@@ -195,6 +195,42 @@ fn test_history_endpoint_validates_and_serves_bars() {
     ));
 }
 
+#[test]
+fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_background() {
+    let _g = guard();
+    let app = app();
+    let conn = app.open().unwrap();
+    let (today, now, _) = bagholder_market::clock_now();
+    let from = bagholder_model::dates::shift_date(&today, -40);
+    let day = bagholder_model::dates::shift_date(&today, -30);
+    let px = bagholder_store::bars::Ohlcv { open: Some(10.0), high: Some(10.5), low: Some(9.5), close: 10.2, volume: Some(1000.0) };
+    bagholder_store::market::upsert_price_history(&conn, "DLYQ", &[bagholder_store::bars::DayBar { date: day.clone(), px }], "test").unwrap();
+    // read from the span's start, but long ago: the copy is stale and the span reaches today
+    bagholder_store::market::mark_history_fetched(&conn, "DLYQ", &from, "2020-01-02T00:00:00Z").unwrap();
+    let q = crate::feeds::HistoryQuery::parse(&format!("symbol=DLYQ&exchange=TSX&currency=CAD&kind=Shares&from={from}&to={today}&tf=1d"));
+    let inst = bagholder_market::history::chart_instrument(&q.read().0);
+    assert!(bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now), "the stored copy is due a read");
+
+    let crate::feeds::HistoryAnswer::Ok(h) = crate::feeds::history_payload(&app, &q) else { panic!("a known timeframe is answered") };
+    let days: Vec<String> = match &h.bars {
+        bagholder_store::bars::ChartBars::Days(b) => b.iter().map(|b| b.date.clone()).collect(),
+        _ => panic!("a daily chart answers days"),
+    };
+    assert_eq!(days, vec![day], "the stored bars are answered, not held back for the read");
+    assert!(h.pending, "answered while the read is still under way, and the page is told to wait for it");
+
+    // the read ends, whatever it found, and the page's document says so
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while crate::feeds::history_pending(&app, &q) {
+        assert!(std::time::Instant::now() < deadline, "the background read ends");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // a read that found nothing (offline here) is not asked again at the next open
+    assert!(!bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now));
+    let crate::feeds::HistoryAnswer::Ok(again) = crate::feeds::history_payload(&app, &q) else { panic!() };
+    assert!(!again.pending, "nothing is under way after a miss");
+}
+
 // ---------------------------------------------------------------------------
 // VersionsTest
 // ---------------------------------------------------------------------------

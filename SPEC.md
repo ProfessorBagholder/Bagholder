@@ -249,7 +249,7 @@ Intraday bars and execution times are shown in the viewer's local time.
 
 The TradingView credit the library's licence requires is the library's own small logo in the chart's bottom-left corner, nothing in the menu.
 
-Bars are cached in the database. Closed days are written once and never rewritten; the newest day may be replaced. A span reaching the present is refetched once its copy is 20 hours old.
+Bars are cached in the database. Closed days are written once and never rewritten; the newest day may be replaced. A span reaching the present is refetched once its copy is 20 hours old, in the background: the chart draws the stored copy at once and takes the new bars in place when the read ends, and a read that finds nothing is not asked again for ten minutes, as with an intraday timeframe.
 
 ### Portfolio
 

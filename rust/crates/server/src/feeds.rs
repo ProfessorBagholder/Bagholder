@@ -2535,10 +2535,10 @@ pub fn qs_one(query: &str, name: &str) -> String {
 /// chart watches (`docs`) in place of asking for its history again every few seconds.
 pub fn history_pending(app: &Arc<App>, q: &HistoryQuery) -> bool {
     let (rec, start, _, tf) = q.read();
-    if !history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
-        return false;
-    }
     let inst = history::chart_instrument(&rec);
+    if !history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
+        return history::daily_pending(&inst);
+    }
     let (today_s, now, _) = bagholder_market::clock_now();
     conn(app).map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
 }
@@ -2566,7 +2566,7 @@ impl HistoryQuery {
 
     /// The listing (CAD and Shares when unsaid), the span's two days and the
     /// timeframe (daily when unsaid), each trimmed as a query value is.
-    fn read(&self) -> (bagholder_model::input::Listing, String, String, String) {
+    pub(crate) fn read(&self) -> (bagholder_model::input::Listing, String, String, String) {
         let or = |v: &str, d: &str| { let v = v.trim(); if v.is_empty() { d.to_string() } else { v.to_string() } };
         let rec = bagholder_model::input::Listing::new(self.symbol.trim().to_string(), self.exchange.trim().to_string(), or(&self.currency, "CAD"), or(&self.kind, "Shares"));
         let day = |d: &str| d.trim().chars().take(10).collect::<String>();
@@ -2621,8 +2621,18 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
                 history::ensure_intraday_in_background(app.store(), inst.clone(), tf.clone(), start.clone(), end.clone());
                 pending = true;
                 ChartBars::default()
-            } else {
+            } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
                 history::ensure_bars(c, &inst, &tf, &start, &end, &today_s, now, &stamp).unwrap_or_default()
+            } else {
+                // a day's bars are answered as stored, never after a read of the sources: a
+                // read that is due runs in the background and the page is told when it ends
+                if history::daily_due(c, &inst, &start, &end, &today_s, now) {
+                    let signal = app.clone();
+                    history::ensure_daily_in_background(app.store(), inst.clone(), start.clone(), move || signal.events.signal());
+                }
+                pending = history::daily_pending(&inst);
+                let daily = history::stored_daily(c, &inst, &start, &end).unwrap_or_default();
+                ChartBars::Days(if tf == "1d" { daily } else { history::aggregate_daily(&daily, &tf) })
             }
         }
     };

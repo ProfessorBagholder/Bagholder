@@ -454,8 +454,51 @@ pub fn fetch_history(conn: &rusqlite::Connection, rec: &Listing, start: &str, en
     }
 }
 
-/// The stored bars for a span, fetching when it was
-/// never fetched or the copy is stale and the span reaches the present.
+/// Whether a span's daily bars are due a read: never read from its start, or
+/// stale where the span reaches the present, and not a read that came back empty
+/// a few minutes ago (then it waits, as an intraday miss does).
+pub fn daily_due(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str, today: &str, now_unix: f64) -> bool {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let start: String = start.chars().take(10).collect();
+    let end: String = end.chars().take(10).collect();
+    if sym.is_empty() || start.len() != 10 || end.len() != 10 || intraday_missed_recently(conn, &sym, "1d", now_unix) {
+        return false;
+    }
+    let last = bagholder_store::market::history_fetch(conn, &sym).unwrap_or(None);
+    let covered = last.as_ref().map_or(false, |l| l.start <= start);
+    let fresh = last
+        .as_ref()
+        .and_then(|l| crate::quotes::instant_secs_public(&l.fetched_at))
+        .map_or(false, |then| (now_unix - then) < HISTORY_STALE_HOURS * 3600.0);
+    !covered || (end >= bagholder_model::dates::shift_date(today, -3) && !fresh)
+}
+
+/// Read a span's daily bars from the sources and store them; a read that finds
+/// nothing is remembered so the next few minutes do not ask again.
+fn fill_daily(conn: &rusqlite::Connection, rec: &Listing, start: &str, today: &str, now_stamp: &str) -> rusqlite::Result<()> {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let start: String = start.chars().take(10).collect();
+    let last_start = bagholder_store::market::history_fetch(conn, &sym)?.map(|l| l.start).unwrap_or_default();
+    // a span already read from an earlier day is read again from that day, so the stamp stays true
+    let fetch_from = if !last_start.is_empty() && last_start < start { last_start } else { start };
+    let (bars, source) = fetch_history(conn, rec, &fetch_from, today, today);
+    if bars.is_empty() {
+        record_intraday_miss(conn, &sym, "1d", now_stamp);
+        return Ok(());
+    }
+    bagholder_store::market::upsert_price_history(conn, &sym, &bars, &source)?;
+    // the stamp says what is covered: when the bars begin well after the day
+    // asked for, only from their first day, so an earlier span asks again
+    let got_from = bars[0].date.clone();
+    let slack = bagholder_model::dates::shift_date(&fetch_from, COVERAGE_SLACK_DAYS);
+    let covered_from = if got_from <= slack { fetch_from } else { got_from };
+    bagholder_store::market::mark_history_fetched(conn, &sym, &covered_from, now_stamp)
+}
+
+/// The stored bars for a span, fetching first when it was never fetched or the
+/// copy is stale and the span reaches the present. What a background job calls;
+/// a chart asked for by a page reads what is stored and has the read done in the
+/// background (`ensure_daily_in_background`).
 pub fn ensure_history(
     conn: &rusqlite::Connection,
     rec: &Listing,
@@ -465,43 +508,59 @@ pub fn ensure_history(
     now_unix: f64,
     now_stamp: &str,
 ) -> rusqlite::Result<Vec<DayBar>> {
+    if daily_due(conn, rec, start, end, today, now_unix) {
+        fill_daily(conn, rec, start, today, now_stamp)?;
+    }
+    stored_daily(conn, rec, start, end)
+}
+
+/// The daily bars stored for a span, asking nothing.
+pub fn stored_daily(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str) -> rusqlite::Result<Vec<DayBar>> {
     let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let start: String = start.chars().take(10).collect();
     let end: String = end.chars().take(10).collect();
     if sym.is_empty() || start.len() != 10 || end.len() != 10 {
         return Ok(vec![]);
     }
-    let last = bagholder_store::market::history_fetch(conn, &sym)?;
-    let last_start = last.as_ref().map(|l| l.start.clone()).unwrap_or_default();
-    let covered = last.is_some() && last_start <= start;
-    let fresh = last.is_some()
-        && match crate::quotes::instant_secs_public(last.as_ref().map(|l| l.fetched_at.as_str()).unwrap_or("")) {
-            Some(then) => (now_unix - then) < HISTORY_STALE_HOURS * 3600.0,
-            None => false,
-        };
-    let needs_recent = end >= bagholder_model::dates::shift_date(today, -3);
-
-    if !covered || (needs_recent && !fresh) {
-        let fetch_from = if !covered {
-            start.clone()
-        } else if last_start < start {
-            last_start.clone()
-        } else {
-            start.clone()
-        };
-        let (bars, source) = fetch_history(conn, rec, &fetch_from, today, today);
-        if !bars.is_empty() {
-            bagholder_store::market::upsert_price_history(conn, &sym, &bars, &source)?;
-            // the stamp says what is covered: when the bars begin well after
-            // the day asked for, only from their first day, so an earlier span
-            // asks again
-            let got_from = bars[0].date.clone();
-            let slack = bagholder_model::dates::shift_date(&fetch_from, COVERAGE_SLACK_DAYS);
-            let covered_from = if got_from <= slack { fetch_from } else { got_from };
-            bagholder_store::market::mark_history_fetched(conn, &sym, &covered_from, now_stamp)?;
-        }
-    }
     bagholder_store::market::price_history(conn, &sym, &start, &end)
+}
+
+fn daily_pending_set() -> &'static std::sync::Mutex<Vec<String>> {
+    static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    &PENDING
+}
+
+/// Whether a daily read for this listing is under way now.
+pub fn daily_pending(rec: &Listing) -> bool {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).contains(&sym)
+}
+
+/// Start the daily read for a span, once per listing at a time, and return at
+/// once; `done` is called when it ends, whatever it found, so whoever showed the
+/// stored bars meanwhile is told to look again.
+pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Listing, start: String, done: impl FnOnce() + Send + 'static) {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    {
+        let mut p = daily_pending_set().lock().unwrap_or_else(|e| e.into_inner());
+        if p.contains(&sym) {
+            return;
+        }
+        p.push(sym.clone());
+    }
+    let left = sym.clone();
+    let run = move || {
+        if let Ok(conn) = pool.get() {
+            let (today, _, stamp) = crate::clock_now();
+            let _ = fill_daily(&conn, &rec, &start, &today, &stamp);
+        }
+        daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != sym);
+        done();
+    };
+    if std::thread::Builder::new().name("bagholder-daily".into()).spawn(run).is_err() {
+        // no thread to read on: nothing is under way, so nothing is left pending
+        daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != left);
+    }
 }
 
 fn read_fx(conn: &rusqlite::Connection) -> rusqlite::Result<BTreeMap<String, f64>> {

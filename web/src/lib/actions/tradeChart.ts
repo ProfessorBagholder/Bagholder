@@ -25,6 +25,8 @@ export interface TradeChartParams {
   colors: ChartColors
   rangeKey: string
   provisional?: boolean
+  /** A trade still open runs to today: its frame ends at the newest bar, not its last fill. */
+  open?: boolean
 }
 
 const _chartRange: Record<string, LogicalRange> = {}
@@ -124,7 +126,7 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
       else if (!idx.length) chart.timeScale().fitContent()
       else {
         const a = idx[0]
-        const b = idx[idx.length - 1]
+        const b = p.open ? p.bars.length - 1 : idx[idx.length - 1]
         const pad = Math.max(4, Math.round((b - a) * 0.15))
         chart.timeScale().setVisibleLogicalRange({ from: a - pad, to: b + pad })
       }

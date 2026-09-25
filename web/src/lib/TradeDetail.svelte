@@ -52,7 +52,10 @@
         return
       }
       if (h.pending) {
-        if (available.indexOf('1d') >= 0) {
+        // the bars stored so far are drawn while newer ones are read; with none
+        // stored for minute bars, the daily chart stands in
+        if (h.bars.length) loaded = { tf, hist: h, provisional: true }
+        else if (want !== '1d' && available.indexOf('1d') >= 0) {
           const d = await loadHistory(t, '1d', closing.signal)
           if (!cancelled) loaded = { tf: '1d', hist: d, provisional: true }
         }
@@ -266,7 +269,7 @@
       {/if}
     </div>
     {#if loaded && candles}
-      <div use:tradeChart={{ bars: loaded.hist.bars, fills: chartFills, tf: loaded.tf, colors, rangeKey: trade.id + '|' + loaded.tf, provisional: loaded.provisional }} style="position:relative;height:300px"></div>
+      <div use:tradeChart={{ bars: loaded.hist.bars, fills: chartFills, tf: loaded.tf, colors, rangeKey: trade.id + '|' + loaded.tf, provisional: loaded.provisional, open: trade.exitDate == null }} style="position:relative;height:300px"></div>
     {:else}
       <div style="position:relative;height:300px">
         {#if loaded}<div class="muted empty" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:12px;text-align:center;padding:0 24px">{loaded.hist.reason || 'No price history for this span.'}</div>{/if}
