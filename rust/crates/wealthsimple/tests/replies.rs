@@ -442,6 +442,30 @@ fn accounts_with_a_status_neither_open_nor_closed_write_nothing_and_fail_the_pul
     assert!(p.book.accounts().unwrap().is_empty());
 }
 
+#[test]
+fn an_account_whose_margin_boost_is_on_backs_the_margin_account_it_names() {
+    // the recorded month holds nothing else of the margin account: its other reads are refused, its accounts' read is not
+    let accounts_read = |p: &Pulled| assert!(p.report.failures.iter().all(|(part, _)| part != "accounts"), "{:?}", p.report.failures);
+    let p = pulled(Op::Accounts, &[edited("edited-accounts-margin-boost.json")]);
+    accounts_read(&p);
+    let id = |key: &str| p.book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), key)).unwrap().unwrap();
+    assert_eq!(p.book.margin_backing().unwrap(), [(id("anon-tfsa-1"), id("anon-margin-9"))].into());
+    // off, it backs nothing
+    let p = pulled(Op::Accounts, &[edited("edited-accounts-margin-boost-off.json")]);
+    accounts_read(&p);
+    assert!(p.book.margin_backing().unwrap().is_empty());
+}
+
+#[test]
+fn a_margin_boost_that_names_no_account_or_states_none_fails_the_pull() {
+    for (reply, says) in [("wrong-meaning-accounts-margin-boost-names-no-account.json", "anon-hd-404"), ("wrong-shape-accounts-margin-boost-without-metadata.json", "no metadata")] {
+        let p = pulled(Op::Accounts, &[edited(reply)]);
+        let (_, why) = p.failures().into_iter().find(|(part, _)| part == "accounts").expect("the accounts' read failed");
+        assert!(why.contains(says), "{reply}: {why}");
+        assert!(p.book.margin_backing().unwrap().is_empty());
+    }
+}
+
 // -- activity (FetchActivityFeedItems) -----------------------------------------
 
 #[test]

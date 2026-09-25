@@ -26,8 +26,39 @@ fn cents(n: &Node) -> Read<Money> {
     Ok(Money::new(amount, currency))
 }
 
+/// The margin account's custodian id that an account's Margin Boost names, where
+/// the feature is on: the account backs that margin account as collateral.
+fn margin_boost(n: &Node) -> Read<Option<String>> {
+    for f in n.list("accountFeatures")? {
+        if f.text("name")? != "MARGIN_BOOST" {
+            continue;
+        }
+        let functional = match f.field("functional")?.value() {
+            Value::Null => true,
+            _ => f.bool("functional")?,
+        };
+        if !f.bool("enabled")? || !functional {
+            return Ok(None);
+        }
+        let meta = f.field("metadata")?;
+        if matches!(meta.value(), Value::Null) {
+            return Err(meta.mismatch("a Margin Boost on with no metadata naming the margin account"));
+        }
+        return Ok(Some(meta.text("targetMarginAccountId")?.to_string()));
+    }
+    Ok(None)
+}
+
 /// The accounts, from `FetchAllAccounts`' nodes.
 pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
+    // each custodian account's id, and the account it belongs to
+    let mut custodian: BTreeMap<String, String> = BTreeMap::new();
+    for v in nodes {
+        let n = Node::root(v);
+        for c in n.list("custodianAccounts")? {
+            custodian.insert(c.text("id")?.to_string(), n.text("id")?.to_string());
+        }
+    }
     let mut out = Vec::new();
     for v in nodes {
         let n = Node::root(v);
@@ -39,12 +70,17 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
         };
         let linked = n.field("linkedAccount")?;
         let linked_to = if matches!(linked.value(), Value::Null) { None } else { Some(linked.text("id")?.to_string()) };
+        let backs = match margin_boost(&n)? {
+            None => None,
+            Some(target) => Some(custodian.get(&target).cloned().ok_or_else(|| n.field("accountFeatures").map(|f| f.mismatch(format!("a Margin Boost naming custodian account {target:?}, which no account stated holds"))).unwrap_or_else(|m| m))?),
+        };
         out.push(AccountStated {
             key: n.text("id")?.to_string(),
             account_type: wealthsimple_account_type(n.text("unifiedAccountType")?),
             open,
             nickname: n.opt_text("nickname")?.map(str::to_string),
             linked_to,
+            backs,
         });
     }
     Ok(out)

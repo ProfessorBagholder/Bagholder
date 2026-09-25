@@ -79,6 +79,13 @@ fragment AccountFeature on AccountFeature {
   enabled
   functional
   firstEnabledOn
+  metadata {
+    __typename
+    ... on MarginBoostFeatureMetadata {
+      targetMarginAccountId
+      __typename
+    }
+  }
 }
 fragment AccountOwner on AccountOwner {
   accountId

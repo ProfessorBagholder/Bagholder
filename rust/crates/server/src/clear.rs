@@ -308,6 +308,10 @@ mod tests {
         let ws_account = book.accounts().unwrap().into_iter().find(|a| a.nickname.as_deref() != Some("Manual")).unwrap();
         let read = book.broker_read(ws_account.connection, "balances", t).unwrap();
         book.store_buying_power(ws_account.id, t, &Ok(bagholder_core::Money::new(bagholder_core::Dec::parse("100").unwrap(), bagholder_core::Currency::parse("CAD").unwrap())), &read).unwrap();
+        use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType, Registration};
+        let margin_kind = AccountType::Known { kind: AccountKind::Margin, registration: Registration::Unregistered, managed: false, joint: false };
+        let margin = book.add_account(ws_account.connection, &[AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "margin-x")], &margin_kind, AccountStatus::Open, Some("Margin"), t).unwrap();
+        book.store_margin_backing(ws_account.connection, &[(ws_account.id, margin)], &read).unwrap();
         // the cache's figure tables by its own writes (the engine reads them), the rest stood in for
         let cache = f.cache().unwrap();
         let src = bagholder_core::SourceName::named("yahoo");

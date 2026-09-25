@@ -112,6 +112,8 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
             report.accounts_linked += 1;
         }
     }
+    let backing: Vec<(AccountId, AccountId)> = stated.iter().filter_map(|a| Some((*ids.get(&a.key)?, *a.backs.as_ref().and_then(|k| ids.get(k))?))).collect();
+    book.store_margin_backing(connection, &backing, &read)?;
 
     // each account's activity: whole the first time, then from its last full read
     // a row stored before it was final is read again, from its day

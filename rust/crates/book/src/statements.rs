@@ -71,6 +71,35 @@ impl Book {
         Ok(())
     }
 
+    /// The accounts of a connection that back a margin account, as one read of the
+    /// accounts states them: what it no longer states is no longer so.
+    pub fn store_margin_backing(&self, connection: ConnectionId, backing: &[(AccountId, AccountId)], read: &ReadId) -> Result<()> {
+        self.atomically(|| {
+            self.conn().execute(
+                "DELETE FROM margin_backing WHERE account_id IN (SELECT id FROM accounts WHERE connection_id = ?1)",
+                params![connection.to_string()],
+            )?;
+            for (account, margin) in backing {
+                self.conn().execute(
+                    "INSERT INTO margin_backing (account_id, margin_account_id, read_id) VALUES (?1, ?2, ?3)",
+                    params![account.to_string(), margin.to_string(), read.0],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Each account that backs a margin account, and the margin account.
+    pub fn margin_backing(&self) -> Result<BTreeMap<AccountId, AccountId>> {
+        let mut st = self.conn().prepare("SELECT account_id, margin_account_id FROM margin_backing ORDER BY account_id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|r| {
+            let (a, b) = r?;
+            Ok((text::parsed("margin_backing", "account_id", &a, AccountId::parse)?, text::parsed("margin_backing", "margin_account_id", &b, AccountId::parse)?))
+        })
+        .collect()
+    }
+
     pub fn account_links(&self) -> Result<Vec<(AccountId, AccountId)>> {
         let mut st = self.conn().prepare("SELECT account_id, linked_to FROM account_links ORDER BY account_id, linked_to")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;

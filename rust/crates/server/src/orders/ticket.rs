@@ -48,15 +48,10 @@ pub struct OrderAccount {
 pub fn order_accounts(app: &Arc<App>) -> Result<Vec<OrderAccount>, String> {
     let f = app.figures.get().ok_or("the figures are not open")?;
     let names = f.names()?;
-    // A cash account backing a margin account (Wealthsimple's margin boost): the
-    // adapter does not read that feature yet, so the link is the earlier store's
-    // until it does (docs/plans/stage-3c-switch.md, step 8 needs it first).
-    let boosted: std::collections::BTreeMap<String, String> = bagholder_store::tables::accounts(&db(app))
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .filter(|a| !a.margin_account_id.is_empty())
-        .map(|a| (a.id, a.margin_account_id))
-        .collect();
+    // a cash account backing a margin account (Wealthsimple's margin boost), by the broker's ids
+    let backing = f.book()?.margin_backing().map_err(|e| e.to_string())?;
+    let broker_id = |a: &bagholder_core::AccountId| names.account.get(a).cloned();
+    let boosted: std::collections::BTreeMap<String, String> = backing.iter().filter_map(|(a, m)| Some((broker_id(a)?, broker_id(m)?))).collect();
     let accounts = f.read(|e| crate::wire::build::accounts(e.inputs(), &names)).ok_or("the figures are not built yet")?;
     Ok(accounts
         .iter()
