@@ -368,7 +368,8 @@ test.describe('Trade detail', () => {
 test.describe('Holding detail (from Portfolio)', () => {
   test('a holding opened from Portfolio shows Qty, Avg, Book and Market instead of Open/Close/Entry/Exit', async ({ page, request }) => {
     const model = await getModel(request)
-    const p = model.positions[0]
+    // a symbol held once, so the row found by its text is this holding's row
+    const p = model.positions.find((x: any) => model.positions.filter((y: any) => y.symbol === x.symbol).length === 1)
     await page.goto('/#portfolio')
     await ready(page)
     await page.locator('#page table tbody tr').filter({ has: page.locator('td:first-child', { hasText: new RegExp('^' + symText(p.symbol).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '( SHORT)?$') }) }).first().click()
