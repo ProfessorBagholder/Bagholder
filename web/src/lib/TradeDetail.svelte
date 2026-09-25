@@ -323,9 +323,10 @@
         </div>
       </div>
 
-      <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
+      <!-- the row is a fixed height: while an event waits its form takes room from the notes box, and the card scrolls rather than spill onto the page -->
+      <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0;overflow-y:auto">
         <div class="lbl" style="margin:0 0 6px">Thesis / notes</div>
-        <textarea class="input" bind:value={thesisDraft} oninput={thesisInput} onblur={thesisBlur} placeholder="Why did you take this trade?" style="flex:1;min-height:96px;height:auto;font-size:13px"></textarea>
+        <textarea class="input" bind:value={thesisDraft} oninput={thesisInput} onblur={thesisBlur} placeholder="Why did you take this trade?" style="flex:1;min-height:{waitingEvent ? 48 : 96}px;height:auto;font-size:13px"></textarea>
         <div style="display:flex;gap:10px;margin-top:16px;align-items:center">
           <div style="flex:1">
             <div class="lbl" style="margin-bottom:5px">Grade</div>
