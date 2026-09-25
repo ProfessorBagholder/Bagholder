@@ -7,6 +7,7 @@
 
 mod app;
 mod compare;
+mod demo_facts;
 mod docs;
 mod due;
 mod engine_inputs;
@@ -264,6 +265,10 @@ fn main() {
     // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md)
     if args.first().map(String::as_str) == Some("pull-broker") {
         std::process::exit(pull_broker::cli(&args[1..]));
+    }
+    // the made-up book's facts and prices, for the browser tests and screenshots
+    if args.first().map(String::as_str) == Some("demo-facts") {
+        std::process::exit(demo_facts::cli(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));

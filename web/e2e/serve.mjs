@@ -13,6 +13,8 @@ const exe = process.platform === 'win32' ? '.exe' : ''
 execFileSync('cargo', ['build', '--quiet', '--bin', 'bagholder', '--bin', 'demo-book'], { cwd: rust, stdio: 'inherit' })
 const home = mkdtempSync(join(tmpdir(), 'bagholder-e2e-'))
 execFileSync(join(rust, 'target', 'debug', 'demo-book' + exe), ['--home', home, '--bars'], { stdio: 'inherit' })
+// the book the engine reads, carried from it, with the made-up facts and prices beside it
+execFileSync(join(rust, 'target', 'debug', 'bagholder' + exe), ['demo-facts', home], { stdio: 'inherit' })
 
 const server = spawn(join(rust, 'target', 'debug', 'bagholder' + exe), [], {
   stdio: 'inherit',

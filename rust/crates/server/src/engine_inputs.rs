@@ -110,6 +110,8 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
             b.net_value.insert(*day, value.amount);
             b.net_deposits.insert(*day, deposits.amount);
         }
+        // the account's value now: the newest day's the broker has stated
+        b.net_value_now = b.net_value.values().next_back().copied();
         if let Some((at, cash)) = s.cash {
             b.as_of = Some(at);
             b.cash = cash;
