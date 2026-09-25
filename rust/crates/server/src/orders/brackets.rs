@@ -416,42 +416,171 @@ pub(super) fn nothing_resting(app: &Arc<App>, b: &Bracket) -> bool {
     !own_exit_rows(app, b).iter().any(in_flight)
 }
 
+/// What the book says of a bracket's position since it was armed: the units sold
+/// in its account since then, and each statement of the account's units read
+/// since then, newest first, with the units it lists.
+struct SinceArmed {
+    sold: bagholder_core::Dec,
+    reads: Vec<(bagholder_core::jiff::Timestamp, Option<bagholder_core::Dec>)>,
+}
+
+fn since_armed(app: &Arc<App>, b: &Bracket) -> Result<Option<SinceArmed>, String> {
+    use bagholder_core::account::AccountRef;
+    use bagholder_core::instrument::{RefScheme, Reference};
+    use bagholder_core::transaction::Kind;
+    let Some(f) = app.figures.get() else { return Ok(None) };
+    let armed: bagholder_core::jiff::Timestamp = b.armed_at.parse().map_err(|e| format!("the bracket's armed time {:?}: {e}", b.armed_at))?;
+    let book = f.book()?;
+    let ws = bagholder_core::Broker::named("wealthsimple");
+    let e = |e: bagholder_book::BookError| e.to_string();
+    let Some(account) = book.account_by_ref(&AccountRef::new(ws.clone(), b.account_id.clone())).map_err(e)? else { return Ok(None) };
+    let Some(instrument) = book.instrument_by_ref(&Reference::new(RefScheme::BrokerSecurity(ws), b.security_id.clone())).map_err(e)? else { return Ok(None) };
+    let zone = book.zone().map_err(e)?.map(|z| z.zone);
+    let sold = f
+        .read(|eng| {
+            eng.inputs()
+                .ledger
+                .transactions
+                .iter()
+                .filter(|t| t.account == account && t.instrument == Some(instrument) && t.kind == Kind::Sell)
+                // an instant after the arming; a row with only a day, a day after the arming's
+                .filter(|t| match (t.occurred_at, &zone) {
+                    (Some(at), _) => at > armed,
+                    (None, Some(z)) => t.trade_date > armed.to_zoned(z.clone()).date(),
+                    (None, None) => false,
+                })
+                .filter_map(|t| t.quantity)
+                .try_fold(bagholder_core::Dec::ZERO, |sum, q| sum.checked_add(q.abs()))
+        })
+        .ok_or("the figures are not built yet")?
+        .map_err(|e| e.to_string())?;
+    Ok(Some(SinceArmed { sold, reads: book.units_reads(account, instrument, armed).map_err(e)? }))
+}
+
 /// Why the position this bracket guards is gone, when it was closed somewhere other
-/// than through the bracket; empty while it stands. The sale must be in the activity
-/// feed, or the position missing from two balance reads after one that showed it: a
-/// single read that lacks it decides nothing.
+/// than through the bracket; empty while it stands. The sale must be in the book's
+/// records, or the position missing from two statements of the account's units read
+/// after one that showed it: a single read that lacks it decides nothing.
 pub(super) fn closed_elsewhere(app: &Arc<App>, b: &Bracket) -> String {
     if !in_play(b) || b.armed_at.is_empty() || !nothing_resting(app, b) {
         return String::new();
     }
-    let conn = db(app);
-    let sold = must(bagholder_store::feeds::sold_since(&conn, &b.account_id, &b.security_id, &b.armed_at, &b.symbol));
-    if sold != 0.0 && sold >= b.quantity.unwrap_or(0.0) {
-        return format!("sold: {} shares in the activity feed", qty_text(sold));
-    }
-    let read_at = must(bagholder_store::tables::get_meta(&conn, "balances_read_at", ""));
-    if read_at.is_empty() || read_at <= b.armed_at {
-        return String::new();
-    }
-    let held = must(bagholder_store::feeds::position_quantity(&conn, &b.account_id, &b.security_id));
-    if held.map_or(false, |h| h > 0.0) {
-        if !b.seen_held || !b.missed_at.is_empty() {
-            patch_bracket(app, &b.id, BracketPatch { seen_held: Some(true), missed_at: Some(String::new()), ..BracketPatch::default() });
+    let seen = match since_armed(app, b) {
+        Ok(Some(s)) => s,
+        Ok(None) => return String::new(),
+        Err(e) => {
+            say_once(app, format!("{}|since-armed", b.id), &format!("bagholder bracket: {} for {}: what the book holds could not be read: {}\n", b.id, b.symbol, e));
+            return String::new();
         }
-        return String::new();
+    };
+    let (why, patch) = decide_closed(b, &seen);
+    if let Some(patch) = patch {
+        if patch.missed_at.as_ref().is_some_and(|m| !m.is_empty()) {
+            log(&format!("bagholder bracket: {} for {}: the units read at {} do not list the position; a second read decides", b.id, b.symbol, patch.missed_at.clone().unwrap_or_default()));
+        }
+        patch_bracket(app, &b.id, patch);
+    }
+    why
+}
+
+/// The rule of `closed_elsewhere`: why the position is gone (empty while it
+/// stands), and what the bracket keeps of the reads so far.
+fn decide_closed(b: &Bracket, seen: &SinceArmed) -> (String, Option<BracketPatch>) {
+    let sold = seen.sold.to_f64();
+    if sold != 0.0 && sold >= b.quantity.unwrap_or(0.0) {
+        return (format!("sold: {} shares in the activity feed", qty_text(sold)), None);
+    }
+    let Some((read_at, held)) = seen.reads.first().cloned() else { return (String::new(), None) };
+    let read_at = read_at.to_string();
+    if held.is_some_and(|h| h.is_positive()) {
+        let patch = (!b.seen_held || !b.missed_at.is_empty()).then(|| BracketPatch { seen_held: Some(true), missed_at: Some(String::new()), ..BracketPatch::default() });
+        return (String::new(), patch);
     }
     if !b.seen_held {
-        return String::new();
+        return (String::new(), None);
     }
     if b.missed_at.is_empty() {
-        patch_bracket(app, &b.id, BracketPatch { missed_at: Some(read_at.clone()), ..BracketPatch::default() });
-        log(&format!("bagholder bracket: {} for {}: the balances read at {} does not list the position; a second read decides", b.id, b.symbol, read_at));
-        return String::new();
+        return (String::new(), Some(BracketPatch { missed_at: Some(read_at), ..BracketPatch::default() }));
     }
     if read_at > b.missed_at {
-        return format!("position gone: two balance reads without it ({}, {})", b.missed_at, read_at);
+        return (format!("position gone: two reads of the account's units without it ({}, {})", b.missed_at, read_at), None);
     }
-    String::new()
+    (String::new(), None)
+}
+
+#[cfg(test)]
+mod closed_tests {
+    use super::*;
+    use bagholder_core::Dec;
+
+    fn at(s: &str) -> bagholder_core::jiff::Timestamp {
+        s.parse().unwrap()
+    }
+
+    fn armed(seen_held: bool, missed_at: &str) -> Bracket {
+        Bracket { id: "b".into(), quantity: Some(25.0), seen_held, missed_at: missed_at.into(), ..Bracket::default() }
+    }
+
+    fn seen(sold: &str, reads: &[(&str, Option<&str>)]) -> SinceArmed {
+        SinceArmed { sold: Dec::parse(sold).unwrap(), reads: reads.iter().map(|(t, q)| (at(t), q.map(|q| Dec::parse(q).unwrap()))).collect() }
+    }
+
+    #[test]
+    fn a_sale_of_every_unit_since_arming_ends_it_and_a_part_sale_does_not() {
+        assert_eq!(decide_closed(&armed(true, ""), &seen("25", &[])).0, "sold: 25 shares in the activity feed");
+        assert_eq!(decide_closed(&armed(true, ""), &seen("10", &[])).0, "");
+    }
+
+    #[test]
+    fn the_position_is_gone_only_after_two_reads_without_it_following_one_with_it() {
+        // not yet seen held: a read without it says nothing
+        let (why, patch) = decide_closed(&armed(false, ""), &seen("0", &[("2026-01-02T00:00:00Z", None)]));
+        assert_eq!((why.as_str(), patch.is_none()), ("", true));
+        // a read listing it: seen held
+        let (_, patch) = decide_closed(&armed(false, ""), &seen("0", &[("2026-01-02T00:00:00Z", Some("25"))]));
+        assert_eq!(patch.unwrap().seen_held, Some(true));
+        // the first read without it: noted, never an end
+        let (why, patch) = decide_closed(&armed(true, ""), &seen("0", &[("2026-01-03T00:00:00Z", None)]));
+        assert_eq!((why.as_str(), patch.unwrap().missed_at.as_deref()), ("", Some("2026-01-03T00:00:00Z")));
+        // the same read again is still one read
+        let (why, _) = decide_closed(&armed(true, "2026-01-03T00:00:00Z"), &seen("0", &[("2026-01-03T00:00:00Z", None)]));
+        assert_eq!(why, "");
+        // a second, later read without it ends it
+        let (why, _) = decide_closed(&armed(true, "2026-01-03T00:00:00Z"), &seen("0", &[("2026-01-04T00:00:00Z", None), ("2026-01-03T00:00:00Z", None)]));
+        assert!(why.starts_with("position gone: two reads"), "{why}");
+        // a read listing it again forgets the miss
+        let (_, patch) = decide_closed(&armed(true, "2026-01-03T00:00:00Z"), &seen("0", &[("2026-01-04T00:00:00Z", Some("25"))]));
+        assert_eq!(patch.unwrap().missed_at.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn what_the_book_holds_since_arming_is_read_from_its_records_and_statements() {
+        use bagholder_core::account::AccountRef;
+        use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
+        let _g = crate::tests_common::guard();
+        crate::tests_common::order_accounts_in_book();
+        let app = crate::tests_common::app();
+        let f = app.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let ws = bagholder_core::Broker::named("wealthsimple");
+        let t0 = at("2021-01-01T00:00:00Z");
+        let security = "sec-since-armed-test";
+        let draft = bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(ws.clone()), security)], kind: InstrumentKind::Security, currency: bagholder_core::Currency::parse("USD").unwrap(), name: None, option: None };
+        let instrument = book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), t0).unwrap().unwrap();
+        let account = book.account_by_ref(&AccountRef::new(ws.clone(), "acct-margin")).unwrap().unwrap();
+        let conn = book.accounts().unwrap().into_iter().find(|a| a.id == account).unwrap().connection;
+        for (when, units) in [("2021-01-02T00:00:00Z", Some("25")), ("2021-01-03T00:00:00Z", None)] {
+            let read = book.broker_read(conn, "units:acct-margin", at(when)).unwrap();
+            let lines: Vec<bagholder_book::statements::UnitsLine> = units.map(|u| bagholder_book::statements::UnitsLine { instrument, quantity: Dec::parse(u).unwrap(), book_value: None }).into_iter().collect();
+            book.store_units(account, at(when).to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).date(), &lines, &read, at(when)).unwrap();
+        }
+        let b = Bracket { id: "b".into(), account_id: "acct-margin".into(), security_id: security.into(), armed_at: t0.to_string(), quantity: Some(25.0), ..Bracket::default() };
+        let seen = since_armed(&app, &b).unwrap().expect("the account and the instrument are the book's");
+        assert_eq!(seen.sold, Dec::ZERO);
+        assert_eq!(seen.reads, vec![(at("2021-01-03T00:00:00Z"), None), (at("2021-01-02T00:00:00Z"), Some(Dec::parse("25").unwrap()))], "newest first, a read that does not list it stating none");
+        // an instrument the book has never met: nothing to say
+        assert!(since_armed(&app, &Bracket { security_id: "sec-never".into(), ..b }).unwrap().is_none());
+    }
 }
 
 /// Seconds until Wealthsimple lets a resting order lapse: its own expiry, or ninety

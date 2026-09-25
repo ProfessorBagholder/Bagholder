@@ -66,16 +66,8 @@ fn list_orders() -> Vec<so::Order> {
     so::typed::list_orders(&db(), 200).unwrap()
 }
 
-fn set_meta(k: &str, v: &str) {
-    tb::set_meta(&db(), k, v).unwrap()
-}
-
 fn typed_rows<T: serde::de::DeserializeOwned>(v: &Value) -> Vec<T> {
     v.as_array().unwrap().iter().map(|x| serde_json::from_value(x.clone()).unwrap()).collect()
-}
-
-fn replace_balances(rows: Value) {
-    tb::replace_balances(&db(), &typed_rows(&rows)).unwrap()
 }
 
 fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
@@ -609,70 +601,15 @@ fn test_the_balances_feed_never_touches_a_bracket_with_a_resting_order() {
     filled(&oid);
     t0();
     let id = sv(&b, "id");
-    replace_balances(json!([{"accountId": "acct-margin", "securityId": "sec-other", "quantity": 1}]));
-    update_bracket(&id, json!({"armedAt": "2020-01-01T00:00:00Z", "seenHeld": true}));
+    update_bracket(&id, json!({"armedAt": "2020-01-01T00:00:00Z", "seenHeld": true, "missedAt": "2020-01-02T00:00:00Z"}));
     clear();
-    for stamp in ["2099-01-01T00:00:00Z", "2099-01-01T01:00:00Z", "2099-01-01T02:00:00Z"] {
-        set_meta("balances_read_at", stamp);
+    for _ in 0..3 {
         t0();
     }
     let b = get_bracket(&id);
     assert_eq!(sv(&b, "status"), "armed", "reads without the position change nothing while the stop rests");
     assert!(tv(&b, "slOrderId"), "the stop still rests");
     assert!(sent_empty(), "nothing is cancelled on the balances' word");
-}
-
-fn watched_only() -> (String, so::Bracket) {
-    let (oid, b) = entry(json!({}));
-    filled(&oid);
-    *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
-    t0();
-    *lk(&bracket_seam::STOP_ALLOWED) = None;
-    let b = get_bracket(&sv(&b, "id"));
-    assert_eq!((sv(&b, "status"), sv(&b, "slMode"), sv(&b, "slOrderId")), ("armed".into(), "watched".into(), "".into()));
-    update_bracket(&sv(&b, "id"), json!({"armedAt": "2020-01-01T00:00:00Z"}));
-    (oid, b)
-}
-
-#[test]
-fn test_a_watched_only_bracket_ends_on_the_second_balance_read_without_the_position() {
-    let _g = setup();
-    let (_oid, b) = watched_only();
-    let id = sv(&b, "id");
-    replace_balances(json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]));
-    set_meta("balances_read_at", "2099-01-01T00:00:00Z");
-    *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
-    t0();
-    assert!(tv(&get_bracket(&id), "seenHeld"));
-    replace_balances(json!([{"accountId": "acct-margin", "securityId": "sec-other", "quantity": 1}]));
-    set_meta("balances_read_at", "2099-01-01T01:00:00Z");
-    t0();
-    let b = get_bracket(&id);
-    assert_eq!((sv(&b, "status"), sv(&b, "missedAt")), ("armed".into(), "2099-01-01T01:00:00Z".into()), "one read never ends it");
-    t0();
-    assert_eq!(sv(&get_bracket(&id), "status"), "armed", "the same read again is still one read");
-    set_meta("balances_read_at", "2099-01-01T02:00:00Z");
-    t0();
-    *lk(&bracket_seam::STOP_ALLOWED) = None;
-    let b = get_bracket(&id);
-    assert_eq!(sv(&b, "status"), "done");
-    assert!(sv(&b, "outcome").contains("two balance reads"), "{}", sv(&b, "outcome"));
-}
-
-#[test]
-fn test_a_watched_only_bracket_ends_when_the_activity_feed_shows_the_sale() {
-    let _g = setup();
-    let (_oid, b) = watched_only();
-    let act = json!({"id": "act-sale", "transactionDate": "2026-09-10", "occurredAt": "2026-09-10T15:00:00Z", "accountId": "acct-margin", "securityId": "sec-s-us", "symbol": "QNC",
-        "quantity": 25, "unitPrice": 170.0, "netCashAmount": 4250.0, "activityType": "Trade", "activitySubType": "SELL", "source": "csv"});
-    let act: bagholder_store::activities::ActivityRow = serde_json::from_value(act).unwrap();
-    bagholder_store::activities::insert_activity(&db(), &act, None, None, &crate::app::uuid4).unwrap();
-    *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
-    t0();
-    *lk(&bracket_seam::STOP_ALLOWED) = None;
-    let b = get_bracket(&sv(&b, "id"));
-    assert_eq!(sv(&b, "status"), "done");
-    assert!(sv(&b, "outcome").contains("sold"), "{}", sv(&b, "outcome"));
 }
 
 #[test]

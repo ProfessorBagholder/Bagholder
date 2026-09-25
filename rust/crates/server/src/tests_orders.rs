@@ -12,7 +12,7 @@ use bagholder_store::orders as so;
 use bagholder_ws::session::CallError;
 use serde_json::{json, Value};
 
-use crate::app::{now_iso, now_unix, stamp_of, uuid4};
+use crate::app::{now_iso, now_unix, stamp_of};
 use crate::tests_common::{app, app_ref};
 use crate::orders::{self as o, seam};
 
@@ -59,10 +59,6 @@ fn list_orders() -> Vec<so::Order> {
 }
 fn activities() -> Vec<Value> {
     bagholder_store::activities::all_activities(&conn()).unwrap().iter().map(|r| serde_json::to_value(r).unwrap()).collect()
-}
-fn apply_ws(rows: &[Value]) -> bagholder_store::merge::Applied {
-    let rows: Vec<bagholder_store::activities::ActivityRow> = rows.iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect();
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn(), &rows, &uuid4).unwrap()
 }
 
 fn set_gql<F: Fn(&str, &Value) -> Result<Value, CallError> + Send + Sync + 'static>(f: F) {
@@ -1007,11 +1003,33 @@ fn test_the_feed_matches_bagholders_order_by_either_id() {
 #[test]
 fn test_an_option_order_from_the_feed_is_named_by_its_contract() {
     let _g = setup();
-    let item = json!({"occurredAt": "2026-08-05T16:12:17.268Z", "canonicalId": "ws-opt-1", "status": "POSTED", "type": "OPTIONS_BUY", "subType": "BUYTOOPEN",
-        "assetSymbol": "QNC 20NOV26 3.00 CALL", "assetQuantity": 5, "amount": -150, "accountId": "acct-1", "currency": "CAD", "securityId": "sec-o-1"});
-    let typed_item: bagholder_ws::wire::ActivityItem = serde_json::from_value(item).unwrap();
-    let mapped = bagholder_ws::mapping::map_activity(&typed_item, &bagholder_ws::mapping::Accounts::default()).expect("mapped");
-    apply_ws(&[serde_json::to_value(&mapped).unwrap()]);
+    // the book has met the contract, by Wealthsimple's security, under its terms
+    {
+        use bagholder_book::import::{ImportMapping, ImportedRow, OldActivity, OldSecurity};
+        let a = app();
+        let f = a.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap().into_iter().find(|c| c.broker == bagholder_core::Broker::named("wealthsimple")).unwrap().id;
+        let row = OldActivity {
+            id: "ws-opt-1".into(),
+            transaction_date: Some("2026-08-05".into()),
+            account_id: Some("acct-tfsa".into()),
+            activity_type: Some("OPTIONS_BUY".into()),
+            activity_sub_type: Some("BUYTOOPEN".into()),
+            symbol: Some("QNC 20NOV26 3.00 CALL".into()),
+            currency: Some("USD".into()),
+            quantity: Some("5".into()),
+            net_cash_amount: Some("-150".into()),
+            source: Some("csv".into()),
+            security_id: Some("sec-o-1".into()),
+            ..OldActivity::default()
+        };
+        let security = OldSecurity { id: "sec-o-1".into(), symbol: Some("QNC".into()), name: None, primary_exchange: None, primary_mic: None, currency: Some("USD".into()), underlying_id: None };
+        let payload = serde_json::to_string(&ImportedRow { row, security: Some(security), underlying: None }).unwrap();
+        let now = bagholder_core::jiff::Timestamp::now();
+        book.store(&ImportMapping, &bagholder_book::records::Incoming { connection: Some(conn), source_key: "ws-opt-1", payload: &payload, refs: vec![] }, now).unwrap();
+        f.record_changed(now).unwrap();
+    }
     let node = json!({"id": "order-opt", "orderId": "ws-7", "canonicalAccountId": "acct-tfsa", "createdAtUtc": "2026-08-05T16:16:16Z", "status": "SUBMITTED", "side": "SELL", "executionType": "LIMIT",
         "submittedQuantity": 40, "limitPrice": 0.25, "securityCurrency": "USD", "securityId": "sec-o-1", "symbol": "QNC", "security": {"id": "sec-o-1", "stock": {"symbol": "QNC", "name": "Quantum Emotion Corp"}}});
     set_gql(move |op, _| match op {

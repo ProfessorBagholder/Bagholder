@@ -20,7 +20,6 @@ use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_model::securities::Security;
 use bagholder_store::bars::ChartBars;
 use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge, StoredShorts};
-use bagholder_store::market as sf_market;
 use bagholder_store::rows;
 use bagholder_store::tables::{get_meta, set_meta};
 
@@ -917,38 +916,10 @@ pub fn release_notice<T: Notable>(app: &Arc<App>, sym: &str, rows: &[T]) -> (Str
     (title, head)
 }
 
-/// The issuer's declared record, read again because a release just announced a
-/// distribution.
-fn read_record_for_notice(_app: &Arc<App>, _c: &Connection, _sym: &str, _exchange: &str) {
-    #[cfg(test)]
-    {
-        // a test counts the reads rather than reaching the source
-        _app.feeds.record_reads.fetch_add(1, Ordering::SeqCst);
-    }
-    #[cfg(not(test))]
-    {
-        bagholder_market::refresh::refresh_distributions(_c, &[bagholder_model::input::Listing::new(_sym, _exchange, "", "")], true);
-    }
-}
-
 /// A release whose subject is a distribution or a dividend.
 pub fn is_distribution_release(headline: &str) -> bool {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"(?i)\b(distribution|distributions|dividend|dividends)\b").unwrap()).is_match(headline)
-}
-
-/// A per-share amount as a release states it: `$0.1489`, trailing zeros gone
-/// below four places.
-pub fn money_per_share(amount: Option<f64>, currency: &str) -> String {
-    let amount = match amount { Some(a) => a, None => return String::new() };
-    let text = format!("{:.4}", amount);
-    let text = text.trim_end_matches('0');
-    let (whole, cents) = match text.split_once('.') { Some((a, b)) => (a, b), None => (text, "") };
-    // never fewer than cents, never more than the record states
-    let keep = cents.len().max(2);
-    let padded = format!("{}00", cents);
-    let sign = if currency.to_uppercase() == "USD" { "US$" } else { "$" };
-    format!("{}{}.{}", sign, whole, &padded[..keep])
 }
 
 /// `2026-08-31` as `Aug 31`, and a year that is not this one carries it.
@@ -971,44 +942,94 @@ pub fn stamp_day(iso: &str) -> String {
 /// is what the holder wants, and reading it from the record rather than the
 /// release's prose keeps it the same figure the Cashflow tab pays from.
 pub fn distribution_detail(app: &Arc<App>, sym: &str) -> String {
-    let c = match conn(app) { Some(c) => c, None => return String::new() };
-    distribution_detail_in(&c, sym)
+    let Some(f) = app.figures.get() else { return String::new() };
+    // the release is the announcement; the record it comes from carries the figures, and it
+    // is read now rather than when it is next due, so the notice is not a day behind it
+    let read = read_record_for_notice(app, f, sym);
+    let read = match read {
+        Ok(ids) => ids,
+        Err(e) => {
+            log(&format!("bagholder notify: {sym}'s declared distributions could not be read again: {e}"));
+            return String::new();
+        }
+    };
+    match f.book() {
+        Ok(book) => distribution_detail_in(&book, &read),
+        Err(e) => {
+            log(&format!("bagholder notify: the book could not be read for {sym}'s distributions: {e}"));
+            String::new()
+        }
+    }
 }
 
-pub fn distribution_detail_in(c: &Connection, sym: &str) -> String {
-    let key = sym.trim().to_uppercase();
-    let mut rows = sf_market::distributions(c).unwrap_or_default().remove(&key).unwrap_or_default();
-    if rows.is_empty() {
-        return String::new();
+/// The payers held under `sym`, their records read again.
+#[cfg(not(test))]
+fn read_record_for_notice(app: &Arc<App>, f: &crate::figures::Figures, sym: &str) -> Result<Vec<bagholder_core::InstrumentId>, String> {
+    crate::due::read_payer_now(app, f, sym, bagholder_core::jiff::Timestamp::now())
+}
+
+/// A test counts the reads rather than reaching the source, and finds the
+/// instruments by the symbol the book calls them.
+#[cfg(test)]
+fn read_record_for_notice(app: &Arc<App>, f: &crate::figures::Figures, sym: &str) -> Result<Vec<bagholder_core::InstrumentId>, String> {
+    app.feeds.record_reads.fetch_add(1, Ordering::SeqCst);
+    let book = f.book()?;
+    let mut out = vec![];
+    for i in book.instruments().map_err(|e| e.to_string())? {
+        if book.names(i.id).map_err(|e| e.to_string())?.last().is_some_and(|n| n.symbol.eq_ignore_ascii_case(sym)) {
+            out.push(i.id);
+        }
     }
-    rows.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
-    let latest = &rows[0];
-    let amount = money_per_share(latest.amount, &latest.currency);
-    if amount.is_empty() {
-        return String::new();
+    Ok(out)
+}
+
+/// A distribution a unit, exactly as the record states it, never fewer than cents.
+fn per_unit(m: &bagholder_core::Money) -> String {
+    let text = m.amount.to_text();
+    let (whole, cents) = text.split_once('.').unwrap_or((&text, ""));
+    let sign = if m.currency.as_str() == "USD" { "US$" } else { "$" };
+    format!("{sign}{whole}.{cents:0<2}")
+}
+
+/// How often a payer pays, in words.
+fn frequency_word(per_year: u32) -> String {
+    match per_year {
+        52 => "weekly".into(),
+        12 => "monthly".into(),
+        4 => "quarterly".into(),
+        2 => "semi-annual".into(),
+        1 => "annual".into(),
+        n => format!("{n} a year"),
     }
-    let when = stamp_day(&latest.ex_date);
-    let paid = stamp_day(&latest.pay_date);
-    let freq = sf_market::quotes(c)
-        .unwrap_or_default()
-        .remove(&key)
-        .map(|q| q.quote.dividend_frequency)
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
-    let mut out = format!("{} a share", amount);
-    if !freq.is_empty() {
-        out += &format!(", {}", freq);
+}
+
+/// The payer's own declared record, as the book keeps it: the newest declaration
+/// of the instruments given (the one listing a symbol names), its frequency where
+/// one is stated, and the amount it replaces when that differs.
+pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId]) -> String {
+    let [id] = instruments else { return String::new() };
+    let (declared, frequencies) = match (book.declared(), book.frequencies()) {
+        (Ok(d), Ok(f)) => (d, f),
+        (Err(e), _) | (_, Err(e)) => {
+            log(&format!("bagholder notify: the declared distributions could not be read: {e}"));
+            return String::new();
+        }
+    };
+    let Some(read) = declared.get(id) else { return String::new() };
+    let mut items: Vec<&bagholder_book::facts::DeclaredRow> = read.items.iter().collect();
+    items.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
+    let Some(latest) = items.first() else { return String::new() };
+    let mut out = format!("{} a share", per_unit(&latest.amount));
+    if let Some(f) = frequencies.get(id) {
+        out += &format!(", {}", frequency_word(f.per_year));
     }
-    if !when.is_empty() {
-        out += &format!(" · ex {}", when);
+    out += &format!(" · ex {}", stamp_day(&latest.ex_date.to_string()));
+    if let Some(p) = latest.pay_date {
+        out += &format!(", paid {}", stamp_day(&p.to_string()));
     }
-    if !paid.is_empty() {
-        out += &format!(", paid {}", paid);
-    }
-    if let Some(was) = rows[1..].iter().find(|r| r.amount.is_some()) {
+    if let Some(was) = items.get(1) {
         if was.amount != latest.amount {
-            out += &format!(" · was {}", money_per_share(was.amount, &was.currency));
+            out += &format!(" · was {}", per_unit(&was.amount));
         }
     }
     out
@@ -1109,12 +1130,6 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
     let _ = sf::mark_told(c, &scope, &events, &now_iso());
     if fresh.is_empty() {
         return;
-    }
-    if fresh.iter().any(|r| is_distribution_release(&r.headline)) {
-        // the release is the announcement; the record it comes from is what carries the figures,
-        // and it is read now rather than at its own twenty-hour clock so the notice is not a day
-        // behind it
-        read_record_for_notice(app, c, &sym, exchange);
     }
     let (title, body) = release_notice(app, &sym, &fresh);
     notify::emit(app, c, "releases", &release_key(&sym, &fresh), &title, &body, Some(notice_extra(&sym, Some(exchange), &fresh)));

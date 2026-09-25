@@ -110,6 +110,19 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
     Ok(())
 }
 
+/// Read one payer now, whether or not its next distribution is due: a release
+/// announcing one has just arrived, and the record is read again so what is told
+/// of it is not a day behind (`SPEC.md` §2, Notifications, Releases).
+pub fn read_at_once(ctx: &Ctx, need: &PayerNeed) -> Result<()> {
+    let Some(adapter) = adapter_for(need) else { return Ok(()) };
+    if read_with(ctx, need, adapter.as_ref())? == Some(OutcomeKind::NotCarried) {
+        if let Some(market) = market_record_for(need).filter(|m| m.source() != adapter.source()) {
+            read_with(ctx, need, market.as_ref())?;
+        }
+    }
+    Ok(())
+}
+
 /// One reader's read of one payer, unless its source rests: what it answered is
 /// recorded, and what it states is stored.
 fn read_with(ctx: &Ctx, need: &PayerNeed, adapter: &dyn Payer) -> Result<Option<OutcomeKind>> {

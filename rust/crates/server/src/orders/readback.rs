@@ -204,7 +204,7 @@ pub(crate) fn feed_order_row(app: &Arc<App>, node: &wire::FeedOrder) -> Order {
         }
     };
     let security_id = if node.security_id.is_empty() { sec_id } else { node.security_id.clone() };
-    let mut symbol = must(so::symbol_for_security(&db(app), &security_id));
+    let mut symbol = book_symbol(app, &security_id);
     if symbol.is_empty() {
         symbol = if node.symbol.is_empty() { stock_symbol } else { node.symbol.clone() };
     }
@@ -346,7 +346,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> RefreshOrdersAnswer {
             patch.quantity = upd.quantity.map(Some);
             patch.limit_price = upd.limit_price.map(Some);
             patch.stop_price = upd.stop_price.map(Some);
-            let name = must(so::symbol_for_security(&db(app), &o.security_id));
+            let name = book_symbol(app, &o.security_id);
             if !name.is_empty() && name != o.symbol {
                 patch.symbol = Some(name);
             }
@@ -500,4 +500,24 @@ pub fn open_orders_count(app: &Arc<App>) -> i64 {
     let entries = orders_all(app).iter().filter(|o| o.status.is_live() && o.role == Role::Entry).count();
     let at_work = must(so::typed::list_brackets(&db(app), &[])).iter().filter(|b| b.status.is_live() && b.status != BracketStatus::Waiting).count();
     (entries + at_work) as i64
+}
+
+/// What the book calls a Wealthsimple security now (a contract by its terms, as
+/// the book names it); empty when the book has not met it or cannot say.
+fn book_symbol(app: &Arc<App>, security_id: &str) -> String {
+    use bagholder_core::instrument::{RefScheme, Reference};
+    let read = || -> Result<String, String> {
+        let Some(f) = app.figures.get() else { return Ok(String::new()) };
+        let book = f.book()?;
+        let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), security_id);
+        let Some(i) = book.instrument_by_ref(&r).map_err(|e| e.to_string())? else { return Ok(String::new()) };
+        Ok(book.names(i).map_err(|e| e.to_string())?.last().map(|n| n.symbol.clone()).unwrap_or_default())
+    };
+    match read() {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("bagholder orders: what the book calls {security_id} could not be read: {e}"));
+            String::new()
+        }
+    }
 }

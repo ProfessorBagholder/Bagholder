@@ -106,6 +106,25 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
     next_due(&ctx, &needs, &zone, open, now).map(Some)
 }
 
+/// Read the payers held under `symbol` now, each change applied: the ones read.
+#[cfg_attr(test, allow(dead_code))]
+pub fn read_payer_now(app: &App, f: &Figures, symbol: &str, now: Timestamp) -> Result<Vec<InstrumentId>, String> {
+    let book = f.book()?;
+    let Some(zone) = book.zone().map_err(|e| e.to_string())?.map(|z| z.zone) else { return Ok(vec![]) };
+    let bank = bank_zone()?;
+    let cache = f.cache()?;
+    let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
+    let n = f.read(|e| e.needs()).ok_or("the engine is not built")?;
+    let needs = crate::read_sources::needs_of(&book, &n, now.to_zoned(zone).date())?;
+    let mut read = vec![];
+    for p in needs.payers.iter().filter(|p| p.listing.symbol.eq_ignore_ascii_case(symbol.trim())) {
+        payers::run::read_at_once(&ctx, p).map_err(|e| e.to_string())?;
+        f.payer_changed(p.listing.id)?;
+        read.push(p.listing.id);
+    }
+    Ok(read)
+}
+
 /// Every reader for the needs, each change applied.
 fn read_all(f: &Figures, ctx: &Ctx, needs: &Needs) -> Result<(), String> {
     let e = |e: bagholder_sources::read::RunError| e.to_string();

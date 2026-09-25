@@ -89,6 +89,23 @@ impl Book {
         })
     }
 
+    /// Every statement of an account's units read after `since`, newest first:
+    /// when it was read, and the units of `instrument` it states (none where it
+    /// does not list it).
+    pub fn units_reads(&self, account: AccountId, instrument: InstrumentId, since: jiff::Timestamp) -> Result<Vec<(jiff::Timestamp, Option<Dec>)>> {
+        let mut st = self.conn().prepare(
+            "SELECT r.at, u.quantity FROM statements s JOIN broker_reads r ON r.id = s.read_id
+             LEFT JOIN statement_units u ON u.statement_id = s.id AND u.instrument_id = ?2
+             WHERE s.account_id = ?1 AND s.kind = 'units' AND r.at > ?3 ORDER BY r.at DESC, s.id DESC",
+        )?;
+        let rows = st.query_map(params![account.to_string(), instrument.to_string(), at_text(since)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+        rows.map(|r| {
+            let (at, q) = r?;
+            Ok((text::instant("broker_reads", "at", &at)?, q.map(|q| text::dec("statement_units", "quantity", &q)).transpose()?))
+        })
+        .collect()
+    }
+
     /// Each account that backs a margin account, and the margin account.
     pub fn margin_backing(&self) -> Result<BTreeMap<AccountId, AccountId>> {
         let mut st = self.conn().prepare("SELECT account_id, margin_account_id FROM margin_backing ORDER BY account_id")?;

@@ -834,7 +834,14 @@ mod tests {
         let app: &'static Arc<App> = APP.get_or_init(|| {
             let home = std::env::temp_dir().join(format!("bagholder-notify-tests-{}", std::process::id()));
             std::fs::create_dir_all(&home).unwrap();
-            App::new(home, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into())
+            let app = App::new(home.clone(), PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+            // the figures, for what a notice reads of the book
+            crate::tests_common::pulled_book(&home);
+            let at: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
+            let f = crate::figures::Figures::open(&home, at).unwrap();
+            f.state_zone("America/Toronto", at).unwrap();
+            let _ = app.figures.set(f);
+            app
         });
         let conn = app.open().unwrap();
         let app = app.clone();
@@ -1228,6 +1235,40 @@ mod tests {
     // what a notice carries
     // ---------------------------------------------------------------------------
 
+    /// A listing the book holds under `symbol` (entered by hand, once), and its
+    /// declared distributions and frequency as a payer's reader keeps them.
+    fn declared_in_book(app: &Arc<App>, symbol: &str, items: &[(&str, &str, &str)], per_year: Option<u32>) {
+        let f = app.figures.get().unwrap();
+        let now: bagholder_core::jiff::Timestamp = "2026-09-15T12:00:00Z".parse().unwrap();
+        let find = || {
+            let book = f.book().unwrap();
+            book.instruments().unwrap().into_iter().find(|i| book.names(i.id).unwrap().last().is_some_and(|n| n.symbol == symbol)).map(|i| i.id)
+        };
+        if find().is_none() {
+            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: symbol.into(), currency: "CAD".into(), day: "2026-01-05".into(), side: "buy".into(), quantity: "10".into(), price: "5".into(), fee: String::new() };
+            crate::entries::enter(f, &req, now).unwrap();
+        }
+        let id = find().unwrap();
+        let cad = bagholder_core::Currency::parse("CAD").unwrap();
+        let rows: Vec<bagholder_book::facts::DeclaredRow> = items
+            .iter()
+            .map(|(ex, pay, amount)| bagholder_book::facts::DeclaredRow {
+                ex_date: ex.parse().unwrap(),
+                record_date: None,
+                pay_date: Some(pay.parse().unwrap()),
+                amount: bagholder_core::Money::new(bagholder_core::Dec::parse(amount).unwrap(), cad),
+                reinvested: None,
+                form: bagholder_core::distribution::Form::Unstated,
+            })
+            .collect();
+        let book = f.book().unwrap();
+        let src = bagholder_core::SourceName::named("tmx");
+        book.store_declared(id, &rows, &src, now).unwrap();
+        if let Some(n) = per_year {
+            book.store_frequency(id, n, &src, None, now).unwrap();
+        }
+    }
+
     #[test]
     fn test_a_distribution_release_carries_the_figures_and_a_way_to_read_it() {
         // A headline that says only "Announces August 2026 Distributions" tells a holder nothing they
@@ -1235,21 +1276,7 @@ mod tests {
         // replaces, from the issuer's own declared record, and it opens the release itself.
         let (_g, app, c) = setup();
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
-        bagholder_store::market::upsert_distributions(
-            &c,
-            "RDDY",
-            &[bagholder_store::market::DistributionRecord { ex_date: "2026-08-31".into(), pay_date: "2026-09-04".into(), amount: Some(0.15), currency: "CAD".into() },
-              bagholder_store::market::DistributionRecord { ex_date: "2026-07-31".into(), pay_date: "2026-08-06".into(), amount: Some(0.20), currency: "CAD".into() }],
-            "test",
-        )
-        .unwrap();
-        bagholder_store::market::upsert_quote(&c, "RDDY", &bagholder_store::market::QuoteRecord {
-            price: Some(4.87),
-            dividend_amount: Some(0.15),
-            dividend_frequency: "Monthly".into(),
-            ex_dividend_date: "2026-08-31".into(),
-            ..Default::default()
-        }, "tmx", "2026-09-15T14:00:00Z").unwrap();
+        declared_in_book(&app, "RDDY", &[("2026-08-31", "2026-09-04", "0.15"), ("2026-07-31", "2026-08-06", "0.20")], Some(12));
         let first = bagholder_store::feeds::NewsItem {
             id: "tmx:7".into(), headline: "Harvest High Income Shares ETFs Announces August 2026 Distributions".into(),
             source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
@@ -1277,8 +1304,8 @@ mod tests {
 
     #[test]
     fn test_a_release_that_announces_nothing_of_the_kind_carries_the_headline_alone() {
-        let (_g, app, c) = setup();
-        bagholder_store::market::upsert_distributions(&c, "QNC", &[bagholder_store::market::DistributionRecord { ex_date: "2026-08-31".into(), pay_date: "2026-09-04".into(), amount: Some(0.15), currency: "CAD".into() }], "test").unwrap();
+        let (_g, app, _c) = setup();
+        declared_in_book(&app, "QNC", &[("2026-08-31", "2026-09-04", "0.15")], None);
         assert_eq!(
             crate::feeds::release_notice(&app, "QNC", &[news_item("tmx:1", "Quantum eMotion Wins Certification", "", "", "2026-09-15T13:00:00Z")]),
             ("Press release · QNC".to_string(), "Quantum eMotion Wins Certification".to_string())
