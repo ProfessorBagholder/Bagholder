@@ -1,0 +1,34 @@
+# A selection of the fields Wealthsimple's own InstitutionalTransfer fragment asks (web app release 0.3.668812):
+# its state and when each was reached, the value asked and, where stated, the value that arrived per currency, and what it moves.
+query FetchInstitutionalTransfer($id: ID!) {
+  accountTransfer(id: $id) {
+    ...InstitutionalTransfer
+  }
+}
+fragment InstitutionalTransfer on InstitutionalTransfer {
+  id
+  accountId: account_id
+  state
+  transferStatus: external_state
+  expectedValue: expected_value
+  estimatedTransferAmount: estimated_transfer_amount
+  estimatedTransferAmountLegCad: estimated_transfer_amount_leg_cad
+  estimatedTransferAmountLegUsd: estimated_transfer_amount_leg_usd
+  actualValue: actual_value
+  actualValueLegCad: actual_value_leg_cad
+  actualValueLegUsd: actual_value_leg_usd
+  actualValueUpdatedAt: actual_value_updated_at
+  transferType: transfer_type
+  type
+  transferFeeReimbursement: transfer_fee_reimbursement {
+    id
+    feeAmount: fee_amount
+  }
+  stateHistories: state_histories {
+    state
+    event
+    transitionedAt: transitioned_at
+  }
+  updatedAt: updated_at
+  stateUpdatedAt: state_updated_at
+}

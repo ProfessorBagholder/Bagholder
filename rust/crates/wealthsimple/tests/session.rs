@@ -1,5 +1,7 @@
 //! The session's rules (`docs/plans/stage-3b-wealthsimple.md`, "The session"),
 //! each on a fake network that answers in order and counts what it was asked.
+//! A read refused for its session and a read of what does not exist answer as
+//! Wealthsimple answered them (the owner's browser, 2026-09-24).
 
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +38,9 @@ fn net(q: &Arc<Queue>) -> Net {
 fn queue(replies: &[(u16, &str)]) -> Arc<Queue> {
     Arc::new(Queue { replies: Mutex::new(replies.iter().map(|(s, b)| (*s, b.to_string())).collect()), asked: Mutex::new(vec![]) })
 }
+
+/// Wealthsimple's answer to a read whose session is not valid.
+const UNAUTHENTICATED: &str = r#"{"errors":[{"message":"Not Authorized","extensions":{"code":"UNAUTHENTICATED"}}]}"#;
 
 fn session_file(refresh_token: &str) -> (tempfile::TempDir, SessionFile) {
     let dir = tempfile::tempdir().unwrap();
@@ -89,14 +94,14 @@ fn a_read_refused_for_its_session_is_refreshed_once_and_asked_once_more_and_neve
     let ok = r#"{"data":{"securities":[]}}"#;
     let token = r#"{"access_token":"a2","refresh_token":"r2","expires_in":1800}"#;
     // refused, refreshed, answered
-    let q = queue(&[(401, "{}"), (200, token), (200, ok)]);
+    let q = queue(&[(401, UNAUTHENTICATED), (200, token), (200, ok)]);
     let (_d, file) = session_file("r1");
     let n = net(&q);
     let mut c = Client::new(&n, file);
     assert!(c.graphql("Securities", json::parse(r#"{"ids":[]}"#).unwrap()).is_ok());
     assert_eq!(q.asked.lock().unwrap().len(), 3);
     // refused again after its refresh: a lapse, and nothing more is asked
-    let q = queue(&[(401, "{}"), (200, r#"{"access_token":"a3","refresh_token":"r3","expires_in":1800}"#), (401, "{}")]);
+    let q = queue(&[(401, UNAUTHENTICATED), (200, r#"{"access_token":"a3","refresh_token":"r3","expires_in":1800}"#), (401, UNAUTHENTICATED)]);
     let (_d2, file) = session_file("r9");
     let n = net(&q);
     let mut c = Client::new(&n, file);
@@ -106,12 +111,13 @@ fn a_read_refused_for_its_session_is_refreshed_once_and_asked_once_more_and_neve
 
 #[test]
 fn a_graphql_error_is_a_refusal_naming_wealthsimple_s_message() {
-    let q = queue(&[(200, r#"{"errors":[{"message":"BAD_REQUEST","extensions":{"code":"INCORRECT"}}],"data":null}"#)]);
+    // a read of a transfer that does not exist: answered 200, with the error
+    let q = queue(&[(200, r#"{"data":{"internalTransfer":null},"errors":[{"message":"NOT_FOUND","path":["internalTransfer"],"extensions":{"code":"NOT_FOUND"}}]}"#)]);
     let (_d, file) = session_file("r1");
     let n = net(&q);
     let mut c = Client::new(&n, file);
-    match c.graphql("Securities", json::parse(r#"{"ids":[]}"#).unwrap()) {
-        Err(Failure::Refused(w)) => assert!(w.contains("BAD_REQUEST"), "{w}"),
+    match c.graphql("FetchInternalTransfer", json::parse(r#"{"id":"internal_transfer-none"}"#).unwrap()) {
+        Err(Failure::Refused(w)) => assert!(w.contains("NOT_FOUND"), "{w}"),
         other => panic!("{other:?}"),
     }
 }

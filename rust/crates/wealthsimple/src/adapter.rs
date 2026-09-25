@@ -27,6 +27,10 @@ pub trait Source {
     fn entitlements(&mut self, activity: &str) -> Answer<Option<Value>>;
     /// A conversion's detail: a funding intent's node or an internal transfer.
     fn conversion(&mut self, id: &str) -> Answer<Option<Value>>;
+    /// A transfer in from another institution's detail.
+    fn transfer(&mut self, id: &str) -> Answer<Option<Value>>;
+    /// A credit card account (`creditCardAccount`): its balance.
+    fn card(&mut self, account: &str) -> Answer<Value>;
     /// The position nodes of an account as of a day.
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value>;
     /// The balances replies' accounts.
@@ -45,6 +49,10 @@ pub struct Wealthsimple<S: Source> {
     securities: BTreeMap<String, Option<Value>>,
     positions: BTreeMap<(String, String), Option<Value>>,
     moves: Vec<BookMove>,
+    transfers: BTreeMap<String, Option<Value>>,
+    /// The credit card accounts, by key, and the currency each is held in:
+    /// their balance is stated apart from the others'.
+    cards: BTreeMap<String, Currency>,
     /// The first failure met while putting a record together.
     failed: Option<Failure>,
 }
@@ -55,7 +63,7 @@ fn mismatch(m: Mismatch) -> Failure {
 
 impl<S: Source> Wealthsimple<S> {
     pub fn new(source: S) -> Wealthsimple<S> {
-        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], failed: None }
+        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), failed: None }
     }
 
     fn day_of(&self, row: &Value) -> Option<jiff::civil::Date> {
@@ -125,6 +133,55 @@ impl<S: Source> Replies for Wealthsimple<S> {
             }
         }
     }
+    fn transfer(&mut self, id: &str) -> Option<Value> {
+        if let Some(t) = self.transfers.get(id) {
+            return t.clone();
+        }
+        let got = match self.source.transfer(id) {
+            Ok(t) => t,
+            Err(f) => {
+                self.note(f);
+                None
+            }
+        };
+        self.transfers.insert(id.to_string(), got.clone());
+        got
+    }
+    fn deposits(&mut self, account: &str, from: &str) -> Option<Vec<Value>> {
+        let from: jiff::civil::Date = from.parse().ok()?;
+        match self.source.history(account, Some(from)) {
+            // the days asked for: a source may answer more
+            Ok(nodes) => Some(nodes.into_iter().filter(|n| Node::root(n).day("date").is_ok_and(|d| d >= from)).collect()),
+            Err(f) => {
+                self.note(f);
+                None
+            }
+        }
+    }
+    fn others(&mut self, account: &str, first: &str, last: &str, except: &str) -> Vec<Value> {
+        let (Ok(first), Ok(last)) = (first.parse::<jiff::civil::Date>(), last.parse::<jiff::civil::Date>()) else { return vec![] };
+        self.rows
+            .iter()
+            .filter(|r| {
+                let n = Node::root(r);
+                n.text("canonicalId").ok() != Some(except)
+                    && (n.text("accountId").ok() == Some(account) || n.opt_text("opposingAccountId").ok().flatten() == Some(account))
+                    && assemble::read_against_positions(r)
+                    && self.day_of(r).is_some_and(|d| d >= first && d <= last)
+            })
+            .cloned()
+            .collect()
+    }
+    fn withheld(&mut self, account: &str, id: &str) -> Vec<Value> {
+        self.rows
+            .iter()
+            .filter(|r| {
+                let n = Node::root(r);
+                n.text("type").ok() == Some("WITHHOLDING_TAX") && n.text("accountId").ok() == Some(account) && n.opt_text("externalCanonicalId").ok().flatten() == Some(id)
+            })
+            .cloned()
+            .collect()
+    }
     fn positions(&mut self, account: &str, day: &str) -> Option<Value> {
         let key = (account.to_string(), day.to_string());
         if let Some(p) = self.positions.get(&key) {
@@ -159,7 +216,7 @@ impl<S: Source> Replies for Wealthsimple<S> {
 /// The adapter's reading of one row, for the pull.
 pub fn row_of(value: &Value, day: jiff::civil::Date) -> Result<Row, Mismatch> {
     let n = Node::root(value);
-    let reads_positions = !assemble::needs(value, &day.to_string())?.positions.is_empty();
+    let reads_positions = assemble::needs(value, &day.to_string())?.reads_positions();
     Ok(Row { key: n.text("canonicalId")?.to_string(), account: n.text("accountId")?.to_string(), day, settled: settled(n.text("unifiedStatus")?), reads_positions, value: value.clone() })
 }
 
@@ -194,7 +251,15 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     }
     fn accounts(&mut self) -> Answer<Vec<AccountStated>> {
         let nodes = self.source.accounts()?;
-        crate::read::accounts(&nodes).map_err(mismatch)
+        let stated = crate::read::accounts(&nodes).map_err(mismatch)?;
+        for n in &nodes {
+            let n = Node::root(n);
+            if n.text("unifiedAccountType").map_err(mismatch)? == "CREDIT_CARD" {
+                let currency = Currency::parse(n.text("currency").map_err(mismatch)?).map_err(|e| Failure::Mismatch(e.to_string()))?;
+                self.cards.insert(n.text("id").map_err(mismatch)?.to_string(), currency);
+            }
+        }
+        Ok(stated)
     }
     fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Row>> {
         let values = self.source.activity(account, from)?;
@@ -217,6 +282,23 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value> {
         self.failed = None;
         let needs = assemble::needs(&row.value, &row.day.to_string()).map_err(mismatch)?;
+        if let Some(t) = &needs.transfer {
+            // the book's moves in the account from the row's day to the day the
+            // transfer completed
+            let done = self.transfer(t).and_then(|v| crate::mapping::completed_on(&Node::root(&v)).ok().flatten());
+            if let Some(done) = done {
+                let mut span = Vec::new();
+                let mut d = row.day;
+                while d <= done {
+                    span.push(d.to_string());
+                    match d.tomorrow() {
+                        Ok(n) => d = n,
+                        Err(_) => break,
+                    }
+                }
+                self.moves = book_moves(book, std::slice::from_ref(&row.account), &span);
+            }
+        }
         if !needs.positions.is_empty() {
             // the book's moves over the days the row's group spans, a day either side
             let group = self.siblings(&row.value);
@@ -249,7 +331,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn reads_positions(&self, payload: &Value) -> bool {
         let Ok(row) = Node::root(payload).obj("activity") else { return false };
         let Some(day) = self.day_of(row.value()) else { return false };
-        assemble::needs(row.value(), &day.to_string()).is_ok_and(|n| !n.positions.is_empty())
+        assemble::needs(row.value(), &day.to_string()).is_ok_and(|n| n.reads_positions())
     }
     fn unsettled(&self, payload: &Value) -> Option<(String, jiff::civil::Date)> {
         let row = Node::root(payload).obj("activity").ok()?;
@@ -267,7 +349,14 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     }
     fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>> {
         let nodes = self.source.balances(accounts)?;
-        let all = crate::read::cash(&nodes).map_err(mismatch)?;
+        let mut all = crate::read::cash(&nodes).map_err(mismatch)?;
+        // a card's balance is what is owed on it: the account's cash below zero
+        for (key, currency) in self.cards.clone() {
+            if accounts.contains(&key) {
+                let owed = crate::read::card_balance(&self.source.card(&key)?).map_err(mismatch)?;
+                all.insert(key, BTreeMap::from([(currency, owed.neg())]));
+            }
+        }
         Ok(all.into_iter().filter(|(k, _)| accounts.contains(k)).collect())
     }
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>> {

@@ -13,7 +13,17 @@
 //!   "entitlements": a corporate action's children (FetchCorporateActionChildActivities)
 //!   "conversion":   a currency conversion's detail (FetchFundingIntent's node or
 //!                   FetchInternalTransfer's), or a move's that states no amount
-//!   "siblings":     moves between the same two accounts on neighbouring days
+//!   "transfer":     a transfer in from another institution's detail
+//!                   (FetchInstitutionalTransfer)
+//!   "deposits":     [{ "account", "nodes": each day's net deposits }]: for a move
+//!                   between accounts that states no amount, both accounts' days
+//!                   from the day before its own to the first on which either's
+//!                   net deposits changed (FetchAccountHistoricalFinancials)
+//!   "withheld":     a withdrawal's tax withheld rows (sharing its id): its
+//!                   gross amount is what reached the other account and the tax
+//!   "siblings":     moves between the same two accounts on neighbouring days; for
+//!                   a transfer from another institution, the account's other rows
+//!                   read against positions while it was under way
 //!   "positions":    [{ "account", "day", "nodes": positions as of that day }],
 //!                   around an event or a move of holdings
 //!   "book":         [{ "account", "security", "day", "quantity" }]: what the
@@ -37,6 +47,9 @@ pub struct Record {
     pub order: Option<Value>,
     pub entitlements: Option<Value>,
     pub conversion: Option<Value>,
+    pub transfer: Option<Value>,
+    pub deposits: Vec<Deposits>,
+    pub withheld: Vec<Value>,
     /// Moves between the same two accounts on neighbouring days, read with it.
     pub siblings: Vec<Value>,
     pub positions: Vec<Positions>,
@@ -48,6 +61,13 @@ pub struct Record {
 pub struct Positions {
     pub account: String,
     pub day: String,
+    pub nodes: Value,
+}
+
+/// An account's net deposits day by day, as Wealthsimple stated them.
+#[derive(Clone, Debug)]
+pub struct Deposits {
+    pub account: String,
     pub nodes: Value,
 }
 
@@ -65,7 +85,7 @@ pub struct BookMove {
 impl Record {
     /// A row with nothing read beside it yet.
     pub fn of(activity: Value) -> Record {
-        Record { activity, securities: BTreeMap::new(), order: None, entitlements: None, conversion: None, siblings: vec![], positions: vec![], book: vec![] }
+        Record { activity, securities: BTreeMap::new(), order: None, entitlements: None, conversion: None, transfer: None, deposits: vec![], withheld: vec![], siblings: vec![], positions: vec![], book: vec![] }
     }
 
     /// The payload the book stores.
@@ -75,10 +95,26 @@ impl Record {
         if !self.securities.is_empty() {
             m.insert("securities".to_string(), Value::Object(self.securities.clone()));
         }
-        for (k, v) in [("order", &self.order), ("entitlements", &self.entitlements), ("conversion", &self.conversion)] {
+        for (k, v) in [("order", &self.order), ("entitlements", &self.entitlements), ("conversion", &self.conversion), ("transfer", &self.transfer)] {
             if let Some(v) = v {
                 m.insert(k.to_string(), v.clone());
             }
+        }
+        if !self.deposits.is_empty() {
+            let items = self
+                .deposits
+                .iter()
+                .map(|d| {
+                    let mut o = BTreeMap::new();
+                    o.insert("account".to_string(), Value::String(d.account.clone()));
+                    o.insert("nodes".to_string(), d.nodes.clone());
+                    Value::Object(o)
+                })
+                .collect();
+            m.insert("deposits".to_string(), Value::Array(items));
+        }
+        if !self.withheld.is_empty() {
+            m.insert("withheld".to_string(), Value::Array(self.withheld.clone()));
         }
         if !self.siblings.is_empty() {
             m.insert("siblings".to_string(), Value::Array(self.siblings.clone()));

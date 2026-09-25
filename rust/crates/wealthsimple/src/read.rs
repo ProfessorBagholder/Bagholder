@@ -103,3 +103,9 @@ pub fn cash(accounts: &[Value]) -> Read<BTreeMap<String, BTreeMap<Currency, Dec>
     }
     Ok(out)
 }
+
+/// What is owed on a credit card now (`creditCardAccount.balance.current`: the
+/// posted purchases less payments; `pending` is apart).
+pub fn card_balance(node: &Value) -> Read<Dec> {
+    Node::root(node).obj("balance")?.dec_text("current")
+}

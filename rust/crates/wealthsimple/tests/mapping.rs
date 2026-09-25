@@ -213,14 +213,66 @@ fn an_expiry_takes_a_long_out_and_brings_a_short_back() {
 }
 
 #[test]
-fn a_move_whose_row_states_no_amount_takes_it_from_its_detail() {
-    // the detail replayed is a real internal transfer's, its amount edited to
-    // this move's (edited-internal-transfer-full-in-kind.json)
+fn a_move_whose_row_states_no_amount_moves_what_both_accounts_net_deposits_show() {
+    // "full in kind" moves of accounts sold to cash first: neither the row nor
+    // its detail states an amount, and the cash moves days after the row, on
+    // the day one account's net deposits fall by what the other's rise
     let rows = all();
-    let (row, m) = rows.iter().find(|(r, _)| text(r, "type") == Some("INTERNAL_TRANSFER") && text(r, "amount").is_none() && text(r, "unifiedStatus") == Some("COMPLETED")).cloned().expect("a move with no amount");
-    assert_eq!(text(&row, "subType"), Some("SOURCE"));
+    let moves: Vec<&(Value, Mapped)> = rows.iter().filter(|(r, _)| text(r, "type") == Some("INTERNAL_TRANSFER") && text(r, "amount").is_none() && text(r, "unifiedStatus") == Some("COMPLETED")).collect();
+    assert_eq!(moves.len(), 4);
+    let mut seen = std::collections::BTreeMap::new();
+    for (row, m) in &moves {
+        assert!(m.problems.is_empty(), "{:?}", m.problems);
+        let [leg] = m.legs.as_slice() else { panic!("{:?}", m.legs) };
+        let cash = leg.cash.expect("the cash moved");
+        assert!(leg.trade_date > day_of(row), "moved {} for a row of {}", leg.trade_date, day_of(row));
+        match text(row, "subType") {
+            Some("SOURCE") => assert_eq!(leg.kind, Kind::TransferOut),
+            _ => assert_eq!(leg.kind, Kind::TransferIn),
+        }
+        *seen.entry((text(row, "externalCanonicalId").unwrap().to_string(), leg.trade_date)).or_insert(Dec::ZERO) = seen.get(&(text(row, "externalCanonicalId").unwrap().to_string(), leg.trade_date)).copied().unwrap_or(Dec::ZERO).checked_add(cash.amount).unwrap();
+        assert!(cash.amount.abs() == dec("9307.07") || cash.amount.abs() == dec("6861.21"), "{cash:?}");
+    }
+    // each move's two sides on one day, one the other's opposite
+    assert_eq!(seen.len(), 2);
+    assert!(seen.values().all(|v| v.is_zero()));
+}
+
+#[test]
+fn a_transfer_from_another_institution_books_what_arrived_on_the_day_it_completed() {
+    // the row states the 80,807.80 asked for; the detail states no value
+    // arrived; the account's positions show 80,650.30 arriving by the day the
+    // detail says the transfer completed
+    let rows = all();
+    let (_, m) = rows.iter().find(|(r, _)| text(r, "type") == Some("INSTITUTIONAL_TRANSFER_INTENT") && text(r, "amount") == Some("80807.8")).cloned().expect("the transfer");
     assert!(m.problems.is_empty(), "{:?}", m.problems);
-    assert_eq!(m.legs.len(), 1);
-    assert_eq!(m.legs[0].kind, Kind::TransferOut);
-    assert_eq!(m.legs[0].cash, Some(bagholder_core::Money::new(dec("-9307.07"), Currency::CAD)));
+    let [leg] = m.legs.as_slice() else { panic!("{:?}", m.legs) };
+    assert_eq!(leg.kind, Kind::TransferIn);
+    assert_eq!(leg.cash, Some(bagholder_core::Money::new(dec("80650.3"), Currency::CAD)));
+    assert_eq!(leg.trade_date, "2023-09-15".parse().unwrap());
+    // one whose detail was not read waits on it, named, and moves nothing
+    let (_, unread) = rows.iter().find(|(r, _)| text(r, "type") == Some("INSTITUTIONAL_TRANSFER_INTENT") && text(r, "amount") != Some("80807.8") && text(r, "unifiedStatus") == Some("COMPLETED")).cloned().expect("another transfer");
+    assert_eq!(unread.problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), vec!["transfer-arrival-unstated"]);
+    assert!(unread.legs.iter().all(|l| l.cash.is_none() && l.quantity.is_none()));
+}
+
+#[test]
+fn tax_withheld_from_a_withdrawal_is_part_of_its_gross_amount() {
+    // the registered account's row states the gross 2,347.33; the tax row
+    // 234.73; the account paid into receives 2,112.60
+    let rows = all();
+    let (tax_row, tax) = rows.iter().find(|(r, _)| text(r, "type") == Some("WITHHOLDING_TAX") && text(r, "amount") == Some("234.73")).cloned().expect("the tax row");
+    let id = text(&tax_row, "externalCanonicalId").unwrap();
+    let side = |sub: &str| rows.iter().find(|(r, _)| text(r, "externalCanonicalId") == Some(id) && text(r, "subType") == Some(sub)).cloned().unwrap().1;
+    let cash = |m: &Mapped| m.legs.iter().map(|l| l.cash.unwrap().amount).fold(Dec::ZERO, |a, b| a.checked_add(b).unwrap());
+    assert_eq!(cash(&side("SOURCE")), dec("-2112.60"));
+    assert_eq!(cash(&side("DESTINATION")), dec("2112.60"));
+    assert_eq!(cash(&tax), dec("-234.73"));
+}
+
+#[test]
+fn a_credit_card_s_balance_is_what_is_owed_on_it() {
+    let v = json::parse(&std::fs::read_to_string(fixtures().join("credit-card-account-1.json")).unwrap()).unwrap();
+    let card = Node::root(&v).obj("data").unwrap().obj("creditCardAccount").unwrap().value().clone();
+    assert_eq!(bagholder_wealthsimple::read::card_balance(&card).unwrap(), dec("5140.28"));
 }

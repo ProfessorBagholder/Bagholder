@@ -12,6 +12,7 @@ A test in the old crates that records one of these as it behaves today is named 
 - **Bad rows dropped or read as zero.** Guarded: `sources/tests/reply.rs` (a reply that does not match its shape is a named mismatch); `book/tests/records.rs` `a_payload_the_mapping_cannot_read_is_kept_with_a_problem`; scan for `lenient`.
 - **An incremental pull from a guessed overlap (fourteen days), with no record of a full read**, so a row posted or revised later than the overlap was never read, and the broker check could not tell a missing row from a real difference. Guarded: `wealthsimple/tests/pull.rs` (the first pull whole, then from the last full read and any row not yet final); `book/tests/statements.rs` (`only_a_read_of_every_page_is_a_full_read`).
 - **A trade's cash signed by Wealthsimple's `amountSign`**, which is not the cash's direction (a buy is `positive`; a multi-leg row's sign is the opposite of its legs'), so every multi-leg roll's cash was booked backwards. Guarded: `wealthsimple/tests/mapping.rs` (`a_buy_pays_and_a_sale_receives_whatever_the_sign_says`, `a_multi_leg_order_is_its_legs_and_their_cash`).
+- **A card purchase kept under its pending id after Wealthsimple posted it under another**, so each such purchase counted twice. Guarded: `wealthsimple/tests/pull.rs` (`a_pending_row_posted_again_under_another_id_leaves_the_book`, `an_imported_row_the_broker_no_longer_lists_leaves_the_book_on_the_first_full_read`).
 
 ## Money and rates
 

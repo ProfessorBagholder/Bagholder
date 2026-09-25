@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_core::json::Value;
 use bagholder_sources::reply::{Node, Read};
 
-use crate::record::{BookMove, Positions, Record};
+use crate::record::{BookMove, Deposits, Positions, Record};
 
 /// What a row needs read beside it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -26,6 +26,21 @@ pub struct Needs {
     pub conversion: Option<String>,
     /// Positions of these accounts on these days.
     pub positions: BTreeSet<(String, String)>,
+    /// A transfer in from another institution's detail, by its id: its
+    /// positions are read once the detail states when it completed.
+    pub transfer: Option<String>,
+    /// The accounts whose net deposits show when a move that states no amount
+    /// moved its cash.
+    pub deposits: Vec<String>,
+    /// The id a withdrawal shares with the tax withheld from it.
+    pub withheld: Option<String>,
+}
+
+impl Needs {
+    /// Whether the row is read against positions (its moves are not the book's own).
+    pub fn reads_positions(&self) -> bool {
+        !self.positions.is_empty() || self.transfer.is_some()
+    }
 }
 
 /// Where a record's replies come from.
@@ -35,6 +50,14 @@ pub trait Replies {
     fn order(&mut self, batch: &str) -> Option<Value>;
     fn entitlements(&mut self, activity: &str) -> Option<Value>;
     fn conversion(&mut self, id: &str) -> Option<Value>;
+    fn transfer(&mut self, id: &str) -> Option<Value>;
+    /// An account's `historicalDaily` nodes from `from`.
+    fn deposits(&mut self, account: &str, from: &str) -> Option<Vec<Value>>;
+    /// The account's rows read against positions (moves of holdings, corporate
+    /// actions) filed from `first` to `last`, other than `except`.
+    fn others(&mut self, account: &str, first: &str, last: &str, except: &str) -> Vec<Value>;
+    /// The account's tax withheld rows that share this id.
+    fn withheld(&mut self, account: &str, id: &str) -> Vec<Value>;
     /// The position nodes of one account as of one day.
     fn positions(&mut self, account: &str, day: &str) -> Option<Value>;
     /// The moves of holdings between the same two accounts as `row` (or, from
@@ -63,16 +86,29 @@ pub fn needs(row: &Value, day: &str) -> Read<Needs> {
     }
     let account = n.text("accountId")?.to_string();
     let transfer_type = n.opt_text("transferType")?.unwrap_or("");
+    let completed = n.text("unifiedStatus")? == "COMPLETED";
     let mut accounts = vec![account];
     match ty {
         "OPTIONS_MULTILEG" => out.order = n.opt_text("externalCanonicalId")?.map(str::to_string),
         "CORPORATE_ACTION" => out.entitlements = Some(n.text("canonicalId")?.to_string()),
         "FUNDS_CONVERSION" => out.conversion = Some(n.opt_text("externalCanonicalId")?.unwrap_or(n.text("canonicalId")?).to_string()),
-        // a move between accounts whose row states no amount: its detail does
-        "INTERNAL_TRANSFER" if n.opt_text("amount")?.is_none() => out.conversion = n.opt_text("externalCanonicalId")?.map(str::to_string),
+        // a move between accounts whose row states no amount: its detail may,
+        // and the accounts' net deposits show the cash it moved
+        "INTERNAL_TRANSFER" if n.opt_text("amount")?.is_none() => {
+            out.conversion = n.opt_text("externalCanonicalId")?.map(str::to_string);
+            if completed {
+                out.deposits = [Some(n.text("accountId")?), n.opt_text("opposingAccountId")?].into_iter().flatten().map(str::to_string).collect();
+            }
+        }
+        // a withdrawal from a registered account states its gross amount; the
+        // tax withheld from it is its own row, sharing its id
+        "INTERNAL_TRANSFER" if completed && n.opt_text("subType")? == Some("SOURCE") => out.withheld = n.opt_text("externalCanonicalId")?.map(str::to_string),
+        // a transfer in from another institution: the row states the value
+        // asked for; what arrived, and when, its detail and the positions do
+        "INSTITUTIONAL_TRANSFER_INTENT" if completed => out.transfer = Some(n.text("externalCanonicalId")?.to_string()),
         _ => {}
     }
-    let moves_holdings = ty == "CORPORATE_ACTION" || ty == "ASSET_MOVEMENT" || ty == "INSTITUTIONAL_TRANSFER_INTENT" || (ty == "INTERNAL_TRANSFER" && transfer_type.contains("in_kind"));
+    let moves_holdings = ty == "CORPORATE_ACTION" || ty == "ASSET_MOVEMENT" || (ty == "INTERNAL_TRANSFER" && transfer_type.contains("in_kind"));
     if moves_holdings {
         if let Some(other) = n.opt_text("opposingAccountId")? {
             accounts.push(other.to_string());
@@ -120,6 +156,50 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
     }
     if let Some(c) = &needs.conversion {
         r.conversion = replies.conversion(c);
+    }
+    if let Some(id) = &needs.withheld {
+        r.withheld = replies.withheld(Node::root(&r.activity).text("accountId")?, id);
+    }
+    // a transfer from another institution: the account's positions the day
+    // before its row and on the day its detail says it completed
+    let mut arrival: Option<(String, String)> = None;
+    if let Some(t) = &needs.transfer {
+        r.transfer = replies.transfer(t);
+        if let Some(done) = r.transfer.as_ref().map(|t| crate::mapping::completed_on(&Node::root(t))).transpose()?.flatten() {
+            let account = Node::root(&r.activity).text("accountId")?.to_string();
+            let before = shift(day, -1).unwrap_or_else(|| day.to_string());
+            let done = done.to_string();
+            r.siblings = replies.others(&account, day, &done, Node::root(&r.activity).text("canonicalId")?);
+            for d in [&before, &done] {
+                if let Some(nodes) = replies.positions(&account, d) {
+                    r.positions.push(Positions { account: account.clone(), day: d.clone(), nodes });
+                }
+            }
+            arrival = Some((account, done));
+        }
+    }
+    // a move that states no amount: each account's net deposits from the day
+    // before it to the first day either's changed
+    if !needs.deposits.is_empty() {
+        let from = shift(day, -1).unwrap_or_else(|| day.to_string());
+        let mut read: Vec<(String, Vec<Value>)> = Vec::new();
+        for a in &needs.deposits {
+            if let Some(mut nodes) = replies.deposits(a, &from) {
+                nodes.sort_by(|x, y| Node::root(x).text("date").unwrap_or("").cmp(Node::root(y).text("date").unwrap_or("")));
+                read.push((a.clone(), nodes));
+            }
+        }
+        // kept up to the first day the two show the move, or the day before
+        // alone where none does
+        let date = |v: &Value| Node::root(v).text("date").unwrap_or("").to_string();
+        let cut = match read.as_slice() {
+            [(_, a), (_, b)] => crate::mapping::mirrored_day(&crate::read::history(a)?, &crate::read::history(b)?)?.map(|(d, _)| d.to_string()),
+            _ => None,
+        };
+        for (account, nodes) in read {
+            let kept: Vec<Value> = nodes.into_iter().filter(|n| cut.as_ref().is_some_and(|c| date(n) <= *c) || date(n) == from).collect();
+            r.deposits.push(Deposits { account, nodes: Value::Array(kept) });
+        }
     }
     // a move of holdings is read with its siblings, over the days they span
     let mut positions = needs.positions.clone();
@@ -180,6 +260,18 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
         securities.insert(id, s);
     }
     r.securities = securities;
+    if let Some((account, done)) = &arrival {
+        let mut days = vec![];
+        let mut d = Some(day.to_string());
+        while let Some(x) = d {
+            if x > *done {
+                break;
+            }
+            d = shift(&x, 1);
+            days.push(x);
+        }
+        r.book = replies.book(std::slice::from_ref(account), &days);
+    }
     if !needs.positions.is_empty() {
         let accounts: Vec<String> = needs.positions.iter().map(|(a, _)| a.clone()).collect::<BTreeSet<_>>().into_iter().collect();
         let (first, last) = span(&r.siblings, day);
@@ -200,9 +292,16 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
 
 /// Whether a row moves holdings read against positions, in a group with others.
 fn moves_holdings(r: &Node) -> bool {
-    matches!(r.text("type").unwrap_or(""), "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "INSTITUTIONAL_TRANSFER_INTENT")
+    matches!(r.text("type").unwrap_or(""), "INTERNAL_TRANSFER" | "ASSET_MOVEMENT")
         && r.opt_text("transferType").ok().flatten().is_none_or(|t| !t.contains("in_cash"))
         && r.text("unifiedStatus").ok() == Some("COMPLETED")
+}
+
+/// Whether a row is read against positions: a move of holdings, a corporate
+/// action, a transfer from another institution.
+pub fn read_against_positions(r: &Value) -> bool {
+    let n = Node::root(r);
+    moves_holdings(&n) || (matches!(n.text("type").unwrap_or(""), "CORPORATE_ACTION" | "INSTITUTIONAL_TRANSFER_INTENT") && n.text("unifiedStatus").ok() == Some("COMPLETED"))
 }
 
 /// A move of holdings' group: every such move connected to it by a shared

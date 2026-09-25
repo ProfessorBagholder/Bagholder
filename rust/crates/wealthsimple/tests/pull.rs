@@ -83,6 +83,16 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances"]);
 }
 
+/// The accounts list's edges in an accounts reply.
+fn edges(v: &mut Value) -> &mut Vec<Value> {
+    let Value::Object(root) = v else { panic!() };
+    let Some(Value::Object(data)) = root.get_mut("data") else { panic!() };
+    let Some(Value::Object(identity)) = data.get_mut("identity") else { panic!() };
+    let Some(Value::Object(list)) = identity.get_mut("accounts") else { panic!() };
+    let Some(Value::Array(edges)) = list.get_mut("edges") else { panic!() };
+    edges
+}
+
 /// One of the fixture's rows, under another id, with another status.
 fn row_as(rows: &[Value], key: &str, status: &str) -> Value {
     let mut v = rows.iter().find(|r| Node::root(r).text("type").ok() == Some("DIY_BUY")).unwrap().clone();
@@ -176,4 +186,38 @@ fn an_imported_row_the_broker_no_longer_lists_leaves_the_book_on_the_first_full_
     assert_eq!((first.superseded, first.removed), (1, 1));
     assert_eq!(state(&book, "bagholder-import", "old-listed"), RecordState::Superseded);
     assert_eq!(state(&book, "bagholder-import", "old-pending"), RecordState::Removed);
+}
+
+#[test]
+fn a_credit_card_s_cash_is_what_is_owed_on_it() {
+    // the accounts list with a card beside the account (its node edited from
+    // the account's), and the card's own reply as Wealthsimple sent it
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    let replies = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(dir()).unwrap() {
+        let p = e.unwrap().path();
+        if !p.to_string_lossy().ends_with(".later") {
+            std::fs::copy(&p, replies.path().join(p.file_name().unwrap())).unwrap();
+        }
+    }
+    let path = replies.path().join("edited-accounts-one.json");
+    let mut accounts = bagholder_core::json::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut card = edges(&mut accounts)[0].clone();
+    if let Value::Object(e) = &mut card {
+        if let Some(Value::Object(n)) = e.get_mut("node") {
+            n.insert("id".into(), Value::String("anon-ca-4".into()));
+            n.insert("unifiedAccountType".into(), Value::String("CREDIT_CARD".into()));
+            n.insert("nickname".into(), Value::Null);
+        }
+    }
+    edges(&mut accounts).push(card);
+    std::fs::write(&path, accounts.canonical()).unwrap();
+    std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple/credit-card-account-1.json"), replies.path().join("credit-card-account-1.json")).unwrap();
+    let (report, asked) = once(&book, replies.path(), "2025-11-19T20:00:00Z");
+    assert!(asked.contains(&"card anon-ca-4".to_string()), "{asked:?}");
+    assert!(!report.failures.iter().any(|(p, _)| p.starts_with("cash")), "{:?}", report.failures);
+    let card = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-ca-4")).unwrap().unwrap();
+    let (_, stated) = book.stated(card).unwrap().cash.expect("the card's cash stated");
+    assert_eq!(stated.get(&Currency::parse("CAD").unwrap()), Some(&Dec::parse("-5140.28").unwrap()));
 }

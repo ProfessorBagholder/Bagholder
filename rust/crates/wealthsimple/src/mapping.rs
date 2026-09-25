@@ -17,9 +17,21 @@
 //! - a corporate action states the units given up and received, not the
 //!   received security: that is the security the account's positions show rising
 //!   by exactly those units across the event, net of the book's own moves.
-//! - a move of holdings between accounts, or in from another institution,
-//!   states a value, not what moved: each security moved is one whose units fell
-//!   in one account by what they rose in the other.
+//! - a move of holdings between accounts states a value, not what moved: each
+//!   security moved is one whose units fell in one account by what they rose in
+//!   the other. A move that states no amount at all (a "full in kind" move of an
+//!   account sold to cash first) states none in its detail either; its cash moves
+//!   days after its row, on the day the two accounts' net deposits fall and rise
+//!   by the same amount.
+//! - a transfer in from another institution states the value asked for, not what
+//!   arrived: the cash arrives days later, less the other institution's fee or
+//!   more by its interest, and its detail leaves the value that arrived empty
+//!   (every one in the owner's history, 2026-09-24). What arrived is what the
+//!   account's positions show rising from the day before the row to the day the
+//!   detail says it completed, net of the book's own moves.
+//! - a withdrawal from a registered account states its gross amount; the tax
+//!   withheld from it is a row of its own sharing its id, and the other account
+//!   receives the rest.
 //! - a currency conversion states the side received; the side paid is stated
 //!   by its detail where Wealthsimple keeps one (an internal transfer's), and is
 //!   otherwise a problem, not a guess.
@@ -234,7 +246,8 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
         "OPTIONS_ASSIGN" => assignment(&root, &row, &base, &mut out)?,
         "CORPORATE_ACTION" => corporate_action(&root, &row, &base, &ctx.record, &mut out)?,
         "FUNDS_CONVERSION" => conversion(&root, &row, &base, &mut out)?,
-        "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "LEGACY_INTERNAL_TRANSFER" | "INSTITUTIONAL_TRANSFER_INTENT" => transfer(&root, &row, &base, &mut out)?,
+        "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "LEGACY_INTERNAL_TRANSFER" => transfer(&root, &row, &base, &mut out)?,
+        "INSTITUTIONAL_TRANSFER_INTENT" => institutional(&root, &row, &base, &mut out)?,
         ty => match rule(ty, row.sub) {
             Some(r) => single(&root, &row, &base, &r, &mut out)?,
             None => {
@@ -486,10 +499,17 @@ fn booked(root: &Node, account: &str, days: &[String]) -> Result<BTreeMap<String
 /// end are not kept.
 fn changed(root: &Node, account: &str, first: jiff::civil::Date, last: jiff::civil::Date) -> Result<Option<BTreeMap<String, Dec>>, Failed> {
     let bad = |e: jiff::Error| Failed::from(Problem::new("unreadable", e.to_string()));
-    let (before_day, after_day) = (first.yesterday().map_err(bad)?, last.tomorrow().map_err(bad)?);
+    changed_between(root, account, first.yesterday().map_err(bad)?, last.tomorrow().map_err(bad)?)
+}
+
+/// Each security's change in one account from the positions of `before_day` to
+/// those of `after_day`, net of what the book's own transactions moved on the
+/// days after the first up to the last. None where either end is not kept.
+fn changed_between(root: &Node, account: &str, before_day: jiff::civil::Date, after_day: jiff::civil::Date) -> Result<Option<BTreeMap<String, Dec>>, Failed> {
+    let bad = |e: jiff::Error| Failed::from(Problem::new("unreadable", e.to_string()));
     let (Some(before), Some(after)) = (units(root, account, &before_day.to_string())?, units(root, account, &after_day.to_string())?) else { return Ok(None) };
     let mut days = Vec::new();
-    let mut d = first;
+    let mut d = before_day.tomorrow().map_err(bad)?;
     while d <= after_day {
         days.push(d.to_string());
         d = d.tomorrow().map_err(bad)?;
@@ -642,6 +662,23 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     let cash_leg = |out: &mut Mapped| -> Result<(), Failed> {
         let mut d = base.draft(row_leg(), kind);
         d.cash = row_cash(row, if incoming { Cash::Received } else { Cash::Paid }, kind)?;
+        // a withdrawal's gross amount holds the tax withheld from it, which its
+        // own row books: what left for the other account is the rest
+        if let (Some(cash), Ok(list)) = (d.cash.as_mut(), root.list("withheld")) {
+            for w in list {
+                let w = read_row(w)?;
+                if w.status != "COMPLETED" {
+                    continue;
+                }
+                let (Some(tax), Some(c)) = (w.amount, w.currency) else {
+                    return Err(Problem::new("cash-not-stated", "tax withheld from a withdrawal whose amount Wealthsimple does not state").into());
+                };
+                if c != cash.currency {
+                    return Err(Problem::new("withheld-currency-differs", format!("tax withheld in {c} from a withdrawal in {}", cash.currency)).into());
+                }
+                cash.amount = cash.amount.checked_add(tax.abs()).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+            }
+        }
         out.legs.push(d);
         Ok(())
     };
@@ -709,11 +746,20 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
         if row.amount.is_some() {
             return cash_leg(out);
         }
-        // the row states no amount: the move's detail does, in the source
-        // account's currency, and on the destination's side in the same
-        // currency where its rate is one
-        if let Ok(detail) = root.obj("conversion") {
-            let amount = detail.dec_text("amount")?;
+        // the row states no amount: the accounts' net deposits show it moving
+        // (below); else the move's detail states it, in the source account's
+        // currency, and on the destination's side in the same currency where
+        // its rate is one
+        if let Some((day, m)) = moved_by_deposits(root, row, incoming)? {
+            // on the day it moved, whose instant is not stated
+            let mut d = base.draft(row_leg(), kind);
+            d.occurred_at = None;
+            d.trade_date = day;
+            d.cash = Some(m);
+            out.legs.push(d);
+            return Ok(());
+        }
+        if let Some((detail, amount)) = root.obj("conversion").ok().and_then(|d| d.opt_dec_text("amount").ok().flatten().map(|a| (d, a))) {
             let currency = Currency::parse(&detail.text("currency")?.to_uppercase()).map_err(|e| Problem::new("unreadable", e.to_string()))?;
             let same = detail.opt_dec_text("fxRate")?.is_none_or(|r| r == Dec::ONE) && detail.opt_dec_text("fxAdjustedAmount")?.is_none_or(|a| a == amount);
             if incoming && !same {
@@ -776,6 +822,139 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     }
     if n == 0 {
         unstated(out, format!("a {kind} the positions do not show moving anything its way"));
+    }
+    Ok(())
+}
+
+/// A move between two accounts that states no amount: the cash its two
+/// accounts' net deposits show moving, and the day: the first from the row's own on
+/// which one's fell by exactly what the other's rose (their other deposits and
+/// withdrawals change one account alone). None where the days are not kept or
+/// no day shows it.
+fn moved_by_deposits(root: &Node, row: &Row, incoming: bool) -> Result<Option<(jiff::civil::Date, Money)>, Failed> {
+    let Some(other) = row.node.opt_text("opposingAccountId")? else { return Ok(None) };
+    let Ok(list) = root.list("deposits") else { return Ok(None) };
+    let mut days: BTreeMap<&str, Vec<bagholder_broker::DayValue>> = BTreeMap::new();
+    for d in list {
+        let nodes: Vec<Value> = d.list("nodes")?.into_iter().map(|n| n.value().clone()).collect();
+        days.insert(d.text("account")?, crate::read::history(&nodes)?);
+    }
+    let (Some(mine), Some(theirs)) = (days.get(row.account), days.get(other)) else { return Ok(None) };
+    let Some((day, moved)) = mirrored_day(mine, theirs)? else { return Ok(None) };
+    let this_way = if incoming { moved.amount.is_positive() } else { moved.amount.is_negative() };
+    Ok(this_way.then_some((day, moved)))
+}
+
+/// The first day on which two accounts' net deposits changed by exactly
+/// opposite amounts, and the first account's change: each list is one
+/// account's days in order from the day before a move.
+pub fn mirrored_day(a: &[bagholder_broker::DayValue], b: &[bagholder_broker::DayValue]) -> Read<Option<(jiff::civil::Date, Money)>> {
+    let changes = |days: &[bagholder_broker::DayValue]| -> BTreeMap<jiff::civil::Date, Money> {
+        days.windows(2)
+            .filter_map(|w| {
+                let d = w[1].net_deposits.amount.checked_sub(w[0].net_deposits.amount).ok()?;
+                (!d.is_zero() && w[1].net_deposits.currency == w[0].net_deposits.currency).then(|| (w[1].day, Money::new(d, w[1].net_deposits.currency)))
+            })
+            .collect()
+    };
+    let (ca, cb) = (changes(a), changes(b));
+    Ok(ca.into_iter().find(|(day, m)| cb.get(day).is_some_and(|o| o.currency == m.currency && o.amount.checked_add(m.amount).ok() == Some(Dec::ZERO))))
+}
+
+/// The instant a transfer from another institution completed: its detail's
+/// `completed` event, where its state is completed.
+pub fn completed_at(detail: &Node) -> Read<Option<jiff::Timestamp>> {
+    if detail.text("state")? != "completed" {
+        return Ok(None);
+    }
+    for h in detail.list("stateHistories")? {
+        if h.text("event")? == "completed" {
+            let t = h.text("transitionedAt")?;
+            return t.parse().map(Some).map_err(|e| h.field("transitionedAt").map(|f| f.mismatch(format!("not an instant: {e}"))).unwrap_or_else(|m| m));
+        }
+    }
+    Ok(None)
+}
+
+/// The day a transfer from another institution completed, as Wealthsimple
+/// files a row.
+pub fn completed_on(detail: &Node) -> Read<Option<jiff::civil::Date>> {
+    Ok(completed_at(detail)?.and_then(|at| bagholder_book::zones::Zones::default().day(at, ZONE).ok()))
+}
+
+/// A transfer in from another institution: what arrived, on the day it
+/// completed. The detail's value that arrived per currency where it states one;
+/// else what the account's positions show rising from the day before the row to
+/// the day the detail says it completed, net of the book's own moves over those
+/// days: its cash, and for a transfer in kind or mixed, its holdings. Another
+/// row of the account read against positions over those days leaves which moved
+/// what unstated, as does anything that fell.
+fn institutional(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(), Failed> {
+    let kind = Kind::TransferIn;
+    let unstated = |out: &mut Mapped, why: &str| {
+        out.problems.push(Problem::new("transfer-arrival-unstated", format!("a transfer from another institution {why}")));
+        out.legs.push(base.draft(row_leg(), kind));
+    };
+    let Ok(detail) = root.obj("transfer") else {
+        unstated(out, "whose detail was not read");
+        return Ok(());
+    };
+    let state = detail.text("state")?;
+    if state != "completed" {
+        return Err(Problem::new("transfer-disagrees", format!("a transfer from another institution its row states completed and its detail {state}")).into());
+    }
+    let Some(at) = completed_at(&detail)? else {
+        unstated(out, "whose detail states no day it completed");
+        return Ok(());
+    };
+    let done = bagholder_book::zones::Zones::default().day(at, ZONE).map_err(|e| Problem::new("unreadable", e))?;
+    let arrived = |out: &mut Mapped, n: usize| {
+        let mut d = base.draft(nth_leg("arrived", n), kind);
+        d.occurred_at = Some(at);
+        d.trade_date = done;
+        out.legs.push(d);
+    };
+    // the value that arrived, where the detail states it
+    let mut n = 0;
+    for (field, code) in [("actualValueLegCad", "CAD"), ("actualValueLegUsd", "USD")] {
+        if let Some(a) = detail.opt_dec_text(field)? {
+            arrived(out, n);
+            out.legs.last_mut().expect("just pushed").cash = Some(Money::new(a, Currency::parse(code).map_err(|e| Problem::new("unreadable", e.to_string()))?));
+            n += 1;
+        }
+    }
+    if n > 0 {
+        return Ok(());
+    }
+    let holdings = match detail.text("transferType")? {
+        "IN_CASH" | "PARTIAL_IN_CASH" => false,
+        "IN_KIND" | "PARTIAL_IN_KIND" | "PARTIAL_MIXED" | "FULL_MIXED" => true,
+        other => return Err(detail.field("transferType")?.mismatch(format!("a transfer type this mapping does not place: {other:?}")).into()),
+    };
+    if root.list("siblings").is_ok_and(|l| !l.is_empty()) {
+        unstated(out, "under way while the account's other moves read against positions were: which moved what is not stated");
+        return Ok(());
+    }
+    let before = base.day.yesterday().map_err(|e| Problem::new("unreadable", e.to_string()))?;
+    let Some(change) = changed_between(root, row.account, before, done)? else {
+        unstated(out, "whose account's positions before it and on the day it completed are not kept");
+        return Ok(());
+    };
+    let moved: Vec<(&String, &Dec)> = change.iter().filter(|(id, _)| holdings || id.starts_with("sec-c-")).collect();
+    if moved.is_empty() || moved.iter().any(|(_, q)| !q.is_positive()) {
+        unstated(out, "whose account's positions do not show only what arrived");
+        return Ok(());
+    }
+    for (i, (id, q)) in moved.into_iter().enumerate() {
+        arrived(out, i);
+        let d = out.legs.last_mut().expect("just pushed");
+        match id.strip_prefix("sec-c-") {
+            Some(code) => d.cash = Some(Money::new(*q, Currency::parse(&code.to_uppercase()).map_err(|e| Problem::new("unreadable", e.to_string()))?)),
+            None => {
+                d.instrument = Some(instrument(root, id, done)?);
+                d.quantity = Some(*q);
+            }
+        }
     }
     Ok(())
 }

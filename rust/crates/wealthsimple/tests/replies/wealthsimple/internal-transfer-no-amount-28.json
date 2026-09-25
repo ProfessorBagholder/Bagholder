@@ -1,0 +1,1 @@
+{"data":{"internalTransfer":{"amount":null,"annotation":null,"currency":"CAD","fxAdjustedAmount":null,"fxFeeRate":null,"fxRate":null,"id":"anon-internal-398","isCancellable":false,"reason":null,"reportedFxAdjustedAmount":null,"source_account":{"id":"anon-joint-1","unifiedAccountType":"MANAGED_JOINT"},"status":"completed","tax_detail":null,"transferType":"full_in_kind"}}}

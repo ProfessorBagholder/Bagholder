@@ -31,6 +31,8 @@ fn doc(name: &str) -> &'static str {
         "FetchInternalTransfer" => include_str!("../graphql/FetchInternalTransfer.graphql"),
         "FetchAccountsWithBalance" => include_str!("../graphql/FetchAccountsWithBalance.graphql"),
         "Securities" => include_str!("../graphql/Securities.graphql"),
+        "FetchInstitutionalTransfer" => include_str!("../graphql/FetchInstitutionalTransfer.graphql"),
+        "FetchCreditCardAccount" => include_str!("../graphql/FetchCreditCardAccount.graphql"),
         other => panic!("no document named {other}"),
     }
 }
@@ -204,6 +206,15 @@ impl Source for Client<'_> {
         let data = self.graphql("FetchInternalTransfer", obj(vec![("id", text(id))]))?;
         let t = Node::root(&data).field("internalTransfer").map_err(|m| mismatch("FetchInternalTransfer", m))?;
         Ok(if matches!(t.value(), Value::Null) { None } else { Some(t.value().clone()) })
+    }
+    fn transfer(&mut self, id: &str) -> Answer<Option<Value>> {
+        let data = self.graphql("FetchInstitutionalTransfer", obj(vec![("id", text(id))]))?;
+        let t = Node::root(&data).field("accountTransfer").map_err(|m| mismatch("FetchInstitutionalTransfer", m))?;
+        Ok(if matches!(t.value(), Value::Null) { None } else { Some(t.value().clone()) })
+    }
+    fn card(&mut self, account: &str) -> Answer<Value> {
+        let data = self.graphql("FetchCreditCardAccount", obj(vec![("id", text(account))]))?;
+        Ok(Node::root(&data).obj("creditCardAccount").map_err(|m| mismatch("FetchCreditCardAccount", m))?.value().clone())
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         let op = "FetchHoldingsExportPositionsAsOfDate";

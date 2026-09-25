@@ -23,6 +23,8 @@ pub struct Replay {
     orders: BTreeMap<String, Value>,
     entitlements: BTreeMap<String, Value>,
     conversions: BTreeMap<String, Value>,
+    transfers: BTreeMap<String, Value>,
+    cards: BTreeMap<String, Value>,
     positions: BTreeMap<(String, String), Value>,
     /// The balances replies' accounts, each as Wealthsimple sent it.
     balances: Vec<Value>,
@@ -41,6 +43,8 @@ impl Replay {
             orders: BTreeMap::new(),
             entitlements: BTreeMap::new(),
             conversions: BTreeMap::new(),
+            transfers: BTreeMap::new(),
+            cards: BTreeMap::new(),
             positions: BTreeMap::new(),
             balances: vec![],
             history: BTreeMap::new(),
@@ -96,6 +100,17 @@ impl Replay {
                     if let Ok(a) = first.text("activityCanonicalId") {
                         r.entitlements.insert(a.to_string(), c.value().clone());
                     }
+                }
+            } else if let Ok(t) = data.obj("accountTransfer") {
+                if let Ok(id) = t.text("id") {
+                    // the detail, not the reply asking only for its selected assets
+                    if t.field("state").is_ok() {
+                        r.transfers.insert(id.to_string(), t.value().clone());
+                    }
+                }
+            } else if let Ok(c) = data.obj("creditCardAccount") {
+                if let Ok(id) = c.text("id") {
+                    r.cards.insert(id.to_string(), c.value().clone());
                 }
             } else if let Ok(t) = data.obj("internalTransfer") {
                 if let Ok(id) = t.text("id") {
@@ -159,6 +174,14 @@ impl Source for Replay {
     fn conversion(&mut self, id: &str) -> Answer<Option<Value>> {
         self.asked.push(format!("conversion {id}"));
         Ok(self.conversions.get(id).cloned())
+    }
+    fn transfer(&mut self, id: &str) -> Answer<Option<Value>> {
+        self.asked.push(format!("transfer {id}"));
+        Ok(self.transfers.get(id).cloned())
+    }
+    fn card(&mut self, account: &str) -> Answer<Value> {
+        self.asked.push(format!("card {account}"));
+        self.cards.get(account).cloned().ok_or_else(|| Failure::Refused(format!("no card account {account} in the capture")))
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         self.asked.push(format!("positions {account} {day}"));
