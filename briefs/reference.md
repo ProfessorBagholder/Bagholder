@@ -131,6 +131,22 @@ Each recommendation is checked against every line here before it reaches the own
 
 **Sharesight:** a "dollar-weighted" return, "a variation of the Modified Dietz method", aimed at an investor's portfolio. Periods under a year are not annualised.
 
+**The equity curve** is the running P&L of closed trades, which prices don't move.
+- TradingView's strategy report: it "visualizes the dynamic changes in your account balance based on closed trades"; Cumulative PnL "shows the accumulated profit or loss after each closed trade".
+- Tradervue: a cumulative P&L chart "for trades matching the current filter".
+- TradeZella: cumulative P&L, the equity curve.
+
+**A return set against an index**
+- IBKR PortfolioAnalyst (MWR/TWR white paper): sub-period return = ending market value ÷ (beginning market value + cash flow) − 1, geometrically linked. "TWR is the preferred method of calculating returns by industry standards." A TWR/MWR toggle sits beside up to three benchmarks.
+- TradingView Portfolios: TWR over "free cash, current value of open positions, and accumulated realized profit". Its benchmark is bought and sold virtually on the portfolio's own trade dates.
+- Wealthsimple (magazine, "wealthsimple-returns"): "If what you're interested in is comparing the performance of different investments or money managers, time-weighted return is the relevant number."
+- CRM2 (NI 31-103): Canadian dealers must report a money-weighted return on the annual performance report. That is the personal return, not a comparison with an index.
+- Money-weighted against an index: the index is run through the same cash flows, the Long-Nickels public market equivalent (PME). Neither TWR nor MWR counts a deposit as return.
+
+**Option expiry:** OCC exercises an equity option $0.01 or more in the money unless the clearing member instructs otherwise (exercise by exception, Cboe circular RG08-073).
+
+**Time zones in journals:** TradeZella has a display time zone setting that charts and statistics follow, and TraderSync an account setting. Tradervue works in US Eastern.
+
 **Max drawdown** (CFTC, 17 CFR 4.10(l)): the "greatest cumulative percentage decline in month-end net asset value due to losses", so withdrawals are not drawdown.
 
 ## Prices
