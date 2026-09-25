@@ -53,6 +53,12 @@ Record each in `docs/decisions.md` with the test that holds it, or "review only"
    - The Host/Origin check and the page's write token stay.
    - The design doc never adds a capability the owner has not asked for. Anything in it the owner has not asked for (check §14) goes to the owner as one line and is not built.
 
+8. **A rule that must hold for any input is built and tested as a rule, never around an example.**
+   - This covers any symbol, fund company, time zone, currency or account.
+   - Its test covers the whole range: every zone in the time-zone database, a listing no reader knows, a currency other than the two the owner holds.
+   - A plan, doc, brief or message to the owner never names an example as though it were a case of its own. Naming one makes the rule look like a special case, and it hides whether the rule was built at all.
+   - Add this to `CLAUDE.md` beside the owner's rule on the old app.
+
 ## Required changes to the plan
 
 1. **Distributions, for any holding (item 7).**
