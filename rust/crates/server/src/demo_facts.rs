@@ -106,6 +106,11 @@ pub fn write(home: &Path) -> Result<String, String> {
             book.store_cash(account, at, &[(*currency, Dec::parse(amount).map_err(err)?)].into_iter().collect(), &read).map_err(err)?;
         }
         book.note_activity_read(account, at, true).map_err(err)?;
+        // what the margin account can borrow, made up as the rest
+        if ws_id == "acct-trading" {
+            let read = book.broker_read(connection, "buying-power", at).map_err(err)?;
+            book.store_buying_power(account, at, &Ok(Money::new(Dec::parse("41250.80").map_err(err)?, Currency::CAD)), &read).map_err(err)?;
+        }
     }
 
     // a quote for each listing the book holds a record of, from its demo bars

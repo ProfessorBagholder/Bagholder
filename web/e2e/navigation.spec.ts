@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ready } from './helpers'
+import { ready, figures } from './helpers'
 
 // SPEC §3, navigation: addresses, where a page opens and where Back returns to.
 
@@ -24,10 +24,12 @@ test('a trade opens at its top, and Back returns to the list where it was scroll
 })
 
 test('a filter set while a trade is open returns to the list, and Back does not reopen the trade', async ({ page, request }) => {
-  const account = (await (await request.get('/api/model')).json()).options.accounts[0] as string
+  // the chip names the account; the filter holds its id
+  const account = ((await figures(request)).options.accounts[0] as { id: string; name: string }).name
   await page.goto('/#dashboard')
   await page.goto('/#trades')
-  await page.locator('#page').getByText(/^\d{4}-\d{2}-\d{2}$/).first().click()
+  // a closed trade: an open one's row opens its holding instead
+  await page.locator('#page table tbody tr').filter({ hasNot: page.locator('td:nth-child(2)', { hasText: /^Open$/ }) }).first().locator('td').first().click()
   await expect(page).toHaveURL(/#trades\/.+/)
   await page.keyboard.press('ControlOrMeta+k')
   await page.keyboard.type(account)

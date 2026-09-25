@@ -2,7 +2,7 @@
   import { roll } from './actions/roll'
   import type { Model, Partial } from './model'
   import { money, money0, signedMoney, pctPlain, qty, px, color, leftOut, waiting } from './fmt'
-  import { absBelow, plot, waits, type Dec, type Fig } from './dec'
+  import { absBelow, plot, sign, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
 
@@ -135,7 +135,7 @@
           <div class="tip" style="left:{x};transform:translateX({cfH > n * 0.7 ? '-100%' : '-8px'})">
             <div class="tl" style="margin-bottom:2px">{monthLong(b.key)}</div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--accent-300)"><span style="font-weight:400;color:var(--ink60)">Distributions</span><span>{money0(b.value)}</span></div>
-            <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Margin interest</span><span>{signedMoney(intr, '', 0)}</span></div>
+            <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Margin interest</span><span>{waits(intr) ? waiting(intr) : sign(intr) === 0 ? money0(intr) : '−' + money0(intr)}</span></div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:{color(net)}"><span style="font-weight:400;color:var(--ink60)">Net cashflow</span><span>{signedMoney(net, '', 0)}</span></div>
           </div>
         {/if}
@@ -267,7 +267,7 @@
                   <td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap">{symText(r.symbol)}</td>
                   <td style="font-variant-numeric:normal;color:var(--ink75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.account}</td>
                   <td style="text-align:right;color:var(--ink75)">{r.qty ? qty(r.qty) : '—'}</td>
-                  <td style="text-align:right;color:var(--ink75)">{r.per == null ? '—' : waits(r.per) ? waiting(r.per) : money(r.per, '', 4)}</td>
+                  <td style="text-align:right;color:var(--ink75)">{perUnit(r.per)}</td>
                   <td style="text-align:right;font-weight:500">{money(r.amount, r.currency)}</td>
                 </tr>
               {/each}

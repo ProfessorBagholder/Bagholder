@@ -6,7 +6,12 @@
   import { symText } from './sym'
   import { relTime } from './fmt'
 
-  const accounts = $derived((store.model?.accounts ?? []) as { id: string; name: string }[])
+  import { qty } from './fmt'
+
+  const accounts = $derived((store.model?.accounts ?? []).filter((a) => a.status !== 'closed'))
+  // units that arrived without a cost: what an opening balance prices
+  const arrivals = $derived((store.model?.waiting ?? []).filter((w) => w.what === 'cost-of-arrival'))
+  const arrival = $derived(arrivals.find((a) => a.transaction === ui.tradeForm.arrival) ?? null)
   const f = $derived(ui.tradeForm)
   const r = $derived(ui.importReport)
   const w = $derived(ui.watch)
@@ -20,15 +25,39 @@
       <button class="btn btn-icon btn-secondary" aria-label="Close" style="margin-left:auto;width:28px;height:28px" onclick={closeModal}>×</button>
     </div>
 
-    {#if ui.modal === 'trade'}
+    {#if ui.modal === 'trade' && arrivals.length}
+      <div class="seg" style="margin-bottom:12px">
+        {#each [['trade', 'Trade'], ['opening', 'Opening balance']] as o (o[0])}<label class="seg-opt" class:on={f.mode === o[0]}><input type="radio" bind:group={f.mode} value={o[0]} />{o[1]}</label>{/each}
+      </div>
+    {/if}
+    {#if ui.modal === 'trade' && f.mode === 'opening'}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" onkeydown={(e) => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); saveTrade() } }}>
+        <div style="grid-column:1/-1"><div class="lbl" style="margin-bottom:5px">Arrival</div>
+          <select class="input" bind:value={f.arrival} aria-label="Arrival">
+            <option value="">Choose</option>
+            {#each arrivals as a (a.transaction)}<option value={a.transaction}>{symText(a.symbol)} · {a.accountName} · {a.units == null ? '' : qty(a.units) + ' · '}{a.day}</option>{/each}
+          </select>
+        </div>
+        <div><div class="lbl" style="margin-bottom:5px">Cost</div>
+          <div style="display:flex;align-items:center;gap:6px"><input class="input" inputmode="decimal" bind:value={f.cost} aria-label="Cost" /><span class="muted" style="font-size:12px">{arrival?.currency ?? ''}</span></div>
+        </div>
+        <div><div class="lbl" style="margin-bottom:5px">Acquired</div><input class="input" type="date" bind:value={f.acquired} aria-label="Acquired" /></div>
+      </div>
+      {#if f.error}<div class="status-err" style="font-size:12px;margin-top:10px">{f.error}</div>{/if}
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-secondary" onclick={closeModal}>Cancel</button>
+        <button class="btn btn-primary" disabled={ui.busy === 'trade'} onclick={() => saveTrade()}>{ui.busy === 'trade' ? 'Saving…' : 'Add opening balance'}</button>
+      </div>
+    {:else if ui.modal === 'trade'}
       <!-- Enter in any of its boxes adds the trade -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" onkeydown={(e) => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); saveTrade(accounts) } }}>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" onkeydown={(e) => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); saveTrade() } }}>
         <div><div class="lbl" style="margin-bottom:5px">Date</div><input class="input" type="date" bind:value={f.date} /></div>
         <div><div class="lbl" style="margin-bottom:5px">Account</div>
           <select class="input" bind:value={f.account}>
             <option value="">Manual</option>
-            {#each accounts.filter((a) => a.name) as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
+            {#each accounts.filter((a) => a.name && a.brokerAccount !== 'manual') as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
           </select>
         </div>
         <div><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
@@ -49,7 +78,7 @@
       {#if f.error}<div class="status-err" style="font-size:12px;margin-top:10px">{f.error}</div>{/if}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn btn-secondary" onclick={closeModal}>Cancel</button>
-        <button class="btn btn-primary" disabled={ui.busy === 'trade'} onclick={() => saveTrade(accounts)}>{ui.busy === 'trade' ? 'Saving…' : 'Add trade'}</button>
+        <button class="btn btn-primary" disabled={ui.busy === 'trade'} onclick={() => saveTrade()}>{ui.busy === 'trade' ? 'Saving…' : 'Add trade'}</button>
       </div>
 
     {:else if ui.modal === 'import'}

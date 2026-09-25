@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus, ready } from './helpers'
+import { openWithStatus, ready, figures, bareSymbol, subUrl } from './helpers'
 
 // SPEC §3, Markets: the tile row, Fear & Greed, the Heatmap card, the Watchlist,
 // Short interest and News cards; and §4/§6 Disclosures, the card on a trade or
@@ -16,7 +16,7 @@ const tile = (symbol: string, sector: string, value: number, percentChange: numb
 // cells, and restore the row afterwards. `spare` extra cells beyond the first let a
 // test add a tile without the row filling up and the picker auto-closing on it.
 async function freeATileCell(request: import('@playwright/test').APIRequestContext, spare = 0): Promise<{ before: { symbol: string; exchange: string }[]; freed: { symbol: string; exchange: string }[]; restore: () => Promise<void> }> {
-  const before = (await (await request.get('/api/model')).json()).markets.tiles as { symbol: string; exchange: string }[]
+  const before = (await figures(request)).markets.tiles as { symbol: string; exchange: string }[]
   const freed = before.slice(0, before.length - 1 - spare)
   const H = { 'X-Bagholder': '1' }
   await request.post('/api/tiles/set', { headers: H, data: { tiles: freed.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) } })
@@ -53,7 +53,7 @@ test.describe('Market tiles', () => {
     await page.keyboard.press('Escape')
     await expect(page.getByLabel('Search instruments')).toHaveCount(0)
     // no tile was left behind
-    const after = (await (await request.get('/api/model')).json()).markets.tiles as { symbol: string }[]
+    const after = (await figures(request)).markets.tiles as { symbol: string }[]
     expect(after.map((t) => t.symbol).sort()).toEqual(freed.map((t) => t.symbol).sort())
     await restore()
   })
@@ -68,7 +68,7 @@ test.describe('Market tiles', () => {
     await page.keyboard.press('Escape')
     await expect(page.locator('.mt-tile[data-sym="CL"]')).toBeVisible()
     await expect.poll(async () => {
-      const m = await (await request.get('/api/model')).json()
+      const m = await figures(request)
       return (m.markets.tiles as { symbol: string }[]).map((t) => t.symbol)
     }).toContain('CL')
 
@@ -76,14 +76,14 @@ test.describe('Market tiles', () => {
     await page.getByRole('button', { name: 'Remove WTI' }).click()
     await expect(page.locator('.mt-tile[data-sym="CL"]')).toHaveCount(0)
     await expect.poll(async () => {
-      const m = await (await request.get('/api/model')).json()
+      const m = await figures(request)
       return (m.markets.tiles as { symbol: string }[]).map((t) => t.symbol)
     }).toEqual(freed.map((t) => t.symbol))
     await restore()
   })
 
   test('dragging a tile to another cell reorders the row and saves the new order', async ({ page, request }) => {
-    const before = (await (await request.get('/api/model')).json()).markets.tiles as { symbol: string; exchange: string }[]
+    const before = (await figures(request)).markets.tiles as { symbol: string; exchange: string }[]
     test.skip(before.length < 2, 'needs at least two tiles to reorder')
     const [first, second] = before
     await page.goto('/#markets')
@@ -98,7 +98,7 @@ test.describe('Market tiles', () => {
     await page.mouse.move(boxB.x + boxB.width / 2 + 2, boxB.y + boxB.height / 2, { steps: 2 })
     await page.mouse.up()
     await expect.poll(async () => {
-      const m = await (await request.get('/api/model')).json()
+      const m = await figures(request)
       return (m.markets.tiles as { symbol: string }[])[0].symbol
     }).toBe(second.symbol)
     // put it back so other tests (and the user's own book) see the tiles unchanged
@@ -204,16 +204,17 @@ test.describe('Heatmap card', () => {
   })
 
   test('a held tile opens its holding; a watched-but-unheld tile opens its listing', async ({ page, request }) => {
+    const vfv = ((await figures(request)).positions as { id: string; symbol: string }[]).find((p) => p.symbol === 'VFV')!
     await openWithStatus(page, request, {}, '#markets', (m) => {
       const mk = m.markets as { holdings: unknown[]; watchlist: unknown[] }
-      mk.holdings = [{ id: 'rt:demo-0019', symbol: 'VFV', exchange: 'TSX', value: 53724, percentChange: 0.4, sector: 'Not classified' }]
+      mk.holdings = [{ id: vfv.id, symbol: 'VFV', exchange: 'TSX', value: 53724, percentChange: 0.4, sector: 'Not classified' }]
       mk.watchlist = [{ symbol: 'ZZZQ', exchange: 'TSX', name: 'Zzzq Corp', currency: 'CAD', last: 12, priceChange: 0.1, percentChange: 0.8, sector: 'Not classified', kind: 'Shares', positionId: null }]
     })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
     await card.locator('.mseg-opt', { hasText: 'Both' }).click()
     const box = card.locator('#heatBox')
     await box.locator('.heat-tile[data-sym="VFV"]').first().click()
-    await expect(page).toHaveURL(/#portfolio\/rt%3Ademo-0019$/)
+    await expect(page).toHaveURL(subUrl('portfolio', vfv.id))
 
     await page.goto('/#markets')
     await ready(page)
@@ -226,7 +227,7 @@ test.describe('Heatmap card', () => {
 
 test.describe('Watchlist', () => {
   test('a symbol typed with a Yahoo-style suffix is looked up and added under the bare ticker and the suffix\'s venue', async ({ page, request }) => {
-    const model = await (await request.get('/api/model')).json()
+    const model = await figures(request)
     const before = (model.markets.watchlist as { symbol: string }[]).map((w) => w.symbol)
     await page.route('**/api/symbols/search*', (route) => {
       const url = new URL(route.request().url())
@@ -251,31 +252,41 @@ test.describe('Watchlist', () => {
   })
 
   test('adding a held-but-unfollowed symbol from "From Holdings" and removing it both persist, and the row opens the holding', async ({ page, request }) => {
-    const model = await (await request.get('/api/model')).json()
+    const model = await figures(request)
     const before = model.markets.watchlist as { symbol: string; exchange: string }[]
-    const notFollowed = (model.positions as { symbol: string; exchange: string; kind: string }[]).find((p) => p.kind === 'Shares' && !before.some((w) => w.symbol === p.symbol))
-    test.skip(!notFollowed, 'every holding is already followed in this book')
+    // "From Holdings": the first four holdings not followed yet (by listing), contracts left out
+    const key = (x: { symbol: string; exchange: string }) => bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase()
+    const followed = new Set(before.map(key))
+    const offered: { symbol: string; exchange: string; kind: string }[] = []
+    for (const p of model.positions as { symbol: string; exchange: string; kind: string }[]) {
+      if (p.kind === 'Options' || followed.has(key(p)) || offered.some((o) => key(o) === key(p))) continue
+      offered.push(p)
+    }
+    const notFollowed = offered.slice(0, 4).find((p) => p.kind === 'Shares')
+    test.skip(!notFollowed, 'every held share is already followed in this book')
+    // a row by its own symbol line: a name holding the same letters ("Ltd") is another row
+    const bySym = (cls: string) => page.locator(cls).filter({ has: page.locator(':scope > div:first-child > div:first-child', { hasText: new RegExp('^' + notFollowed!.symbol + '$') }) })
     await page.goto('/#markets')
     await ready(page)
     await page.getByRole('button', { name: 'Add to the watchlist' }).click()
-    await expect(page.locator('.wl-sug', { hasText: notFollowed!.symbol })).toBeVisible()
-    await page.locator('.wl-sug', { hasText: notFollowed!.symbol }).click()
+    await expect(bySym('.wl-sug')).toBeVisible()
+    await bySym('.wl-sug').click()
     await page.keyboard.press('Escape')
     await expect.poll(async () => {
-      const m = await (await request.get('/api/model')).json()
+      const m = await figures(request)
       return (m.markets.watchlist as { symbol: string }[]).map((w) => w.symbol)
     }).toContain(notFollowed!.symbol)
 
-    const row = page.locator('.wl-row', { hasText: notFollowed!.symbol })
+    const row = bySym('.wl-row.go')
     await row.click()
     await expect(page).toHaveURL(/#portfolio\//) // the book holds it: the row opens the holding, not the listing
 
     await page.goto('/#markets')
     await ready(page)
-    await page.locator('.wl-row', { hasText: notFollowed!.symbol }).hover()
+    await bySym('.wl-row.go').hover()
     await page.getByRole('button', { name: 'Remove ' + notFollowed!.symbol + ' from the watchlist', exact: true }).click()
     await expect.poll(async () => {
-      const m = await (await request.get('/api/model')).json()
+      const m = await figures(request)
       return (m.markets.watchlist as { symbol: string }[]).map((w) => w.symbol)
     }).toEqual(before.map((w) => w.symbol))
   })
@@ -402,7 +413,7 @@ test.describe('News', () => {
 
 test.describe('Disclosures', () => {
   test('the card reads a held listing\'s filed record, sorts newest first by default, and opens a document on click', async ({ page, request }) => {
-    const model = await (await request.get('/api/model')).json()
+    const model = await figures(request)
     const aapl = (model.positions as { symbol: string; name: string; exchange: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
     const docKey = 'filings:symbol=AAPL&name=' + encodeURIComponent(aapl.name) + '&exchange=' + encodeURIComponent(aapl.exchange) + '&currency=' + encodeURIComponent(aapl.currency)
     const filing = (id: string, date: string, category: string, source: string, extra: Partial<{ size: string }> = {}) => ({
@@ -432,7 +443,7 @@ test.describe('Disclosures', () => {
   })
 
   test('a listing with no regulatory filer reads "No regulatory filer for this listing."', async ({ page, request }) => {
-    const model = await (await request.get('/api/model')).json()
+    const model = await figures(request)
     const positionId = (model.positions as { symbol: string; id: string }[]).find((p) => p.symbol === 'AAPL')!.id
     const aapl = (model.positions as { symbol: string; name: string; exchange: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
     const docKey = 'filings:symbol=AAPL&name=' + encodeURIComponent(aapl.name) + '&exchange=' + encodeURIComponent(aapl.exchange) + '&currency=' + encodeURIComponent(aapl.currency)

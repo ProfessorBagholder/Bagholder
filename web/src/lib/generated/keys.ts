@@ -21,6 +21,7 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'cashflow.income': 'label',
     'cashflow.rows': 'id',
     'accounts': 'id',
+    'waiting': 'transaction',
     'markets.holdings': 'id',
     'markets.watchlist': 'symbol',
     'markets.news': 'id',

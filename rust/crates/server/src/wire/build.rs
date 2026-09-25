@@ -229,6 +229,7 @@ fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: String) -> P
         thesis: p.journal.thesis.clone(),
         tags: p.journal.tags.clone(),
         gaps: p.gaps.words().into_iter().map(String::from).collect(),
+        flags: p.flags.iter().map(|f| f.to_string()).collect(),
     }
 }
 
@@ -435,6 +436,29 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder
 
     let context = super::context::context(base, &positions);
     Figures {
+        waiting: figs
+            .matched
+            .waiting
+            .iter()
+            .map(|(t, w)| {
+                let s = shown(inputs, w.instrument);
+                Waiting {
+                    transaction: t.to_string(),
+                    what: match w.what {
+                        bagholder_engine::ledger::Wanted::CostOfArrival => "cost-of-arrival",
+                        bagholder_engine::ledger::Wanted::Event => "event",
+                    }
+                    .into(),
+                    account: w.account.to_string(),
+                    account_name: account_name(inputs, w.account),
+                    instrument: w.instrument.to_string(),
+                    symbol: s.symbol,
+                    currency: inputs.ledger.instruments.get(&w.instrument).map(|i| i.instrument.currency.as_str().to_string()).unwrap_or_default(),
+                    day: w.day.to_string(),
+                    units: w.units.map(Dec),
+                }
+            })
+            .collect(),
         markets: context.markets,
         sectors: context.sectors,
         regions: context.regions,

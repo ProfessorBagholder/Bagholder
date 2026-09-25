@@ -76,7 +76,9 @@
   function exposureSlices(rows: ExpRow[]): DonutItem[] {
     return rows.map((x, i) => ({ label: x.name, v: x.value, share: x.share, color: x.name === UNCLASSIFIED ? 'rgba(var(--ink-rgb),.28)' : 'var(--pie-' + ((i % 11) + 1) + ')' }))
   }
-  const expCount = (rows: ExpRow[]) => String(rows.filter((x) => x.name !== UNCLASSIFIED && !x.name.startsWith('Other (') && x.value > 0).length)
+  // the classified names the positions cover: the server's `Other (n)` counts as its n
+  const expCount = (rows: ExpRow[]) =>
+    String(rows.filter((x) => x.name !== UNCLASSIFIED && x.value > 0).reduce((n, x) => n + (Number(/^Other \((\d+)\)$/.exec(x.name)?.[1]) || 1), 0))
   const sec = $derived(exposureSlices(model.sectors))
   const reg = $derived(exposureSlices(model.regions))
 

@@ -12,6 +12,7 @@ mod docs;
 mod broker_reads;
 mod due;
 mod engine_inputs;
+mod entries;
 mod figures;
 mod pull_broker;
 mod read_sources;

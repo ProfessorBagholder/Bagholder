@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ready } from './helpers'
+import { ready, figures } from './helpers'
 
 // SPEC §3, Filters: the popover is driven from its search box.
 
@@ -23,7 +23,7 @@ test('Tab runs box, Done, Clear all, box; Shift+Tab runs it backwards', async ({
 })
 
 test('Enter on a held symbol opens its holding; Shift+Enter narrows the book by it; Backspace in the empty box deselects it', async ({ page, request }) => {
-  const model = await (await request.get('/api/model')).json()
+  const model = await figures(request)
   const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')
   await open(page)
   await page.keyboard.type(held.symbol)
@@ -47,7 +47,8 @@ test('Enter on a held symbol opens its holding; Shift+Enter narrows the book by 
 })
 
 test('a click on a value keeps the keyboard in the box, and ⌘K from one field returns to the search', async ({ page, request }) => {
-  const account = (await (await request.get('/api/model')).json()).options.accounts[0] as string
+  // an account is shown, and so typed and matched, by its name
+  const account = ((await figures(request)).options.accounts[0] as { name: string }).name
   await open(page)
   await page.keyboard.type(account.slice(0, 3))
   await page.locator('.pop .pop-row', { hasText: account }).first().click()

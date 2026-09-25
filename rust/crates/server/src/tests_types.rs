@@ -327,6 +327,7 @@ fn model_api_declarations() -> String {
         crate::http::model::Notes, crate::http::model::NotesAnswer, crate::http::model::Import,
         crate::http::model::ModelQuery, crate::http::model::ModelLiveAnswer, crate::http::model::ModelAnswer, crate::http::model::ModelViewAnswer,
         crate::http::model::FiguresQuery, crate::http::stream::Resync,
+        crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
     ];
     let mut out = String::from(
         "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'\nimport type { LegacyNote } from './book'\nimport type { Status } from './status'\n\n",
@@ -362,7 +363,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" => "orders",
         "Appended" | "BookAppend" | "ImportReport" | "WatchStatus" | "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" | "ModelQuery" | "ModelViewAnswer" => "model_api",
+        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" | "ModelQuery" | "ModelViewAnswer" => "model_api",
         "Book" | "WatchFolder" | "ScanWithStatus" | "WatchSetAnswer" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
@@ -430,7 +431,7 @@ fn figures_declarations() -> String {
     let decls: Vec<String> = decls![
         crate::wire::Fig<()>,
         Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
-        Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, AccountOption, InstrumentOption, Options, Figures,
+        Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options, Figures,
         crate::wire::filters::Range, crate::wire::filters::Filters,
     ];
     let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\nimport type { Markets, ExposureSlice } from './wire'\n\n");
@@ -522,4 +523,29 @@ fn test_the_pages_row_keys_are_the_servers() {
     assert!(have == want, "web/src/lib/generated/keys.ts is not what the server's differ keys: run with BAGHOLDER_BLESS=1 and check the page");
     // the figures' own lists are all there, each by its id
     assert!(want.contains("'trades': 'id'") && want.contains("'positions': 'id'") && want.contains("'cashflow.tiles': 'label'"), "{want}");
+}
+
+/// Every word the engine can say a figure waits on (`Gap::word`), generated to
+/// `web/src/lib/generated/gaps.ts`: the page has a word for each (its own test).
+fn gap_words() -> Vec<String> {
+    let source = include_str!("../../engine/src/gap.rs");
+    let body = &source[source.find("pub fn word(&self)").expect("Gap::word")..];
+    let body = &body[..body.find("\n    }\n").expect("its end")];
+    regex::Regex::new(r#"=>\s*"([a-z-]+)""#).unwrap().captures_iter(body).map(|c| c[1].to_string()).collect()
+}
+
+#[test]
+fn test_the_pages_gap_words_are_the_engines() {
+    let words = gap_words();
+    assert!(words.len() > 20, "the scan finds the engine's list");
+    let want = format!(
+        "// Generated from the engine's gap words (`Gap::word`, rust/crates/engine/src/gap.rs). Do not edit:\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_gap_words`.\n\nexport const GAP_WORDS: string[] = [\n{}]\n",
+        words.iter().map(|w| format!("  '{w}',\n")).collect::<String>()
+    );
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/gaps.ts");
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    assert!(std::fs::read_to_string(&path).unwrap_or_default() == want, "web/src/lib/generated/gaps.ts is not the engine's gap words: run with BAGHOLDER_BLESS=1");
 }

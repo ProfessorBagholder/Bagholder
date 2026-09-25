@@ -1,10 +1,13 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+import { modelDoc, streamBody } from './helpers'
 
 // SPEC §4, the trade page: its journal and its keys.
 
-const openFirstTrade = async (page: import('@playwright/test').Page) => {
+// the first closed trade in the list (an open one's row opens its holding instead)
+const openFirstTrade = async (page: Page) => {
   await page.goto('/#trades')
-  await page.locator('#page').getByText(/^\d{4}-\d{2}-\d{2}$/).first().click()
+  const row = page.locator('#page table tbody tr').filter({ hasNot: page.locator('td:nth-child(2)', { hasText: /^Open$/ }) }).first()
+  await row.locator('td').first().click()
   await expect(page).toHaveURL(/#trades\/.+/)
 }
 
@@ -12,7 +15,8 @@ test('a journal save that fails says so in the header, and the row goes back to 
   await openFirstTrade(page)
   await page.route('**/api/journal', (route) => route.fulfill({ status: 500, json: { ok: false, error: 'store failed' } }))
   await page.locator('.seg-opt', { hasText: /^A$/ }).click()
-  await expect(page.locator('#syncline .status-err')).toHaveText('Could not save journal entry.')
+  // said with the server's own reason
+  await expect(page.locator('#syncline .status-err')).toHaveText('Could not save journal entry: store failed')
   await expect(page.locator('.seg-opt.on', { hasText: /^A$/ })).toHaveCount(0)
 })
 
@@ -38,12 +42,12 @@ test('Escape in the tag box stays on the trade; outside it, Escape goes back to 
 })
 
 test('a server started again is asked for the chart again; the same server is not', async ({ page, request }) => {
-  const model = await (await request.get('/api/model')).json()
-  const trade = model.trades[0]
+  const model = await modelDoc(request)
+  const trade = model.trades.find((t: { status: string }) => t.status === 'closed')
   let startedAt = 'A'
   await page.route('**/api/events?*', (route) => {
     const m = { ...model, status: { ...model.status, startedAt } }
-    route.fulfill({ status: 200, contentType: 'text/event-stream', body: `retry: 200\nevent: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: m })}\n\n` })
+    route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(m) })
   })
   let asked = 0
   page.on('request', (r) => { if (r.url().includes('/api/history?')) asked++ })
@@ -64,12 +68,12 @@ test('a server started again is asked for the chart again; the same server is no
 })
 
 test('an open trade keeps its executions when the view arrives again, and a trade opened by its address has them', async ({ page, request }) => {
-  const model = await (await request.get('/api/model')).json()
-  const trade = model.trades[0]
+  const model = await modelDoc(request)
+  const trade = model.trades.find((t: { status: string }) => t.status === 'closed')
   let sent = 0
   await page.route('**/api/events?*', (route) => {
     sent++
-    route.fulfill({ status: 200, contentType: 'text/event-stream', body: `retry: 200\nevent: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: model })}\n\n` })
+    route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model) })
   })
   await page.goto('/#trades/' + encodeURIComponent(trade.id))
   const rows = page.locator('#page table tbody tr')

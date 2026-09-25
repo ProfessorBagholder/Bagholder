@@ -8,8 +8,11 @@ import { waits } from './dec'
 // the server's own types (rust/crates/store/src/activities.rs and csvimport.rs), generated
 import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
 import type { LoginInput } from './generated/session'
+import type { EntryRequest } from './generated/model_api'
 
 export interface TradeForm {
+  /** A trade, or an opening balance: what units that arrived without a cost cost. */
+  mode: 'trade' | 'opening'
   date: string
   account: string
   symbol: string
@@ -18,6 +21,10 @@ export interface TradeForm {
   price: string
   currency: 'CAD' | 'USD'
   fees: string
+  /** The opening balance: the arrival it prices, its total cost and the day acquired. */
+  arrival: string
+  cost: string
+  acquired: string
   error: string
 }
 /** One file's report from `/api/import`: the server's own shape, or, when the
@@ -34,7 +41,7 @@ function today(): string {
   return localDay()
 }
 function freshTradeForm(): TradeForm {
-  return { date: today(), account: '', symbol: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', error: '' }
+  return { mode: 'trade', date: today(), account: '', symbol: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '' }
 }
 
 export const ui = $state<{
@@ -217,47 +224,36 @@ export function closeModal(): void {
   ui.modal = ''
 }
 
-// Save a manually-entered trade, matching the legacy saveTrade()/book/append.
-export function saveTrade(accounts: { id: string; name: string }[]): void {
+// Save what the Add trade form holds: a trade, or an opening balance. Quantities and
+// amounts go as the text typed (the server reads them as exact decimals and says what
+// it cannot read); the figures move on the stream.
+export async function saveTrade(): Promise<void> {
   const f = ui.tradeForm
-  const qty = Number(String(f.qty).replace(/,/g, ''))
-  const price = Number(String(f.price).replace(/[$,]/g, ''))
-  const fees = Number(String(f.fees || 0).replace(/[$,]/g, ''))
-  if (!f.date || !f.symbol || !(qty > 0) || !(price >= 0) || isNaN(fees)) {
-    f.error = 'Date, symbol, a positive quantity and a price are required.'
-    return
-  }
-  const acc = accounts.find((a) => a.id === f.account)
-  ui.busy = 'trade'
-  f.error = ''
-  call('POST /api/book/append', {
-    body: {
-      activities: [],
-      activity: null,
-      date: f.date,
-      transactionDate: '',
-      occurredAt: '',
-      symbol: f.symbol.trim().toUpperCase(),
-      side: f.side,
-      qty,
-      quantity: null,
-      price,
-      unitPrice: null,
-      currency: f.currency,
-      commission: fees,
-      accountId: acc ? acc.id : 'manual',
-      account: '',
-      accountType: acc ? acc.name : 'Manual',
-    },
-  }).then((r) => {
-    ui.busy = ''
-    if (!r || !r.ok) {
-      f.error = (r && (r.error as string)) || 'Could not save the trade.'
+  const text = (v: string) => v.trim().replace(/[$,]/g, '')
+  let body: EntryRequest
+  if (f.mode === 'opening') {
+    if (!f.arrival || !text(f.cost) || !f.acquired) {
+      f.error = 'The arrival, its cost and the day acquired are required.'
       return
     }
-    ui.modal = ''
-    flash(r.added ? 'Trade added' : 'That trade was already recorded')
-  })
+    body = { entry: 'cost-of-arrival', arrival: f.arrival, cost: text(f.cost), acquired: f.acquired }
+  } else {
+    if (!f.date || !f.symbol.trim() || !text(f.qty) || !text(f.price)) {
+      f.error = 'Date, symbol, a quantity and a price are required.'
+      return
+    }
+    body = { entry: 'trade', account: f.account, instrument: null, symbol: f.symbol.trim().toUpperCase(), currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
+  }
+  ui.busy = 'trade'
+  f.error = ''
+  const r = await call('POST /api/entries', { body })
+  ui.busy = ''
+  if (!r.ok) {
+    f.error = r.error || 'Could not save it.'
+    return
+  }
+  ui.modal = ''
+  flash(f.mode === 'opening' ? 'Opening balance added' : 'Trade added')
 }
 
 // Import CSVs via a native file picker, then show the report modal.

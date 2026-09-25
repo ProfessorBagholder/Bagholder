@@ -68,7 +68,9 @@ describe('one holding\'s price moves', () => {
 
     const veqt = moving(model)
     const rows = [...container.querySelectorAll('tbody tr')] as HTMLElement[]
-    const veqtRow = rows.find((r) => r.textContent!.includes(veqt.symbol))!
+    // the row whose symbol cell is this holding's, as the page writes it (a listing suffix dropped)
+    const shown = veqt.symbol.toUpperCase().replace(/\.(TO|V|CN|NE)$/, '')
+    const veqtRow = rows.find((r) => r.querySelector('td')!.textContent!.trim() === shown)!
     const others = rows.filter((r) => r !== veqtRow)
     expect(veqtRow).toBeTruthy()
     expect(others.length).toBeGreaterThanOrEqual(3)

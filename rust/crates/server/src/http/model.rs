@@ -26,6 +26,7 @@ pub fn routes() -> Routed {
         get "/api/data" => data;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
+        post "/api/entries" => entries;
         post "/api/groups" => groups;
         post "/api/notes" => notes;
         post "/api/import" => import;
@@ -333,6 +334,28 @@ async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryReques
             Ok(_) => Ok(JournalAnswer { ok: true }),
             Err(crate::figures::JournalRefused::Unknown(id)) => Err(ApiError::NotFound(format!("no trade {id}"))),
             Err(crate::figures::JournalRefused::Failed(e)) => Err(ApiError::Failed(e)),
+        }
+    })
+    .await?
+    .map(Json)
+}
+
+/// `POST /api/entries`: kept in the book as the person's record; the page hears the
+/// figures move on its stream.
+#[derive(Serialize, TS)]
+pub struct EntryAnswer {
+    #[ts(type = "true")]
+    ok: bool,
+}
+
+async fn entries(State(state): State<AppState>, Body(e): Body<crate::entries::EntryRequest>) -> Api<EntryAnswer> {
+    let app = state.app;
+    blocking(move || -> Result<EntryAnswer, ApiError> {
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        match crate::entries::enter(f, &e, bagholder_core::jiff::Timestamp::now()) {
+            Ok(()) => Ok(EntryAnswer { ok: true }),
+            Err(crate::entries::Refused::Entry(why)) => Err(ApiError::BadRequest(why)),
+            Err(crate::entries::Refused::Failed(why)) => Err(ApiError::Failed(why)),
         }
     })
     .await?

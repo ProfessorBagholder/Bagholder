@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { ready } from './helpers'
+import { ready, figures, openWithStatus } from './helpers'
 
 // SPEC §5, Filters: every field re-asks the server (GET /api/events?filters=…),
 // narrowing every page; the chips beside the tabs; Clear all; Esc with nothing
@@ -40,7 +40,7 @@ test('each date preset narrows the book to that window and sets the chip', async
 })
 
 test('a custom date range sets the chip and clears the preset, and picking a year does the same', async ({ page, request }) => {
-  const options = (await (await request.get('/api/model')).json()).options
+  const options = (await figures(request)).options
   await page.goto('/#trades')
   await ready(page)
   await page.getByRole('button', { name: 'Filters' }).click()
@@ -86,25 +86,31 @@ test('Grade, Side and Result each narrow the book and show it as a chip', async 
 })
 
 test('Account, Tag, Kind and Exchange each narrow the book and show it as a chip', async ({ page, request }) => {
-  const options = (await (await request.get('/api/model')).json()).options
+  const options = (await figures(request)).options
   await page.goto('/#trades')
   await ready(page)
-  const cases: [string, string, string][] = []
-  if (options.accounts?.[0]) cases.push(['account', 'Account', options.accounts[0]])
-  if (options.tags?.[0]) cases.push(['tag', 'Tag', options.tags[0]])
-  if (options.kinds?.[0]) cases.push(['kind', 'Kind', options.kinds[0]])
-  if (options.exchanges?.[0]) cases.push(['exchange', 'Exchange', options.exchanges[0]])
-  expect(cases.length).toBeGreaterThan(0) // the demo book carries at least one of each
-  for (const [key, label, value] of cases) {
-    const filters = await selectListValue(page, label, value)
-    expect((filters.lists as Record<string, string[]>)[key]).toEqual([value])
-    await expect(page.locator('.chip', { hasText: label + ' is' })).toContainText(value)
+  // [key, field, what the list and the chip show, what the filter holds]: an account is
+  // shown by its name and held by its id
+  const cases: [string, string, string, string][] = []
+  if (options.accounts?.[0]) cases.push(['account', 'Account', options.accounts[0].name, options.accounts[0].id])
+  if (options.tags?.[0]) cases.push(['tag', 'Tag', options.tags[0], options.tags[0]])
+  if (options.kinds?.[0]) cases.push(['kind', 'Kind', options.kinds[0], options.kinds[0]])
+  if (options.exchanges?.[0]) cases.push(['exchange', 'Exchange', options.exchanges[0], options.exchanges[0]])
+  expect(cases.length).toBe(4) // the demo book carries at least one of each
+  for (const [key, label, shown, held] of cases) {
+    const filters = await selectListValue(page, label, shown)
+    expect((filters.lists as Record<string, string[]>)[key]).toEqual([held])
+    await expect(page.locator('.chip', { hasText: label + ' is' })).toContainText(shown)
   }
 })
 
 test('Symbol, from its own field editor, narrows the book by the funnel icon', async ({ page, request }) => {
-  const model = await (await request.get('/api/model')).json()
-  const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')
+  const model = await figures(request)
+  const instruments = model.options.instruments as { id: string; symbol: string }[]
+  // a held share whose ticker no other instrument's contains, so the search lists it alone
+  const held = (model.positions as { kind: string; symbol: string; instrument: string }[]).find(
+    (p) => p.kind === 'Shares' && instruments.filter((i) => i.symbol.toUpperCase().includes(p.symbol.toUpperCase())).length === 1,
+  )!
   await page.goto('/#trades')
   await ready(page)
   await page.getByRole('button', { name: 'Filters' }).click()
@@ -113,7 +119,8 @@ test('Symbol, from its own field editor, narrows the book by the funnel icon', a
   const reqPromise = eventsRequest(page)
   await page.locator('.tk-rowbtn.funnel').first().click()
   const filters = await requestFilters(await reqPromise)
-  expect((filters.lists as Record<string, string[]>).symbol).toContain(held.symbol)
+  // the filter holds the instrument's id, never its symbol
+  expect((filters.lists as Record<string, string[]>).symbol).toEqual([held.instrument])
   await expect(page.locator('.chip', { hasText: 'Symbol is' })).toBeVisible()
 })
 
@@ -126,19 +133,19 @@ test('the Price range narrows by a step and by More/Less than', async ({ page })
   let reqPromise = eventsRequest(page)
   await page.locator('.pill', { hasText: '$100' }).click()
   let filters = await requestFilters(await reqPromise)
-  expect(filters.ranges).toMatchObject({ price: { op: '>', v: 100 } })
+  expect(filters.ranges).toMatchObject({ price: { op: '>', v: '100' } }) // the bound as decimal text
   await expect(page.locator('.chip', { hasText: 'Price >' })).toContainText('$100')
 
   reqPromise = eventsRequest(page)
   await page.locator('.pill', { hasText: 'Less than' }).click()
   filters = await requestFilters(await reqPromise)
-  expect(filters.ranges).toMatchObject({ price: { op: '<', v: 100 } })
+  expect(filters.ranges).toMatchObject({ price: { op: '<', v: '100' } })
   await expect(page.locator('.chip', { hasText: 'Price <' })).toContainText('$100')
 
   reqPromise = eventsRequest(page)
   await page.getByLabel('Custom value').fill('12.34')
   filters = await requestFilters(await reqPromise)
-  expect(filters.ranges).toMatchObject({ price: { op: '<', v: 12.34 } })
+  expect(filters.ranges).toMatchObject({ price: { op: '<', v: '12.34' } })
   await expect(page.locator('.chip', { hasText: 'Price <' })).toContainText('$12.34')
 
   // Clear, from the field's own editor
@@ -220,14 +227,10 @@ test('filters do not survive a reload', async ({ page }) => {
 test('typing lists the book\'s own symbols first, then matches on other fields, then listings found outside the book', async ({ page, request }) => {
   await page.route('**/api/symbols/search*', (route) => route.fulfill({ json: { ok: true, matches: [{ symbol: 'ZZZQF', name: 'Zzz Quantum Fund', exchange: 'OTC' }] } }))
 
-  const model = await (await request.get('/api/model')).json()
-  model.options.symbols = [...model.options.symbols, 'ZZZQ']
-  model.options.listings = { ...model.options.listings, ZZZQ: { name: 'Zzz Quantum Corp', exchange: 'NASDAQ', kind: 'Shares', currency: 'USD' } }
-  model.options.accounts = [...model.options.accounts, 'ZZZQ Trust']
-  const body = `retry: 200\nevent: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: model })}\n\n`
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
-
-  await page.goto('/')
+  await openWithStatus(page, request, {}, '', (model) => {
+    model.options.instruments.push({ id: 'i-zzzq', symbol: 'ZZZQ', name: 'Zzz Quantum Corp', exchange: 'NASDAQ', kind: 'Shares', currency: 'USD' })
+    model.options.accounts.push({ id: 'a-zzzq', name: 'ZZZQ Trust' })
+  })
   await ready(page)
   await page.keyboard.press('ControlOrMeta+k')
   await page.getByLabel('Search', { exact: true }).fill('ZZZQ')

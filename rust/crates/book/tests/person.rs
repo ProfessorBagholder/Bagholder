@@ -56,3 +56,65 @@ fn an_entry_the_book_cannot_stand_behind_is_refused_and_named() {
     assert!(f.book.adjustments().unwrap().is_empty());
     let _ = Dec::ONE;
 }
+
+#[test]
+fn a_trade_entered_by_hand_is_the_transaction_it_states() {
+    use bagholder_book::person::{Side, Traded};
+    let f = Fixture::new();
+    let (_, held) = arrival(&f);
+    let account = f.book.accounts().unwrap()[0].id;
+    // a sale of what the book holds: the same instrument, the units going out
+    let sold = f
+        .book
+        .enter(&Entry::Trade { account, instrument: Traded::Held(held), day: "2026-03-02".parse().unwrap(), side: Side::Sell, quantity: d("40"), price: cad("12.5"), fee: Some(cad("4.95")) }, t0())
+        .unwrap();
+    let t = f.book.transactions_of(sold.record).unwrap().remove(0);
+    assert_eq!((t.kind, t.instrument, t.quantity, t.price, t.fee, t.cash), (bagholder_core::transaction::Kind::Sell, Some(held), Some(d("-40")), Some(cad("12.5")), Some(cad("4.95")), None), "the price and the fee as entered, no cash worked out");
+    assert_eq!(t.trade_date, "2026-03-02".parse().unwrap());
+    // a purchase of a symbol the book has not met: an instrument named by it, in the account's connection
+    let bought = f
+        .book
+        .enter(&Entry::Trade { account, instrument: Traded::Named { symbol: " qnc ".into(), currency: Currency::USD, contract: None }, day: "2026-03-03".parse().unwrap(), side: Side::Buy, quantity: d("10"), price: Money::new(d("1.75"), Currency::USD), fee: None }, t0())
+        .unwrap();
+    let t = f.book.transactions_of(bought.record).unwrap().remove(0);
+    let i = t.instrument.unwrap();
+    assert_ne!(i, held);
+    assert_eq!(f.book.instrument(i).unwrap().currency, Currency::USD);
+    assert_eq!(f.book.names(i).unwrap().last().unwrap().symbol, "QNC", "named as entered");
+    assert_eq!(t.quantity, Some(d("10")));
+    assert_eq!(f.book.record(bought.record).unwrap().source, SourceName::person());
+}
+
+#[test]
+fn a_trade_the_book_cannot_stand_behind_is_refused_and_named() {
+    use bagholder_book::person::{Side, Traded};
+    let f = Fixture::new();
+    let (_, held) = arrival(&f);
+    let account = f.book.accounts().unwrap()[0].id;
+    let trade = |quantity: &str, price: Money, fee: Option<Money>, instrument: Traded| Entry::Trade { account, instrument, day: "2026-03-02".parse().unwrap(), side: Side::Buy, quantity: d(quantity), price, fee };
+    let refused = |e: &Entry| matches!(f.book.enter(e, t0()), Err(BookError::Refused(_)));
+    assert!(refused(&trade("0", cad("1"), None, Traded::Held(held))), "no units");
+    assert!(refused(&trade("-5", cad("1"), None, Traded::Held(held))), "units are counted up, the side says which way");
+    assert!(refused(&trade("5", Money::new(d("1"), Currency::USD), None, Traded::Held(held))), "a price in another currency than the instrument's");
+    assert!(refused(&trade("5", cad("-1"), None, Traded::Held(held))), "a negative price");
+    assert!(refused(&trade("5", cad("1"), Some(cad("-1")), Traded::Held(held))), "a negative fee");
+    assert!(refused(&trade("5", cad("1"), None, Traded::Named { symbol: "  ".into(), currency: Currency::CAD, contract: None })), "no symbol");
+}
+
+#[test]
+fn a_contract_entered_by_hand_is_an_option_on_its_underlying_with_its_size_unstated() {
+    use bagholder_book::person::{Contract, Side, Traded, Underlying};
+    let f = Fixture::new();
+    let (_, held) = arrival(&f);
+    let account = f.book.accounts().unwrap()[0].id;
+    let contract = Contract { underlying: Underlying::Held(held), expiry: "2027-01-15".parse().unwrap(), strike: d("12"), right: bagholder_core::instrument::OptionRight::Call };
+    let stored = f
+        .book
+        .enter(&Entry::Trade { account, instrument: Traded::Named { symbol: "XYZ 15JAN27 12.00 CALL".into(), currency: Currency::CAD, contract: Some(contract) }, day: "2026-03-02".parse().unwrap(), side: Side::Buy, quantity: d("2"), price: cad("1.10"), fee: None }, t0())
+        .unwrap();
+    let t = f.book.transactions_of(stored.record).unwrap().remove(0);
+    let i = t.instrument.unwrap();
+    assert_eq!(f.book.instrument(i).unwrap().kind, bagholder_core::instrument::InstrumentKind::OptionContract);
+    let terms = f.book.option_terms(i).unwrap().expect("its terms");
+    assert_eq!((terms.underlying, terms.strike, terms.multiplier), (held, d("12"), None), "on the instrument the book holds, its size not assumed");
+}

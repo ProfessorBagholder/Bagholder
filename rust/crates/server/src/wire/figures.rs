@@ -117,6 +117,8 @@ pub struct Position {
     pub tags: Vec<String>,
     /// What the holding waits on.
     pub gaps: Vec<String>,
+    /// Its lots' marks (`entered`, `deposited`, …).
+    pub flags: Vec<String>,
 }
 
 /// One broker fill of a trade or holding, for its page.
@@ -431,6 +433,27 @@ pub struct Cashflow {
 // what the filters can be set to
 // --------------------------------------------------------------------------
 
+/// A fact only the person can give (`SPEC.md` §2, What you enter), and what it is
+/// about: the forms offer these.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = transaction)]
+#[serde(rename_all = "camelCase")]
+pub struct Waiting {
+    /// The transaction an entry is made against.
+    pub transaction: String,
+    /// `cost-of-arrival`: what units that arrived cost; `event`: what a corporate
+    /// event did to cost.
+    pub what: String,
+    pub account: String,
+    pub account_name: String,
+    pub instrument: String,
+    pub symbol: String,
+    pub currency: String,
+    pub day: String,
+    /// The units the transaction moved, as the broker states them.
+    pub units: Option<Dec>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
 #[diff(key = id)]
 pub struct AccountOption {
@@ -490,6 +513,8 @@ pub struct Figures {
     pub accounts: Vec<Account>,
     /// Σ the accounts' values, for the ticket's share of it.
     pub nav_total: Option<Fig<Dec>>,
+    /// What waits on the person, whatever the filters.
+    pub waiting: Vec<Waiting>,
     /// The market around the book, from its readers (`context`).
     pub markets: bagholder_model::wire::Markets,
     pub sectors: Vec<bagholder_model::wire::ExposureSlice>,

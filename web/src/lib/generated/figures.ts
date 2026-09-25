@@ -68,7 +68,11 @@ percentChange: number | null, opened: string, held: Fig<number>, grade: string, 
 /**
  * What the holding waits on.
  */
-gaps: Array<string>, };
+gaps: Array<string>, 
+/**
+ * Its lots' marks (`entered`, `deposited`, …).
+ */
+flags: Array<string>, };
 
 export type Fill = { id: string, 
 /**
@@ -212,6 +216,21 @@ income: Array<Slice>, incomeTotal: Partial, rows: Array<CashflowRow>,
  */
 skippedFilters: Array<string>, };
 
+export type Waiting = { 
+/**
+ * The transaction an entry is made against.
+ */
+transaction: string, 
+/**
+ * `cost-of-arrival`: what units that arrived cost; `event`: what a corporate
+ * event did to cost.
+ */
+what: string, account: string, accountName: string, instrument: string, symbol: string, currency: string, day: string, 
+/**
+ * The units the transaction moved, as the broker states them.
+ */
+units: Dec | null, };
+
 export type AccountOption = { id: string, name: string, };
 
 export type InstrumentOption = { id: string, symbol: string, name: string, exchange: string, kind: string, currency: string, };
@@ -231,6 +250,10 @@ activityCount: number, options: Options, kpi: Kpi, equity: Equity, years: Array<
  * Σ the accounts' values, for the ticket's share of it.
  */
 navTotal: Fig<Dec> | null, 
+/**
+ * What waits on the person, whatever the filters.
+ */
+waiting: Array<Waiting>, 
 /**
  * The market around the book, from its readers (`context`).
  */

@@ -1,67 +1,35 @@
 import { expect, test } from '@playwright/test'
-import { ready, openWithStatus } from './helpers'
+import { ready, openWithStatus, figures, money, money0, pct, pctPlain, hold, stamp, symText, sign, waits, waiting, subUrl, type Waits } from './helpers'
 
 // SPEC §4, Dashboard: the six KPI tiles, the equity curve, the annualized-returns
 // card and its benchmark switch, Monthly P&L, Grade vs P&L, By symbol and the
-// review queue.
+// review queue. Figures are checked against the figures document (GET /api/figures),
+// formatted from its exact decimal text the way SPEC.md §3 defines.
 
-// Local mirrors of src/lib/fmt.ts, so a figure on screen is checked against the
-// model's own number the way SPEC.md §3 defines it — without importing app source
-// into the test (the e2e suite never does).
-function money(v: number | null | undefined, dp = 2): string {
-  if (v == null || !isFinite(v)) return '—'
-  const sign = v < 0 ? '−' : ''
-  return sign + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
-}
-const money0 = (v: number | null | undefined) => money(v, 0)
-function pct(v: number | null | undefined, dp = 1): string {
-  if (v == null || !isFinite(v)) return '—'
-  return (v < 0 ? '−' : '+') + Math.abs(v * 100).toFixed(dp) + '%'
-}
-function pctPlain(v: number | null | undefined, dp = 1): string {
-  if (v == null || !isFinite(v)) return '—'
-  return (v * 100).toFixed(dp) + '%'
-}
-const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const stamp = (iso: string) => MON[+iso.slice(5, 7) - 1] + " '" + iso.slice(2, 4)
-const stampDay = (iso: string) => +iso.slice(8, 10) + ' ' + stamp(iso)
-const hold = (d: number | null | undefined) => (d == null ? '—' : Math.round(d).toLocaleString('en-US') + 'd')
-const bareSymbol = (s: string) => s.toUpperCase().replace(/\.(TO|V|CN|NE)$/, '')
-const symText = (s: string) => {
-  const m = s.match(/^(\S+)(.*)$/s)
-  return m ? bareSymbol(m[1]) + m[2] : s
-}
-
-interface Trade { id: string; symbol: string }
+type Fig<T> = T | Waits
+interface Trade { id: string; symbol: string; status: 'open' | 'closed' }
 interface DashModel {
   kpi: {
-    realized: number; count: number; wins: number; losses: number; breakeven: number
-    winRate: number | null; grossWin: number; grossLoss: number
-    profitFactor: number | null; profitFactorInfinite: boolean
-    expectancy: number | null; avgWin: number; avgLoss: number
+    realized: Fig<string>; realizedLeftOut: number; count: number; wins: number; losses: number; breakeven: number
+    winRate: number | null; grossWin: Fig<string>; grossLoss: Fig<string>
+    profitFactor: Fig<number | null>; profitFactorInfinite: boolean
+    expectancy: Fig<string | null>; avgWin: Fig<string | null>; avgLoss: Fig<string | null>
   }
   equity: {
-    series: { d: string; v: number }[]
-    drawdown: { pct: number | null; abs: number | null; at: string }
+    series: { d: string; v: string }[]
+    drawdown: { pct: number | null; abs: string | null; at: string | null }
     annualized: { rate: number | null; count: number }
   }
-  years: { year: string; r: number; spR: number | null }[]
-  benchmark: { key: string; label: string }
-  monthly: { key: string; label: string; value: number; count: number; tradeIds: string[] }[]
-  grades: { buckets: { grade: string; n: number; pnl: number; tradeIds: string[] }[]; graded: number; ungraded: number }
-  bySymbol: { symbol: string; pnl: number; n: number; winRate: number; avgHold: number; tradeIds: string[] }[]
-  queue: { id: string; symbol: string; date: string; pnl: number; missing: string }[]
   trades: Trade[]
 }
 
 async function getModel(request: import('@playwright/test').APIRequestContext): Promise<DashModel> {
-  return (await (await request.get('/api/model')).json()) as DashModel
+  return (await figures(request)) as DashModel
 }
 
-// A trade id may hold characters (':') a hash-route encodes; match the URL it actually becomes.
-function tradeUrl(id: string): RegExp {
-  return new RegExp('#trades/' + encodeURIComponent(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-}
+// a trade the list holds, closed, whose page a drill-down opens
+const closedTrade = (m: DashModel) => m.trades.find((t) => t.status === 'closed')!.id
+const tradeUrl = (id: string) => subUrl('trades', id)
 
 test('the six KPI tiles show label, value and subtitle against the model kpi block', async ({ page, request }) => {
   const m = await getModel(request)
@@ -75,7 +43,8 @@ test('the six KPI tiles show label, value and subtitle against the model kpi blo
 
   await expect(tiles.nth(0).locator('.lbl')).toHaveText('Realized P&L')
   await expect(tiles.nth(0).locator('.v')).toHaveText(money(k.realized))
-  await expect(tiles.nth(0).locator('.s')).toHaveText(k.count + (k.count === 1 ? ' trade' : ' trades'))
+  const realizedWaiting = k.realizedLeftOut ? ' · ' + k.realizedLeftOut + ' waiting' : ''
+  await expect(tiles.nth(0).locator('.s')).toHaveText(k.count + (k.count === 1 ? ' trade' : ' trades') + realizedWaiting)
 
   await expect(tiles.nth(1).locator('.lbl')).toHaveText('Win rate')
   await expect(tiles.nth(1).locator('.v')).toHaveText(k.winRate == null ? '—' : pctPlain(k.winRate))
@@ -83,7 +52,7 @@ test('the six KPI tiles show label, value and subtitle against the model kpi blo
   await expect(tiles.nth(1).locator('.s')).toHaveText(k.wins + ' W · ' + k.losses + ' L' + beCount)
 
   await expect(tiles.nth(2).locator('.lbl')).toHaveText('Profit factor')
-  const pf = k.profitFactorInfinite ? '∞' : k.profitFactor == null ? '—' : k.profitFactor.toFixed(2)
+  const pf = k.profitFactorInfinite ? '∞' : waits(k.profitFactor) ? waiting(k.profitFactor) : k.profitFactor == null ? '—' : k.profitFactor.toFixed(2)
   await expect(tiles.nth(2).locator('.v')).toHaveText(pf)
   await expect(tiles.nth(2).locator('.s')).toHaveText('W ' + money0(k.grossWin) + ' · L ' + money0(k.grossLoss))
 
@@ -93,7 +62,9 @@ test('the six KPI tiles show label, value and subtitle against the model kpi blo
 
   await expect(tiles.nth(4).locator('.lbl')).toHaveText('Max drawdown')
   await expect(tiles.nth(4).locator('.v')).toHaveText(dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%')
-  const ddSub = dd.pct == null ? 'No NAV history' : '−$' + Math.abs(Math.round(dd.abs ?? 0)).toLocaleString('en-US') + (dd.at ? ' · ' + stamp(dd.at) : '')
+  // the CAD fall, shown as a fall whatever sign the document gives it, and the trough month
+  const fall = dd.abs == null ? '—' : money0(dd.abs.replace(/^-/, ''))
+  const ddSub = dd.pct == null ? 'No NAV history' : '−' + fall + (dd.at ? ' · ' + stamp(dd.at) : '')
   await expect(tiles.nth(4).locator('.s')).toHaveText(ddSub)
 
   await expect(tiles.nth(5).locator('.lbl')).toHaveText('Avg annualized')
@@ -107,19 +78,21 @@ test('positive KPI figures read in the positive colour class, negative in the ne
   await page.goto('/')
   await ready(page)
   const realizedTile = page.locator('#page .kpi').nth(0).locator('.v')
-  if (m.kpi.realized > 0) await expect(realizedTile).toHaveClass(/\bpos\b/)
-  else if (m.kpi.realized < 0) await expect(realizedTile).toHaveClass(/\bneg\b/)
+  const k = m.kpi.realized
+  expect(waits(k)).toBe(false) // the made-up book's realized P&L is stated
+  if (!waits(k) && sign(k) > 0) await expect(realizedTile).toHaveClass(/\bpos\b/)
+  else if (!waits(k) && sign(k) < 0) await expect(realizedTile).toHaveClass(/\bneg\b/)
 })
 
 test('the equity curve draws a line for the series in scope and dims the chart past the hovered day', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
-    ;(m.equity as DashModel['equity']).series = [
-      { d: '2026-01-05', v: 10000 },
-      { d: '2026-02-10', v: 12000 },
-      { d: '2026-03-15', v: 9000 },
-      { d: '2026-04-20', v: 15000 },
-      { d: '2026-05-25', v: 18000 },
-    ] as unknown as DashModel['equity']['series']
+    m.equity.series = [
+      { d: '2026-01-05', v: '10000' },
+      { d: '2026-02-10', v: '12000' },
+      { d: '2026-03-15', v: '9000' },
+      { d: '2026-04-20', v: '15000' },
+      { d: '2026-05-25', v: '18000' },
+    ]
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })
@@ -149,7 +122,7 @@ test('the equity curve draws a line for the series in scope and dims the chart p
 
 test('the equity curve says there is no NAV history yet when the series is empty', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
-    ;(m.equity as DashModel['equity']).series = []
+    m.equity.series = []
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })
@@ -162,8 +135,8 @@ test('annualized returns lists the years newest first, each with two bars, and a
       { year: '2024', r: 0.12, spR: 0.08 },
       { year: '2025', r: -0.05, spR: 0.1 },
       { year: '2026', r: 0.2, spR: 0.15 },
-    ] as unknown as DashModel['years']
-    m.benchmark = { key: 'SP500', label: 'S&P 500' } as unknown as DashModel['benchmark']
+    ]
+    m.benchmark = { key: 'SP500', label: 'S&P 500' }
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Annualized returns' }) })
@@ -223,13 +196,12 @@ test('the remembered benchmark choice survives a reload', async ({ page, request
 })
 
 test('Monthly P&L bar hover names the month and trade count, and clicking a month with one trade opens it', async ({ page, request }) => {
-  const model = await getModel(request)
-  const id = model.trades[0].id
+  const id = closedTrade(await getModel(request))
   await openWithStatus(page, request, {}, '', (m) => {
     m.monthly = [
-      { key: '2026-01', label: "Jan '26", value: 500, count: 1, tradeIds: [id] },
-      { key: '2026-02', label: "Feb '26", value: -300, count: 2, tradeIds: ['a', 'b'] },
-    ] as unknown as DashModel['monthly']
+      { key: '2026-01', label: "Jan '26", value: '500', count: 1, tradeIds: [id] },
+      { key: '2026-02', label: "Feb '26", value: '-300', count: 2, tradeIds: ['a', 'b'] },
+    ]
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Monthly P&L' }) })
@@ -247,7 +219,7 @@ test('Monthly P&L bar hover names the month and trade count, and clicking a mont
 
 test('clicking a month with several trades filters Trades to that month, not to one trade', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
-    m.monthly = [{ key: '2026-03', label: "Mar '26", value: 1200, count: 3, tradeIds: ['a', 'b', 'c'] }] as unknown as DashModel['monthly']
+    m.monthly = [{ key: '2026-03', label: "Mar '26", value: '1200', count: 3, tradeIds: ['a', 'b', 'c'] }]
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Monthly P&L' }) })
@@ -262,14 +234,13 @@ test('Grade vs P&L shows four bars with a CAD sum and a count per grade', async 
   await openWithStatus(page, request, {}, '', (m) => {
     m.grades = {
       buckets: [
-        { grade: 'A', n: 2, pnl: 900, tradeIds: ['a', 'b'] },
-        { grade: 'B', n: 1, pnl: 100, tradeIds: ['c'] },
-        { grade: 'C', n: 0, pnl: 0, tradeIds: [] },
-        { grade: 'F', n: 1, pnl: -400, tradeIds: ['d'] },
+        { grade: 'A', n: 2, pnl: '900', tradeIds: ['a', 'b'] },
+        { grade: 'B', n: 1, pnl: '100', tradeIds: ['c'] },
+        { grade: 'C', n: 0, pnl: '0', tradeIds: [] },
+        { grade: 'F', n: 1, pnl: '-400', tradeIds: ['d'] },
       ],
       graded: 4,
-      ungraded: 0,
-    } as unknown as DashModel['grades']
+    }
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Grade vs P&L' }) })
@@ -285,19 +256,17 @@ test('Grade vs P&L shows four bars with a CAD sum and a count per grade', async 
 })
 
 test('clicking a grade with one trade opens it; clicking one with several filters Trades to that grade', async ({ page, request }) => {
-  const model = await getModel(request)
-  const id = model.trades[0].id
+  const id = closedTrade(await getModel(request))
   await openWithStatus(page, request, {}, '', (m) => {
     m.grades = {
       buckets: [
-        { grade: 'A', n: 1, pnl: 900, tradeIds: [id] },
-        { grade: 'B', n: 2, pnl: 100, tradeIds: ['c', 'd'] },
-        { grade: 'C', n: 0, pnl: 0, tradeIds: [] },
-        { grade: 'F', n: 0, pnl: 0, tradeIds: [] },
+        { grade: 'A', n: 1, pnl: '900', tradeIds: [id] },
+        { grade: 'B', n: 2, pnl: '100', tradeIds: ['c', 'd'] },
+        { grade: 'C', n: 0, pnl: '0', tradeIds: [] },
+        { grade: 'F', n: 0, pnl: '0', tradeIds: [] },
       ],
       graded: 3,
-      ungraded: 0,
-    } as unknown as DashModel['grades']
+    }
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Grade vs P&L' }) })
@@ -315,11 +284,11 @@ test('clicking a grade with one trade opens it; clicking one with several filter
 test('a grade with no graded trades yet does nothing when clicked', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.grades = { buckets: [
-      { grade: 'A', n: 0, pnl: 0, tradeIds: [] },
-      { grade: 'B', n: 0, pnl: 0, tradeIds: [] },
-      { grade: 'C', n: 0, pnl: 0, tradeIds: [] },
-      { grade: 'F', n: 1, pnl: -10, tradeIds: ['x'] },
-    ], graded: 1, ungraded: 0 } as unknown as DashModel['grades']
+      { grade: 'A', n: 0, pnl: '0', tradeIds: [] },
+      { grade: 'B', n: 0, pnl: '0', tradeIds: [] },
+      { grade: 'C', n: 0, pnl: '0', tradeIds: [] },
+      { grade: 'F', n: 1, pnl: '-10', tradeIds: ['x'] },
+    ], graded: 1 }
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Grade vs P&L' }) })
@@ -330,10 +299,10 @@ test('a grade with no graded trades yet does nothing when clicked', async ({ pag
 test('By symbol is grouped by underlying, sorted by P&L, and every column sorts on click', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.bySymbol = [
-      { symbol: 'AAA', pnl: 500, n: 3, winRate: 0.667, avgHold: 4, tradeIds: ['a', 'b', 'c'] },
-      { symbol: 'BBB.TO', pnl: -200, n: 2, winRate: 0.0, avgHold: 12, tradeIds: ['d', 'e'] },
-      { symbol: 'CCC', pnl: 1200, n: 1, winRate: 1, avgHold: 30, tradeIds: ['f'] },
-    ] as unknown as DashModel['bySymbol']
+      { id: 'i-aaa', symbol: 'AAA', pnl: '500', n: 3, winRate: 0.667, avgHold: 4, tradeIds: ['a', 'b', 'c'] },
+      { id: 'i-bbb', symbol: 'BBB.TO', pnl: '-200', n: 2, winRate: 0.0, avgHold: 12, tradeIds: ['d', 'e'] },
+      { id: 'i-ccc', symbol: 'CCC', pnl: '1200', n: 1, winRate: 1, avgHold: 30, tradeIds: ['f'] },
+    ]
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'By symbol' }) })
@@ -343,7 +312,7 @@ test('By symbol is grouped by underlying, sorted by P&L, and every column sorts 
   await expect(rows.nth(0).locator('td').first()).toHaveText(symText('CCC'))
   await expect(rows.nth(1).locator('td').first()).toHaveText(symText('AAA'))
   await expect(rows.nth(2).locator('td').first()).toHaveText(symText('BBB.TO')) // .TO dropped: bare ticker
-  await expect(rows.nth(2).locator('td').nth(1)).toHaveText(money(-200))
+  await expect(rows.nth(2).locator('td').nth(1)).toHaveText(money('-200'))
   await expect(rows.nth(2).locator('td').nth(1)).toHaveClass(/\bneg\b/)
   await expect(rows.nth(0).locator('td').nth(1)).toHaveClass(/\bpos\b/)
   await expect(rows.nth(0).locator('td').nth(3)).toHaveText(pctPlain(1))
@@ -367,13 +336,22 @@ test('By symbol is grouped by underlying, sorted by P&L, and every column sorts 
 })
 
 test('clicking a By symbol row with one trade opens it; with several it filters Trades to that symbol', async ({ page, request }) => {
-  const model = await getModel(request)
-  const id = model.trades[0].id
+  const id = closedTrade(await getModel(request))
+  let asked: Record<string, unknown> | null = null
+  page.on('request', (r) => {
+    const f = new URL(r.url()).searchParams.get('filters')
+    if (r.url().includes('/api/events') && f) asked = JSON.parse(f)
+  })
   await openWithStatus(page, request, {}, '', (m) => {
+    // a row names its underlying instrument by id; the chip shows the instrument's symbol
+    m.options.instruments.push(
+      { id: 'i-one', symbol: 'ONE', name: 'One Corp', exchange: 'NASDAQ', kind: 'Shares', currency: 'USD' },
+      { id: 'i-two', symbol: 'TWO', name: 'Two Corp', exchange: 'NASDAQ', kind: 'Shares', currency: 'USD' },
+    )
     m.bySymbol = [
-      { symbol: 'ONE', pnl: 100, n: 1, winRate: 1, avgHold: 2, tradeIds: [id] },
-      { symbol: 'TWO', pnl: -50, n: 2, winRate: 0.5, avgHold: 5, tradeIds: ['x', 'y'] },
-    ] as unknown as DashModel['bySymbol']
+      { id: 'i-one', symbol: 'ONE', pnl: '100', n: 1, winRate: 1, avgHold: 2, tradeIds: [id] },
+      { id: 'i-two', symbol: 'TWO', pnl: '-50', n: 2, winRate: 0.5, avgHold: 5, tradeIds: ['x', 'y'] },
+    ]
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'By symbol' }) })
@@ -387,16 +365,25 @@ test('clicking a By symbol row with one trade opens it; with several it filters 
   const chip = page.locator('.chip').first()
   await expect(chip.locator('.cf')).toHaveText('Symbol is')
   await expect(chip.locator('.cv')).toHaveText('TWO')
+  // the filter holds the instrument's id, never its symbol
+  await expect.poll(() => (asked as { lists?: { symbol?: string[] } } | null)?.lists?.symbol).toEqual(['i-two'])
 })
 
 test('the review queue lists closed trades missing a grade or a thesis, newest first, and opens a trade on click', async ({ page, request }) => {
-  const model = await getModel(request)
-  const id = model.trades[0].id
+  const doc = await figures(request)
+  const model = doc as DashModel
+  // the book's own queue: its closed trades missing a grade or a thesis, newest first
+  const queue = doc.queue as { id: string; date: string }[]
+  const all = doc.trades as { id: string; status: string; grade: string; thesis: string }[]
+  const want = all.filter((t) => t.status === 'closed' && (!t.grade || !t.thesis)).map((t) => t.id)
+  expect(queue.map((q) => q.id).sort()).toEqual(want.sort())
+  expect(queue.map((q) => q.date)).toEqual(queue.map((q) => q.date).sort().reverse())
+  const id = closedTrade(model)
   await openWithStatus(page, request, {}, '', (m) => {
     m.queue = [
-      { id, symbol: 'AAA', date: '2026-05-01', pnl: 300, currency: 'CAD', missing: 'grade' },
-      { id: 'x2', symbol: 'BBB', date: '2026-04-01', pnl: -100, currency: 'CAD', missing: 'grade, thesis' },
-    ] as unknown as DashModel['queue']
+      { id, symbol: 'AAA', date: '2026-05-01', pnl: '300', missing: 'grade' },
+      { id: 'x2', symbol: 'BBB', date: '2026-04-01', pnl: '-100', missing: 'grade, thesis' },
+    ]
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Review queue' }) })

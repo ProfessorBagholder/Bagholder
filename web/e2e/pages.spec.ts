@@ -7,8 +7,8 @@ test('value-axis labels that would touch are not both shown', async ({ page, req
   // one large gain and one small loss: "$0" and the loss sit a few pixels apart
   await openWithStatus(page, request, {}, '', (m) => {
     m.monthly = [
-      { key: '2026-01', label: "Jan '26", value: 9000, count: 3, tradeIds: [] },
-      { key: '2026-02', label: "Feb '26", value: -40, count: 1, tradeIds: [] },
+      { key: '2026-01', label: "Jan '26", value: '9000', count: 3, tradeIds: [] },
+      { key: '2026-02', label: "Feb '26", value: '-40', count: 1, tradeIds: [] },
     ]
   })
   const axis = page.locator('[data-axis]')

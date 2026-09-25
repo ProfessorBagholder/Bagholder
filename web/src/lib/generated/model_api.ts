@@ -84,3 +84,9 @@ export type Resync = {
  * the stream this page holds, from its `hello`
  */
 id: number, };
+
+export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
+
+export type ChildShare = { instrument: string, costShare: string, };
+
+export type EntryAnswer = { ok: true, };

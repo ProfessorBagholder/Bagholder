@@ -642,6 +642,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut available = Vec::new();
     let mut unavailable = Vec::new();
+    let mut unread = Vec::new();
     for a in &accounts {
         let Some(b) = inputs.market.brokers.get(&a.account.id) else { continue };
         if let Some(n) = b.net_value_now {
@@ -657,8 +658,15 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
             match &b.buying_power {
                 Some(Ok(p)) => available.push(Money::new(*p, Currency::CAD)),
                 Some(Err(why)) => unavailable.push((a.account.id, why.clone())),
-                None => {}
+                None => unread.push(a.account.id),
             }
+        }
+    }
+    // a margin account in scope makes the figure one to state: it waits on any
+    // whose buying power is not read yet
+    for a in &accounts {
+        if is_margin(a) && !inputs.market.brokers.contains_key(&a.account.id) {
+            unread.push(a.account.id);
         }
     }
     let to_cad_sum = |by: &BTreeMap<Currency, Fig<Dec>>| -> Fig<Money> {
@@ -708,7 +716,11 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         net_value,
         margin_used_by: used,
         margin_used,
-        available_margin: (!available.is_empty()).then(|| money_sum(available.iter().copied())),
+        available_margin: match (unread.first(), available.is_empty()) {
+            (Some(a), _) => Some(Err(Gaps::of(Gap::BuyingPowerUnread(*a)))),
+            (None, false) => Some(money_sum(available.iter().copied())),
+            (None, true) => None,
+        },
         margin_unavailable: unavailable,
         has_margin: accounts.iter().any(|a| is_margin(a)),
         cash,

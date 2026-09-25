@@ -66,6 +66,10 @@ pub enum Flag {
     FromEvent,
     /// Moved in from another of the person's accounts.
     Transferred,
+    /// Its cost is one the person entered (`SPEC.md` §2, What you enter: each
+    /// shows as entered by you): an opening balance, a spin-off's share, capital
+    /// returned.
+    Entered,
 }
 
 impl Flag {
@@ -80,6 +84,7 @@ impl Flag {
             Flag::Continued => "continued",
             Flag::FromEvent => "from-event",
             Flag::Transferred => "transferred",
+            Flag::Entered => "entered",
         }
     }
 }
@@ -260,6 +265,29 @@ pub struct Matched {
     /// What each fill did to its position: closed part of it, opened one, or both
     /// (a fill that crossed through zero).
     pub roles: BTreeMap<TransactionId, FillRole>,
+    /// What waits on the person (`SPEC.md` §2, What you enter), by the transaction
+    /// it is about: units that arrived with no cost on the record, and corporate
+    /// events nothing says the values of.
+    pub waiting: BTreeMap<TransactionId, Waiting>,
+}
+
+/// A fact only the person can give, and what it is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waiting {
+    pub what: Wanted,
+    pub account: AccountId,
+    pub instrument: InstrumentId,
+    pub day: Date,
+    /// The units the transaction moved, as the broker states them.
+    pub units: Option<Dec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wanted {
+    /// What the units cost, in total, and the day they were acquired.
+    CostOfArrival,
+    /// What the event did to cost: each new holding's share, or capital returned.
+    Event,
 }
 
 /// What a fill did to its position, as the match found it.
@@ -667,7 +695,15 @@ impl<'a> Matcher<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn open_lot(&mut self, account: AccountId, instrument: InstrumentId, opened_by: &TransactionId, day: Date, at: Option<Timestamp>, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, flags: BTreeSet<Flag>, joins: Option<TripKey>) {
+    /// Whether what explains `t` is the person's own entry.
+    fn entered(&self, t: &TransactionId) -> bool {
+        self.inputs.facts.adjustments.get(t).is_some_and(|a| a.source == bagholder_core::SourceName::person())
+    }
+
+    fn open_lot(&mut self, account: AccountId, instrument: InstrumentId, opened_by: &TransactionId, day: Date, at: Option<Timestamp>, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, mut flags: BTreeSet<Flag>, joins: Option<TripKey>) {
+        if self.entered(opened_by) {
+            flags.insert(Flag::Entered);
+        }
         let deposited = flags.contains(&Flag::Deposited);
         let trip = self.trip_for(account, instrument, direction, deposited, opened_by, joins);
         let lot = Lot { trip: trip.clone(), opened_by: opened_by.clone(), day, at, direction, qty, value, fee, flags };
@@ -1193,7 +1229,10 @@ impl<'a> Matcher<'a> {
             let (value, day) = match stated {
                 Some(leg) => (Ok(leg.cost.expect("filtered")), leg.acquired.unwrap_or(t.trade_date)),
                 None if self.inputs.facts.adjustments.in_conflict(&t.id) => (Err(Gaps::of(Gap::AdjustmentConflict(t.id.clone()))), t.trade_date),
-                None => (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date),
+                None => {
+                    self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::CostOfArrival, account, instrument, day: t.trade_date, units: Some(qty) });
+                    (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date)
+                }
             };
             let value = match value {
                 Ok(v) if v.currency != currency => Err(Gaps::of(Gap::CurrencyUnstated(t.id.clone()))),
@@ -1336,7 +1375,11 @@ impl<'a> Matcher<'a> {
             // nothing says what this event was: the units the broker states move
             // at an unknown cost, and the holding waits on it
             let Some(instrument) = t.instrument else { return };
-            let unknown = if self.inputs.facts.adjustments.in_conflict(&t.id) { Gaps::of(Gap::AdjustmentConflict(t.id.clone())) } else { Gaps::of(Gap::EventUnknown(t.id.clone())) };
+            let conflict = self.inputs.facts.adjustments.in_conflict(&t.id);
+            let unknown = if conflict { Gaps::of(Gap::AdjustmentConflict(t.id.clone())) } else { Gaps::of(Gap::EventUnknown(t.id.clone())) };
+            if !conflict {
+                self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::Event, account, instrument, day: t.trade_date, units: t.quantity });
+            }
             self.taint(account, instrument, &unknown);
             if let Some(q) = t.quantity.filter(|q| !q.is_zero()) {
                 if q.is_positive() {
@@ -1565,8 +1608,12 @@ impl<'a> Matcher<'a> {
     /// lot's cost is then zero.
     fn return_capital(&mut self, account: AccountId, instrument: InstrumentId, cash: Money, anchor: &TransactionId, day: Date, at: Option<Timestamp>) -> Result<(), Gaps> {
         let mut realized: Vec<Slice> = Vec::new();
+        let entered = self.entered(anchor);
         let book = self.book(account, instrument);
         for lot in book.lots.iter_mut().filter(|l| l.direction == Direction::Long) {
+            if entered {
+                lot.flags.insert(Flag::Entered);
+            }
             let back = cash.times(lot.qty)?;
             lot.value = match &lot.value {
                 Ok(v) if v.currency != back.currency => Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone()))),

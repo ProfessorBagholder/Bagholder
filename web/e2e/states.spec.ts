@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus } from './helpers'
+import { openWithStatus, modelDoc, streamBody } from './helpers'
 
 // What the page shows while it has nothing yet, when it cannot get it, and the two
 // things it does for a reader everywhere: cut text shown whole, time said as it passes.
@@ -73,16 +73,21 @@ test('"Synced … ago" is said again as the minutes pass, without anything arriv
 })
 
 test('a tile\'s figure rolls to its new value and comes to rest as plain text', async ({ page, request }) => {
-  const model = await (await request.get('/api/model')).json()
-  const body = (m: unknown) => `retry: 200\nevent: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: m })}\n\n`
+  const model = await modelDoc(request)
   let next = model
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: body(next) }))
+  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(next) }))
   await page.goto('/')
   const figure = page.locator('.kpi .v').first()
+  await expect(figure).toHaveText(/\$\d/)
+  await expect(figure.locator('.rl-w')).toHaveCount(0) // at rest before it is read
   const before = (await figure.textContent())!
-  // the same figure, moved in its last digit; it arrives with the stream's next connection
+  // the same figure, moved by a cent in its last digit, as exact decimal text; it arrives
+  // with the stream's next connection
+  const cents = BigInt(before.replace(/[^\d]/g, '')) * (before.startsWith('−') ? -1n : 1n)
+  const moved = cents + (before.endsWith('9') ? -1n : 1n)
+  const a = moved < 0n ? -moved : moved
   next = structuredClone(model)
-  next.kpi.realized = model.kpi.realized + (Math.round(model.kpi.realized * 100) % 10 === 9 ? -0.01 : 0.01)
+  next.kpi.realized = (moved < 0n ? '-' : '') + (a / 100n).toString() + '.' + (a % 100n).toString().padStart(2, '0')
   await expect(figure.locator('.rl-w').first()).toBeVisible()
   // what a reader (or a copy) gets is the new figure throughout
   const after = (await figure.locator('.rl-plain').textContent())!

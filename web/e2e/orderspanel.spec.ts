@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { openWithStatus, ready } from './helpers'
+import { openWithStatus, ready, modelDoc, streamBody } from './helpers'
 
 // SPEC.md "### Orders". Fixture orders/brackets stand in for the doc the server would
 // send for `orders` (orders.svelte.ts watches that exact key); e2e/orders.spec.ts already
@@ -259,13 +259,12 @@ test('the orders document updates a card in place, with the panel open', async (
   // o-3 (AAPL) stays pending and stays a card; only its third line -- the fill so
   // far -- should move, proving the document patches that one card rather than the
   // panel refetching or rebuilding its list.
-  const model = await (await request.get('/api/model')).json()
-  const others = Object.entries({ orders: allOrders }).map(([doc, data]) => `event: snapshot\ndata: ${JSON.stringify({ doc, data })}\n\n`).join('')
+  const model = await modelDoc(request)
   const patch = `event: patch\ndata: ${JSON.stringify({ doc: 'orders', ops: [
     ['set', ['orders', { k: 'id', v: 'o-3' }, 'filledQty'], 70],
     ['set', ['orders', { k: 'id', v: 'o-3' }, 'avgFill'], 160.1],
   ] })}\n\n`
-  const body = `retry: 200\nevent: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: model })}\n\n${others}${patch}`
+  const body = streamBody(model, { orders: allOrders }, patch)
   await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
   await page.goto('/')
   await ready(page)

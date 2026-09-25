@@ -6,7 +6,8 @@
   // grid of the facts + executions table and the thesis / grade / tags card, then
   // the short-interest cards and the disclosures list.
   import type { Trade, Fill } from './model'
-  import { money, money0, pct, px, qty, hold, color, localWhen } from './fmt'
+  import { money, money0, pct, px, qty, hold, color, localWhen, waiting } from './fmt'
+  import { waits } from './dec'
   import { symText } from './sym'
   import { ICONS } from './icons'
   import { sort, toggleSort, sortRows } from './sort.svelte'
@@ -15,10 +16,14 @@
   import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
   import { watchDoc } from './live'
   import { tradeChart } from './actions/tradeChart'
+  import EventEntry from './EventEntry.svelte'
   import ShortInterest from './trade/ShortInterest.svelte'
   import Disclosures from './trade/Disclosures.svelte'
 
   let { trade }: { trade: Trade } = $props()
+
+  // a corporate event this holding waits on, and that only the person can say what it did
+  const waitingEvent = $derived((store.model?.waiting ?? []).find((w) => w.what === 'event' && w.instrument === trade.instrument && w.account === trade.accountId) ?? null)
 
   const signedPct = (v: number | null | undefined) => (v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2) + '%')
 
@@ -234,7 +239,7 @@
     <div style="display:flex;align-items:flex-start;gap:14px;margin:0 0 14px">
       <div style="min-width:0">
         <h4>{symText(trade.symbol)}</h4>
-        <div class="dim" style="font-size:11.5px;margin-top:2px">{trade.name || trade.symbol}{trade.exchange ? ' · ' + trade.exchange + ': ' + listingTicker(trade) : ''}</div>
+        <div class="dim" style="font-size:11.5px;margin-top:2px">{trade.name || trade.symbol}{trade.exchange ? ' · ' + trade.exchange + ': ' + listingTicker(trade) : ''}{trade.flags?.includes('entered') ? ' · Entered by you' : ''}</div>
       </div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
         {@render tkbtns()}
@@ -285,7 +290,7 @@
             {@render fact('Entry', px(trade.entry))}
             {@render fact('Exit', px(trade.exit))}
           {/if}
-          {@render fact('Hold', hold(trade.holdDays))}
+          {@render fact('Hold', trade.held != null && waits(trade.held) ? waiting(trade.held) : hold(trade.holdDays))}
           {@render fact('Account', trade.account)}
         </div>
         <div style="display:flex;align-items:baseline;gap:8px;margin:14px 0 6px"><span class="lbl">Executions{fills ? ' (' + execs.length + ')' : ''}</span></div>
@@ -350,6 +355,7 @@
             </div>
           {/if}
         </div>
+        {#if waitingEvent && store.model}<EventEntry event={waitingEvent} model={store.model} />{/if}
       </div>
     </div>
   {/if}

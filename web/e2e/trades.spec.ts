@@ -1,15 +1,23 @@
-import { expect, test, type Page } from '@playwright/test'
-import { ready } from './helpers'
-import { money, pct, px, qty as fqty, hold } from '../src/lib/fmt'
-import { symText } from '../src/lib/sym'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { ready, figures, money, pct, px, qty as fqty, hold, symText, subUrl, tradesInListOrder } from './helpers'
 
 // SPEC.md "### Trades" (list columns, sorts, detail header, chart, executions,
-// journal) plus §3/§6 where they name the trade page.
+// journal) plus §3/§6 where they name the trade page. Figures are checked against
+// the figures document (GET /api/figures), formatted from its exact decimal text.
 
 const COLS = ['Open', 'Close', 'Symbol', 'Exchange', 'Qty', 'Entry', 'Exit', 'FX', 'P&L', 'P&L %', 'Hold', 'Grade', 'Tags']
 
-async function getModel(request: Parameters<Parameters<typeof test>[1]>[0]['request']) {
-  return (await (await request.get('/api/model')).json()) as any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getModel(request: APIRequestContext): Promise<any> {
+  return figures(request)
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const closed = (model: any) => model.trades.filter((t: any) => t.status === 'closed')
+// the executions of a trade or a holding, as the page asks for them
+async function fills(request: APIRequestContext, id: string): Promise<{ when: string | null; date: string; side: string; sub: string }[]> {
+  const r = await request.get('/api/figures/detail?id=' + encodeURIComponent(id))
+  expect(r.ok()).toBeTruthy()
+  return (await r.json()).fills
 }
 
 const rows = (page: Page) => page.locator('#page table tbody tr')
@@ -31,7 +39,7 @@ test.describe('Trades list', () => {
     const model = await getModel(request)
     await page.goto('/#trades')
     await ready(page)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.grade && (x.tags || []).length)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && x.grade && (x.tags || []).length)
     const row = page.locator('#page table tbody tr').filter({ hasText: t.symbol })
     const cells = row.first().locator('td')
     await expect(cells.nth(0)).toHaveText(t.entryDate)
@@ -49,13 +57,32 @@ test.describe('Trades list', () => {
     await expect(cells.nth(12)).toContainText(t.tags[0])
   })
 
-  test('newest close first by default', async ({ page, request }) => {
+  test('newest activity first by default: an open trade by its latest fill, a closed one by its close', async ({ page, request }) => {
     const model = await getModel(request)
-    const wantOrder = model.trades.slice().sort((a: any, b: any) => (a.exitDate < b.exitDate ? 1 : a.exitDate > b.exitDate ? -1 : 0)).map((t: any) => t.exitDate)
+    const inOrder = tradesInListOrder(model.trades as { lastDate: string; exitDate: string | null; status: string; entryDate: string }[])
+    // a closed trade's latest activity is its close
+    for (const t of inOrder) if (t.status === 'closed') expect(t.lastDate).toBe(t.exitDate)
     await page.goto('/#trades')
     await ready(page)
+    const opens = await page.locator('#page table tbody tr td:nth-child(1)').allTextContents()
     const closes = await page.locator('#page table tbody tr td:nth-child(2)').allTextContents()
-    expect(closes).toEqual(wantOrder)
+    expect(opens).toEqual(inOrder.map((t) => t.entryDate))
+    expect(closes).toEqual(inOrder.map((t) => t.exitDate ?? 'Open'))
+  })
+
+  test('an open trade is listed with its Close reading Open, and opening it opens the holding', async ({ page, request }) => {
+    const model = await getModel(request)
+    const inOrder = tradesInListOrder(model.trades as { id: string; lastDate: string; status: string; position: string | null }[])
+    const i = inOrder.findIndex((t) => t.status === 'open')
+    expect(i).toBeGreaterThanOrEqual(0)
+    const t = inOrder[i]
+    expect(t.position).toBeTruthy()
+    await page.goto('/#trades')
+    await ready(page)
+    const row = rows(page).nth(i)
+    await expect(row.locator('td').nth(1)).toHaveText('Open')
+    await row.click()
+    await expect(page).toHaveURL(subUrl('portfolio', t.position!))
   })
 
   test('every column sorts, and a second click on the same header reverses it', async ({ page }) => {
@@ -105,17 +132,20 @@ test.describe('Trades list', () => {
 
   test('a click on a row opens the trade, with a breadcrumb beside the tabs', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades[0]
+    const inOrder = tradesInListOrder(model.trades as { id: string; symbol: string; lastDate: string; status: string }[])
+    const i = inOrder.findIndex((t) => t.status === 'closed')
+    const t = inOrder[i]
     await page.goto('/#trades')
     await ready(page)
-    await page.locator('#page table tbody tr').filter({ hasText: t.symbol }).first().click()
-    await expect(page).toHaveURL('/#trades/' + encodeURIComponent(t.id))
+    await expect(rows(page).nth(i).locator('td').nth(2)).toHaveText(symText(t.symbol))
+    await rows(page).nth(i).click()
+    await expect(page).toHaveURL(subUrl('trades', t.id))
     await expect(page.locator('.tabbar')).toContainText(symText(t.symbol))
   })
 
   test('a long symbol truncates with an ellipsis and shows in full on hover', async ({ page, request }) => {
     const model = await getModel(request)
-    const long = model.trades.find((t: any) => t.kind === 'Options' && t.symbol.length > 20)
+    const long = closed(model).find((t: any) => t.kind === 'Options' && t.symbol.length > 20)
     expect(long).toBeTruthy()
     await page.setViewportSize({ width: 1150, height: 900 })
     await page.goto('/#trades')
@@ -133,27 +163,27 @@ test.describe('Trades list', () => {
 test.describe('Trade detail', () => {
   test('the header shows symbol, name · exchange: ticker, and P&L / P&L % in the trade\'s currency', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares')
+    const t = closed(model).find((x: any) => x.kind === 'Shares')
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     await expect(page.locator('#page h4')).toHaveText(symText(t.symbol))
-    await expect(page.locator('#page').getByText(t.name + ' · ' + t.exchange + ': ' + t.symbol)).toBeVisible()
+    await expect(page.locator('#page').getByText(t.name + ' · ' + t.exchange + ': ' + symText(t.symbol))).toBeVisible()
     await expect(page.locator('#page .tab', { hasText: /^[−$]/ }).first()).toHaveText(money(t.pnl))
     await expect(page.locator('#page').getByText(pct(t.pnlPct), { exact: true })).toBeVisible()
   })
 
   test('an option\'s header names the underlying, with listing suffixes dropped from the ticker', async ({ page, request }) => {
     const model = await getModel(request)
-    const opt = model.trades.find((x: any) => x.kind === 'Options')
+    const opt = closed(model).find((x: any) => x.kind === 'Options')
     await page.goto('/#trades/' + encodeURIComponent(opt.id))
     await ready(page)
     await expect(page.locator('#page h4')).toHaveText(opt.symbol) // the contract itself, unbared
-    await expect(page.locator('#page').getByText(opt.name + ' · ' + opt.exchange + ': ' + opt.underlying)).toBeVisible()
+    await expect(page.locator('#page').getByText(opt.name + ' · ' + opt.exchange + ': ' + symText(opt.underlying))).toBeVisible()
   })
 
   test('facts show Open, Close, Entry, Exit, Hold and Account for a trade', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares')
+    const t = closed(model).find((x: any) => x.kind === 'Shares')
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const fact = (label: string) => page.locator('#page').locator('div', { hasText: new RegExp('^' + label + '$') }).locator('xpath=following-sibling::div[1]')
@@ -167,7 +197,8 @@ test.describe('Trade detail', () => {
 
   test('the executions table\'s label carries the count, and When sorts newest first by default and reverses on a second click', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Options') // 2 fills: open + close
+    const t = closed(model).find((x: any) => x.kind === 'Options') // 2 fills: open + close
+    expect(await fills(request, t.id)).toHaveLength(2)
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     await expect(page.locator('#page').getByText(/^Executions \(\d+\)$/)).toHaveText('Executions (2)')
@@ -181,17 +212,21 @@ test.describe('Trade detail', () => {
 
   test('an execution\'s day and time are the viewer\'s, not the server\'s', async ({ page, request }) => {
     // SPEC.md: execution times are shown in the viewer's local time. The browser runs
-    // in Toronto (playwright.config.ts); the server formats fills in Edmonton.
+    // in Toronto (playwright.config.ts); a fill's instant arrives in UTC.
     const model = await getModel(request)
-    const withFills = await Promise.all(model.trades.map(async (x: any) => ({ id: x.id, fills: (await (await request.get('/api/trade?id=' + encodeURIComponent(x.id))).json()).fills || [] })))
-    const t = withFills.find((x: any) => x.fills.some((f: any) => String(f.when).includes('T')))!
-    const at = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-    const viewer = (when: string) => {
-      const p = Object.fromEntries(at.formatToParts(new Date(when)).map((x) => [x.type, x.value]))
-      return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`
+    const withFills: { id: string; fills: Awaited<ReturnType<typeof fills>> }[] = await Promise.all(closed(model).map(async (x: any) => ({ id: x.id as string, fills: await fills(request, x.id) })))
+    const t = withFills.find((x) => x.fills.some((f) => String(f.when).includes('T')))!
+    const inZone = (zone: string) => {
+      const at = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      return (when: string) => {
+        const p = Object.fromEntries(at.formatToParts(new Date(when)).map((x) => [x.type, x.value]))
+        return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`
+      }
     }
-    const want = t.fills.filter((f: any) => String(f.when).includes('T')).map((f: any) => viewer(f.when))
-    expect(want).not.toEqual(t.fills.filter((f: any) => String(f.when).includes('T')).map((f: any) => `${f.date} ${f.time}`))
+    const timed = t.fills.filter((f) => String(f.when).includes('T'))
+    const want = timed.map((f) => inZone('America/Toronto')(f.when!))
+    // the check tells the two zones apart
+    expect(want).not.toEqual(timed.map((f) => inZone('UTC')(f.when!)))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const shown = (await page.locator('#page .scroll table tbody tr td:nth-child(1)').allTextContents()).map((x) => x.trim().replace(/\s+/g, ' '))
@@ -200,7 +235,7 @@ test.describe('Trade detail', () => {
 
   test('an option execution\'s Side reads what the fill did in the trade, BUY TO OPEN then SELL TO CLOSE', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Options')
+    const t = closed(model).find((x: any) => x.kind === 'Options')
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const sides = await page.locator('#page .scroll table tbody tr td:nth-child(2)').allTextContents()
@@ -209,7 +244,7 @@ test.describe('Trade detail', () => {
 
   test('a share execution\'s Side reads BUY or SELL', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares')
+    const t = closed(model).find((x: any) => x.kind === 'Shares')
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const sides = await page.locator('#page .scroll table tbody tr td:nth-child(2)').allTextContents()
@@ -218,7 +253,7 @@ test.describe('Trade detail', () => {
 
   test('the timeframe pills offer 1H, 4H, 1D, 1W and 1M for a share or option, with the default one highlighted', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
     // what is offered is the server's word (it drops an intraday timeframe a recent read could not supply)
     await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1h', '4h', '1d', '1w', '1M'], reason: '', pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
@@ -231,7 +266,7 @@ test.describe('Trade detail', () => {
 
   test('only the timeframes the server offers are pills: without intraday bars, the daily ones alone', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
     await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1d', '1w', '1M'], reason: '', pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
@@ -240,7 +275,7 @@ test.describe('Trade detail', () => {
 
   test('picking a timeframe highlights it and it is remembered for that trade while the page stays open', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
     await page.goto('/#trades')
     await ready(page)
     await page.locator('#page table tbody tr').filter({ hasText: t.symbol }).first().click()
@@ -257,8 +292,8 @@ test.describe('Trade detail', () => {
 
   test('a different trade keeps its own default timeframe, unaffected by another trade\'s pick', async ({ page, request }) => {
     const model = await getModel(request)
-    const a = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
-    const b = model.trades.find((x: any) => x.kind === 'Shares' && x.id !== a.id && x.holdDays > 10 && x.holdDays <= 180)
+    const a = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
+    const b = closed(model).find((x: any) => x.kind === 'Shares' && x.id !== a.id && x.holdDays > 10 && x.holdDays <= 180)
     await page.goto('/#trades/' + encodeURIComponent(a.id))
     await ready(page)
     await page.locator('#page .pill', { hasText: '1W' }).click()
@@ -268,7 +303,7 @@ test.describe('Trade detail', () => {
 
   test('with no bars to draw, the chart\'s place says why in the server\'s words', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares')
+    const t = closed(model).find((x: any) => x.kind === 'Shares')
     const reason = 'TMX Money could not be reached; Yahoo Finance could not be reached.'
     await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1d', '1w', '1M'], reason, pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
@@ -279,7 +314,7 @@ test.describe('Trade detail', () => {
 
   test('thesis saves on blur', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && !x.thesis)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && !x.thesis)
     let saved: any = null
     await page.route('**/api/journal', (route) => {
       saved = route.request().postDataJSON()
@@ -297,7 +332,7 @@ test.describe('Trade detail', () => {
 
   test('a tag is added with Enter and removed with Backspace in the empty box, and matching tags are suggested', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && !(x.tags || []).length)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && !(x.tags || []).length)
     const saves: any[] = []
     await page.route('**/api/journal', (route) => {
       saves.push(route.request().postDataJSON())
@@ -320,7 +355,7 @@ test.describe('Trade detail', () => {
 
   test('a grade pill toggles off when clicked again', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && !x.grade)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && !x.grade)
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     await page.locator('.seg-opt', { hasText: /^C$/ }).click()
@@ -336,8 +371,8 @@ test.describe('Holding detail (from Portfolio)', () => {
     const p = model.positions[0]
     await page.goto('/#portfolio')
     await ready(page)
-    await page.locator('#page table tbody tr').filter({ hasText: p.symbol }).first().click()
-    await expect(page).toHaveURL('/#portfolio/' + encodeURIComponent(p.id))
+    await page.locator('#page table tbody tr').filter({ has: page.locator('td:first-child', { hasText: new RegExp('^' + symText(p.symbol).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '( SHORT)?$') }) }).first().click()
+    await expect(page).toHaveURL(subUrl('portfolio', p.id))
     await expect(page.locator('#page h4')).toHaveText(symText(p.symbol))
     const fact = (label: string) => page.locator('#page').locator('div', { hasText: new RegExp('^' + label + '$') }).locator('xpath=following-sibling::div[1]')
     await expect(fact('Qty')).toHaveText(fqty(p.qty))
@@ -346,37 +381,40 @@ test.describe('Holding detail (from Portfolio)', () => {
     await expect(page.locator('#page').getByText('Open', { exact: true })).toHaveCount(0)
   })
 
-  test('a holding\'s header carries its last price and percent change, not a P&L', async ({ page, request }) => {
+  test('a holding\'s header carries its unrealized P&L and its percentage at the top right', async ({ page, request }) => {
+    // SPEC.md "### Portfolio", A holding: "the unrealized P&L and its percentage at the top right"
     const model = await getModel(request)
-    const p = model.positions[0]
+    const p = model.positions.find((x: any) => typeof x.unreal === 'string' && x.unrealPct != null)
     await page.goto('/#portfolio/' + encodeURIComponent(p.id))
     await ready(page)
     await expect(page.locator('.tabbar')).toContainText(symText(p.symbol))
-    const priceLine = page.locator('#page .tab', { hasText: /^\d/ }).first()
-    await expect(priceLine).toBeVisible()
+    const figure = page.locator('#page .tab', { hasText: /^[−$]/ }).first()
+    await expect(figure).toHaveText(money(p.unreal))
+    // one place or two: SPEC.md §3 gives a position's P&L % two, its Holdings example one
+    await expect(figure.locator('xpath=following-sibling::div[1]')).toHaveText(new RegExp('^(' + [pct(p.unrealPct, 1), pct(p.unrealPct, 2)].map((x) => x.replace(/[.+]/g, '\\$&')).join('|') + ')$'))
   })
 })
 
 test.describe('The chart, on stored bars', () => {
   test('a trade draws its daily bars with every execution marked on its day', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
-    const detail = await (await request.get('/api/trade?id=' + encodeURIComponent(t.id))).json()
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
+    const detail = { fills: await fills(request, t.id) }
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const chart = page.getByRole('img', { name: /^Price chart, 1D/ })
     await expect(chart).toBeVisible()
     const label = (await chart.getAttribute('aria-label'))!
-    const [, bars, marked, fills] = label.match(/(\d+) bars, (\d+) of (\d+) executions marked/)!.map(Number)
+    const [, bars, marked, executions] = label.match(/(\d+) bars, (\d+) of (\d+) executions marked/)!.map(Number)
     expect(bars).toBeGreaterThan(10)
-    expect(fills).toBe(detail.fills.length)
-    expect(marked).toBe(fills)
+    expect(executions).toBe(detail.fills.length)
+    expect(marked).toBe(executions)
     await expect(chart.locator('canvas').first()).toBeVisible()
   })
 
   test('another timeframe redraws the same chart in place, with other bars', async ({ page, request }) => {
     const model = await getModel(request)
-    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 30 && x.holdDays <= 180)
+    const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 30 && x.holdDays <= 180)
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const chart = page.getByRole('img', { name: /^Price chart/ })

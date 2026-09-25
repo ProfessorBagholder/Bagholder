@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus } from './helpers'
+import { openWithStatus, figures } from './helpers'
 
 // SPEC §6, Markets: what Enter and Escape do in its cards.
 
@@ -13,7 +13,8 @@ test('Escape closes the watchlist add row and the tile picker wherever the focus
 })
 
 test('Escape in the News box clears the words typed; in the Short interest box too; and never the filters while it does', async ({ page, request }) => {
-  const account = (await (await request.get('/api/model')).json()).options.accounts[0] as string
+  // an account is shown, and so typed and matched, by its name
+  const account = ((await figures(request)).options.accounts[0] as { name: string }).name
   await page.goto('/#markets')
   await expect(page.getByText('Fear & Greed')).toBeVisible()
   await page.keyboard.press('ControlOrMeta+k')

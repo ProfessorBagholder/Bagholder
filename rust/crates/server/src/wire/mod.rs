@@ -96,6 +96,7 @@ mod tests {
             ("CashflowRow", key::<CashflowRow>()),
             ("AccountOption", key::<AccountOption>()),
             ("InstrumentOption", key::<InstrumentOption>()),
+            ("Waiting", key::<Waiting>()),
         ];
         for (name, k) in &keyed {
             assert!(k.is_some(), "{name} is a list's row and declares no key");

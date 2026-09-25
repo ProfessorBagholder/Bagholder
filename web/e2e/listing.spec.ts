@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { figures, subUrl } from './helpers'
 
 // SPEC §4/§6: every listing on Markets opens its page -- the holding's where the book
 // holds it, its own otherwise.
@@ -16,11 +17,11 @@ test('a ticker the book does not hold opens its own page under Markets', async (
 })
 
 test('a listing the book turns out to hold opens the holding, and Back does not return to the listing', async ({ page, request }) => {
-  const model = await (await request.get('/api/model')).json()
+  const model = await figures(request)
   const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')
   await page.goto('/#markets')
   await page.goto('/#markets/' + encodeURIComponent('listing:' + held.symbol.toUpperCase() + '@' + String(held.exchange).toUpperCase()))
-  await expect(page).toHaveURL(new RegExp('#portfolio/' + encodeURIComponent(held.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  await expect(page).toHaveURL(subUrl('portfolio', held.id))
   await expect(page.locator('#page')).toContainText('Executions')
   await page.goBack()
   await expect(page).toHaveURL(/#markets$/)

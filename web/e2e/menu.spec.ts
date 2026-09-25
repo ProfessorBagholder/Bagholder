@@ -163,7 +163,7 @@ test('Import CSV reads the file, sends its name and text, and reports what was a
 
   await expect(page.getByRole('heading', { name: 'Import CSV' })).toBeVisible()
   await expect.poll(() => (sent as { name?: string } | null)?.name).toBe('trades.csv')
-  expect((sent as { text?: string }).text).toBe(csv)
+  expect((sent as unknown as { text?: string }).text).toBe(csv)
   await expect(page.locator('#modalDlg')).toContainText('1 file · 1 new activity · 0 already stored')
   await expect(page.locator('#modalDlg')).toContainText('legacy · 2 rows · 1 new · 0 duplicates')
   await expect(page.locator('#modalDlg')).toContainText('1 skipped')
