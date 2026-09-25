@@ -32,6 +32,7 @@ fn scratch(name: &str) -> PathBuf {
 #[test]
 fn test_a_running_endpoint_is_used_and_nothing_is_provisioned() {
     let _g = guard();
+    localmodel::serve_from(&scratch("detect")).unwrap();
     hooks::DETECT.with(|h| *h.borrow_mut() = Some(Box::new(|| Some(("http://127.0.0.1:11434".into(), "llama3.2".into())))));
     let kicked = Rc::new(Cell::new(0));
     let k = kicked.clone();
@@ -45,11 +46,47 @@ fn test_a_running_endpoint_is_used_and_nothing_is_provisioned() {
 #[test]
 fn test_no_endpoint_kicks_provisioning_and_returns_empty() {
     let _g = guard();
+    localmodel::serve_from(&scratch("kick")).unwrap();
     let kicked = Rc::new(Cell::new(0));
     let k = kicked.clone();
     hooks::ENSURE.with(|h| *h.borrow_mut() = Some(Box::new(move || k.set(k.get() + 1))));
     assert_eq!(localmodel::endpoint(), "");
     assert_eq!(kicked.get(), 1, "with nothing running, provisioning is kicked off");
+}
+
+#[test]
+fn test_until_an_app_names_its_folder_nothing_is_asked_or_started() {
+    let _g = guard();
+    let probes = Rc::new(Cell::new(0));
+    let p = probes.clone();
+    hooks::DETECT.with(|h| *h.borrow_mut() = Some(Box::new(move || { p.set(p.get() + 1); None })));
+    // no ENSURE stand-in: were provisioning to start, it would run for real
+    hooks::ENSURE.with(|h| *h.borrow_mut() = None);
+    assert_eq!(localmodel::folder(), None);
+    assert_eq!(localmodel::endpoint(), "");
+    assert!(!localmodel::available());
+    assert!(!localmodel::wait_ready(0.0));
+    localmodel::ensure();
+    assert_eq!(probes.get(), 0, "no endpoint is probed");
+    assert_eq!(localmodel::status(), "off", "nothing is detected, downloaded or started");
+}
+
+#[test]
+fn test_the_model_folder_is_the_named_home_s_models_folder() {
+    let _g = guard();
+    let home = scratch("home");
+    localmodel::serve_from(&home).unwrap();
+    assert_eq!(localmodel::folder(), Some(home.join("models")));
+    localmodel::reset_state();
+    assert_eq!(localmodel::folder(), None, "a fresh process has no folder until told");
+}
+
+#[test]
+fn test_a_test_run_is_refused_the_person_s_own_folder() {
+    let _g = guard();
+    let real = PathBuf::from(std::env::var("HOME").unwrap()).join(".bagholder-rust");
+    assert!(localmodel::serve_from(&real).is_err());
+    assert_eq!(localmodel::folder(), None);
 }
 
 #[test]
