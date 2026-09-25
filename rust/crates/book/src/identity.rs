@@ -350,7 +350,19 @@ impl Book {
     /// transactions (a conflict between references, a kind or currency that
     /// differs from the instrument's); the `Vec` holds problems that do not.
     pub(crate) fn resolve_instrument(&self, draft: &InstrumentDraft, seen_by: &TransactionId, at: jiff::Timestamp) -> Result<(std::result::Result<InstrumentId, Problem>, Vec<Problem>)> {
-        let source = &self.record(seen_by.record)?.source;
+        let source = self.record(seen_by.record)?.source;
+        self.resolve_instrument_from(draft, &source, Some(seen_by), at)
+    }
+
+    /// The instrument a broker's statement names that no record does (a
+    /// holding a broker states with no row that brought it): found or made
+    /// from the broker's own description of it, as a record's would be. A name
+    /// is kept only from a record, where it was seen.
+    pub fn instrument_stated(&self, draft: &InstrumentDraft, source: &SourceName, at: jiff::Timestamp) -> Result<std::result::Result<InstrumentId, Problem>> {
+        self.atomically(|| Ok(self.resolve_instrument_from(draft, source, None, at)?.0))
+    }
+
+    fn resolve_instrument_from(&self, draft: &InstrumentDraft, source: &SourceName, seen_by: Option<&TransactionId>, at: jiff::Timestamp) -> Result<(std::result::Result<InstrumentId, Problem>, Vec<Problem>)> {
         let mut notes = Vec::new();
         let identifying: Vec<&Reference> = draft.refs.iter().filter(|r| r.identifies()).collect();
         if identifying.is_empty() {
@@ -404,11 +416,11 @@ impl Book {
                 None => self.add_instrument_ref(id, r)?,
             }
         }
-        if let Some(name) = &draft.name {
+        if let (Some(name), Some(seen_by)) = (&draft.name, seen_by) {
             self.record_sighting(id, name, seen_by)?;
         }
         if let Some(opt) = &draft.option {
-            let (underlying, more) = self.resolve_instrument(&opt.underlying, seen_by, at)?;
+            let (underlying, more) = self.resolve_instrument_from(&opt.underlying, source, seen_by, at)?;
             notes.extend(more);
             let underlying = match underlying {
                 Ok(u) => u,

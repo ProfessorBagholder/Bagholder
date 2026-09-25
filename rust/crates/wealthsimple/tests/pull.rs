@@ -52,11 +52,17 @@ fn once_with(book: &Book, replies: &Path, now: &str, edit: impl FnOnce(&mut Vec<
 fn a_pull_with_nothing_new_asks_only_the_accounts_their_activity_and_their_cash() {
     let home = tempfile::tempdir().unwrap();
     let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
-    let (first, _) = once(&book, &dir(), "2025-11-19T20:00:00Z");
-    // one month of rows names only some of what the account holds: the rest
-    // of its positions are named, not dropped
-    assert_eq!(first.failures.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), vec!["units:anon-tfsa-1"]);
+    let (first, asked) = once(&book, &dir(), "2025-11-19T20:00:00Z");
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
     assert_eq!(first.records_new, 53);
+    // one month of rows names only some of what the account holds: the rest
+    // are read from their securities' records, in one batch, and stated whole
+    assert_eq!(asked.iter().filter(|a| a.starts_with("securities")).collect::<Vec<_>>(), vec!["securities 13", "securities 7"]);
+    let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+    let (_, units) = book.stated(account).unwrap().units.expect("the units stated");
+    let positions = bagholder_core::json::parse(&std::fs::read_to_string(dir().join("positions@anon-tfsa-1@2025-11-18.json")).unwrap()).unwrap();
+    let held = Node::root(&positions).obj("data").unwrap().list("accounts").unwrap()[0].obj("financials").unwrap().obj("current").unwrap().obj("positionsAsOfDate").unwrap().list("edges").unwrap().iter().filter(|e| !e.obj("node").unwrap().obj("security").unwrap().text("id").unwrap().starts_with("sec-c-")).count();
+    assert_eq!(units.len(), held);
     // the same day again: nothing new to read, nothing stated to read again
     let (second, asked) = once(&book, &dir(), "2025-11-19T21:00:00Z");
     assert!(second.failures.is_empty(), "{:?}", second.failures);

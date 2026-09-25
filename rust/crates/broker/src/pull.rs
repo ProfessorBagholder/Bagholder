@@ -232,18 +232,35 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         for k in ks {
             match adapter.units(k, as_of) {
                 Ok(units) => {
-                    let mut unknown = Vec::new();
+                    // a holding no row names (a token migrated, a gift): its
+                    // instrument from the broker's own description, read
+                    // together, so the check shows it beside what the book holds
+                    let mut unnamed = Vec::new();
+                    for u in &units {
+                        if book.instrument_by_ref(&u.instrument)?.is_none() {
+                            unnamed.push(u.instrument.clone());
+                        }
+                    }
+                    if !unnamed.is_empty() {
+                        for (r, draft) in adapter.instruments(&unnamed, as_of) {
+                            let why = match draft {
+                                Ok(d) => book.instrument_stated(&d, &adapter.mapping().source(), now)?.err().map(|p| Failure::Mismatch(format!("{}: {}", r.value, p.detail))),
+                                Err(f) => Some(f),
+                            };
+                            if let Some(f) = why {
+                                report.failed(format!("units:{k}"), f);
+                            }
+                        }
+                    }
                     for u in units {
                         match book.instrument_by_ref(&u.instrument)? {
                             Some(i) => {
                                 let e = sum.entry(i).or_insert(Dec::ZERO);
                                 *e = add(*e, u.quantity)?;
                             }
-                            None => unknown.push(u.instrument.value.clone()),
+                            // a statement is kept only whole
+                            None => complete = false,
                         }
-                    }
-                    if !unknown.is_empty() {
-                        report.failed(format!("units:{k}"), Failure::Mismatch(format!("positions in instruments no row names: {}", unknown.join(", "))));
                     }
                 }
                 Err(f) => {

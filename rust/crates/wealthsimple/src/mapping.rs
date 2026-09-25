@@ -882,6 +882,16 @@ pub fn completed_on(detail: &Node) -> Read<Option<jiff::civil::Date>> {
     Ok(completed_at(detail)?.and_then(|at| bagholder_book::zones::Zones::default().day(at, ZONE).ok()))
 }
 
+/// An instrument as Wealthsimple describes it: `securities` holds its security's
+/// record (and an option's underlying's) by id.
+pub fn draft_of(securities: &Value, id: &str, seen: jiff::civil::Date) -> Result<InstrumentDraft, String> {
+    let v = Value::Object(BTreeMap::from([("securities".to_string(), securities.clone())]));
+    instrument(&Node::root(&v), id, seen).map_err(|f| match f {
+        Failed::Reply(m) => m.to_string(),
+        Failed::Problem(p) => p.detail,
+    })
+}
+
 /// A transfer in from another institution: what arrived, on the day it
 /// completed. The detail's value that arrived per currency where it states one;
 /// else what the account's positions show rising from the day before the row to

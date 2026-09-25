@@ -471,6 +471,14 @@ impl Book {
         found.map(|s| text::parsed("source_records", "id", &s, RecordId::parse)).transpose()
     }
 
+    /// The value a record is known by in `scheme`, if any.
+    pub fn record_ref(&self, record: RecordId, scheme: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT value FROM record_refs WHERE record_id = ? AND scheme = ? ORDER BY value LIMIT 1", params![record.to_string(), scheme], |r| r.get(0))
+            .optional()?)
+    }
+
     /// The records known by `value` in `scheme`.
     pub fn records_by_ref(&self, scheme: &str, value: &str) -> Result<Vec<RecordId>> {
         let mut stmt = self.conn().prepare_cached("SELECT record_id FROM record_refs WHERE scheme = ? AND value = ? ORDER BY record_id")?;

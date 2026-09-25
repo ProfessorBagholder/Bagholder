@@ -228,23 +228,29 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     }
     engine.apply(Change::Trades(book.trades().map_err(err)?));
 
-    // the old row each transaction came from
-    // the old row each record stands for: an imported record's own key, or,
-    // for a broker's record that replaced one, the key of the record it replaced
+    // rows are joined by Wealthsimple's own id for them: the old store gives
+    // its rows new ids of its own when it syncs again, so its ids name nothing
+    // across copies. A broker's record is known by its key; an imported
+    // record by the broker's id it carries, else its own key
     let mut keys = book.live_record_keys().map_err(err)?;
-    let import = bagholder_book::import::mapping::import_source();
+    let wealthsimple = bagholder_core::SourceName::named("wealthsimple");
     for (id, key) in keys.iter_mut() {
-        if book.record(*id).map_err(err)?.source == import {
+        if book.record(*id).map_err(err)?.source == wealthsimple {
             continue;
         }
-        for r in book.records_by_ref(bagholder_book::import::mapping::WEALTHSIMPLE_RECORD, key).map_err(err)? {
-            let rec = book.record(r).map_err(err)?;
-            if rec.source == import {
-                *key = rec.source_key;
-                break;
-            }
+        if let Some(broker_id) = book.record_ref(*id, bagholder_book::import::mapping::WEALTHSIMPLE_RECORD).map_err(err)? {
+            *key = broker_id;
         }
     }
+    let mut stmt = old.prepare("SELECT id, canonical_id FROM activities WHERE canonical_id IS NOT NULL AND canonical_id != ''").map_err(err)?;
+    let canonical: BTreeMap<String, String> = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(err)?.collect::<Result<_, _>>().map_err(err)?;
+    drop(stmt);
+    // an old key (`rt:<row>`, `<row>`, `<row>|…`) by the broker's id of its row
+    let old_key = |k: &str| -> String {
+        let (prefix, rest) = k.strip_prefix("rt:").map_or(("", k), |r| ("rt:", r));
+        let row = rest.split('|').next().unwrap_or(rest);
+        format!("{prefix}{}", canonical.get(row).cloned().unwrap_or_else(|| row.to_string()))
+    };
     let old_row = |t: &TransactionId| -> String { keys.get(&t.record).cloned().unwrap_or_default() };
     let figures = engine.figures();
     let mut out = String::new();
@@ -274,7 +280,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let mut same = 0usize;
     let mut seen_new: BTreeSet<String> = BTreeSet::new();
     for o in &view.trades {
-        let key = o.id.split('|').next().unwrap_or(&o.id).to_string();
+        let key = old_key(&o.id);
         match new_by_old.get(&key) {
             None => {
                 causes.entry("old trade with no new trade on the same opening".into()).or_default().push(format!("{} {} {} → {} pnl {:.2}", o.id, o.symbol, o.entry_date, o.exit_date, o.pnl));
@@ -372,7 +378,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let mut pos_same = 0usize;
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for o in &view.positions {
-        let key = o.rt.clone().unwrap_or_else(|| o.id.clone());
+        let key = old_key(&o.rt.clone().unwrap_or_else(|| o.id.clone()));
         match new_pos.get(&key) {
             None => pos_causes.entry("old position with no new position on the same opening".into()).or_default().push(format!("{key} {} qty {} book {:.2}", o.symbol, o.qty, o.cost)),
             Some(n) => {
@@ -407,7 +413,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let mut cash_diff = Vec::new();
     let mut cash_same = 0;
     for o in view.cashflow.rows.iter().chain(view.cashflow.other.iter()) {
-        match new_cash.get(&o.id) {
+        match new_cash.get(&old_key(&o.id)) {
             None => cash_diff.push(format!("{} {} {:?} {:.2}: no new row", o.id, o.date, o.kind, o.amount)),
             Some(n) if close_enough(o.amount_cad, &n.amount_cad) && (n.amount.amount.to_f64() - o.amount).abs() < 0.005 => cash_same += 1,
             Some(n) => cash_diff.push(format!("{} {} {:?} {:.2} cad {:.2} / {} cad {}", o.id, o.date, o.kind, o.amount, o.amount_cad, n.amount.amount.to_text(), money(&n.amount_cad))),

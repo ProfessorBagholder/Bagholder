@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use bagholder_book::mapping::Mapping;
+use bagholder_book::mapping::{InstrumentDraft, Mapping};
 use bagholder_core::account::AccountType;
 use bagholder_core::instrument::Reference;
 use bagholder_core::json::Value;
@@ -146,6 +146,9 @@ pub trait BrokerAdapter {
     fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>>;
     /// An account's positions as of a day.
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
+    /// The broker's description of each instrument it states a holding in that
+    /// no row names (seen on `day`), read together: each one's, or why not.
+    fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)>;
     /// An account's value and net deposits per day, from `from` (the whole of
     /// its history when `None`).
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>>;

@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_book::mapping::Mapping;
 use bagholder_broker::{AccountStated, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, Units};
 use bagholder_core::json::Value;
+use bagholder_book::mapping::InstrumentDraft;
+use bagholder_core::instrument::Reference;
 use bagholder_core::{Broker, Currency, Dec};
 use bagholder_sources::reply::{Mismatch, Node};
 
@@ -362,6 +364,38 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>> {
         let nodes = self.source.positions(account, day)?;
         crate::read::units(&nodes).map_err(mismatch)
+    }
+    fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)> {
+        // their securities' records a batch at a time, then options' underlyings
+        self.failed = None;
+        self.prefetch(refs.iter().map(|r| r.value.clone()));
+        let underlyings: Vec<String> = refs
+            .iter()
+            .filter_map(|r| self.securities.get(&r.value).cloned().flatten())
+            .filter_map(|s| Node::root(&s).obj("optionDetails").and_then(|o| o.obj("underlyingSecurity")).and_then(|u| u.text("id").map(str::to_string)).ok())
+            .collect();
+        self.prefetch(underlyings);
+        let failed = self.failed.take();
+        refs.iter()
+            .map(|r| {
+                let mut records: BTreeMap<String, Value> = BTreeMap::new();
+                let mut wanted = vec![r.value.clone()];
+                while let Some(id) = wanted.pop() {
+                    if records.contains_key(&id) {
+                        continue;
+                    }
+                    let Some(s) = self.securities.get(&id).cloned().flatten() else {
+                        let f = failed.clone().unwrap_or_else(|| Failure::Mismatch(format!("security {id}, which a position names, is not answered")));
+                        return (r.clone(), Err(f));
+                    };
+                    if let Ok(u) = Node::root(&s).obj("optionDetails").and_then(|o| o.obj("underlyingSecurity")).and_then(|u| u.text("id").map(str::to_string)) {
+                        wanted.push(u);
+                    }
+                    records.insert(id, s);
+                }
+                (r.clone(), crate::mapping::draft_of(&Value::Object(records), &r.value, day).map_err(Failure::Mismatch))
+            })
+            .collect()
     }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>> {
         let nodes = self.source.history(account, from)?;
