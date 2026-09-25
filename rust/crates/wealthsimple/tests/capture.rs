@@ -40,3 +40,12 @@ fn every_row_of_the_capture_maps() {
         println!("{n:6} {k}: {d}");
     }
 }
+
+#[test]
+#[ignore = "maps one stored record's payload named by BAGHOLDER_WS_PAYLOAD"]
+fn one_stored_payload() {
+    let path = std::env::var("BAGHOLDER_WS_PAYLOAD").expect("BAGHOLDER_WS_PAYLOAD names a payload file");
+    let v = bagholder_core::json::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let m = map_payload(&v);
+    println!("{:#?}\n{:#?}", m.legs.iter().map(|d| (d.kind, d.cash, d.quantity)).collect::<Vec<_>>(), m.problems);
+}

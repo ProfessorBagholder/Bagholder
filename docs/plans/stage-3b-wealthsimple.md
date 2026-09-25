@@ -226,14 +226,15 @@ Nothing refused. Two points where the plan departs from what was written before,
   - Coins whose positions Wealthsimple states to fewer digits than its rows: the crypto account's differences below 0.000001 of a unit.
   - A move between two closed accounts whose row states no amount (±9,307.07): its detail (`FetchInternalTransfer`) states it, and is now read with the row; the capture did not hold that detail, so the real run keeps the difference until a live pull reads it.
   - A coin whose rows state its units rounded to whole units (PEPE: 2,590,417.0 on a fill) while its positions state them exactly: the rows' rounding leaves 1,567.76 PEPE in the book that Wealthsimple does not hold.
-  - Not yet traced: the smaller cash differences of four accounts (30.00, 56.91, 143.09 against 200, and a USD account at 6,159.07).
+  - A spending account's 30.00: its cash matches Wealthsimple's stated value to the cent on every day through the last full day; the difference is the day's withdrawals posted after the capture read its activity (the check's pending case).
+  - Not yet traced: 56.91 moved between two RESP accounts (the check counts it on one side while the day-by-day balance of the closed account comes to zero; which is right is open), and a USD account at 6,159.07.
 - The comparison run again (`compare-figures … --facts-from-book`): portfolio market value 627,165.03 CAD with 3 left out (3a's run: 632,070.43 with 15), the contract sizes and the MSTY consolidation now stated; realized P&L by instrument 106 agree to the cent, 62 differ; the per-trade and per-payment matching reads 0 the same, because the tool matches by the imported records' keys, which Wealthsimple's records replaced (the tool's matching by the broker's own id is the follow-up below).
 - Owner entries: `engine/tests/cases/entries.json` (9 cases written by an agent that had not read the engine; one re-derived after `SPEC.md` set the day a return of capital applies) green; `book/tests/person.rs` green.
 
 ## Handoff
 
 Stopped at: the broker check's untraced accounts and the comparison's matching. What is left, in order:
-1. Trace the four accounts' smaller cash differences and name each cause.
+1. Trace the 56.91 between the RESP accounts and the USD account's 6,159.07, and name each cause.
 2. `compare-figures` now names a broker record by the imported row it replaced (`record_refs`); per-trade pairing still reads 0 the same, which points at the round trips' boundaries rather than the keys (the old model split a position's trips where the new one keeps one open to flat): pair by instrument and close instead, then read the differences.
 3. Recorded replies of a refusal and of a lapsed session from Wealthsimple itself (the session's tests use replies written to the shapes the bundle shows).
 
