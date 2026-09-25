@@ -104,10 +104,12 @@ pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<D
         let to = dec31.min(today);
         // the year opens on the last day of the year before, if it cleared the floor
         let before = series.iter().rev().find(|d| d.day < jan1).filter(|d| d.value > floor);
-        let (from, start_day) = match before {
-            Some(_) => (jan1, None),
+        // `base` is the day the year's return is measured over: the last value
+        // before it, or its own first point clear of the floor
+        let (from, start_day, base) = match before {
+            Some(b) => (jan1, None, b.day),
             None => match in_year.iter().find(|d| d.value > floor) {
-                Some(d) => (d.day, Some(d.day)),
+                Some(d) => (d.day, Some(d.day), d.day),
                 None => continue,
             },
         };
@@ -133,7 +135,7 @@ pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<D
             r: factor - 1.0,
             from,
             to,
-            days: (to - from).get_days() as i64,
+            days: (to - base).get_days() as i64,
             flow,
             end_value,
             benchmark: benchmark.and_then(|b| benchmark_return(b, from, to)),
@@ -142,7 +144,12 @@ pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<D
     out
 }
 
-/// The years compounded and annualized over the days they cover; a year of
+/// A span of this many days or more is a year or more.
+const YEAR_DAYS: i64 = 365;
+
+/// The years compounded over the days they cover, and annualized only when
+/// those days make a year or more: a shorter span is its return over the span,
+/// as GIPS rules (only periods of a year or more are annualized). A year of
 /// fewer than 30 days is left out.
 pub fn annualized(years: &[YearReturn]) -> Annualized {
     let used: Vec<&YearReturn> = years.iter().filter(|y| y.r > -1.0 && y.days >= 30).collect();
@@ -153,7 +160,7 @@ pub fn annualized(years: &[YearReturn]) -> Annualized {
     let prod: f64 = used.iter().map(|y| 1.0 + y.r).product();
     let yrs = days as f64 / 365.25;
     Annualized {
-        rate: Some(if yrs >= 1.0 / 12.0 { prod.powf(1.0 / yrs) - 1.0 } else { prod - 1.0 }),
+        rate: Some(if days >= YEAR_DAYS { prod.powf(1.0 / yrs) - 1.0 } else { prod - 1.0 }),
         years: yrs,
         count: used.len(),
         first: used.first().map(|y| y.year),
@@ -196,4 +203,39 @@ pub fn drawdown(series: &[Day]) -> Drawdown {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use bagholder_core::jiff::civil::date;
+
+    use super::*;
+
+    fn day(d: Date, value: f64, ret: Option<f64>) -> Day {
+        Day { day: d, value, ret, flow: Some(0.0) }
+    }
+
+    #[test]
+    fn a_span_under_a_year_is_its_return_not_annualized() {
+        // two months at +15 %: 15 %, never compounded up to a year's (+131 %)
+        let series = [day(date(2026, 7, 1), 100.0, None), day(date(2026, 8, 31), 115.0, Some(0.15))];
+        let years = yearly_returns(&series, date(2026, 8, 31), None);
+        let a = annualized(&years);
+        assert!((a.rate.unwrap() - 0.15).abs() < 1e-12, "{:?}", a.rate);
+    }
+
+    #[test]
+    fn a_year_counts_its_days_from_the_value_it_is_measured_over() {
+        // five full years at 10 % each, measured from each year's last value before it
+        let mut series = vec![day(date(2020, 12, 31), 100.0, None)];
+        let mut v = 100.0;
+        for y in 2021..=2025 {
+            v *= 1.1;
+            series.push(day(date(y, 12, 31), v, Some(0.1)));
+        }
+        let years = yearly_returns(&series, date(2025, 12, 31), None);
+        assert_eq!(years.iter().map(|y| y.days).collect::<Vec<_>>(), vec![365, 365, 365, 366, 365]);
+        let a = annualized(&years);
+        assert!((a.rate.unwrap() - 0.10).abs() < 5e-5, "{:?}", a.rate);
+    }
 }
