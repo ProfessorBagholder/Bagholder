@@ -388,3 +388,32 @@ fn a_distribution_keeps_the_units_wealthsimple_states_it_was_paid_on_and_moves_n
     }
     assert!(stated > 0, "the recorded month holds a distribution that states its units");
 }
+
+#[test]
+fn a_row_stamped_at_midnight_toronto_is_that_day_whatever_the_season_and_the_viewer() {
+    // Wealthsimple states a day as midnight in Toronto: a charge, a dividend or an
+    // interest payment dated the 1st is stamped 00:00 Toronto time, 04:00 or 05:00
+    // UTC by the season, and is that day's, never the one before in a zone further west
+    let mut r = replay(&fixtures());
+    let rows = r.source.rows.clone();
+    let accounts: std::collections::BTreeSet<String> = rows.iter().map(|x| Node::root(x).text("accountId").unwrap().to_string()).collect();
+    for a in accounts {
+        bagholder_broker::BrokerAdapter::activity(&mut r, &a, None).unwrap();
+    }
+    let charge = rows.iter().find(|x| text(x, "type") == Some("INTEREST_CHARGE")).expect("an interest charge").clone();
+    let toronto = bagholder_core::jiff::tz::TimeZone::get("America/Toronto").unwrap();
+    let mut day: bagholder_core::jiff::civil::Date = "2025-01-01".parse().unwrap();
+    let last: bagholder_core::jiff::civil::Date = "2026-12-31".parse().unwrap();
+    while day <= last {
+        for (h, m) in [(0, 0), (0, 1), (23, 59)] {
+            let at = day.at(h, m, 0, 0).to_zoned(toronto.clone()).unwrap().timestamp();
+            let mut row = charge.clone();
+            let Value::Object(o) = &mut row else { panic!() };
+            o.insert("occurredAt".into(), Value::String(at.to_string()));
+            let mapped = map_row(&mut r, &row);
+            let leg = mapped.legs.first().expect("a leg");
+            assert_eq!(leg.trade_date, day, "{at} is Toronto's {day}");
+        }
+        day = day.tomorrow().unwrap();
+    }
+}

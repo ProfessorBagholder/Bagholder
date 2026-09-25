@@ -107,7 +107,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 
 - Instants are stored and sent in UTC. They become days and times only where a rule names a zone.
 - **The person's home zone** is a setting, an input to the engine. "Today", a year's boundary and a month's are the person's, never the server's (a container runs in UTC).
-- **The day a broker files a row under** is part of that broker's mapping (Wealthsimple's is Alberta's).
+- **The day a broker files a row under** is part of that broker's mapping (Wealthsimple's is Toronto's: it stamps a date-only row at midnight Toronto time, checked on a full history 2026-09-25).
 - **Each venue has its session hours and holidays**, used for which quotes can have moved, the bracket engine's session rules and a resting order's renewal.
 - **FX is the Bank of Canada's published rate.** The Bank publishes a rate for every business day at 16:30 Eastern, and the app keeps every one of them from the start of the person's history: a trade on a business day uses that day's rate, one on a weekend or holiday the previous business day's (the Canadian convention, the one the Canada Revenue Agency applies). A trade made today before 16:30 uses today's rate once it is published, and until then its CAD figure is marked as waiting for it: that is the only time a rate does not exist yet. Failing to reach the Bank is a failure of that source like any other (§15): shown, retried, never covered by a number of the app's own.
 - Display is in the viewer's zone. Zone rules come from the system's database with a built-in copy where there is none, and tests pin the rules (`docs/plans/time-zone-rules.md`).

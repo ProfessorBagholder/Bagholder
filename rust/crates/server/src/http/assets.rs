@@ -29,7 +29,6 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(index))
         .route("/index.html", get(index))
         .route("/assets/{*path}", get(asset))
-        .route("/favicon.svg", get(|s: State<AppState>| page_file(s, "favicon.svg")))
         .route("/favicon.png", get(|s: State<AppState>| page_file(s, "favicon.png")))
         .route("/favicon.ico", get(|s: State<AppState>| page_file(s, "favicon.png")))
         .route("/v2", get(legacy))

@@ -34,8 +34,8 @@ pub const IMPORT_SOURCE: &str = "bagholder-import";
 /// own row can find the imported one it replaces.
 pub const WEALTHSIMPLE_RECORD: &str = "broker-record:wealthsimple";
 
-/// The zone Wealthsimple files its rows under (`docs/architecture.md` §7).
-const WEALTHSIMPLE_ZONE: &str = "America/Edmonton";
+/// The zone Wealthsimple states its days in: Toronto's (`docs/architecture.md` §7).
+const WEALTHSIMPLE_ZONE: &str = "America/Toronto";
 
 pub fn import_source() -> SourceName {
     SourceName::named(IMPORT_SOURCE)
@@ -191,8 +191,9 @@ impl Mapping for ImportMapping {
     }
 
     /// 3: a dividend keeps the units the row states it was paid on.
+    /// 4: a row's day is Toronto's, where Wealthsimple states its days.
     fn version(&self) -> u32 {
-        3
+        4
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {

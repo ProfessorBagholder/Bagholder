@@ -47,8 +47,11 @@ use bagholder_core::transaction::{Effect, Kind};
 use bagholder_core::{Broker, Currency, Dec, Leg, Money, RecordId, Rounding, SourceName, TransactionId};
 use bagholder_sources::reply::{Mismatch, Node, Read};
 
-/// Wealthsimple files a row under Alberta's day (`docs/architecture.md` §7).
-pub const ZONE: &str = "America/Edmonton";
+/// Wealthsimple states a day as midnight in Toronto: a dividend, an interest
+/// payment or a charge is stamped 00:00 Toronto time (04:00 or 05:00 UTC by the season),
+/// 235 of the 251 date-only rows of a full history checked 2026-09-25, the other 16 at
+/// 01:00 Toronto, the same day. A row's day is Toronto's.
+pub const ZONE: &str = "America/Toronto";
 
 pub fn source() -> SourceName {
     SourceName::named("wealthsimple")
@@ -66,8 +69,9 @@ impl Mapping for WealthsimpleMapping {
     }
 
     /// 2: a distribution keeps the units Wealthsimple states it was paid on.
+    /// 3: a row's day is Toronto's, where Wealthsimple states its days.
     fn version(&self) -> u32 {
-        2
+        3
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {

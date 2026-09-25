@@ -120,6 +120,7 @@ impl Figures {
         let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), names: RwLock::new(None) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
+        rederive_all(&book, at)?;
         if let Some(z) = book.zone().map_err(err)? {
             let mut e = build(&book, &cache, clock(&z.zone, at)?)?;
             settle_trades(&book, &mut e, at)?;
@@ -344,6 +345,25 @@ fn merge(into: &mut Moved, more: Moved) {
     }
 }
 
+
+/// Every source's mapping, as the book stores records under it.
+pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 4] {
+    [&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::import::mapping::ImportMapping, &bagholder_book::person::PersonMapping, &bagholder_broker::csv::CsvMapping]
+}
+
+/// Derive again every record a newer version of its mapping reads differently: a
+/// mapping's version moves exactly when what it makes of a stored row changes,
+/// so the rows already stored follow it, not only the ones read after.
+fn rederive_all(book: &Book, at: Timestamp) -> Result<(), String> {
+    for m in mappings() {
+        let changes = book.rederive(m, at).map_err(|e| format!("{}'s records could not be derived again: {e}", m.source()))?;
+        if !changes.is_empty() {
+            crate::app::log(&format!("bagholder: {}'s records derived again under version {}", m.source(), m.version()));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +374,26 @@ mod tests {
 
     fn pulled(home: &Path) {
         crate::tests_common::pulled_book(home)
+    }
+
+    #[test]
+    fn records_a_mapping_now_reads_differently_are_derived_again_when_the_book_opens() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let book_file = home.path().join(bagholder_book::BOOK_FILE);
+        let versions = || -> Vec<(String, i64)> {
+            let c = rusqlite::Connection::open(&book_file).unwrap();
+            let mut st = c.prepare("SELECT source, derived_version FROM source_records WHERE state = 'live'").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert!(!versions().is_empty());
+        // every record as an older version of its mapping left it
+        rusqlite::Connection::open(&book_file).unwrap().execute("UPDATE source_records SET derived_version = 0", []).unwrap();
+        Figures::open(home.path(), at("2025-11-20T12:00:00Z")).unwrap();
+        for (source, v) in versions() {
+            let m = mappings().into_iter().find(|m| m.source().as_str() == source).unwrap_or_else(|| panic!("no mapping for {source}"));
+            assert_eq!(v, m.version() as i64, "{source}'s records follow its mapping's version");
+        }
     }
 
     /// The engine the figure path holds, against one built fresh from the files.
