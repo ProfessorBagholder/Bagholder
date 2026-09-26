@@ -209,6 +209,8 @@ test('Max is off (and the position\'s shares fill Sell) when buying power is unk
 test('a ticket closed without sending leaves a draft card showing the server\'s amount and legs, though no price was typed', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
     [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' } },
+    // the stream here is made up whole: the Orders panel reads its own document, with nothing pending
+    orders: { ok: true, live: true, orders: [], brackets: [] },
   })
   await ready(page)
   type P = { quantity: string; entry: string; notional: string; stopLossPrice: string; stopLossValue: string; takeProfitPrice: string; takeProfitValue: string }

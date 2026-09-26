@@ -63,7 +63,6 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] The skeleton's removal uses an animation callback. (Fixed: Disclosures `Opening…`, 47dbc752; the data modal's entrance motion, ab423bc7.)
 - [x] The store runs `synchronous = NORMAL`. — fixed (b319efa3): FULL, every commit flushed.
 - [x] A replaced database is not migrated until restart. — fixed (f54d5c93): each borrow checks the file is the one kept connections hold and reads its stamped version; a replaced or rolled-back file is prepared on that borrow.
-- [ ] Disclosures `Opening…`; the data modal has no entrance motion; the skeleton's removal uses an animation callback; the store runs `synchronous = NORMAL`; a replaced database is not migrated until restart.
 
 ## SPEC text to correct (the build is right)
 
