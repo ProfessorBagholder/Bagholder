@@ -10,6 +10,10 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] A row's day is Toronto's, where Wealthsimple states its days; each month's margin interest is in its own month again (fc0e54d9).
 - [x] Stored rows follow a new mapping version at startup (fc0e54d9).
 - [x] The tab icon is the app's own (fc0e54d9).
+- [x] No count of what a figure left out, and no note under a chart, anywhere (17ffe15e); a page test fails on either.
+- [x] A coin moved in costs what Wealthsimple states it arrived at; the person's cost comes first (17ffe15e).
+- [x] A sale past what the book holds keeps the P&L of what was held; a stated zero value is a value (498ff87d). On the owner's book nothing is left out: Realized P&L, the Equity curve's end and the sum of every trade's P&L agree.
+- [x] Annualized returns: hovering a year says how far it was over or under the index (624b960f).
 
 ## High
 
@@ -18,7 +22,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] **Back loses the list's scroll** (§4 Trades). Only the window's scroll is kept; the Trades and Holdings tables scroll inside their cards. `router.svelte.ts:73`.
 - [ ] **A sync error is cut to 57 characters in the header** (§4 header). The Chrome-closed message reads "…Choo…". Old page same. `App.svelte:185,302`.
 - [ ] **The market universes are never read at start or every 30 minutes** (§4 Markets). Only a click on an unread one reads it; after that their day changes go stale. `feeds.rs:2305`.
-- [ ] **A Sell from the ticket on shares a bracket holds does not wait for the stop's cancel** (§4 Order ticket, Nothing left behind). After 8 s it sends the sell whatever the cancel's state, so a stop and a sell can both rest on the same shares. `orders/ticket.rs:735`.
+- [x] **A Sell from the ticket on shares a bracket holds does not wait for the stop's cancel** (fc293360: it waits for the confirmation, and without it nothing is sold) (§4 Order ticket, Nothing left behind). After 8 s it sends the sell whatever the cancel's state, so a stop and a sell can both rest on the same shares. `orders/ticket.rs:735`.
 - [ ] **A fill of a Bagholder order is not written at once** (§4 Orders). It waits for Wealthsimple's activity feed. `orders/readback.rs:262`.
 
 ## Medium
