@@ -98,7 +98,7 @@
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
     {#each c.tiles as t (t.label)}
       {#if t.kind === 'margin'}
-        <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v" use:roll={money0(t.marginUsed)}></div><div class="s">{money0(t.interestPerMonth)}/mo margin interest</div></div>
+        <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v" use:roll={money0(t.marginUsed)}></div><div class="s">{t.interestPerMonth === null ? '' : money0(t.interestPerMonth) + '/mo margin interest'}</div></div>
       {:else if t.kind === 'yield'}
         <div class="card elev-sm kpi"><div class="lbl">Yield on cost</div><div class="tab v" style="color:var(--accent-300)" use:roll={t.yield == null ? '—' : pctPlain(t.yield, 2)}></div><div class="s">{money0(t.projected)}/mo</div></div>
       {:else}

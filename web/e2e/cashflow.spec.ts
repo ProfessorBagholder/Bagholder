@@ -34,7 +34,8 @@ test('the tiles are two rolling years, YTD, All time, Margin used and Yield on c
     if (t.kind === 'margin') {
       await expect(kpis.nth(i)).toContainText('Margin used')
       await expect(kpis.nth(i)).toContainText(money0(t.marginUsed))
-      await expect(kpis.nth(i)).toContainText(money0(t.interestPerMonth) + '/mo margin interest')
+      // no month charged: nothing to average, and the subtitle says nothing
+      await expect(kpis.nth(i).locator('.s')).toHaveText(t.interestPerMonth === null ? '' : money0(t.interestPerMonth) + '/mo margin interest')
     } else if (t.kind === 'yield') {
       await expect(kpis.nth(i)).toContainText('Yield on cost')
       await expect(kpis.nth(i)).toContainText(pctPlain(t.yield, 2))
@@ -62,6 +63,18 @@ test('Last 12 months stands in for Margin used when no margin account is in scop
   const tile = page.locator('#page .kpi', { hasText: 'Last 12 months' })
   await expect(tile.locator('.v')).toHaveText('$5,000')
   await expect(tile.locator('.s')).toHaveText('$417/mo avg')
+})
+
+test('with no month charged interest, the Margin used tile has no subtitle', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '#cashflow', (m) => {
+    const tiles = m.cashflow.tiles as Tile[]
+    const i = tiles.findIndex((t) => t.kind === 'margin')
+    tiles[i] = { ...(tiles[i] as Extract<Tile, { kind: 'margin' }>), interestPerMonth: null }
+  })
+  await ready(page)
+  const tile = page.locator('#page .kpi', { hasText: 'Margin used' })
+  await expect(tile.locator('.s')).toHaveText('')
+  await expect(tile).not.toContainText('/mo')
 })
 
 test('a bar hover reads the month, Distributions, Margin interest and Net cashflow, and interest can rise above distributions', async ({ page, request }) => {

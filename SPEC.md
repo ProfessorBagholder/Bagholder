@@ -306,7 +306,7 @@ Six tiles in the style of the dashboard tiles, CAD, dividends in scope. The Marg
 | Two years ago, last year, by calendar year, rolling over on January 1 | Sum received that year | Average per paying month |
 | YTD | Sum received this year | Average per paying month |
 | All time | Sum received | `Total earned` |
-| Margin used | The Portfolio tab's Margin used over the accounts in scope | Average margin interest per charged month: the Interest charge rows in scope, summed in CAD, ÷ the number of months carrying one, as `$x/mo margin interest` |
+| Margin used | The Portfolio tab's Margin used over the accounts in scope | Average margin interest per charged month: the Interest charge rows in scope, summed in CAD, ÷ the number of months carrying one, as `$x/mo margin interest`; nothing when no month in scope carries one |
 | Last 12 months (no margin account in scope) | Sum received in the trailing twelve months, to today | Average per paying month in that window |
 | Yield on cost | Annual income of all rated holdings ÷ their book cost | Projected monthly income, that annual income ÷ 12, as `$x/mo` |
 
