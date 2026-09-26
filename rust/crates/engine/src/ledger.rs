@@ -894,15 +894,13 @@ impl<'a> Matcher<'a> {
     /// A transaction took out more than was held: what it did close is waiting on
     /// what the rest was. The holding it emptied is flat afterwards, so nothing
     /// later waits on it.
+    /// Units a sale or a move took beyond what the book held: listed for the broker
+    /// check. The lots it did take keep their own cost and P&L; the units beyond
+    /// have no cost on record, so they add nothing to P&L and none is made up for
+    /// them (a sale's dust past the rows' rounding is cents, never a reason to lose
+    /// the P&L of every unit that was held).
     fn beyond(&mut self, t: &Transaction, account: AccountId, instrument: InstrumentId, qty: Dec) {
         self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty });
-        let gap = Gap::BeyondHeld(t.id.clone());
-        let closer = Closer::Transaction(t.id.clone());
-        for trip in self.out.trips.values_mut().filter(|tr| tr.closed.contains(&t.id)) {
-            for s in trip.slices.iter_mut().filter(|s| s.closed_by == closer && s.instrument == instrument && s.account == account) {
-                s.taint.add(gap.clone());
-            }
-        }
     }
 
     /// Every contract past its expiry before `day` with lots still open: closed

@@ -202,12 +202,12 @@
     }
   },
   {
-    "name": "a sale beyond what was held waits; the holding is flat after it",
-    "spec": "docs/plans/stage-2-engine.md, the ledger: a sale with nothing to close is a sale beyond what is held, never a short invented from it",
+    "name": "a sale beyond what was held closes what was held at its cost; the holding is flat after it",
+    "spec": "SPEC.md §2 Trade: a sale beyond what the book holds closes what is held at its own cost; the units beyond have no cost on record, add nothing to P&L, and are never a short invented from it",
     "working": [
-      "buy 10 for 100; sell 12 for 144: 10 close at 144 × 10/12 = 120, but 2 were sold that the record never shows bought, so that round trip waits (beyond-held)",
+      "buy 10 for 100; sell 12 for 144: 10 close at 144 × 10/12 = 120, P&L 20; the 2 the record never shows bought add nothing and are listed as beyond what was held",
       "buy 5 for 60; sell 5 for 65: a new round trip on a flat holding, P&L 5, stated",
-      "realized over the stated trades: 5; one trade left out"
+      "realized: 20 + 5 = 25 over 2 trades"
     ],
     "today": "2026-02-01",
     "accounts": [{"id": "A"}],
@@ -220,9 +220,9 @@
     ],
     "expect": {
       "position_count": 0,
-      "trades": [{"opened_by": "t1", "pnl": {"gaps": ["beyond-held"]}}, {"opened_by": "t3", "pnl": "5.00"}],
+      "trades": [{"opened_by": "t1", "pnl": "20.00"}, {"opened_by": "t3", "pnl": "5.00"}],
       "beyond": ["t2"],
-      "kpi": {"realized": "5.00", "count": 1, "left_out": 1, "wins": 1}
+      "kpi": {"realized": "25.00", "count": 2, "left_out": 0, "wins": 2}
     }
   },
   {

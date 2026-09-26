@@ -71,8 +71,9 @@ impl Mapping for WealthsimpleMapping {
     /// 2: a distribution keeps the units Wealthsimple states it was paid on.
     /// 3: a row's day is Toronto's, where Wealthsimple states its days.
     /// 4: a coin moved in keeps the value Wealthsimple states it arrived at.
+    /// 5: a stated value of zero is kept as one.
     fn version(&self) -> u32 {
-        4
+        5
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -338,7 +339,8 @@ fn single(root: &Node, row: &Row, base: &Base, r: &Rule, out: &mut Mapped) -> Re
     // person states none
     if r.kind == Kind::TransferIn && r.units == Units::In && r.cash == Cash::None {
         if let (Some(amount), Some(currency)) = (row.amount, row.currency) {
-            d.value = Some(Money::new(amount.abs(), currency)).filter(|m| !m.amount.is_zero());
+            // a stated zero is a value: dust worth under half a cent
+            d.value = Some(Money::new(amount.abs(), currency));
         }
     }
     match (r.units, row.quantity) {

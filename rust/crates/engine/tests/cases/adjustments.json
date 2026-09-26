@@ -39,7 +39,7 @@
       {"applies_to": "t2", "source": "issuer", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]},
       {"applies_to": "t2", "source": "tmx", "legs": [{"from": "X", "to": "X", "units_per_unit": "3"}]}
     ],
-    "expect": {"beyond": ["t3"], "trades": [{"opened_by": "t1", "pnl": {"gaps": ["adjustment-conflict", "beyond-held"]}}]}
+    "expect": {"beyond": ["t3"], "trades": [{"opened_by": "t1", "pnl": {"gaps": ["adjustment-conflict"]}}]}
   },
   {
     "name": "two entries by the person that disagree on a deposit's cost leave it waiting on the conflict",
