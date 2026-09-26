@@ -233,7 +233,7 @@ pub(crate) fn fill_pull_step(waited: SignedDuration) -> SignedDuration {
 pub(crate) fn fill_pull_due(app: &Arc<App>, book: &Book, conn: ConnectionId, last_pull: Option<Timestamp>, now: Timestamp) -> Result<Option<Timestamp>, String> {
     let source = bagholder_wealthsimple::mapping::source();
     let mut missing = Vec::new();
-    for id in crate::orders::own_fills_booked(app) {
+    for id in crate::orders::own_fills_booked(app)? {
         if book.record_by_key(Some(conn), &source, &id).map_err(|e| e.to_string())?.is_none() {
             missing.push(id);
         }

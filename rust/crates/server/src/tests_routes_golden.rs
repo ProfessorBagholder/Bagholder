@@ -29,10 +29,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-use bagholder_store::orders as so;
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -253,57 +250,34 @@ fn test_refresh_route_reaches_a_connected_answer() {
     assert_eq!(crate::session::load_session(&app).unwrap().refresh_token, "new-refresh");
 }
 
-/// `http::orders`'s routes, on the shared app the way `tests_orders.rs`
-/// drives the functions behind them: `orders::seam` fakes Wealthsimple, so
-/// nothing here reaches the network either, and every case that needs a
-/// clean store wipes it first (as `tests_orders.rs`'s own `setup()` does --
-/// this crate's server tests share one app and one store, so a test that
-/// leaves rows behind would be read by whichever test runs next).
+/// `http::orders`'s routes, on an app of their own with orders live against the fake
+/// Wealthsimple of `tests_execution`: nothing here reaches the network.
 #[test]
 fn test_orders_routes_golden() {
-    use crate::orders::seam;
+    use crate::tests_execution::{fresh, order};
     let _g = crate::tests_common::guard();
-    seam::reset();
-    let app = crate::tests_common::app();
-    let conn = app.open().unwrap();
-    bagholder_store::relabel::ensure(&conn).unwrap();
-    for t in ["orders", "brackets", "activities", "accounts", "securities"] {
-        let _ = conn.execute(&format!("DELETE FROM \"{}\"", t), []);
-    }
-    *app.orders.refreshed_at.lock().unwrap() = String::new();
-    app.state.lock().unwrap().connected = false;
-    drop(conn);
-
+    let (_h, app, fake) = fresh();
     let req = |method: Method, uri: &str, body: Option<Value>| from_the_page(&app, method, uri, body);
     let get = |req: Request<Body>| runtime().block_on(json_of(app.clone(), req));
 
-    // no session at all: the deterministic early branch of every mutation
-    *seam::SESSION.lock().unwrap() = Some(None);
-    assert_eq!(get(req(Method::GET, "/api/orders", None)), json!({"status": 200, "body": {"ok": true, "orders": [], "brackets": [], "live": false, "refreshedAt": ""}}));
-    // `orders_payload`'s own `ok` (always true) is the one the page reads:
-    // the flatten of the two documents keeps whichever field the second
-    // (`OrdersDoc`) carries, exactly as the untyped `Map::extend` did
-    assert_eq!(
-        get(req(Method::POST, "/api/orders/refresh", None)),
-        json!({"status": 200, "body": {"ok": true, "skipped": "no session", "orders": [], "brackets": [], "live": false, "refreshedAt": ""}})
-    );
-    assert_eq!(get(req(Method::POST, "/api/order/cancel", Some(json!({"id": "golden-no-such-order"})))), json!({"status": 200, "body": {"ok": false, "error": "No such order."}}));
-    assert_eq!(get(req(Method::POST, "/api/order/modify", Some(json!({"id": "golden-no-such-order"})))), json!({"status": 200, "body": {"ok": false, "error": "No such order."}}));
-    assert_eq!(get(req(Method::POST, "/api/bracket/adjust", Some(json!({"id": "golden-no-such-bracket", "leg": "sl"})))), json!({"status": 200, "body": {"ok": false, "error": "No such bracket."}}));
-    assert_eq!(get(req(Method::POST, "/api/bracket/cancel", Some(json!({"id": "golden-no-such-bracket"})))), json!({"status": 200, "body": {"ok": false, "error": "No such bracket."}}));
+    // no session: nothing to read with
+    let doc = get(req(Method::GET, "/api/orders", None));
+    assert_eq!(doc, json!({"status": 200, "body": {"ok": true, "live": false, "refreshedAt": null, "orders": [], "brackets": [], "error": null}}));
+    assert_eq!(get(req(Method::POST, "/api/orders/refresh", None))["body"]["read"], json!({"ok": false, "skipped": "no session", "read": 0, "failed": 0}));
+    assert_eq!(get(req(Method::POST, "/api/order/cancel", Some(json!({"id": "golden-no-such-order"}))))["body"], json!({"ok": false, "error": "No such order."}));
+    assert_eq!(get(req(Method::POST, "/api/order/modify", Some(json!({"id": "golden-no-such-order"}))))["body"], json!({"ok": false, "error": "No such order."}));
+    assert_eq!(get(req(Method::POST, "/api/bracket/adjust", Some(json!({"id": "golden-no-such-bracket", "leg": "sl"}))))["body"], json!({"ok": false, "error": "No such bracket."}));
+    assert_eq!(get(req(Method::POST, "/api/bracket/cancel", Some(json!({"id": "golden-no-such-bracket"}))))["body"], json!({"ok": false, "error": "No such bracket."}));
+    assert_eq!(get(req(Method::POST, "/api/order/modify", Some(json!({"id": "x", "quantity": "five"}))))["body"], json!({"ok": false, "error": "No such order."}));
 
-    // a resting order, cancelled through the stand-in for Wealthsimple's cancel mutation
-    let golden_order: so::Order = serde_json::from_value(json!({"id": "golden-order-1", "accountId": "acct-golden", "account": "Golden", "securityId": "sec-golden", "symbol": "GOLDEN", "currency": "USD", "side": "BUY", "type": "LIMIT", "quantity": 5, "limitPrice": 1.75, "tif": "DAY", "status": "sent", "source": "bagholder", "role": "entry"})).unwrap();
-    so::typed::insert_order(&app.open().unwrap(), &golden_order, &crate::app::now_iso()).unwrap();
-    *seam::SESSION.lock().unwrap() = Some(Some(bagholder_ws::session::Session { access_token: "tok".into(), ..Default::default() }));
-    *seam::LIVE.lock().unwrap() = Some(true);
-    seam::SPAWN_INLINE.store(true, Ordering::SeqCst);
-    *seam::GQL.lock().unwrap() = Some(std::sync::Arc::new(|op: &str, _vars: &Value| match op {
-        "SoOrdersOrderCancel" => Ok(json!({"orderServiceCancelOrder": {"externalId": "golden-order-1", "errors": []}})),
-        "FetchSoOrdersExtendedOrder" => Ok(json!({"soOrdersExtendedOrder": {"status": "CANCELLED"}})),
-        other => panic!("unexpected op {}", other),
-    }));
+    // a resting order, cancelled through the gate
+    app.set_orders_live(true);
+    *app.orders.seam.session.lock().unwrap() = Some(bagholder_ws::session::Session { access_token: "tok".into(), ..Default::default() });
+    let book = app.figures.get().unwrap().book().unwrap();
+    crate::orders::gate::place(&app, &book, &order("golden-order-1", None), &bagholder_core::order::Asker::Person, bagholder_core::jiff::Timestamp::now()).unwrap().unwrap();
     let cancelled = get(req(Method::POST, "/api/order/cancel", Some(json!({"id": "golden-order-1"}))));
     assert_eq!(cancelled, json!({"status": 200, "body": {"ok": true, "id": "golden-order-1", "status": "cancelling"}}));
-    seam::reset();
+    assert_eq!(fake.0.lock().unwrap().cancels, vec!["golden-order-1".to_string()]);
+    let asked: Vec<String> = book.order_log("golden-order-1").unwrap().into_iter().map(|l| format!("{} {}", l.asker.to_text(), l.event.kind())).collect();
+    assert_eq!(asked, ["person written", "person accepted", "person cancel-asked"]);
 }

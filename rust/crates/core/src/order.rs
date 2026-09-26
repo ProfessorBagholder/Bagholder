@@ -126,12 +126,15 @@ pub struct Reading {
     pub price: Option<Dec>,
     pub quantity: Option<Dec>,
     pub expires_at: Option<jiff::Timestamp>,
+    /// Why the broker rejected it, in its words, and its code for the reason.
+    pub why: Option<String>,
+    pub code: Option<String>,
 }
 
 impl Reading {
     /// A reading of status and fill alone.
     pub fn of(status: BrokerStatus, filled: Dec, average: Option<Dec>) -> Reading {
-        Reading { status, filled, average, price: None, quantity: None, expires_at: None }
+        Reading { status, filled, average, price: None, quantity: None, expires_at: None, why: None, code: None }
     }
 }
 
@@ -406,6 +409,10 @@ impl OrderFold {
                 };
                 if matches!(self.state, Sending | Unconfirmed) {
                     self.why = None;
+                }
+                if to == Rejected {
+                    self.why = r.why.clone().or(self.why.take());
+                    self.code = r.code.clone();
                 }
                 let applied = self.to(to);
                 Ok(if applied == Applied::Updated && !more { Applied::Nothing } else { applied })

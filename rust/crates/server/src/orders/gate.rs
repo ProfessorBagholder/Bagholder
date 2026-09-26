@@ -108,7 +108,7 @@ pub fn place(app: &Arc<App>, book: &Book, o: &OrderRequest, asker: &Asker, now: 
             }
         }
     }
-    let live = super::orders_live();
+    let live = super::orders_live(app);
     book.write_order(o, !live, asker, now).map_err(|e| e.to_string())?;
     if !live {
         return Ok(Err(Held::Dry));
@@ -121,13 +121,13 @@ pub fn place(app: &Arc<App>, book: &Book, o: &OrderRequest, asker: &Asker, now: 
         Sent::Unclear { why } => OrderEvent::Unclear { why },
         Sent::NotSent { why } => OrderEvent::NotSent { why },
     };
-    record(book, &o.id, asker, now, &event)?;
+    record(app, book, &o.id, asker, now, &event)?;
     Ok(Ok(fold(book, &o.id)?))
 }
 
 /// Ask for an order's cancel. `Ok` with its state after the answer.
 pub fn cancel(app: &Arc<App>, book: &Book, id: &str, asker: &Asker, now: Timestamp) -> Result<Result<OrderFold, Held>, String> {
-    if !super::orders_live() {
+    if !super::orders_live(app) {
         return Ok(Err(Held::Dry));
     }
     let before = fold(book, id)?;
@@ -139,14 +139,14 @@ pub fn cancel(app: &Arc<App>, book: &Book, id: &str, asker: &Asker, now: Timesta
             return Ok(Err(Held::Capped));
         }
     }
-    record(book, id, asker, now, &OrderEvent::CancelAsked)?;
+    record(app, book, id, asker, now, &OrderEvent::CancelAsked)?;
     match broker(app).cancel(app, id) {
         // asked, and taken: the read-back says when it is gone
         Sent::Accepted { .. } => {}
         // no answer: still being cancelled, as far as anyone knows; the read-back settles it
         Sent::Unclear { .. } => {}
         Sent::Refused { why, .. } | Sent::NotSent { why } => {
-            record(book, id, asker, now, &OrderEvent::CancelRefused { why })?;
+            record(app, book, id, asker, now, &OrderEvent::CancelRefused { why })?;
         }
     }
     Ok(Ok(fold(book, id)?))
@@ -163,15 +163,47 @@ pub fn read_back(app: &Arc<App>, book: &Book, id: &str, now: Timestamp) -> Resul
         Found::Order(r) => r,
         Found::None => Reading::of(BrokerStatus::NotFound, Dec::ZERO, None),
     };
-    record(book, id, &Asker::Engine, now, &OrderEvent::Read(reading))?;
+    record(app, book, id, &Asker::Engine, now, &OrderEvent::Read(reading))?;
     fold(book, id)
 }
 
-fn record(book: &Book, id: &str, asker: &Asker, now: Timestamp, e: &OrderEvent) -> Result<(), String> {
-    if let Err(refused) = book.order_event(id, asker, now, e).map_err(|e| e.to_string())? {
-        crate::app::log(&format!("bagholder order {id}: {refused}"));
+/// Record an event on an order, and what follows from it: the person told of a fill,
+/// a refusal or an order ended at the broker, and a fill's own row pulled.
+fn record(app: &Arc<App>, book: &Book, id: &str, asker: &Asker, now: Timestamp, e: &OrderEvent) -> Result<(), String> {
+    let before = fold(book, id)?;
+    match book.order_event(id, asker, now, e).map_err(|e| e.to_string())? {
+        Err(refused) => crate::app::log(&format!("bagholder order {id}: {refused}")),
+        Ok(_) => {
+            let after = book.order(id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no order {id}"))?;
+            super::readback::followed(app, book, &before, &after);
+        }
     }
     Ok(())
+}
+
+/// Change a working order's limit or quantity: asked, then sent once. `Ok` with its
+/// state after the answer; what it stands at after is the broker's to say (the next read).
+pub fn modify(app: &Arc<App>, book: &Book, id: &str, limit_price: Option<Dec>, quantity: Option<Dec>, asker: &Asker, now: Timestamp) -> Result<Result<OrderFold, Held>, String> {
+    if !super::orders_live(app) {
+        return Ok(Err(Held::Dry));
+    }
+    let before = fold(book, id)?;
+    if !matches!(before.state, OrderState::Pending | OrderState::PartlyFilled) {
+        return Ok(Err(Held::NotNow(format!("the order is {}", before.state.as_str()))));
+    }
+    record(app, book, id, asker, now, &OrderEvent::ModifyAsked { limit_price, quantity })?;
+    let mut change = serde_json::Map::new();
+    if let Some(p) = limit_price {
+        change.insert("newLimitPrice".into(), json!(p.to_f64()));
+    }
+    if let Some(q) = quantity {
+        change.insert("newQuantity".into(), json!(q.to_f64()));
+    }
+    match broker(app).modify(app, id, &Value::Object(change)) {
+        Sent::Accepted { .. } | Sent::Unclear { .. } => {}
+        Sent::Refused { why, .. } | Sent::NotSent { why } => record(app, book, id, asker, now, &OrderEvent::ModifyRefused { why })?,
+    }
+    Ok(Ok(fold(book, id)?))
 }
 
 fn fold(book: &Book, id: &str) -> Result<OrderFold, String> {
@@ -276,7 +308,7 @@ pub const WS_STATUSES: [(&str, BrokerStatus); 15] = [
 ];
 
 /// A number as Wealthsimple states it: a JSON number or its text, read exactly.
-fn number(v: Option<&Value>, field: &str) -> Result<Option<Dec>, String> {
+pub(crate) fn number(v: Option<&Value>, field: &str) -> Result<Option<Dec>, String> {
     match v {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(n)) => Dec::parse(&n.to_string()).map(Some).map_err(|e| format!("{field}: {e}")),
@@ -294,6 +326,15 @@ fn instant(v: Option<&Value>, field: &str) -> Result<Option<Timestamp>, String> 
     }
 }
 
+fn text_of(v: Option<&Value>, field: &str) -> Result<Option<String>, String> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(other) => Err(format!("{field} is {other}, not text")),
+    }
+}
+
 /// `FetchSoOrdersExtendedOrder`'s answer, read strictly.
 pub fn read_extended(data: &Value) -> Result<Found, String> {
     let o = match data.get("soOrdersExtendedOrder") {
@@ -305,9 +346,11 @@ pub fn read_extended(data: &Value) -> Result<Found, String> {
     let word = o.get("status").and_then(Value::as_str).ok_or("an order with no status")?.to_uppercase();
     let status = WS_STATUSES.iter().find(|(w, _)| *w == word).map(|(_, s)| *s).ok_or_else(|| format!("a status this build does not know: {word:?}"))?;
     let filled = number(o.get("filledQuantity"), "filledQuantity")?.unwrap_or(Dec::ZERO);
-    let price = match o.get("orderType").and_then(Value::as_str).map(str::to_uppercase).as_deref() {
-        Some(t) if t.contains("STOP") => number(o.get("stopPrice"), "stopPrice")?,
-        _ => number(o.get("limitPrice"), "limitPrice")?,
+    // `orderType` states the side (`buy_quantity`), not how it is priced: a stop's
+    // price is its stop, which only a stop or stop-limit order states
+    let price = match number(o.get("stopPrice"), "stopPrice")? {
+        Some(stop) => Some(stop),
+        None => number(o.get("limitPrice"), "limitPrice")?,
     };
     // an order that expires reports when; a working good-till-cancelled one reports when it will
     Ok(Found::Order(Reading {
@@ -317,6 +360,8 @@ pub fn read_extended(data: &Value) -> Result<Found, String> {
         price,
         quantity: number(o.get("submittedQuantity"), "submittedQuantity")?,
         expires_at: instant(o.get("expiredAtUtc"), "expiredAtUtc")?,
+        why: text_of(o.get("rejectionCause"), "rejectionCause")?,
+        code: text_of(o.get("rejectionCode"), "rejectionCode")?,
     }))
 }
 
@@ -326,4 +371,28 @@ pub fn read_extended(data: &Value) -> Result<Found, String> {
 pub struct GateState {
     pub broker: Mutex<Option<Arc<dyn OrderBroker>>>,
     pub bracket_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+/// Cancel an order placed elsewhere (in Wealthsimple's own app): not the app's, so
+/// not in the book, but sent once all the same, and only from here.
+pub fn cancel_elsewhere(app: &Arc<App>, external_id: &str) -> Result<Sent, Held> {
+    if !super::orders_live(app) {
+        return Err(Held::Dry);
+    }
+    Ok(broker(app).cancel(app, external_id))
+}
+
+/// Change an order placed elsewhere, as `cancel_elsewhere`.
+pub fn modify_elsewhere(app: &Arc<App>, external_id: &str, limit_price: Option<Dec>, quantity: Option<Dec>) -> Result<Sent, Held> {
+    if !super::orders_live(app) {
+        return Err(Held::Dry);
+    }
+    let mut change = serde_json::Map::new();
+    if let Some(p) = limit_price {
+        change.insert("newLimitPrice".into(), json!(p.to_f64()));
+    }
+    if let Some(q) = quantity {
+        change.insert("newQuantity".into(), json!(q.to_f64()));
+    }
+    Ok(broker(app).modify(app, external_id, &Value::Object(change)))
 }

@@ -158,6 +158,11 @@ impl Book {
         self.orders_where("state IN ('sending','unconfirmed','pending','partly-filled','cancelling')", &[])
     }
 
+    /// Every order with something filled: whose fills the book should hold.
+    pub fn orders_filled(&self) -> Result<Vec<StoredOrder>> {
+        self.orders_where("filled <> '0'", &[])
+    }
+
     /// Every order of a bracket: its entry and each exit it placed.
     pub fn orders_of_bracket(&self, bracket: &str) -> Result<Vec<StoredOrder>> {
         self.orders_where("bracket_id = ?", &[bracket])
@@ -436,6 +441,7 @@ fn order_body(e: &OrderEvent) -> Value {
         OrderEvent::Read(r) => json!({
             "status": status_word(r.status), "filled": dec_v(r.filled), "average": opt_dec_v(r.average),
             "price": opt_dec_v(r.price), "quantity": opt_dec_v(r.quantity), "expires_at": r.expires_at.map(at_text),
+            "why": r.why, "code": r.code,
         }),
         OrderEvent::CancelAsked => json!({}),
         OrderEvent::ModifyAsked { limit_price, quantity } => json!({ "limit_price": opt_dec_v(*limit_price), "quantity": opt_dec_v(*quantity) }),
@@ -523,7 +529,7 @@ fn order_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<Ord
             OrderEvent::Refused { why: f.text("why")?, code: f.opt_text("code")? }
         }
         "read" => {
-            f.only(&["status", "filled", "average", "price", "quantity", "expires_at"])?;
+            f.only(&["status", "filled", "average", "price", "quantity", "expires_at", "why", "code"])?;
             let status = match f.text("status")?.as_str() {
                 "open" => BrokerStatus::Open,
                 "filled" => BrokerStatus::Filled,
@@ -533,7 +539,16 @@ fn order_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<Ord
                 "not-found" => BrokerStatus::NotFound,
                 other => return Err(format!("not a broker status: {other:?}")),
             };
-            OrderEvent::Read(Reading { status, filled: f.dec("filled")?, average: f.opt_dec("average")?, price: f.opt_dec("price")?, quantity: f.opt_dec("quantity")?, expires_at: f.opt_instant("expires_at")? })
+            OrderEvent::Read(Reading {
+                status,
+                filled: f.dec("filled")?,
+                average: f.opt_dec("average")?,
+                price: f.opt_dec("price")?,
+                quantity: f.opt_dec("quantity")?,
+                expires_at: f.opt_instant("expires_at")?,
+                why: f.opt_text("why")?,
+                code: f.opt_text("code")?,
+            })
         }
         "cancel-asked" => {
             f.only(&[])?;

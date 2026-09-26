@@ -35,7 +35,9 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
   },
   'orders': {
     'orders': 'id',
+    'orders.*.legs': 'key',
     'brackets': 'id',
+    'brackets.*.legs': 'key',
   },
   'shorts': {
     'rows': 'symbol',

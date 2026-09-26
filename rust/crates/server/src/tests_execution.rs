@@ -128,7 +128,7 @@ impl OrderBroker for FakeBroker {
         }
         Ok(match s.orders.get(external_id) {
             None => Found::None,
-            Some(o) => Found::Order(Reading { status: o.status, filled: o.filled, average: o.average, price: None, quantity: None, expires_at: o.expires_at }),
+            Some(o) => Found::Order(Reading { expires_at: o.expires_at, ..Reading::of(o.status, o.filled, o.average) }),
         })
     }
 }
@@ -144,9 +144,7 @@ pub fn fresh() -> (tempfile::TempDir, Arc<App>, Arc<FakeBroker>) {
     (home, app, fake)
 }
 
-pub fn live(on: bool) {
-    *crate::orders::seam::LIVE.lock().unwrap() = Some(on);
-}
+
 
 pub fn order(id: &str, bracket: Option<(&str, OrderRole)>) -> OrderRequest {
     OrderRequest {
@@ -175,7 +173,7 @@ fn t0() -> Timestamp {
 fn an_order_whose_answer_is_lost_after_the_broker_took_it_ends_working_by_read_back_never_failed() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     fake.then(Behaviour::LoseAfter);
     let got = gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap().unwrap();
@@ -183,42 +181,38 @@ fn an_order_whose_answer_is_lost_after_the_broker_took_it_ends_working_by_read_b
     let after = gate::read_back(&app, &book, "order-1", t0()).unwrap();
     assert_eq!(after.state, OrderState::Pending);
     assert_eq!(fake.at_broker(), 1, "exactly one order at the broker");
-    live(false);
 }
 
 #[test]
 fn an_order_whose_request_never_reached_the_broker_is_failed_by_read_back() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     fake.then(Behaviour::LoseBefore);
     gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap().unwrap();
     let after = gate::read_back(&app, &book, "order-1", t0()).unwrap();
     assert_eq!((after.state, after.why.as_deref()), (OrderState::Failed, Some("the broker has no record of it")));
     assert_eq!(fake.at_broker(), 0);
-    live(false);
 }
 
 #[test]
 fn a_read_back_that_cannot_reach_the_broker_changes_nothing() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     fake.then(Behaviour::LoseAfter);
     gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap().unwrap();
     fake.0.lock().unwrap().reads_fail = true;
     assert!(gate::read_back(&app, &book, "order-1", t0()).is_err());
     assert_eq!(book.order("order-1").unwrap().unwrap().fold.state, OrderState::Unconfirmed);
-    live(false);
 }
 
 #[test]
 fn with_orders_off_nothing_reaches_the_broker_and_the_order_is_written_dry() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(false);
     let book = app.figures.get().unwrap().book().unwrap();
     assert_eq!(gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap(), Err(Held::Dry));
     assert_eq!(book.order("order-1").unwrap().unwrap().fold.state, OrderState::Dry);
@@ -236,7 +230,7 @@ fn bracket(book: &bagholder_book::Book, id: &str) {
 fn no_exit_is_placed_while_another_of_its_bracket_is_in_flight_and_nothing_is_written_for_it() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     bracket(&book, "bracket-1");
     fake.then(Behaviour::LoseAfter);
@@ -244,14 +238,13 @@ fn no_exit_is_placed_while_another_of_its_bracket_is_in_flight_and_nothing_is_wr
     assert_eq!(gate::place(&app, &book, &order("order-2", Some(("bracket-1", OrderRole::Target))), &Asker::Engine, t0()).unwrap(), Err(Held::InFlight));
     assert!(book.order("order-2").unwrap().is_none());
     assert_eq!(fake.at_broker(), 1);
-    live(false);
 }
 
 #[test]
 fn a_bracket_that_sends_more_than_it_ever_could_in_a_minute_is_held() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     bracket(&book, "bracket-1");
     for i in 0..gate::BRACKET_CAP_PER_MINUTE {
@@ -267,14 +260,13 @@ fn a_bracket_that_sends_more_than_it_ever_could_in_a_minute_is_held() {
     // a minute on, it may send again
     let later = t0() + SignedDuration::from_secs(75);
     assert!(gate::place(&app, &book, &order("order-y", Some(("bracket-1", OrderRole::Stop))), &Asker::Engine, later).unwrap().is_ok());
-    live(false);
 }
 
 #[test]
 fn a_cancel_is_cancelling_until_the_broker_settles_it_and_a_refused_one_leaves_the_order_working() {
     let _g = crate::tests_common::guard();
     let (_h, app, fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap().unwrap();
     fake.then(Behaviour::Refuse("too late", None));
@@ -284,20 +276,18 @@ fn a_cancel_is_cancelling_until_the_broker_settles_it_and_a_refused_one_leaves_t
     fake.set("order-1", BrokerStatus::Filled, "10");
     assert_eq!(gate::read_back(&app, &book, "order-1", t0()).unwrap().state, OrderState::Filled);
     assert_eq!(gate::cancel(&app, &book, "order-1", &Asker::Person, t0()).unwrap(), Err(Held::NotNow("the order is filled".into())));
-    live(false);
 }
 
 #[test]
 fn who_asked_is_kept_with_every_request() {
     let _g = crate::tests_common::guard();
     let (_h, app, _fake) = fresh();
-    live(true);
+    app.set_orders_live(true);
     let book = app.figures.get().unwrap().book().unwrap();
     gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap().unwrap();
     gate::cancel(&app, &book, "order-1", &Asker::Agent("helper".into()), t0()).unwrap().unwrap();
     let askers: Vec<(String, &'static str)> = book.order_log("order-1").unwrap().into_iter().map(|l| (l.asker.to_text(), l.event.kind())).collect();
     assert_eq!(askers, vec![("person".into(), "written"), ("person".into(), "accepted"), ("agent:helper".into(), "cancel-asked")]);
-    live(false);
 }
 
 #[test]

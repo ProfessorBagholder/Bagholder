@@ -51,7 +51,7 @@ fn an_order_is_written_once_and_its_state_is_the_fold_of_its_log() {
     let o = b.order("order-1").unwrap().unwrap();
     assert_eq!((o.fold.state, o.request, o.created_at), (OrderState::Sending, request("order-1", None), at));
     assert_eq!(b.order_event("order-1", &Asker::Person, at, &OrderEvent::Accepted { broker_id: "o-9".into() }).unwrap(), Ok(Applied::Moved { from: OrderState::Sending, to: OrderState::Pending }));
-    let read = Reading { status: BrokerStatus::Open, filled: d("4"), average: Some(d("101.2")), price: Some(d("101.25")), quantity: Some(d("10")), expires_at: Some(t("2026-12-27T14:00:00Z")) };
+    let read = Reading { status: BrokerStatus::Open, filled: d("4"), average: Some(d("101.2")), price: Some(d("101.25")), quantity: Some(d("10")), expires_at: Some(t("2026-12-27T14:00:00Z")), why: None, code: None };
     b.order_event("order-1", &Asker::Engine, t("2026-09-28T14:00:05Z"), &OrderEvent::Read(read)).unwrap().unwrap();
     let o = b.order("order-1").unwrap().unwrap();
     assert_eq!((o.fold.state, o.fold.filled, o.fold.broker_id.as_deref()), (OrderState::PartlyFilled, d("4"), Some("o-9")));
@@ -105,8 +105,8 @@ fn every_order_event() -> Vec<OrderEvent> {
         OrderEvent::Refused { why: "no".into(), code: Some("NOT_ENOUGH_SHARES".into()) },
         OrderEvent::Refused { why: "no".into(), code: None },
         OrderEvent::Unclear { why: "timed out".into() },
-        OrderEvent::Read(Reading { status: BrokerStatus::NotFound, filled: Dec::ZERO, average: None, price: None, quantity: None, expires_at: None }),
-        OrderEvent::Read(Reading { status: BrokerStatus::Expired, filled: d("3.5"), average: Some(d("12.3456")), price: Some(d("12.5")), quantity: Some(d("7")), expires_at: Some(t("2026-12-01T21:00:00Z")) }),
+        OrderEvent::Read(Reading { status: BrokerStatus::NotFound, filled: Dec::ZERO, average: None, price: None, quantity: None, expires_at: None, why: None, code: None }),
+        OrderEvent::Read(Reading { status: BrokerStatus::Expired, filled: d("3.5"), average: Some(d("12.3456")), price: Some(d("12.5")), quantity: Some(d("7")), expires_at: Some(t("2026-12-01T21:00:00Z")), why: Some("no".into()), code: Some("X".into()) }),
         OrderEvent::CancelAsked,
         OrderEvent::CancelRefused { why: "too late".into() },
         OrderEvent::ModifyAsked { limit_price: Some(d("12.4")), quantity: None },

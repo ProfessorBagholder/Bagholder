@@ -12,7 +12,6 @@ use bagholder_store::bars::{ChartBars, DayBar, TimeBar};
 use bagholder_store::feeds::{
     FiledDocument, Filing, Gauge, GaugePart, GaugePoint, GaugeReading, Regulator, ShortMarket, ShortPoint, Shorts, StoredGauge, StoredShorts, VolumeSpan,
 };
-use bagholder_store::orders::{Bracket, BracketStatus, Order, OrderStatus, OrderType, Role, Side, SlKind, SlMode, Source, StopLoss, TakeProfit, TrailUnit};
 
 use bagholder_store::activities::ActivityRow;
 use bagholder_store::tables::LegacyNote;
@@ -21,7 +20,7 @@ use bagholder_store::feeds::{Notification, NotificationExtra};
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
 use crate::http::orders::{Adjust, Modify, Named, QuoteOf, RefreshAndOrders};
 use crate::orders::{
-    OrderAccount, OrderActionAnswer, OrderCard, OrdersDoc, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
+    BracketCard, Filled, Leg, OrderAccount, OrderActionAnswer, OrderCard, OrdersDoc, PageDec, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
 };
 
 fn declarations() -> String {
@@ -30,12 +29,12 @@ fn declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![
-        Side, OrderType, OrderStatus, Role, Source, BracketStatus, SlKind, TrailUnit, SlMode, StopLoss, TakeProfit, Order, OrderCard, Bracket, OrdersDoc,
+        Filled, Leg, OrderCard, BracketCard, OrdersDoc, PageDec,
         OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders, QuoteOf, OrderAccount, TicketQuoteDetail, TicketQuoteOk, TicketQuote, TicketStop, TicketTarget, Ticket,
         PlaceTicketAnswer,
         crate::orders::preview::StopInput, crate::orders::preview::TargetInput, crate::orders::preview::QuoteInput, crate::orders::preview::PreviewRequest, crate::orders::preview::Preview,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\nimport type { Dec } from '../dec'\nimport type { Fig } from './figures'\n\n");
+    let mut out = String::from("// Generated from the server's orders document and routes (rust/crates/server/src/orders). Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\nimport type { Dec } from '../dec'\nimport type { Fig } from './figures'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());

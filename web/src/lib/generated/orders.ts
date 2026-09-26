@@ -1,67 +1,127 @@
-// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not
+// Generated from the server's orders document and routes (rust/crates/server/src/orders). Do not
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.
 
 import type { OkOr } from './common'
 import type { Dec } from '../dec'
 import type { Fig } from './figures'
 
-export type Side = "" | "BUY" | "SELL";
+export type Filled = { quantity: Dec, average: Dec | null, };
 
-export type OrderType = "" | "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT";
-
-export type OrderStatus = "" | "dry" | "sending" | "sent" | "pending" | "cancelling" | "filled" | "cancelled" | "expired" | "rejected" | "failed";
-
-export type Role = "" | "entry" | "stop" | "target";
-
-export type Source = "" | "bagholder" | "wealthsimple" | "manual" | "csv";
-
-export type BracketStatus = "" | "waiting" | "armed" | "firing" | "target_placed" | "stopping" | "closing" | "done" | "cancelled";
-
-export type SlKind = "" | "stop" | "trail";
-
-export type TrailUnit = "" | "pct" | "amt";
-
-export type SlMode = "" | "native" | "watched";
-
-export type StopLoss = { kind: SlKind, price: number | null, trail: number | null, trailUnit: TrailUnit, };
-
-export type TakeProfit = { price: number | null, };
-
-export type Order = { id: string, createdAt: string, accountId: string, account: string, securityId: string, symbol: string, currency: string, side: Side, type: OrderType, quantity: number | null, limitPrice: number | null, stopPrice: number | null, tif: string, 
+export type Leg = { 
 /**
- * The exits asked for with an entry, as the ticket gave them.
+ * `sl` or `tp`.
  */
-stopLoss: StopLoss | null, takeProfit: TakeProfit | null, status: OrderStatus, wsOrderId: string, error: string, updatedAt: string, source: Source, wsStatus: string, filledQty: number | null, avgFill: number | null, submittedAt: string, expiresAt: string, parentId: string, role: Role, fillBookedQty: number | null, };
-
-export type OrderCard = { exchange: string, id: string, createdAt: string, accountId: string, account: string, securityId: string, symbol: string, currency: string, side: Side, type: OrderType, quantity: number | null, limitPrice: number | null, stopPrice: number | null, tif: string, 
+key: string, quantity: Dec, 
 /**
- * The exits asked for with an entry, as the ticket gave them.
+ * The level: the stop's (a trailing stop's current one) or the target.
  */
-stopLoss: StopLoss | null, takeProfit: TakeProfit | null, status: OrderStatus, wsOrderId: string, error: string, updatedAt: string, source: Source, wsStatus: string, filledQty: number | null, avgFill: number | null, submittedAt: string, expiresAt: string, parentId: string, role: Role, fillBookedQty: number | null, };
+level: Dec, 
+/**
+ * A trailing stop's trail: a percent, or an amount per share.
+ */
+trailPct: Dec | null, trailAmount: Dec | null, 
+/**
+ * The exit's fill, when this leg is how the bracket ended.
+ */
+filled: Filled | null, 
+/**
+ * `Placing`, `Cancelling`, `Retrying · <reason>`, `Watching`, `Filled`,
+ * `Cancelled`, `Off`, or nothing.
+ */
+note: string, 
+/**
+ * Quantity × level × the contract size; a fill's own amount once it filled.
+ */
+amount: Fig<Dec>, };
 
-export type Bracket = { id: string, orderId: string, createdAt: string, accountId: string, securityId: string, symbol: string, currency: string, quantity: number | null, tif: string, slKind: SlKind, slPrice: number | null, slTrail: number | null, slTrailUnit: TrailUnit, slOrderId: string, slNative: boolean, slMode: SlMode, highWater: number | null, tpPrice: number | null, tpOrderId: string, status: BracketStatus, outcome: string, error: string, attempts: number, movedAt: string, armedAt: string, seenHeld: boolean, missedAt: string, updatedAt: string, };
+export type OrderCard = { id: string, 
+/**
+ * The broker's id for the account.
+ */
+account: string, exchange: string, symbol: string, 
+/**
+ * `buy` or `sell`.
+ */
+side: string, 
+/**
+ * `market`, `limit`, `stop` or `stop-limit`.
+ */
+kind: string, 
+/**
+ * `day` or `until-cancel`; none when Wealthsimple has not said.
+ */
+tif: string | null, quantity: Dec, limitPrice: Dec | null, stopPrice: Dec | null, 
+/**
+ * Where it stands (`bagholder_core::order::OrderState`).
+ */
+state: string, filled: Dec, average: Dec | null, 
+/**
+ * Why it was refused, failed or is not confirmed, in the words recorded.
+ */
+why: string | null, 
+/**
+ * Its value in the instrument's currency: the quantity at its price, what it
+ * filled for once filled; none for a market order not filled.
+ */
+value: Fig<Dec> | null, 
+/**
+ * The value is the fill's price guessed at: a market order's.
+ */
+approx: boolean, 
+/**
+ * `pending`, `filled` or `cancelled`.
+ */
+tab: string, at: string, 
+/**
+ * Edit and Cancel act on it; Edit is dimmed where Wealthsimple takes no change.
+ */
+live: boolean, editable: boolean, 
+/**
+ * The legs of the bracket waiting for this order to fill.
+ */
+legs: Array<Leg>, };
 
-export type OrdersDoc = { ok: boolean, orders: Array<OrderCard>, brackets: Array<Bracket>, 
+export type BracketCard = { id: string, account: string, exchange: string, symbol: string, tab: string, 
+/**
+ * When it armed while live; when it ended after.
+ */
+at: string, live: boolean, 
+/**
+ * What was paid for the shares under it.
+ */
+value: Fig<Dec>, legs: Array<Leg>, 
+/**
+ * On the Cancelled tab: `Cancelled` when the person ended it, `Off` otherwise.
+ */
+endWord: string | null, 
+/**
+ * What its editor starts from.
+ */
+stopLevel: Dec | null, trailPct: Dec | null, trailAmount: Dec | null, target: Dec | null, };
+
+export type OrdersDoc = { ok: boolean, 
 /**
  * Whether orders are sent at all (`BAGHOLDER_DRY_ORDERS` turns them off).
  */
-live: boolean, refreshedAt: string, };
+live: boolean, refreshedAt: string | null, orders: Array<OrderCard>, brackets: Array<BracketCard>, 
+/**
+ * Why the document could not be read, when it could not.
+ */
+error: string | null, };
+
+export type PageDec = number | string | null;
 
 export type OrderActionAnswer = { ok: boolean, error?: string, id?: string, status?: string, unchanged?: boolean, };
 
-export type RefreshOrdersAnswer = { ok: boolean, skipped?: string, read?: number, added?: number, failed?: number, };
+export type RefreshOrdersAnswer = { ok: boolean, skipped?: string, read: number, failed: number, };
 
 export type Named = { id: string, };
 
-export type Modify = { id: string, quantity: number | string | null, limitPrice: number | string | null, };
+export type Modify = { id: string, quantity: PageDec, limitPrice: PageDec, };
 
-export type Adjust = { id: string, leg: string, price?: number | string | null, trail?: number | string | null, remove?: boolean, };
+export type Adjust = { id: string, leg: string, price: PageDec, trail: PageDec, remove?: boolean, };
 
-export type RefreshAndOrders = { ok: boolean, skipped?: string, read?: number, added?: number, failed?: number, orders: Array<OrderCard>, brackets: Array<Bracket>, 
-/**
- * Whether orders are sent at all (`BAGHOLDER_DRY_ORDERS` turns them off).
- */
-live: boolean, refreshedAt: string, };
+export type RefreshAndOrders = { read: RefreshOrdersAnswer, orders: OrdersDoc, };
 
 export type QuoteOf = { symbol: string, security: string, account: string, exchange: string, };
 
@@ -78,13 +138,37 @@ export type TicketQuoteOk = { ok: true, quote: TicketQuoteDetail, orderTypes: Ar
 
 export type TicketQuote = TicketQuoteOk | OkOr;
 
-export type TicketStop = { kind: string | null, price: number | null, trail: number | null, trailUnit: string | null, };
+export type TicketStop = { 
+/**
+ * `stop` or `trail`.
+ */
+kind: string | null, price: PageDec, trail: PageDec, 
+/**
+ * `pct` or `amt`.
+ */
+trailUnit: string | null, };
 
-export type TicketTarget = { price: number | null, };
+export type TicketTarget = { price: PageDec, };
 
-export type Ticket = { symbol: string, securityId: string, accountId: string, side: string, type: string, tif: string | null, quantity: number | null, limitPrice: number | null, stopPrice: number | null, currency: string | null, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
+export type Ticket = { symbol: string, securityId: string, accountId: string, 
+/**
+ * `BUY` or `SELL`.
+ */
+side: string, 
+/**
+ * `MARKET`, `LIMIT`, `STOP` or `STOP_LIMIT`.
+ */
+type: string, 
+/**
+ * `DAY` or `UNTIL_CANCEL`; a day order when absent.
+ */
+tif: string | null, quantity: PageDec, limitPrice: PageDec, stopPrice: PageDec, currency: string | null, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
 
-export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string, status?: string, order?: Order, wsOrderId?: string, bracketId?: string, };
+export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string, 
+/**
+ * Where the order stands after the answer: `dry`, `unconfirmed`, `pending`, …
+ */
+status?: string, bracketId?: string, };
 
 export type StopInput = { on: boolean, 
 /**
