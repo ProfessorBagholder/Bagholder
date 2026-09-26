@@ -4,7 +4,7 @@
 
 **Verdict: Go with changes.**
 - **Part A** is being built now: make change A1 before going further.
-- **Parts B, C and D:** build them with the changes below. C and D also wait for the owner's answers on items 1 and 3.
+- **Parts B, C and D:** build them with the changes below. C and D are narrowed by the owner's decisions.
 
 **The gate comes before the build.**
 - A heavy lift is built after its verdict (brief 01). Part A started before this one, and stage 4's plan never came to the gate.
@@ -14,9 +14,29 @@
   - no list is cut at 200;
   - rows being sent count as in flight.
 
-## The owner's items
+## Owner decisions (2026-09-26)
 
-Under brief 09's decision 1, only items 1 and 3 are the owner's; they go to the owner. Items 2 and 4 are engineering, decided here:
+Record both in `docs/decisions.md`.
+
+1. **AI agents are a possible future feature, not part of the migration.**
+   - Stage 5 builds nothing for agents:
+     - no `bagholder mcp`;
+     - no agent token;
+     - no tools generated from the route table;
+     - no order tools;
+     - no JSON Schema, so `schemars` is not added.
+   - The route table's new descriptions and kinds stay only where the page uses them.
+   - Mark `docs/architecture.md` §14 as a possible future feature, not built. Brief 09's decision 7 is superseded.
+   - **The filings MCP server that ships today stays as it is, with one fix.**
+     - The server is `disclosures-mcp`, listed in `rust/mcp/manifest.json`.
+     - Its `disclosures_document` tool writes the filing to whatever path the caller names (`market/src/bin/disclosures-mcp.rs:159-166`), and filing text is written by outsiders.
+     - The fix: it writes only into a folder of the app's own, under a name it makes itself, and the `dest` argument goes.
+2. **Starting at login is the administrator's choice, made with their platform's own means.**
+   - The app offers no option for it, sets nothing up, and has no `service` command.
+   - `README.md` says how to run it at login on each platform.
+   - The container already restarts itself: `restart: unless-stopped` in `docker-compose.yml`.
+
+## Decided here (engineering)
 
 - **Item 2, a key for access beyond loopback: taken as recommended.** Jupyter does the same.
   - At start, the app prints its address with the key in it, as Jupyter prints its `?token=` link. A browser signs in by opening that link, and the cookie holds the key from then on.
@@ -53,33 +73,13 @@ Under brief 09's decision 1, only items 1 and 3 are the owner's; they go to the 
   - the markets context on the new wire;
   - the timers test.
 
-**C1. MCP tools are chosen, not generated one per route.**
-- **Anthropic's guidance on tools for agents:**
-  - "A common error we've observed is tools that merely wrap existing software functionality or API endpoints"
-  - "More tools don't always lead to better outcomes"
-  - "Too many tools or overlapping tools can also distract agents"
-  - Its advice is "a few thoughtful tools targeting specific high-impact workflows".
-- **What becomes a tool:**
-  - A route becomes a tool only when the table marks it for agents, with a description written for an agent.
-  - Routes shaped for the page are not tools: screen subscriptions, the ticket's quote, a card's document.
-  - The marked set is the few operations an agent needs:
-    - reading the figures and trades in scope, a position, and the journal;
-    - the market reads;
-    - writing the journal and the watchlist;
-    - orders, per the owner's answer on item 3.
-- It is still declared once, in the same table. There is no second interface.
-- **Criterion:** `tools/list` equals the marked set, and a test fails on a route marked for agents without a description.
-
-**C2. The keychain, decided on evidence.**
+**C1. The keychain, decided on evidence.**
 - **The risk on the Mac:**
   - A keychain item trusts the program that created it. A release binary replaced by an update may be asked about again.
   - As the plan already notes, it may be refused while the app is started at login before the keychain unlocks.
 - **Verification:** a real update of a release build on the Mac, then started at login, reads the session with no prompt and no refusal.
 - If it can't, the 0600 file is the store on that platform. Report it; don't work around it.
 
-**D1. Starting at login follows the owner's answer on item 1.** Record the owner's answer in `docs/decisions.md`. Until the owner has answered, a release sets nothing up at login.
-
 ## For the owner
 
-- **Item 1: starting at login.**
-- **Item 3: whether AI agents can place orders.**
+Nothing.
