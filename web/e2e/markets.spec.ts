@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus, figures } from './helpers'
+import { openWithStatus, figures, following } from './helpers'
 
 // SPEC §6, Markets: what Enter and Escape do in its cards.
 
@@ -45,13 +45,9 @@ test('the News card reads Reading… while the server\'s pass still has the mark
 })
 
 test('the news is asked for while the News card shows, and not by a page on another tab', async ({ page, request }) => {
-  let docs: string[] = []
-  await page.route('**/api/events/watch', async (route) => {
-    docs = Object.keys((route.request().postDataJSON() as { docs: Record<string, unknown> }).docs)
-    await route.fulfill({ status: 200, json: { ok: true } })
-  })
+  const shown = following(page)
   await openWithStatus(page, request, {}, '#markets')
-  await expect.poll(() => docs.includes('news')).toBe(true)
+  await expect.poll(() => shown().includes('news')).toBe(true)
   await page.getByRole('button', { name: 'Trades' }).click()
-  await expect.poll(() => docs.includes('news')).toBe(false)
+  await expect.poll(() => shown().includes('news')).toBe(false)
 })

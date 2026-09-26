@@ -260,11 +260,19 @@ units: Dec | null, };
 
 export type AccountOption = { id: string, name: string, };
 
-export type InstrumentOption = { id: string, symbol: string, name: string, exchange: string, kind: string, currency: string, };
+export type InstrumentOption = { id: string, symbol: string, name: string, exchange: string, kind: string, currency: string, 
+/**
+ * The broker's id for it, which an order names; empty where none is known.
+ */
+security: string, 
+/**
+ * The accounts that traded or hold it, by id.
+ */
+accounts: Array<string>, };
 
 export type Options = { accounts: Array<AccountOption>, instruments: Array<InstrumentOption>, tags: Array<string>, exchanges: Array<string>, kinds: Array<string>, grades: Array<string>, sides: Array<string>, results: Array<string>, years: Array<string>, };
 
-export type Figures = { 
+export type BookDoc = { 
 /**
  * Today, in the person's zone.
  */
@@ -272,7 +280,7 @@ today: string,
 /**
  * Transactions on the record: none is the first-run page.
  */
-activityCount: number, options: Options, kpi: Kpi, equity: Equity, years: Array<YearRow>, benchmark: BenchmarkRef, monthly: Array<MonthlyBar>, bySymbol: Array<BySymbolRow>, grades: Grades, queue: Array<QueueRow>, trades: Array<Trade>, positions: Array<Position>, portfolio: Portfolio, cashflow: Cashflow, accounts: Array<Account>, 
+activityCount: number, options: Options, accounts: Array<Account>, 
 /**
  * Σ the accounts' values, for the ticket's share of it.
  */
@@ -280,11 +288,33 @@ navTotal: Fig<Dec> | null,
 /**
  * What waits on the person, whatever the filters.
  */
-waiting: Array<Waiting>, 
+waiting: Array<Waiting>, };
+
+export type DashboardDoc = { kpi: Kpi, equity: Equity, years: Array<YearRow>, benchmark: BenchmarkRef, monthly: Array<MonthlyBar>, bySymbol: Array<BySymbolRow>, grades: Grades, queue: Array<QueueRow>, };
+
+export type PositionsDoc = { portfolio: Portfolio, positions: Array<Position>, };
+
+export type TradesDoc = { 
 /**
- * The market around the book, from its readers (`context`).
+ * How many trades the filters show, all of them.
  */
-markets: Markets, sectors: Array<ExposureSlice>, regions: Array<ExposureSlice>, };
+total: number, trades: Array<Trade>, };
+
+export type CashflowDoc = { cashflow: Cashflow, 
+/**
+ * How many dividends the filters show, all of them.
+ */
+rowsTotal: number, };
+
+export type TradeDoc = { 
+/**
+ * The id asked for: a document for it with neither is one the figures do not have.
+ */
+id: string, trade: Trade | null, position: Position | null, };
+
+export type ExposureDoc = { sectors: Array<ExposureSlice>, regions: Array<ExposureSlice>, };
+
+export type MarketsDoc = { markets: Markets, };
 
 export type Range = { 
 /**
@@ -306,3 +336,21 @@ lists: { [key in string]: Array<string> },
  * `price`, `hold`, `pnl`, `qty`.
  */
 ranges: { [key in string]: Range }, preset: string, years: Array<string>, from: string, to: string, search: string, benchmark: string, };
+
+export type Dir = "asc" | "desc";
+
+export type Sort = { key: string, dir: Dir, };
+
+export type Params = { 
+/**
+ * The page's filters: every kind but `book` and `trade:` reads them.
+ */
+filters: Filters | null, 
+/**
+ * The trades' or the dividends' order.
+ */
+sort: Sort | null, 
+/**
+ * How many rows of a long list the page shows: as far as it has scrolled.
+ */
+limit: number | null, };

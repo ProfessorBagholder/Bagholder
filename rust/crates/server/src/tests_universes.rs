@@ -32,8 +32,8 @@ fn stored(app: &Arc<App>, source: Source, age: f64) {
 
 /// A page that shows the documents `keys`.
 fn page_showing(app: &Arc<App>, keys: &[&str]) -> Feed {
-    let feed = Feed::open(app.clone(), None);
-    let docs = keys.iter().map(|k| (k.to_string(), json!({}))).collect();
+    let feed = Feed::open(app.clone());
+    let docs = keys.iter().map(|k| (k.to_string(), crate::events::Want { params: json!({}), have: None })).collect();
     assert!(app.events.watch(app, feed.id(), docs));
     feed
 }

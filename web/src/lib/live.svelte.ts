@@ -12,11 +12,10 @@
 //
 // Nothing here polls. There is no timer in this file.
 
-import type { Model } from './model'
-
 import { post } from './api'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
+import { bookIs, lastBook, load, save } from './kept'
 
 export type Step = string | { k: string; v: string }
 export type Op = ['set', Step[], unknown] | ['del', Step[]] | ['rows', Step[], string, string[], Record<string, unknown>]
@@ -144,16 +143,15 @@ function reconcileRows(target: unknown[], source: unknown[], keys: Record<string
 
 // --- the connection ---------------------------------------------------------------
 
-export interface Sink {
-  model: Model | null
-  error: string | null
-  loading: boolean
-}
-
-/** Where a document the page is showing is kept: `data` is written into, never replaced. */
+/** Where a document the page is showing is kept: `data` is written into, never replaced; `v` is the version of it held. */
 export interface Holder<T> {
   data: T | null
+  v?: string
+  error?: string
 }
+
+/** The connection itself: whether it is reaching the server. */
+export const conn = $state<{ error: string; open: boolean }>({ error: '', open: false })
 
 /**
  * The order a stream's messages are numbered in, from 1: `seen` takes each
@@ -172,15 +170,12 @@ export function numbering(gap: () => void): (id: string) => void {
 }
 
 let source: EventSource | null = null
-let url = ''
 let streamId = 0
+/** The book the page shows: the one it last showed until the server names it. */
+let book = lastBook()
+/** What is being drawn from what was kept: the page says what it shows once these are in. */
+const drawing = new Set<Promise<void>>()
 const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void }>()
-
-/** What runs after a change to the model is written, with the ids it touched, or 'all' for the whole view again (the open trade refreshes its fills). */
-let afterChange: (touched: Set<string> | 'all') => void = () => {}
-export function onChange(fn: (touched: Set<string> | 'all') => void): void {
-  afterChange = fn
-}
 
 /** Which server answered: when it started, the version it runs and the protocol it speaks (from its status). */
 export interface ServerStamp {
@@ -188,9 +183,9 @@ export interface ServerStamp {
   version: string
   protocol: string
 }
-function stamp(m: unknown): ServerStamp | null {
-  if (!isObj(m) || !isObj(m.status) || typeof m.status.startedAt !== 'string' || !m.status.startedAt) return null
-  const { startedAt, version, protocol } = m.status
+function stamp(s: unknown): ServerStamp | null {
+  if (!isObj(s) || typeof s.startedAt !== 'string' || !s.startedAt) return null
+  const { startedAt, version, protocol } = s
   return { startedAt, version: typeof version === 'string' ? version : '', protocol: typeof protocol === 'string' ? protocol : '' }
 }
 
@@ -206,45 +201,75 @@ export function isUpdate(was: ServerStamp, now: ServerStamp, built: string = PRO
 }
 
 /**
- * What runs when the view arrives from a server started since the one that sent the
+ * What runs when the status arrives from a server started since the one that sent the
  * last: what was kept of its answers is no longer its word. After an update it runs
- * before the view is taken, which the old build then does not take at all.
+ * before anything is taken, which the old build then does not take at all.
  */
 let afterRestart: (was: ServerStamp, now: ServerStamp) => void = () => {}
 export function onRestart(fn: (was: ServerStamp, now: ServerStamp) => void): void {
   afterRestart = fn
 }
 
-// Tell the server what this page is showing beyond the model: once per turn of the
-// page however many things opened and closed in it, and not at all when the set is
-// what was last said (a card that closes and opens again in one update says nothing).
+// Tell the server what this page is showing: once per turn of the page however many
+// things opened and closed in it, and not at all when the set is what was last said
+// (a card that closes and opens again in one update says nothing). Each carries the
+// version of it the page holds, so what has not changed is not sent again.
 let saidFor = 0
 let said = ''
 let saying = false
+/** What the stream was opened naming: said already, so a hello is not followed by the same again. */
+let connectedWith = ''
+
+/** What the page shows now, and the version of each it holds, as the server is told it. */
+function shownNow(): { docs: Record<string, unknown>; have: Record<string, string> } {
+  const docs: Record<string, unknown> = {}
+  const have: Record<string, string> = {}
+  for (const key of [...wanted.keys()].sort()) {
+    const w = wanted.get(key)!
+    docs[key] = w.params ?? {}
+    if (w.holder.v && w.holder.data != null) have[key] = w.holder.v
+  }
+  return { docs, have }
+}
 function sayWanted(): void {
   if (saying) return
   saying = true
-  queueMicrotask(() => {
+  queueMicrotask(async () => {
+    // a screen drawn from what was kept says the version it holds
+    while (drawing.size) await Promise.all([...drawing])
     saying = false
     if (!streamId) return
-    const docs: Record<string, unknown> = {}
-    for (const key of [...wanted.keys()].sort()) docs[key] = wanted.get(key)!.params ?? {}
+    const { docs, have } = shownNow()
     const now = JSON.stringify(docs)
     if (saidFor === streamId && now === said) return
     saidFor = streamId
     said = now
-    void post('/api/events/watch', { id: streamId, docs })
+    post('/api/events/watch', { id: streamId, docs, have }).then((r) => {
+      if (!r.ok) conn.error = 'Bagholder did not take what this page shows: ' + (r.error || 'no answer')
+    })
   })
 }
 
 /**
- * Show a document for as long as something on the page needs it: the orders while
- * their panel is open, the short-interest table while its card is. It arrives whole
- * once and then by change, written into `holder.data`; `changed` runs after each.
+ * Show a document for as long as something on the page needs it: a screen's
+ * figures while it is open, the orders while their panel is. It arrives whole once
+ * and then by change, written into `holder.data`; `changed` runs after each.
  * Returns what stops it.
  */
 export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, changed?: () => void): () => void {
   wanted.set(key, { params, holder: holder as Holder<unknown>, changed })
+  if (holder.data == null) {
+    // drawn at once from what was kept, before the server answers
+    const p = load(book, key, params).then((k) => {
+      if (k && holder.data == null && wanted.get(key)?.holder === holder) {
+        holder.data = k.data as T
+        holder.v = k.v
+        changed?.()
+      }
+    })
+    drawing.add(p)
+    p.finally(() => drawing.delete(p))
+  }
   sayWanted()
   return () => {
     if (wanted.get(key)?.holder === holder) {
@@ -254,78 +279,137 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   }
 }
 
+/** A new state of the header's status: from a server started again, and was it an update? */
+function restarted(was: unknown, now: unknown): boolean {
+  const a = stamp(was)
+  const b = stamp(now)
+  if (!a || !b || a.startedAt === b.startedAt) return false
+  if (isUpdate(a, b)) {
+    afterRestart(a, b) // the page loads itself again: this build takes nothing more from the new server
+    return true
+  }
+  afterRestart(a, b)
+  return false
+}
+
 /**
- * Connect, or connect again under other filters. The first message is the whole
- * view; when one is already shown it is reconciled into the objects on screen.
+ * Connect: one stream, over which every document the page shows arrives. The
+ * browser connects again by itself when it drops; the page then says again what
+ * it shows, with the version of each it holds, and is sent what changed.
  */
-export function connect(sink: Sink, filters: unknown): void {
+let connecting = false
+export async function connect(): Promise<void> {
+  if (connecting || (source && source.readyState !== EventSource.CLOSED)) return
+  connecting = true
+  // what the screens on show read is registered as they start, and what was kept of
+  // them drawn: then the stream is opened naming them, with the version of each held,
+  // so its first message already answers them
+  await Promise.resolve()
+  while (drawing.size) await Promise.all([...drawing])
+  connecting = false
+  if (source && source.readyState !== EventSource.CLOSED) return
   // the browser's time zone: the person's days, months and "today" are in it
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const next = '/api/events?filters=' + encodeURIComponent(JSON.stringify(filters)) + '&zone=' + encodeURIComponent(zone)
-  if (source && next === url && source.readyState !== EventSource.CLOSED) return
-  source?.close()
-  url = next
-  streamId = 0
-  if (!sink.model) sink.loading = true
-  const es = new EventSource(next)
+  const { docs, have } = shownNow()
+  connectedWith = JSON.stringify(docs)
+  const es = new EventSource('/api/events?zone=' + encodeURIComponent(zone) + '&docs=' + encodeURIComponent(connectedWith) + '&have=' + encodeURIComponent(JSON.stringify(have)))
   source = es
+  streamId = 0
   const seen = numbering(() => {
-    if (streamId) void post('/api/events/resync', { id: streamId })
+    if (streamId) post('/api/events/resync', { id: streamId }).then((r) => {
+      if (!r.ok) conn.error = 'Bagholder did not send this page what it missed: ' + (r.error || 'no answer')
+    })
   })
   es.addEventListener('hello', (e) => {
     seen((e as MessageEvent).lastEventId)
-    streamId = (JSON.parse((e as MessageEvent).data) as { id: number }).id
-    sayWanted() // a new stream knows nothing of what this page shows
+    const hello = JSON.parse((e as MessageEvent).data) as { id: number; book: string }
+    streamId = hello.id
+    conn.open = true
+    conn.error = ''
+    // the stream was opened naming what the page showed then: only a difference is said
+    saidFor = streamId
+    said = connectedWith
+    if (hello.book && hello.book !== book) {
+      // another book than the one drawn: nothing kept of that one stands
+      if (book) for (const w of wanted.values()) {
+        w.holder.data = null
+        w.holder.v = undefined
+      }
+      book = hello.book
+      void bookIs(book)
+      saidFor = 0 // said again, holding nothing of this book
+    }
+    sayWanted()
   })
   es.addEventListener('snapshot', (e) => {
     seen((e as MessageEvent).lastEventId)
-    const { doc, data } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown }
-    if (doc === 'model') {
-      const shown = !!sink.model
-      const was = stamp(sink.model)
-      const now = stamp(data)
-      const restarted = was && now && was.startedAt !== now.startedAt
-      if (restarted && isUpdate(was, now)) {
-        afterRestart(was, now) // the page loads itself again: this build does not take the new server's view
-        return
-      }
-      if (sink.model) reconcile(sink.model as unknown as Obj, data as Obj, ROW_KEYS.model)
-      else sink.model = data as Model
-      if (restarted) afterRestart(was, now)
-      if (shown) afterChange('all') // a view over the one shown: anything in it may have moved while away
-      sink.error = null
-      sink.loading = false
-      return
-    }
+    const { doc, data, v } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown; v: string }
     const w = wanted.get(doc)
     if (!w) return
+    if (doc === 'status' && restarted(w.holder.data, data)) return
     if (isObj(w.holder.data) && isObj(data)) reconcile(w.holder.data, data, ROW_KEYS[docKind(doc)] ?? {})
     else w.holder.data = data
+    w.holder.v = v
+    w.holder.error = ''
     w.changed?.()
+  })
+  es.addEventListener('same', (e) => {
+    seen((e as MessageEvent).lastEventId)
+    const { doc, v } = JSON.parse((e as MessageEvent).data) as { doc: string; v: string }
+    const w = wanted.get(doc)
+    if (w) w.holder.v = v
   })
   es.addEventListener('patch', (e) => {
     seen((e as MessageEvent).lastEventId)
-    const { doc, ops } = JSON.parse((e as MessageEvent).data) as { doc: string; ops: Op[] }
-    if (doc === 'model') {
-      if (sink.model) afterChange(applyOps(sink.model, ops))
-      return
-    }
+    const { doc, ops, v } = JSON.parse((e as MessageEvent).data) as { doc: string; ops: Op[]; v: string }
     const w = wanted.get(doc)
     if (w?.holder.data == null) return
     applyOps(w.holder.data, ops)
+    w.holder.v = v
     w.changed?.()
   })
-  // the browser connects again by itself; the server then sends the whole view, which
-  // is reconciled, so whatever was missed while away is made good
+  es.addEventListener('refused', (e) => {
+    seen((e as MessageEvent).lastEventId)
+    const { doc, error } = JSON.parse((e as MessageEvent).data) as { doc: string; error: string }
+    const w = wanted.get(doc)
+    if (w) w.holder.error = error
+    else if (!doc) {
+      // the stream could not read what the page shows: said, and said again the other way
+      conn.error = error
+      saidFor = 0
+      sayWanted()
+    }
+  })
   es.onerror = () => {
     streamId = 0
-    if (!sink.model) sink.error = 'Could not reach Bagholder.'
+    conn.open = false
+    conn.error = 'Could not reach Bagholder.'
   }
+}
+
+/** The server's word over what the page holds: every document sent whole again, reconciled into what is shown. */
+export function resyncAll(): void {
+  if (!streamId) return
+  post('/api/events/resync', { id: streamId }).then((r) => {
+    if (!r.ok) conn.error = 'Bagholder did not send this page its state again: ' + (r.error || 'no answer')
+  })
+}
+
+/** Keep every document shown as it stands: when the page is hidden or left, the moment it may not come back. */
+export function keepShown(): void {
+  const docs = [...wanted.entries()].filter(([, w]) => w.holder.data != null && w.holder.v).map(([key, w]) => ({ key, params: w.params, data: $state.snapshot(w.holder.data), v: w.holder.v! }))
+  void save(book, docs)
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') keepShown()
+  })
+  window.addEventListener('pagehide', keepShown)
 }
 
 export function disconnect(): void {
   source?.close()
   source = null
-  url = ''
   streamId = 0
+  conn.open = false
 }

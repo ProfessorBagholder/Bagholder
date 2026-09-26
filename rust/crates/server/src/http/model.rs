@@ -15,8 +15,9 @@ use crate::app::App;
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
         get "/api/status" => status;
-        get "/api/figures" => figures;
         get "/api/figures/detail" => figures_detail;
+        get "/api/figures/trades" => figures_trades;
+        get "/api/view" => view;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
         post "/api/entries" => entries;
@@ -39,40 +40,91 @@ async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswe
     super::answer(move || crate::status::answer(&state.app)).await
 }
 
-#[derive(Deserialize, TS)]
-pub struct FiguresQuery {
-    /// The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
-    #[serde(default, deserialize_with = "trimmed")]
-    filters: Option<String>,
-}
-
-/// `GET /api/figures`: the figures document from the engine, for the page's
-/// filters. A filter the engine does not know is refused, naming it; before a
-/// page has stated its zone there is nothing to build.
-async fn figures(State(state): State<AppState>, Params(q): Params<FiguresQuery>) -> Api<crate::wire::figures::Figures> {
-    let app = state.app;
-    let built = blocking(move || -> Result<crate::wire::figures::Figures, ApiError> {
-        let filters: crate::wire::filters::Filters = match q.filters {
-            Some(raw) => serde_json::from_str(&raw).map_err(|e| ApiError::BadRequest(format!("the filters: {e}")))?,
-            None => Default::default(),
-        };
-        let filters = filters.to_engine().map_err(ApiError::BadRequest)?;
-        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
-        let book = f.book().map_err(ApiError::Failed)?;
-        let names = f.read(|e| crate::wire::build::Names::load(&book, e.inputs())).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?.map_err(ApiError::Failed)?;
-        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
-        f.read(|e| crate::wire::build::build(e, &names, &filters, &base)).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))
-    })
-    .await??;
-    Ok(Json(built))
-}
-
 /// `GET /api/figures/detail`: a trade's or a holding's fills, by its id.
 async fn figures_detail(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> Api<crate::wire::figures::Detail> {
     let app = state.app;
     let id = q.id.unwrap_or_default();
     let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::detail(e, &id))).flatten()).await?;
     Ok(Json(found.ok_or_else(|| ApiError::NotFound("no such trade or holding".into()))?))
+}
+
+#[derive(Deserialize, TS)]
+pub struct ViewQuery {
+    /// The subscription's key: `book`, `dashboard`, `positions`, `trades`,
+    /// `cashflow`, `exposure`, `markets`, `trade:<id>`.
+    #[serde(default, deserialize_with = "trimmed")]
+    key: Option<String>,
+    /// Its parameters, as the JSON a subscription is asked with (`views::Params`).
+    #[serde(default, deserialize_with = "trimmed")]
+    params: Option<String>,
+}
+
+/// A document of the figures, as a subscription is first sent it.
+#[derive(Serialize, TS)]
+#[ts(type = "unknown")]
+pub struct ViewAnswer(serde_json::Value);
+
+/// `GET /api/view`: one screen's document once, exactly as a page subscribing to
+/// it is first sent it. A key or a parameter the figures do not know is refused,
+/// naming it.
+async fn view(State(state): State<AppState>, Params(q): Params<ViewQuery>) -> Api<ViewAnswer> {
+    let app = state.app;
+    let built = blocking(move || -> Result<serde_json::Value, ApiError> {
+        let key = q.key.ok_or_else(|| ApiError::BadRequest("key required".into()))?;
+        let params: serde_json::Value = match q.params {
+            Some(raw) => serde_json::from_str(&raw).map_err(|e| ApiError::BadRequest(format!("the parameters: {e}")))?,
+            None => serde_json::json!({}),
+        };
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        let names = f.names().map_err(ApiError::Failed)?;
+        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
+        f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, base: &base }, &key, params))
+            .ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?
+            .map_err(ApiError::BadRequest)
+    })
+    .await??;
+    Ok(Json(ViewAnswer(built)))
+}
+
+#[derive(Deserialize, TS)]
+pub struct TradesQuery {
+    /// The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
+    #[serde(default, deserialize_with = "trimmed")]
+    filters: Option<String>,
+    /// The column the list is sorted by, as the page's header names it.
+    #[serde(default, deserialize_with = "trimmed")]
+    sort: Option<String>,
+    /// `asc` or `desc`.
+    #[serde(default, deserialize_with = "trimmed")]
+    dir: Option<String>,
+}
+
+/// `GET /api/figures/trades`: every trade under the page's filters, in its order:
+/// what the Trades CSV export writes. A filter or a column the figures do not
+/// know is refused, naming it.
+async fn figures_trades(State(state): State<AppState>, Params(q): Params<TradesQuery>) -> Api<crate::wire::figures::TradesDoc> {
+    let app = state.app;
+    let built = blocking(move || -> Result<crate::wire::figures::TradesDoc, ApiError> {
+        let filters: crate::wire::filters::Filters = match q.filters {
+            Some(raw) => serde_json::from_str(&raw).map_err(|e| ApiError::BadRequest(format!("the filters: {e}")))?,
+            None => Default::default(),
+        };
+        let filters = filters.to_engine().map_err(ApiError::BadRequest)?;
+        let dir = match q.dir.as_deref() {
+            None | Some("desc") => crate::views::Dir::Desc,
+            Some("asc") => crate::views::Dir::Asc,
+            Some(other) => return Err(ApiError::BadRequest(format!("no direction {other:?}"))),
+        };
+        let sort = crate::views::Sort { key: q.sort.unwrap_or_else(|| "exitDate".into()), dir };
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        let names = f.names().map_err(ApiError::Failed)?;
+        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
+        f.read(|e| crate::views::all_trades(&crate::views::Cx { engine: e, names: &names, base: &base }, filters, sort))
+            .ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?
+            .map_err(ApiError::BadRequest)
+    })
+    .await??;
+    Ok(Json(built))
 }
 
 #[derive(Deserialize, TS)]

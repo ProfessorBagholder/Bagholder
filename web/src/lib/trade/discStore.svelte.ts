@@ -6,7 +6,7 @@
 // timer in this file.
 import type { Trade, Filing, FilingsDoc } from '../model'
 import { listingTicker } from './chart'
-import { watchDoc } from '../live'
+import { watchDoc } from '../live.svelte'
 import { call } from '../api'
 
 export const DISC_ORDER = ['Financials', 'Material events', 'Governance', 'Offerings', 'Insider & ownership', 'News releases', 'Other']

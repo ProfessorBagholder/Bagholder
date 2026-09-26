@@ -14,7 +14,7 @@ describe('the one way to the server', () => {
     const streams = Object.entries(sources)
       .filter(([path, text]) => !path.endsWith('.test.ts') && /new EventSource\(/.test(text))
       .map(([path]) => path)
-    expect(streams).toEqual(['/src/lib/live.ts'])
+    expect(streams).toEqual(['/src/lib/live.svelte.ts'])
   })
 
   // A timer is kept only where there is nothing to wait for instead, and each is argued

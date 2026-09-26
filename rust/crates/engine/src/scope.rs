@@ -550,18 +550,27 @@ fn kpi(closed: &[&TradeFig], parts: &[&Fig<Money>]) -> Kpi {
     }
 }
 
-/// Everything one filter set produces.
-#[allow(clippy::too_many_arguments)]
-pub fn scope(
-    f: &Filters,
-    inputs: &Inputs,
-    trades: &[TradeFig],
-    positions: &[PositionFig],
-    cash_rows: &[CashRow],
-    rates: &BTreeMap<InstrumentId, PayerRate>,
-    equity: &BTreeMap<AccountId, AccountEquity>,
-    benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>,
-) -> Scoped {
+/// The dashboard's part of a filter set: everything that follows from the
+/// trades in scope and the accounts' values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dashboard {
+    pub kpi: Kpi,
+    pub monthly: Vec<MonthBar>,
+    pub by_underlying: Vec<UnderlyingRow>,
+    pub grades: Vec<GradeBucket>,
+    pub ungraded: usize,
+    pub queue: Vec<(TradeKey, Missing)>,
+    pub equity: EquityBlock,
+    pub pnl_curve: PnlCurve,
+}
+
+/// The trades a filter set shows, in the engine's order.
+pub fn trades_in_scope(f: &Filters, inputs: &Inputs, trades: &[TradeFig]) -> Vec<TradeKey> {
+    trades.iter().filter(|t| trade_matches(f, inputs, t)).map(|t| t.key.clone()).collect()
+}
+
+/// The dashboard under a filter set.
+pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTreeMap<AccountId, AccountEquity>, benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>) -> Dashboard {
     let today = inputs.clock.today;
     let in_scope: Vec<&TradeFig> = trades.iter().filter(|t| trade_matches(f, inputs, t)).collect();
     // closed trades whose close is in the dates: what the statistics count
@@ -630,22 +639,57 @@ pub fn scope(
         .collect();
     queue.sort_by(|a, b| b.0.closed_on.cmp(&a.0.closed_on));
 
-    let portfolio = portfolio(f, inputs, positions);
-    let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
     let equity = equity_block(f, equity, benchmarks, today);
     let pnl_curve = pnl_curve(&parts.iter().map(|(_, r)| *r).collect::<Vec<_>>());
-    Scoped {
+    Dashboard {
         pnl_curve,
         kpi: kpi(&closed, &parts.iter().map(|(_, r)| &r.pnl_cad).collect::<Vec<_>>()),
-        trades: in_scope.iter().map(|t| t.key.clone()).collect(),
         monthly,
         by_underlying,
         grades,
         ungraded,
         queue: queue.into_iter().map(|(t, m)| (t.key.clone(), m)).collect(),
+        equity,
+    }
+}
+
+/// The holdings' part of a filter set.
+pub fn portfolio_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfolio {
+    portfolio(f, inputs, positions)
+}
+
+/// The cashflow's part of a filter set, over the holdings' part.
+pub fn cashflow_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig], cash_rows: &[CashRow], rates: &BTreeMap<InstrumentId, PayerRate>, portfolio: &Portfolio) -> Cashflow {
+    cashflow(f, inputs, positions, cash_rows, rates, portfolio)
+}
+
+/// Everything one filter set produces.
+#[allow(clippy::too_many_arguments)]
+pub fn scope(
+    f: &Filters,
+    inputs: &Inputs,
+    trades: &[TradeFig],
+    positions: &[PositionFig],
+    cash_rows: &[CashRow],
+    rates: &BTreeMap<InstrumentId, PayerRate>,
+    equity: &BTreeMap<AccountId, AccountEquity>,
+    benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>,
+) -> Scoped {
+    let d = dashboard(f, inputs, trades, equity, benchmarks);
+    let portfolio = portfolio(f, inputs, positions);
+    let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
+    Scoped {
+        trades: trades_in_scope(f, inputs, trades),
+        kpi: d.kpi,
+        monthly: d.monthly,
+        by_underlying: d.by_underlying,
+        grades: d.grades,
+        ungraded: d.ungraded,
+        queue: d.queue,
+        pnl_curve: d.pnl_curve,
+        equity: d.equity,
         portfolio,
         cashflow,
-        equity,
     }
 }
 

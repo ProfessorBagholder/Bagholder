@@ -5,7 +5,7 @@
 // with its source, or an external url). Drives the timestamp word and the click
 // target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
 import { call } from '../api'
-import { watchDoc, type Holder } from '../live'
+import { watchDoc, type Holder } from '../live.svelte'
 import { arrived } from './channel.svelte'
 
 export interface NoteExtra {

@@ -98,9 +98,12 @@ pub struct Figures {
     /// Something changed that can make a read due (a zone stated, the record
     /// changed): the scheduler looks again at once (`due`).
     wake: std::sync::atomic::AtomicBool,
-    /// Counts each change to the figures, so a page's stream rebuilds its
-    /// document only when one moved.
+    /// Counts each change to the figures.
     version: std::sync::atomic::AtomicU64,
+    /// What each of the latest changes moved, by the version it made: what a
+    /// page's subscriptions are brought forward by (`moved_since`). `None` is a
+    /// change that moved everything (the engine built again).
+    log: std::sync::Mutex<std::collections::VecDeque<(u64, Option<Moved>)>>,
     /// What the page calls each instrument by the broker, read once per record.
     names: RwLock<Option<crate::wire::build::Names>>,
     /// Told of every commit to the cache on a connection `cache` hands out (the
@@ -123,7 +126,7 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), names: RwLock::new(None), heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None) };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
@@ -145,7 +148,7 @@ impl Figures {
         settle_trades(&book, &mut e, now)?;
         *self.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
         *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
-        self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.logged(None);
         self.wake();
         Ok(())
     }
@@ -196,9 +199,41 @@ impl Figures {
 
     fn moved(&self, m: Moved) -> Moved {
         if !m.is_empty() {
-            self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.logged(Some(m.clone()));
         }
         m
+    }
+
+    /// A change made: the next version, and what it moved kept for the pages.
+    fn logged(&self, m: Option<Moved>) {
+        let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let v = self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        log.push_back((v, m));
+        while log.len() > LOGGED {
+            log.pop_front();
+        }
+    }
+
+    /// What moved after version `v`: nothing, the entities the engine reported, or
+    /// everything (the engine was built again, or `v` is older than what is kept).
+    pub fn moved_since(&self, v: u64) -> Since {
+        let log = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let now = self.version();
+        if v >= now {
+            return Since::Nothing;
+        }
+        match log.front() {
+            Some((first, _)) if *first <= v + 1 => {}
+            _ => return Since::Everything,
+        }
+        let mut all = Moved::default();
+        for (_, m) in log.iter().filter(|(at, _)| *at > v) {
+            match m {
+                Some(m) => all.merge(m.clone()),
+                None => return Since::Everything,
+            }
+        }
+        Since::Moved(all)
     }
 
     /// The broker's names for the instruments, read from the book once per record.
@@ -257,7 +292,8 @@ impl Figures {
                 let mut e = build(&book, &self.cache()?, clock(&zone, now)?)?;
                 settle_trades(&book, &mut e, now)?;
                 *engine = Some(e);
-                self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(engine);
+                self.logged(None);
                 Ok(Moved::default())
             }
             Some(e) if changed => {
@@ -370,9 +406,19 @@ impl Figures {
 }
 
 fn merge(into: &mut Moved, more: Moved) {
-    for (entity, fields) in more.0 {
-        into.0.entry(entity).or_default().extend(fields);
-    }
+    into.merge(more)
+}
+
+/// How many changes are kept for the pages to be brought forward by: a page
+/// further behind is sent its subscriptions whole.
+const LOGGED: usize = 256;
+
+/// What moved after a version (`Figures::moved_since`).
+#[derive(Debug, PartialEq)]
+pub enum Since {
+    Nothing,
+    Moved(Moved),
+    Everything,
 }
 
 

@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { positions } from './subs.svelte'
   import type { Options } from './model'
   import {
     filters, resetFilters, FIELDS, PRESETS, dateLabel, listSummary, rangeSummary, clearField,
     type ListKey, type RangeKey, type Field,
   } from './filters.svelte'
-  import { setFilters, refilter, store } from './state.svelte'
+  import { setFilters, refilter } from './state.svelte'
+  import { use, filtered } from './subs.svelte'
   import { openTicket } from './ticket/ticket.svelte'
   import { goSub } from './router.svelte'
   import { symText, bareSymbol } from './sym'
@@ -36,13 +38,14 @@
     if (wrap && !wrap.contains(e.target as Node)) onclose()
   }
 
+  // the holdings, for a row's Sell: shown while the popover is
+  use('positions', positions, filtered)
+
   // ---- the book's knowledge of an instrument, for the row's Buy/Sell ----
   function tkLookup(instrument: string): { securityId: string; kind: string; hasPosition: boolean } {
-    const m = store.model
-    const pos = (m?.positions ?? []).find((p) => p.instrument === instrument) ?? null
-    const t = pos ?? (m?.trades ?? []).find((x) => x.instrument === instrument) ?? null
-    const kind = options.instruments.find((i) => i.id === instrument)?.kind ?? ''
-    return { securityId: t?.security ?? '', kind, hasPosition: !!pos }
+    const pos = (positions.data?.positions ?? []).find((p) => p.instrument === instrument) ?? null
+    const known = options.instruments.find((i) => i.id === instrument)
+    return { securityId: pos?.security || known?.security || '', kind: known?.kind ?? '', hasPosition: !!pos }
   }
 
   // ---- external symbol search ----
@@ -207,7 +210,7 @@
   // A symbol row goes to its ticker's page: the holding's where the book holds the instrument, the listing's own otherwise.
   function listingOpen(symbol: string, exchange: string, instrument = '', kind = '') {
     onclose()
-    const held = instrument ? store.model?.positions.find((p) => p.instrument === instrument) : undefined
+    const held = instrument ? positions.data?.positions.find((p) => p.instrument === instrument) : undefined
     if (held) goSub('portfolio', held.id)
     else goSub('markets', rememberListing({ symbol, exchange, kind }))
   }

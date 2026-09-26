@@ -1,12 +1,14 @@
 <script lang="ts">
   import { roll } from './actions/roll'
-  import type { Model, Partial } from './model'
+  import type { CashflowDoc, Partial } from './model'
   import { money, money0, signedMoney, pctPlain, qty, px, color, waiting } from './fmt'
   import { absBelow, plot, sign, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { more } from './subs.svelte'
+  import { atEnd } from './actions/atEnd'
 
-  let { model }: { model: Model } = $props()
+  let { model }: { model: CashflowDoc } = $props()
 
   const MON_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
   function monthLong(key: string): string {
@@ -60,8 +62,8 @@
     return v != null && typeof v === 'object' && 'leftOut' in v ? (v as Partial).total : v
   }
   const holdings = $derived(sortRows(c.holdings || [], sort.yoc.key, sort.yoc.dir, (r, k) => sortValue(r as unknown as Record<string, unknown>, k)))
-  // a day's payments by symbol, then account, whichever column is sorted
-  const rows = $derived(sortRows(c.rows || [], sort.cash.key, sort.cash.dir, (r, k) => (r as unknown as Record<string, unknown>)[k], ['symbol', 'account']))
+  // sorted by the server as the header says, as far down as scrolled
+  const rows = $derived(c.rows || [])
 
   const pie = $derived({ total: c.incomeTotal, items: (c.income || []).map((x, i) => ({ symbol: x.label, v: x.value, share: x.share, color: PIE(i) })) })
   const pieFmt = (v: Fig<Dec>) => (waits(v) ? waiting(v) : money0(v) + '/mo')
@@ -269,6 +271,7 @@
             {/if}
           </tbody>
         </table>
+        {#if rows.length < model.rowsTotal}<div use:atEnd={() => more('cash', model.rowsTotal)} style="height:1px"></div>{/if}
       </div>
     </div>
   </div>

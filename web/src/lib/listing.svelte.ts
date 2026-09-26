@@ -11,7 +11,7 @@
 import { lookup } from './api'
 import { bareSymbol } from './sym'
 import { localDay } from './fmt'
-import type { Fill, Model, Trade } from './model'
+import type { Fill, Markets, Trade } from './model'
 
 interface Known {
   symbol: string
@@ -53,11 +53,11 @@ export function rememberListing(o: { symbol: string; exchange?: string | null; c
 }
 
 /** The listing standing in for a trade on the detail page. */
-export function listingAsTrade(id: string, model: Model | null): Trade | null {
+export function listingAsTrade(id: string, markets: Markets | null): Trade | null {
   if (!isListingId(id)) return null
   const l = entry(id)
   // the quote the model already keeps for a watched listing, which moves with it
-  const w = model?.markets.watchlist.find((x) => listingId(x) === id)
+  const w = markets?.watchlist.find((x) => listingId(x) === id)
   const watched = w && w.last != null
   const since = localDay(new Date(Date.now() - LISTING_DAYS * 86400000))
   return {

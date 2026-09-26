@@ -4,10 +4,10 @@
 // whether it acts, its value and each leg's amount as exact decimal text, each leg's
 // word. The page only writes them out in the card grammar; it works nothing out.
 
+import { book } from '../subs.svelte'
 import { filters } from '../filters.svelte'
-import { store } from '../state.svelte'
 import { flash } from '../ui.svelte'
-import { watchDoc } from '../live'
+import { watchDoc } from '../live.svelte'
 import { draftStore, type TicketDraft } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
 import { plain } from '../ticket/vals'
@@ -207,7 +207,7 @@ export function draftCard(d: TicketDraft): { d: TicketDraft; line: string; legs:
 }
 
 // the accounts in scope, from the page's filter, which names each by its id
-function ordersScope() { const on = filters.lists.account; return (store.model?.accounts ?? []).filter((a) => on.includes(a.id)) }
+function ordersScope() { const on = filters.lists.account; return (book.data?.accounts ?? []).filter((a) => on.includes(a.id)) }
 // a card names its account by the broker's id for it
 export function inOrdersScope(brokerAccount: string): boolean { return !filters.lists.account.length || ordersScope().some((a) => a.brokerAccount === brokerAccount) }
 export function ordersScopeLabel(): string { const s = ordersScope(); return s.length ? s.map((a) => a.name).join(', ') : 'All Accounts' }

@@ -490,6 +490,10 @@ pub struct InstrumentOption {
     pub exchange: String,
     pub kind: String,
     pub currency: String,
+    /// The broker's id for it, which an order names; empty where none is known.
+    pub security: String,
+    /// The accounts that traded or hold it, by id.
+    pub accounts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
@@ -506,18 +510,31 @@ pub struct Options {
 }
 
 // --------------------------------------------------------------------------
-// the document
+// the documents, one per screen (`docs/plans/stage-5-interface-and-running.md`, A)
 // --------------------------------------------------------------------------
 
-/// Everything the page shows of the book, for one set of filters.
+/// What every screen reads of the book as a whole, whatever the filters: the
+/// header's day, the first-run page's count, the filters' choices, the accounts
+/// and what waits on the person.
 #[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
-pub struct Figures {
+pub struct BookDoc {
     /// Today, in the person's zone.
     pub today: String,
     /// Transactions on the record: none is the first-run page.
     pub activity_count: usize,
     pub options: Options,
+    pub accounts: Vec<Account>,
+    /// Σ the accounts' values, for the ticket's share of it.
+    pub nav_total: Option<Fig<Dec>>,
+    /// What waits on the person, whatever the filters.
+    pub waiting: Vec<Waiting>,
+}
+
+/// The Dashboard under the page's filters.
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardDoc {
     pub kpi: Kpi,
     pub equity: Equity,
     pub years: Vec<YearRow>,
@@ -526,17 +543,57 @@ pub struct Figures {
     pub by_symbol: Vec<BySymbolRow>,
     pub grades: Grades,
     pub queue: Vec<QueueRow>,
-    pub trades: Vec<Trade>,
-    pub positions: Vec<Position>,
+}
+
+/// The holdings under the page's filters, and their totals.
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct PositionsDoc {
     pub portfolio: Portfolio,
+    pub positions: Vec<Position>,
+}
+
+/// The trades under the page's filters, in the order the page sorts them by, as
+/// far down the list as the page has scrolled.
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct TradesDoc {
+    /// How many trades the filters show, all of them.
+    pub total: usize,
+    pub trades: Vec<Trade>,
+}
+
+/// The Cashflow tab under the page's filters, its dividends as far down the list
+/// as the page has scrolled.
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct CashflowDoc {
     pub cashflow: Cashflow,
-    pub accounts: Vec<Account>,
-    /// Σ the accounts' values, for the ticket's share of it.
-    pub nav_total: Option<Fig<Dec>>,
-    /// What waits on the person, whatever the filters.
-    pub waiting: Vec<Waiting>,
-    /// The market around the book, from its readers (`context`).
-    pub markets: super::context::Markets,
+    /// How many dividends the filters show, all of them.
+    pub rows_total: usize,
+}
+
+/// One trade or holding, by its id, whatever the filters: the page it opens.
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeDoc {
+    /// The id asked for: a document for it with neither is one the figures do not have.
+    pub id: String,
+    pub trade: Option<Trade>,
+    pub position: Option<Position>,
+}
+
+/// The Portfolio's sectors and regions under the page's filters.
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureDoc {
     pub sectors: Vec<super::context::ExposureSlice>,
     pub regions: Vec<super::context::ExposureSlice>,
+}
+
+/// The Markets tab: the market around the book (`context`).
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketsDoc {
+    pub markets: super::context::Markets,
 }

@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { store, refilter, resync, loadDetail } from './lib/state.svelte'
-  import { disconnect } from './lib/live'
+  import { start, refilter, loadDetail } from './lib/state.svelte'
+  import { conn, connect, disconnect } from './lib/live.svelte'
+  import { status as statusSlot, book, dashboard, positions, trades, cashflow, exposure, markets, trade, use, filtered, limits } from './lib/subs.svelte'
+  import { sort } from './lib/sort.svelte'
   import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
   import { symText } from './lib/sym'
@@ -93,7 +95,7 @@
     // the popover already open on one field, returns it to the search
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
       e.preventDefault()
-      if (!store.model) return // nothing to search yet
+      if (!book.data) return // nothing to search yet
       ui.menuOpen = false
       filterField = 'fields'
       filterOpen = true
@@ -148,15 +150,40 @@
     }
   }
 
-  const status = $derived(store.model?.status ?? null)
+  // What the screen on show reads, and only that (docs/architecture.md §13): the header's
+  // status and the book as a whole always, each tab's figures while it is open, one
+  // trade or holding while its page is. The filters and a list's order and length are
+  // the subscriptions' parameters.
+  use('status', statusSlot, filtered)
+  use('book', book)
+  const detailTab = $derived(!route.heat && !!route.sub && (route.tab === 'trades' || route.tab === 'portfolio'))
+  use(() => (!route.heat && route.tab === 'dashboard' ? 'dashboard' : null), dashboard, filtered)
+  use(() => (!route.heat && (route.tab === 'portfolio' || route.tab === 'markets') ? 'positions' : null), positions, filtered)
+  use(() => (!route.heat && route.tab === 'portfolio' && !route.sub ? 'exposure' : null), exposure, filtered)
+  use(() => (route.heat || route.tab === 'markets' ? 'markets' : null), markets, filtered)
+  use(() => (!route.heat && route.tab === 'trades' && !route.sub ? 'trades' : null), trades, () => ({ ...filtered(), sort: $state.snapshot(sort.trades), limit: limits.trades }))
+  use(() => (!route.heat && route.tab === 'cashflow' ? 'cashflow' : null), cashflow, () => ({ ...filtered(), sort: $state.snapshot(sort.cash), limit: limits.cash }))
+  use(() => (detailTab ? 'trade:' + route.sub : null), trade)
+
+  const status = $derived(statusSlot.data)
   const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
 
   // The detail the address names: a holding under Portfolio, a trade under Trades, each by its id.
-  const selHolding = $derived(route.tab === 'portfolio' && route.sub ? store.model?.positions.find((p) => p.id === route.sub) ?? null : null)
+  const shown = $derived(detailTab && trade.data?.id === route.sub ? trade.data : null)
+  const selHolding = $derived(route.tab === 'portfolio' ? shown?.position ?? null : null)
   const sel = $derived.by<import('./lib/model').Trade | null>(() => {
     if (selHolding) return holdingAsTrade(selHolding)
-    if (route.tab !== 'trades' || !route.sub || !store.model) return null
-    return store.model.trades.find((t) => t.id === route.sub) ?? null
+    if (route.tab !== 'trades') return null
+    return shown?.trade ?? null
+  })
+  // what the tab on show reads has arrived: until it has, its silhouette
+  const tabReady = $derived.by(() => {
+    if (detailTab) return !!shown
+    if (route.tab === 'dashboard') return !!dashboard.data
+    if (route.tab === 'cashflow') return !!cashflow.data
+    if (route.tab === 'portfolio') return !!positions.data && !!exposure.data
+    if (route.tab === 'trades') return !!trades.data
+    return !!markets.data && !!positions.data
   })
   // the heatmap on its own: no header, no tabs, no frame
   $effect(() => {
@@ -167,9 +194,9 @@
     document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ui.ordersOpen || ui.notesOpen))
   })
   // nothing to show yet: every tab is the first-run page, which carries a sync error itself
-  const showingEmpty = $derived(!!store.model && !store.model.activityCount)
+  const showingEmpty = $derived(!!book.data && !book.data.activityCount)
   // a listing the book does not hold: its own page, under Markets
-  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, store.model) : null)
+  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, markets.data?.markets ?? null) : null)
   $effect(() => {
     if (route.tab !== 'markets' || !isListingId(route.sub)) return
     loadListing(route.sub!, (positionId) => {
@@ -251,8 +278,8 @@
   }
 
   onMount(() => {
-    // one connection: the whole view once, then only what changes in it (live.ts)
-    refilter()
+    // one connection: each screen's data once, then only what changes in it (live.svelte.ts)
+    const stopStream = start()
     const stopRouter = startRouter()
     const stopNotes = showNotifications()
     const stopCutTip = startCutTip()
@@ -264,22 +291,30 @@
       stopCutTip()
       stopScrollbars()
       stopConnect()
-      disconnect()
+      stopStream()
     }
   })
 
   // The legs and fills of the trade or holding that is open are asked for when it
   // opens -- that one row's detail, not the model again.
+  // Asked again when that trade's own document changed (a fill, a correction).
   $effect(() => {
-    loadDetail(route.sub && (route.tab === 'trades' || route.tab === 'portfolio') ? route.sub : null)
+    void shown?.trade
+    void shown?.position
+    void trade.v
+    loadDetail(detailTab && shown ? route.sub : null)
   })
+  function reconnect(): void {
+    disconnect()
+    connect()
+  }
 </script>
 
 <svelte:window onkeydown={onKey} onpointerdown={onDocPointerDown} />
 
-{#if route.heat && !showingEmpty && !(store.error && !store.model)}
-  {#if store.model}
-    <Heatmap markets={store.model.markets} alone />
+{#if route.heat && !showingEmpty && !(conn.error && !markets.data)}
+  {#if markets.data}
+    <Heatmap markets={markets.data.markets} alone />
   {:else}
     <!-- a wall display starting up: the window is the heatmap's from the first frame -->
     <div id="heatFull" aria-hidden="true"><div class="bhsk" style="width:220px;height:22px"></div><div class="bhsk" style="flex:1;min-height:0;border-radius:5px;animation-delay:120ms"></div></div>
@@ -326,7 +361,7 @@
           <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
         </button>
         {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
-        {#if filterOpen && store.model}{#key filterOpened}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
+        {#if filterOpen && book.data}{#key filterOpened}<FilterPopover options={book.data.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
       </div>
       <div style="position:relative;flex:none" bind:this={menuWrap}>
         <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>
@@ -354,7 +389,7 @@
     {/if}
     <div style="margin-left:auto;min-width:0;display:flex;align-items:center;gap:7px;padding:6px 0">
       <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;overflow-x:auto;padding-bottom:1px">
-        {#each chips(store.model?.options) as c (c.key)}
+        {#each chips(book.data?.options) as c (c.key)}
           <span class="chip"><span class="cf">{c.field}</span><button class="cv" onclick={() => editChip(c.key)}>{c.value}</button><button class="cx" aria-label="Remove filter" onclick={() => removeChip(c.key)}>×</button></span>
         {/each}
       </div>
@@ -363,26 +398,26 @@
 
   <!-- page -->
   <div id="page" style="position:relative">
-    {#if !store.model}
-      {#if store.error}
-        <div class="empty"><div class="status-err">{store.error}</div><button class="btn btn-secondary" onclick={resync}>Retry</button></div>
+    {#if !book.data || !(showingEmpty || tabReady)}
+      {#if conn.error}
+        <div class="empty"><div class="status-err">{conn.error}</div><button class="btn btn-secondary" onclick={reconnect}>Retry</button></div>
       {:else}
         <div out:lift><Skeleton tab={route.tab} /></div>
       {/if}
     {:else}
     <div use:arrive>
     {#if showingEmpty}
-      <Empty status={store.model.status} />
-    {:else if route.tab === 'dashboard'}
-      <Dashboard model={store.model} />
-    {:else if route.tab === 'cashflow'}
-      <Cashflow model={store.model} />
+      {#if status}<Empty {status} />{/if}
+    {:else if route.tab === 'dashboard' && dashboard.data}
+      <Dashboard model={dashboard.data} />
+    {:else if route.tab === 'cashflow' && cashflow.data}
+      <Cashflow model={cashflow.data} />
     {:else if route.tab === 'portfolio'}
-      {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else}<Portfolio model={store.model} />{/if}
+      {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else if positions.data && exposure.data}<Portfolio model={positions.data} exposure={exposure.data} />{/if}
     {:else if route.tab === 'trades'}
-      {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
+      {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else if trades.data}<Trades doc={trades.data} />{/if}
     {:else if route.tab === 'markets'}
-      {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else}<Markets markets={store.model.markets} />{/if}
+      {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else if markets.data}<Markets markets={markets.data.markets} />{/if}
     {/if}
     </div>
     {/if}

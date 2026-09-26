@@ -8,7 +8,7 @@ import type { FilingsDoc, Filing, Trade } from '../model'
 
 // the stream is stood in for: what the card watches is handed straight to it
 const holders: { data: FilingsDoc | null }[] = []
-vi.mock(import('../live'), async (original) => ({
+vi.mock(import('../live.svelte'), async (original) => ({
   ...(await original()),
   watchDoc: ((_key: string, _params: unknown, holder: { data: FilingsDoc | null }) => {
     holders.push(holder)

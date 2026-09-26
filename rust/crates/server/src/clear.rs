@@ -205,6 +205,8 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
         }
     }
     book.clear(&book_clearing(kinds)).map_err(|e| Refused::Failed(e.to_string()))?;
+    // what a page kept of the book as it was is not shown again
+    book.renew_id(now).map_err(|e| Refused::Failed(e.to_string()))?;
     if kinds.contains(&Kind::Market) {
         clear_cache(&f.cache().map_err(Refused::Failed)?).map_err(Refused::Failed)?;
     }

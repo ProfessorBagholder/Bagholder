@@ -6,8 +6,8 @@
   import type { FearDoc } from '../generated/markets'
   import { relTime } from '../fmt'
   import { n2, shortDay } from './util'
-  import { watchDoc } from '../live'
-  import { store } from '../state.svelte'
+  import { watchDoc } from '../live.svelte'
+  import { book } from '../subs.svelte'
   import Mseg from './Mseg.svelte'
 
   const INDEX_OPTS = [['stocks', 'Stocks'], ['crypto', 'Crypto']] as const
@@ -45,7 +45,7 @@
   // publisher is being read; only a read that has answered with nothing is said so
   const held = $derived({ loading: !docs[fearIndex]?.data || !!docs[fearIndex]?.data?.reading, rec: docs[fearIndex]?.data?.gauge ?? null })
   const g = $derived(held.rec)
-  const today = $derived(String((store.model as unknown as { today?: string } | null)?.today || ''))
+  const today = $derived(book.data?.today ?? '')
   const when = $derived.by(() => {
     if (!g || !g.asOf) return ''
     return String(g.asOf).slice(0, 10) === today ? relTime(g.asOf) : shortDay(String(g.asOf).slice(0, 10))

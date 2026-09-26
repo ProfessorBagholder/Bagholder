@@ -5,21 +5,40 @@ export async function ready(page: Page): Promise<void> {
   await expect(page.locator('#page > [data-arrived]')).toBeVisible()
 }
 
-/**
- * The figures document the page is sent, under `filters` (none by default): money,
- * quantities and prices as exact decimal text, a figure that waits as `{ gaps }`,
- * accounts and instruments by their ids (web/src/lib/generated/figures.ts).
- */
+/** One screen's document, exactly as a page subscribing to it is first sent it (GET /api/view). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function figures(request: APIRequestContext, filters?: Record<string, unknown>): Promise<any> {
-  const r = await request.get('/api/figures' + (filters ? '?filters=' + encodeURIComponent(JSON.stringify(filters)) : ''))
+export async function view(request: APIRequestContext, key: string, params: Record<string, unknown> = {}): Promise<any> {
+  const r = await request.get('/api/view?key=' + encodeURIComponent(key) + '&params=' + encodeURIComponent(JSON.stringify(params)))
   expect(r.ok(), await r.text()).toBeTruthy()
   return r.json()
 }
 
 /**
- * The model document as the stream sends it: the figures, with the header's status
- * beside them (the server's own status, less the versions only the stream reads).
+ * Everything the page shows of the book under `filters` (none by default), each
+ * screen's document read as the page is sent it and put side by side under the
+ * names the page reads them by: money, quantities and prices as exact decimal text,
+ * a figure that waits as `{ gaps }`, accounts and instruments by their ids
+ * (web/src/lib/generated/figures.ts). Every trade and dividend, not a page of them.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function figures(request: APIRequestContext, filters?: Record<string, unknown>): Promise<any> {
+  const f = filters ? { filters } : {}
+  const all = { ...f, limit: 1_000_000 }
+  const [book, dashboard, positions, trades, cashflow, exposure, markets] = await Promise.all([
+    view(request, 'book'),
+    view(request, 'dashboard', f),
+    view(request, 'positions', f),
+    view(request, 'trades', all),
+    view(request, 'cashflow', all),
+    view(request, 'exposure', f),
+    view(request, 'markets', f),
+  ])
+  return { ...book, ...dashboard, ...positions, trades: trades.trades, cashflow: cashflow.cashflow, ...exposure, markets: markets.markets }
+}
+
+/**
+ * The page's documents as the stream sends them, with the header's status (the
+ * server's own status, less the versions only the stream reads).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function modelDoc(request: APIRequestContext, status: Record<string, unknown> = {}): Promise<any> {
@@ -29,17 +48,72 @@ export async function modelDoc(request: APIRequestContext, status: Record<string
   return model
 }
 
-/** A stream body that sends `model` as the whole view, then each of `docs` as its own document. */
+/**
+ * The documents a page is sent, made from `model` (as `modelDoc` gives it): the
+ * status, the book, each screen's, and one for each trade and holding by its id.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function docsOf(model: any): Record<string, unknown> {
+  const pick = (...keys: string[]) => Object.fromEntries(keys.filter((k) => k in model).map((k) => [k, model[k]]))
+  const out: Record<string, unknown> = {
+    status: model.status,
+    book: pick('today', 'activityCount', 'options', 'accounts', 'navTotal', 'waiting'),
+    dashboard: pick('kpi', 'equity', 'years', 'benchmark', 'monthly', 'bySymbol', 'grades', 'queue'),
+    positions: pick('portfolio', 'positions'),
+    trades: { total: (model.trades ?? []).length, trades: model.trades ?? [] },
+    cashflow: { cashflow: model.cashflow, rowsTotal: (model.cashflow?.rows ?? []).length },
+    exposure: pick('sectors', 'regions'),
+    markets: { markets: model.markets },
+  }
+  for (const t of model.trades ?? []) out['trade:' + t.id] = { id: t.id, trade: t, position: (model.positions ?? []).find((p: { id: string }) => p.id === t.position) ?? null }
+  for (const p of model.positions ?? []) out['trade:' + p.id] = { id: p.id, trade: null, position: p }
+  return out
+}
+
+/** A stream body that sends `model`'s documents (`docsOf`), then each of `docs` as its own document. */
 export function streamBody(model: unknown, docs: Record<string, unknown> = {}, tail = ''): string {
-  const others = Object.entries(docs).map(([doc, data]) => `event: snapshot\ndata: ${JSON.stringify({ doc, data })}\n\n`).join('')
-  return `retry: 200\nevent: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: model })}\n\n${others}${tail}`
+  const all = { ...docsOf(model), ...docs }
+  const each = Object.entries(all).map(([doc, data]) => `event: snapshot\ndata: ${JSON.stringify({ doc, data, v: 'test' })}\n\n`).join('')
+  return `retry: 200\nevent: hello\ndata: {"id":1,"book":"test"}\n\n${each}${tail}`
+}
+
+/**
+ * Every set of subscriptions the page tells the server it shows, in order: the ones it
+ * opens its stream naming (GET /api/events?docs=…), then each change it says
+ * (POST /api/events/watch). Each is the subscriptions' keys and their parameters.
+ */
+export function saidShown(page: Page): Record<string, unknown>[] {
+  const said: Record<string, unknown>[] = []
+  page.on('request', (r) => {
+    const u = new URL(r.url())
+    if (r.method() === 'GET' && u.pathname === '/api/events') said.push(JSON.parse(u.searchParams.get('docs') || '{}'))
+    if (r.method() === 'POST' && u.pathname === '/api/events/watch') said.push((r.postDataJSON() as { docs: Record<string, unknown> }).docs)
+  })
+  return said
+}
+
+/** The keys of what the page last said it shows. */
+export function following(page: Page): () => string[] {
+  const said = saidShown(page)
+  return () => Object.keys(said[said.length - 1] ?? {}).sort()
+}
+
+/**
+ * A stream stood in for: the page's stream answers `body`, and what the page says it
+ * shows is taken (the stream it names is not the server's own).
+ */
+export async function standIn(page: Page, body: string | (() => string)): Promise<void> {
+  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: typeof body === 'string' ? body : body() }))
+  // a spec's own handler for it, registered before, answers first
+  await page.route('**/api/events/watch', (route) => route.fallback())
 }
 
 /**
  * Open the page on the real book, with the header's status changed as given. The
- * server's own stream is stood in for by one snapshot: what a status the test cannot
- * bring about for real (an update on offer, a server of another protocol) looks like.
- * `docs` are documents (the orders, a listing's filings) sent the same way.
+ * server's own stream is stood in for by one snapshot of each document: what a
+ * status the test cannot bring about for real (an update on offer, a server of
+ * another protocol) looks like. `docs` are documents (the orders, a listing's
+ * filings) sent the same way.
  */
 export async function openWithStatus(
   page: Page,
@@ -53,8 +127,7 @@ export async function openWithStatus(
   const model = await modelDoc(request, status)
   change(model)
   // a document is sent with every (re)connection, so one the page asks for later reaches it on the next
-  const body = streamBody(model, docs)
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
+  await standIn(page, streamBody(model, docs))
   await page.goto('/' + hash)
 }
 

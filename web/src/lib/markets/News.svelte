@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { positions, markets } from '../subs.svelte'
   import { keyed } from '../keys'
   // The News card (newsCardHtml): the tabbed card — Stories / Releases /
   // Disclosures — with a scope segment, a symbol chip, a search box, and one line
@@ -7,11 +8,11 @@
   // one listing's /api/filings under a chip).
   import type { NewsItem, NewsTag } from '../model'
   import type { NewsDoc } from '../generated/markets'
-  import { watchDoc } from '../live'
+  import { watchDoc } from '../live.svelte'
   import { signedPct, newsWhen, discDate, newsTextKey } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, sortRows } from '../sort.svelte'
-  import { store } from '../state.svelte'
+  import { book as bookDoc } from '../subs.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import { discFeed, discBySym, showDiscFeed, showDisclosures, discTitleComing, type DiscRow } from './disc.svelte'
   import { titleComing } from '../trade/discStore.svelte'
@@ -95,16 +96,16 @@
   const chipPct = $derived.by<number | null>(() => {
     const only = sym
     if (!only) return null
-    const held = (store.model?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
-    const watched = (store.model?.markets?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
+    const held = (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
+    const watched = (markets.data?.markets.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
     if (held || watched) return null
     return sugQuotes[sugKey(only)]?.percentChange ?? null
   })
 
   // --- filed releases: the issuer's own releases, beside the wires' ---
   function tagOf(s: string, ex: string): NewsTag {
-    const w = (store.model?.markets?.watchlist || []).find((x) => bareSymbol(x.symbol) === s)
-    const p = (store.model?.positions || []).find((x) => bareSymbol(x.symbol) === s)
+    const w = (markets.data?.markets.watchlist || []).find((x) => bareSymbol(x.symbol) === s)
+    const p = (positions.data?.positions || []).find((x) => bareSymbol(x.symbol) === s)
     return { symbol: s, exchange: ex || (p && p.exchange) || (w && w.exchange) || '', held: !!p, watched: !!w, percentChange: p ? (p.percentChange == null ? null : p.percentChange * 100) : w ? w.percentChange : null, positionId: p ? p.id : null }
   }
   function filedReleases(only: Chip | null, sc: string, wire: NewsItem[]): NewsItem[] {
@@ -201,8 +202,8 @@
   $effect(() => {
     const only = sym
     if (!only) return
-    const held = (store.model?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
-    const watched = (store.model?.markets?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
+    const held = (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
+    const watched = (markets.data?.markets.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
     if (held || watched) return
     // asked again only once the one remembered is a minute old
     sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
@@ -220,7 +221,7 @@
         if (query.trim().toUpperCase() !== key) return
         newsChip(only)
         query = ''
-        const items = (store.model?.markets?.news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol))
+        const items = (markets.data?.markets.news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol))
         if (kind !== 'disc' && !items) {
           reading = only.symbol
           call('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
@@ -230,7 +231,7 @@
           })
         }
       }
-      const book = bookListing(key, [...(store.model?.markets?.watchlist || []), ...(store.model?.positions || []), ...(store.model?.trades || [])])
+      const book = bookListing(key, [...(markets.data?.markets.watchlist || []), ...(positions.data?.positions || []), ...(bookDoc.data?.options.instruments || [])])
       if (book) return take(book)
       // a word no directory names as a ticker stays a text search
       searchSymbols(key).then((m) => {
@@ -268,8 +269,8 @@
     if (!left.length) return false
     const has = (s: string) => left.includes(bareSymbol(s).toUpperCase())
     if (sym) return has(sym.symbol)
-    const held = (store.model?.positions ?? []).map((p) => p.symbol)
-    const watched = (store.model?.markets.watchlist ?? []).map((w) => w.symbol)
+    const held = (positions.data?.positions ?? []).map((p) => p.symbol)
+    const watched = (markets.data?.markets.watchlist ?? []).map((w) => w.symbol)
     if (scope === 'holdings') return held.some(has)
     if (scope === 'watchlist') return watched.some(has)
     return kind === 'releases' ? held.concat(watched).some(has) : left.includes('*')

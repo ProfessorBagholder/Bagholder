@@ -39,17 +39,38 @@ grade: string, tags: Array<string>, };
 
 export type JournalAnswer = { ok: true, };
 
-export type FiguresQuery = { 
-/**
- * The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
- */
-filters: string | null, };
-
 export type Resync = { 
 /**
  * the stream this page holds, from its `hello`
  */
 id: number, };
+
+export type TradesQuery = { 
+/**
+ * The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
+ */
+filters: string | null, 
+/**
+ * The column the list is sorted by, as the page's header names it.
+ */
+sort: string | null, 
+/**
+ * `asc` or `desc`.
+ */
+dir: string | null, };
+
+export type ViewQuery = { 
+/**
+ * The subscription's key: `book`, `dashboard`, `positions`, `trades`,
+ * `cashflow`, `exposure`, `markets`, `trade:<id>`.
+ */
+key: string | null, 
+/**
+ * Its parameters, as the JSON a subscription is asked with (`views::Params`).
+ */
+params: string | null, };
+
+export type ViewAnswer = unknown;
 
 export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
 

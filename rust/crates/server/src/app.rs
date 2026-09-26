@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 pub const APP_VERSION: &str = "1.47.0";
 /// Bumped whenever the page and the server change together.
-pub const PROTOCOL: &str = "2026-09-19.1";
+pub const PROTOCOL: &str = "2026-09-26.1";
 /// Bump when title/summary logic improves, so a row that is missing a half is
 /// read again. A row that has both keeps them: a re-read of everything costs a
 /// download and a reading each, which is minutes of a list standing still.
@@ -144,7 +144,7 @@ impl App {
         let events = Arc::new(crate::events::Bus::new());
         let hook = {
             let events = events.clone();
-            std::sync::Arc::new(move || events.signal()) as std::sync::Arc<dyn Fn() + Send + Sync>
+            std::sync::Arc::new(move || events.signal_from(crate::events::Source::Store)) as std::sync::Arc<dyn Fn() + Send + Sync>
         };
         Arc::new(App {
             // the schema and its repairs on the first borrow, and again on the borrow
@@ -196,7 +196,7 @@ impl App {
     /// any change does. Once; a second call leaves the first.
     pub fn set_figures(&self, f: crate::figures::Figures) {
         let events = self.events.clone();
-        f.hear(Arc::new(move || events.signal()));
+        f.hear(Arc::new(move || events.signal_from(crate::events::Source::Cache)));
         let _ = self.figures.set(f);
     }
 

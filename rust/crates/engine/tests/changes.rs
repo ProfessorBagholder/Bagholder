@@ -184,9 +184,33 @@ fn every_change_equals_a_fresh_build_and_says_what_moved() {
         if moved != expected {
             failures.push(format!("{k}: moved {:?}\n   but what differs is {:?}", moved.0, expected.0));
         }
-        if k != "benchmark" && expected.is_empty() {
+        if expected.is_empty() {
             failures.push(format!("{k}: the change moved nothing, so it tests nothing"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The record as a whole and each benchmark are entities of the report too, so a
+/// reader of the report alone knows the accounts, the waiting facts, today and a
+/// benchmark's returns moved.
+#[test]
+fn the_record_as_a_whole_and_each_benchmark_are_reported_when_they_move() {
+    use bagholder_engine::engine::Entity;
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
+    let case: Value = serde_json::from_str(&text).unwrap();
+    let mut b = build(&case);
+    let base = engine(&mut b);
+    for c in every_change(&mut b, &base) {
+        let k = kind(&c);
+        let moved = base.clone().apply(c);
+        let book = moved.0.get(&Entity::Book);
+        match k {
+            "ledger" => assert!(book.is_some_and(|f| f.contains("activity")), "{k}: {:?}", moved.0),
+            "clock" => assert!(book.is_some_and(|f| f.contains("today")), "{k}: {:?}", moved.0),
+            "benchmark" => assert!(moved.0.contains_key(&Entity::Benchmark("SP500".into())), "{k}: {:?}", moved.0),
+            "quote" | "journal" | "groups" | "declared" | "frequency" => assert!(book.is_none(), "{k} moved the record as a whole: {:?}", moved.0),
+            _ => {}
+        }
+    }
 }

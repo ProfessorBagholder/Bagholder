@@ -246,10 +246,10 @@ test('switching the annualized-returns benchmark highlights the new choice, pers
   // the mocked stream reconnects on its own every 200ms with the filters already in
   // force, so only a request naming the new benchmark proves the switch asked again
   const [req] = await Promise.all([
-    page.waitForRequest((r) => r.url().includes('/api/events?filters=') && decodeURIComponent(r.url()).includes('"benchmark":"TSX"')),
+    page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/api/events/watch') && (r.postDataJSON() as { docs: { dashboard?: { filters?: { benchmark?: string } } } }).docs.dashboard?.filters?.benchmark === 'TSX'),
     tsx.click(),
   ])
-  const filters = JSON.parse(new URL(req.url()).searchParams.get('filters') ?? '')
+  const filters = (req.postDataJSON() as { docs: { dashboard: { filters: { benchmark: string } } } }).docs.dashboard.filters
   expect(filters.benchmark).toBe('TSX')
   await expect(tsx).toHaveClass(/\bon\b/)
   await expect(sp500).not.toHaveClass(/\bon\b/)
@@ -427,8 +427,9 @@ test('clicking a By symbol row with one trade opens it; with several it filters 
   const id = closedTrade(await getModel(request))
   let asked: Record<string, unknown> | null = null
   page.on('request', (r) => {
-    const f = new URL(r.url()).searchParams.get('filters')
-    if (r.url().includes('/api/events') && f) asked = JSON.parse(f)
+    if (r.method() !== 'POST' || !r.url().endsWith('/api/events/watch')) return
+    const f = (r.postDataJSON() as { docs: { status?: { filters?: Record<string, unknown> } } }).docs.status?.filters
+    if (f) asked = f
   })
   await openWithStatus(page, request, {}, '', (m) => {
     // a row names its underlying instrument by id; the chip shows the instrument's symbol

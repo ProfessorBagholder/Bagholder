@@ -1,17 +1,31 @@
 import { expect, test, type Page } from '@playwright/test'
 import { ready, figures, openWithStatus } from './helpers'
 
-// SPEC §5, Filters: every field re-asks the server (GET /api/events?filters=…),
+// SPEC §5, Filters: every field re-asks the server (the subscriptions' filters, POST /api/events/watch),
 // narrowing every page; the chips beside the tabs; Clear all; Esc with nothing
 // open; and the ranked order the search box lists its matches in.
 
 async function requestFilters(req: Awaited<ReturnType<Page['waitForRequest']>>): Promise<Record<string, unknown>> {
-  const u = new URL(req.url())
-  return JSON.parse(decodeURIComponent(u.searchParams.get('filters')!))
+  return (req.postDataJSON() as { docs: { status: { filters: Record<string, unknown> } } }).docs.status.filters
 }
 
+const filtersOf = (r: { postDataJSON(): unknown }) => JSON.stringify((r.postDataJSON() as { docs: { status?: { filters?: unknown } } }).docs.status?.filters ?? null)
+const isWatch = (r: { method(): string; url(): string }) => r.method() === 'POST' && r.url().endsWith('/api/events/watch')
+// the filters each page last said it shows under
+const said = new WeakMap<Page, string>()
+function follow(page: Page): void {
+  if (said.has(page)) return
+  said.set(page, '')
+  page.on('request', (r) => { if (isWatch(r)) said.set(page, filtersOf(r)) })
+}
+
+test.beforeEach(({ page }) => follow(page))
+
+/** The page saying what it shows under filters other than those it said last (a stream standing in reconnects, and says the same again). */
 function eventsRequest(page: Page) {
-  return page.waitForRequest((r) => r.url().includes('/api/events?filters='))
+  follow(page)
+  const was = said.get(page)
+  return page.waitForRequest((r) => isWatch(r) && filtersOf(r) !== was)
 }
 
 /** Open the funnel, pick one field from the fields list, pick one value from it, and close with Done. */

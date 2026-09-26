@@ -1,6 +1,6 @@
 <script lang="ts">
   import { roll } from './actions/roll'
-  import type { Model } from './model'
+  import type { PositionsDoc, ExposureDoc } from './model'
   import { money0, signedMoney, pct, pctPlain, px, cls, color, waiting } from './fmt'
   import { waits } from './dec'
   import { symText } from './sym'
@@ -8,7 +8,7 @@
   import { goSub, keepScroll } from './router.svelte'
   import Donut, { type DonutItem } from './Donut.svelte'
 
-  let { model }: { model: Model } = $props()
+  let { model, exposure }: { model: PositionsDoc; exposure: ExposureDoc } = $props()
   const pf = $derived(model.portfolio)
 
   // --- tiles (portfolioTilesHtml) ---
@@ -79,8 +79,8 @@
   // the classified names the positions cover: the server's `Other (n)` counts as its n
   const expCount = (rows: ExpRow[]) =>
     String(rows.filter((x) => x.name !== UNCLASSIFIED && x.value > 0).reduce((n, x) => n + (Number(/^Other \((\d+)\)$/.exec(x.name)?.[1]) || 1), 0))
-  const sec = $derived(exposureSlices(model.sectors))
-  const reg = $derived(exposureSlices(model.regions))
+  const sec = $derived(exposureSlices(exposure.sectors))
+  const reg = $derived(exposureSlices(exposure.regions))
 
   // --- Holdings table ---
   type Col = { key: string; label: string; align?: 'right' | 'center'; padRight?: string }
@@ -168,10 +168,10 @@
     {:else}
       <div style="display:grid;grid-template-columns:minmax(max-content,1fr) minmax(240px,340px) minmax(240px,340px) minmax(max-content,1fr);column-gap:40px;align-items:center">
         <div style="display:contents">
-          <Donut items={sec} total={null} centreLabel="Sectors" centreText={expCount(model.sectors)} side="l" size="100%" legendFirst />
+          <Donut items={sec} total={null} centreLabel="Sectors" centreText={expCount(exposure.sectors)} side="l" size="100%" legendFirst />
         </div>
         <div style="display:contents">
-          <Donut items={reg} total={null} centreLabel="Regions" centreText={expCount(model.regions)} side="r" size="100%" />
+          <Donut items={reg} total={null} centreLabel="Regions" centreText={expCount(exposure.regions)} side="r" size="100%" />
         </div>
       </div>
     {/if}

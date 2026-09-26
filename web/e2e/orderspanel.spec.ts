@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { openWithStatus, ready, modelDoc, streamBody } from './helpers'
+import { openWithStatus, ready, modelDoc, streamBody, standIn } from './helpers'
 
 // SPEC.md "### Orders". Fixture orders/brackets stand in for the doc the server would
 // send for `orders` (orders.svelte.ts watches that exact key); e2e/orders.spec.ts already
@@ -282,7 +282,7 @@ test('while the limit sell at the target rests, the stop row reads Watching; onc
     ['set', ['brackets', { k: 'id', v: 'b-1' }, 'legs', { k: 'key', v: 'tp' }, 'note'], 'Cancelling'],
   ] })}\n\n`
   const docs = { orders: { ...noOrders, live: true, orders: [oArmedEntry], brackets: [resting] } }
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, docs) }))
+  await standIn(page, streamBody(model, docs))
   await page.goto('/')
   await ready(page)
   await page.getByRole('button', { name: 'Orders' }).click()
@@ -291,7 +291,7 @@ test('while the limit sell at the target rests, the stop row reads Watching; onc
   await expect(page.locator('.od-card', { hasText: 'Bracket' }).locator('.od-leg').filter({ hasText: 'Take profit' }).locator('.od-leg-state')).toHaveCount(0)
   // the stop level reached: the limit sell's cancel is out and the market sell follows
   await page.unroute('**/api/events?*')
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, docs, patch) }))
+  await standIn(page, streamBody(model, docs, patch))
   await page.reload()
   await ready(page)
   await page.getByRole('button', { name: 'Orders' }).click()
@@ -339,7 +339,7 @@ test('after Cancel is accepted the card reads Cancelling on its second line, wit
     ['set', ['orders', { k: 'id', v: 'o-1' }, 'live'], false],
   ] })}\n\n`
   const body = streamBody(model, { orders: { ...noOrders, live: true, orders: [oPending] } }, patch)
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
+  await standIn(page, body)
   await page.goto('/')
   await ready(page)
   await page.getByRole('button', { name: 'Orders' }).click()
@@ -381,7 +381,7 @@ test('the orders document updates a card in place, with the panel open', async (
     ['set', ['orders', { k: 'id', v: 'o-3' }, 'average'], '160.1'],
   ] })}\n\n`
   const body = streamBody(model, { orders: allOrders }, patch)
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
+  await standIn(page, body)
   await page.goto('/')
   await ready(page)
   await page.getByRole('button', { name: 'Orders' }).click()

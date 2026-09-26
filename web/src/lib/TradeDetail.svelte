@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { positions, book } from './subs.svelte'
   // The trade / holding / listing detail — the largest screen. A faithful port of
   // ledger.html's tradeDetailHtml + listingDetailHtml: the header card (symbol,
   // name·exchange, ticket buttons, the big P&L or a listing's price), the
@@ -11,10 +12,11 @@
   import { symText } from './sym'
   import { ICONS } from './icons'
   import { sort, toggleSort, sortRows } from './sort.svelte'
-  import { store, saveJournal, server, detail } from './state.svelte'
+  import { saveJournal, server, detail } from './state.svelte'
+  import { use, filtered } from './subs.svelte'
   import { openTicket } from './ticket/ticket.svelte'
   import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
-  import { watchDoc } from './live'
+  import { watchDoc } from './live.svelte'
   import { tradeChart } from './actions/tradeChart'
   import { fillsChart } from './actions/fillsChart'
   import EventEntry from './EventEntry.svelte'
@@ -24,7 +26,9 @@
   let { trade }: { trade: Trade } = $props()
 
   // a corporate event this holding waits on, and that only the person can say what it did
-  const waitingEvent = $derived((store.model?.waiting ?? []).find((w) => w.what === 'event' && w.instrument === trade.instrument && w.account === trade.accountId) ?? null)
+  // this page's holding, to sell from: the holdings are shown while it is
+  use('positions', positions, filtered)
+  const waitingEvent = $derived((book.data?.waiting ?? []).find((w) => w.what === 'event' && w.instrument === trade.instrument && w.account === trade.accountId) ?? null)
 
   const signedPct = (v: number | null | undefined) => (v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2) + '%')
 
@@ -128,7 +132,7 @@
     }
     // this page's own holding, by its id (the holding's page, or the holding an open trade
     // is): never the same symbol held in another account
-    const pos = trade.position ? (store.model?.positions || []).find((p) => p.id === trade.position) ?? null : null
+    const pos = trade.position ? (positions.data?.positions || []).find((p) => p.id === trade.position) ?? null : null
     const holding = pos?.id ?? ''
     return [
       { side: 'BUY', on: true, open: () => openTicket(trade.symbol, 'BUY', trade.exchange || '', trade.security, holding) },
@@ -172,7 +176,7 @@
   const tagMatches = $derived.by(() => {
     const draft = tagDraft.trim().toLowerCase()
     if (!draft) return [] as string[]
-    return ((store.model?.options?.tags || []) as string[])
+    return ((book.data?.options?.tags || []) as string[])
       .filter((x) => (trade.tags || []).indexOf(x) < 0 && x.toLowerCase().indexOf(draft) >= 0)
       .sort((a, b) => a.toLowerCase().indexOf(draft) - b.toLowerCase().indexOf(draft) || a.length - b.length)
       .slice(0, 6)
@@ -364,7 +368,7 @@
             </div>
           {/if}
         </div>
-        {#if waitingEvent && store.model}<EventEntry event={waitingEvent} model={store.model} />{/if}
+        {#if waitingEvent && book.data}<EventEntry event={waitingEvent} options={book.data.options} />{/if}
       </div>
     </div>
   {/if}

@@ -15,7 +15,7 @@ const MAKES_A_NUMBER = /Number\(|parseFloat\(|parseInt\(|as unknown as number|as
 
 const ALLOWED: Record<string, [number, string]> = {
   '/src/lib/dec.ts': [4, "`plot` (a chart's coordinate, never shown), `ticketNumber` (a starting value for the ticket's quantity field), and Intl's typing of the exact text it formats"],
-  '/src/lib/live.ts': [1, "a stream message's number"],
+  '/src/lib/live.svelte.ts': [1, "a stream message's number"],
   '/src/lib/router.svelte.ts': [1, "the heatmap address's seconds"],
   '/src/lib/Portfolio.svelte': [1, "the count in the server's `Other (n)`"],
   '/src/lib/cuttip.ts': [1, 'a CSS length'],

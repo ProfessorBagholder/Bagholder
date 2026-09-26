@@ -1,5 +1,4 @@
-//! The figures document built from the engine (`figures::Figures`), for one
-//! set of filters.
+//! The page's documents built from the engine (`figures`), one per screen.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,7 +9,7 @@ use bagholder_engine::cashflow::{CashRow, Payment};
 use bagholder_engine::input::Inputs;
 use bagholder_engine::ledger::Direction;
 use bagholder_engine::positions::PositionFig;
-use bagholder_engine::scope::{self, CashTile, Filters, Missing, PaidLabel, Scoped};
+use bagholder_engine::scope::{self, CashTile, Filters, Missing, PaidLabel};
 use bagholder_engine::trades::{TradeFig, TradeKey, TradeStatus};
 use bagholder_engine::Engine;
 
@@ -302,15 +301,33 @@ fn paid_label(l: &PaidLabel) -> String {
     }
 }
 
-fn options(inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig]) -> Options {
+fn options(inputs: &Inputs, names: &Names, trades: &[TradeFig], positions: &[PositionFig]) -> Options {
     let accounts: Vec<AccountOption> = inputs.ledger.accounts.keys().map(|a| AccountOption { id: a.to_string(), name: account_name(inputs, *a) }).collect();
     let used: BTreeSet<InstrumentId> = trades.iter().flat_map(|t| t.instruments.iter().copied()).chain(positions.iter().map(|p| p.instrument)).collect();
     // a contract's underlying too: the by-symbol rows and the symbol filter name a contract's trades by it
     let underlyings: BTreeSet<InstrumentId> = used.iter().filter_map(|i| inputs.ledger.instruments.get(i)?.terms.as_ref().map(|t| t.underlying)).filter(|u| !used.contains(u)).collect();
+    let mut accounts_of: BTreeMap<InstrumentId, BTreeSet<AccountId>> = BTreeMap::new();
+    for t in trades {
+        for i in &t.instruments {
+            accounts_of.entry(*i).or_default().insert(t.account);
+        }
+    }
+    for p in positions {
+        accounts_of.entry(p.instrument).or_default().insert(p.account);
+    }
     let option = |i: &InstrumentId| {
         let info = inputs.ledger.instruments.get(i)?;
         let s = shown(inputs, *i);
-        Some(InstrumentOption { id: i.to_string(), symbol: s.symbol, name: s.name, exchange: s.exchange, kind: kind_word(info.instrument.kind).into(), currency: info.instrument.currency.as_str().into() })
+        Some(InstrumentOption {
+            id: i.to_string(),
+            symbol: s.symbol,
+            name: s.name,
+            exchange: s.exchange,
+            kind: kind_word(info.instrument.kind).into(),
+            currency: info.instrument.currency.as_str().into(),
+            security: names.security.get(i).cloned().unwrap_or_default(),
+            accounts: accounts_of.get(i).map(|a| a.iter().map(|x| x.to_string()).collect()).unwrap_or_default(),
+        })
     };
     let traded: Vec<InstrumentOption> = used.iter().filter_map(option).collect();
     let sorted = |v: BTreeSet<String>| v.into_iter().collect::<Vec<_>>();
@@ -354,93 +371,48 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
         .collect()
 }
 
-/// Everything the page shows of the book under `filters`.
-pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &super::context::MarketBase) -> Figures {
-    let inputs = engine.inputs();
-    let figs = engine.figures();
-    let scoped: Scoped = engine.scope(filters);
-    let by_key: BTreeMap<&TradeKey, &TradeFig> = figs.trades.iter().map(|t| (&t.key, t)).collect();
-    let ids = |ks: &[TradeKey]| ks.iter().map(|k| key_id(&by_key, k)).collect::<Vec<_>>();
+/// Each open trade's holding, and each holding's trade, by their wire ids.
+pub struct Links {
+    pub holding_of: BTreeMap<String, String>,
+    pub trade_of: BTreeMap<String, String>,
+}
 
-    // each open trade's holding, and each holding's trade
-    let mut holding_of: BTreeMap<String, String> = BTreeMap::new();
-    let mut trade_of: BTreeMap<String, String> = BTreeMap::new();
+pub fn links(engine: &Engine) -> Links {
+    let figs = engine.figures();
+    let by_trip: BTreeMap<&bagholder_engine::ledger::TripKey, &TradeFig> = figs.trades.iter().filter_map(|t| match &t.key {
+        TradeKey::Trip(k) => Some((k, t)),
+        TradeKey::Group(_) => None,
+    }).collect();
+    let mut holding_of = BTreeMap::new();
+    let mut trade_of = BTreeMap::new();
     for p in figs.positions {
-        if let Some(t) = figs.trades.iter().find(|t| matches!(&t.key, TradeKey::Trip(k) if *k == p.key)) {
+        if let Some(t) = by_trip.get(&p.key) {
             holding_of.insert(trade_id(t), position_id(p));
             trade_of.insert(position_id(p), trade_id(t));
         }
     }
-    let trades: Vec<Trade> = scoped.trades.iter().filter_map(|k| by_key.get(k)).map(|t| trade(inputs, names, t, holding_of.get(&trade_id(t)).cloned().filter(|_| t.status != TradeStatus::Closed))).collect();
-    let positions: Vec<Position> = scoped.portfolio.positions.iter().map(|i| &figs.positions[*i]).map(|p| position(inputs, names, p, trade_of.get(&position_id(p)).cloned().unwrap_or_default())).collect();
+    Links { holding_of, trade_of }
+}
 
-    let today = inputs.clock.today;
-    let benchmark = BENCHMARKS.iter().find(|(k, _)| *k == filters.benchmark).map(|(k, l)| BenchmarkRef { key: k.to_string(), label: l.to_string() }).unwrap_or(BenchmarkRef { key: filters.benchmark.clone(), label: String::new() });
+/// A trade's wire row, its holding linked while it is open.
+pub fn trade_row(inputs: &Inputs, names: &Names, links: &Links, t: &TradeFig) -> Trade {
+    trade(inputs, names, t, links.holding_of.get(&trade_id(t)).cloned().filter(|_| t.status != TradeStatus::Closed))
+}
 
-    let e = &scoped.equity;
-    let mut equity_gaps: Vec<String> = e.gaps.words().into_iter().map(String::from).collect();
-    if e.series.iter().any(|d| d.exact.is_none()) {
-        // a day whose accounts' values add past what a decimal holds is not drawn
-        equity_gaps.push("arithmetic".into());
-    }
-    let equity = Equity {
-        series: e.series.iter().filter_map(|d| d.exact.map(|v| Point { d: d.day.to_string(), v: Dec(v) })).collect(),
-        drawdown: Drawdown { pct: e.drawdown.pct, abs: e.drawdown.abs.and_then(bagholder_engine::stat::returns::cents).map(Dec), at: e.drawdown.at.map(|d| d.to_string()) },
-        annualized: Annualized { rate: e.annualized.rate, count: e.annualized.count },
-        gaps: equity_gaps,
-        skipped_filters: e.unread_filters.iter().map(|s| s.to_string()).collect(),
-        pnl: {
-            let c = &scoped.pnl_curve;
-            let mut gaps: Vec<String> = vec![];
-            for (_, v) in &c.days {
-                if let Err(g) = v {
-                    for w in g.words() {
-                        if !gaps.iter().any(|x| x == w) {
-                            gaps.push(w.to_string());
-                        }
-                    }
-                }
-            }
-            PnlCurve {
-                series: c.days.iter().filter_map(|(d, v)| v.as_ref().ok().map(|m| Point { d: d.to_string(), v: Dec(m.amount) })).collect(),
-                left_out: c.left_out as u32,
-                gaps,
-            }
-        },
-    };
-    let years = e.years.iter().map(|y| YearRow { year: y.year.to_string(), r: y.r, sp_r: y.benchmark, vs: y.benchmark.map(|b| y.r - b) }).collect();
+/// A holding's wire row, its trade linked.
+pub fn position_row(inputs: &Inputs, names: &Names, links: &Links, p: &PositionFig) -> Position {
+    position(inputs, names, p, links.trade_of.get(&position_id(p)).cloned().unwrap_or_default())
+}
 
-    let pf = &scoped.portfolio;
-    let allocation = slices(
-        pf.allocation.iter().map(|a| {
-            let p = &figs.positions[a.position];
-            (shown(inputs, p.instrument).symbol, a.value, a.share.clone().unwrap_or(0.0), Some(position_id(p)))
-        }).collect(),
-        10,
-        None,
-    );
-    let portfolio = Portfolio {
-        position_count: pf.positions.len(),
-        market_value: partial(&pf.market_value),
-        cost_basis: partial(&pf.cost_basis),
-        unrealized: partial(&pf.unrealized),
-        unrealized_pct: pf.unrealized_pct.clone().into_wire(),
-        nav: pf.net_value.as_ref().map(fig_money),
-        nav_accounts: pf.net_value_accounts,
-        has_margin: pf.has_margin,
-        margin_used: fig_money(&pf.margin_used),
-        margin_used_pct: pf.margin_used_pct.clone().into_wire(),
-        available_margin: pf.available_margin.as_ref().map(fig_money),
-        available_margin_unavailable: pf.margin_unavailable.iter().map(|(a, _)| account_name(inputs, *a)).collect(),
-        cash: fig_money(&pf.cash),
-        cash_pct: pf.cash_pct.clone().into_wire(),
-        day_change: pf.day_change.as_ref().map(partial),
-        day_change_pct: pf.day_change_pct.clone().into_wire(),
-        allocation,
-    };
+/// A trade's id as the page names it.
+pub fn trade_wire_id(t: &TradeFig) -> String {
+    trade_id(t)
+}
 
-    let cashflow = cashflow(inputs, &figs, &scoped, today);
-
+/// What every screen reads of the book as a whole.
+pub fn book_doc(engine: &Engine, names: &Names) -> BookDoc {
+    let inputs = engine.inputs();
+    let figs = engine.figures();
     let accounts = accounts(inputs, names);
     let nav_total = {
         let navs: Vec<bagholder_core::Dec> = accounts.iter().filter_map(|a| a.nav.map(|d| d.0)).collect();
@@ -449,17 +421,12 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &super::co
             Err(e) => Fig::Waits { gaps: vec![format!("arithmetic: {e}")] },
         })
     };
-
-    // each holding in scope with its value in CAD, as the context sizes it
-    let valued: Vec<(Position, Option<f64>)> = scoped
-        .portfolio
-        .positions
-        .iter()
-        .zip(&positions)
-        .map(|(i, p)| (p.clone(), figs.positions[*i].market_cad.as_ref().ok().map(|m| m.amount.to_f64())))
-        .collect();
-    let context = super::context::context(base, &valued);
-    Figures {
+    BookDoc {
+        today: inputs.clock.today.to_string(),
+        activity_count: inputs.ledger.transactions.len(),
+        options: options(inputs, names, figs.trades, figs.positions),
+        accounts,
+        nav_total,
         waiting: figs
             .matched
             .waiting
@@ -483,38 +450,122 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &super::co
                 }
             })
             .collect(),
-        markets: context.markets,
-        sectors: context.sectors,
-        regions: context.regions,
-        today: today.to_string(),
-        activity_count: inputs.ledger.transactions.len(),
-        options: options(inputs, figs.trades, figs.positions),
-        kpi: kpi(&scoped.kpi),
-        equity,
-        years,
-        benchmark,
-        monthly: scoped.monthly.iter().map(|m| MonthlyBar { key: month_key(m.year, m.month), label: month_label(m.year, m.month), value: fig_money(&m.value), count: m.count, trade_ids: ids(&m.trades) }).collect(),
-        by_symbol: scoped.by_underlying.iter().map(|r| BySymbolRow { id: r.underlying.to_string(), symbol: shown(inputs, r.underlying).symbol, pnl: fig_money(&r.pnl), n: r.count, win_rate: r.win_rate, avg_hold: r.avg_hold, trade_ids: ids(&r.trades) }).collect(),
-        grades: Grades {
-            buckets: scoped.grades.iter().map(|g| GradeBucket { grade: g.grade.as_str().into(), n: g.count, pnl: fig_money(&g.pnl), trade_ids: ids(&g.trades) }).collect(),
-            graded: scoped.grades.iter().map(|g| g.count).sum(),
+    }
+}
+
+/// The Dashboard under `filters`.
+pub fn dashboard_doc(engine: &Engine, filters: &Filters) -> DashboardDoc {
+    let inputs = engine.inputs();
+    let figs = engine.figures();
+    let d = engine.dashboard(filters);
+    let by_key: BTreeMap<&TradeKey, &TradeFig> = figs.trades.iter().map(|t| (&t.key, t)).collect();
+    let ids = |ks: &[TradeKey]| ks.iter().map(|k| key_id(&by_key, k)).collect::<Vec<_>>();
+    let benchmark = BENCHMARKS.iter().find(|(k, _)| *k == filters.benchmark).map(|(k, l)| BenchmarkRef { key: k.to_string(), label: l.to_string() }).unwrap_or(BenchmarkRef { key: filters.benchmark.clone(), label: String::new() });
+    let e = &d.equity;
+    let mut equity_gaps: Vec<String> = e.gaps.words().into_iter().map(String::from).collect();
+    if e.series.iter().any(|d| d.exact.is_none()) {
+        // a day whose accounts' values add past what a decimal holds is not drawn
+        equity_gaps.push("arithmetic".into());
+    }
+    let equity = Equity {
+        series: e.series.iter().filter_map(|d| d.exact.map(|v| Point { d: d.day.to_string(), v: Dec(v) })).collect(),
+        drawdown: Drawdown { pct: e.drawdown.pct, abs: e.drawdown.abs.and_then(bagholder_engine::stat::returns::cents).map(Dec), at: e.drawdown.at.map(|d| d.to_string()) },
+        annualized: Annualized { rate: e.annualized.rate, count: e.annualized.count },
+        gaps: equity_gaps,
+        skipped_filters: e.unread_filters.iter().map(|s| s.to_string()).collect(),
+        pnl: {
+            let c = &d.pnl_curve;
+            let mut gaps: Vec<String> = vec![];
+            for (_, v) in &c.days {
+                if let Err(g) = v {
+                    for w in g.words() {
+                        if !gaps.iter().any(|x| x == w) {
+                            gaps.push(w.to_string());
+                        }
+                    }
+                }
+            }
+            PnlCurve {
+                series: c.days.iter().filter_map(|(d, v)| v.as_ref().ok().map(|m| Point { d: d.to_string(), v: Dec(m.amount) })).collect(),
+                left_out: c.left_out as u32,
+                gaps,
+            }
         },
-        queue: scoped
+    };
+    DashboardDoc {
+        kpi: kpi(&d.kpi),
+        years: e.years.iter().map(|y| YearRow { year: y.year.to_string(), r: y.r, sp_r: y.benchmark, vs: y.benchmark.map(|b| y.r - b) }).collect(),
+        equity,
+        benchmark,
+        monthly: d.monthly.iter().map(|m| MonthlyBar { key: month_key(m.year, m.month), label: month_label(m.year, m.month), value: fig_money(&m.value), count: m.count, trade_ids: ids(&m.trades) }).collect(),
+        by_symbol: d.by_underlying.iter().map(|r| BySymbolRow { id: r.underlying.to_string(), symbol: shown(inputs, r.underlying).symbol, pnl: fig_money(&r.pnl), n: r.count, win_rate: r.win_rate, avg_hold: r.avg_hold, trade_ids: ids(&r.trades) }).collect(),
+        grades: Grades {
+            buckets: d.grades.iter().map(|g| GradeBucket { grade: g.grade.as_str().into(), n: g.count, pnl: fig_money(&g.pnl), trade_ids: ids(&g.trades) }).collect(),
+            graded: d.grades.iter().map(|g| g.count).sum(),
+        },
+        queue: d
             .queue
             .iter()
             .filter_map(|(k, m)| by_key.get(k).map(|t| QueueRow { id: trade_id(t), symbol: shown(inputs, t.instrument).symbol, date: t.closed_on.unwrap_or(t.last_on).to_string(), pnl: fig_money(&t.pnl_cad), missing: missing_word(*m).into() }))
             .collect(),
-        trades,
-        positions,
-        portfolio,
-        cashflow,
-        accounts,
-        nav_total,
     }
 }
 
-fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, scoped: &Scoped, today: bagholder_core::jiff::civil::Date) -> Cashflow {
-    let c = &scoped.cashflow;
+/// The holdings' totals under `filters`, from the engine's holdings' part of the scope.
+pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio) -> Portfolio {
+    let inputs = engine.inputs();
+    let figs = engine.figures();
+    let allocation = slices(
+        pf.allocation.iter().map(|a| {
+            let p = &figs.positions[a.position];
+            (shown(inputs, p.instrument).symbol, a.value, a.share.clone().unwrap_or(0.0), Some(position_id(p)))
+        }).collect(),
+        10,
+        None,
+    );
+    Portfolio {
+        position_count: pf.positions.len(),
+        market_value: partial(&pf.market_value),
+        cost_basis: partial(&pf.cost_basis),
+        unrealized: partial(&pf.unrealized),
+        unrealized_pct: pf.unrealized_pct.clone().into_wire(),
+        nav: pf.net_value.as_ref().map(fig_money),
+        nav_accounts: pf.net_value_accounts,
+        has_margin: pf.has_margin,
+        margin_used: fig_money(&pf.margin_used),
+        margin_used_pct: pf.margin_used_pct.clone().into_wire(),
+        available_margin: pf.available_margin.as_ref().map(fig_money),
+        available_margin_unavailable: pf.margin_unavailable.iter().map(|(a, _)| account_name(inputs, *a)).collect(),
+        cash: fig_money(&pf.cash),
+        cash_pct: pf.cash_pct.clone().into_wire(),
+        day_change: pf.day_change.as_ref().map(partial),
+        day_change_pct: pf.day_change_pct.clone().into_wire(),
+        allocation,
+    }
+}
+
+/// The market's context for the holdings in `pf`: each with its value in CAD.
+pub fn context_of(engine: &Engine, names: &Names, links: &Links, pf: &bagholder_engine::scope::Portfolio, base: &super::context::MarketBase) -> super::context::Context {
+    let inputs = engine.inputs();
+    let figs = engine.figures();
+    let valued: Vec<(Position, Option<f64>)> = pf
+        .positions
+        .iter()
+        .map(|i| {
+            let p = &figs.positions[*i];
+            (position_row(inputs, names, links, p), p.market_cad.as_ref().ok().map(|m| m.amount.to_f64()))
+        })
+        .collect();
+    super::context::context(base, &valued)
+}
+
+/// The Cashflow tab under `filters`, over the holdings' part of the scope.
+pub fn cashflow_doc(engine: &Engine, filters: &Filters, pf: &bagholder_engine::scope::Portfolio) -> Cashflow {
+    let c = engine.cashflow(filters, pf);
+    cashflow(engine.inputs(), &engine.figures(), &c, engine.inputs().clock.today)
+}
+
+fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagholder_engine::scope::Cashflow, today: bagholder_core::jiff::civil::Date) -> Cashflow {
     let tiles = c
         .tiles
         .iter()
@@ -773,29 +824,37 @@ mod tests {
         }
         let book = f.book().unwrap();
         let names = f.read(|e| Names::load(&book, e.inputs())).unwrap().unwrap();
-        let doc = f.read(|e| build(e, &names, &Filters::default(), &base)).unwrap();
-        assert!(!doc.trades.is_empty() && !doc.positions.is_empty());
+        let page = f.read(|e| crate::views::every_view(&crate::views::Cx { engine: e, names: &names, base: &base }, &Default::default())).unwrap().unwrap();
+        let rows = |k: &str, path: &[&str]| -> Vec<serde_json::Value> {
+            let mut v = &page[k];
+            for p in path {
+                v = &v[*p];
+            }
+            v.as_array().cloned().unwrap_or_default()
+        };
+        let (trades, positions, cash_rows) = (rows("trades", &["trades"]), rows("positions", &["positions"]), rows("cashflow", &["cashflow", "rows"]));
+        assert!(!trades.is_empty() && !positions.is_empty());
         let unique = |ids: Vec<&str>| {
             let mut seen = std::collections::BTreeSet::new();
             ids.into_iter().all(|i| !i.is_empty() && seen.insert(i))
         };
-        assert!(unique(doc.trades.iter().map(|t| t.id.as_str()).collect()));
-        assert!(unique(doc.positions.iter().map(|p| p.id.as_str()).collect()));
-        assert!(unique(doc.cashflow.rows.iter().map(|r| r.id.as_str()).collect()));
-        for t in doc.trades.iter().filter(|t| t.status == Status::Open) {
-            let p = t.position.as_deref().expect("an open trade names its holding");
-            assert!(doc.positions.iter().any(|x| x.id == p && x.trade == t.id), "{p}");
+        let id = |r: &serde_json::Value| r["id"].as_str().unwrap_or_default().to_string();
+        assert!(unique(trades.iter().map(|t| t["id"].as_str().unwrap_or_default()).collect()));
+        assert!(unique(positions.iter().map(|p| p["id"].as_str().unwrap_or_default()).collect()));
+        assert!(unique(cash_rows.iter().map(|r| r["id"].as_str().unwrap_or_default()).collect()));
+        for t in trades.iter().filter(|t| t["status"] == "open") {
+            let p = t["position"].as_str().expect("an open trade names its holding");
+            assert!(positions.iter().any(|x| id(x) == p && x["trade"] == t["id"]), "{p}");
         }
-        for p in &doc.positions {
-            assert!(!p.security.is_empty(), "{}: the broker's id an order names", p.symbol);
-            assert!(!p.account.is_empty());
+        for p in &positions {
+            assert!(!p["security"].as_str().unwrap_or_default().is_empty(), "{}: the broker's id an order names", p["symbol"]);
+            assert!(!p["account"].as_str().unwrap_or_default().is_empty());
         }
         // the page's own tests read this document: kept beside them, the market's
         // context (which reads the day it is built on) left out
-        let mut page = serde_json::to_value(&doc).unwrap();
-        page["markets"] = serde_json::Value::Null;
-        page["sectors"] = serde_json::json!([]);
-        page["regions"] = serde_json::json!([]);
+        let mut page = serde_json::Value::Object(page);
+        page["markets"] = serde_json::json!({"markets": null});
+        page["exposure"] = serde_json::json!({"sectors": [], "regions": []});
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/fixtures/figures_pulled_month.json");
         if std::env::var("BAGHOLDER_BLESS").is_ok_and(|v| v == "1") {
             std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
@@ -806,7 +865,7 @@ mod tests {
         let kept: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap_or_default()).unwrap_or_default();
         assert_eq!(shape(&kept), shape(&page), "web/src/lib/fixtures/figures_pulled_month.json is not the shape of the document the server builds: run with BAGHOLDER_BLESS=1 and review the diff");
         // money is text on the wire
-        let json = serde_json::to_value(&doc).unwrap();
+        let json = &page["positions"];
         assert!(json["positions"][0]["cost"].is_string() || json["positions"][0]["cost"]["gaps"].is_array());
     }
 }

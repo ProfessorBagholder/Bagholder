@@ -1,11 +1,11 @@
 <script lang="ts">
+  import { status as statusSlot } from './subs.svelte'
   import { ICONS } from './icons'
-  import { store } from './state.svelte'
   import { THEMES, theme, applyTheme } from './theme.svelte'
   import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData } from './ui.svelte'
   import { channel, notifyDead, notifyOn, notifyTest, notifyToggle } from './notes/channel.svelte'
 
-  const status = $derived(store.model?.status)
+  const status = $derived(statusSlot.data)
   // A row's list opens under the pointer and on a tap (a touch has no hover); it closes when the
   // pointer leaves it, when a choice is made, or with the menu.
   let themeOpen = $state(false)

@@ -266,7 +266,8 @@ mod tests {
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
-        let mut feed = crate::events::Feed::open(app.clone(), None);
+        let mut feed = crate::events::Feed::open(app.clone());
+        assert!(app.events.watch(&app, feed.id(), [("status".to_string(), crate::events::Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
         let first = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
         assert!(first.contains("\"error\":\"\""), "nothing is failing yet: {first}");
         let mut signals = app.events.subscribe();

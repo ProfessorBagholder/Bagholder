@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { modelDoc, openWithStatus, ready, streamBody } from './helpers'
+import { modelDoc, openWithStatus, ready, streamBody, standIn } from './helpers'
 
 // SPEC §3, the header: what the status line says, in the order it says it, and the
 // update on offer beside the version.
@@ -50,9 +50,7 @@ for (const [what, next] of [
   test(`${what} answering after a restart loads the page again, once; a restart of the same build does not`, async ({ page, request }) => {
     const model = await modelDoc(request)
     let server: Record<string, unknown> = { startedAt: 'A' }
-    await page.route('**/api/events?*', (route) =>
-      route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody({ ...model, status: { ...model.status, ...server } }) }),
-    )
+    await standIn(page, () => streamBody({ ...model, status: { ...model.status, ...server } }))
     let loads = 0
     page.on('request', (r) => { if (r.resourceType() === 'document') loads++ })
     await page.goto('/')

@@ -322,7 +322,7 @@ fn model_api_declarations() -> String {
         bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
         crate::http::model::TradeQuery, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer,
-        crate::http::model::FiguresQuery, crate::http::stream::Resync,
+        crate::http::stream::Resync, crate::http::model::TradesQuery, crate::http::model::ViewQuery, crate::http::model::ViewAnswer,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
         crate::csv_import::ImportRequest, crate::csv_import::RowNote, crate::csv_import::ImportReport,
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
@@ -366,8 +366,8 @@ fn generated_file_of(name: &str) -> &'static str {
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
-        "Figures" | "Detail" => "figures",
-        "FiguresQuery" | "Resync" => "model_api",
+        "TradesDoc" | "Detail" => "figures",
+        "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }
@@ -429,8 +429,9 @@ fn figures_declarations() -> String {
     let decls: Vec<String> = decls![
         crate::wire::Fig<()>,
         Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
-        Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options, Figures,
-        crate::wire::filters::Range, crate::wire::filters::Filters,
+        Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
+        BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc, ExposureDoc, MarketsDoc,
+        crate::wire::filters::Range, crate::wire::filters::Filters, crate::views::Dir, crate::views::Sort, crate::views::Params,
     ];
     let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\nimport type { Markets, ExposureSlice } from './wire'\n\n");
     for d in decls {
@@ -462,7 +463,7 @@ fn test_no_amount_on_the_figures_wire_is_a_number() {
         "leftOut", "realizedLeftOut", "count", "wins", "losses", "breakeven", "winRate", "profitFactor", "pct", "rate", "r", "spR", "n", "graded", "share", "positionCount", "navAccounts", "activityCount", "holdDays",
     ];
     const MORE: [&str; 8] = ["pnlPct", "unrealPct", "percentChange", "held", "avgHold", "unrealizedPct", "marginUsedPct", "cashPct"];
-    const MORE2: [&str; 5] = ["dayChangePct", "yield", "yoc", "currentYield", "vs"];
+    const MORE2: [&str; 8] = ["dayChangePct", "yield", "yoc", "currentYield", "vs", "total", "rowsTotal", "limit"];
     // the declarations without their doc comments
     let text = regex::Regex::new(r"(?s)/\*\*.*?\*/").unwrap().replace_all(&figures_declarations(), "").to_string();
     let field = regex::Regex::new(r"(\w+)\??: ([^,;}]*)").unwrap();
@@ -483,11 +484,15 @@ fn test_no_amount_on_the_figures_wire_is_a_number() {
 fn keys_declarations() -> String {
     use bagholder_model::patch::keys_of;
     let docs: Vec<(&str, Vec<(String, &'static str)>)> = vec![
-        ("model", {
-            let mut k = keys_of::<crate::wire::figures::Figures>();
-            k.extend(keys_of::<crate::status::Status>().into_iter().map(|(p, f)| (format!("status.{p}"), f)));
-            k
-        }),
+        ("book", keys_of::<crate::wire::figures::BookDoc>()),
+        ("dashboard", keys_of::<crate::wire::figures::DashboardDoc>()),
+        ("positions", keys_of::<crate::wire::figures::PositionsDoc>()),
+        ("trades", keys_of::<crate::wire::figures::TradesDoc>()),
+        ("cashflow", keys_of::<crate::wire::figures::CashflowDoc>()),
+        ("trade", keys_of::<crate::wire::figures::TradeDoc>()),
+        ("exposure", keys_of::<crate::wire::figures::ExposureDoc>()),
+        ("markets", keys_of::<crate::wire::figures::MarketsDoc>()),
+        ("status", keys_of::<crate::status::Status>()),
         ("orders", keys_of::<crate::orders::OrdersDoc>()),
         ("shorts", keys_of::<crate::feeds::ShortsFeed>()),
         ("notifications", keys_of::<crate::notify::NotificationsDoc>()),
