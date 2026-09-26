@@ -80,3 +80,43 @@ fn test_a_refusal_still_reads_as_one() {
     let e = client::request("GET", &url, &[], None, Duration::from_secs(5)).err().expect("an error");
     assert_eq!(e.code(), Some(404), "a symbol a source does not carry is still a 404");
 }
+
+/// A server that reads each request and then drops the connection without an
+/// answer: the request reached it, the caller never hears so.
+fn swallow() -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (o, q) = (opens.clone(), requests.clone());
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let s = match s { Ok(s) => s, Err(_) => return };
+            o.fetch_add(1, Ordering::SeqCst);
+            let mut r = BufReader::new(s);
+            if read_request(&mut r) {
+                q.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    (format!("http://127.0.0.1:{}/x", port), opens, requests)
+}
+
+#[test]
+fn test_a_request_that_must_reach_its_host_at_most_once_is_never_sent_twice() {
+    let (url, opens, requests) = swallow();
+    let e = client::request_once("POST", &url, &[], Some(b"{}"), Duration::from_secs(5));
+    assert!(e.is_err(), "no answer is an error for the caller to settle");
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!((opens.load(Ordering::SeqCst), requests.load(Ordering::SeqCst)), (1, 1), "sent once, on one connection");
+}
+
+#[test]
+fn test_a_request_that_must_reach_its_host_at_most_once_never_takes_a_kept_connection() {
+    let (url, opens, requests) = serve(200, 1);
+    // a kept connection the peer then closes
+    assert_eq!(client::request("GET", &url, &[], None, Duration::from_secs(5)).unwrap().body, b"ok");
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(client::request_once("POST", &url, &[], Some(b"{}"), Duration::from_secs(5)).unwrap().body, b"ok");
+    assert_eq!((opens.load(Ordering::SeqCst), requests.load(Ordering::SeqCst)), (2, 2), "a fresh connection, one request, no retry on the stale one");
+}

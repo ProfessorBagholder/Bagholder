@@ -63,6 +63,7 @@ use crate::session::{ensure_fresh_token, load_session};
 
 pub(crate) mod brackets;
 mod edit;
+pub mod gate;
 pub mod preview;
 mod readback;
 mod ticket;
@@ -131,6 +132,8 @@ pub struct OrdersState {
     /// The orders this run is sending now, written and not yet answered. A row left
     /// `sending` that is not among them was being sent when an earlier run stopped.
     pub(crate) sending: Mutex<HashSet<String>>,
+    /// The gate's broker and its per-bracket locks.
+    pub(crate) gate: gate::GateState,
 }
 
 #[cfg(test)]
