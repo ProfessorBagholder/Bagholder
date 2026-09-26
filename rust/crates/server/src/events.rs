@@ -632,4 +632,23 @@ mod tests {
         feed.step(&crate::status::status);
         assert_eq!(reads(), first + 1, "a commit to the store they live in reads them again");
     }
+
+    /// What is held is quoted only while a page shows a holding's price: a page on
+    /// the Dashboard or the trades asks for no quote; one showing the holdings does.
+    #[test]
+    fn test_quotes_are_owed_only_to_a_page_showing_a_price() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let feed = Feed::open(app.clone());
+        let show = |keys: &[&str]| {
+            assert!(app.events.watch(&app, feed.id(), keys.iter().map(|k| (k.to_string(), Want { params: serde_json::json!({}), have: None })).collect()));
+            app.events.showing(&crate::due::PRICED)
+        };
+        assert!(!show(&["status", "book", "dashboard", "notifications"]));
+        assert!(!show(&["status", "book", "trades"]));
+        for priced in ["positions", "exposure", "markets", "cashflow", "trade:x"] {
+            assert!(show(&["status", "book", priced]), "{priced}");
+        }
+        assert!(!show(&[]));
+    }
 }

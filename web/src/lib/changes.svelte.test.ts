@@ -114,3 +114,91 @@ describe('a trade is graded', () => {
     expect([...container.querySelectorAll('tbody tr')]).toEqual(rows)
   })
 })
+
+// The server's own documents for a month of one account's recorded replies (the trades
+// and the Cashflow as a page subscribing to them is sent them).
+import pulled from './fixtures/figures_pulled_month.json'
+import Cashflow from './Cashflow.svelte'
+import { reconcile } from './live.svelte'
+import { ROW_KEYS } from './generated/keys'
+import type { TradesDoc, CashflowDoc } from './model'
+
+describe('a new trade arrives', () => {
+  it('is one row put in; the rows already there are the same elements, untouched', () => {
+    const doc = $state(structuredClone(pulled.trades) as unknown as TradesDoc)
+    const { container } = render(Trades, { props: { doc } })
+    flushSync()
+    const before = [...container.querySelectorAll('tbody tr')]
+    const fresh = { ...structuredClone($state.snapshot(doc.trades[0])), id: 'trade-new', symbol: 'NEWCO' }
+    const stop = watch(container)
+    applyOps(doc, [['set', ['total'], doc.total + 1], ['rows', ['trades'], 'id', ['trade-new', ...doc.trades.map((t) => t.id)], { 'trade-new': fresh }]] as Op[])
+    flushSync()
+    const seen = stop()
+    expect(container.textContent).toContain('NEWCO')
+    const moved = elementsMoved(seen)
+    expect(moved.length).toBeGreaterThan(0)
+    expect(moved.filter((el) => !el.textContent!.includes('NEWCO'))).toEqual([])
+    for (const r of before) expect(r.isConnected).toBe(true)
+    expect(seen.filter((m) => m.type !== 'childList' && before.some((r) => r.contains(m.target))).length).toBe(0)
+  })
+})
+
+describe('a correction moves one trade\'s P&L', () => {
+  it('writes in that trade\'s row and no other', () => {
+    const doc = $state(structuredClone(pulled.trades) as unknown as TradesDoc)
+    const { container } = render(Trades, { props: { doc } })
+    flushSync()
+    const rows = [...container.querySelectorAll('tbody tr')]
+    const t = doc.trades.find((x) => typeof x.pnl === 'string')!
+    const stop = watch(container)
+    applyOps(doc, [
+      ['set', ['trades', { k: 'id', v: t.id }, 'pnl'], '12345.67'],
+      ['set', ['trades', { k: 'id', v: t.id }, 'pnlCad'], '12345.67'],
+    ] as Op[])
+    flushSync()
+    const seen = stop()
+    expect(seen.length).toBeGreaterThan(0)
+    expect(new Set(seen.map((m) => within(m.target, 'tr'))).size).toBe(1)
+    expect(elementsMoved(seen)).toEqual([])
+    expect([...container.querySelectorAll('tbody tr')]).toEqual(rows)
+  })
+})
+
+describe('a distribution is paid', () => {
+  it('is one row put in the history; the rows already there are the same elements, untouched', () => {
+    const doc = $state(structuredClone(pulled.cashflow) as unknown as CashflowDoc)
+    const { container } = render(Cashflow, { props: { model: doc } })
+    flushSync()
+    const history = [...container.querySelectorAll('h5')].find((h) => h.textContent === 'Distribution history')!.closest('.card')!
+    const before = [...history.querySelectorAll('tbody tr')]
+    expect(before.length).toBeGreaterThan(0)
+    const fresh = { ...structuredClone($state.snapshot(doc.cashflow.rows[0])), id: 'paid-new', symbol: 'PAYCO' }
+    const stop = watch(history)
+    applyOps(doc, [['set', ['rowsTotal'], doc.rowsTotal + 1], ['rows', ['cashflow', 'rows'], 'id', ['paid-new', ...doc.cashflow.rows.map((r) => r.id)], { 'paid-new': fresh }]] as Op[])
+    flushSync()
+    const seen = stop()
+    expect(history.textContent).toContain('PAYCO')
+    expect(elementsMoved(seen).filter((el) => !el.textContent!.includes('PAYCO'))).toEqual([])
+    for (const r of before) expect(r.isConnected).toBe(true)
+  })
+})
+
+describe('the filters change', () => {
+  it('the rows that stay are the same elements, untouched; only those that go are taken away', () => {
+    const doc = $state(structuredClone(pulled.trades) as unknown as TradesDoc)
+    const { container } = render(Trades, { props: { doc } })
+    flushSync()
+    const rows = [...container.querySelectorAll('tbody tr')] as HTMLElement[]
+    // the list under the new filters: every other trade, as the server sends it whole
+    const kept = structuredClone(pulled.trades) as unknown as TradesDoc
+    kept.trades = kept.trades.filter((_, i) => i % 2 === 0)
+    kept.total = kept.trades.length
+    const staying = rows.filter((_, i) => i % 2 === 0)
+    const stop = watch(container)
+    reconcile(doc as unknown as Record<string, unknown>, kept as unknown as Record<string, unknown>, ROW_KEYS.trades)
+    flushSync()
+    const seen = stop()
+    expect([...container.querySelectorAll('tbody tr')]).toEqual(staying)
+    expect(seen.filter((m) => m.type !== 'childList' && staying.some((r) => r.contains(m.target))).length).toBe(0)
+  })
+})

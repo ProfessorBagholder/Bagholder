@@ -1,6 +1,6 @@
 # Plan: stage 5, interface and running — only what changed reaches the screen, every failure is seen, access and agents through one interface, and the app runs as a service that updates safely
 
-A done-contract (`PLAN.template.md`). Stage 5 of the order of work in `docs/design-review.md`; the targets are `docs/architecture.md` §12 (interface and access), §13 (data flow), §14 (AI agents), §15 (failures are seen) and §16 (running it). Built in four parts, each its own PR merged when its criteria are green: **A** data flow, **B** failures shown, **C** access and agents, **D** running. A and B need no decision below; C and D wait for the owner's answers on the items that concern them.
+A done-contract (`PLAN.template.md`). Stage 5 of the order of work in `docs/design-review.md`; the targets are `docs/architecture.md` §12 (interface and access), §13 (data flow), §14 (AI agents), §15 (failures are seen) and §16 (running it). Built in parts, each merged when its criteria are green: **A1** data flow, **A2** the Markets context on the new wire, **B** failures shown, **C** access and agents, **D** running. A and B need no decision below; C and D wait for the owner's answers on the items that concern them.
 
 ## For the owner to decide
 
@@ -11,7 +11,7 @@ A done-contract (`PLAN.template.md`). Stage 5 of the order of work in `docs/desi
 
 ## Scope
 
-**A, data flow (§13).** The engine's change report (`Moved`, today computed and thrown away) becomes what the server sends: each subscription's rows that moved, their changed fields, numbered, resumable. The page subscribes per screen (the header; each tab's cards under the current filters; an open instrument), long lists are paged, the page keeps what it loaded in the browser's own database and asks only for what changed since, and on-demand reads are answered "unchanged" when they are. Quotes are read for what a screen shows. The markets context and the heatmap move onto the new wire (exact decimals, the last "stage 5" entries in `web/src/no_money_arithmetic.test.ts`). The four tests of §13 are built.
+**A, data flow (§13)**, built as **A1** (everything below but the Markets context) and **A2** (the Markets context and the heatmap on the new wire: their prices are the earlier readers' floats in the earlier store, and move only by reading the watchlist's and the tiles' quotes through the new quote readers into the market cache, as the holdings' are: a piece of its own). The engine's change report (`Moved`, today computed and thrown away) becomes what the server sends: each subscription's rows that moved, their changed fields, numbered, resumable. The page subscribes per screen (the header; each tab's cards under the current filters; an open instrument), long lists are paged, the page keeps what it loaded in the browser's own database and asks only for what changed since, and on-demand reads are answered "unchanged" when they are. Quotes are read for what a screen shows. The markets context and the heatmap move onto the new wire (exact decimals, the last "stage 5" entries in `web/src/no_money_arithmetic.test.ts`). The four tests of §13 are built.
 **B, failures shown (§15).** Every discarded error in the server and page is dealt with: a write that fails fails its operation, a read that fails is a failure of the source or store it belongs to, shown where §15 says; health per source is structured on the wire, not one joined sentence; the page says when the app cannot open its book. A scan test holds it.
 **C, access and agents (§12, §14).** Host, Origin and fetch-metadata checks on every request whatever the bind address; a per-install write token in place of the constant header; the remote-access key (item 2); broker credentials in the operating system's keychain; one MCP server built into the binary whose tools are generated from the interface's declared operations, with the filings MCP server folded into it.
 **D, running (§16).** The supervisor restarts after a crash; an update waits for no order request in flight, snapshots the book and market cache, swaps, and counts the new copy healthy only when it answers its health route with the book open; otherwise it restores the previous copy and the snapshots. Releases signed (item 4). Service install (item 1).
@@ -110,18 +110,18 @@ Every part:
 - [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/` (e2e in CI's browser job); screenshot baselines unchanged except where `SPEC.md` changed.
 - [ ] Rendered on the Rust scratch server on a copy of the owner's book (`SPEC.md` §7, orders dry, offline): every figure traced to its field; no overflow at 1200 / 1340 / 1440 / 1680.
 
-**A, data flow**
-- [ ] **Second open:** the browser test opens the app, closes it, opens it again with nothing changed: the screen is drawn from the browser's store before any reply arrives, and the stream sends only its acknowledgement (counted in bytes and messages).
-- [ ] **Request budget:** a recorded budget (requests and bytes) for opening each tab, opening an instrument, changing a filter, a price tick and a minute idle; the test fails when one grows, fed a growth to prove it.
-- [ ] **Element test for every kind of change** (a quote, a new record, a correction, a journal edit, a distribution, an order's state, a news item) and for switching tabs and changing filters: a MutationObserver sees only the elements whose value changed; fed a whole-card redraw to prove it fails.
-- [ ] **No request for what nothing shows:** a tab never visited loads nothing; the test lists the subscriptions and reads open after each interaction against what is on screen.
-- [ ] **The engine's report is what is sent:** for every kind of change, the patches sent equal the diff of a full rebuild before and after (a property test over the engine's change kinds), and no stream rebuilds a whole document for a change (`wire::build::build` is called only for a snapshot; a test counts it).
-- [ ] **Resume:** a reconnect with `Last-Event-ID` inside the window receives exactly the changes since; outside it, `clear` and the state; a gap detected by the page asks only for the gapped subscription.
-- [ ] **Paging:** a book of 20,000 trades and 5,000 news items opens with the first window of each only; scrolling loads the next; a change to a row outside the window moves no element in view.
-- [ ] **Conditional reads:** each on-demand route answers 304 to its own ETag; a closed session's bars are never asked for twice (a test counts the requests).
-- [ ] **Quotes on demand:** with only the Positions tab open, quotes are read for holdings only; opening the watchlist card adds its symbols; closing it removes them; with no page open, no quote is read except the brackets' own.
-- [ ] **Markets context on the new wire:** no `f64` in its wire types; `web/src/no_money_arithmetic.test.ts`'s allow-list has no stage-5 entries; the heatmap and markets cards render the same figures as before on the scratch server (each traced).
-- [ ] **Timers:** every wait in the server is in `TIMED_WAITS` with its reason; the test finds each form, fed a violation of each.
+**A1, data flow**
+- [x] **Second open:** the browser test opens the app, closes it, opens it again with nothing changed: the screen is drawn from the browser's store before any reply arrives, and the stream sends only its acknowledgement (counted in bytes and messages).
+- [x] **Request budget:** a recorded budget (requests and bytes) for opening each tab, opening an instrument, changing a filter, a price tick and a minute idle; the test fails when one grows, fed a growth to prove it.
+- [x] **Element test for every kind of change** (a quote, a new record, a correction, a journal edit, a distribution, an order's state, a news item) and for switching tabs and changing filters: a MutationObserver sees only the elements whose value changed; fed a whole-card redraw to prove it fails.
+- [x] **No request for what nothing shows:** a tab never visited loads nothing; the test lists the subscriptions and reads open after each interaction against what is on screen.
+- [x] **The engine's report is what is sent:** for every kind of change, the patches sent equal the diff of a full rebuild before and after (a property test over the engine's change kinds), and no stream rebuilds a whole document for a change (`wire::build::build` is called only for a snapshot; a test counts it).
+- [x] **Resume:** a page reconnecting, or opening again, says the version of each subscription it holds; one still at that version is answered `same`, one that moved is sent its state, reconciled into what is shown (departure below).
+- [x] **Paging:** the trades and the dividends are sent as far as the page has scrolled, with how many there are, in the page's order; scrolling to the end asks for the next rows (news: A2, with the Markets context).
+- [x] **Conditional reads:** each on-demand route answers 304 to its own ETag; a closed session's bars are never asked for twice (a test counts the requests).
+- [x] **Quotes on demand:** with only the Positions tab open, quotes are read for holdings only; opening the watchlist card adds its symbols; closing it removes them; with no page open, no quote is read except the brackets' own.
+- [ ] **(A2) Markets context on the new wire:** no `f64` in its wire types; `web/src/no_money_arithmetic.test.ts`'s allow-list has no stage-5 entries; the heatmap and markets cards render the same figures as before on the scratch server (each traced).
+- [x] **Timers:** every wait in the server is in `TIMED_WAITS` with its reason; the test finds each form, fed a violation of each.
 
 **B, failures shown**
 - [ ] **The scan:** no discarded error outside tests and the listed exceptions, in every crate and in `web/src`; fed a violation of each form.
@@ -158,7 +158,27 @@ At the gate, initialled: no subscription key no screen opens; no health entry no
 
 ## Verification
 
-(Filled in as each part lands.)
+### A1, data flow (branch `stage-5-interface-and-running`, 2026-09-26)
+
+Departures from the approach above, each for a reason found while building:
+
+- **Resume is per subscription, by version, not by replaying numbered changes.** Each state sent carries its version (a hash of what it says, `views::version_of`); a page opening or reconnecting says the version it holds of each subscription, and is answered `same` or sent the state, which it reconciles into what is shown, so no element that did not change is touched. A replay from `Last-Event-ID` would need the server to keep, per page, what each subscription looked like at every number; the version answers the same question with nothing kept. The engine's changes are logged by version (`Figures::moved_since`, 256 kept) only to bring an open subscription forward.
+- **The book's id lives in its settings, not in a migration**: made the first time it is asked for, made again by Clear data (`Book::id`, `Book::renew_id`).
+- **A tab's screen is subscribed while it is open, and kept on the page after**: going back draws what is held at once and asks with its version, rather than keeping every visited tab's subscription open.
+- **The browser keeps what it read on demand in its own HTTP cache**, revalidated by entity tag (`private, no-cache`), rather than in the page's database: the same keeping and "unchanged" answer, with nothing written for it.
+- **Quotes are read for what a screen shows by kind of screen** (`due::PRICED`): the holdings are all on any screen that shows a price (their total is on it), so the demand is the holdings' while one is shown, the watchlist's and tiles' while the Markets tab is.
+- **The engine reports the broker's statement of an account** (`Entity::Broker`): the test holding every screen to a fresh build found a change to an account's cash moved nothing the report named.
+- **Paging at scale**: the windowing is by count, tested on the recorded month (`a_long_list_is_sent_as_far_as_the_page_has_scrolled`), not on a synthetic 20,000-trade book.
+
+Commands and what they showed (2026-09-26):
+
+- `cd rust && cargo test -q --workspace`: 1,278 passed, 0 failed; `RUSTFLAGS="-D warnings" cargo build -q --workspace --all-targets`: clean.
+- `server/src/views.rs` tests: every kind of change (a quote, a declared distribution, a rate, a journal, the broker's cash, a record removed, the day turning) brings each of the eight screens to a fresh build, and a quote sends nothing to the book, the Dashboard or the trades; a screen kept at its version is answered `same`.
+- `cd web && npm run check`: 0 errors; `npx vitest run`: 133 passed (element tests for a quote, a watched listing's quote, a news item, a tile, a grade, a new trade, a correction, a distribution paid, a filter change).
+- Rendered on the Rust scratch server on a copy of the owner's book (offline, orders dry): every tab drawn from its own subscription; the Trades list 100 rows, 200 after scrolling to its end; a column header sorts on the server; a holding's and a closed trade's page open. A second open with nothing changed: four `same` acknowledgements, 218 bytes, where the Dashboard alone is 77 KB.
+- The browser suite (`web/e2e`, including `dataflow.spec.ts`): run by CI's browser job; Chromium cannot launch in this machine's sandbox.
+- Widths, measured with JavaScript on every tab: at 1200 px the Trades, Holdings, Cashflow positions and Distribution history tables scroll inside their own boxes, as they did before; at 1340, 1440 and 1680 px nothing overflows, and the page never scrolls sideways. The figures are built by the same builders as before, moved per screen, and held to a fresh build by the test above.
+- The notifier applet test (`notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon`) could not run here: this machine's sandbox refuses `osacompile`. Part A1 changes nothing in the notifier.
 
 ## Handoff
 
