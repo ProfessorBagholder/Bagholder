@@ -782,6 +782,10 @@ fn serve() -> i32 {
     }
     let bind_host = { let b = std::env::var("BAGHOLDER_BIND").unwrap_or_default().trim().to_string(); if b.is_empty() { "127.0.0.1".to_string() } else { b } };
     let a = app::init(home, root_dir(), bind_host.clone());
+    // the local model keeps its file in this app's data folder, and is off until told so
+    if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
+        log(&format!("bagholder: the local model is off: {}", e));
+    }
     match a.open() {
         Ok(conn) => {
             if let Err(e) = bagholder_store::relabel::ensure(&conn) {
