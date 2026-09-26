@@ -68,14 +68,25 @@
     shortsLookup(query)
   })
 
+  const rowKey = (r: ShortsFeedRow) => r.symbol + '@' + String(r.exchange || '')
   const rows = $derived.by(() => {
     const q = query.trim().toUpperCase()
     const s = sort.shorts
-    let pool = (feed.rows || []).filter((r) => scope === 'all' || (scope === 'holdings' ? r.held : r.watched))
+    const inScope = (r: ShortsFeedRow) => scope === 'all' || (scope === 'holdings' ? r.held : r.watched)
+    let pool = (feed.rows || []).filter(inScope)
     if (q) {
       pool = pool.filter((r) => String(r.symbol).toUpperCase().indexOf(q) === 0 || String(r.name || '').toUpperCase().indexOf(q) >= 0)
-      const f = found[q]
-      if (!pool.length && f && f.row) pool = [f.row]
+      // a ticker that is none of the listings in scope is a row of its own, beside
+      // whatever the words also match: the book's own row where the book has one
+      // outside the scope, else the one read for it on its own
+      const exact = (r: ShortsFeedRow) => String(r.symbol).toUpperCase() === q
+      if (!pool.some(exact)) {
+        const own = (feed.rows || []).filter((r) => exact(r) && !inScope(r))
+        const f = found[q]
+        const add = own.length ? own : f && f.row ? [f.row] : []
+        const have = new Set(pool.map(rowKey))
+        pool = pool.concat(add.filter((r) => !have.has(rowKey(r))))
+      }
     }
     return sortRows(pool, s.key, s.dir, (r, k) =>
       k === 'symbol' ? String(r.symbol || '').toLowerCase() : k === 'exchange' ? String(r.exchange || '').toLowerCase() : k === 'asOf' ? String(r.asOf || '') : ((r as unknown as Record<string, number | null>)[k] == null ? -Infinity : (r as unknown as Record<string, number>)[k]),
@@ -111,7 +122,7 @@
   {#if rows.length}
     <div class="si-head"><GridHead table="shorts" cols={SHORTS_COLS} /></div>
     <div class="scroll si-list" style="max-height:340px">
-      {#each rows as r (r.symbol + '@' + String(r.exchange || ''))}
+      {#each rows as r (rowKey(r))}
         <div class="si-row go" role="button" tabindex="-1" onclick={() => openRow(r)} onkeydown={(e) => { if (e.key === 'Enter') openRow(r) }}>
           <div><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">{r.symbol}</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">{r.name || ''}</div></div>
           <div style="font-size:12px;color:var(--ink55);text-align:right">{r.exchange || ''}</div>

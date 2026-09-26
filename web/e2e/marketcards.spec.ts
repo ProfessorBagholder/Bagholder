@@ -447,6 +447,32 @@ test.describe('Short interest', () => {
     await expect(card).toContainText('No listing by that name.')
     await expect.poll(() => asked).toBe('ZQZQ')
   })
+
+  test('a ticker outside the scope on show is a row of its own', async ({ page, request }) => {
+    const feed = { ok: true, reading: false, rows: [row('HHH', 40, { held: true }), row('WWW', 80, { watched: true })] }
+    await openWithStatus(page, request, {}, '#markets', () => {}, { shorts: feed })
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Short interest' }) })
+    const symbols = () => card.locator('.si-row > div:first-child > div:first-child')
+    for (const [scope, outside] of [['Holdings', 'WWW'], ['Watchlist', 'HHH']]) {
+      await card.locator('.mseg-opt', { hasText: scope }).click()
+      await page.getByLabel('Search short interest').fill(outside)
+      await expect(symbols()).toHaveText([outside])
+      await page.getByLabel('Search short interest').fill('')
+    }
+  })
+
+  test('a ticker among prefix matches is added as a row of its own beside them', async ({ page, request }) => {
+    const feed = { ok: true, reading: false, rows: [row('TD', 40, { held: true }), row('TRP', 20, { held: true })] }
+    await openWithStatus(page, request, {}, '#markets', () => {}, { shorts: feed })
+    await page.route('**/api/shorts?symbol=*', (route) => {
+      const symbol = new URL(route.request().url()).searchParams.get('symbol')!
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, covered: true, shorts: row(symbol, 5, { exchange: 'NYSE' }) }) })
+    })
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Short interest' }) })
+    await page.getByLabel('Search short interest').fill('T')
+    await expect(card.locator('.si-row')).toHaveCount(3)
+    await expect(card.locator('.si-row', { hasText: 'NYSE' })).toHaveCount(1)
+  })
 })
 
 test.describe('News', () => {
