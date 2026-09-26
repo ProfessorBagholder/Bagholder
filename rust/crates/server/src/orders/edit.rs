@@ -102,10 +102,6 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
         _ => return refused("Which leg?".into()),
     };
     let positive = |v: Option<f64>| v.filter(|x| *x > 0.0);
-    let both_removed = |p: &mut BracketPatch| {
-        p.status = Some(BracketStatus::Cancelled);
-        p.outcome = Some("both legs removed".into());
-    };
     let mut patch = BracketPatch { error: Some(String::new()), ..BracketPatch::default() };
     if remove {
         let err = cancel_exit(app, if stop_leg { &b.sl_order_id } else { &b.tp_order_id });
@@ -116,20 +112,20 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
             patch.sl_kind = Some(SlKind::Unset);
             patch.sl_order_id = Some(String::new());
             patch.sl_mode = Some(SlMode::Unset);
-            if !some(b.tp_price) {
-                both_removed(&mut patch);
-            }
         } else {
             patch.tp_price = Some(None);
             patch.tp_order_id = Some(String::new());
             if b.status == BracketStatus::TargetPlaced {
                 patch.status = Some(BracketStatus::Armed);
             }
-            if !b.sl_kind.is_set() {
-                both_removed(&mut patch);
-            }
         }
+        // the last leg gone ends the bracket as any ending does: closing until
+        // Wealthsimple confirms nothing of it rests, then done (SPEC §4, Nothing left behind)
+        let last = if stop_leg { !some(b.tp_price) } else { !b.sl_kind.is_set() };
         patch_bracket(app, &b.id, patch);
+        if last {
+            end_bracket(app, &b, "both legs removed", "");
+        }
         log(&format!("bagholder bracket: {} for {}: {} removed by the user", b.id, b.symbol, if stop_leg { "stop loss" } else { "take profit" }));
         return OrderActionAnswer::accepted(b.id);
     }

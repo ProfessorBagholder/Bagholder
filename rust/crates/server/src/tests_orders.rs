@@ -1115,14 +1115,20 @@ fn test_removing_a_leg_and_then_the_other_ends_the_bracket() {
     e.tick(None);
     let id = st(&b, "id");
     e.clear();
+    let stop = st(&get_bracket(&id), "slOrderId");
     assert_eq!(adjust(&e, &id, "sl", None, None, true)["ok"], json!(true));
     assert_eq!(e.ops(), ["SoOrdersOrderCancel"], "the resting stop is cancelled");
     let b = get_bracket(&id);
     assert_eq!((st(&b, "status"), st(&b, "slKind"), st(&b, "slOrderId")), ("armed".into(), String::new(), String::new()));
     assert_eq!(adjust(&e, &id, "tp", None, None, true)["ok"], json!(true));
+    // the last leg gone ends it as any ending does (SPEC §4, Nothing left behind):
+    // closing while the stop's cancel is unconfirmed, done once Wealthsimple confirms it
     let b = get_bracket(&id);
-    assert_eq!((st(&b, "status"), st(&b, "outcome")), ("cancelled".into(), "both legs removed".into()));
+    assert_eq!((st(&b, "status"), st(&b, "outcome")), ("closing".into(), "both legs removed".into()));
     assert!(b.tp_price.is_none());
+    update_order(&stop, json!({"status": "cancelled"}));
+    e.tick(None);
+    assert_eq!(st(&get_bracket(&id), "status"), "done");
 }
 
 // ---------------------------------------------------------------------------
