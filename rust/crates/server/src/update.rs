@@ -398,12 +398,9 @@ fn put_in_place(src: &Path, dest: &Path, copy: bool) -> std::io::Result<()> {
     std::fs::rename(&tmp, dest)
 }
 
-/// The current copies kept under HOME/previous,
-/// the new files put in place, the marker the supervisor watches left.
-fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
-    let home = &app.home;
-    bagholder_store::guard_home(home)?;
-    let dir = app_dir(app);
+/// The current copies of `names` in `dir` kept under HOME/previous, replacing
+/// whatever an earlier update left there.
+fn keep_previous(home: &Path, dir: &Path, names: &[String]) -> Result<(), String> {
     let previous = home.join("previous");
     if previous.exists() {
         std::fs::remove_dir_all(&previous).map_err(|e| e.to_string())?;
@@ -418,6 +415,16 @@ fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) ->
             std::fs::copy(&cur, &keep).map_err(|e| e.to_string())?;
         }
     }
+    Ok(())
+}
+
+/// The current copies kept under HOME/previous,
+/// the new files put in place, the marker the supervisor watches left.
+fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
+    let home = &app.home;
+    bagholder_store::guard_home(home)?;
+    let dir = app_dir(app);
+    keep_previous(home, &dir, names)?;
     for name in names {
         if let Err(e) = put_in_place(&staging.join(name), &dir.join(name), false) {
             // a replace failed part way: every file goes back to its previous copy
@@ -425,12 +432,72 @@ fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) ->
             return Err(e.to_string());
         }
     }
-    std::fs::write(home.join("update-pending"), tag).map_err(|e| e.to_string())
+    write_pending(home, &Pending { tag: tag.to_string(), git: None })
+}
+
+/// The marker an update leaves for the supervisor (HOME/update-pending): the
+/// version going in and, for a git checkout, the commit to go back to. The
+/// supervisor reads it when the new server dies inside the healthy window.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub(crate) struct Pending {
+    pub tag: String,
+    /// A git checkout's way back: its root and the commit before the pull.
+    #[serde(default)]
+    pub git: Option<GitRestore>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub(crate) struct GitRestore {
+    pub root: PathBuf,
+    pub commit: String,
+}
+
+pub(crate) fn write_pending(home: &Path, p: &Pending) -> Result<(), String> {
+    let text = serde_json::to_string(p).map_err(|e| e.to_string())?;
+    std::fs::write(home.join("update-pending"), text).map_err(|e| e.to_string())
+}
+
+/// The marker as written; an earlier build wrote the bare tag.
+fn read_pending(home: &Path) -> Pending {
+    let text = std::fs::read_to_string(home.join("update-pending")).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_else(|_| Pending { tag: text.trim().to_string(), git: None })
+}
+
+/// Where a failed update is written for the server the supervisor starts next,
+/// which says it in the header (`recall_failure`).
+const FAILED_FILE: &str = "update-failed";
+
+/// The failure the supervisor left, taken into the header's update error once:
+/// the restarted server is the one that can say it.
+pub fn recall_failure(app: &Arc<App>) {
+    let path = app.home.join(FAILED_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let _ = std::fs::remove_file(&path);
+    let text = text.trim();
+    if !text.is_empty() {
+        app.state.lock().unwrap().update_error = text.to_string();
+    }
 }
 
 /// The previous copies put back.
 pub fn rollback(app: &Arc<App>) -> bool {
     rollback_in(&app.home, &app_dir(app))
+}
+
+/// The version before a failed update put back: a git checkout's commit first
+/// (the page and sources are the checkout's), then the kept executables.
+/// True when the previous executables are in place again.
+fn restore_previous(home: &Path, dir: &Path, pending: &Pending) -> bool {
+    if let Some(g) = &pending.git {
+        // the checkout named, whatever repository the environment points at
+        let reset = Command::new("git").args(["reset", "--hard", &g.commit]).current_dir(&g.root).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").stdin(Stdio::null()).output();
+        match reset {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => log(&format!("bagholder update: the checkout could not go back to {}: {}", g.commit, String::from_utf8_lossy(&o.stderr).trim())),
+            Err(e) => log(&format!("bagholder update: the checkout could not go back to {}: {}", g.commit, e)),
+        }
+    }
+    rollback_in(home, dir)
 }
 
 fn rollback_in(home: &Path, dir: &Path) -> bool {
@@ -504,6 +571,14 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
         return Err(why);
     }
     let before = git(app, &["rev-parse", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    if before.is_empty() {
+        return Err("git could not name the current commit".into());
+    }
+    // the executables the build replaces are kept, so a new version that does not
+    // start is put back without building the old one again
+    let dir = app_dir(app);
+    let exes = [exe_name().to_string(), if cfg!(windows) { "bagholder-browser.exe".to_string() } else { "bagholder-browser".to_string() }];
+    keep_previous(&app.home, &dir, &exes)?;
     let r = git(app, &["pull", "--ff-only"]).map_err(|e| e.to_string())?;
     if !r.status.success() {
         let msg = { let e = String::from_utf8_lossy(&r.stderr).to_string(); if e.is_empty() { String::from_utf8_lossy(&r.stdout).to_string() } else { e } };
@@ -514,14 +589,14 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
     set_updating(app, &format!("Building {}…", tag));
     let built = Command::new("cargo").args(["build", "--release", "--bins"]).current_dir(cargo_dir(app)).stdin(Stdio::null()).output();
     if !built.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-        if !before.is_empty() {
-            let _ = git(app, &["reset", "--hard", &before]);
-        }
+        let _ = git(app, &["reset", "--hard", &before]);
+        // a build that failed part way may have linked one executable already
+        rollback(app);
         let msg = built.map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_else(|e| e.to_string());
         let last = msg.trim().lines().last().unwrap_or("").chars().take(200).collect::<String>();
         return Err(format!("the new version did not build: {}", last));
     }
-    std::fs::write(app.home.join("update-pending"), tag).map_err(|e| e.to_string())
+    write_pending(&app.home, &Pending { tag: tag.to_string(), git: Some(GitRestore { root: app.root.clone(), commit: before }) })
 }
 
 /// Bring this copy to `tag`, then restart. Never
@@ -602,9 +677,21 @@ pub fn supervise(home: &Path, healthy_sec: u64) -> i32 {
     };
     let dir = exe.canonicalize().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| PathBuf::from("."));
     let args: Vec<String> = std::env::args().skip(1).collect();
+    supervise_child(home, &dir, healthy_sec, || {
+        let mut c = Command::new(&exe);
+        c.args(&args).env("BAGHOLDER_CHILD", "1");
+        c
+    })
+}
+
+/// The supervisor's loop over the child `command` makes, the copy it runs living
+/// in `dir`. A child that dies inside the window after an update gets the
+/// version before it back (the kept files, and a git checkout's commit), is
+/// started again, and the failure is left for that server to say.
+pub(crate) fn supervise_child(home: &Path, dir: &Path, healthy_sec: u64, command: impl Fn() -> Command) -> i32 {
     let marker = home.join("update-pending");
     loop {
-        let mut child = match Command::new(&exe).args(&args).env("BAGHOLDER_CHILD", "1").spawn() {
+        let mut child = match command().spawn() {
             Ok(c) => c,
             Err(e) => {
                 log(&format!("bagholder: the server could not be started: {}", e));
@@ -640,11 +727,16 @@ pub fn supervise(home: &Path, healthy_sec: u64) -> i32 {
             continue;
         }
         if pending && code != 0 {
+            let update = read_pending(home);
             let _ = std::fs::remove_file(&marker);
-            if rollback_in(home, &dir) {
-                log("bagholder update: the new version did not start; the previous one is back");
+            let back = restore_previous(home, dir, &update);
+            let what = if update.tag.is_empty() { "the new version".to_string() } else { update.tag.clone() };
+            let _ = std::fs::write(home.join(FAILED_FILE), format!("Update failed: {} did not start.", what));
+            if back {
+                log(&format!("bagholder update: {} did not start; the previous version is back", what));
                 continue;
             }
+            log(&format!("bagholder update: {} did not start, and no previous version was kept to go back to", what));
         }
         return code;
     }

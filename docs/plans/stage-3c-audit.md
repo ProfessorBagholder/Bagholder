@@ -29,7 +29,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 
 - [x] Sync status: `folder scanned` notice missing after Scan now or Watch folder. `ui.svelte.ts:343`. — fixed (22be8ddf, 80272e5b; the count is the server's).
 - [x] A failed figures pass's header error is never cleared by a later good pass (it has its own place now, cleared by the next good pass and by nothing else). `due.rs:45`.
-- [ ] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`.
+- [x] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`. — fixed: the executables are kept before a checkout's build, so the supervisor puts them and the checkout's commit back and starts that version; the failure is written for the restarted server, which says it in the header.
 - [ ] A disclosure or release banner opens the page only for a held symbol. `notes/channel.svelte.ts:88`.
 - [ ] Short interest is asked for an option's underlying and for a coin. `trade/shorts.svelte.ts:19`.
 - [ ] A failed bars request shows "No price history for this span." instead of the failure. `trade/chart.ts:91`.

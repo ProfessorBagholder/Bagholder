@@ -96,6 +96,8 @@ fn serve() -> i32 {
     }
     let bind_host = { let b = std::env::var("BAGHOLDER_BIND").unwrap_or_default().trim().to_string(); if b.is_empty() { "127.0.0.1".to_string() } else { b } };
     let a = app::App::new(home, root_dir(), bind_host.clone());
+    // an update the supervisor rolled back is said in the header by the server it started
+    update::recall_failure(&a);
     match a.open() {
         Ok(conn) => {
             if let Err(e) = bagholder_store::relabel::ensure(&conn) {

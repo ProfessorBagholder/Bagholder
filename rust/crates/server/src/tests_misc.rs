@@ -554,3 +554,88 @@ fn test_no_wait_on_a_clock_that_is_not_accounted_for() {
     let want: Vec<(String, usize)> = TIMED_WAITS.iter().map(|(f, n, _)| (f.to_string(), *n)).collect();
     assert_eq!(found, want, "a wait on a clock was added or removed: argue for it in TIMED_WAITS, the list of timers that remain");
 }
+
+/// A stand-in for the server: a shell script in `dir`, run by `sh`, that the
+/// update replaces. The version kept under `previous` records that it ran.
+#[cfg(unix)]
+fn update_stand_in(home: &std::path::Path, dir: &std::path::Path) -> std::path::PathBuf {
+    let ran = home.join("previous-ran");
+    std::fs::create_dir_all(home.join("previous")).unwrap();
+    std::fs::write(home.join("previous").join("bagholder"), format!("echo previous > '{}'\nexit 0\n", ran.display())).unwrap();
+    // the new version dies at once, inside the healthy window
+    std::fs::write(dir.join("bagholder"), "exit 7\n").unwrap();
+    ran
+}
+
+#[cfg(unix)]
+fn assert_failure_said(home: &std::path::Path, tag: &str) {
+    assert!(!home.join("update-pending").exists(), "the marker is spent");
+    assert!(!home.join("previous").exists(), "the kept copies are back in place, not left behind");
+    let a = app::App::new(home.to_path_buf(), home.to_path_buf(), "127.0.0.1".into());
+    update::recall_failure(&a);
+    let said = a.state.lock().unwrap().update_error.clone();
+    assert!(said.starts_with("Update failed") && said.contains(tag), "the restarted server says the update failed: {said:?}");
+    let again = app::App::new(home.to_path_buf(), home.to_path_buf(), "127.0.0.1".into());
+    update::recall_failure(&again);
+    assert_eq!(again.state.lock().unwrap().update_error, "", "said once, by the server the supervisor started");
+}
+
+#[cfg(unix)]
+fn supervise_stand_in(home: &std::path::Path, dir: &std::path::Path) -> i32 {
+    let exe = dir.join("bagholder");
+    update::supervise_child(home, dir, update::UPDATE_HEALTHY_SEC, || {
+        let mut c = std::process::Command::new("sh");
+        c.arg(&exe);
+        c
+    })
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_new_version_that_dies_in_the_window_is_rolled_back_and_the_header_says_so() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let ran = update_stand_in(home.path(), dir.path());
+    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: None }).unwrap();
+    assert_eq!(supervise_stand_in(home.path(), dir.path()), 0, "the previous version is started again and runs");
+    assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "previous");
+    assert!(std::fs::read_to_string(dir.path().join("bagholder")).unwrap().contains("previous-ran"), "the previous executable is in place");
+    assert_failure_said(home.path(), "v99.0.0");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_git_checkout_goes_back_to_its_commit_when_the_new_version_dies() {
+    let home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("target");
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .current_dir(root.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(root.path().join(".gitignore"), "target/\n").unwrap();
+    std::fs::write(root.path().join("page.html"), "before\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "before"]);
+    let before = git(&["rev-parse", "HEAD"]);
+    std::fs::write(root.path().join("page.html"), "after\n").unwrap();
+    git(&["commit", "-q", "-am", "after"]);
+    let ran = update_stand_in(home.path(), &dir);
+    let back = update::GitRestore { root: root.path().to_path_buf(), commit: before.clone() };
+    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: Some(back) }).unwrap();
+    assert_eq!(supervise_stand_in(home.path(), &dir), 0, "the previous version is started again, not left stopped");
+    assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "previous");
+    assert_eq!(git(&["rev-parse", "HEAD"]), before, "the checkout is back on the commit before the pull");
+    assert_eq!(std::fs::read_to_string(root.path().join("page.html")).unwrap(), "before\n");
+    assert_failure_said(home.path(), "v99.0.0");
+}
