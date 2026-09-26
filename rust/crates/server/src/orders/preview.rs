@@ -103,6 +103,10 @@ pub struct Preview {
     pub stop_loss_price: Option<Text>,
     pub take_profit_pct_in: Text,
     pub take_profit_price: Option<Text>,
+    /// Each leg's amount, the quantity at its price, in the instrument's currency: what
+    /// a leg row shows beside its level (the Orders panel's draft card).
+    pub stop_loss_value: Option<Text>,
+    pub take_profit_value: Option<Text>,
     /// What the stop loss loses and the target gains, in the instrument's currency.
     pub risk: Option<Text>,
     pub gain: Option<Text>,
@@ -255,6 +259,14 @@ pub fn preview(r: &PreviewRequest, to_cad: &ToCad) -> Result<Preview, Unread> {
         _ => None,
     };
     let risk = per_unit_risk.map(|u| mul(mul(u, qty)?, mult)).transpose()?;
+    let leg_value = |on: bool, price: Option<Dec>| -> Result<Option<Dec>, Unread> {
+        match price {
+            Some(p) if on => Ok(Some(mul(mul(qty, p)?, mult)?)),
+            _ => Ok(None),
+        }
+    };
+    let stop_loss_value = leg_value(stop_loss_on, stop_loss_price)?;
+    let take_profit_value = leg_value(take_profit_on, take_profit_price)?;
     let gain = match (entry, take_profit_price) {
         (Some(e), Some(t)) => Some(mul(mul(mul(dir, sub(t, e)?)?, qty)?, mult)?),
         _ => None,
@@ -322,6 +334,8 @@ pub fn preview(r: &PreviewRequest, to_cad: &ToCad) -> Result<Preview, Unread> {
         stop_loss_price: text(stop_loss_price),
         take_profit_pct_in: Text(take_profit_pct_in),
         take_profit_price: text(take_profit_price),
+        stop_loss_value: text(stop_loss_value),
+        take_profit_value: text(take_profit_value),
         risk: text(risk),
         gain: text(gain),
         stop_loss_pct,
@@ -385,6 +399,29 @@ mod tests {
         assert_eq!((dec(&p.risk), dec(&p.gain)), (Some(d("50")), Some(d("100"))));
         assert_eq!(p.reward_to_risk, Some(2.0));
         assert!((p.stop_loss_pct.unwrap() + 0.05).abs() < 1e-12 && (p.take_profit_pct.unwrap() - 0.1).abs() < 1e-12);
+    }
+
+    /// A leg's amount is its quantity at its price, times the contract size; a leg that
+    /// is off, or a Sell's, has none.
+    #[test]
+    fn each_legs_amount_is_the_quantity_at_its_price() {
+        for (qty, mult) in [("10", "1"), ("3", "100"), ("0.5", "1")] {
+            let mut r = ticket();
+            r.quantity = t(qty);
+            r.quote.multiplier = t(mult);
+            let p = preview(&r, &NONE).unwrap();
+            let at = |price: Option<Dec>| price.map(|x| d(qty).checked_mul(x).unwrap().checked_mul(d(mult)).unwrap());
+            assert_eq!(dec(&p.stop_loss_value), at(dec(&p.stop_loss_price)), "{qty} x {mult}");
+            assert_eq!(dec(&p.take_profit_value), at(dec(&p.take_profit_price)), "{qty} x {mult}");
+            assert!(p.stop_loss_value.is_some() && p.take_profit_value.is_some());
+        }
+        let mut r = ticket();
+        r.sl.on = false;
+        let p = preview(&r, &NONE).unwrap();
+        assert_eq!((p.stop_loss_value, p.take_profit_value.is_some()), (None, true), "a leg that is off has no amount");
+        r.side = "SELL".into();
+        let p = preview(&r, &NONE).unwrap();
+        assert_eq!((p.stop_loss_value, p.take_profit_value), (None, None), "a sale has no legs");
     }
 
     #[test]

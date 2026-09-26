@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus, ready, figures, waits, waiting, pctPlain, money } from './helpers'
+import { openWithStatus, ready, figures, waits, waiting, pctPlain, money, px } from './helpers'
 
 // SPEC.md "### Order ticket". The made-up book (e2e/serve.mjs -> demo_book.rs) already
 // holds NVDA and AAPL as open positions in the USD margin account ("Trading"; NVDA in the
@@ -204,6 +204,35 @@ test('Max is off (and the position\'s shares fill Sell) when buying power is unk
   await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
   await page.getByRole('button', { name: 'Sell NVDA', exact: true }).click()
   await expect(page.locator('.tk-max').first()).not.toHaveClass(/off/) // the held quantity is known
+})
+
+test('a ticket closed without sending leaves a draft card showing the server\'s amount and legs, though no price was typed', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '', () => {}, {
+    [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' } },
+  })
+  await ready(page)
+  type P = { quantity: string; entry: string; notional: string; stopLossPrice: string; stopLossValue: string; takeProfitPrice: string; takeProfitValue: string }
+  let preview: P | null = null
+  page.on('response', async (r) => { if (r.url().endsWith('/api/order/preview') && r.ok()) preview = await r.json() })
+  await page.keyboard.press('Control+k')
+  await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
+  await page.getByRole('button', { name: 'Buy NVDA', exact: true }).click()
+  await page.locator('#tk-qty').fill('25')
+  await page.locator('#tk-qty').press('Enter')
+  await expect.poll(() => (preview as P | null)?.quantity).toBe('25')
+  await expect.poll(() => (preview as P | null)?.stopLossValue != null).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: 'New order' })).toHaveCount(0)
+  const p = preview as unknown as P
+  await page.getByRole('button', { name: 'Orders' }).click()
+  const card = page.locator('.od-card.draft')
+  await expect(card.locator('.od-value')).toHaveText(money(p.notional))
+  await expect(card.locator('.od-line')).toHaveText('Buy ' + p.quantity + ' at ' + px(p.entry) + ' limit · Day')
+  const legs = card.locator('.od-leg')
+  await expect(legs.filter({ hasText: 'Stop loss' })).toContainText(p.quantity + ' at ' + px(p.stopLossPrice))
+  await expect(legs.filter({ hasText: 'Stop loss' }).locator('.od-leg-amt')).toHaveText(money(p.stopLossValue))
+  await expect(legs.filter({ hasText: 'Take profit' })).toContainText(p.quantity + ' at ' + px(p.takeProfitPrice))
+  await expect(legs.filter({ hasText: 'Take profit' }).locator('.od-leg-amt')).toHaveText(money(p.takeProfitValue))
 })
 
 test('a stop loss and target round to the cent even off a quote with extra precision', async ({ page, request }) => {

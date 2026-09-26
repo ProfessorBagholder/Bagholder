@@ -153,6 +153,11 @@ stop: Dec | null, quantity: Dec, notional: Dec | null, stopLossOn: boolean, take
  */
 trail: Dec | null, trailDistance: Dec | null, stopLossPctIn: Dec, stopLossPrice: Dec | null, takeProfitPctIn: Dec, takeProfitPrice: Dec | null, 
 /**
+ * Each leg's amount, the quantity at its price, in the instrument's currency: what
+ * a leg row shows beside its level (the Orders panel's draft card).
+ */
+stopLossValue: Dec | null, takeProfitValue: Dec | null, 
+/**
  * What the stop loss loses and the target gains, in the instrument's currency.
  */
 risk: Dec | null, gain: Dec | null, stopLossPct: number | null, takeProfitPct: number | null, rewardToRisk: number | null, 

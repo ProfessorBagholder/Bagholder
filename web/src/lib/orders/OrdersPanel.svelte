@@ -7,7 +7,7 @@
     orderWhenWord, orderMultiplier, bracketEndWord, bracketExited,
     inOrdersScope, ordersScopeLabel,
     editOrder, cancelOrderEdit, orderEditSave, editBracket, cancelBracketEdit, bracketEditSave, bracketRemove,
-    cancelOrderNow, cancelBracketNow,
+    cancelOrderNow, cancelBracketNow, draftCard,
     type Order, type Bracket,
   } from './orders.svelte'
   import { draftStore, resumeDraft, discardDraft } from '../ticket/ticket.svelte'
@@ -64,30 +64,7 @@
 
   const showDraft = $derived(panel.tab === 'pending' && !!draftStore.d)
 
-  // draft card figures (draftCardHtml)
-  const draftInfo = $derived.by(() => {
-    const d = draftStore.d
-    if (!d) return null
-    const buy = d.side !== 'SELL', qtyN = d.qty || 0
-    const entry = d.type === 'MARKET' ? null : d.type === 'STOP' ? d.stop : d.limit
-    const typeWord = ({ MARKET: 'Market', LIMIT: 'limit', STOP: 'stop', STOP_LIMIT: 'stop limit' } as Record<string, string>)[d.type] || 'limit'
-    const line = (buy ? 'Buy ' : 'Sell ') + qtyFmt(qtyN) + (entry != null ? ' at ' + px(entry) + ' ' + typeWord : ' ' + (d.type === 'MARKET' ? 'market' : typeWord)) + (d.type === 'MARKET' ? '' : ' · ' + (d.tif === 'DAY' ? 'Day' : 'GTC'))
-    const legs: { label: string; tone: string; value: string; amount: string }[] = []
-    const addLeg = (label: string, tone: string, price: number | null, note: string) => {
-      if (price == null && !note) return
-      legs.push({ label, tone, value: price != null ? qtyFmt(qtyN) + ' at ' + px(price) : note, amount: price != null ? money(qtyN * price, '', 2) : '' })
-    }
-    if (buy && d.sl && d.sl.on) {
-      const sl = d.sl
-      if (sl.kind === 'trail') addLeg('Stop loss', 'neg', null, 'trailing ' + (sl.trail != null ? (sl.unit === 'pct' ? plain(sl.trail) + '%' : px(sl.trail)) : '5%'))
-      else if (sl.priceUnit === 'pct' ? sl.pct != null && entry != null : sl.price != null) addLeg('Stop loss', 'neg', sl.priceUnit === 'pct' ? +((entry as number) * (1 - (sl.pct as number) / 100)).toFixed(2) : sl.price, '')
-    }
-    if (buy && d.tp && d.tp.on) {
-      const tp = d.tp
-      if (tp.unit === 'pct' ? tp.pct != null && entry != null : tp.price != null) addLeg('Take profit', 'pos', tp.unit === 'pct' ? +((entry as number) * (1 + (tp.pct as number) / 100)).toFixed(2) : tp.price, '')
-    }
-    return { d, buy, qtyN, entry, line, legs, value: entry != null ? money(qtyN * entry, '', 2) : '' }
-  })
+  const draftInfo = $derived(draftStore.d ? draftCard(draftStore.d) : null)
 
   function resume() { onclose(); resumeDraft() }
 

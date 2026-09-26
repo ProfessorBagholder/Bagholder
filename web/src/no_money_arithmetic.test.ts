@@ -31,7 +31,6 @@ const ALLOWED: Record<string, [number, string]> = {
   '/src/lib/ticket/ticket.svelte.ts': [9, 'the order API takes numbers: the server\'s figures, the held units and the Max cross into them (`ticketNumber`)'],
   '/src/lib/ticket/OrderTicket.svelte': [1, "the units an amount bought, as the server stated them, into the field's number"],
   '/src/lib/ticket/vals.ts': [1, 'the number typed into a field, which the server reads as text'],
-  '/src/lib/orders/OrdersPanel.svelte': [4, "the orders document's numbers (the old store's until stage 4 moves orders)"],
   '/src/lib/orders/orders.svelte.ts': [1, 'the number typed into an order edit (stage 4)'],
   '/src/lib/heatmap/treemap.ts': [1, "a tile's day change, a ratio (stage 5)"],
 }

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ordersStore, bracketLegs, orderDetailLine, orderPill, type Order, type Bracket } from './orders.svelte'
+import { ordersStore, bracketLegs, orderDetailLine, orderPill, draftCard, type Order, type Bracket } from './orders.svelte'
+import type { TicketDraft } from '../ticket/ticket.svelte'
+import type { Preview } from '../generated/orders'
 
 // SPEC.md §4, Orders: what a card's second line and a bracket's leg rows say in each
 // state the server can send. The rules, not examples: every ended state and every
@@ -33,6 +35,42 @@ describe('an order whose cancel is out', () => {
   })
   it('and no other live state says it', () => {
     for (const status of ['sent', 'pending'] as const) expect(orderDetailLine(order({ status }))).not.toContain('Cancelling')
+  })
+})
+
+describe('the draft card', () => {
+  // the server's figures for what the draft holds (POST /api/order/preview)
+  const preview = (over: Record<string, unknown> = {}) => ({
+    entry: '165.4', limit: '165.4', stop: '168.71', quantity: '25', notional: '4135', stopLossOn: true, takeProfitOn: true, trailing: false,
+    trail: '5', trailDistance: '8.27', stopLossPctIn: '5', stopLossPrice: '157.13', takeProfitPctIn: '10', takeProfitPrice: '181.94',
+    stopLossValue: '3928.25', takeProfitValue: '4548.5', ...over,
+  }) as unknown as Preview
+  const draft = (over: Partial<TicketDraft> = {}): TicketDraft => ({
+    symbol: 'X', side: 'BUY', exchange: 'EX', at: '2026-09-19T16:00:00Z', accountId: 'a', type: 'LIMIT', tif: 'DAY',
+    qty: 1, limit: null, stop: null,
+    sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
+    tp: { on: true, price: null, pct: null, unit: 'amt' }, text: {}, preview: preview(), ...over,
+  })
+  it('shows the server\'s amount, quantity, price and legs, though nothing was typed', () => {
+    const c = draftCard(draft())
+    expect([c.value, c.line]).toEqual(['$4,135.00', 'Buy 25 at 165.40 limit · Day'])
+    expect(c.legs.map((l) => [l.label, l.value, l.amount])).toEqual([['Stop loss', '25 at 157.13', '$3,928.25'], ['Take profit', '25 at 181.94', '$4,548.50']])
+  })
+  it('a trailing stop names its trail beside its starting level', () => {
+    const c = draftCard(draft({ preview: preview({ trailing: true, trail: '5' }) }))
+    expect(c.legs[0].value).toBe('25 at 157.13 · trailing 5%')
+  })
+  it('a leg that is off, or a sale, has no leg row', () => {
+    expect(draftCard(draft({ preview: preview({ stopLossOn: false, stopLossValue: null }) })).legs.map((l) => l.label)).toEqual(['Take profit'])
+    expect(draftCard(draft({ side: 'SELL', preview: preview({ stopLossOn: false, takeProfitOn: false }) })).legs).toEqual([])
+  })
+  it('a market order holds no price: no amount', () => {
+    const c = draftCard(draft({ type: 'MARKET', preview: preview({ entry: '165.42' }) }))
+    expect([c.value, c.line]).toEqual(['', 'Buy 25 at market'])
+  })
+  it('without the server\'s figures it shows no figure it would have to work out', () => {
+    const c = draftCard(draft({ preview: null, limit: 1.72 }))
+    expect([c.value, c.line, c.legs]).toEqual(['', 'Buy 1 at 1.72 limit · Day', []])
   })
 })
 

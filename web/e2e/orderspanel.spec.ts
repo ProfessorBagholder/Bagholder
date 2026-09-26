@@ -225,14 +225,19 @@ test('a closed-without-sending draft is an amber card above Pending, with Resume
     sl: { on: true, kind: 'stop', price: 1.6, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: false, price: null, pct: null, unit: 'amt' },
     text: {},
+    // the server's figures for what the draft holds, as the ticket last had them
+    preview: { entry: '1.72', limit: '1.72', quantity: '1', notional: '1.72', stopLossOn: true, takeProfitOn: false, trailing: false, stopLossPrice: '1.6', stopLossValue: '1.6', takeProfitPrice: null, takeProfitValue: null },
   }
   await page.addInitScript((d) => localStorage.setItem('bh2.ticketDraft', JSON.stringify(d)), draft)
   await openPanel(page, request, { ok: true, live: false, orders: [], brackets: [] }, { openOrders: 0 })
   const card = page.locator('.od-card.draft')
   await expect(card.locator('.od-draft')).toHaveText('Draft')
   await expect(card.locator('.od-title')).toContainText('TSX-V: QNC')
+  await expect(card.locator('.od-value')).toHaveText('$1.72')
   await expect(card.locator('.od-line')).toHaveText('Buy 1 at 1.72 limit · Day')
+  await expect(card.locator('.od-leg')).toHaveCount(1)
   await expect(card.locator('.od-leg')).toContainText('1 at 1.60')
+  await expect(card.locator('.od-leg-amt')).toHaveText('$1.60')
   await card.getByRole('button', { name: 'Resume' }).click()
   await expect(page.getByRole('dialog', { name: 'Orders' })).toHaveCount(0)
   await expect(page.getByRole('dialog', { name: 'New order' })).toBeVisible()

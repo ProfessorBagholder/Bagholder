@@ -17,14 +17,19 @@ import { ticketNumber } from '../dec'
 export const ticketStore = $state<{ t: Ticket | null; preview: Preview | null; previewError: string }>({ t: null, preview: null, previewError: '' })
 
 // The set-aside draft (legacy state.ticketDraft): the Orders panel reads it to
-// show the Pending draft card with Resume / Discard.
+// show the Pending draft card with Resume / Discard. `preview` is the server's
+// figures for what the draft holds, as the ticket last had them: the card's amount
+// and its legs' levels and amounts are those, never worked out in the page.
 export interface TicketDraft {
   symbol: string; side: 'BUY' | 'SELL'; exchange: string; at: string
   accountId: string; type: string; tif: string
   qty: number | null; limit: number | null; stop: number | null
   sl: Ticket['sl']; tp: Ticket['tp']; text: Record<string, string | null>
+  preview?: Preview | null
 }
 export const draftStore = $state<{ d: TicketDraft | null }>({ d: null })
+// the ticket the draft was set aside from, while an answer for it may still come
+let draftOf: Ticket | null = null
 
 const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl', 'tp', 'text'] as const
 
@@ -92,7 +97,15 @@ export async function refreshPreview(): Promise<void> {
   if (!t) return
   const n = ++asked
   const r = await call('POST /api/order/preview', { body: previewRequest(t, ctx()) })
-  if (n !== asked || ticketStore.t !== t) return
+  if (n !== asked) return
+  if (ticketStore.t !== t) {
+    // closed while asked: the draft it left holds what this answers
+    if (draftOf === t && draftStore.d && !('error' in r && r.error)) {
+      draftStore.d.preview = r as Preview
+      keepDraft()
+    }
+    return
+  }
   if ('error' in r && r.error) {
     ticketStore.previewError = r.error
     return
@@ -164,13 +177,18 @@ function tkRememberedAccount(accounts: TicketAccount[]): string {
   return ''
 }
 function saveDraft(t: Ticket) {
-  const d = { symbol: t.symbol, side: t.side, exchange: t.exchange, at: new Date().toISOString() } as Record<string, unknown>
+  const d = { symbol: t.symbol, side: t.side, exchange: t.exchange, at: new Date().toISOString(), preview: ticketStore.preview } as Record<string, unknown>
   for (const k of TK_DRAFT_KEYS) d[k] = (t as unknown as Record<string, unknown>)[k]
   draftStore.d = d as unknown as TicketDraft
-  try { localStorage.setItem('bh2.ticketDraft', JSON.stringify(d)) } catch { /* ignore */ }
+  draftOf = t
+  keepDraft()
+}
+function keepDraft() {
+  try { localStorage.setItem('bh2.ticketDraft', JSON.stringify(draftStore.d)) } catch { /* ignore */ }
 }
 export function dropDraft() {
   draftStore.d = null
+  draftOf = null
   try { localStorage.removeItem('bh2.ticketDraft') } catch { /* ignore */ }
 }
 function loadDraftFromStorage() {

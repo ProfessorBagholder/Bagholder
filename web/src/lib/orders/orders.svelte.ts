@@ -6,7 +6,7 @@ import { filters } from '../filters.svelte'
 import { store } from '../state.svelte'
 import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live'
-import { draftStore } from '../ticket/ticket.svelte'
+import { draftStore, type TicketDraft } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
 import { plain } from '../ticket/vals'
 import { symText } from '../sym'
@@ -180,6 +180,32 @@ export function bracketLegs(b: Bracket): Leg[] {
     legs.push({ key: 'tp', label: 'Take profit', tone: 'pos', line, amount: amt, note })
   }
   return legs
+}
+
+/**
+ * The draft card (SPEC.md §4, Orders, Pending): its words from what the draft holds,
+ * its amount and its legs' levels and amounts the server's, from the preview the
+ * ticket last had for it. A draft with no preview shows no figure.
+ */
+export function draftCard(d: TicketDraft): { d: TicketDraft; line: string; legs: { label: string; tone: string; value: string; amount: string }[]; value: string } {
+  const p = d.preview ?? null
+  const buy = d.side !== 'SELL', market = d.type === 'MARKET'
+  const qty = p ? p.quantity : d.qty
+  const tif = d.tif === 'DAY' ? 'Day' : 'GTC'
+  const how = market ? 'at market'
+    : d.type === 'STOP_LIMIT' ? 'stop ' + px(p ? p.stop : d.stop) + ' · limit ' + px(p ? p.limit : d.limit)
+    : 'at ' + px(p ? p.entry : d.type === 'STOP' ? d.stop : d.limit) + ' ' + (d.type === 'STOP' ? 'stop' : 'limit')
+  const line = (buy ? 'Buy ' : 'Sell ') + qtyFmt(qty) + ' ' + how + (market ? '' : ' · ' + tif)
+  const legs: { label: string; tone: string; value: string; amount: string }[] = []
+  if (p && p.stopLossOn && p.stopLossPrice != null) {
+    const trail = p.trailing ? ' · trailing ' + (d.sl.unit === 'pct' ? plain(p.trail) + '%' : px(p.trail)) : ''
+    legs.push({ label: 'Stop loss', tone: 'neg', value: qtyFmt(p.quantity) + ' at ' + px(p.stopLossPrice) + trail, amount: p.stopLossValue != null ? money(p.stopLossValue, '', 2) : '' })
+  }
+  if (p && p.takeProfitOn && p.takeProfitPrice != null) {
+    legs.push({ label: 'Take profit', tone: 'pos', value: qtyFmt(p.quantity) + ' at ' + px(p.takeProfitPrice), amount: p.takeProfitValue != null ? money(p.takeProfitValue, '', 2) : '' })
+  }
+  // the order's amount where the draft holds a price: none for a market order
+  return { d, line, legs, value: !market && p && p.notional != null ? money(p.notional, '', 2) : '' }
 }
 
 // the accounts in scope, from the page's filter, which names each by its id
