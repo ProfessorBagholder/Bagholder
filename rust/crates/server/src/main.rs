@@ -98,6 +98,10 @@ fn serve() -> i32 {
     let a = app::App::new(home, root_dir(), bind_host.clone());
     // an update the supervisor rolled back is said in the header by the server it started
     update::recall_failure(&a);
+    // the local model keeps its file in this app's data folder, and is off until told so
+    if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
+        log(&format!("bagholder: the local model is off: {}", e));
+    }
     // the first borrow prepares the store (the pool's schema), so a store that
     // cannot be prepared stops the server here, saying why
     if let Err(e) = a.open() {

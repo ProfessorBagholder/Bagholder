@@ -9,6 +9,11 @@
 //!    server. This happens once, lazily, the first time a summary is asked
 //!    for; later starts reuse the downloaded file.
 //!
+//! None of this happens until the app that runs the model says where it keeps
+//! its data (`serve_from`, called by the server as it starts): until then the
+//! model is off, nothing is probed, downloaded or started, so a test that builds
+//! an app on a temporary home never reaches for a model.
+//!
 //! Everything is best-effort and answers "" rather than failing. The file is
 //! fetched over HTTPS from a pinned Hugging Face URL and refused unless its
 //! SHA-256 matches the pin, so a tampered or truncated download is never run.
@@ -54,9 +59,10 @@ pub mod hooks {
     }
 }
 
-/// Back to the state a fresh process starts in (nothing detected, off).
+/// Back to the state a fresh process starts in (nothing detected, off, no folder).
 pub fn reset_state() {
     let mut st = state().lock().unwrap();
+    st.folder = None;
     st.phase = "off";
     st.detail.clear();
     st.proc = None;
@@ -110,6 +116,9 @@ const ALLOWED_HOSTS: [&str; 3] = ["huggingface.co", "cdn-lfs.huggingface.co", "c
 pub const COMING_UP: [&str; 2] = ["detecting", "starting"];
 
 struct State {
+    /// Where the model file is kept: the running app's data folder's `models`,
+    /// or none while no app has said (the model is then off).
+    folder: Option<PathBuf>,
     phase: &'static str,
     detail: String,
     proc: Option<Child>,
@@ -130,21 +139,26 @@ pub fn next_rest(before: Option<Duration>) -> Duration {
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new(), rest: None }))
+    S.get_or_init(|| Mutex::new(State { folder: None, phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new(), rest: None }))
 }
 
-fn home() -> PathBuf {
-    match std::env::var("BAGHOLDER_HOME") {
-        Ok(h) if !h.is_empty() => PathBuf::from(h),
-        _ => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".bagholder-rust"),
-    }
+/// Turn the model on for the app whose data folder is `home`: the model file is
+/// kept in its `models` folder. Called by the server as it starts, once; a test
+/// run is refused the person's own folder.
+pub fn serve_from(home: &std::path::Path) -> Result<(), String> {
+    let home = bagholder_store::guard_home(home)?;
+    state().lock().unwrap().folder = Some(home.join("models"));
+    Ok(())
 }
 
-fn llamafile_path() -> PathBuf {
-    // a test never makes or fills the person's model folder
-    let d = bagholder_store::guard_home(&home()).expect("a test reached the real data folder").join("models");
-    let _ = std::fs::create_dir_all(&d);
-    d.join("summarizer.llamafile")
+/// The folder the model file is kept in, or none while the model is off.
+pub fn folder() -> Option<PathBuf> {
+    state().lock().unwrap().folder.clone()
+}
+
+fn llamafile_path(folder: &std::path::Path) -> PathBuf {
+    let _ = std::fs::create_dir_all(folder);
+    folder.join("summarizer.llamafile")
 }
 
 fn get_ok(url: &str, timeout: Duration) -> bool {
@@ -222,9 +236,10 @@ pub fn endpoint() -> String {
         if !st.endpoint.is_empty() {
             return st.endpoint.clone();
         }
-        // while an attempt is under way or resting, nothing is asked: a caller
-        // checking many times a second never probes a server once per check
-        if !may_try(&st) {
+        // off until an app has said where it keeps its data; while an attempt is under
+        // way or resting, nothing is asked: a caller checking many times a second never
+        // probes a server once per check
+        if st.folder.is_none() || !may_try(&st) {
             return String::new();
         }
     }
@@ -259,7 +274,7 @@ pub fn ensure() {
     }
     {
         let mut st = state().lock().unwrap();
-        if !st.endpoint.is_empty() || !may_try(&st) {
+        if st.folder.is_none() || !st.endpoint.is_empty() || !may_try(&st) {
             return;
         }
         st.phase = "detecting";
@@ -306,7 +321,11 @@ fn provision() {
         changed();
         return;
     }
-    let path = llamafile_path();
+    let Some(folder) = folder() else {
+        set("off", "");
+        return;
+    };
+    let path = llamafile_path(&folder);
     if !verified(&path) {
         set("downloading", "");
         if !download(&path) {
@@ -532,6 +551,8 @@ mod rest_tests {
         }
         assert_eq!(probes.get(), 0, "a check during an attempt or its rest asks no server");
         reset_state();
+        // on, as a running server turns it on (nothing is written there: the probe answers none)
+        state().lock().unwrap().folder = Some(std::env::temp_dir().join("bagholder-localmodel-test"));
         assert_eq!(endpoint(), "");
         assert_eq!(probes.get(), 1, "with nothing under way, one check probes once");
         hooks::clear();

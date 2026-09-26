@@ -639,3 +639,21 @@ fn test_a_git_checkout_goes_back_to_its_commit_when_the_new_version_dies() {
     assert_eq!(std::fs::read_to_string(root.path().join("page.html")).unwrap(), "before\n");
     assert_failure_said(home.path(), "v99.0.0");
 }
+
+// ---------------------------------------------------------------------------
+// LocalModelTest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_test_app_never_turns_the_local_model_on() {
+    let _g = guard();
+    // what the filings path asks of the model: whether one is up, and a wait for one coming
+    assert!(!bagholder_market::enrich::summary_available());
+    assert!(!bagholder_market::enrich::wait_for_summary(0.0));
+    // the model has no folder at all, so none outside this app's home; and nothing was started
+    let home = crate::tests_common::app().home.clone();
+    let folder = bagholder_market::localmodel::folder();
+    assert!(folder.as_ref().map_or(true, |f| f.starts_with(&home)), "the model folder {:?} is outside {:?}", folder, home);
+    assert_eq!(folder, None, "only the running server turns the model on");
+    assert_eq!(bagholder_market::localmodel::status(), "off", "nothing detected, downloaded or started");
+}
