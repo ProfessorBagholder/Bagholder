@@ -89,9 +89,9 @@ export function plot(d: Dec): number {
 }
 
 /**
- * A starting value for the order ticket, which works on what the person types, as
- * numbers, and sends numbers (the order API's own shape): a held quantity, the
- * accounts' value for a share of it. Never shown as a figure, never summed.
+ * A starting value for the order ticket's quantity field, which holds what the
+ * person types as a number: a held quantity, the server's Max. Never shown as a
+ * figure, never summed, never sent (the order goes as the server's decimal text).
  */
 export function ticketNumber(f: Fig<Dec> | null | undefined): number | null {
   return f == null || waits(f) ? null : Number(f)

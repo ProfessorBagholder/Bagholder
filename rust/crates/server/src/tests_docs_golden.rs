@@ -15,7 +15,6 @@ use bagholder_model::patch::{self, Diff};
 use bagholder_store::feeds::{
     FiledDocument, Filing, Gauge, GaugePoint, GaugeReading, Regulator, ShortMarket, Shorts, StoredGauge, StoredShorts,
 };
-use bagholder_store::orders::{Bracket, Order, OrderStatus, OrderType, Role, Side, Source};
 
 use crate::docs::HistoryPending;
 use crate::feeds::{FearDoc, ShortsFeedRow, ShortsFeed};
@@ -70,34 +69,44 @@ fn test_status_field_change_is_one_set() {
 
 // --- orders: a row added, changed, then removed ---------------------------
 
-fn order(id: &str, status: OrderStatus) -> Order {
-    Order {
+fn dec(s: &str) -> crate::wire::Dec {
+    crate::wire::Dec(bagholder_core::Dec::parse(s).unwrap())
+}
+
+fn order(id: &str, state: &str) -> OrderCard {
+    OrderCard {
         id: id.into(),
-        created_at: "2026-09-15T14:00:00Z".into(),
-        account_id: "acct-1".into(),
-        account: "🚀 Trading".into(),
-        security_id: "sec-1".into(),
+        account: "acct-1".into(),
+        exchange: "TSX-V".into(),
         symbol: "QNC".into(),
-        currency: "CAD".into(),
-        side: Side::Buy,
-        kind: OrderType::Limit,
-        quantity: Some(5.0),
-        limit_price: Some(1.75),
-        status,
-        role: Role::Entry,
-        source: Source::Bagholder,
-        ..Order::default()
+        side: "buy".into(),
+        kind: "limit".into(),
+        tif: Some("day".into()),
+        quantity: dec("5"),
+        limit_price: Some(dec("1.75")),
+        stop_price: None,
+        state: state.into(),
+        filled: dec(if state == "filled" { "5" } else { "0" }),
+        average: None,
+        why: None,
+        value: Some(crate::wire::Fig::Stated(dec("8.75"))),
+        approx: false,
+        tab: if state == "filled" { "filled" } else { "pending" }.into(),
+        at: "2026-09-15T14:00:00Z".into(),
+        live: state == "pending",
+        editable: state == "pending",
+        legs: vec![],
     }
 }
 
-fn orders_doc(orders: Vec<Order>) -> OrdersDoc {
-    OrdersDoc { ok: true, orders: orders.into_iter().map(|order| OrderCard { exchange: "TSX-V".into(), order }).collect(), brackets: Vec::<Bracket>::new(), live: true, refreshed_at: "2026-09-15T14:00:00Z".into() }
+fn orders_doc(orders: Vec<OrderCard>) -> OrdersDoc {
+    OrdersDoc { ok: true, live: true, refreshed_at: Some("2026-09-15T14:00:00Z".into()), orders, brackets: vec![], error: None }
 }
 
 #[test]
 fn test_an_order_row_added_changed_and_removed() {
     let empty = orders_doc(vec![]);
-    let one_pending = orders_doc(vec![order("o1", OrderStatus::Pending)]);
+    let one_pending = orders_doc(vec![order("o1", "pending")]);
     let added = tdiff(&empty, &one_pending);
     assert_eq!(added.len(), 1);
     assert_eq!(added[0][0], json!("rows"));
@@ -106,9 +115,11 @@ fn test_an_order_row_added_changed_and_removed() {
     assert_eq!(added[0][3], json!(["o1"]));
     assert_eq!(added[0][4].as_object().unwrap().len(), 1, "the new row, whole, keyed by its id");
 
-    let one_filled = orders_doc(vec![order("o1", OrderStatus::Filled)]);
+    let one_filled = orders_doc(vec![order("o1", "filled")]);
     let changed = tdiff(&one_pending, &one_filled);
-    assert_eq!(changed, vec![json!(["set", ["orders", {"k": "id", "v": "o1"}, "status"], "filled"])], "one field of one row, not the list again");
+    let fields: Vec<Value> = changed.iter().map(|op| op[1][2].clone()).collect();
+    assert_eq!(fields, vec![json!("state"), json!("filled"), json!("tab"), json!("live"), json!("editable")], "the fields of one row that moved, not the list again: {changed:?}");
+    assert!(changed.iter().all(|op| op[0] == json!("set") && op[1][1] == json!({"k": "id", "v": "o1"})));
 
     // no row key can be named on an empty array, so the list going empty is a
     // whole-list `set`, not a `rows` op naming no rows -- true of the typed

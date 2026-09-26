@@ -1,43 +1,38 @@
-// Orders and brackets the app placed or Wealthsimple reports as pending, polled
-// while the panel is open. Ported from ledger.html's orders panel: the tabs, the
-// card/leg/foot builders, the in-place editors, cancel and adjust.
+// The Orders panel (SPEC.md §4, Orders): the orders the app placed or Wealthsimple
+// reports as pending, and the brackets that armed, watched while the panel is open.
+// The server builds every card (rust/crates/server/src/orders): its tab, its date,
+// whether it acts, its value and each leg's amount as exact decimal text, each leg's
+// word. The page only writes them out in the card grammar; it works nothing out.
 
 import { filters } from '../filters.svelte'
 import { store } from '../state.svelte'
-import { ui, flash } from '../ui.svelte'
+import { flash } from '../ui.svelte'
 import { watchDoc } from '../live'
 import { draftStore, type TicketDraft } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
 import { plain } from '../ticket/vals'
 import { symText } from '../sym'
 import { call } from '../api'
+import { cmp, sign, type Dec } from '../dec'
+
+import type { BracketCard, Leg, OrderCard, OrdersDoc } from '../generated/orders'
+export type { BracketCard, Leg, OrderCard, OrdersDoc } from '../generated/orders'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-// the server's own types (rust/crates/store/src/orders/types.rs), generated
-import type { Bracket, OrderCard, OrdersDoc } from '../generated/orders'
-export type { Bracket } from '../generated/orders'
-/** An order as the panel shows it: the order, and the venue its listing trades on. */
-export type Order = OrderCard
-export type OrdersResp = OrdersDoc
+export type Tab = 'pending' | 'filled' | 'cancelled'
 
-export const ordersStore = $state<{ data: OrdersResp | null; error: string; loaded: boolean }>({ data: null, error: '', loaded: false })
+export const ordersStore = $state<{ data: OrdersDoc | null; error: string; loaded: boolean }>({ data: null, error: '', loaded: false })
 export const panel = $state<{
-  tab: 'pending' | 'filled' | 'cancelled'
+  tab: Tab
   orderEdit: { id: string; error: string; qty: string | null; limit: string | null } | null
   bracketEdit: { id: string; error: string; sl: string | null; tp: string | null } | null
   busy: string
 }>({ tab: 'pending', orderEdit: null, bracketEdit: null, busy: '' })
 
-
-export const ORDER_LIVE: Record<string, number> = { sent: 1, pending: 1, cancelling: 1 }
-export const BRACKET_LIVE: Record<string, number> = { waiting: 1, armed: 1, firing: 1, target_placed: 1, stopping: 1, closing: 1 }
-
 // The orders are shown only while the panel is open, so they are sent only then: the
-// whole list when it opens, and after that each order's change as it happens (a fill,
-// a cancel going through, a bracket arming) written into that order's object. The
-// server reads them back from Wealthsimple closely while the panel is open or an
-// order is live; nothing here asks again.
+// whole document when it opens, and after that each card's change as it happens (a
+// fill, a cancel going through, a bracket arming) written into that card's object.
 let stopWatching: (() => void) | undefined
 export function openOrders(): void {
   panel.orderEdit = null
@@ -45,67 +40,101 @@ export function openOrders(): void {
   stopWatching?.()
   const holder = {
     get data() { return ordersStore.data },
-    set data(v: OrdersResp | null) {
+    set data(v: OrdersDoc | null) {
       ordersStore.data = v
       ordersStore.loaded = true
       ordersStore.error = v && v.ok === false ? 'Could not load the orders.' : ''
     },
   }
-  stopWatching = watchDoc<OrdersResp>('orders', {}, holder)
+  stopWatching = watchDoc<OrdersDoc>('orders', {}, holder)
 }
 export function closeOrders(): void {
   stopWatching?.()
   stopWatching = undefined
 }
 
-// --- pure formatting, ported verbatim ---
-export function orderPrice(o: Order): string {
-  if (o.type === 'MARKET') return '—'
-  if (o.type === 'STOP') return px(o.stopPrice)
-  if (o.type === 'STOP_LIMIT') return 'Stop ' + px(o.stopPrice) + ' · ' + px(o.limitPrice)
-  return px(o.limitPrice)
-}
-export function orderTypeWord(t: string): string {
-  return ({ MARKET: 'Market', LIMIT: 'Limit', STOP: 'Stop', STOP_LIMIT: 'Stop limit' } as Record<string, string>)[t] || (t ? t.charAt(0) + t.slice(1).toLowerCase().replace(/_/g, ' ') : '—')
-}
-export function orderById(id: string): Order | null { return (ordersStore.data?.orders ?? []).find((x) => x.id === id) || null }
-export function bracketOf(o: Order): Bracket | null { return (ordersStore.data?.brackets ?? []).find((b) => b.orderId === o.id) || null }
-export function orderLine(o: Order): string {
-  return (o.side === 'SELL' ? 'Sell ' : 'Buy ') + qtyFmt(o.quantity) + ' ' + symText(o.symbol) + ' at ' + (o.type === 'MARKET' ? 'market' : orderPrice(o) + ' ' + orderTypeWord(o.type).toLowerCase())
-}
-// `165.40 · Day`; a filled order names its fill instead of its type, and one whose
-// cancel is out says so until Wealthsimple is read saying it is cancelled
-export function orderDetailLine(o: Order): string {
-  if (o.status === 'filled') return 'Filled ' + qtyFmt(o.filledQty || o.quantity) + (o.avgFill ? ' at ' + px(o.avgFill) : '')
-  const tif = o.tif === 'DAY' ? 'Day' : o.tif === 'UNTIL_CANCEL' ? 'GTC' : ''
-  const how = o.type === 'MARKET' ? 'at market' : o.type === 'STOP_LIMIT' ? 'stop ' + px(o.stopPrice) + ' · limit ' + px(o.limitPrice) : 'at ' + orderPrice(o) + ' ' + orderTypeWord(o.type).toLowerCase()
-  return qtyFmt(o.quantity) + ' ' + how + (tif ? ' · ' + tif : '') + (o.status === 'cancelling' ? ' · Cancelling' : '')
-}
-// the card's title text (side span is separate): exchange and symbol
-export function orderTitle(o: Order): string { return (o.exchange ? o.exchange + ': ' : '') + symText(o.symbol) }
-export function orderFillLine(o: Order): string {
-  const filled = o.filledQty || 0
-  if (o.status === 'rejected' || o.status === 'failed') return o.error || ''
-  if (o.status !== 'filled' && filled && filled < (o.quantity ?? 0)) return qtyFmt(filled) + ' of ' + qtyFmt(o.quantity) + ' filled' + (o.avgFill ? ' at ' + px(o.avgFill) : '')
-  return ''
-}
-export function orderPill(o: Order): [string, string] {
-  const filled = o.filledQty || 0
-  switch (o.status) {
-    case 'pending': return filled && filled < (o.quantity ?? 0) ? ['Partially filled', 'accent'] : ['Pending', 'accent']
-    case 'sent': return ['Pending', 'accent']
-    // written, and Wealthsimple not heard from yet: the app's own word for it
-    case 'sending': return ['Sent', 'accent']
-    case 'cancelling': return ['Cancelling', 'accent']
-    case 'filled': return ['Filled', 'pos']
-    case 'cancelled': return ['Cancelled', '']
-    case 'expired': return ['Expired', '']
-    case 'rejected': return ['Rejected', 'neg']
-    case 'failed': return ['Failed', 'neg']
-    case 'dry': return ['Not sent', '']
-    default: return [o.status || '—', '']
+export function orderById(id: string): OrderCard | null { return (ordersStore.data?.orders ?? []).find((x) => x.id === id) || null }
+export function bracketById(id: string): BracketCard | null { return (ordersStore.data?.brackets ?? []).find((x) => x.id === id) || null }
+
+// --- the card grammar ---
+
+const TIF: Record<string, string> = { day: 'Day', 'until-cancel': 'GTC' }
+
+/** Whether the order takes a limit price: a limit or stop-limit order. */
+export const hasLimit = (o: OrderCard): boolean => o.kind === 'limit' || o.kind === 'stop-limit'
+
+// the quantity and how it works: `5 at 165.40 limit`, `5 at market`, `5 stop 1.60 · limit 1.55`
+function terms(o: Pick<OrderCard, 'kind' | 'quantity' | 'limitPrice' | 'stopPrice'>): string {
+  const q = qtyFmt(o.quantity)
+  switch (o.kind) {
+    case 'market': return q + ' at market'
+    case 'stop': return q + ' at ' + px(o.stopPrice) + ' stop'
+    case 'stop-limit': return q + ' stop ' + px(o.stopPrice) + ' · limit ' + px(o.limitPrice)
+    default: return q + ' at ' + px(o.limitPrice) + ' limit'
   }
 }
+
+// how an order filled: `Filled 5 at 1.75`
+function filledWords(quantity: Dec, average: Dec | null): string {
+  return 'Filled ' + qtyFmt(quantity) + (average != null ? ' at ' + px(average) : '')
+}
+
+/**
+ * Row two of an order's card: its terms and time in force (a market order's is its
+ * day, not said: `5 at market`), `Cancelling` while its cancel is out; how it went
+ * once filled.
+ */
+export function orderDetailLine(o: OrderCard): string {
+  if (o.state === 'filled') return filledWords(sign(o.filled) > 0 ? o.filled : o.quantity, o.average)
+  const tif = o.tif && o.kind !== 'market' ? TIF[o.tif] ?? '' : ''
+  return terms(o) + (tif ? ' · ' + tif : '') + (o.state === 'cancelling' ? ' · Cancelling' : '')
+}
+
+/** The order as a sentence, for the confirm dialog and the header: `Buy 100 QNC at 1.75 limit`. */
+export function orderLine(o: Pick<OrderCard, 'side' | 'symbol' | 'kind' | 'quantity' | 'limitPrice' | 'stopPrice'>): string {
+  const t = terms(o)
+  const sp = t.indexOf(' ')
+  return (o.side === 'sell' ? 'Sell ' : 'Buy ') + t.slice(0, sp) + ' ' + symText(o.symbol) + t.slice(sp)
+}
+
+/** The listing as the card's title names it: `NYSE: QNC`, the symbol alone with no exchange stored. */
+export function listing(c: { exchange: string; symbol: string }): string {
+  return (c.exchange ? c.exchange + ': ' : '') + symText(c.symbol)
+}
+
+/** The value at the right of an order's card: `≈` before a market order's guessed fill. */
+export function orderValue(o: OrderCard): string {
+  if (o.value == null) return ''
+  return (o.approx ? '≈ ' : '') + money(o.value, '', 2)
+}
+
+/**
+ * The third line, only for what the second cannot say: the fill so far on a pending
+ * order partly filled, the reason on a rejected or failed one.
+ */
+export function orderFillLine(o: OrderCard): string {
+  if (o.state === 'rejected' || o.state === 'failed') return o.why ?? ''
+  if (o.tab === 'pending' && sign(o.filled) > 0 && cmp(o.filled, o.quantity) < 0)
+    return qtyFmt(o.filled) + ' of ' + qtyFmt(o.quantity) + ' filled' + (o.average != null ? ' at ' + px(o.average) : '')
+  return ''
+}
+
+/** Written and sent, Wealthsimple's answer not read yet (SPEC.md §4, Orders, Status). */
+export const orderUnconfirmed = (o: OrderCard): boolean => o.state === 'sending' || o.state === 'unconfirmed'
+export const SENT_WORD = 'Sent · not confirmed'
+
+/** A finished order's state word at the right of its foot on the Cancelled tab, and whether it is red. */
+export function orderEndWord(o: OrderCard): [string, boolean] {
+  switch (o.state) {
+    case 'cancelled': return ['Cancelled', false]
+    case 'expired': return ['Expired', false]
+    case 'rejected': return ['Rejected', true]
+    case 'failed': return ['Failed', true]
+    case 'dry': return ['Not sent', false]
+    default: return ['', false]
+  }
+}
+
 export function orderWhenWord(iso: string | undefined): string {
   const t = Date.parse(iso || '')
   if (!isFinite(t)) return '—'
@@ -115,71 +144,40 @@ export function orderWhenWord(iso: string | undefined): string {
   if (d.toDateString() === now.toDateString()) return 'Today ' + time
   return MON[d.getMonth()] + ' ' + d.getDate() + (d.getFullYear() !== now.getFullYear() ? ' ' + d.getFullYear() : '') + ', ' + time
 }
-// contracts × 100; shares × 1
-export function orderMultiplier(o: Order): number { return /\s\d{2}[A-Z]{3}\d{2}\s[\d.]+\s(CALL|PUT)$/.test(o.symbol || '') ? 100 : 1 }
-export function orderValue(o: Order): string {
-  const mult = orderMultiplier(o)
-  if (o.status === 'filled' && o.avgFill) return money((o.filledQty || o.quantity || 0) * o.avgFill * mult, '', 2)
-  const price = o.type === 'MARKET' ? o.avgFill : o.type === 'STOP' ? o.stopPrice : o.limitPrice
-  if (!(price != null && price > 0)) return ''
-  return (o.type === 'MARKET' ? '≈ ' : '') + money((o.quantity ?? 0) * price * mult, '', 2)
-}
-// (a bracket does not fail: a leg Wealthsimple refuses is tried again for as long as it lives)
-export function bracketEndWord(b: Bracket): [string, string] {
-  return b.outcome === 'cancelled by the user' || b.outcome === 'both legs removed' ? ['Cancelled', ''] : ['Off', '']
-}
-export function bracketExited(b: Bracket): boolean { return b.status === 'done' && (b.outcome === 'stopped' || b.outcome === 'target') }
 
-export interface Leg { key: string; label: string; tone: string; line: string; amount: string; note: string }
-/**
- * A bracket's legs as its card shows them (SPEC.md §4, Orders, Bracket rows): no word
- * while a leg rests, is watched or waits for the fill; `Watching` on the stop while the
- * limit sell at the target rests, there being no stop at Wealthsimple then; `Placing`
- * and `Cancelling` while a request is out, `Retrying · <reason>` after a refused one;
- * at the end the leg that exited reads its fill, the other `Cancelled`, and both read
- * `Off` when the bracket ended without exiting.
- */
-export function bracketLegs(b: Bracket): Leg[] {
-  const legs: Leg[] = []
-  const all = ordersStore.data?.orders ?? []
-  const entry = orderById(b.orderId)
-  const mult = entry ? orderMultiplier(entry) : 1
-  const stopOrder = b.slOrderId ? orderById(b.slOrderId) : null, tpOrder = b.tpOrderId ? orderById(b.tpOrderId) : null
-  const done = b.status === 'done', off = b.status === 'cancelled'
-  // an exit of the bracket's own filled: one leg exited, the other did not
-  const exitedBy = b.outcome === 'stopped' || b.outcome === 'target'
-  const notExited = exitedBy ? 'Cancelled' : 'Off'
-  const cancelling = (role: string) => all.some((o) => o.parentId === b.orderId && o.role === role && o.status === 'cancelling')
-  const amount = (price: number | null) => (price && b.quantity ? money(b.quantity * price * mult, '', 2) : '')
-  const exited = (role: string) => all.find((o) => o.parentId === b.orderId && o.role === role && o.status === 'filled') || null
-  const went = (o: Order) => ({ line: 'Filled ' + qtyFmt(o.filledQty || b.quantity) + (o.avgFill ? ' at ' + px(o.avgFill) : ''), amount: o.avgFill ? money((o.filledQty || b.quantity || 0) * o.avgFill * mult, '', 2) : '' })
-  // the limit sell at the target rests at Wealthsimple
-  const targetRests = !!b.tpOrderId && (!tpOrder || tpOrder.status === 'sent' || tpOrder.status === 'pending')
-  if (b.slKind) {
-    let line = qtyFmt(b.quantity) + ' at ' + px(b.slPrice) + (b.slKind === 'trail' ? ' · trailing ' + (b.slTrailUnit === 'amt' ? px(b.slTrail) : plain(b.slTrail) + '%') : '')
-    let amt = amount(b.slPrice)
-    let note = ''
-    if (b.status === 'armed' || b.status === 'firing') note = b.slMode === 'watched' ? '' : stopOrder && stopOrder.status === 'cancelling' ? 'Cancelling' : stopOrder && ORDER_LIVE[stopOrder.status] ? '' : b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
-    else if (b.status === 'target_placed') note = targetRests ? 'Watching' : ''
-    else if (b.status === 'stopping') note = b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
-    else if (b.status === 'closing') note = b.outcome === 'stopped' ? 'Filled' : stopOrder || cancelling('stop') ? 'Cancelling' : notExited
-    else if (done) { const f = b.outcome === 'stopped' ? exited('stop') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'stopped' ? 'Filled' : notExited }
-    else if (off) note = 'Off'
-    legs.push({ key: 'sl', label: 'Stop loss', tone: 'neg', line, amount: amt, note })
+/** A leg row as a card shows it (SPEC.md §4, Orders, Bracket rows). */
+export interface LegRow { key: string; label: string; tone: string; line: string; note: string; amount: string }
+export function legRow(l: Leg): LegRow {
+  const sl = l.key === 'sl'
+  const trail = l.trailPct != null ? ' · trailing ' + plain(l.trailPct) + '%' : l.trailAmount != null ? ' · trailing ' + px(l.trailAmount) : ''
+  return {
+    key: l.key,
+    label: sl ? 'Stop loss' : 'Take profit',
+    tone: sl ? 'neg' : 'pos',
+    line: l.filled ? filledWords(l.filled.quantity, l.filled.average) : qtyFmt(l.quantity) + ' at ' + px(l.level) + trail,
+    note: l.note,
+    amount: money(l.amount, '', 2),
   }
-  if (b.tpPrice) {
-    let line = qtyFmt(b.quantity) + ' at ' + px(b.tpPrice)
-    let amt = amount(b.tpPrice)
-    let note = ''
-    if (b.status === 'armed' || b.status === 'firing') note = b.status === 'firing' && b.attempts ? 'Retrying · ' + (b.error || '') : ''
-    else if (b.status === 'target_placed') note = tpOrder && tpOrder.status === 'filled' ? 'Filled' : b.tpOrderId ? '' : b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
-    else if (b.status === 'stopping') note = 'Cancelling'
-    else if (b.status === 'closing') note = b.outcome === 'target' ? 'Filled' : cancelling('target') ? 'Cancelling' : notExited
-    else if (done) { const f = b.outcome === 'target' ? exited('target') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'target' ? 'Filled' : notExited }
-    else if (off) note = 'Off'
-    legs.push({ key: 'tp', label: 'Take profit', tone: 'pos', line, amount: amt, note })
-  }
-  return legs
+}
+
+/** A bracket's editor: the stop leg's field (its label and starting text), the target's starting text. */
+export function bracketEditor(b: BracketCard): { sl: { label: string; start: string; field: 'price' | 'trail'; cur: Dec } | null; tp: { start: string; cur: Dec } | null } {
+  const sl = b.trailAmount != null ? { label: 'Trail', start: px(b.trailAmount), field: 'trail' as const, cur: b.trailAmount }
+    : b.trailPct != null ? { label: 'Trail %', start: plain(b.trailPct), field: 'trail' as const, cur: b.trailPct }
+    : b.stopLevel != null ? { label: 'Stop price', start: px(b.stopLevel), field: 'price' as const, cur: b.stopLevel }
+    : null
+  return { sl, tp: b.target != null ? { start: px(b.target), cur: b.target } : null }
+}
+
+/** The cards of a tab in the accounts in scope, newest first together. */
+export type Card = { kind: 'order'; at: string; o: OrderCard } | { kind: 'bracket'; at: string; b: BracketCard }
+export function tabCards(doc: OrdersDoc, tab: Tab): Card[] {
+  const cards: Card[] = [
+    ...doc.orders.filter((o) => o.tab === tab && inOrdersScope(o.account)).map((o) => ({ kind: 'order' as const, at: o.at, o })),
+    ...doc.brackets.filter((b) => b.tab === tab && inOrdersScope(b.account)).map((b) => ({ kind: 'bracket' as const, at: b.at, b })),
+  ]
+  const when = (c: Card) => Date.parse(c.at) || 0
+  return cards.sort((a, c) => when(c) - when(a))
 }
 
 /**
@@ -210,7 +208,7 @@ export function draftCard(d: TicketDraft): { d: TicketDraft; line: string; legs:
 
 // the accounts in scope, from the page's filter, which names each by its id
 function ordersScope() { const on = filters.lists.account; return (store.model?.accounts ?? []).filter((a) => on.includes(a.id)) }
-// an order names its account by the broker's id for it
+// a card names its account by the broker's id for it
 export function inOrdersScope(brokerAccount: string): boolean { return !filters.lists.account.length || ordersScope().some((a) => a.brokerAccount === brokerAccount) }
 export function ordersScopeLabel(): string { const s = ordersScope(); return s.length ? s.map((a) => a.name).join(', ') : 'All Accounts' }
 
@@ -220,70 +218,78 @@ export function cancelOrderEdit() { panel.orderEdit = null }
 export function editBracket(id: string) { panel.bracketEdit = { id, error: '', sl: null, tp: null }; panel.orderEdit = null }
 export function cancelBracketEdit() { panel.bracketEdit = null }
 
-function parseField(v: string | null): number | null { if (v == null) return null; const n = parseFloat(v.replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n }
+const DEC_TEXT = /^\d+(\.\d+)?$/
+/**
+ * What was typed into an editor's box as the decimal text the server reads: the
+ * formatting a figure is shown with (`$`, grouping commas, spaces) taken off. Text
+ * that is not a positive decimal then is none.
+ */
+export function typedDec(v: string): Dec | null {
+  const t = v.replace(/[$,\s]/g, '')
+  return DEC_TEXT.test(t) && sign(t as Dec) > 0 ? (t as Dec) : null
+}
 
 export async function orderEditSave(id: string) {
   const o = orderById(id), e = panel.orderEdit
   if (!o || !e) return
-  const quantity = e.qty != null ? parseField(e.qty) : o.quantity
-  const limitPrice = e.limit != null ? parseField(e.limit) : (o.type === 'LIMIT' || o.type === 'STOP_LIMIT' ? o.limitPrice : null)
-  const hasLimit = o.type === 'LIMIT' || o.type === 'STOP_LIMIT'
-  if (!(quantity != null && quantity > 0)) { e.error = 'Shares must be more than zero.'; return }
-  if (hasLimit && !(limitPrice != null && limitPrice > 0)) { e.error = 'A limit price is required.'; return }
+  const quantity = e.qty != null ? typedDec(e.qty) : o.quantity
+  const limitPrice = !hasLimit(o) ? null : e.limit != null ? typedDec(e.limit) : o.limitPrice
+  if (quantity == null) { e.error = 'Shares must be more than zero.'; return }
+  if (hasLimit(o) && limitPrice == null) { e.error = 'A limit price is required.'; return }
   panel.busy = 'orders'; e.error = ''
   const r = await call('POST /api/order/modify', { body: { id, quantity, limitPrice } })
   panel.busy = ''
-  if (!r || !r.ok) { if (panel.orderEdit) panel.orderEdit.error = (r && (r.error as string)) || 'Could not change the order.'; return }
+  if (!r || !r.ok) { if (panel.orderEdit) panel.orderEdit.error = (r && r.error) || 'Could not change the order.'; return }
   panel.orderEdit = null
-  flash('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice != null ? limitPrice : o.limitPrice }), 'ok', 10000)
+  flash('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice ?? o.limitPrice }), 'ok', 10000)
 }
 
 export async function bracketEditSave(id: string) {
   const e = panel.bracketEdit
-  const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
+  const b = bracketById(id)
   if (!b || !e) return
-  const calls: Record<string, unknown>[] = []
-  if (b.slKind) {
-    const v = e.sl != null ? parseField(e.sl) : (b.slKind === 'trail' ? b.slTrail : b.slPrice)
-    if (!(v != null && v > 0)) { e.error = b.slKind === 'trail' ? 'A trail is required.' : 'A stop price is required.'; return }
-    const cur = b.slKind === 'trail' ? b.slTrail : b.slPrice
-    if (v !== cur) calls.push(b.slKind === 'trail' ? { id, leg: 'sl', trail: v } : { id, leg: 'sl', price: v })
+  const ed = bracketEditor(b)
+  const calls: { id: string; leg: string; price: Dec | null; trail: Dec | null }[] = []
+  if (ed.sl) {
+    const v = e.sl != null ? typedDec(e.sl) : ed.sl.cur
+    if (v == null) { e.error = ed.sl.field === 'trail' ? 'A trail is required.' : 'A stop price is required.'; return }
+    if (cmp(v, ed.sl.cur) !== 0) calls.push(ed.sl.field === 'trail' ? { id, leg: 'sl', price: null, trail: v } : { id, leg: 'sl', price: v, trail: null })
   }
-  if (b.tpPrice) {
-    const v = e.tp != null ? parseField(e.tp) : b.tpPrice
-    if (!(v != null && v > 0)) { e.error = 'A limit price is required.'; return }
-    if (v !== b.tpPrice) calls.push({ id, leg: 'tp', price: v })
+  if (ed.tp) {
+    const v = e.tp != null ? typedDec(e.tp) : ed.tp.cur
+    if (v == null) { e.error = 'A limit price is required.'; return }
+    if (cmp(v, ed.tp.cur) !== 0) calls.push({ id, leg: 'tp', price: v, trail: null })
   }
   if (!calls.length) { panel.bracketEdit = null; return }
   panel.busy = 'orders'; e.error = ''
-  for (const c of calls) {
-    const r = await call('POST /api/bracket/adjust', { body: c as { id: string; leg: string; price?: number; trail?: number } })
-    if (!r || !r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not change the bracket.'; return }
+  for (const body of calls) {
+    const r = await call('POST /api/bracket/adjust', { body })
+    if (!r || !r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = (r && r.error) || 'Could not change the bracket.'; return }
   }
   panel.busy = ''; panel.bracketEdit = null
-  flash('Bracket changed · ' + b.symbol, 'ok', 10000)
+  flash('Bracket changed · ' + symText(b.symbol), 'ok', 10000)
 }
 
 export async function bracketRemove(id: string, leg: string) {
-  const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
+  const b = bracketById(id)
   if (!b) return
   panel.busy = 'orders'
-  const r = await call('POST /api/bracket/adjust', { body: { id, leg, remove: true } })
+  const r = await call('POST /api/bracket/adjust', { body: { id, leg, price: null, trail: null, remove: true } })
   panel.busy = ''
-  if (!r || !r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not remove the leg.'; return }
+  if (!r || !r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = (r && r.error) || 'Could not remove the leg.'; return }
   panel.bracketEdit = null
-  flash((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + b.symbol, 'ok', 10000)
+  flash((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + symText(b.symbol), 'ok', 10000)
 }
 
 export async function cancelOrderNow(id: string) {
   const o = orderById(id)
   const r = await call('POST /api/order/cancel', { body: { id } })
-  flash(r && r.ok ? 'Cancel sent · ' + (o ? orderLine(o) : '') : (r && (r.error as string)) || 'Could not cancel the order.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
+  flash(r && r.ok ? 'Cancel sent · ' + (o ? orderLine(o) : '') : (r && r.error) || 'Could not cancel the order.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
 }
 export async function cancelBracketNow(id: string) {
-  const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
+  const b = bracketById(id)
   const r = await call('POST /api/bracket/cancel', { body: { id } })
-  flash(r && r.ok ? 'Bracket cancelled · ' + (b ? b.symbol : '') : (r && (r.error as string)) || 'Could not cancel the bracket.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
+  flash(r && r.ok ? 'Bracket cancelled · ' + (b ? symText(b.symbol) : '') : (r && r.error) || 'Could not cancel the bracket.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
 }
 
 export { draftStore }

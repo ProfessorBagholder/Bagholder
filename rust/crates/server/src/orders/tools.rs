@@ -1,133 +1,59 @@
-//! Small tools the order code shares: reading a JSON row, words for a price and a
-//! quantity, times, the one way to Wealthsimple, and the store.
+//! What the order code shares: the session, the one way it reads Wealthsimple, the
+//! words for a failed call, notices, and whether the checks run.
 
-use super::*;
+use std::sync::Arc;
 
-// ---------------------------------------------------------------------------
-// small tools
-// ---------------------------------------------------------------------------
+use bagholder_ws::session::CallError;
+use serde_json::Value;
 
-pub fn orders_live() -> bool {
+use crate::app::App;
+use crate::notify;
+use crate::session::{ensure_fresh_token, load_session};
+
+pub(crate) use crate::app::log;
+
+/// The session orders are sent and read with, its token refreshed when due.
+pub(crate) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Session> {
     #[cfg(test)]
-    if let Some(v) = *seam::LIVE.lock().unwrap_or_else(|e| e.into_inner()) {
-        return v;
+    {
+        return app.orders.seam.session.lock().unwrap_or_else(|e| e.into_inner()).clone();
     }
-    static LIVE: OnceLock<bool> = OnceLock::new();
-    *LIVE.get_or_init(|| std::env::var("BAGHOLDER_DRY_ORDERS").map(|v| v.trim() != "1").unwrap_or(true))
-}
-
-pub(super) fn db(app: &Arc<App>) -> bagholder_store::pool::Pooled<'_> {
-    app.open().expect("bagholder orders: the store could not be opened")
-}
-
-pub(super) fn must<T>(r: rusqlite::Result<T>) -> T {
-    r.unwrap_or_else(|e| panic!("bagholder orders: store: {}", e))
-}
-
-/// The first value that is present and non-zero.
-pub(super) fn or_f(a: Option<f64>, b: Option<f64>) -> Option<f64> {
-    match a {
-        Some(x) if x != 0.0 => Some(x),
-        _ => b,
-    }
-}
-
-pub(super) fn jo(v: Option<f64>) -> Value {
-    match v {
-        Some(x) if x.is_finite() => json!(x),
-        _ => Value::Null,
-    }
-}
-
-pub(super) fn set(v: &mut Value, k: &str, x: Value) {
-    if let Value::Object(m) = v {
-        m.insert(k.to_string(), x);
-    }
-}
-
-/// `x` rounded to `n` decimals, ties to even.
-pub(super) fn round_half_even(x: f64, n: usize) -> f64 {
-    format!("{:.*}", n, x).parse().unwrap_or(x)
-}
-
-/// `str(float)`, or `None`.
-pub(super) fn rp(v: Option<f64>) -> String {
-    match v {
-        Some(x) => bagholder_model::value::num_repr(x),
-        None => "None".into(),
-    }
-}
-
-/// `x` in `%g` form: six significant digits, trailing zeros dropped.
-pub(super) fn fmt_g(x: f64) -> String {
-    if x == 0.0 {
-        return if x.is_sign_negative() { "-0".into() } else { "0".into() };
-    }
-    if !x.is_finite() {
-        return if x.is_nan() { "nan".into() } else if x > 0.0 { "inf".into() } else { "-inf".into() };
-    }
-    let e_form = format!("{:.5e}", x);
-    let (mant, exp) = e_form.split_once('e').unwrap();
-    let exp: i32 = exp.parse().unwrap_or(0);
-    if exp < -4 || exp >= 6 {
-        let m = if mant.contains('.') { mant.trim_end_matches('0').trim_end_matches('.') } else { mant };
-        format!("{}e{}{:02}", m, if exp < 0 { '-' } else { '+' }, exp.abs())
-    } else {
-        let t = format!("{:.*}", (5 - exp).max(0) as usize, x);
-        if t.contains('.') {
-            t.trim_end_matches('0').trim_end_matches('.').to_string()
-        } else {
-            t
-        }
-    }
-}
-
-pub(super) fn two(b: &[u8], i: usize) -> Option<i64> {
-    let a = (b[i] as char).to_digit(10)?;
-    let c = (b[i + 1] as char).to_digit(10)?;
-    Some((a * 10 + c) as i64)
-}
-
-/// `%Y-%m-%dT%H:%M:%S` as unix seconds; exact.
-pub(super) fn parse_ymdhms(t: &str) -> Option<i64> {
-    let b = t.as_bytes();
-    if b.len() != 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+    #[allow(unreachable_code)]
+    let sess = load_session(app)?;
+    if sess.access_token.is_empty() {
         return None;
     }
-    let y: i64 = t[..4].parse().ok()?;
-    let (mo, d, h, mi, se) = (two(b, 5)?, two(b, 8)?, two(b, 11)?, two(b, 14)?, two(b, 17)?);
-    if !(1..=12).contains(&mo) || d < 1 || d > bagholder_model::dates::days_in_month(y, mo as u32) as i64 || h > 23 || mi > 59 || se > 61 {
-        return None;
+    ensure_fresh_token(app, Some(sess.clone()));
+    match load_session(app) {
+        Some(v) if !v.access_token.is_empty() || !v.refresh_token.is_empty() => Some(v),
+        _ => Some(sess),
     }
-    Some(bagholder_model::dates::to_days(y, mo as u32, d as u32) * 86400 + h * 3600 + mi * 60 + se)
 }
 
-/// `datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")`.
-pub(super) fn parse_z(t: &str) -> Option<i64> {
-    t.strip_suffix('Z').and_then(parse_ymdhms)
-}
+/// The order mutations, which only the gate sends.
+pub const MUTATIONS: [&str; 3] = ["SoOrdersOrderCreate", "SoOrdersOrderCancel", "SoOrdersOrderModify"];
 
-/// One call to Wealthsimple, its answer read as `T`: the order code's only way there.
-/// No answer is a failure, as the client itself has it, and so is one that is not the
-/// shape asked for. Under the dry setting nothing that places, cancels or changes an
-/// order is sent.
-pub(super) fn gql_as<T: serde::de::DeserializeOwned>(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: Value) -> Result<T, CallError> {
-    if !orders_live() && matches!(op, "SoOrdersOrderCreate" | "SoOrdersOrderCancel" | "SoOrdersOrderModify") {
-        return Err(CallError::Failed("orders are off (BAGHOLDER_DRY_ORDERS)".into()));
+/// One read of Wealthsimple, its answer read as `T`: the order code's only way there
+/// that is not the gate. No answer is a failure, as the client itself has it, and so is
+/// one that is not the shape asked for. An order mutation is refused here: it leaves
+/// through the gate or not at all.
+pub(crate) fn gql_as<T: serde::de::DeserializeOwned>(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: Value) -> Result<T, CallError> {
+    if MUTATIONS.contains(&op) {
+        return Err(CallError::Failed(format!("{op} leaves through the gate")));
     }
     #[cfg(test)]
     {
         let _ = sess;
-        let g = seam::GQL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let g = app.orders.seam.gql.lock().unwrap_or_else(|e| e.into_inner()).clone();
         return match g {
             Some(g) => read_answer(op, g(op, &vars)?),
-            None => Err(CallError::Failed(format!("{}: no network in tests", op))),
+            None => Err(CallError::Failed(format!("{op}: no network in tests"))),
         };
     }
     #[cfg(not(test))]
     {
         let home = app.ws_home();
-        Client { home: &home }.graphql::<T>(sess, op, &vars, None)
+        bagholder_ws::session::Client { home: &home }.graphql::<T>(sess, op, &vars, None)
     }
 }
 
@@ -135,74 +61,51 @@ pub(super) fn gql_as<T: serde::de::DeserializeOwned>(#[cfg_attr(test, allow(unus
 #[cfg(test)]
 pub(crate) fn read_answer<T: serde::de::DeserializeOwned>(op: &str, data: Value) -> Result<T, CallError> {
     if data.is_null() {
-        return Err(CallError::Failed(format!("graphql failed: {}", op)));
+        return Err(CallError::Failed(format!("graphql failed: {op}")));
     }
-    T::deserialize(data).map_err(|e| CallError::Failed(format!("{}: unreadable answer: {}", op, e)))
+    T::deserialize(data).map_err(|e| CallError::Failed(format!("{op}: unreadable answer: {e}")))
 }
 
-/// A refusal in words: the reason after the sentence when Wealthsimple gave one.
-pub(super) fn refused_words(what: &str, reason: &str) -> String {
-    if reason.is_empty() {
-        format!("{}.", what)
-    } else {
-        format!("{}: {}", what, reason)
-    }
-}
-
-pub(super) fn err_text(e: &CallError) -> String {
+pub(crate) fn err_text(e: &CallError) -> String {
     let t = e.to_string();
     if t.is_empty() {
-        "RuntimeError".into()
+        "the call failed".into()
     } else {
         t
     }
 }
 
-pub(super) fn orders_all(app: &Arc<App>) -> Vec<Order> {
-    must(so::typed::list_orders(&db(app), 200))
-}
-
-pub(super) fn order(app: &Arc<App>, id: &str) -> Option<Order> {
-    must(so::typed::get_order(&db(app), id))
-}
-
-pub(super) fn patch_order(app: &Arc<App>, id: &str, patch: OrderPatch) {
-    must(so::typed::update_order(&db(app), id, &patch, &now_iso()))
-}
-
-pub(super) fn live_brackets(app: &Arc<App>) -> Vec<Bracket> {
-    must(so::typed::list_brackets(&db(app), &BRACKET_LIVE_ST))
-}
-
-pub(super) fn bracket(app: &Arc<App>, id: &str) -> Option<Bracket> {
-    must(so::typed::get_bracket(&db(app), id))
-}
-
-pub(super) fn patch_bracket(app: &Arc<App>, id: &str, patch: BracketPatch) {
-    must(so::typed::update_bracket(&db(app), id, &patch, &now_iso()))
-}
-
-/// A number that is there and is not zero: what the engine means by "has a price".
-pub(super) fn some(v: Option<f64>) -> bool {
-    v.map_or(false, |x| x != 0.0)
-}
-
-/// A time Wealthsimple gives (`2026-09-10T14:00:00.123Z`), in seconds.
-pub(super) fn parse_utc_text(t: &str) -> Option<i64> {
-    let t = t.trim();
-    if t.is_empty() {
-        return None;
+/// Tell the person: a notice of `kind`, said once under `key`.
+pub(crate) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str) {
+    match app.open() {
+        Ok(conn) => {
+            notify::emit(app, &conn, kind, key, title, body, None);
+        }
+        Err(e) => log(&format!("bagholder orders: the notice {key} could not be written: {e}")),
     }
-    parse_ymdhms(&t.chars().take(19).collect::<String>())
 }
 
-pub(super) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str) {
-    notify::emit(app, &db(app), kind, key, title, body, None);
-}
 /// Whether the order and bracket checks run now: whenever the app is connected.
 /// A sync in progress does not pause them: a stop is watched every few seconds
-/// whatever else reads Wealthsimple (`SPEC.md` §4, Brackets after the fill), and
-/// a token refresh is one at a time, adopted by whoever waited on it.
+/// whatever else reads Wealthsimple (`SPEC.md` §4, Brackets after the fill).
 pub(crate) fn orders_can_run(app: &Arc<App>) -> bool {
     app.state.lock().unwrap().connected
+}
+
+/// The failures the order code has standing, for the header (`SPEC.md` §1: every
+/// failure is said until its own next success): the brackets' quote, and each
+/// bracket stopped by its guard.
+pub fn order_failures(app: &Arc<App>) -> Vec<String> {
+    let mut out: Vec<String> = app.orders.quote_problem.lock().unwrap_or_else(|e| e.into_inner()).clone().into_iter().collect();
+    if let Some(f) = app.figures.get() {
+        match f.book().and_then(|b| b.live_brackets().map_err(|e| e.to_string())) {
+            Ok(live) => {
+                for sb in live.iter().filter(|b| b.bracket.phase == bagholder_core::bracket::Phase::Halted) {
+                    out.push(format!("The bracket on {} is stopped: {}; nothing more is sent until you change or cancel it", sb.place.symbol, sb.bracket.why.clone().unwrap_or_default()));
+                }
+            }
+            Err(e) => out.push(format!("The brackets could not be read: {e}")),
+        }
+    }
+    out
 }

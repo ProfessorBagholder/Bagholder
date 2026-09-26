@@ -73,6 +73,7 @@ pub fn status(app: &Arc<App>) -> Status {
     let off = update::updates_off();
     let mut sources = app.figures.get().map(|f| f.source_failures().unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default();
     sources.extend(crate::feeds::feed_failures(app));
+    sources.extend(orders::order_failures(app));
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
     let error = failures(&st, &sources);
@@ -99,7 +100,7 @@ pub fn status(app: &Arc<App>) -> Status {
         can_update,
         update_by: if off { "image" } else { "app" }.to_string(),
         login_view: login::login_view(),
-        orders_live: orders::orders_live(),
+        orders_live: orders::orders_live(app),
         open_orders,
         updating: st.updating.clone(),
         update_error: st.update_error.clone(),

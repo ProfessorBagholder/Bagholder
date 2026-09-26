@@ -169,7 +169,7 @@ impl App {
             login: crate::login::LoginState::default(),
             feeds: crate::feeds::FeedsState::default(),
             notify: crate::notify::NotifyState::default(),
-            orders: crate::orders::OrdersState::default(),
+            orders: crate::orders::OrdersState::from_env(),
             figures: std::sync::OnceLock::new(),
             net,
             pull_asked: AtomicBool::new(false),
@@ -329,18 +329,6 @@ pub fn f(v: &Value, k: &str) -> String {
     s(v.get(k))
 }
 
-/// An absent or unreadable number is the default.
-pub fn num(v: Option<&Value>, default: Option<f64>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => default,
-        Some(Value::String(t)) if t.is_empty() => default,
-        Some(Value::Number(n)) => n.as_f64().or(default),
-        Some(Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
-        Some(Value::String(t)) => bagholder_model::textrules::parse_float(t).or(default),
-        _ => default,
-    }
-}
-
 pub fn truthy(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null) => false,
@@ -356,13 +344,4 @@ pub fn log(line: &str) {
     eprintln!("{}", line);
 }
 
-/// `qty_text`: whole numbers bare, fractions without trailing zeros.
-pub fn qty_text(q: f64) -> String {
-    if q.fract() == 0.0 {
-        format!("{}", q as i64)
-    } else {
-        let t = format!("{:.6}", q);
-        t.trim_end_matches('0').trim_end_matches('.').to_string()
-    }
-}
 

@@ -137,7 +137,7 @@ impl Diff for Doc {
 /// The document `key` as it stands, or `None` for a key nothing answers to.
 pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
     match key {
-        "orders" => Some(Doc::Orders(crate::orders::orders_doc(app, false))),
+        "orders" => Some(Doc::Orders(crate::orders::orders_doc(app))),
         "shorts" => Some(Doc::Shorts(crate::feeds::shorts_feed(app))),
         "notifications" => {
             let conn = app.open().ok()?;

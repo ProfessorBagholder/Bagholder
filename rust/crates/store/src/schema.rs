@@ -83,6 +83,36 @@ pub fn drop_figure_tables(conn: &Connection, at: &str) -> Result<()> {
     })
 }
 
+/// The tables the book's orders and brackets took over (`docs/plans/stage-4-execution.md`):
+/// dropped from the live file once carried into the book, the file snapshotted first.
+pub const ORDER_TABLES: [&str; 2] = ["orders", "brackets"];
+
+/// The meta key that says the order tables were carried into the book and dropped.
+pub const ORDERS_MOVED_META: &str = "order_tables_moved";
+
+/// Whether this file's orders and brackets were carried into the book.
+pub fn orders_moved(conn: &Connection) -> Result<bool> {
+    if !table_exists(conn, "meta")? {
+        return Ok(false);
+    }
+    let v: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = ?", [ORDERS_MOVED_META], |r| r.get(0)).ok();
+    Ok(v.is_some_and(|v| !v.is_empty()))
+}
+
+/// Drop the order tables from this file, and note when.
+pub fn drop_order_tables(conn: &Connection, at: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        for t in ORDER_TABLES {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
+        }
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![ORDERS_MOVED_META, at],
+        )?;
+        Ok(())
+    })
+}
+
 pub fn init_schema(conn: &Connection) -> Result<()> {
     crate::atomically(conn, || {
         conn.execute_batch(SCHEMA_0)?;
@@ -112,6 +142,12 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         // a file whose figures the book holds keeps none of their tables
         if figures_moved(conn)? {
             for t in FIGURE_TABLES {
+                conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
+            }
+        }
+        // and none of the orders the book carries
+        if orders_moved(conn)? {
+            for t in ORDER_TABLES {
                 conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
             }
         }

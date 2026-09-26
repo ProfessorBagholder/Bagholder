@@ -637,6 +637,82 @@ impl<'a> Client<'a> {
     }
 }
 
+/// What a request that places, cancels or changes an order came to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Mutation<T> {
+    /// Wealthsimple answered, and the answer reads as `T`.
+    Answer(T),
+    /// Wealthsimple refused it: nothing was done.
+    Refused(String),
+    /// The session is not good: nothing was done, and a sign-in is needed.
+    NotAuthorized,
+    /// No answer that says what became of it (a timeout, a dropped connection, a
+    /// server error, a reply that does not read): the order is read back to find out.
+    Unclear(String),
+}
+
+impl Client<'_> {
+    /// A mutation, sent once (`bagholder_net::client::request_once`): never again on
+    /// a failed read, and never through a redirect. Only the order gate calls it.
+    pub fn mutate<T: DeserializeOwned>(&self, sess: &Session, operation: &str, variables: &Value) -> Mutation<T> {
+        let token = sess.access_token.clone();
+        let extra: Vec<(&str, String)> = vec![
+            ("Authorization", format!("Bearer {}", token)),
+            ("x-wealthsimple-client", WS_CLIENT.to_string()),
+            ("x-ws-profile", "trade".to_string()),
+            ("x-ws-api-version", GRAPHQL_VERSION.to_string()),
+            ("x-ws-locale", "en-CA".to_string()),
+            ("x-platform-os", "web".to_string()),
+            ("Origin", "https://my.wealthsimple.com".to_string()),
+            ("Referer", "https://my.wealthsimple.com/app/trade".to_string()),
+        ];
+        let headers = headers_for(sess, &extra, &self.home.cached_user_agent());
+        let Some(q) = crate::queries::query(operation) else {
+            return Mutation::Refused(format!("unknown operation {operation}"));
+        };
+        let body = json!({"operationName": operation, "query": q, "variables": variables});
+        let payload = serde_json::to_vec(&body).unwrap_or_default();
+        let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !k.eq_ignore_ascii_case("Content-Type")).collect();
+        hdrs.push(("Content-Type", "application/json"));
+        let resp = match bagholder_net::client::request_once("POST", &graphql_url(), &hdrs, Some(&payload), Duration::from_secs(90)) {
+            Ok(r) => r,
+            Err(e) => return Mutation::Unclear(format!("{operation}: {e}")),
+        };
+        read_mutation(operation, resp.status, &resp.text())
+    }
+}
+
+/// A mutation's reply, by what it says of the order: only Wealthsimple's own words
+/// that nothing was done are a refusal; anything that does not say is unclear.
+pub fn read_mutation<T: DeserializeOwned>(operation: &str, status: u16, text: &str) -> Mutation<T> {
+    match status {
+        401 | 403 => return Mutation::NotAuthorized,
+        500..=599 => return Mutation::Unclear(format!("{operation}: Wealthsimple answered with an error ({status})")),
+        400..=499 => return Mutation::Refused(format!("{operation}: Wealthsimple refused the request ({status})")),
+        _ => {}
+    }
+    let data: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return Mutation::Unclear(format!("{operation}: a reply that is not JSON")),
+    };
+    if let Some(errs) = data.get("errors").filter(|e| !e.is_null() && e.as_array().map_or(true, |a| !a.is_empty())) {
+        // errors beside data: the mutation may have run and a later field failed
+        if data.get("data").is_some_and(|d| !d.is_null()) {
+            return Mutation::Unclear(format!("{operation}: an answer with errors beside its data: {errs}"));
+        }
+        let first = errs.as_array().and_then(|a| a.first()).unwrap_or(errs);
+        let msg = first.get("message").and_then(Value::as_str).map(String::from).unwrap_or_else(|| first.to_string());
+        return Mutation::Refused(format!("{operation}: {msg}"));
+    }
+    match data.get("data") {
+        Some(d) if !d.is_null() => match T::deserialize(d.clone()) {
+            Ok(t) => Mutation::Answer(t),
+            Err(e) => Mutation::Unclear(format!("{operation}: a reply of another shape: {e}")),
+        },
+        _ => Mutation::Unclear(format!("{operation}: a reply with no data")),
+    }
+}
+
 // -- when the token is refreshed ------------------------------------------------
 
 /// How long before the token's expiry it is refreshed.
@@ -693,5 +769,29 @@ pub fn token_refresh_needed(sess: &Session, now: f64) -> bool {
     match expires_at_unix(sess) {
         None => true,
         Some(exp) => now >= exp - TOKEN_REFRESH_MARGIN_SEC,
+    }
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq, serde::Deserialize)]
+    struct Placed {
+        id: String,
+    }
+
+    #[test]
+    fn only_wealthsimples_own_refusal_reads_as_nothing_done_and_anything_that_does_not_say_is_unclear() {
+        let read = |status, text: &str| read_mutation::<Placed>("Op", status, text);
+        assert_eq!(read(200, r#"{"data": {"id": "o-1"}}"#), Mutation::Answer(Placed { id: "o-1".into() }));
+        assert!(matches!(read(200, r#"{"errors": [{"message": "no"}], "data": null}"#), Mutation::Refused(m) if m.ends_with("no")));
+        assert!(matches!(read(200, r#"{"errors": [{"message": "late"}], "data": {"id": "o-1"}}"#), Mutation::Unclear(_)));
+        assert!(matches!(read(200, r#"{"data": {"other": 1}}"#), Mutation::Unclear(_)));
+        assert!(matches!(read(200, r#"{"data": null}"#), Mutation::Unclear(_)));
+        assert!(matches!(read(200, "<html>"), Mutation::Unclear(_)));
+        assert!(matches!(read(502, ""), Mutation::Unclear(_)));
+        assert!(matches!(read(422, "{}"), Mutation::Refused(_)));
+        assert_eq!(read(401, ""), Mutation::NotAuthorized);
     }
 }

@@ -148,7 +148,7 @@ impl std::fmt::Display for Refused {
 
 /// The book's part of the kinds ticked.
 pub fn book_clearing(kinds: &[Kind]) -> Clearing {
-    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market) }
+    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market), orders: kinds.contains(&Kind::Orders) }
 }
 
 /// Empty the earlier store's tables of `kinds`, in one transaction.
@@ -187,9 +187,9 @@ pub fn clear_cache(cache: &bagholder_sources::cache::MarketCache) -> Result<(), 
 }
 
 /// The live bracket's symbol, if one is.
-fn live_bracket(conn: &rusqlite::Connection) -> Result<Option<String>, String> {
-    let live = bagholder_store::orders::typed::list_brackets(conn, &crate::orders::brackets::BRACKET_LIVE_ST).map_err(|e| e.to_string())?;
-    Ok(live.first().map(|b| b.symbol.clone()))
+fn live_bracket(book: &bagholder_book::Book) -> Result<Option<String>, String> {
+    let live = book.live_brackets().map_err(|e| e.to_string())?;
+    Ok(live.first().map(|b| b.place.symbol.clone()))
 }
 
 /// Clear what `kinds` ticks, and build the figures again.
@@ -198,12 +198,12 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
         return Err(Refused::Pulling);
     }
     let old = app.open().map_err(|e| Refused::Failed(e.to_string()))?;
+    let book = f.book().map_err(Refused::Failed)?;
     if kinds.contains(&Kind::Orders) || kinds.contains(&Kind::Login) {
-        if let Some(symbol) = live_bracket(&old).map_err(Refused::Failed)? {
+        if let Some(symbol) = live_bracket(&book).map_err(Refused::Failed)? {
             return Err(Refused::BracketLive(symbol));
         }
     }
-    let book = f.book().map_err(Refused::Failed)?;
     book.clear(&book_clearing(kinds)).map_err(|e| Refused::Failed(e.to_string()))?;
     if kinds.contains(&Kind::Market) {
         clear_cache(&f.cache().map_err(Refused::Failed)?).map_err(Refused::Failed)?;
@@ -293,6 +293,10 @@ mod tests {
         assert_eq!(tables(&app.open().unwrap()), listed(OLD_TABLES.iter().map(|(t, _)| *t).collect()), "the earlier store's tables and OLD_TABLES");
     }
 
+    fn px_of(s: &str) -> bagholder_core::Dec {
+        bagholder_core::Dec::parse(s).unwrap()
+    }
+
     /// Everything the app keeps, in all three stores: a pulled month, an entry, an
     /// imported file, a note, a rate, and a row in every table of the other stores.
     fn filled(app: &Arc<App>) {
@@ -314,6 +318,18 @@ mod tests {
         let margin_kind = AccountType::Known { kind: AccountKind::Margin, registration: Registration::Unregistered, managed: false, joint: false };
         let margin = book.add_account(ws_account.connection, &[AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "margin-x")], &margin_kind, AccountStatus::Open, Some("Margin"), t).unwrap();
         book.store_margin_backing(ws_account.connection, &[(ws_account.id, margin)], &read).unwrap();
+        // an order and a bracket with their logs
+        use bagholder_core::order::{Asker, OrderKind, OrderRole, Side, TimeInForce};
+        let place = bagholder_book::orders::BracketPlace { id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        book.write_bracket(&place, &bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(px_of("3")) }, &Asker::Person, t).unwrap();
+        let order = bagholder_book::orders::OrderRequest {
+            id: "order-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd,
+            side: Side::Buy, kind: OrderKind::Market, quantity: bagholder_core::Dec::ONE, limit_price: None, stop_price: None, time_in_force: TimeInForce::Day,
+            bracket: Some(("bracket-x".into(), OrderRole::Entry)), request: serde_json::json!({}),
+        };
+        book.write_order(&order, true, &Asker::Person, t).unwrap();
+        // ended: a live bracket would refuse the clear
+        book.bracket_event("bracket-x", &Asker::Engine, t, &bagholder_core::bracket::BracketEvent::EntryEnded { why: "entry dry".into() }).unwrap().unwrap();
         // the cache's figure tables by its own writes (the engine reads them), the rest stood in for
         let cache = f.cache().unwrap();
         let src = bagholder_core::SourceName::named("yahoo");
@@ -462,8 +478,10 @@ mod tests {
     fn a_live_bracket_refuses_orders_and_the_login_and_names_what_it_is_on() {
         let (_h, app) = app();
         let f = app.figures.get().unwrap();
-        let b = bagholder_store::orders::types::Bracket { id: "b1".into(), symbol: "ZZQQ".into(), status: bagholder_store::orders::types::BracketStatus::Armed, ..Default::default() };
-        bagholder_store::orders::typed::insert_bracket(&app.open().unwrap(), &b, "2025-11-19T21:00:00Z").unwrap();
+        let usd = bagholder_core::Currency::parse("USD").unwrap();
+        let place = bagholder_book::orders::BracketPlace { id: "b1".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        let created = bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(bagholder_core::Dec::ONE) };
+        f.book().unwrap().write_bracket(&place, &created, &bagholder_core::order::Asker::Person, now()).unwrap();
         for kinds in [vec![Kind::Orders], vec![Kind::Login], ALL.to_vec()] {
             assert_eq!(clear(&app, f, &kinds, now()), Err(Refused::BracketLive("ZZQQ".into())), "{kinds:?}");
         }

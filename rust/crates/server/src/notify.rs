@@ -1010,65 +1010,6 @@ mod tests {
         assert!(chunk.starts_with(&format!("id: {}\n", third)) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
     }
 
-    fn order() -> Value {
-        json!({"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"})
-    }
-
-    fn with(base: &Value, patch: Value) -> Value {
-        let mut o = base.as_object().unwrap().clone();
-        o.extend(patch.as_object().unwrap().clone());
-        Value::Object(o)
-    }
-
-    fn t4(a: &str, b: &str, c: &str, d: &str) -> Option<(String, String, String, String)> {
-        Some((a.into(), b.into(), c.into(), d.into()))
-    }
-
-    #[test]
-    fn test_a_fill_read_back_is_told_by_its_role() {
-        // the rows as the tests spell them, read as what they are
-        fn order_notice(o: &Value, upd: &Value) -> Option<(String, String, String, String)> {
-            crate::orders::order_notice(&serde_json::from_value(o.clone()).unwrap(), &serde_json::from_value(upd.clone()).unwrap())
-        }
-        let o = order();
-        assert_eq!(order_notice(&o, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), t4("fills", "order:o1:filled", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading"));
-        let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
-        assert_eq!(order_notice(&stop, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.6374})), t4("fills", "order:o2:filled", "Stopped out · QNC", "Sold 5 at 1.64 · 🚀 Trading"));
-        let target = with(&o, json!({"id": "o3", "side": "SELL", "limitPrice": 1.93, "role": "target"}));
-        assert_eq!(order_notice(&target, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.93})).unwrap().2, "Target hit · QNC");
-        assert_eq!(order_notice(&with(&o, json!({"status": "filled"})), &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), None, "read back filled again: nothing new");
-        assert_eq!(order_notice(&with(&o, json!({"quantity": 100.0})), &json!({"status": "pending", "filledQty": 40.0, "avgFill": 64.5})), t4("fills", "order:o1:partial:40", "Partly filled · QNC", "40 of 100 at 64.50 · 🚀 Trading"));
-        assert_eq!(order_notice(&with(&o, json!({"quantity": 100.0, "filledQty": 40.0})), &json!({"status": "pending", "filledQty": 40.0, "avgFill": 64.5})), None, "the same partial fill again");
-    }
-
-    #[test]
-    fn test_problems_are_told_but_not_the_persons_own_cancel_nor_a_legs_expiry() {
-        // the rows as the tests spell them, read as what they are
-        fn order_notice(o: &Value, upd: &Value) -> Option<(String, String, String, String)> {
-            crate::orders::order_notice(&serde_json::from_value(o.clone()).unwrap(), &serde_json::from_value(upd.clone()).unwrap())
-        }
-        let o = order();
-        assert_eq!(order_notice(&o, &json!({"status": "rejected", "error": "Limit price has too many decimal places. Max allowed: 2"})),
-            t4("problems", "order:o1:rejected", "Order rejected · QNC", "Buy 5 at 1.75 limit · Limit price has too many decimal places. Max allowed: 2"));
-        assert_eq!(order_notice(&o, &json!({"status": "failed"})).unwrap().2, "Order not sent · QNC");
-        assert_eq!(order_notice(&o, &json!({"status": "expired"})), t4("problems", "order:o1:expired", "Order expired · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"));
-        assert_eq!(order_notice(&o, &json!({"status": "cancelled"})), t4("problems", "order:o1:cancelled", "Order cancelled · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"));
-        assert_eq!(order_notice(&with(&o, json!({"status": "cancelling"})), &json!({"status": "cancelled"})), None, "a cancel asked for here is not told");
-        let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
-        assert_eq!(order_notice(&stop, &json!({"status": "expired"})), None, "a leg's expiry is the engine's to place again");
-        assert_eq!(order_notice(&stop, &json!({"status": "cancelled"})), None);
-        assert_eq!(order_notice(&stop, &json!({"status": "rejected", "error": "no shares"})).unwrap().3, "Sell 5 stop 1.66 · no shares");
-        // `_order_words` and `_price_words` are private to orders.rs: read through a rejection's body
-        let words = |ord: Value| order_notice(&ord, &json!({"status": "rejected", "error": "e"})).unwrap().3;
-        assert_eq!(words(with(&o, json!({"type": "MARKET"}))), "Buy 5 at market · e");
-        assert_eq!(words(with(&o, json!({"type": "STOP_LIMIT", "stopPrice": 1.6, "limitPrice": 1.55, "side": "SELL", "quantity": 2.5}))), "Sell 2.5 stop 1.60 · limit 1.55 · e");
-        let prices: Vec<String> = [json!(1.6374), json!(0.625), json!(0.54), json!(12), Value::Null]
-            .into_iter()
-            .map(|p| words(with(&o, json!({"limitPrice": p}))).trim_start_matches("Buy 5 at ").trim_end_matches(" limit · e").to_string())
-            .collect();
-        assert_eq!(prices, ["1.64", "0.625", "0.54", "12.00", "—"]);
-    }
-
     #[test]
     fn test_the_session_expiring_is_told_on_the_transition_and_a_failing_sync_on_the_third_time() {
         let (_g, app, conn) = setup();

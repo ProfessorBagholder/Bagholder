@@ -1,23 +1,20 @@
-//! Golden (stage 5d7e): every answer Wealthsimple gives the order code, read
-//! as the order code reads it -- an order's extended reading, the pending-order
-//! feed page by page, the securities summary behind a ticket's quote, the
-//! listing search, and the replies to a create, a cancel and a modify. Each
-//! case is a realistic answer or a malformed one (numbers as text, text as
-//! numbers, nulls, missing keys, the wrong shape), so a change to how any of
-//! them is read shows here as a diff.
+//! Golden: every answer Wealthsimple gives the order code, read as the order code
+//! reads it -- an order's extended reading, the pending-order feed page by page, the
+//! securities summary behind a ticket's quote, the listing search, and the replies to
+//! a create, a cancel and a modify. Each case is a realistic answer or a malformed one
+//! (numbers as text, text as numbers, nulls, missing keys, the wrong shape), so a
+//! change to how any of them is read shows here as a diff. The order answers and the
+//! feed are read strictly: what does not match is a failure, named.
 //!
 //! After an intended change: `BAGHOLDER_BLESS=1 cargo test -p bagholder-server
 //! wire_golden`, then read the diff in `tests/golden/orders_wire.json`.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
 
-use super::*;
-
-fn sess(v: Value) -> bagholder_ws::session::Session {
-    serde_json::from_value(v).unwrap()
-}
+use crate::orders::{self as o, gate};
 
 /// An answer read as the order code reads it, or the failure it reads as.
 fn read<T: serde::de::DeserializeOwned>(data: &Value, then: impl FnOnce(T) -> Value) -> Value {
@@ -25,6 +22,10 @@ fn read<T: serde::de::DeserializeOwned>(data: &Value, then: impl FnOnce(T) -> Va
         Ok(d) => then(d),
         Err(e) => json!({"failed": e.to_string()}),
     }
+}
+
+fn dbg<T: std::fmt::Debug>(v: &T) -> Value {
+    json!(format!("{v:?}"))
 }
 
 fn extended_cases() -> Vec<(&'static str, Value)> {
@@ -199,102 +200,98 @@ fn mutation_error_cases() -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// What an answer carries that is the same on every run: the order's own id is
-/// a fresh uuid each time, so it is left out.
-fn strip_id(v: Value) -> Value {
-    match v {
-        Value::Object(mut m) => {
-            m.remove("id");
-            m.remove("order");
-            Value::Object(m)
-        }
-        v => v,
-    }
-}
-
 #[test]
 fn test_every_order_answer_wealthsimple_gives_is_read_as_the_golden_pins() {
-    let _g = setup();
+    let _g = crate::tests_common::guard();
+    let (_h, app, _fake) = crate::tests_execution::fresh();
     let mut got = Map::new();
 
     let mut ext = Map::new();
     for (name, data) in extended_cases() {
-        ext.insert(name.into(), read(&data, |d: bagholder_ws::wire::ExtendedOrderAnswer| jv(&o::parse_extended_order(&d))));
+        ext.insert(name.into(), match gate::read_extended(&data) {
+            Ok(f) => dbg(&f),
+            Err(e) => json!({"failed": e}),
+        });
     }
     got.insert("extendedOrder".into(), Value::Object(ext));
 
+    let sess: bagholder_ws::session::Session = serde_json::from_value(json!({"access_token": "t", "identity_canonical_id": "ident-1"})).unwrap();
     let mut feed = Map::new();
     for (name, pages) in feed_cases() {
         let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
         let a2 = asked.clone();
-        set_gql(move |op, vars| {
+        *app.orders.seam.gql.lock().unwrap() = Some(Arc::new(move |op: &str, vars: &Value| {
             assert_eq!(op, "OrderServiceExtendedOrderFeed");
             let mut a = a2.lock().unwrap();
             let n = a.len();
             a.push(vars["cursor"].clone());
-            Ok(pages.get(n).cloned().unwrap_or_else(|| panic!("page {} asked for", n)))
-        });
-        let nodes = o::fetch_order_feed(&app(), &sess(ident_sess()), "ident-1").unwrap();
-        unpatch();
-        let rows: Vec<Value> = nodes.iter().map(|n| jv(&o::feed_order_row(&app(), n))).collect();
+            Ok(pages.get(n).cloned().unwrap_or_else(|| panic!("page {n} asked for")))
+        }));
+        let rows = match o::read_feed(&app, &sess) {
+            Ok(rows) => json!(rows.iter().map(dbg).collect::<Vec<_>>()),
+            Err(e) => json!({"failed": e}),
+        };
         feed.insert(name.into(), json!({"cursors": *asked.lock().unwrap(), "rows": rows}));
     }
     got.insert("feed".into(), Value::Object(feed));
 
     let mut quotes = Map::new();
     for (name, node) in quote_cases() {
-        quotes.insert(name.into(), read(&json!({"securities": [node]}), |d: bagholder_ws::wire::SecuritiesSummary| jv(&d.securities.first().and_then(o::parse_quote))));
+        quotes.insert(name.into(), read(&json!({"securities": [node]}), |d: bagholder_ws::wire::SecuritiesSummary| serde_json::to_value(d.securities.first().and_then(o::parse_quote)).unwrap()));
     }
     let summary = json!({"securities": quote_cases().into_iter().map(|(_, n)| n).collect::<Vec<_>>()});
-    set_gql(move |_, _| Ok(summary.clone()));
-    let all = o::fetch_quotes(&app(), &sess(tok()), &["sec-s-us".into()]).unwrap();
-    set_gql(|_, _| Ok(json!({"securities": {"id": "sec-s-us"}})));
-    let none = o::fetch_quotes(&app(), &sess(tok()), &["sec-s-us".into()]).unwrap();
-    unpatch();
+    *app.orders.seam.gql.lock().unwrap() = Some(Arc::new(move |_: &str, _: &Value| Ok(summary.clone())));
+    let all = o::fetch_quotes(&app, &sess, &["sec-s-us".into()]).unwrap();
+    *app.orders.seam.gql.lock().unwrap() = Some(Arc::new(|_: &str, _: &Value| Ok(json!({"securities": {"id": "sec-s-us"}}))));
+    let none = o::fetch_quotes(&app, &sess, &["sec-s-us".into()]).map(|q| q.len()).map_err(|e| e.to_string());
     let mut keys: Vec<&String> = all.keys().collect();
     keys.sort();
     quotes.insert("summary: ids kept".into(), json!(keys));
-    quotes.insert("summary: securities not a list".into(), json!(none.len()));
+    quotes.insert("summary: securities not a list".into(), dbg(&none));
     got.insert("quote".into(), Value::Object(quotes));
 
     let mut search = Map::new();
     for (name, data, sym, ex) in search_cases() {
-        search.insert(name.into(), read(&data, |d: bagholder_ws::wire::SecuritySearchAnswer| jv(&o::parse_listing_search(&d, sym, ex))));
+        search.insert(name.into(), read(&data, |d: bagholder_ws::wire::SecuritySearchAnswer| serde_json::to_value(o::parse_listing_search(&d, sym, ex)).unwrap()));
     }
     got.insert("listingSearch".into(), Value::Object(search));
 
+    use bagholder_ws::session::Mutation;
+    let answer = |data: Value| -> Result<Value, String> { if data.is_null() { Err("no answer".into()) } else { Ok(data) } };
     let mut create = Map::new();
     for (name, reply) in create_cases() {
-        set_gql(move |_, _| Ok(reply.clone()));
-        set_live(Some(true));
-        set_session(Some(tok()));
-        let r = o::place_order(&app(), &ticket(json!({"stopLoss": null, "takeProfit": null})));
-        unpatch();
-        let row = get_order(r.id.as_deref().unwrap_or(""));
-        create.insert(name.into(), json!({"answer": strip_id(jv(&r)), "stored": [row.status, row.error, row.ws_order_id]}));
+        let m = match answer(reply).and_then(|d| o::read_answer::<bagholder_ws::wire::CreateOrderAnswer>("golden", d).map_err(|e| e.to_string())) {
+            Ok(a) => Mutation::Answer(a),
+            Err(e) => Mutation::Unclear(e),
+        };
+        create.insert(name.into(), dbg(&gate::created(m)));
     }
     got.insert("create".into(), Value::Object(create));
 
     let mut cancel = Map::new();
     let mut modify = Map::new();
     for (name, result) in mutation_error_cases() {
-        let oid = sent_order();
-        let reply = if result.is_null() { json!({}) } else { json!({"orderServiceCancelOrder": result.clone()}) };
-        set_gql(move |op, _| if op == "SoOrdersOrderCancel" { Ok(reply.clone()) } else { Err(CallError::Failed("not in this test".into())) });
-        set_live(Some(true));
-        set_session(Some(tok()));
-        cancel.insert(name.into(), strip_id(jv(&o::cancel_order(&app(), &oid))));
-        unpatch();
-        let oid = sent_order();
-        let reply = if result.is_null() { json!({}) } else { json!({"soOrdersModifyOrder": result.clone()}) };
-        set_gql(move |op, _| if op == "SoOrdersOrderModify" { Ok(reply.clone()) } else { Err(CallError::Failed("not in this test".into())) });
-        set_live(Some(true));
-        set_session(Some(tok()));
-        modify.insert(name.into(), strip_id(jv(&o::modify_order(&app(), &oid, None, Some(166.0)))));
-        unpatch();
+        let c = if result.is_null() { json!({}) } else { json!({"orderServiceCancelOrder": result.clone()}) };
+        let m = match o::read_answer::<bagholder_ws::wire::CancelOrderAnswer>("golden", c) {
+            Ok(a) => Mutation::Answer(a),
+            Err(e) => Mutation::Unclear(e.to_string()),
+        };
+        cancel.insert(name.into(), dbg(&gate::cancelled(m)));
+        let md = if result.is_null() { json!({}) } else { json!({"soOrdersModifyOrder": result.clone()}) };
+        let m = match o::read_answer::<bagholder_ws::wire::ModifyOrderAnswer>("golden", md) {
+            Ok(a) => Mutation::Answer(a),
+            Err(e) => Mutation::Unclear(e.to_string()),
+        };
+        modify.insert(name.into(), dbg(&gate::modified(m)));
     }
     got.insert("cancel".into(), Value::Object(cancel));
     got.insert("modify".into(), Value::Object(modify));
+    // the transport's own outcomes
+    got.insert("transport".into(), json!({
+        "refused": dbg(&gate::created(Mutation::Refused("Bad request".into()))),
+        "session lapsed": dbg(&gate::created(Mutation::NotAuthorized)),
+        "no answer": dbg(&gate::created(Mutation::Unclear("the connection dropped".into()))),
+    }));
 
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/orders_wire.json");
     if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
@@ -310,7 +307,7 @@ fn test_every_order_answer_wealthsimple_gives_is_read_as_the_golden_pins() {
         names.sort();
         names.dedup();
         for name in names {
-            assert_eq!(g.get(name), w.get(name), "{} / {} reads differently than the golden pins", group, name);
+            assert_eq!(g.get(name), w.get(name), "{group} / {name} reads differently than the golden pins");
         }
     }
     assert_eq!(got.len(), want.len(), "the golden's groups");

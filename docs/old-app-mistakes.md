@@ -23,7 +23,7 @@ A test in the old crates that records one of these as it behaves today is named 
 ## Corporate events and contracts
 
 - **Split ratios inferred from the person's own fill prices.** Guarded: scan for `split_markers`; case "a split marker with its ratio from the record" (`events.json`). Pinned in the old crates by `model/tests/model.rs` `test_known_wrong_split_ratio_read_from_fill_prices`.
-- **Every option contract taken to be 100 shares.** Guarded: scan for `option_multiplier` and `from_int(100)`; case "a contract of 150 shares, and one whose size is not stated" (`options.json`). Pinned in the old crates by `server/src/tests_orders.rs` `test_known_wrong_an_option_fill_nets_with_a_fixed_hundred_times_multiplier`.
+- **Every option contract taken to be 100 shares.** Guarded: scan for `option_multiplier` and `from_int(100)`; case "a contract of 150 shares, and one whose size is not stated" (`options.json`).
 - **Option terms read from the symbol's text.** Guarded: scan for `option_symbol`.
 - **A contract count worked out from cash.** Guarded: scan for `infer_zero_qty_option_fills`, `is_clean_option_qty`.
 - **Separate same-day orders folded into a roll.** Guarded: scan for `fold_option_rolls`; the roll cases in `options.json`.
@@ -41,13 +41,21 @@ A test in the old crates that records one of these as it behaves today is named 
 
 ## Orders and brackets (stage 4)
 
-- **An order whose send failed, a timeout included, is marked failed and never read back**, so an order Wealthsimple took can rest unseen. Not guarded yet.
-- **A fill booked twice by two read-backs at once**: the booking and its "booked" mark are two writes with no shared lock. Not guarded yet.
-- **Order handling sees only the newest 200 orders**, so a waiting bracket's entry past that is cancelled without a word. Not guarded yet.
-- **The HTTP client re-sends a request once on a fresh connection** when a reused one fails, order POSTs included, so an order can be sent twice (`net/src/client.rs`). Not guarded yet.
-- **A sale from the ticket does not wait for the stop's cancel to be confirmed.** Not guarded yet. Pinned in the old crates by `server/src/tests_brackets.rs` `test_known_wrong_a_sell_from_the_ticket_goes_out_before_the_stops_cancel_is_confirmed`.
-- **A watched stop can fire while the target's cancel is unconfirmed.** Not guarded yet.
-- **A bracket whose watched market sell is refused stays firing and is never retried.** Not guarded yet.
+- **An order whose send failed, a timeout included, is marked failed and never read back**, so an order Wealthsimple took can rest unseen, and a bracket placed its exit again beside it. Guarded: `core/src/order.rs` (`an_answer_that_is_not_the_brokers_leaves_the_order_unconfirmed_until_read_back`); `server/src/tests_execution.rs` (`an_order_whose_answer_is_lost_after_the_broker_took_it_ends_working_by_read_back_never_failed`, `a_lost_answer_on_an_exit_the_broker_never_got_places_it_again_exactly_once`).
+- **A fill booked twice by two read-backs at once**: the booking and its "booked" mark were two writes with no shared lock. Gone since 3c (the fill is Wealthsimple's own row); the filled quantity only rises, under one transaction: `tests_execution.rs` `an_order_filling_in_three_parts_read_twice_and_at_once_holds_exactly_what_filled`.
+- **Order handling saw only the newest 200 orders**, so a waiting bracket's entry past that was cancelled without a word. Guarded: live orders and brackets are found by state through an index (`book/src/orders.rs`); `tests_execution.rs` `five_thousand_orders_leave_the_oldest_live_bracket_followed`.
+- **The HTTP client re-sent a request once on a fresh connection** when a reused one failed, order POSTs included, so an order could go out twice. Guarded: order mutations go by `net::client::request_once` (`net/tests/kept_connection.rs`), and only through `server/src/orders/gate.rs` (`tests_boundary.rs`).
+- **A sale from the ticket did not wait for the stop's cancel to be confirmed, and one that failed left neither stop nor sale.** Guarded: `tests_execution.rs` (`a_sale_from_the_ticket_goes_out_only_once_the_stops_cancel_is_confirmed`, `a_sale_whose_stop_cancel_is_not_confirmed_sells_nothing_and_the_stop_rests_again`, `a_sale_refused_puts_the_stop_back`).
+- **A watched stop could fire while the target's cancel was unconfirmed.** Guarded: nothing is sent past an exit whose own answer is not known (`core/src/bracket.rs` `decide`; `core/tests/brackets.rs` `under_any_run_of_broker_answers_and_prices_no_exit_is_placed_while_one_is_in_flight_and_every_tick_settles`).
+- **A bracket whose watched market sell was refused stayed firing and was never retried.** Guarded: `tests_execution.rs` `a_market_sell_rejected_after_it_was_taken_puts_the_stop_back`.
+- **Rows being sent were not counted as in flight**, so an exit left sending by a crash did not stop a second. Guarded: `OrderState::in_flight` (`core/src/order.rs` `in_flight_is_every_state_the_broker_may_still_act_on`); the gate's `Held::InFlight` (`tests_execution.rs` `no_exit_is_placed_while_another_of_its_bracket_is_in_flight_and_nothing_is_written_for_it`).
+- **A position left unwatched while its stop was being placed again** (after a trail move, a roll, an edit or an expiry). Guarded: a live bracket with no stop resting watches the level (`core/src/bracket.rs`); `tests_execution.rs` `the_target_reached_cancels_the_stop_and_a_lapsed_session_leaves_the_stop_watched_until_the_target_goes_out`.
+- **Two writers**: the routes and the engine's tick changed a bracket at the same time. Guarded: every change is an event appended under the bracket's lock (`gate::bracket_lock`), and a move not allowed from the state the log says is refused and kept (`core/src/order.rs` `every_move_in_the_table_is_made_and_every_other_event_moves_nothing`; `book.states_disagreeing` checked after each scenario).
+- **The retry wait counted from the bracket's last change**, so any edit reset it. Guarded: it counts from the last refusal's event (`Bracket::may_retry`; `core/tests/brackets.rs` `a_refused_exit_is_tried_again_after_a_minute_five_fifteen_then_hourly`).
+- **A dry ticket with legs made a bracket that waited forever.** Guarded: `tests_execution.rs` `with_orders_off_a_ticket_with_legs_is_recorded_and_no_bracket_waits`.
+- **Order answers and the page's numbers read leniently.** Guarded: `gate::read_extended` and the feed reader refuse what does not match (`tests_execution.rs` `wealthsimples_order_answer_is_read_strictly`; `orders/readback.rs` `a_feed_node_is_read_strictly`); the ticket reads exact decimals (`orders::PageDec`).
+- **The page worked out order values and leg amounts from floats, a contract's size guessed from its symbol.** Guarded: the orders document carries every amount (`orders/doc.rs`); `web/src/no_money_arithmetic.test.ts` has no Orders panel entry.
+- **No record of who asked, no history.** Guarded: every order and bracket event carries its asker (`tests_execution.rs` `who_asked_is_kept_with_every_request`).
 
 ## Running it (stage 5)
 

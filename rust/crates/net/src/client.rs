@@ -493,14 +493,24 @@ pub fn request(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Response, Error> {
-    send(method, url, headers, body, timeout, false)
+    send(method, url, headers, body, timeout, false, false)
 }
 
 /// The same request, answering an HTTP error with its response rather than
 /// failing -- for a caller that reads what an error page sets, such as its
 /// cookies.
 pub fn request_any(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>, timeout: Duration) -> Result<Response, Error> {
-    send(method, url, headers, body, timeout, true)
+    send(method, url, headers, body, timeout, true, false)
+}
+
+/// A request that must reach its host at most once: one that places, cancels or
+/// changes an order. It goes out on a fresh connection, is never sent a second time
+/// (a pooled connection's failed read may still have been received, RFC 9110
+/// §9.2.2), and follows no redirect; an answer it does not get is an error the
+/// caller settles by asking what became of it, never by sending again. An HTTP
+/// error answers with its response, as `request_any`.
+pub fn request_once(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>, timeout: Duration) -> Result<Response, Error> {
+    send(method, url, headers, body, timeout, true, true)
 }
 
 fn send(
@@ -510,6 +520,7 @@ fn send(
     body: Option<&[u8]>,
     timeout: Duration,
     lenient: bool,
+    once: bool,
 ) -> Result<Response, Error> {
     let mut url = url.to_string();
     for _ in 0..=REDIRECT_MAX {
@@ -562,7 +573,9 @@ fn send(
         let head;
         let mut attempt = 0;
         loop {
-            let pooled = {
+            let pooled = if once {
+                None
+            } else {
                 let mut p = pool().lock().unwrap();
                 p.get_mut(&key).and_then(|v| v.pop())
             };
@@ -612,7 +625,7 @@ fn send(
             }
         }
 
-        if (301..=308).contains(&head.status) {
+        if (301..=308).contains(&head.status) && !once {
             if let Some(loc) = head.get("location") {
                 url = if loc.starts_with("http") {
                     loc.to_string()
