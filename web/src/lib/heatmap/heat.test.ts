@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { heatFromHash, tabFromHash, subFromHash } from '../router.svelte'
-import { nextScope } from './heat.svelte'
+import { marketsOnShow, nextScope } from './heat.svelte'
 
 describe("the heatmap's own address", () => {
   it('is Markets, with no row open', () => {
@@ -28,9 +28,23 @@ describe("the slideshow's next scope", () => {
     expect(nextScope(list, 'holdings', (u) => u !== 'watchlist')).toBe('ca')
     expect(nextScope(list, 'us', () => true)).toBe('holdings')
   })
-  it('asks for a market never read on its way, and stays when nothing has anything', () => {
-    const asked: string[] = []
-    expect(nextScope(list, 'holdings', () => false, (u) => asked.push(u))).toBe('holdings')
-    expect(asked).toEqual(['ca', 'us'])
+  it('stays when nothing has anything', () => {
+    expect(nextScope(list, 'holdings', () => false)).toBe('holdings')
+  })
+})
+
+describe('the market universes on show', () => {
+  const books = ['holdings', 'watchlist', 'both']
+  const markets = ['ca', 'us', 'intl']
+  it('are the one shown when it is a market, and none when it is the book', () => {
+    for (const u of markets) expect(marketsOnShow(u, null)).toEqual([u])
+    for (const u of books) expect(marketsOnShow(u, null)).toEqual([])
+  })
+  it('are, while a slideshow runs, every market it goes through, each once', () => {
+    for (const u of [...books, ...markets]) {
+      const shown = marketsOnShow(u, { list: [...books, ...markets, ...markets] })
+      expect(shown.slice().sort()).toEqual(markets.slice().sort())
+    }
+    expect(marketsOnShow('holdings', { list: ['holdings', 'watchlist'] })).toEqual([])
   })
 })

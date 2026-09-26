@@ -9,9 +9,10 @@
   import Mseg from '../markets/Mseg.svelte'
   import Icon from '../markets/Icon.svelte'
   import HeatBox from './HeatBox.svelte'
-  import { call } from '../api'
+  import type { UniverseDoc } from '../generated/markets'
+  import { watchDoc } from '../live'
   import { go, goHash, rewrite, route } from '../router.svelte'
-  import { heat, show, remember, heatHash, applyAddress, nextScope, MARKET_U, EVERY_SCOPE } from './heat.svelte'
+  import { heat, show, remember, heatHash, applyAddress, nextScope, marketsOnShow, MARKET_U, EVERY_SCOPE } from './heat.svelte'
 
   let { markets, alone = false }: { markets: Markets; alone?: boolean } = $props()
 
@@ -35,15 +36,25 @@
     return tiles
   }
   const tiles = $derived(heatTilesFor(heat))
-  const emptyWord = $derived(heat.universe === 'watchlist' ? 'Nothing watched.' : MARKET_U[heat.universe] ? 'Not read yet.' : 'No open positions.')
-  const unread = (u: string) => !!MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length
-  const readMarkets = () => void call('POST /api/markets/refresh')
+
+  // Each market universe on show is a document the server is told of: it reads the
+  // universe when it has no rows or they are stale, and keeps it fresh while shown,
+  // whichever way it came on show (a click, the remembered choice, the address, the
+  // slideshow). Its rows arrive in the model; the document says only a failed read.
+  const udocs = $state<Record<string, { data: UniverseDoc | null }>>({})
+  $effect(() => {
+    const stops = marketsOnShow(heat.universe, alone ? show.on : null).map((u) => {
+      if (!udocs[u]) udocs[u] = { data: null }
+      return watchDoc('universe:' + u, {}, udocs[u])
+    })
+    return () => stops.forEach((stop) => stop())
+  })
+  const emptyWord = $derived(heat.universe === 'watchlist' ? 'Nothing watched.' : MARKET_U[heat.universe] ? udocs[heat.universe]?.data?.failed || 'Not read yet.' : 'No open positions.')
 
   function pick(patch: Partial<typeof heat>) {
     if ('universe' in patch) show.on = null // a scope picked by hand ends the cycling
     Object.assign(heat, patch)
     remember()
-    if (unread(heat.universe)) readMarkets() // a market universe never read: ask for it now
     if (alone) rewrite(heatHash()) // the address stays true, without a history entry
   }
 
@@ -58,13 +69,7 @@
     const s = show.on
     if (!alone || !s) return
     const id = setInterval(() => {
-      let asked = false
-      const next = nextScope(s.list, heat.universe, (u) => heatTilesFor({ ...heat, universe: u }).length > 0, (u) => {
-        if (unread(u) && !asked) {
-          asked = true
-          readMarkets()
-        }
-      })
+      const next = nextScope(s.list, heat.universe, (u) => heatTilesFor({ ...heat, universe: u }).length > 0)
       if (next === heat.universe) return
       heat.universe = next
       remember()

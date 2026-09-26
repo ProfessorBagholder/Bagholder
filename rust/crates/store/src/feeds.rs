@@ -1294,6 +1294,11 @@ pub fn replace_universe(conn: &Connection, key: &str, rows: &[bagholder_model::i
     })
 }
 
+/// When the universe `key` was last read, or `None` when it has no rows.
+pub fn universe_read_at(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn.query_row("SELECT MAX(fetched_at) FROM universes WHERE key = ?", [key], |r| r.get::<_, Option<String>>(0))?)
+}
+
 // --------------------------------------------------------------------------
 // the remaining readers
 // --------------------------------------------------------------------------

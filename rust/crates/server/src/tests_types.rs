@@ -126,7 +126,7 @@ fn markets_declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![
-        GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc,
+        GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc, crate::feeds::UniverseDoc,
         ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
         crate::feeds::FearAnswer, crate::feeds::ShortsAnswer, crate::feeds::ListingAnswer, crate::feeds::NewsSymbolAnswer, crate::feeds::WatchlistAnswer, crate::feeds::TilesAnswer,
         crate::http::markets::Listing, crate::http::markets::Fear, crate::http::markets::ShortsQuery, crate::http::markets::GlanceAnswer,
@@ -497,6 +497,7 @@ fn keys_declarations() -> String {
         ("fear", keys_of::<crate::feeds::FearDoc>()),
         ("quote", keys_of::<crate::orders::TicketQuote>()),
         ("history", keys_of::<crate::docs::HistoryPending>()),
+        ("universe", keys_of::<crate::feeds::UniverseDoc>()),
     ];
     let mut out = String::from("// Generated from the server's differ (`bagholder_model::patch::keys_of`). Do not edit:\n// change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_row_keys`.\n\n/** Each document's lists of rows, by path (`*` for a list's rows or a map's values), and the field that tells the rows apart. */\nexport const ROW_KEYS: Record<string, Record<string, string>> = {\n");
     for (doc, keys) in docs {

@@ -17,6 +17,12 @@ export type StoredGauge = { fetchedAt: string, readVersion: number, index: strin
 
 export type FearDoc = { ok: true, gauge: StoredGauge | null, };
 
+export type UniverseDoc = { 
+/**
+ * The source's failure, from its last read until it next answers.
+ */
+failed: string | null, };
+
 export type ShortMarket = "us" | "ca";
 
 export type VolumeSpan = "day" | "period";

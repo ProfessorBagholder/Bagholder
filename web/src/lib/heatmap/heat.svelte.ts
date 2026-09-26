@@ -42,19 +42,22 @@ export function applyAddress(a: HeatAddress): void {
   remember()
 }
 
-/**
- * The slideshow's next scope: the next in the list with something to show. `has` says
- * whether a scope has tiles; `unread` is told of each market never read on the way, so
- * it can be asked for.
- */
-export function nextScope(list: string[], current: string, has: (u: string) => boolean, unread: (u: string) => void = () => {}): string {
+/** The slideshow's next scope: the next in the list with something to show. `has` says whether a scope has tiles. */
+export function nextScope(list: string[], current: string, has: (u: string) => boolean): string {
   const i = Math.max(0, list.indexOf(current))
   for (let k = 1; k <= list.length; k++) {
     const u = list[(i + k) % list.length]
     if (has(u)) return u
-    if (MARKET_U[u]) unread(u)
   }
   return current
+}
+
+/**
+ * The market universes on show, each once: the one shown, and while a slideshow runs
+ * every market it goes through, so one never read is read before its turn.
+ */
+export function marketsOnShow(universe: string, slideshow: { list: string[] } | null): string[] {
+  return [...new Set([universe, ...(slideshow?.list ?? [])])].filter((u) => !!MARKET_U[u])
 }
 
 export const EVERY_SCOPE = { list: HEAT_UNIVERSES.slice(), seconds: 20 }

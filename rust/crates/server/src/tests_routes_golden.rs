@@ -119,7 +119,6 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
         ("shorts_missing_symbol", req(Method::GET, "/api/shorts", None)),
         ("shorts_feed_empty", req(Method::GET, "/api/shorts/feed", None)),
         ("history_missing_params", req(Method::GET, "/api/history", None)),
-        ("markets_refresh", req(Method::POST, "/api/markets/refresh", None)),
         // `login_start` is never called here: it launches a real browser.
         ("login_cancel", req(Method::POST, "/api/login/cancel", None)),
         ("login_input_no_window", req(Method::POST, "/api/login/input", Some(json!({"kind": "click", "x": 1, "y": 2})))),

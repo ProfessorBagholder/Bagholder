@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { openWithStatus, ready } from './helpers'
 
 // SPEC §3 Markets, "The heatmap on its own" and "The slideshow".
@@ -75,6 +75,57 @@ test('the play button starts a cycle over every scope at twenty seconds and writ
   await expect(page).toHaveURL(/#heatmap\/holdings,watchlist,both,ca,us,intl\/value\/20$/)
   await page.getByRole('button', { name: 'Stop cycling' }).click()
   await expect(page).toHaveURL(/#heatmap\/holdings\/value$/)
+})
+
+/** Every set of documents the page tells the server it shows, in order. */
+function watched(page: Page): string[][] {
+  const said: string[][] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/events/watch') said.push(Object.keys((r.postDataJSON() as { docs: Record<string, unknown> }).docs))
+  })
+  return said
+}
+const universesIn = (docs: string[] | undefined) => (docs ?? []).filter((k) => k.startsWith('universe:')).sort()
+
+// SPEC §4 Markets, Heatmap: a market universe on show is read by the server when it has
+// no rows or they are stale, whichever way it came on show.
+for (const u of ['ca', 'us', 'intl']) {
+  test(`a market universe addressed with no rows is asked for from the address alone (${u})`, async ({ page, request }) => {
+    const said = watched(page)
+    await openWithStatus(page, request, {}, `#heatmap/${u}/value`, (m) => {
+      const mk = m.markets as { universes: Record<string, unknown[]> }
+      mk.universes = { ca: [], us: [], intl: [] }
+    })
+    await expect(page.locator('#heatFull')).toContainText('Not read yet.')
+    await expect.poll(() => universesIn(said.at(-1))).toEqual([`universe:${u}`])
+  })
+
+  test(`a market universe remembered with no rows is asked for when Markets opens (${u})`, async ({ page, request }) => {
+    const said = watched(page)
+    await page.addInitScript((universe) => localStorage.setItem('bh2.heatmap', JSON.stringify({ universe, size: 'value' })), u)
+    await openWithStatus(page, request, {}, '#markets', (m) => {
+      const mk = m.markets as { universes: Record<string, unknown[]> }
+      mk.universes = { ca: [], us: [], intl: [] }
+    })
+    const card = page.locator('#page .card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
+    await expect(card).toContainText('Not read yet.')
+    await expect.poll(() => universesIn(said.at(-1))).toEqual([`universe:${u}`])
+    // the book's own scopes are nobody's to read: leaving the market stops asking
+    await card.locator('.mseg-opt', { hasText: /^Holdings$/ }).click()
+    await expect.poll(() => universesIn(said.at(-1))).toEqual([])
+  })
+}
+
+test('a slideshow asks for every market it goes through, not only the one on show', async ({ page, request }) => {
+  const said = watched(page)
+  await openWithStatus(page, request, {}, '#heatmap/holdings,ca,intl/value/20', withUs)
+  await expect.poll(() => universesIn(said.at(-1))).toEqual(['universe:ca', 'universe:intl'])
+})
+
+test("a market universe whose read failed says what failed instead of 'Not read yet.'", async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '#heatmap/ca/value', withUs, { 'universe:ca': { failed: 'TMX Money could not be reached.' } })
+  await expect(page.locator('#heatFull')).toContainText('TMX Money could not be reached.')
+  await expect(page.locator('#heatFull')).not.toContainText('Not read yet.')
 })
 
 test('two sectors that each fold their small symbols to `Other (2)` both draw, and nothing breaks', async ({ page, request }) => {

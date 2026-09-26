@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use ts_rs::TS;
 
@@ -37,8 +37,14 @@ pub struct FeedsState {
     looking_at: Mutex<String>,
     /// The listing(s) whose disclosures are being read now, by document key.
     reading_now: Mutex<HashMap<String, Vec<String>>>,
-    /// Whether the heatmap universes were asked for sooner than their own clock.
-    universe_kick: (Mutex<bool>, Condvar),
+    /// What the market universes' reads have come to.
+    universes: Mutex<UniverseReads>,
+    /// The sources a test's universe reads asked, and the failure it told them to
+    /// answer with.
+    #[cfg(test)]
+    pub(crate) universe_reads: Mutex<Vec<UniverseSource>>,
+    #[cfg(test)]
+    pub(crate) universe_fails: Mutex<Option<String>>,
     /// How many times a notice has sent for the issuer's record. A test counts the
     /// reads rather than reaching the source.
     #[cfg(test)]
@@ -2289,47 +2295,139 @@ pub fn shorts_sweep_loop(app: Arc<App>) {
 // universes
 // ---------------------------------------------------------------------------
 
-/// The heatmaps' tiles. Never fails.
-pub fn refresh_universes(app: &Arc<App>) -> Vec<String> {
-    app.single_flight("universes", vec![], || {
-        let c = match conn(app) { Some(c) => c, None => return vec![] };
-        let done = bagholder_market::universes::refresh(&c, &now_iso());
-        if !done.is_empty() {
-        }
-        done
-    })
+// The market universes feed the heatmap and nothing else, and their sources push
+// nothing: the screener is one request, the TSX 60 sixty-odd. So a universe is read
+// only while some page shows it (the `universe:<key>` document): at once when it has
+// no rows or its rows are older than `UNIVERSE_STALE_SEC`, and again each time they
+// come to that age for as long as a page still shows it. Nobody looking, nothing read
+// -- not at start, not through a night. A source's attempt, answered or failed, is
+// not made again before the same half hour, so a source that is down costs one
+// request per half hour, not one per page.
+
+/// How old a universe's rows may be before a page showing it has them read again.
+pub const UNIVERSE_STALE_SEC: f64 = 1800.0;
+
+type UniverseSource = bagholder_market::universes::Source;
+
+/// What the market universes' reads have come to: when each source was last asked
+/// (answered or not), and each source's failure until it next answers.
+#[derive(Default)]
+pub struct UniverseReads {
+    asked: HashMap<UniverseSource, f64>,
+    failed: HashMap<UniverseSource, String>,
 }
 
-/// At start, then every thirty minutes, or sooner
-/// when the page asks.
-pub fn universe_loop(app: Arc<App>) {
-    // The index constituents feed the heatmap and nothing else: sixty-odd requests a
-    // pass. They are read when a page asks for the heatmap (the kick), and again each
-    // half hour only while a page is still connected -- not at start, and not through
-    // a night with nobody there.
-    loop {
-        let kicked = || *app.feeds.universe_kick.0.lock().unwrap_or_else(|e| e.into_inner());
-        if !app.events.park_until(&app, kicked) {
-            return;
-        }
-        loop {
-            *app.feeds.universe_kick.0.lock().unwrap_or_else(|e| e.into_inner()) = false;
-            refresh_universes(&app);
-            if !app.events.park_until_or(&app, Duration::from_secs(1800), kicked) && (app.stopping() || app.events.watchers() == 0) {
-                break;
-            }
-        }
-        if app.stopping() {
-            return;
-        }
+/// `universe:<key>`: what the last read of the universe's source came to. Its rows
+/// are the model's (`markets.universes`); this says only why they may be missing.
+#[derive(Clone, Debug, Serialize, TS, Diff)]
+pub struct UniverseDoc {
+    /// The source's failure, from its last read until it next answers.
+    pub failed: Option<String>,
+}
+
+/// The universe `key`'s document as it stands; `None` for a key that is not a market
+/// universe.
+pub fn universe_stored(app: &Arc<App>, key: &str) -> Option<UniverseDoc> {
+    let source = UniverseSource::of(key)?;
+    let reads = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner());
+    Some(UniverseDoc { failed: reads.failed.get(&source).cloned() })
+}
+
+/// Seconds from `now` until a source is due a read: none while any universe it
+/// carries has no rows (`read_at` holds `None` for it), else when the oldest has
+/// come to `UNIVERSE_STALE_SEC`; and never sooner than that long after the source
+/// was last asked.
+pub fn universe_due_in(now: f64, read_at: &[Option<f64>], asked: Option<f64>) -> f64 {
+    let rows_due = if read_at.iter().any(|t| t.is_none()) { now } else { read_at.iter().flatten().fold(f64::INFINITY, |a, &t| a.min(t)) + UNIVERSE_STALE_SEC };
+    let asked_due = asked.map_or(f64::NEG_INFINITY, |t| t + UNIVERSE_STALE_SEC);
+    (rows_due.max(asked_due) - now).max(0.0)
+}
+
+fn source_due_in(app: &Arc<App>, source: UniverseSource) -> f64 {
+    let read_at: Vec<Option<f64>> = match conn(app) {
+        Some(c) => source.keys().iter().map(|k| sf::universe_read_at(&c, k).ok().flatten().as_deref().and_then(parse_instant)).collect(),
+        None => source.keys().iter().map(|_| None).collect(),
+    };
+    let asked = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner()).asked.get(&source).copied();
+    universe_due_in(now_unix(), &read_at, asked)
+}
+
+#[cfg(not(test))]
+fn fetch_universes(_app: &Arc<App>, source: UniverseSource) -> Result<Vec<(&'static str, Vec<bagholder_model::input::UniverseRow>)>, String> {
+    bagholder_market::universes::read(source)
+}
+
+/// A test stands in for the sources: it counts the reads, and answers as it was told.
+#[cfg(test)]
+fn fetch_universes(app: &Arc<App>, source: UniverseSource) -> Result<Vec<(&'static str, Vec<bagholder_model::input::UniverseRow>)>, String> {
+    app.feeds.universe_reads.lock().unwrap().push(source);
+    if let Some(why) = app.feeds.universe_fails.lock().unwrap().clone() {
+        return Err(why);
     }
+    Ok(source
+        .keys()
+        .iter()
+        .map(|k| (*k, vec![bagholder_model::input::UniverseRow { symbol: format!("{}1", k.to_uppercase()), name: "A company".into(), value: 1.0, percent_change: Some(0.5), sector: "Technology".into(), country: String::new() }]))
+        .collect())
 }
 
-pub fn kick_universes(app: &Arc<App>) -> OkOr {
-    let (lock, cv) = &app.feeds.universe_kick;
-    *lock.lock().unwrap() = true;
-    cv.notify_all();
-    OkOr::ok()
+/// Read `source` now, unless it was asked within the half hour (by another page's
+/// universe from the same source, say): each answer replaces its universe's rows, a
+/// failure is kept for the documents until the source next answers.
+fn read_universes(app: &Arc<App>, source: UniverseSource) {
+    {
+        let mut reads = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_unix();
+        if reads.asked.get(&source).is_some_and(|t| now - t < UNIVERSE_STALE_SEC) {
+            return;
+        }
+        reads.asked.insert(source, now);
+    }
+    let outcome = fetch_universes(app, source).and_then(|answered| {
+        let c = conn(app).ok_or_else(|| "The database could not be opened.".to_string())?;
+        let now = now_iso();
+        for (key, rows) in answered {
+            sf::replace_universe(&c, key, &rows, &now).map_err(|e| format!("The {} universe could not be stored: {e}", key))?;
+        }
+        Ok(())
+    });
+    {
+        let mut reads = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner());
+        match outcome {
+            Ok(()) => reads.failed.remove(&source),
+            Err(why) => {
+                log(&format!("bagholder universes: {why}"));
+                reads.failed.insert(source, why)
+            }
+        };
+    }
+    app.events.signal(); // the documents say what the read came to
+}
+
+/// A page has started showing the universe `key` (`universe:<key>`): read it when it
+/// has no rows or they are stale, and again as they go stale, for as long as some
+/// page still shows it.
+pub fn universe_shown(app: Arc<App>, doc: String, key: String) {
+    let Some(source) = UniverseSource::of(&key) else { return };
+    spawn("bagholder-universe-shown", move || loop {
+        let ran = app.single_flight(&doc.clone(), false, || {
+            while app.events.watched(&doc) && !app.stopping() {
+                let due_in = source_due_in(&app, source);
+                if due_in <= 0.0 {
+                    read_universes(&app, source);
+                    continue;
+                }
+                // until the rows come due, or the page stops showing them
+                app.events.park_until_or(&app, Duration::from_secs_f64(due_in), || !app.events.watched(&doc));
+            }
+            true
+        });
+        // a page that opened the universe again as this one was leaving found it
+        // still running and left it to this one
+        if !ran || !app.events.watched(&doc) || app.stopping() {
+            return;
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

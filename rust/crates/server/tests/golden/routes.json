@@ -308,12 +308,6 @@
       "error": "symbol, from, to and a known tf are required"
     }
   },
-  "markets_refresh": {
-    "status": 200,
-    "body": {
-      "ok": true
-    }
-  },
   "login_cancel": {
     "status": 200,
     "body": {

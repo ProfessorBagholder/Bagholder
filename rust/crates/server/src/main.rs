@@ -190,7 +190,6 @@ fn serve() -> i32 {
         }
     }
     a.spawn_with("bagholder-news-loop", feeds::news_loop);
-    a.spawn_with("bagholder-universe-loop", feeds::universe_loop);
     a.spawn_with("bagholder-market-loop", feeds::market_loop);
     a.spawn_with("bagholder-archive", feeds::archive_loop);
     a.spawn_with("bagholder-watch", feeds::watch_loop);
@@ -438,3 +437,5 @@ mod tests_docs_golden;
 mod tests_routes_golden;
 #[cfg(test)]
 mod tests_boundary;
+#[cfg(test)]
+mod tests_universes;

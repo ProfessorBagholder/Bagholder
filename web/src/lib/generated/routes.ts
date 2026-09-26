@@ -47,7 +47,6 @@ export interface Routes {
   'GET /api/shorts': { query: ShortsQuery; answer: ShortsAnswer }
   'GET /api/shorts/feed': { answer: ShortsFeed }
   'GET /api/history': { query: HistoryQuery; answer: HistoryAnswer }
-  'POST /api/markets/refresh': { answer: OkOr }
   'POST /api/watchlist/add': { body: WatchlistBody; answer: WatchlistAnswer }
   'POST /api/watchlist/remove': { body: WatchlistBody; answer: WatchlistAnswer }
   'POST /api/tiles/set': { body: TilesSet; answer: TilesAnswer }

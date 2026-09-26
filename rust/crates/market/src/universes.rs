@@ -9,7 +9,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
-use crate::http::{get_text, post_json};
+use crate::http::{describe_failure, get_text, post_json};
 use crate::news::{nasdaq_headers, pace, tmx_headers};
 use bagholder_model::input::UniverseRow;
 use bagholder_model::lenient;
@@ -227,25 +227,74 @@ pub fn canada_tile(c: &Constituent, q: Option<&TileQuote>) -> UniverseRow {
     }
 }
 
-pub fn fetch_screener() -> Option<Vec<ScreenerRow>> {
+/// Where the universes come from: Nasdaq's screener carries the US and
+/// International in one answer, TMX Money the S&P/TSX 60. Each is read on its
+/// own, when a universe it carries is wanted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Source {
+    Screener,
+    Tmx,
+}
+
+impl Source {
+    /// The source that carries the universe `key`; `None` for a key that is not a
+    /// market universe.
+    pub fn of(key: &str) -> Option<Source> {
+        match key {
+            "us" | "intl" => Some(Source::Screener),
+            "ca" => Some(Source::Tmx),
+            _ => None,
+        }
+    }
+
+    /// The universes one read of this source replaces.
+    pub fn keys(self) -> &'static [&'static str] {
+        match self {
+            Source::Screener => &["us", "intl"],
+            Source::Tmx => &["ca"],
+        }
+    }
+
+    /// The source's name, as a failure names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Screener => "Nasdaq's screener",
+            Source::Tmx => "TMX Money",
+        }
+    }
+}
+
+/// Every US listing from the screener, or what failed: an answer with no
+/// listings in it is a failure, never an empty market.
+pub fn fetch_screener() -> Result<Vec<ScreenerRow>, String> {
+    let label = Source::Screener.label();
     pace("api.nasdaq.com", 0.6);
-    let text = get_text(SCREENER_URL, &nasdaq_headers()).ok()?;
-    let data: Value = serde_json::from_str(&text).ok()?;
-    Some(parse_screener(&data))
+    let text = get_text(SCREENER_URL, &nasdaq_headers()).map_err(|e| format!("{label} {}.", describe_failure(&e)))?;
+    let data: Value = serde_json::from_str(&text).map_err(|_| format!("{label} answered with something other than its listings."))?;
+    let rows = parse_screener(&data);
+    if rows.is_empty() {
+        return Err(format!("{label} answered with no listings."));
+    }
+    Ok(rows)
 }
 
 /// The S&P/TSX 60, its constituents by index weight,
-/// each quoted for the day's change and its sector.
-pub fn fetch_canada() -> Option<Vec<UniverseRow>> {
+/// each quoted for the day's change and its sector, or what failed.
+pub fn fetch_canada() -> Result<Vec<UniverseRow>, String> {
+    let label = Source::Tmx.label();
     pace("app-money.tmx.com", 0.6);
     let payload = json!({
         "operationName": "getIndexConstituents",
         "variables": {"symbol": CANADA_INDEX},
         "query": TMX_CONSTITUENTS_QUERY,
     });
-    let data = post_json(crate::tmx::TMX_URL, &payload, &tmx_headers()).ok()?;
+    let data = post_json(crate::tmx::TMX_URL, &payload, &tmx_headers()).map_err(|e| format!("{label} {}.", describe_failure(&e)))?;
+    let constituents = parse_constituents(&data);
+    if constituents.is_empty() {
+        return Err(format!("{label} answered with no constituents of the S&P/TSX 60."));
+    }
     let mut out = Vec::new();
-    for c in parse_constituents(&data) {
+    for c in constituents {
         pace("app-money.tmx.com", 0.6);
         let q = post_json(
             crate::tmx::TMX_URL,
@@ -260,27 +309,16 @@ pub fn fetch_canada() -> Option<Vec<UniverseRow>> {
         .and_then(|d| parse_tile_quote(&d));
         out.push(canada_tile(&c, q.as_ref()));
     }
-    Some(out)
+    Ok(out)
 }
 
-/// Read every universe; each answer replaces its rows.
-/// Returns the keys that answered.
-pub fn refresh(conn: &rusqlite::Connection, now: &str) -> Vec<String> {
-    let mut done: Vec<String> = Vec::new();
-    if let Some(rows) = fetch_screener() {
-        let us = us_rows(&rows, TOP);
-        let intl = intl_rows(&rows, TOP);
-        if bagholder_store::feeds::replace_universe(conn, "us", &us, now).is_ok()
-            && bagholder_store::feeds::replace_universe(conn, "intl", &intl, now).is_ok()
-        {
-            done.push("us".into());
-            done.push("intl".into());
+/// Read one source: the rows of each universe it carries, by key, or what failed.
+pub fn read(source: Source) -> Result<Vec<(&'static str, Vec<UniverseRow>)>, String> {
+    match source {
+        Source::Screener => {
+            let rows = fetch_screener()?;
+            Ok(vec![("us", us_rows(&rows, TOP)), ("intl", intl_rows(&rows, TOP))])
         }
+        Source::Tmx => Ok(vec![("ca", fetch_canada()?)]),
     }
-    if let Some(ca) = fetch_canada() {
-        if !ca.is_empty() && bagholder_store::feeds::replace_universe(conn, "ca", &ca, now).is_ok() {
-            done.push("ca".into());
-        }
-    }
-    done
 }

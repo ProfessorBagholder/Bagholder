@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::extract::{flag, text, trimmed};
-use super::{answer, api_routes, blocking, Api, ApiError, AppState, Body, OkOr, Params, Routed};
+use super::{answer, api_routes, blocking, Api, ApiError, AppState, Body, Params, Routed};
 use crate::feeds;
 
 pub fn routes() -> Routed {
@@ -26,7 +26,6 @@ pub fn routes() -> Routed {
         get "/api/shorts" => shorts;
         get "/api/shorts/feed" => shorts_feed;
         get "/api/history" => history;
-        post "/api/markets/refresh" => markets_refresh;
         post "/api/watchlist/add" => watchlist_add;
         post "/api/watchlist/remove" => watchlist_remove;
         post "/api/tiles/set" => tiles_set;
@@ -233,10 +232,6 @@ async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) 
 /// module itself, which is also handed them by the documents (`history:<query>`).
 async fn history(State(state): State<AppState>, Params(q): Params<feeds::HistoryQuery>) -> Api<feeds::HistoryAnswer> {
     answer(move || feeds::history_payload(&state.app, &q)).await
-}
-
-async fn markets_refresh(State(state): State<AppState>) -> Api<OkOr> {
-    answer(move || feeds::kick_universes(&state.app)).await
 }
 
 // The three writes below hand their body to the module that owns the rows; it
