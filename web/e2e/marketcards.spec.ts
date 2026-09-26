@@ -527,6 +527,13 @@ test.describe('Disclosures', () => {
     ])
     await popup.waitForLoadState()
     expect(popup.url()).toBe('https://filer.example/f2')
+    // while it hands off, the arrow reads `Opening…`, whole and visible
+    const open = rows.first().locator('.dc-open')
+    await expect(open).toHaveText('Opening…')
+    await expect(open).toBeVisible()
+    const box = (await open.boundingBox())!
+    expect(await open.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+    expect(box.x + box.width).toBeLessThanOrEqual((await rows.first().boundingBox())!.x + (await rows.first().boundingBox())!.width + 1)
     await popup.close()
   })
 

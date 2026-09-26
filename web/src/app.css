@@ -128,6 +128,8 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .dc-open{color:var(--ink55);visibility:hidden;border:0;background:transparent;padding:0;cursor:pointer;font:inherit;text-align:right}
 .dc-row:hover .dc-open{visibility:visible}
 .dc-open:hover,.dc-open.lit{color:var(--accent-300)}
+/* while a document is handed off the arrow reads `Opening…`, whole, reaching left out of the arrow's narrow column */
+.dc-open.lit{visibility:visible;justify-self:end;white-space:nowrap}
 .dc-skel{display:inline-block;height:10px;border-radius:4px;background:rgba(var(--ink-rgb),.09);animation:dcpulse 1.3s ease-in-out infinite}
 @keyframes dcpulse{0%,100%{opacity:.5}50%{opacity:.9}}
 .dc-sweep{position:relative;height:1px;margin:0 -16px;background:rgba(var(--ink-rgb),.08);overflow:hidden}

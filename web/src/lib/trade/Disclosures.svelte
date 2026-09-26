@@ -180,7 +180,7 @@
           <div class="dc-sumcell">{#if f.summary}{f.summary}{:else if enriching || (preparing(sym) && !f.enrichFinal)}<span class="dc-skel" style="width:90%"></span>{/if}</div>
           {#if view.multiSource}<button class="dc-src" onclick={(e) => { e.stopPropagation(); pickSource(f.source) }}>{f.source}</button>{/if}
           {#if view.anySize}<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">{f.size || ''}</div>{/if}
-          <button class="dc-open" class:lit={discOpening === f.id} onclick={(e) => { e.stopPropagation(); openDoc(f) }} aria-label="Open document">{discOpening === f.id ? '…' : '↗'}</button>
+          <button class="dc-open" class:lit={discOpening === f.id} onclick={(e) => { e.stopPropagation(); openDoc(f) }} aria-label="Open document">{discOpening === f.id ? 'Opening…' : '↗'}</button>
         </div>
       {/each}
     </div>
