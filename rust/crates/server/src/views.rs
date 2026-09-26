@@ -157,11 +157,12 @@ pub fn version_of_bytes(bytes: &[u8]) -> u64 {
 /// Which of the engine's entities a subscription's state is made of.
 enum Reads {
     /// The record as a whole, the trades (their tags, years and instruments), the
-    /// holdings that came or went, the accounts' values.
+    /// holdings that came or went, the accounts' values as the broker states them.
     Book,
     /// The trades, the accounts' values, the record (today), and one benchmark.
     Dashboard(String),
-    /// The holdings (and the record, and the market's context).
+    /// The holdings, the broker's cash and borrowing beside them (and the record,
+    /// and the market's context).
     Holdings,
     /// The trades and the holdings.
     TradesAndHoldings,
@@ -171,11 +172,11 @@ impl Reads {
     fn reads(&self, moved: &Moved, base: bool) -> bool {
         moved.0.iter().any(|(e, fields)| match (self, e) {
             (_, Entity::Book) => true,
-            (Reads::Book, Entity::Trade(_) | Entity::Equity(_)) => true,
+            (Reads::Book, Entity::Trade(_) | Entity::Equity(_) | Entity::Broker(_)) => true,
             (Reads::Book, Entity::Position(..)) => fields.contains("*"),
             (Reads::Dashboard(_), Entity::Trade(_) | Entity::Equity(_)) => true,
             (Reads::Dashboard(b), Entity::Benchmark(k)) => k == b,
-            (Reads::Holdings, Entity::Position(..) | Entity::Equity(_) | Entity::Trade(_)) => true,
+            (Reads::Holdings, Entity::Position(..) | Entity::Equity(_) | Entity::Trade(_) | Entity::Broker(_)) => true,
             (Reads::TradesAndHoldings, Entity::Trade(_) | Entity::Position(..)) => true,
             _ => false,
         }) || (base && matches!(self, Reads::Holdings))
@@ -594,7 +595,7 @@ impl CashflowView {
 
 impl View for CashflowView {
     fn reads(&self, moved: &Moved, _base: bool) -> bool {
-        moved.0.keys().any(|e| matches!(e, Entity::Book | Entity::CashRow(_) | Entity::Payer(_) | Entity::Position(..)))
+        moved.0.keys().any(|e| matches!(e, Entity::Book | Entity::CashRow(_) | Entity::Payer(_) | Entity::Position(..) | Entity::Broker(_)))
     }
     fn snapshot(&mut self, cx: &Cx) -> Value {
         let d = self.build(cx);
@@ -636,4 +637,229 @@ pub fn every_view(cx: &Cx, filters: &crate::wire::filters::Filters) -> Result<se
         out.insert(key.into(), snapshot_of(cx, key, all.clone())?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{Feed, Want};
+    use std::sync::Arc;
+
+    /// A change as the page writes it into what it holds (`live.svelte.ts`, `applyOps`).
+    fn apply(root: &mut Value, ops: &[Value]) {
+        fn walk<'a>(mut at: &'a mut Value, path: &[Value]) -> Option<&'a mut Value> {
+            for s in path {
+                at = match s {
+                    Value::String(k) => at.get_mut(k.as_str())?,
+                    Value::Object(step) => {
+                        let (k, v) = (step["k"].as_str()?, step["v"].as_str()?);
+                        at.as_array_mut()?.iter_mut().find(|r| r.get(k).and_then(|x| x.as_str().map(String::from).or_else(|| x.as_i64().map(|n| n.to_string()))).as_deref() == Some(v))?
+                    }
+                    _ => return None,
+                };
+            }
+            Some(at)
+        }
+        for op in ops {
+            let op = op.as_array().expect("an op is a list");
+            let path = op[1].as_array().expect("a path").clone();
+            match op[0].as_str().unwrap() {
+                "rows" => {
+                    let key = op[2].as_str().unwrap();
+                    let order: Vec<&str> = op[3].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+                    let added = op[4].as_object().unwrap();
+                    let list = walk(root, &path).and_then(|l| l.as_array_mut()).expect("the list the rows are in");
+                    let text = |r: &Value| r.get(key).and_then(|x| x.as_str().map(String::from).or_else(|| x.as_i64().map(|n| n.to_string()))).unwrap_or_default();
+                    let have: std::collections::HashMap<String, Value> = list.drain(..).map(|r| (text(&r), r)).collect();
+                    *list = order.iter().map(|id| have.get(*id).cloned().or_else(|| added.get(*id).cloned()).expect("a row it has or is sent")).collect();
+                }
+                "set" if path.is_empty() => *root = op[2].clone(),
+                "set" => {
+                    let (last, parent) = path.split_last().unwrap();
+                    let at = walk(root, parent).expect("the parent of what is set");
+                    match last {
+                        Value::String(k) => {
+                            at.as_object_mut().expect("an object").insert(k.clone(), op[2].clone());
+                        }
+                        step => *walk(at, std::slice::from_ref(step)).expect("the row set") = op[2].clone(),
+                    }
+                }
+                "del" => {
+                    let (last, parent) = path.split_last().unwrap();
+                    walk(root, parent).and_then(|p| p.as_object_mut()).expect("an object").remove(last.as_str().unwrap());
+                }
+                other => panic!("no op {other}"),
+            }
+        }
+    }
+
+    /// Every screen a page can show, each held as the page holds it.
+    const VIEWS: [&str; 7] = ["book", "dashboard", "positions", "trades", "cashflow", "exposure", "markets"];
+
+    struct Page {
+        feed: Feed,
+        held: std::collections::BTreeMap<String, Value>,
+    }
+
+    impl Page {
+        /// What the stream sent, written into what the page holds; the docs that moved.
+        fn step(&mut self) -> Vec<String> {
+            let mut moved = Vec::new();
+            for (name, m) in self.feed.step(&crate::status::status) {
+                let doc = m["doc"].as_str().unwrap_or_default().to_string();
+                match name {
+                    "snapshot" => {
+                        self.held.insert(doc.clone(), m["data"].clone());
+                    }
+                    "patch" => apply(self.held.get_mut(&doc).expect("a patch to what is held"), m["ops"].as_array().unwrap()),
+                    _ => continue,
+                }
+                moved.push(doc);
+            }
+            moved
+        }
+    }
+
+    fn opened() -> (tempfile::TempDir, Arc<crate::app::App>, Page, String) {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = crate::app::App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
+        let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        app.set_figures(f);
+        let feed = Feed::open(app.clone());
+        let all = serde_json::json!({"limit": 1_000_000});
+        let mut docs: std::collections::BTreeMap<String, Want> = VIEWS.iter().map(|k| (k.to_string(), Want { params: all.clone(), have: None })).collect();
+        // a holding's page too
+        let held = app.figures.get().unwrap().read(|e| build::position_id(&e.figures().positions[0])).unwrap();
+        docs.insert(format!("trade:{held}"), Want { params: serde_json::json!({}), have: None });
+        assert!(app.events.watch(&app, feed.id(), docs));
+        let mut page = Page { feed, held: Default::default() };
+        let first = page.step();
+        assert_eq!(first.len(), VIEWS.len() + 1, "every screen sent whole once: {first:?}");
+        (home, app, page, held)
+    }
+
+    /// What a page holds of each screen is what a fresh build of it says.
+    #[track_caller]
+    fn same_as_fresh(app: &Arc<crate::app::App>, page: &Page, when: &str) {
+        let f = app.figures.get().unwrap();
+        let names = f.names().unwrap();
+        let base = app.market_base().unwrap();
+        for (key, held) in &page.held {
+            let params = if key.starts_with("trade:") { serde_json::json!({}) } else { serde_json::json!({"limit": 1_000_000}) };
+            let fresh = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, base: &base }, key, params)).unwrap().unwrap();
+            assert!(*held == fresh, "{when}: {key} as the page holds it is not what a fresh build says");
+        }
+    }
+
+    /// For every kind of change, what the page is sent brings each screen it shows to
+    /// exactly what a fresh build says, and a screen that reads nothing that moved is
+    /// sent nothing (`docs/architecture.md` §13: the engine's report is what is sent).
+    #[test]
+    fn every_kind_of_change_brings_each_screen_to_a_fresh_build_and_touches_no_other() {
+        let (_home, app, mut page, held) = opened();
+        let f = app.figures.get().unwrap();
+        let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
+        assert!(page.step().is_empty(), "nothing moved, nothing sent");
+
+        // a quote for something held: the screens that show a price, and no other
+        let (instrument, currency) = f.read(|e| {
+            let p = &e.figures().positions[0];
+            (p.instrument, e.inputs().ledger.instruments[&p.instrument].instrument.currency)
+        }).unwrap();
+        let price = bagholder_core::Money::new(bagholder_core::Dec::parse("12.34").unwrap(), currency);
+        f.cache().unwrap().store_quote(&bagholder_sources::cache::StoredQuote { instrument, source: bagholder_core::SourceName::named("tmx"), price, change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now }).unwrap();
+        assert!(!f.price_changed(instrument).unwrap().is_empty());
+        let moved = page.step();
+        for untouched in ["book", "dashboard", "trades"] {
+            assert!(!moved.contains(&untouched.to_string()), "a quote moved the {untouched}: {moved:?}");
+        }
+        assert!(moved.contains(&"positions".to_string()) && moved.contains(&format!("trade:{held}")), "{moved:?}");
+        same_as_fresh(&app, &page, "a quote");
+
+        // the payer's declared record
+        let book = f.book().unwrap();
+        let row = bagholder_book::facts::DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: "2025-11-03".parse().unwrap(), record_date: None, pay_date: None, amount: bagholder_core::Money::new(bagholder_core::Dec::parse("0.10").unwrap(), currency), reinvested: None };
+        book.store_declared(instrument, &[row], &bagholder_core::SourceName::named("tmx"), now).unwrap();
+        f.payer_changed(instrument).unwrap();
+        page.step();
+        same_as_fresh(&app, &page, "a declared distribution");
+
+        // a rate the Bank published
+        book.store_rates(bagholder_core::Currency::USD, &[("2025-11-18".parse().unwrap(), bagholder_core::Dec::parse("1.4012").unwrap())], ("2025-11-18".parse().unwrap(), "2025-11-18".parse().unwrap()), &bagholder_core::SourceName::named("bank-of-canada"), now).unwrap();
+        f.rates_changed().unwrap();
+        page.step();
+        same_as_fresh(&app, &page, "a rate");
+
+        // a journal written
+        let trade = page.held["trades"]["trades"][0]["id"].as_str().unwrap().to_string();
+        f.write_journal(&trade, &bagholder_core::journal::JournalEntry { thesis: "why".into(), grade: Some(bagholder_core::journal::Grade::A), tags: vec!["t".into()] }, now).unwrap();
+        let moved = page.step();
+        assert!(!moved.contains(&"positions".to_string()) || f.read(|e| e.figures().positions.iter().any(|p| p.trade.is_some_and(|t| t.to_string() == trade))).unwrap(), "a journal moved holdings that are not its trade's: {moved:?}");
+        same_as_fresh(&app, &page, "a journal");
+
+        // the broker states an account's cash
+        let account = f.read(|e| e.figures().positions[0].account).unwrap();
+        let connection = book.connections().unwrap()[0].id;
+        let read = book.broker_read(connection, "cash", now).unwrap();
+        book.store_cash(account, now, &[(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("42.00").unwrap())].into_iter().collect(), &read).unwrap();
+        f.broker_changed(account).unwrap();
+        page.step();
+        same_as_fresh(&app, &page, "the broker's cash");
+
+        // the record changed: a row the broker no longer lists
+        let removed = book.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap()[0];
+        book.mark_removed(removed, now).unwrap();
+        f.record_changed(now).unwrap();
+        page.step();
+        same_as_fresh(&app, &page, "a record removed");
+
+        // the next day
+        f.clock_moved("2025-11-20T21:00:00Z".parse().unwrap()).unwrap();
+        page.step();
+        same_as_fresh(&app, &page, "the day turning");
+    }
+
+    /// A page opening again with the version it kept of a screen is told it is the
+    /// same; one holding another version is sent the screen.
+    #[test]
+    fn a_screen_kept_at_its_version_is_answered_same_and_another_is_sent() {
+        let (_home, app, mut page, _) = opened();
+        let v = |d: &Value| format!("{:016x}", version_of(d));
+        let feed = Feed::open(app.clone());
+        let docs = [
+            ("book".to_string(), Want { params: serde_json::json!({"limit": 1_000_000}), have: Some(v(&page.held["book"])) }),
+            ("dashboard".to_string(), Want { params: serde_json::json!({"limit": 1_000_000}), have: Some("0000000000000000".into()) }),
+        ];
+        assert!(app.events.watch(&app, feed.id(), docs.into_iter().collect()));
+        page.feed = feed;
+        let said: Vec<(&str, String)> = page.feed.step(&crate::status::status).into_iter().map(|(n, m)| (n, m["doc"].as_str().unwrap_or_default().to_string())).collect();
+        assert!(said.contains(&("same", "book".into())), "{said:?}");
+        assert!(said.contains(&("snapshot", "dashboard".into())), "{said:?}");
+    }
+
+    /// A long list is sent as far as the page has scrolled, with how long it is.
+    #[test]
+    fn a_long_list_is_sent_as_far_as_the_page_has_scrolled() {
+        let (_home, app, page, _) = opened();
+        let all = page.held["trades"]["trades"].as_array().unwrap().len();
+        assert!(all > 3, "a book with more trades than the window");
+        let f = app.figures.get().unwrap();
+        let names = f.names().unwrap();
+        let base = app.market_base().unwrap();
+        let three = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, base: &base }, "trades", serde_json::json!({"limit": 3}))).unwrap().unwrap();
+        assert_eq!(three["total"], serde_json::json!(all));
+        assert_eq!(three["trades"].as_array().unwrap(), &page.held["trades"]["trades"].as_array().unwrap()[..3]);
+        // the order is the page's: by symbol, ascending
+        let by = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, base: &base }, "trades", serde_json::json!({"limit": 1_000_000, "sort": {"key": "symbol", "dir": "asc"}}))).unwrap().unwrap();
+        let symbols: Vec<String> = by["trades"].as_array().unwrap().iter().map(|t| t["symbol"].as_str().unwrap().to_lowercase()).collect();
+        let mut sorted = symbols.clone();
+        sorted.sort();
+        assert_eq!(symbols, sorted);
+        // a column the list does not have is refused
+        assert!(open("trades", &serde_json::json!({"sort": {"key": "nope", "dir": "asc"}})).unwrap().is_err());
+    }
 }

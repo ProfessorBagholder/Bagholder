@@ -53,6 +53,9 @@ pub enum Entity {
     BrokerCheck(AccountId),
     /// A benchmark's total return in CAD, by its key.
     Benchmark(String),
+    /// What the broker states of an account now: its cash, what it can borrow,
+    /// its value.
+    Broker(AccountId),
     /// What the record is as a whole: its accounts and instruments, the facts it
     /// waits on the person for, how many transactions it holds, and today.
     Book,
@@ -126,6 +129,18 @@ struct BookFig {
     today: Date,
 }
 fields!(BookFig; accounts, instruments, waiting, activity, today);
+
+/// What the broker states of an account, compared whole.
+struct Stated<'a>(&'a BrokerAccount);
+impl Fields for Stated<'_> {
+    fn changed(&self, other: &Self) -> BTreeSet<&'static str> {
+        if self.0 != other.0 {
+            BTreeSet::from(["stated"])
+        } else {
+            BTreeSet::new()
+        }
+    }
+}
 
 fn diff<'a, T: Fields + 'a>(moved: &mut Moved, before: impl IntoIterator<Item = (Entity, &'a T)>, after: impl IntoIterator<Item = (Entity, &'a T)>) {
     let before: BTreeMap<Entity, &T> = before.into_iter().collect();
@@ -365,6 +380,7 @@ impl Engine {
                 let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
                 let before_equity: Option<AccountEquity> = self.equity.get(&a).cloned();
                 let before_check: Vec<BrokerCheck> = self.checks.iter().filter(|c| c.account == a).cloned().collect();
+                let before_stated: Option<BrokerAccount> = self.inputs.market.brokers.get(&a).cloned();
                 match b {
                     Some(b) => self.inputs.market.brokers.insert(a, b),
                     None => self.inputs.market.brokers.remove(&a),
@@ -378,6 +394,8 @@ impl Engine {
                 diff(&mut moved, before_positions.iter().map(|p| (position_entity(p), p)), self.positions.iter().filter(|p| p.account == a).map(|p| (position_entity(p), p)));
                 diff(&mut moved, before_equity.iter().map(|e| (Entity::Equity(a), e)), self.equity.get(&a).map(|e| (Entity::Equity(a), e)));
                 diff(&mut moved, before_check.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().filter(|c| c.account == a).map(|c| (Entity::BrokerCheck(c.account), c)));
+                let now_stated = self.inputs.market.brokers.get(&a);
+                diff(&mut moved, before_stated.as_ref().map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)), now_stated.map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)));
             }
         }
         moved
@@ -402,6 +420,7 @@ impl Engine {
             equity: parts.equity.then(|| self.equity.clone()),
             checks: parts.checks.then(|| self.checks.clone()),
             benchmarks: parts.benchmarks.then(|| self.benchmarks.clone()),
+            brokers: parts.book.then(|| self.inputs.market.brokers.clone()),
             book: parts.book.then(|| self.book_fig()),
         }
     }
@@ -434,6 +453,10 @@ impl Engine {
         if let Some(b) = &before.benchmarks {
             let (was, now): (Vec<_>, Vec<_>) = (b.iter().map(|(k, l)| (k, BenchmarkLevels(l))).collect(), self.benchmarks.iter().map(|(k, l)| (k, BenchmarkLevels(l))).collect());
             diff(m, was.iter().map(|(k, l)| (Entity::Benchmark((*k).clone()), l)), now.iter().map(|(k, l)| (Entity::Benchmark((*k).clone()), l)));
+        }
+        if let Some(b) = &before.brokers {
+            let (was, now): (Vec<_>, Vec<_>) = (b.iter().map(|(a, s)| (*a, Stated(s))).collect(), self.inputs.market.brokers.iter().map(|(a, s)| (*a, Stated(s))).collect());
+            diff(m, was.iter().map(|(a, s)| (Entity::Broker(*a), s)), now.iter().map(|(a, s)| (Entity::Broker(*a), s)));
         }
         if let Some(b) = &before.book {
             let now = self.book_fig();
@@ -477,5 +500,6 @@ struct Snapshot {
     equity: Option<BTreeMap<AccountId, AccountEquity>>,
     checks: Option<Vec<BrokerCheck>>,
     benchmarks: Option<BTreeMap<String, crate::stat::benchmark::Levels>>,
+    brokers: Option<BTreeMap<AccountId, BrokerAccount>>,
     book: Option<BookFig>,
 }
