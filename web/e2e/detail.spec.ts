@@ -103,3 +103,32 @@ test('short interest is asked for again when the reader returns to a reading ove
   await comeBack()
   await expect.poll(() => asked).toBe(2)
 })
+
+test('short interest is neither asked for nor drawn on any page but a share listing', async ({ page, request }) => {
+  const model = await modelDoc(request)
+  const pages: { hash: string; shares: boolean }[] = [
+    ...model.trades.map((t: { id: string; kind: string }) => ({ hash: '#trades/' + encodeURIComponent(t.id), shares: t.kind === 'Shares' })),
+    ...model.positions.map((p: { id: string; kind: string }) => ({ hash: '#portfolio/' + encodeURIComponent(p.id), shares: p.kind === 'Shares' })),
+  ]
+  const others = pages.filter((p) => !p.shares)
+  expect(others.length, 'the book has pages that are not a share listing').toBeGreaterThan(0)
+  let asked = 0
+  let charted = 0
+  page.on('request', (r) => {
+    if (r.url().includes('/api/shorts?')) asked++
+    if (r.url().includes('/api/history?')) charted++
+  })
+  for (const p of others) {
+    const before = charted
+    await page.goto('/' + p.hash)
+    await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+    // the page has asked for its chart, which it asks for beside the card: the card's own ask would be out by now
+    await expect.poll(() => charted).toBeGreaterThan(before)
+    await page.waitForTimeout(300)
+    expect(asked, p.hash).toBe(0)
+    await expect(page.locator('#page').getByText('Short volume', { exact: true })).toHaveCount(0)
+  }
+  // a share listing's page does ask: the watch above would have seen it
+  await page.goto('/' + pages.find((p) => p.shares)!.hash)
+  await expect.poll(() => asked).toBeGreaterThan(0)
+})

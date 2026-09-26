@@ -7,7 +7,7 @@
   import type { Trade } from '../model'
   import { qty } from '../fmt'
   import Donut, { type DonutItem } from '../Donut.svelte'
-  import { ensureShorts, shortsKey, shortDay, shortSpan, shortsStore } from './shorts.svelte'
+  import { ensureShorts, reportsShorts, shortsKey, shortDay, shortSpan, shortsStore } from './shorts.svelte'
 
   let { trade }: { trade: Trade } = $props()
 
@@ -27,7 +27,7 @@
   })
 
   const rec = $derived(shortsStore[shortsKey(trade)])
-  const s = $derived(rec && rec.ok && rec.covered ? rec.shorts : null)
+  const s = $derived(reportsShorts(trade) && rec && rec.ok && rec.covered ? rec.shorts : null)
 
   interface Ring {
     key: string

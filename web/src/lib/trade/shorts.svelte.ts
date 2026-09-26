@@ -16,6 +16,15 @@ export const shortsStore = $state<Record<string, ShortsRec>>({})
 
 const SHORTS_KEEP_MS = 30 * 60 * 1000
 
+/**
+ * Whether short selling is reported for it: a share listing only. A coin, an index, a
+ * futures or currency contract and an option are reported by no one (SPEC.md §4 Trades,
+ * Short interest), so nothing is asked for them and nothing is drawn.
+ */
+export function reportsShorts(t: Pick<Trade, 'kind'>): boolean {
+  return t.kind === 'Shares'
+}
+
 export function discSymbol(t: Trade): string {
   return String(listingTicker(t) || t.symbol || '').toUpperCase()
 }
@@ -32,7 +41,7 @@ const shownFrom = new Map<string, Answer<ShortsAnswer>>()
 export async function ensureShorts(t: Trade): Promise<void> {
   const sym = discSymbol(t)
   const key = shortsKey(t)
-  if (!sym) return
+  if (!sym || !reportsShorts(t)) return
   const q = { symbol: sym, exchange: t.exchange || '', currency: t.currency || '', name: '', trend: false }
   const d = await readings.read({ query: q }, { key })
   // the reading already shown: nothing to write, and its trend stays on it
