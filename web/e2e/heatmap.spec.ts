@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { openWithStatus, ready } from './helpers'
+import { openWithStatus, ready, saidShown } from './helpers'
 
 // SPEC §3 Markets, "The heatmap on its own" and "The slideshow".
 
@@ -77,13 +77,10 @@ test('the play button starts a cycle over every scope at twenty seconds and writ
   await expect(page).toHaveURL(/#heatmap\/holdings\/value$/)
 })
 
-/** Every set of documents the page tells the server it shows, in order. */
-function watched(page: Page): string[][] {
-  const said: string[][] = []
-  page.on('request', (r) => {
-    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/events/watch') said.push(Object.keys((r.postDataJSON() as { docs: Record<string, unknown> }).docs))
-  })
-  return said
+/** The keys of what the page last told the server it shows. */
+function watched(page: Page): { last: () => string[] } {
+  const said = saidShown(page)
+  return { last: () => Object.keys(said.at(-1) ?? {}) }
 }
 const universesIn = (docs: string[] | undefined) => (docs ?? []).filter((k) => k.startsWith('universe:')).sort()
 
@@ -97,7 +94,7 @@ for (const u of ['ca', 'us', 'intl']) {
       mk.universes = { ca: [], us: [], intl: [] }
     })
     await expect(page.locator('#heatFull')).toContainText('Not read yet.')
-    await expect.poll(() => universesIn(said.at(-1))).toEqual([`universe:${u}`])
+    await expect.poll(() => universesIn(said.last())).toEqual([`universe:${u}`])
   })
 
   test(`a market universe remembered with no rows is asked for when Markets opens (${u})`, async ({ page, request }) => {
@@ -109,17 +106,17 @@ for (const u of ['ca', 'us', 'intl']) {
     })
     const card = page.locator('#page .card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
     await expect(card).toContainText('Not read yet.')
-    await expect.poll(() => universesIn(said.at(-1))).toEqual([`universe:${u}`])
+    await expect.poll(() => universesIn(said.last())).toEqual([`universe:${u}`])
     // the book's own scopes are nobody's to read: leaving the market stops asking
     await card.locator('.mseg-opt', { hasText: /^Holdings$/ }).click()
-    await expect.poll(() => universesIn(said.at(-1))).toEqual([])
+    await expect.poll(() => universesIn(said.last())).toEqual([])
   })
 }
 
 test('a slideshow asks for every market it goes through, not only the one on show', async ({ page, request }) => {
   const said = watched(page)
   await openWithStatus(page, request, {}, '#heatmap/holdings,ca,intl/value/20', withUs)
-  await expect.poll(() => universesIn(said.at(-1))).toEqual(['universe:ca', 'universe:intl'])
+  await expect.poll(() => universesIn(said.last())).toEqual(['universe:ca', 'universe:intl'])
 })
 
 test("a market universe whose read failed says what failed instead of 'Not read yet.'", async ({ page, request }) => {

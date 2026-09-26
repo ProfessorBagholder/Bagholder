@@ -85,49 +85,55 @@ test.describe('Trades list', () => {
     await expect(page).toHaveURL(subUrl('portfolio', t.position!))
   })
 
+  // the server sorts the list: the rows are read once its new order has arrived
+  const sortedBy = (vals: string[], cmp: (a: string, b: string) => number) => vals.every((v, i) => i === 0 || cmp(vals[i - 1], v) <= 0)
+  const text = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
   test('every column sorts, and a second click on the same header reverses it', async ({ page }) => {
     await page.goto('/#trades')
     await ready(page)
     const openCol = () => page.locator('#page table tbody tr td:nth-child(1)').allTextContents()
     await headerCell(page, 'Open').click()
-    const desc = await openCol()
-    expect(desc).toEqual(desc.slice().sort().reverse())
+    await expect.poll(async () => sortedBy(await openCol(), (a, b) => text(b, a))).toBe(true)
     await headerCell(page, 'Open').click()
-    const asc = await openCol()
-    expect(asc).toEqual(asc.slice().sort())
+    await expect.poll(async () => sortedBy(await openCol(), text)).toBe(true)
+    const all = await openCol()
+    expect(new Set(all).size).toBeGreaterThan(1) // a column that could be in either order proves nothing
   })
 
   test('switching the sort to a different header resets its direction to descending', async ({ page }) => {
     await page.goto('/#trades')
     await ready(page)
     const openCol = () => page.locator('#page table tbody tr td:nth-child(1)').allTextContents()
-    const qtyCol = () => page.locator('#page table tbody tr td:nth-child(5)').allTextContents()
+    const qtyCol = async () => (await page.locator('#page table tbody tr td:nth-child(5)').allTextContents()).map((s) => Number(s.replace(/,/g, '')))
     await headerCell(page, 'Open').click() // desc
+    await expect.poll(async () => sortedBy(await openCol(), (a, b) => text(b, a))).toBe(true)
     await headerCell(page, 'Open').click() // asc -- now the direction held on Open is ascending
-    const openAsc = await openCol()
-    expect(openAsc).toEqual(openAsc.slice().sort())
+    await expect.poll(async () => sortedBy(await openCol(), text)).toBe(true)
     // moving to a fresh column starts over at descending, not carrying the ascending flip
     await headerCell(page, 'Qty').click()
-    const qtyVals = (await qtyCol()).map((s) => Number(s.replace(/,/g, '')))
-    expect(qtyVals).toEqual(qtyVals.slice().sort((a, b) => b - a))
+    await expect.poll(async () => {
+      const q = await qtyCol()
+      return q.every((v, i) => i === 0 || q[i - 1] >= v)
+    }).toBe(true)
   })
 
   test('Grade sorts A first on the first click, and ungraded trades sink to the bottom either way', async ({ page }) => {
     await page.goto('/#trades')
     await ready(page)
-    await headerCell(page, 'Grade').click() // first click: desc, A first
-    const gradesDesc = await page.locator('#page table tbody tr td:nth-child(12) .grade').allTextContents()
-    const gradedDesc = gradesDesc.filter((g) => g !== '—')
-    expect(gradedDesc[0]).toBe('A')
-    expect(gradesDesc.slice(gradesDesc.length - gradesDesc.filter((g) => g === '—').length)).toEqual(gradesDesc.filter((g) => g === '—'))
-
-    await headerCell(page, 'Grade').click() // second click: asc, F first (none here, so the lowest actual grade)
-    const gradesAsc = await page.locator('#page table tbody tr td:nth-child(12) .grade').allTextContents()
-    const gradedAsc = gradesAsc.filter((g) => g !== '—')
+    const grades = () => page.locator('#page table tbody tr td:nth-child(12) .grade').allTextContents()
     const rank: Record<string, number> = { F: 0, C: 1, B: 2, A: 3 }
-    expect(rank[gradedAsc[0]]).toBeLessThanOrEqual(rank[gradedAsc[gradedAsc.length - 1]])
-    // ungraded still last
-    expect(gradesAsc.slice(gradesAsc.length - gradesAsc.filter((g) => g === '—').length)).toEqual(gradesAsc.filter((g) => g === '—'))
+    // graded first, in the order asked, and every ungraded trade after them
+    const inOrder = (g: string[], dir: 1 | -1) => {
+      const firstUngraded = g.indexOf('—')
+      const graded = firstUngraded < 0 ? g : g.slice(0, firstUngraded)
+      return g.slice(graded.length).every((x) => x === '—') && graded.every((x, i) => i === 0 || dir * (rank[x] - rank[graded[i - 1]]) >= 0)
+    }
+    await headerCell(page, 'Grade').click() // first click: desc, A first
+    await expect.poll(async () => inOrder(await grades(), -1)).toBe(true)
+    expect((await grades()).filter((g) => g !== '—')[0]).toBe('A')
+    await headerCell(page, 'Grade').click() // second click: asc, the lowest grade first
+    await expect.poll(async () => inOrder(await grades(), 1)).toBe(true)
   })
 
   test('a click on a row opens the trade, with a breadcrumb beside the tabs', async ({ page, request }) => {

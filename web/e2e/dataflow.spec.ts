@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { ready } from './helpers'
+import { ready, following } from './helpers'
 
 // docs/architecture.md §13, held in the browser: the page loads what is on screen when
 // it is first needed, keeps it between opens, asks for nothing it does not show, and a
@@ -25,7 +25,7 @@ async function recordStream(page: Page): Promise<void> {
               /* a message that is not JSON is recorded without its document */
             }
             // whether the screen was already drawn when this message came
-            w.__sse.push({ name, doc, bytes: data.length, drawn: !!document.querySelector('#page > [data-arrived]') })
+            w.__sse.push({ name, doc, bytes: data.length, drawn: !!document.querySelector('#page .kpi .v') })
           })
         }
       }
@@ -35,15 +35,6 @@ async function recordStream(page: Page): Promise<void> {
 }
 
 const sse = (page: Page) => page.evaluate(() => (window as unknown as { __sse: { name: string; doc: string; bytes: number; drawn: boolean }[] }).__sse)
-
-/** What the page last said it shows (POST /api/events/watch), by key. */
-function following(page: Page): () => string[] {
-  let last: string[] = []
-  page.on('request', (r) => {
-    if (r.method() === 'POST' && r.url().endsWith('/api/events/watch')) last = Object.keys((r.postDataJSON() as { docs: Record<string, unknown> }).docs).sort()
-  })
-  return () => last
-}
 
 test('a tab never visited loads nothing: each subscribes to its own screen, and to the holdings only where they are shown', async ({ page }) => {
   const shown = following(page)
@@ -92,6 +83,7 @@ const BUDGET = {
 }
 
 test('each interaction keeps within its request budget', async ({ page }) => {
+  test.setTimeout(120_000) // it sits a minute idle
   await recordStream(page)
   const asked: string[] = []
   page.on('request', (r) => {

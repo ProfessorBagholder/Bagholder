@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { openWithStatus, ready, figures, bareSymbol, subUrl } from './helpers'
+import { openWithStatus, ready, figures, bareSymbol, subUrl, saidShown } from './helpers'
 
 // SPEC §3, Markets: the tile row, Fear & Greed, the Heatmap card, the Watchlist,
 // Short interest and News cards; and §4/§6 Disclosures, the card on a trade or
@@ -185,11 +185,8 @@ test.describe('Fear & Greed', () => {
   })
 
   test('while the card shows, both meters are asked for, the one on show and the one a click away', async ({ page, request }) => {
-    const watched: string[][] = []
-    await page.route('**/api/events/watch', async (route) => {
-      watched.push(Object.keys((route.request().postDataJSON() as { docs: Record<string, unknown> }).docs))
-      await route.fulfill({ status: 200, json: { ok: true } })
-    })
+    const said = saidShown(page)
+    const watched = { some: (f: (docs: string[]) => boolean) => said.some((d) => f(Object.keys(d))) }
     await openWithStatus(page, request, {}, '#markets', () => {}, { 'fear:stocks': gauge('stocks', 62, []), 'fear:crypto': gauge('crypto', 30, []) })
     await expect.poll(() => watched.some((docs) => docs.includes('fear:stocks') && docs.includes('fear:crypto'))).toBe(true)
   })

@@ -217,6 +217,20 @@ export function onRestart(fn: (was: ServerStamp, now: ServerStamp) => void): voi
 let saidFor = 0
 let said = ''
 let saying = false
+/** What the stream was opened naming: said already, so a hello is not followed by the same again. */
+let connectedWith = ''
+
+/** What the page shows now, and the version of each it holds, as the server is told it. */
+function shownNow(): { docs: Record<string, unknown>; have: Record<string, string> } {
+  const docs: Record<string, unknown> = {}
+  const have: Record<string, string> = {}
+  for (const key of [...wanted.keys()].sort()) {
+    const w = wanted.get(key)!
+    docs[key] = w.params ?? {}
+    if (w.holder.v && w.holder.data != null) have[key] = w.holder.v
+  }
+  return { docs, have }
+}
 function sayWanted(): void {
   if (saying) return
   saying = true
@@ -225,13 +239,7 @@ function sayWanted(): void {
     while (drawing.size) await Promise.all([...drawing])
     saying = false
     if (!streamId) return
-    const docs: Record<string, unknown> = {}
-    const have: Record<string, string> = {}
-    for (const key of [...wanted.keys()].sort()) {
-      const w = wanted.get(key)!
-      docs[key] = w.params ?? {}
-      if (w.holder.v && w.holder.data != null) have[key] = w.holder.v
-    }
+    const { docs, have } = shownNow()
     const now = JSON.stringify(docs)
     if (saidFor === streamId && now === said) return
     saidFor = streamId
@@ -289,11 +297,22 @@ function restarted(was: unknown, now: unknown): boolean {
  * browser connects again by itself when it drops; the page then says again what
  * it shows, with the version of each it holds, and is sent what changed.
  */
-export function connect(): void {
+let connecting = false
+export async function connect(): Promise<void> {
+  if (connecting || (source && source.readyState !== EventSource.CLOSED)) return
+  connecting = true
+  // what the screens on show read is registered as they start, and what was kept of
+  // them drawn: then the stream is opened naming them, with the version of each held,
+  // so its first message already answers them
+  await Promise.resolve()
+  while (drawing.size) await Promise.all([...drawing])
+  connecting = false
   if (source && source.readyState !== EventSource.CLOSED) return
   // the browser's time zone: the person's days, months and "today" are in it
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const es = new EventSource('/api/events?zone=' + encodeURIComponent(zone))
+  const { docs, have } = shownNow()
+  connectedWith = JSON.stringify(docs)
+  const es = new EventSource('/api/events?zone=' + encodeURIComponent(zone) + '&docs=' + encodeURIComponent(connectedWith) + '&have=' + encodeURIComponent(JSON.stringify(have)))
   source = es
   streamId = 0
   const seen = numbering(() => {
@@ -307,7 +326,9 @@ export function connect(): void {
     streamId = hello.id
     conn.open = true
     conn.error = ''
-    saidFor = 0 // a new stream knows nothing of what this page shows
+    // the stream was opened naming what the page showed then: only a difference is said
+    saidFor = streamId
+    said = connectedWith
     if (hello.book && hello.book !== book) {
       // another book than the one drawn: nothing kept of that one stands
       if (book) for (const w of wanted.values()) {
@@ -316,6 +337,7 @@ export function connect(): void {
       }
       book = hello.book
       void bookIs(book)
+      saidFor = 0 // said again, holding nothing of this book
     }
     sayWanted()
   })
@@ -351,6 +373,12 @@ export function connect(): void {
     const { doc, error } = JSON.parse((e as MessageEvent).data) as { doc: string; error: string }
     const w = wanted.get(doc)
     if (w) w.holder.error = error
+    else if (!doc) {
+      // the stream could not read what the page shows: said, and said again the other way
+      conn.error = error
+      saidFor = 0
+      sayWanted()
+    }
   })
   es.onerror = () => {
     streamId = 0

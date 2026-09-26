@@ -78,12 +78,34 @@ export function streamBody(model: unknown, docs: Record<string, unknown> = {}, t
 }
 
 /**
+ * Every set of subscriptions the page tells the server it shows, in order: the ones it
+ * opens its stream naming (GET /api/events?docs=…), then each change it says
+ * (POST /api/events/watch). Each is the subscriptions' keys and their parameters.
+ */
+export function saidShown(page: Page): Record<string, unknown>[] {
+  const said: Record<string, unknown>[] = []
+  page.on('request', (r) => {
+    const u = new URL(r.url())
+    if (r.method() === 'GET' && u.pathname === '/api/events') said.push(JSON.parse(u.searchParams.get('docs') || '{}'))
+    if (r.method() === 'POST' && u.pathname === '/api/events/watch') said.push((r.postDataJSON() as { docs: Record<string, unknown> }).docs)
+  })
+  return said
+}
+
+/** The keys of what the page last said it shows. */
+export function following(page: Page): () => string[] {
+  const said = saidShown(page)
+  return () => Object.keys(said[said.length - 1] ?? {}).sort()
+}
+
+/**
  * A stream stood in for: the page's stream answers `body`, and what the page says it
  * shows is taken (the stream it names is not the server's own).
  */
 export async function standIn(page: Page, body: string | (() => string)): Promise<void> {
   await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: typeof body === 'string' ? body : body() }))
-  await page.route('**/api/events/watch', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
+  // a spec's own handler for it, registered before, answers first
+  await page.route('**/api/events/watch', (route) => route.fallback())
 }
 
 /**
