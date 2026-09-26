@@ -17,6 +17,7 @@ pub fn routes() -> Routed {
         get "/api/status" => status;
         get "/api/figures/detail" => figures_detail;
         get "/api/figures/trades" => figures_trades;
+        get "/api/view" => view;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
         post "/api/entries" => entries;
@@ -45,6 +46,44 @@ async fn figures_detail(State(state): State<AppState>, Params(q): Params<TradeQu
     let id = q.id.unwrap_or_default();
     let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::detail(e, &id))).flatten()).await?;
     Ok(Json(found.ok_or_else(|| ApiError::NotFound("no such trade or holding".into()))?))
+}
+
+#[derive(Deserialize, TS)]
+pub struct ViewQuery {
+    /// The subscription's key: `book`, `dashboard`, `positions`, `trades`,
+    /// `cashflow`, `exposure`, `markets`, `trade:<id>`.
+    #[serde(default, deserialize_with = "trimmed")]
+    key: Option<String>,
+    /// Its parameters, as the JSON a subscription is asked with (`views::Params`).
+    #[serde(default, deserialize_with = "trimmed")]
+    params: Option<String>,
+}
+
+/// A document of the figures, as a subscription is first sent it.
+#[derive(Serialize, TS)]
+#[ts(type = "unknown")]
+pub struct ViewAnswer(serde_json::Value);
+
+/// `GET /api/view`: one screen's document once, exactly as a page subscribing to
+/// it is first sent it. A key or a parameter the figures do not know is refused,
+/// naming it.
+async fn view(State(state): State<AppState>, Params(q): Params<ViewQuery>) -> Api<ViewAnswer> {
+    let app = state.app;
+    let built = blocking(move || -> Result<serde_json::Value, ApiError> {
+        let key = q.key.ok_or_else(|| ApiError::BadRequest("key required".into()))?;
+        let params: serde_json::Value = match q.params {
+            Some(raw) => serde_json::from_str(&raw).map_err(|e| ApiError::BadRequest(format!("the parameters: {e}")))?,
+            None => serde_json::json!({}),
+        };
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        let names = f.names().map_err(ApiError::Failed)?;
+        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
+        f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, base: &base }, &key, params))
+            .ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?
+            .map_err(ApiError::BadRequest)
+    })
+    .await??;
+    Ok(Json(ViewAnswer(built)))
 }
 
 #[derive(Deserialize, TS)]

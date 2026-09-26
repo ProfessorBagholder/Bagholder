@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { modelDoc, streamBody } from './helpers'
+import { modelDoc, streamBody, standIn } from './helpers'
 
 // SPEC §4, the trade page: its journal and its keys.
 
@@ -45,10 +45,7 @@ test('a server started again is asked for the chart again; the same server is no
   const model = await modelDoc(request)
   const trade = model.trades.find((t: { status: string }) => t.status === 'closed')
   let startedAt = 'A'
-  await page.route('**/api/events?*', (route) => {
-    const m = { ...model, status: { ...model.status, startedAt } }
-    route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(m) })
-  })
+  await standIn(page, () => streamBody({ ...model, status: { ...model.status, startedAt } }))
   let asked = 0
   page.on('request', (r) => { if (r.url().includes('/api/history?')) asked++ })
   await page.goto('/#trades/' + encodeURIComponent(trade.id))
@@ -71,9 +68,9 @@ test('an open trade keeps its executions when the view arrives again, and a trad
   const model = await modelDoc(request)
   const trade = model.trades.find((t: { status: string }) => t.status === 'closed')
   let sent = 0
-  await page.route('**/api/events?*', (route) => {
+  await standIn(page, () => {
     sent++
-    route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model) })
+    return streamBody(model)
   })
   await page.goto('/#trades/' + encodeURIComponent(trade.id))
   const rows = page.locator('#page table tbody tr')

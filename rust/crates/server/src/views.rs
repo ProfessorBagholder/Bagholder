@@ -617,7 +617,6 @@ impl View for CashflowView {
 }
 
 /// A subscription's whole state, as a page opening it is sent it.
-#[cfg(test)]
 pub fn snapshot_of(cx: &Cx, key: &str, params: Value) -> Result<Value, String> {
     open(key, &params).ok_or_else(|| format!("{key} is not a view of the figures"))?.map(|mut v| v.snapshot(cx))
 }

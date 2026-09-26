@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus, ready, subUrl } from './helpers'
+import { openWithStatus, ready, subUrl, figures } from './helpers'
 
 // SPEC §2, What you enter: an opening balance in Add trade, against units that arrived
 // without a cost; an event's values on the trade page, beside the journal, while the
@@ -117,7 +117,7 @@ test("an event entry is refused in the server's words and nothing else, and one 
 })
 
 test('a holding with nothing waiting has no event form', async ({ page, request }) => {
-  const m = await (await request.get('/api/figures')).json()
+  const m = await figures(request)
   const p = m.positions.find((x: Doc) => x.kind === 'Shares')
   await page.goto('/#portfolio/' + encodeURIComponent(p.id))
   await ready(page)

@@ -507,18 +507,20 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 16] = [
+const TIMED_WAITS: [(&str, usize, &str); 18] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
     ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
     ("server/src/app.rs", 1, "`wait` itself"),
     ("server/src/broker_reads.rs", 1, "Wealthsimple's reads: until the next pull window (weekdays 2 PM Mountain), the next balances read while a page is open, or a failed read's rest ending"),
+    ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
     ("server/src/events.rs", 6, "`park_until_or` itself, the 40 ms gather; three in its tests (the day turning is the scheduler's, `due.rs`)"),
     ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
+    ("server/src/http/stream.rs", 1, "the event stream's keep-alive comment, every fifteen seconds while it is idle, so a connection that died is noticed: the transport's, not a poll"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
-    ("server/src/notify.rs", 2, "its stream's heartbeat (folded into /api/events in stage 5, the data flow); a test"),
+    ("server/src/notify.rs", 4, "its stream's heartbeat (folded into /api/events in stage 6, with the page's structure); three in its tests"),
     ("server/src/orders/brackets.rs", 1, "the bracket engine, parked until a bracket is live: a stop's five-second cadence (SPEC §6)"),
     ("server/src/orders/readback.rs", 1, "Wealthsimple offers no order push: read only while an order is live or shown"),
     ("server/src/orders/ticket.rs", 2, "a ticket's sale waits on Wealthsimple confirming a bracket's exit cancelled, and on the sale's own answer, a second at a time for at most thirty: Wealthsimple pushes neither"),
@@ -529,10 +531,19 @@ const TIMED_WAITS: [(&str, usize, &str); 16] = [
 #[test]
 fn test_no_wait_on_a_clock_that_is_not_accounted_for() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    // every form a wait on a clock takes: the app's own `wait` with any duration, a
+    // thread's or a task's sleep, a bounded park or condvar wait, a timeout, an
+    // interval (a stream's keep-alive included), a receive with a deadline
+    let forms = regex::Regex::new(r"\.wait\([^)]|thread::sleep|park_until_or\(|wait_timeout|time::sleep|time::timeout|\binterval\(|recv_timeout|sleep_until").unwrap();
     let timed = |line: &str| {
         let l = line.trim_start();
-        !l.starts_with("//") && [".wait(Duration", "thread::sleep", "park_until_or(", "wait_timeout", "time::sleep", "time::timeout", "time::interval"].iter().any(|p| l.contains(p))
+        !l.starts_with("//") && forms.is_match(l)
     };
+    // the scan finds each form
+    for violation in ["if app.wait(QUOTE_EVERY) {", "std::thread::sleep(d);", "bus.park_until_or(&app, d, f)", "c.wait_timeout(g, d)", "tokio::time::sleep(d).await", "tokio::time::timeout(d, f).await", "KeepAlive::new().interval(KEEPALIVE)", "rx.recv_timeout(d)", "tokio::time::sleep_until(t)"] {
+        assert!(timed(violation), "the scan misses {violation}");
+    }
+    assert!(!timed("child.wait()"), "a process's end is not a clock");
     let mut found: Vec<(String, usize)> = Vec::new();
     let mut dirs = vec![crates.clone()];
     while let Some(d) = dirs.pop() {

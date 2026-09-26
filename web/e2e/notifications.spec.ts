@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { modelDoc, openWithStatus, streamBody } from './helpers'
+import { modelDoc, openWithStatus, streamBody, standIn } from './helpers'
 
 // SPEC §3, Notifications: the server tells, the browser shows -- under its own permission.
 
@@ -82,9 +82,7 @@ test("a disclosure's or a release's banner opens the instrument's page: the hold
   ]
   await browserSays(page, 'granted')
   let row: unknown = null
-  await page.route('**/api/events?*', (route) =>
-    route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, { notifications: { rows: row ? [row] : [], unread: row ? 1 : 0 } }) }),
-  )
+  await standIn(page, () => streamBody(model, { notifications: { rows: row ? [row] : [], unread: row ? 1 : 0 } }))
   await page.route('**/api/notifications/seen', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   await page.goto('/#dashboard')
   await expect(page.locator('#page > [data-arrived]')).toBeVisible()

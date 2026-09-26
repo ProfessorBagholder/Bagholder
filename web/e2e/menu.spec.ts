@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { ready, openWithStatus } from './helpers'
+import { ready, openWithStatus, figures } from './helpers'
 
 // SPEC §3, the header's menu, and §3 "The menu."/"Connecting." for what each item
 // does. Connect, CSV import, the watch folder, Clear data and Disconnect never
@@ -168,7 +168,7 @@ test('Import CSV sends each file with the account chosen and reports what its ro
   })
   await page.goto('/')
   await ready(page)
-  const m = await (await page.request.get('/api/figures')).json()
+  const m = await figures(page.request)
   const account = m.accounts.find((a: { name: string; brokerAccount: string }) => a.name && a.brokerAccount !== 'manual')
   await importFiles(page, [{ name: 'trades.csv', text: csv }], account.name)
   await expect.poll(() => sent.length).toBe(1)

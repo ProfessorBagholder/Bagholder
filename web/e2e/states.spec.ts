@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus, modelDoc, streamBody } from './helpers'
+import { openWithStatus, modelDoc, streamBody, standIn } from './helpers'
 
 // What the page shows while it has nothing yet, when it cannot get it, and the two
 // things it does for a reader everywhere: cut text shown whole, time said as it passes.
@@ -88,7 +88,7 @@ test('"Synced … ago" is said again as the minutes pass, without anything arriv
 test('a tile\'s figure rolls to its new value and comes to rest as plain text', async ({ page, request }) => {
   const model = await modelDoc(request)
   let next = model
-  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(next) }))
+  await standIn(page, () => streamBody(next))
   await page.goto('/')
   const figure = page.locator('.kpi .v').first()
   await expect(figure).toHaveText(/\$\d/)

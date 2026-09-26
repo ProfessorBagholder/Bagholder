@@ -59,6 +59,19 @@ sort: string | null,
  */
 dir: string | null, };
 
+export type ViewQuery = { 
+/**
+ * The subscription's key: `book`, `dashboard`, `positions`, `trades`,
+ * `cashflow`, `exposure`, `markets`, `trade:<id>`.
+ */
+key: string | null, 
+/**
+ * Its parameters, as the JSON a subscription is asked with (`views::Params`).
+ */
+params: string | null, };
+
+export type ViewAnswer = unknown;
+
 export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
 
 export type ChildShare = { instrument: string, costShare: string, };
