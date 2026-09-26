@@ -74,6 +74,10 @@ pub use readback::*;
 pub use ticket::*;
 pub use tools::*;
 
+/// What Cancel, Edit and a bracket's Save, Remove and Cancel answer with orders off
+/// (`SPEC.md` §4, Orders, Refresh): nothing of the kind is sent or changed.
+pub const ORDERS_OFF: &str = "Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple.";
+
 /// One order or bracket action -- cancel, modify, adjust -- refused with a
 /// reason, or accepted with what changed. The same shape every one of these
 /// routes has answered in since before it was typed.

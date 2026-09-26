@@ -693,7 +693,14 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicket
     }
     let sess = match ticket_session(app) {
         Some(s) => s,
-        None => return PlaceTicketAnswer::err("Not connected."),
+        None => {
+            // every submit is a row: this one, with why nothing was sent
+            row.status = OrderStatus::Failed;
+            row.error = "Not connected.".into();
+            must(so::typed::insert_order(&db(app), row, &now_iso()));
+            log(&format!("bagholder order: {} not sent: not connected", id));
+            return PlaceTicketAnswer::err_with_id("Not connected.", id);
+        }
     };
     row.status = OrderStatus::Sending;
     must(so::typed::insert_order(&db(app), row, &now_iso()));
@@ -741,6 +748,11 @@ pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> PlaceTicketAnswer {
         Ok(x) => x,
         Err(e) => return PlaceTicketAnswer::err(e),
     };
+    if orders_live() && ticket_session(app).is_none() {
+        // nothing can reach Wealthsimple: the order is written with that failure,
+        // and no bracket is ended for a sale that cannot go out
+        return submit_order(app, &mut row, &req);
+    }
     if row.side == Side::Sell {
         let mut left = row.quantity.unwrap_or(0.0);
         // a bracket kept on fewer shares for this sale, and how many it guarded

@@ -441,7 +441,7 @@ pub fn cancel_order(app: &Arc<App>, order_id: &str) -> OrderActionAnswer {
         return OrderActionAnswer::err("That order is not open.");
     }
     if !orders_live() {
-        return OrderActionAnswer::err("Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple.");
+        return OrderActionAnswer::err(ORDERS_OFF);
     }
     let sess = match ticket_session(app) {
         Some(s) => s,

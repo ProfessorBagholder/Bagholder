@@ -866,3 +866,61 @@ fn test_the_order_and_bracket_checks_run_while_a_sync_does() {
     }
     set(true, false);
 }
+
+/// SPEC §4, Orders, Refresh: with orders off (`BAGHOLDER_DRY_ORDERS=1`) a
+/// bracket's Save, a leg's Remove and the bracket's Cancel answer `Orders are off`,
+/// and neither the bracket nor Wealthsimple is touched, whatever the leg.
+#[test]
+fn test_with_orders_off_a_brackets_changes_answer_orders_are_off_and_change_nothing() {
+    let _g = setup();
+    let (oid, b) = entry(json!({"stopLoss": {"kind": "trail", "trail": 5, "trailUnit": "pct"}}));
+    filled(&oid);
+    t0();
+    let id = sv(&b, "id");
+    let before = get_bracket(&id);
+    assert!(!before.sl_order_id.is_empty(), "the stop rests at Wealthsimple");
+    live(false);
+    clear();
+    let tries: Vec<(&str, od::OrderActionAnswer)> = vec![
+        ("stop moved", od::adjust_bracket(&app(), &id, "sl", Some(150.0), None, false)),
+        ("trail changed", od::adjust_bracket(&app(), &id, "sl", None, Some(8.0), false)),
+        ("target moved", od::adjust_bracket(&app(), &id, "tp", Some(190.0), None, false)),
+        ("stop removed", od::adjust_bracket(&app(), &id, "sl", None, None, true)),
+        ("target removed", od::adjust_bracket(&app(), &id, "tp", None, None, true)),
+        ("bracket cancelled", od::cancel_bracket(&app(), &id)),
+    ];
+    for (what, r) in tries {
+        assert!(!r.ok, "{what}: refused");
+        assert_eq!(r.error.as_deref(), Some(od::ORDERS_OFF), "{what}");
+    }
+    assert!(sent_empty(), "nothing reached Wealthsimple: {:?}", ops());
+    assert_eq!(get_bracket(&id), before, "the bracket is as it was");
+    live(true);
+}
+
+/// SPEC §4, Submit: every submit is a row, written before anything is sent. With no
+/// session nothing can be sent: the row is written with that failure, the answer
+/// names it, and a sale touches no bracket on the shares it would have sold.
+#[test]
+fn test_a_submit_with_no_session_is_a_row_with_its_failure_and_touches_no_bracket() {
+    let _g = setup();
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let armed = get_bracket(&sv(&b, "id"));
+    assert_eq!(armed.status, so::BracketStatus::Armed);
+    *lk(&seam::SESSION) = Some(None);
+    for side in ["BUY", "SELL"] {
+        clear();
+        let before = list_orders().len();
+        let r = od::place_order(&app(), &ticket(json!({"side": side, "stopLoss": null, "takeProfit": null})));
+        assert!(!r.ok, "{side}");
+        assert_eq!(r.error.as_deref(), Some("Not connected."), "{side}");
+        let id = r.id.clone().expect("the answer names the row it wrote");
+        let row = get_order(&id);
+        assert_eq!((row.status, row.error.as_str(), row.side.as_str()), (so::OrderStatus::Failed, "Not connected.", side));
+        assert_eq!(list_orders().len(), before + 1, "{side}: one row, this one");
+        assert!(sent_empty(), "{side}: nothing sent: {:?}", ops());
+    }
+    assert_eq!(get_bracket(&sv(&b, "id")), armed, "the bracket on those shares is untouched");
+}

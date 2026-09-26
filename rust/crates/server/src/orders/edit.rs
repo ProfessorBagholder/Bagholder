@@ -36,7 +36,7 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<f64>, limit
         return OrderActionAnswer::already(id);
     }
     if !orders_live() {
-        return refused("Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple.");
+        return refused(ORDERS_OFF);
     }
     let sess = match ticket_session(app) {
         Some(s) => s,
@@ -89,6 +89,12 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
     };
     if !b.status.is_live() {
         return refused("That bracket is not live.".into());
+    }
+    // with orders off the bracket is not changed here either: its resting orders
+    // could not be cancelled, and a bracket changed only locally would say
+    // something Wealthsimple does not hold
+    if !orders_live() {
+        return refused(ORDERS_OFF.into());
     }
     let stop_leg = match leg.to_lowercase().as_str() {
         "sl" => true,

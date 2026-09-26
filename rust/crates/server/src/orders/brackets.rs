@@ -1006,6 +1006,9 @@ pub fn cancel_bracket(app: &Arc<App>, bracket_id: &str) -> OrderActionAnswer {
     if !b.status.is_live() {
         return OrderActionAnswer::err("That bracket is not live.");
     }
+    if !orders_live() {
+        return OrderActionAnswer::err(ORDERS_OFF);
+    }
     end_bracket(app, &b, "cancelled by the user", "");
     OrderActionAnswer::accepted(b.id)
 }
