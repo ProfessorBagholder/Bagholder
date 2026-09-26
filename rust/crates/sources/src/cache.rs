@@ -469,6 +469,11 @@ impl MarketCache {
     /// Record one request's outcome, and keep the source's newest thousand
     /// outcomes and the newest of each kind.
     pub fn record(&self, row: &OutcomeRow) -> Result<()> {
+        // a request the process was told not to make asked nothing: it is no
+        // outcome of the source's, and saying it failed would be untrue
+        if row.outcome == OutcomeKind::Unreachable && bagholder_net::client::is_offline_refusal(&row.detail) {
+            return Ok(());
+        }
         bagholder_sqlite::atomically(&self.conn, || {
             self.conn.execute(
                 "INSERT INTO outcomes (source, host, kind, instrument_id, outcome, detail, shape_change, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",

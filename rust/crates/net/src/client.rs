@@ -468,6 +468,16 @@ pub fn outbound_requests() -> usize {
     OUTBOUND.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// What a request refused by `BAGHOLDER_OFFLINE` says: nothing was asked of
+/// anyone, so it tells nothing of the source it was meant for.
+pub const OFFLINE: &str = "offline: BAGHOLDER_OFFLINE is set";
+
+/// Whether a failure's words are that refusal, as it reads or with the reader's
+/// own subject before it (`SPY: offline: …`).
+pub fn is_offline_refusal(detail: &str) -> bool {
+    detail == OFFLINE || detail.strip_suffix(OFFLINE).is_some_and(|head| head.ends_with(": "))
+}
+
 /// Whether the process was told to stay off the network (`BAGHOLDER_OFFLINE`).
 pub fn offline() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -513,7 +523,7 @@ fn send(
             OUTBOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         if offline() && !loopback {
-            return Err(Error::Transport("offline: BAGHOLDER_OFFLINE is set".into()));
+            return Err(Error::Transport(OFFLINE.into()));
         }
         // BAGHOLDER_LOG_REQUESTS=1 names every request as it leaves: how "nothing is
         // asked for while nobody is looking" is checked on a running app. The query

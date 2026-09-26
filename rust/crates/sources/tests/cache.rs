@@ -230,6 +230,22 @@ fn each_sources_newest_counted_outcome_is_the_one_that_says_how_it_is() {
 }
 
 #[test]
+fn a_request_the_process_was_told_not_to_make_is_no_outcome_of_the_source() {
+    let (_d, c) = open();
+    let at = t("2026-09-24T12:00:00Z");
+    // refused by BAGHOLDER_OFFLINE: nothing was asked, nothing is recorded
+    let offline = OutcomeRow { detail: bagholder_net::client::OFFLINE.into(), ..outcome("a", OutcomeKind::Unreachable, at) };
+    c.record(&offline).unwrap();
+    // as it reads, or with the reader's own subject before it
+    c.record(&OutcomeRow { detail: format!("SPY: {}", bagholder_net::client::OFFLINE), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
+    assert!(c.outcomes(&SourceName::named("a")).unwrap().is_empty());
+    assert!(c.newest_counted().unwrap().is_empty(), "a source nobody asked is not failing");
+    // a source that could not be reached is still one, whatever else its words say
+    c.record(&OutcomeRow { detail: "offline: the host said so".into(), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
+    assert_eq!(c.newest_counted().unwrap().len(), 1);
+}
+
+#[test]
 fn a_commit_to_the_cache_is_heard() {
     let (_d, c) = open();
     let heard = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
