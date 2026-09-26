@@ -255,6 +255,63 @@ test('Discard removes the draft card', async ({ page, request }) => {
   await expect(page.locator('#odBody .dim')).toHaveText('No pending orders.')
 })
 
+test('while the limit sell at the target rests, the stop row reads Watching; once the stop is hit, Placing', async ({ page, request }) => {
+  const tpLeg = entry({ id: 'o-6-tp', symbol: 'NVDA', exchange: 'NASDAQ', account: 'Trading', accountId: 'acct-trading', side: 'SELL', quantity: 25, role: 'target', parentId: 'o-6', limitPrice: 181.94, tif: 'UNTIL_CANCEL', status: 'pending' })
+  const resting = { ...bArmed, status: 'target_placed', slOrderId: '', tpOrderId: 'o-6-tp' }
+  const model = await modelDoc(request)
+  const patch = `event: patch\ndata: ${JSON.stringify({ doc: 'orders', ops: [
+    ['set', ['brackets', { k: 'id', v: 'b-1' }, 'status'], 'stopping'],
+    ['set', ['brackets', { k: 'id', v: 'b-1' }, 'tpOrderId'], ''],
+  ] })}\n\n`
+  const docs = { orders: { ok: true, live: true, orders: [oArmedEntry, tpLeg], brackets: [resting] } }
+  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, docs) }))
+  await page.goto('/')
+  await ready(page)
+  await page.getByRole('button', { name: 'Orders' }).click()
+  const stopRow = page.locator('.od-card', { hasText: 'Bracket' }).locator('.od-leg').filter({ hasText: 'Stop loss' })
+  await expect(stopRow.locator('.od-leg-state')).toHaveText('Watching')
+  await expect(page.locator('.od-card', { hasText: 'Bracket' }).locator('.od-leg').filter({ hasText: 'Take profit' }).locator('.od-leg-state')).toHaveCount(0)
+  // the stop level reached: the limit sell's cancel is out and the market sell follows
+  await page.unroute('**/api/events?*')
+  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, docs, patch) }))
+  await page.reload()
+  await ready(page)
+  await page.getByRole('button', { name: 'Orders' }).click()
+  await expect(page.locator('.od-card', { hasText: 'Bracket' }).locator('.od-leg').filter({ hasText: 'Stop loss' }).locator('.od-leg-state')).toHaveText('Placing')
+})
+
+test('a bracket that ended without exiting reads Off on both legs, and its foot says how it ended', async ({ page, request }) => {
+  const ended = (id: string, orderId: string, outcome: string, updatedAt: string) => ({ ...bArmed, id, orderId, status: 'done', outcome, slOrderId: '', updatedAt })
+  const e2 = { ...oArmedEntry, id: 'o-9', symbol: 'TD', exchange: 'TSX' }
+  const byUser = ended('b-u', 'o-6', 'cancelled by the user', '2026-09-19T10:00:00Z')
+  const sold = { ...ended('b-s', 'o-9', 'sold from the ticket', '2026-09-19T11:00:00Z'), symbol: 'TD' }
+  await openPanel(page, request, { ok: true, live: true, orders: [oArmedEntry, e2], brackets: [byUser, sold] } as never, { openOrders: 0 })
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  const user = page.locator('.od-card', { hasText: 'NASDAQ: NVDA' })
+  await expect(user.locator('.od-leg-state')).toHaveText(['Off', 'Off'])
+  await expect(user.locator('.od-state')).toHaveText('Cancelled')
+  const off = page.locator('.od-card', { hasText: 'TSX: TD' })
+  await expect(off.locator('.od-leg-state')).toHaveText(['Off', 'Off'])
+  await expect(off.locator('.od-state')).toHaveText('Off')
+})
+
+test('after Cancel is accepted the card reads Cancelling on its second line, with no Edit or Cancel, until the next read', async ({ page, request }) => {
+  const model = await modelDoc(request)
+  const patch = `event: patch\ndata: ${JSON.stringify({ doc: 'orders', ops: [
+    ['set', ['orders', { k: 'id', v: 'o-1' }, 'status'], 'cancelling'],
+  ] })}\n\n`
+  const body = streamBody(model, { orders: { ok: true, live: true, orders: [oPending], brackets: [] } }, patch)
+  await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
+  await page.goto('/')
+  await ready(page)
+  await page.getByRole('button', { name: 'Orders' }).click()
+  const card = page.locator('.od-card', { hasText: 'TSX-V: QNC' })
+  await expect(card.locator('.od-line')).toHaveText('100 at 1.75 limit · GTC · Cancelling')
+  await expect(card.getByRole('button', { name: 'Edit' })).toHaveCount(0)
+  await expect(card.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+})
+
 test('the orders document updates a card in place, with the panel open', async ({ page, request }) => {
   // o-3 (AAPL) stays pending and stays a card; only its third line -- the fill so
   // far -- should move, proving the document patches that one card rather than the

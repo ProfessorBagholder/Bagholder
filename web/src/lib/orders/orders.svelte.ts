@@ -73,12 +73,13 @@ export function bracketOf(o: Order): Bracket | null { return (ordersStore.data?.
 export function orderLine(o: Order): string {
   return (o.side === 'SELL' ? 'Sell ' : 'Buy ') + qtyFmt(o.quantity) + ' ' + symText(o.symbol) + ' at ' + (o.type === 'MARKET' ? 'market' : orderPrice(o) + ' ' + orderTypeWord(o.type).toLowerCase())
 }
-// `165.40 · Day`; a filled order names its fill instead of its type
+// `165.40 · Day`; a filled order names its fill instead of its type, and one whose
+// cancel is out says so until Wealthsimple is read saying it is cancelled
 export function orderDetailLine(o: Order): string {
   if (o.status === 'filled') return 'Filled ' + qtyFmt(o.filledQty || o.quantity) + (o.avgFill ? ' at ' + px(o.avgFill) : '')
   const tif = o.tif === 'DAY' ? 'Day' : o.tif === 'UNTIL_CANCEL' ? 'GTC' : ''
   const how = o.type === 'MARKET' ? 'at market' : o.type === 'STOP_LIMIT' ? 'stop ' + px(o.stopPrice) + ' · limit ' + px(o.limitPrice) : 'at ' + orderPrice(o) + ' ' + orderTypeWord(o.type).toLowerCase()
-  return qtyFmt(o.quantity) + ' ' + how + (tif ? ' · ' + tif : '')
+  return qtyFmt(o.quantity) + ' ' + how + (tif ? ' · ' + tif : '') + (o.status === 'cancelling' ? ' · Cancelling' : '')
 }
 // the card's title text (side span is separate): exchange and symbol
 export function orderTitle(o: Order): string { return (o.exchange ? o.exchange + ': ' : '') + symText(o.symbol) }
@@ -128,6 +129,14 @@ export function bracketEndWord(b: Bracket): [string, string] {
 export function bracketExited(b: Bracket): boolean { return b.status === 'done' && (b.outcome === 'stopped' || b.outcome === 'target') }
 
 export interface Leg { key: string; label: string; tone: string; line: string; amount: string; note: string }
+/**
+ * A bracket's legs as its card shows them (SPEC.md §4, Orders, Bracket rows): no word
+ * while a leg rests, is watched or waits for the fill; `Watching` on the stop while the
+ * limit sell at the target rests, there being no stop at Wealthsimple then; `Placing`
+ * and `Cancelling` while a request is out, `Retrying · <reason>` after a refused one;
+ * at the end the leg that exited reads its fill, the other `Cancelled`, and both read
+ * `Off` when the bracket ended without exiting.
+ */
 export function bracketLegs(b: Bracket): Leg[] {
   const legs: Leg[] = []
   const all = ordersStore.data?.orders ?? []
@@ -135,18 +144,24 @@ export function bracketLegs(b: Bracket): Leg[] {
   const mult = entry ? orderMultiplier(entry) : 1
   const stopOrder = b.slOrderId ? orderById(b.slOrderId) : null, tpOrder = b.tpOrderId ? orderById(b.tpOrderId) : null
   const done = b.status === 'done', off = b.status === 'cancelled'
+  // an exit of the bracket's own filled: one leg exited, the other did not
+  const exitedBy = b.outcome === 'stopped' || b.outcome === 'target'
+  const notExited = exitedBy ? 'Cancelled' : 'Off'
   const cancelling = (role: string) => all.some((o) => o.parentId === b.orderId && o.role === role && o.status === 'cancelling')
   const amount = (price: number | null) => (price && b.quantity ? money(b.quantity * price * mult, '', 2) : '')
   const exited = (role: string) => all.find((o) => o.parentId === b.orderId && o.role === role && o.status === 'filled') || null
   const went = (o: Order) => ({ line: 'Filled ' + qtyFmt(o.filledQty || b.quantity) + (o.avgFill ? ' at ' + px(o.avgFill) : ''), amount: o.avgFill ? money((o.filledQty || b.quantity || 0) * o.avgFill * mult, '', 2) : '' })
+  // the limit sell at the target rests at Wealthsimple
+  const targetRests = !!b.tpOrderId && (!tpOrder || tpOrder.status === 'sent' || tpOrder.status === 'pending')
   if (b.slKind) {
     let line = qtyFmt(b.quantity) + ' at ' + px(b.slPrice) + (b.slKind === 'trail' ? ' · trailing ' + (b.slTrailUnit === 'amt' ? px(b.slTrail) : plain(b.slTrail) + '%') : '')
     let amt = amount(b.slPrice)
     let note = ''
     if (b.status === 'armed' || b.status === 'firing') note = b.slMode === 'watched' ? '' : stopOrder && stopOrder.status === 'cancelling' ? 'Cancelling' : stopOrder && ORDER_LIVE[stopOrder.status] ? '' : b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
+    else if (b.status === 'target_placed') note = targetRests ? 'Watching' : ''
     else if (b.status === 'stopping') note = b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
-    else if (b.status === 'closing') note = b.outcome === 'stopped' ? 'Filled' : stopOrder || cancelling('stop') ? 'Cancelling' : 'Cancelled'
-    else if (done) { const f = b.outcome === 'stopped' ? exited('stop') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'stopped' ? 'Filled' : 'Cancelled' }
+    else if (b.status === 'closing') note = b.outcome === 'stopped' ? 'Filled' : stopOrder || cancelling('stop') ? 'Cancelling' : notExited
+    else if (done) { const f = b.outcome === 'stopped' ? exited('stop') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'stopped' ? 'Filled' : notExited }
     else if (off) note = 'Off'
     legs.push({ key: 'sl', label: 'Stop loss', tone: 'neg', line, amount: amt, note })
   }
@@ -157,8 +172,8 @@ export function bracketLegs(b: Bracket): Leg[] {
     if (b.status === 'armed' || b.status === 'firing') note = b.status === 'firing' && b.attempts ? 'Retrying · ' + (b.error || '') : ''
     else if (b.status === 'target_placed') note = tpOrder && tpOrder.status === 'filled' ? 'Filled' : b.tpOrderId ? '' : b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
     else if (b.status === 'stopping') note = 'Cancelling'
-    else if (b.status === 'closing') note = b.outcome === 'target' ? 'Filled' : cancelling('target') ? 'Cancelling' : 'Cancelled'
-    else if (done) { const f = b.outcome === 'target' ? exited('target') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'target' ? 'Filled' : 'Cancelled' }
+    else if (b.status === 'closing') note = b.outcome === 'target' ? 'Filled' : cancelling('target') ? 'Cancelling' : notExited
+    else if (done) { const f = b.outcome === 'target' ? exited('target') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'target' ? 'Filled' : notExited }
     else if (off) note = 'Off'
     legs.push({ key: 'tp', label: 'Take profit', tone: 'pos', line, amount: amt, note })
   }
