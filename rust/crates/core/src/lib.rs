@@ -6,6 +6,7 @@
 pub mod text_enum;
 pub mod account;
 pub mod adjustment;
+pub mod bracket;
 pub mod dec;
 pub mod distribution;
 pub mod ids;
@@ -13,6 +14,7 @@ pub mod json;
 pub mod instrument;
 pub mod journal;
 pub mod money;
+pub mod order;
 pub mod names;
 pub mod record;
 pub mod transaction;
