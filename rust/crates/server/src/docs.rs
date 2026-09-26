@@ -134,8 +134,28 @@ impl Diff for Doc {
     }
 }
 
+/// Where what the document `key` reads changes: it is read again only when one
+/// of these moved (`events::Feed::step`).
+pub fn sources(key: &str) -> &'static [crate::events::Source] {
+    use crate::events::Source::*;
+    match key.split(':').next().unwrap_or(key) {
+        // the book's orders and what the broker reports of them: each change is said by hand
+        "orders" | "quote" => &[State],
+        "notifications" => &[Store],
+        _ => &[Store, State],
+    }
+}
+
+/// How many times each document was read, for the tests that hold a read to a change.
+#[cfg(test)]
+pub static READS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
 /// The document `key` as it stands, or `None` for a key nothing answers to.
 pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
+    #[cfg(test)]
+    {
+        *READS.lock().unwrap_or_else(|e| e.into_inner()).entry(key.to_string()).or_default() += 1;
+    }
     match key {
         "orders" => Some(Doc::Orders(crate::orders::orders_doc(app))),
         "shorts" => Some(Doc::Shorts(crate::feeds::shorts_feed(app))),
@@ -166,6 +186,12 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
 
 /// A page has just started showing `key`.
 pub fn opened(app: &Arc<App>, key: &str) {
+    // a holding's price now on screen: the figure path looks at once whether it is due
+    if crate::due::PRICED.contains(&key.split(':').next().unwrap_or(key)) {
+        if let Some(f) = app.figures.get() {
+            f.wake();
+        }
+    }
     match key {
         "orders" => {
             crate::orders::kick_orders_refresh(app);

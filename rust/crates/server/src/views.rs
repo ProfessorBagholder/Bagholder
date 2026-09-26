@@ -139,10 +139,14 @@ pub trait View: Send {
 /// The version of a state: a hash of the JSON it is written as (FNV-1a), the same
 /// for the same state on every run of every build.
 pub fn version_of(v: &impl Serialize) -> u64 {
-    let text = serde_json::to_vec(v).expect("a wire value is plain data");
+    version_of_bytes(&serde_json::to_vec(v).expect("a wire value is plain data"))
+}
+
+/// The version of an answer as written: FNV-1a over its bytes.
+pub fn version_of_bytes(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
-    for b in text {
-        h ^= b as u64;
+    for b in bytes {
+        h ^= *b as u64;
         h = h.wrapping_mul(0x100000001b3);
     }
     h

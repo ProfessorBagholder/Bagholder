@@ -62,7 +62,26 @@ pub struct Bus {
     /// Streams whose page saw a message out of its order: each is sent its whole
     /// state again at its next step.
     resync: Mutex<std::collections::HashSet<u64>>,
+    /// Changes counted by where they came from (`Source`): what tells a document
+    /// that reads none of what moved that it need not be read again.
+    counts: [AtomicU64; 3],
 }
+
+/// Where a change came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// A commit to the earlier store (`bagholder.db`): feeds, notifications, the
+    /// market's context tables.
+    Store = 0,
+    /// A commit to the market cache (`market.db`): quotes, closes, sources' outcomes.
+    Cache = 1,
+    /// A write to the app's own state in memory (orders read back, a ticket's
+    /// quote, a sync's step), and any change said by hand.
+    State = 2,
+}
+
+/// The count of changes from each source, as `Bus::stamp` reads them.
+pub type Stamp = [u64; 3];
 
 impl Bus {
     pub fn new() -> Bus {
@@ -74,16 +93,29 @@ impl Bus {
             streams: Mutex::new(HashMap::new()),
             next_stream: AtomicU64::new(1),
             resync: Mutex::new(std::collections::HashSet::new()),
+            counts: Default::default(),
         }
     }
 
-    /// Something changed. Cheap, and safe to call from anywhere, SQLite's commit
-    /// hook included: it counts and wakes, no more.
+    /// Something changed in the app's own state. Cheap, and safe to call from
+    /// anywhere: it counts and wakes, no more.
     pub fn signal(&self) {
+        self.signal_from(Source::State)
+    }
+
+    /// Something changed at `source`: counted, and whoever waits woken. Safe to
+    /// call from SQLite's commit hook.
+    pub fn signal_from(&self, source: Source) {
+        self.counts[source as usize].fetch_add(1, Ordering::SeqCst);
         let (m, c) = &self.bell;
         *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         c.notify_all();
         self.ticker.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// The changes counted from each source so far.
+    pub fn stamp(&self) -> Stamp {
+        [0, 1, 2].map(|i| self.counts[i].load(Ordering::SeqCst))
     }
 
     /// A receiver that is told of every signal from now on.
@@ -183,6 +215,12 @@ impl Bus {
         self.resync.lock().unwrap_or_else(|e| e.into_inner()).remove(&id)
     }
 
+    /// Whether any page is showing a subscription of one of `kinds` (the part of a
+    /// key before `:`): what a read made only for what is on screen asks.
+    pub fn showing(&self, kinds: &[&str]) -> bool {
+        self.streams.lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| kinds.contains(&k.split(':').next().unwrap_or(k))))
+    }
+
     pub fn watched(&self, key: &str) -> bool {
         self.streams.lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
     }
@@ -276,8 +314,8 @@ pub struct Feed {
     base: usize,
     /// The views of the figures this page shows, by key, with their parameters.
     views: std::collections::BTreeMap<String, (Value, Box<dyn crate::views::View>)>,
-    /// The other documents it shows, as last sent.
-    sent_docs: std::collections::BTreeMap<String, (Value, crate::docs::Doc)>,
+    /// The other documents it shows, as last sent, and the changes counted when they were read.
+    sent_docs: std::collections::BTreeMap<String, (Value, crate::docs::Doc, Stamp)>,
     /// The header's status as last sent, for the filters it was asked with.
     status: Option<(Value, crate::status::Status)>,
     /// Subscriptions refused, with the parameters they were refused for: said once.
@@ -361,7 +399,8 @@ impl Feed {
         }
         let want: Wanted = self.wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
         self.views.retain(|k, (params, _)| want.get(k).is_some_and(|w| w.params == *params));
-        self.sent_docs.retain(|k, (params, _)| want.get(k).is_some_and(|w| w.params == *params));
+        self.sent_docs.retain(|k, (params, _, _)| want.get(k).is_some_and(|w| w.params == *params));
+        let stamp = self.app.events.stamp();
         self.refused.retain(|k, params| want.get(k).is_some_and(|w| w.params == *params));
         self.figures(&want, &mut out);
         for (key, w) in &want {
@@ -385,19 +424,25 @@ impl Feed {
             if crate::views::open(key, &Value::Null).is_some() {
                 continue; // a view of the figures: above
             }
+            // read again only when what it reads moved
+            if let Some((_, _, at)) = self.sent_docs.get(key) {
+                if crate::docs::sources(key).iter().all(|s| at[*s as usize] == stamp[*s as usize]) {
+                    continue;
+                }
+            }
             let app = &self.app;
             let key2 = key.clone();
             let Ok(Some(now)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::docs::read(app, &key2))) else { continue };
             match self.sent_docs.get(key) {
                 None => Self::first(&mut out, key, &w.have, crate::views::version_of(&now), || serde_json::to_value(&now).unwrap_or(Value::Null)),
-                Some((_, was)) => {
+                Some((_, was, _)) => {
                     let ops = bagholder_diff::typed(was, &now);
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": key, "ops": ops, "v": v_text(crate::views::version_of(&now))})));
                     }
                 }
             }
-            self.sent_docs.insert(key.clone(), (w.params.clone(), now));
+            self.sent_docs.insert(key.clone(), (w.params.clone(), now, stamp));
         }
         out
     }
@@ -565,5 +610,26 @@ mod tests {
         let said = feed.step(&crate::status::status);
         assert!(said.iter().any(|(name, m)| *name == "refused" && m["error"].as_str().is_some_and(|e| e.contains("TFSA"))), "{said:?}");
         assert!(feed.step(&crate::status::status).is_empty(), "said once");
+    }
+
+    /// A document is read again only when something it reads moved: a commit to
+    /// the market cache leaves the notifications unread; one to the store reads them.
+    #[test]
+    fn test_a_document_is_read_again_only_when_what_it_reads_moved() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let mut feed = Feed::open(app.clone());
+        assert!(app.events.watch(&app, feed.id(), [("notifications".to_string(), Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
+        let reads = || crate::docs::READS.lock().unwrap().get("notifications").copied().unwrap_or(0);
+        feed.step(&crate::status::status);
+        let first = reads();
+        assert!(first > 0);
+        app.events.signal_from(Source::Cache);
+        app.events.signal();
+        feed.step(&crate::status::status);
+        assert_eq!(reads(), first, "a quote stored, the app's own state written: the notifications read nothing new");
+        app.events.signal_from(Source::Store);
+        feed.step(&crate::status::status);
+        assert_eq!(reads(), first + 1, "a commit to the store they live in reads them again");
     }
 }

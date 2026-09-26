@@ -12,7 +12,8 @@
 //! - each market's close settling, for the closes and benchmarks needed;
 //! - each payer's next distribution window (`payers::run::next_due`);
 //! - a failed read's source rest ending;
-//! - a minute, for the quotes of what is held, only while a page is open.
+//! - a minute, for the quotes of what is held, only while a page shows a
+//!   holding's price (`PRICED`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -33,6 +34,9 @@ use crate::figures::{bank_zone, Figures};
 
 /// How often what is held is quoted while a page shows it.
 pub const QUOTES_EVERY: Duration = Duration::from_secs(60);
+/// The subscriptions that show a holding's price: while a page shows one, what is
+/// held is quoted (`docs/architecture.md` §13, sources are read on demand).
+pub const PRICED: [&str; 5] = ["positions", "exposure", "markets", "cashflow", "trade"];
 /// How many times the needs are worked out again after a pass of reads.
 const PASSES: usize = 4;
 
@@ -115,8 +119,8 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
         read_all(f, &ctx, &needs).map_err(|e| e.to_string())?;
         last = Some(n);
     }
-    // what is held is quoted while a page shows it
-    let open = app.events.watchers() > 0;
+    // what is held is quoted while a page shows a holding's price
+    let open = app.events.showing(&PRICED);
     if open {
         quotes::read_quotes(&ctx, &needs.held).map_err(|e| e.to_string())?;
         for l in &needs.held {

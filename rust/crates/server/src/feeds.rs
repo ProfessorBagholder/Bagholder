@@ -2665,16 +2665,15 @@ pub fn archive_loop(app: Arc<App>) {
     }
 }
 
-/// Prices, every QUOTE_REFRESH_MINUTES.
+/// The watchlist's and the Markets tiles' prices, every QUOTE_REFRESH_MINUTES,
+/// while a page shows the Markets tab.
 pub fn quote_loop(app: Arc<App>) {
-    // The exchanges offer no push, so prices are asked for; but only while a page is
-    // open to show them. With nobody looking, nothing is fetched; a page that opens
-    // asks for fresh quotes itself (`/api/events` -> the model's own kick).
-    // Parked, at no cost, until a page connects; then read at once (a page that opens
-    // after hours away gets fresh prices) and each minute while one stays. Which
+    // The exchanges offer no push, so prices are asked for; but only while a page
+    // shows them. Parked, at no cost, until a page opens the Markets tab; then read
+    // at once and each minute while one shows it. Which
     // listings are asked is narrowed again by whether their market can have moved
     // (`market::quotes::can_have_moved`).
-    while app.events.park_until(&app, || app.events.watchers() > 0) {
+    while app.events.park_until(&app, || app.events.showing(&["markets"])) {
         refresh_quotes(&app);
         if app.wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
             return;

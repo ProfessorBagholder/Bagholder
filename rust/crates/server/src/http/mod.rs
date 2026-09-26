@@ -218,6 +218,7 @@ pub fn router(state: AppState) -> Router {
         .merge(notifications::routes().router)
         .route("/api/events/watch", post(stream::watch))
         .route("/api/events/resync", post(stream::resync))
+        .layer(axum::middleware::from_fn(conditional))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, ROUTE_TIMEOUT));
     let streams = Router::new()
         .route("/api/events", get(stream::events))
@@ -234,6 +235,38 @@ pub fn router(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(CatchPanicLayer::custom(|_: Box<dyn std::any::Any + Send>| ApiError::Internal.into_response()))
         .with_state(state)
+}
+
+/// A read answered "unchanged" (RFC 9110 §13.1.2): every answer to a GET carries
+/// its version as an entity tag, and a request naming the tag of what it holds is
+/// answered 304 with no body. The browser keeps what it was sent (`no-cache`:
+/// kept, and asked again each time with its tag), so a read asked for again when
+/// nothing changed moves no data. The sign-in window's frames are never kept.
+async fn conditional(req: Request, next: Next) -> Response {
+    let get = req.method() == Method::GET && !req.uri().path().starts_with("/api/login");
+    let held = req.headers().get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let res = next.run(req).await;
+    if !get || res.status() != StatusCode::OK {
+        return res;
+    }
+    let (mut parts, body) = res.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, BODY_LIMIT * 4).await else {
+        return ApiError::Internal.into_response();
+    };
+    let tag = format!("\"{:016x}\"", crate::views::version_of_bytes(&bytes));
+    let value = HeaderValue::from_str(&tag).expect("hex in quotes is a header value");
+    parts.headers.insert(header::ETAG, value.clone());
+    parts.headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
+    let matches = held.is_some_and(|h| h.split(',').any(|t| {
+        let t = t.trim();
+        t == "*" || t.trim_start_matches("W/") == tag
+    }));
+    if matches {
+        parts.status = StatusCode::NOT_MODIFIED;
+        parts.headers.remove(header::CONTENT_LENGTH);
+        return Response::from_parts(parts, axum::body::Body::empty());
+    }
+    Response::from_parts(parts, axum::body::Body::from(bytes))
 }
 
 async fn not_found() -> ApiError {

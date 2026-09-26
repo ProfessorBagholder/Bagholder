@@ -85,8 +85,14 @@ fn test_every_answer_is_private_and_every_failure_has_one_shape() {
     runtime().block_on(async {
         let (code, headers, _) = send(from_the_page(Method::GET, "/api/status", None)).await;
         assert_eq!(code, StatusCode::OK);
-        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        // a read is kept by this browser alone, and asked again each time with its tag
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
         assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        // a failure and a write are never kept
+        let (_, headers, _) = send(from_the_page(Method::GET, "/api/nothing", None)).await;
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        let (_, headers, _) = send(from_the_page(Method::POST, "/api/journal", None)).await;
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
 
         assert_eq!(json_of(from_the_page(Method::GET, "/api/nothing", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "not found"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/figures/detail?id=none-such", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no such trade or holding"})));
@@ -241,3 +247,29 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     assert_eq!(added.values().next().unwrap()["title"], json!(row.title));
 }
 
+
+/// A read asked for again with the tag of what it holds is answered 304, with no
+/// body; asked with another tag, it is sent whole with its tag.
+#[test]
+fn test_a_read_the_page_holds_is_answered_unchanged() {
+    let _g = guard();
+    runtime().block_on(async {
+        let (code, headers, body) = send(from_the_page(Method::GET, "/api/figures/detail?id=nothing-by-this-id", None)).await;
+        assert_eq!(code, StatusCode::NOT_FOUND, "a failure is never tagged: {}", String::from_utf8_lossy(&body));
+        assert!(headers.get(header::ETAG).is_none());
+        let (code, headers, body) = send(from_the_page(Method::GET, "/api/watch", None)).await;
+        assert_eq!(code, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let tag = headers[header::ETAG].to_str().unwrap().to_string();
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+        let mut again = from_the_page(Method::GET, "/api/watch", None);
+        again.headers_mut().insert(header::IF_NONE_MATCH, tag.parse().unwrap());
+        let (code, headers, body) = send(again).await;
+        assert_eq!((code, body.len()), (StatusCode::NOT_MODIFIED, 0));
+        assert_eq!(headers[header::ETAG].to_str().unwrap(), tag);
+        let mut other = from_the_page(Method::GET, "/api/watch", None);
+        other.headers_mut().insert(header::IF_NONE_MATCH, "\"0000000000000000\"".parse().unwrap());
+        let (code, _, body) = send(other).await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(!body.is_empty());
+    });
+}
