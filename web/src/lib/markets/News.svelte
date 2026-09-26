@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { positions, markets } from '../subs.svelte'
+  import { positions, markets, headlines, use, filtered, limits, more, FIRST_ROWS } from '../subs.svelte'
   import { keyed } from '../keys'
   // The News card (newsCardHtml): the tabbed card — Stories / Releases /
   // Disclosures — with a scope segment, a symbol chip, a search box, and one line
-  // per item. Stories and releases come from the model's news feed; releases also
-  // merge the issuer's filed releases; disclosures come from /api/filings/feed (or
-  // one listing's /api/filings under a chip).
-  import type { NewsItem, NewsTag } from '../model'
+  // per item. Stories and releases are the server's `headlines`: the items of the
+  // scope, the tab, the chip and the words typed, in the header's order, the
+  // issuers' filed releases beside the wires', sent as far as the list has
+  // scrolled. Disclosures come from /api/filings/feed (or one listing's
+  // /api/filings under a chip).
+  import type { Headline, NewsTag } from '../model'
   import type { NewsDoc } from '../generated/markets'
   import { watchDoc } from '../live.svelte'
-  import { signedPct, newsWhen, discDate, newsTextKey } from './util'
+  import { signedPct, newsWhen, discDate } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, sortRows } from '../sort.svelte'
   import { book as bookDoc } from '../subs.svelte'
@@ -20,16 +22,14 @@
   import GridHead from './GridHead.svelte'
   import { call } from '../api'
   import { searchSymbols } from '../api'
+  import { atEnd } from '../actions/atEnd'
   import { tickerKey, bookListing, directoryListing, type Chip } from './newsChip'
   import { escapable } from '../escape'
-
-  let { news }: { news: NewsItem[] } = $props()
 
   // Shown, the card says so: the news is read for a page showing it (and for a
   // Releases notification), and the server sends the listings its pass has still to read.
   const pass = $state<{ data: NewsDoc | null }>({ data: null })
   $effect(() => watchDoc('news', {}, pass))
-
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const KIND_OPTS = [['stories', 'Stories'], ['releases', 'Releases'], ['disc', 'Disclosures']] as const
@@ -44,7 +44,6 @@
     { key: 'news', label: 'Disclosure' },
     { key: 'symbol', label: 'Symbol', align: 'right' as const },
   ]
-  const FILED_RELEASE = /news release|press release/i
 
   let scope = $state((() => { try { return localStorage.getItem('bh2.news') || 'all' } catch { return 'all' } })())
   let kind = $state((() => { try { const k = localStorage.getItem('bh2.newsKind'); return k === 'disc' || k === 'releases' ? k : 'stories' } catch { return 'stories' } })())
@@ -63,22 +62,41 @@
   let kindChosen: string | null = null
   let reading = $state('')
 
-  // --- the chip and its borrowed tab (newsKindFor / newsChip) ---
-  function newsKindFor(only: Chip): string {
-    if (!only || kind === 'disc') return kind
-    const mine = (n: NewsItem) => (n.tags || []).some((t) => bareSymbol(t.symbol) === only.symbol && String(t.exchange || '').toUpperCase() === only.exchange)
-    const has = (k: string) => (news || []).some((n) => (k === 'releases' ? n.kind === 'release' : n.kind !== 'release') && mine(n))
-    if (has(kind)) return kind
-    const other = kind === 'releases' ? 'stories' : 'releases'
-    return has(other) ? other : kind
-  }
+  // The list the server sends for what the card shows; the Disclosures tab asks for none.
+  use(
+    () => (kind === 'disc' ? null : 'headlines'),
+    headlines,
+    () => ({ ...filtered(), scope, kind, symbol: sym?.symbol, exchange: sym?.exchange, query: query.trim(), sort: $state.snapshot(sort.news), limit: limits.news }),
+  )
+  // what narrows the list starts it again at its first rows
+  $effect(() => {
+    void [scope, kind, sym, query.trim()]
+    limits.news = FIRST_ROWS
+  })
+  const doc = $derived(headlines.data)
+  const storyRows = $derived(doc?.items ?? [])
+
+  // A chip takes the tab that has its items (newsKindFor): once the list for the chip
+  // arrives, a tab with none of them gives way to the one that has them.
+  let borrow = $state<{ symbol: string; v: string | undefined } | null>(null)
+  $effect(() => {
+    const b = borrow
+    const c = doc?.chip
+    if (!b || !sym || sym.symbol !== b.symbol || headlines.v === b.v || !c) return
+    borrow = null
+    if (kind === 'stories' && !c.stories && c.releases) kind = 'releases'
+    else if (kind === 'releases' && !c.releases && c.stories) kind = 'stories'
+  })
   function newsChip(only: Chip | null) {
     if (only && kindChosen == null) kindChosen = kind
     sym = only
-    if (only) kind = newsKindFor(only)
-    else if (kindChosen != null) {
-      kind = kindChosen
-      kindChosen = null
+    if (only && kind !== 'disc') borrow = { symbol: only.symbol, v: headlines.v }
+    else if (!only) {
+      borrow = null
+      if (kindChosen != null) {
+        kind = kindChosen
+        kindChosen = null
+      }
     }
   }
   function pickScope(v: string) {
@@ -92,71 +110,18 @@
     try { localStorage.setItem('bh2.newsKind', kind) } catch { /* ignore */ }
   }
 
+  const heldSym = (s: string) => (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === s)
+  const watchedSym = (s: string) => (markets.data?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === s)
+
   // --- the chip's own change, when the listing is neither held nor watched ---
   const chipPct = $derived.by<number | null>(() => {
     const only = sym
-    if (!only) return null
-    const held = (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
-    const watched = (markets.data?.markets.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
-    if (held || watched) return null
+    if (!only || heldSym(only.symbol) || watchedSym(only.symbol)) return null
     return sugQuotes[sugKey(only)]?.percentChange ?? null
   })
 
-  // --- filed releases: the issuer's own releases, beside the wires' ---
-  function tagOf(s: string, ex: string): NewsTag {
-    const w = (markets.data?.markets.watchlist || []).find((x) => bareSymbol(x.symbol) === s)
-    const p = (positions.data?.positions || []).find((x) => bareSymbol(x.symbol) === s)
-    return { symbol: s, exchange: ex || (p && p.exchange) || (w && w.exchange) || '', held: !!p, watched: !!w, percentChange: p ? (p.percentChange == null ? null : p.percentChange * 100) : w ? w.percentChange : null, positionId: p ? p.id : null }
-  }
-  function filedReleases(only: Chip | null, sc: string, wire: NewsItem[]): NewsItem[] {
-    let rows: DiscRow[]
-    // pure read only — the feed/payload load and title enrichment happen in the
-    // effects below, never inside this derived
-    if (only) {
-      const rec = discBySym[only.symbol]
-      if (!rec || !rec.payload) return []
-      rows = (rec.payload.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '' }))
-    } else {
-      rows = discFeed[sc]?.data?.filings || []
-    }
-    const said = new Set((wire || []).map((n) => newsTextKey(n.headline)))
-    return rows
-      .filter((f) => FILED_RELEASE.test(String(f.type || '')) && !said.has(newsTextKey(f.subject || '')))
-      .map((f) => ({
-        id: 'filed:' + f.id,
-        headline: f.subject || f.type || 'News release',
-        source: f.source || '',
-        url: f.url || '',
-        publishedAt: String(f.date || ''),
-        kind: 'release',
-        market: false,
-        tags: [tagOf(f.symbol || '', f.exchange || '')],
-        filed: { id: f.id, sym: f.symbol, source: f.source, url: f.url },
-      })) as (NewsItem & { filed?: { id: string; sym?: string; source: string; url: string } })[]
-  }
-
-  // --- the story / release rows ---
   const releases = $derived(kind === 'releases')
   const bare = $derived(scope === 'all' && !sym && !releases)
-  const storyRows = $derived.by(() => {
-    const only = sym
-    const isOnly = (t: NewsTag) => !!only && bareSymbol(t.symbol) === only.symbol && String(t.exchange || '').toUpperCase() === only.exchange
-    let rows = (news || []).filter(
-      (n) => (releases ? n.kind === 'release' : n.kind !== 'release') && (only ? n.tags.some(isOnly) : scope === 'all' ? (releases ? n.tags.length > 0 : n.market) : n.tags.some((t) => (scope === 'holdings' ? t.held : t.watched))),
-    ) as (NewsItem & { filed?: { id: string; sym?: string; source: string; url: string } })[]
-    if (releases) rows = rows.concat(filedReleases(only, scope, rows))
-    const q = query.trim().toUpperCase()
-    if (q) {
-      const tokens = q.split(/\s+/)
-      const bySym = tokens.length === 1 && q.length <= 5 ? rows.filter((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(q))) : []
-      const text = (n: NewsItem) => (n.headline + ' ' + n.source).toUpperCase()
-      rows = bySym.length ? bySym : rows.filter((n) => { const h = text(n); return tokens.every((t) => h.indexOf(t) >= 0) })
-    }
-    let s = sort.news
-    if (bare && s.key !== 'when' && s.key !== 'news') s = { key: 'when', dir: 'desc' }
-    const first = (n: NewsItem) => n.tags[0] || ({} as NewsTag)
-    return sortRows(rows, s.key, s.dir, (n, k) => (k === 'when' ? n.publishedAt : k === 'news' ? n.headline.toLowerCase() : k === 'symbol' ? (first(n).symbol ? bareSymbol(first(n).symbol).toLowerCase() : null) : first(n).percentChange))
-  })
 
   // --- the disclosures view ---
   const discView = $derived.by(() => {
@@ -192,7 +157,8 @@
 
   // The disclosures this view shows are sent while it shows them, and stop when it
   // stops: one listing's under the chip, or the scope's feed. The server reads the
-  // documents; their titles reach the rows as they are read.
+  // documents; their titles reach the rows as they are read, and the issuers' filed
+  // releases reach the Releases tab.
   $effect(() => {
     if (kind !== 'releases' && kind !== 'disc') return
     if (sym) return showDisclosures({ symbol: sym.symbol, exchange: sym.exchange || '', name: sym.name || '', currency: sym.currency || '' })
@@ -201,15 +167,29 @@
   // A chip for a listing the book neither holds nor watches: fetch its quote.
   $effect(() => {
     const only = sym
-    if (!only) return
-    const held = (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
-    const watched = (markets.data?.markets.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
-    if (held || watched) return
+    if (!only || heldSym(only.symbol) || watchedSym(only.symbol)) return
     // asked again only once the one remembered is a minute old
     sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
   })
 
   // --- on-demand chip lookup: a ticker typed that the card does not hold ---
+  // A ticker that took the chip and has no items yet: its news is read once the list
+  // for it says it has none.
+  let lookedUp = $state<{ chip: Chip; v: string | undefined } | null>(null)
+  $effect(() => {
+    const l = lookedUp
+    const c = doc?.chip
+    if (!l || sym !== l.chip || headlines.v === l.v || !c) return
+    lookedUp = null
+    if (c.stories || c.releases) return
+    const only = l.chip
+    reading = only.symbol
+    call('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
+      reading = ''
+      if (r && r.ok && r.exchange && sym === only) sym = { ...only, exchange: String(r.exchange).toUpperCase() }
+      // the items it read reach the card as rows of its list
+    })
+  })
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     const key = tickerKey(query)
@@ -221,17 +201,9 @@
         if (query.trim().toUpperCase() !== key) return
         newsChip(only)
         query = ''
-        const items = (markets.data?.markets.news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol))
-        if (kind !== 'disc' && !items) {
-          reading = only.symbol
-          call('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
-            reading = ''
-            if (r && r.ok && r.exchange && sym === only) only.exchange = String(r.exchange).toUpperCase()
-            // the items it read reach the card as rows inserted into the news
-          })
-        }
+        if (kind !== 'disc') lookedUp = { chip: only, v: headlines.v }
       }
-      const book = bookListing(key, [...(markets.data?.markets.watchlist || []), ...(positions.data?.positions || []), ...(bookDoc.data?.options.instruments || [])])
+      const book = bookListing(key, [...(markets.data?.watchlist || []), ...(positions.data?.positions || []), ...(bookDoc.data?.options.instruments || [])])
       if (book) return take(book)
       // a word no directory names as a ticker stays a text search
       searchSymbols(key).then((m) => {
@@ -245,8 +217,8 @@
   function newsSym(t: { symbol: string; exchange: unknown }) {
     newsChip({ symbol: bareSymbol(t.symbol), exchange: String(t.exchange || '').toUpperCase() })
   }
-  function openStory(n: NewsItem & { filed?: { id: string; sym?: string; source: string; url: string } }) {
-    if (n.filed) return openDisc(n.filed)
+  function openStory(n: Headline) {
+    if (n.filed) return openDisc({ id: n.filed.id, sym: n.filed.symbol, source: n.filed.source, url: n.filed.url })
     if (n.url) window.open(n.url, '_blank', 'noopener')
   }
   function openDisc(f: { id: string; sym?: string; source?: string; url?: string }) {
@@ -254,7 +226,7 @@
     window.open(durl, '_blank', 'noopener')
   }
 
-  const first = (n: NewsItem) => n.tags[0] || ({} as NewsTag)
+  const first = (n: Headline) => n.tags[0] || ({} as NewsTag)
   function chgVal(t: NewsTag): number | null {
     return t.percentChange == null && sym && bareSymbol(t.symbol).toUpperCase() === sym.symbol ? chipPct : t.percentChange
   }
@@ -270,7 +242,7 @@
     const has = (s: string) => left.includes(bareSymbol(s).toUpperCase())
     if (sym) return has(sym.symbol)
     const held = (positions.data?.positions ?? []).map((p) => p.symbol)
-    const watched = (markets.data?.markets.watchlist ?? []).map((w) => w.symbol)
+    const watched = (markets.data?.watchlist ?? []).map((w) => w.symbol)
     if (scope === 'holdings') return held.some(has)
     if (scope === 'watchlist') return watched.some(has)
     return kind === 'releases' ? held.concat(watched).some(has) : left.includes('*')
@@ -313,6 +285,7 @@
       <div class="muted" style="font-size:12px">{discView.empty}</div>
     {/if}
   {:else if storyRows.length}
+    {#if releases && doc?.filedFailed}<div class="status-err" style="font-size:12px;margin-bottom:6px">{doc.filedFailed}</div>{/if}
     <div class="nw-head" class:nw-bare={bare}><GridHead table="news" cols={bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS} /></div>
     <div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">
       {#each keyed(storyRows, (r) => r.id) as { row: n, key } (key)}
@@ -328,8 +301,10 @@
           {/if}
         </div>
       {/each}
+      {#if doc && storyRows.length < doc.total}<div use:atEnd={() => more('news', doc.total)} style="height:1px"></div>{/if}
     </div>
   {:else}
+    {#if releases && doc?.filedFailed}<div class="status-err" style="font-size:12px;margin-bottom:6px">{doc.filedFailed}</div>{/if}
     <div class="muted" style="font-size:12px">{passReading ? 'Reading…' : releases ? 'No releases.' : 'No news.'}</div>
   {/if}
 </div>

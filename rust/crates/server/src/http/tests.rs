@@ -123,8 +123,9 @@ fn test_a_write_with_no_body_is_a_write_with_nothing_to_say() {
         let f = a.figures.get().unwrap();
         let book = f.book().unwrap();
         let names = f.names().unwrap();
-        let base = app().market_base().unwrap();
-        let trades = |f: &crate::figures::Figures| f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, base: &base }, "trades", json!({"limit": 100000})).unwrap()).unwrap();
+        let context = a.market_context().unwrap();
+        let door = crate::wire::context::Door { built: &context, app: &a };
+        let trades = |f: &crate::figures::Figures| f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, tables: &door, following: &context.following }, "trades", json!({"limit": 100000})).unwrap()).unwrap();
         let doc = trades(f);
         let id = doc["trades"][0]["id"].as_str().unwrap().to_string();
         let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(&format!(r#"{{"id":"{id}","grade":"A","tags":["x", " "],"thesis":"why"}}"#)))).await;

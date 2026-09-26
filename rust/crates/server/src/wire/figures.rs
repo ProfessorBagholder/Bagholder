@@ -582,18 +582,3 @@ pub struct TradeDoc {
     pub trade: Option<Trade>,
     pub position: Option<Position>,
 }
-
-/// The Portfolio's sectors and regions under the page's filters.
-#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
-#[serde(rename_all = "camelCase")]
-pub struct ExposureDoc {
-    pub sectors: Vec<super::context::ExposureSlice>,
-    pub regions: Vec<super::context::ExposureSlice>,
-}
-
-/// The Markets tab: the market around the book (`context`).
-#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketsDoc {
-    pub markets: super::context::Markets,
-}

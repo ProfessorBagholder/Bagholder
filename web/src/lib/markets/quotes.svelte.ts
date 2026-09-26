@@ -2,12 +2,15 @@
 // (SPEC.md §4 Markets, Watchlist: a minute's memory, nothing stored): asked for again
 // the next time it is wanted once that minute is up, the one shown standing until the
 // new one lands. Reactive $state so the watchlist row and the add-row suggestion fill
-// in when a quote lands.
+// in when a quote lands. The price is the source's exact decimal text, the day's
+// change a fraction.
 import { bareSymbol } from '../sym'
-import { request } from '../api'
+import { call } from '../api'
+import type { Dec } from '../dec'
 
 export interface Quote {
-  last: number | null
+  last: Dec | null
+  /** The day's change, as a fraction. */
   percentChange: number | null
 }
 
@@ -26,12 +29,10 @@ export function sugQuoteSchedule(rows: { symbol: string; exchange?: string; curr
     const k = sugKey(w)
     if (w.last != null || pending[k] || (sugQuotes[k] && Date.now() - readAt[k] < MEMORY_MS)) return
     pending[k] = true
-    request<{ ok: boolean; price?: number | null; percentChange?: number | null }>(
-      'GET',
-      '/api/symbols/quote?symbol=' + encodeURIComponent(w.symbol) + '&exchange=' + encodeURIComponent(w.exchange || '') + '&currency=' + encodeURIComponent(w.currency || ''),
-    ).then((r) => {
+    call('GET /api/symbols/quote', { query: { symbol: w.symbol, exchange: w.exchange || '', currency: w.currency || '', name: '' } }).then((r) => {
       delete pending[k]
-      if (r && r.ok && r.price != null) {
+      // a glance with no answer shows no price: the row keeps its dash, and it is asked again when next wanted
+      if (r.ok) {
         readAt[k] = Date.now()
         sugQuotes[k] = { last: r.price, percentChange: r.percentChange ?? null }
       }

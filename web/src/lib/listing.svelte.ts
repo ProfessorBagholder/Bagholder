@@ -11,7 +11,8 @@
 import { lookup } from './api'
 import { bareSymbol } from './sym'
 import { localDay } from './fmt'
-import type { Fill, Markets, Trade } from './model'
+import type { Dec } from './dec'
+import type { Fill, MarketsDoc, Trade } from './model'
 
 interface Known {
   symbol: string
@@ -21,7 +22,8 @@ interface Known {
   kind: string
   securityId: string
   fills?: Fill[]
-  price?: number | null
+  price?: Dec | null
+  /** The day's change, as a fraction. */
   percentChange?: number | null
 }
 
@@ -53,7 +55,7 @@ export function rememberListing(o: { symbol: string; exchange?: string | null; c
 }
 
 /** The listing standing in for a trade on the detail page. */
-export function listingAsTrade(id: string, markets: Markets | null): Trade | null {
+export function listingAsTrade(id: string, markets: MarketsDoc | null): Trade | null {
   if (!isListingId(id)) return null
   const l = entry(id)
   // the quote the model already keeps for a watched listing, which moves with it

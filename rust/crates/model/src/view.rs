@@ -480,7 +480,7 @@ pub fn view_of(base: &Base, filters: Option<&Filters>, detail: Detail) -> View {
         markets: {
             // the context reads values in CAD: each holding at the base's own rates
             let cad: Vec<Position> = positions.iter().map(|p| Position { mv: crate::fx::to_cad(&base.fx, p.mv, &p.currency, &base.today), ..(*p).clone() }).collect();
-            crate::markets::markets_view(&crate::context::MarketBase::of_base(base), &cad.iter().collect::<Vec<_>>())
+            crate::markets::markets_view(&crate::context::MarketBase::of_base(base), &base.quotes, &cad.iter().collect::<Vec<_>>())
         },
         trades: trades
             .into_iter()

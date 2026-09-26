@@ -10,7 +10,7 @@ use ts_rs::TS;
 
 use bagholder_store::bars::{ChartBars, DayBar, TimeBar};
 use bagholder_store::feeds::{
-    FiledDocument, Filing, Gauge, GaugePart, GaugePoint, GaugeReading, Regulator, ShortMarket, ShortPoint, Shorts, StoredGauge, StoredShorts, VolumeSpan,
+    FiledDocument, Filing, Gauge, GaugePart, GaugePoint, GaugeReading, Regulator, ShortMarket, StoredGauge, VolumeSpan,
 };
 
 use bagholder_store::activities::ActivityRow;
@@ -126,13 +126,13 @@ fn markets_declarations() -> String {
     }
     let decls: Vec<String> = decls![
         GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc, crate::feeds::UniverseDoc, crate::feeds::NewsDoc,
-        ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
-        crate::feeds::FearAnswer, crate::feeds::ShortsAnswer, crate::feeds::ListingAnswer, crate::feeds::NewsSymbolAnswer, crate::feeds::WatchlistAnswer, crate::feeds::TilesAnswer,
+        ShortMarket, VolumeSpan, crate::feeds::ShortReport, crate::feeds::ShortsView, ShortsPayload, ShortsFeedRow, ShortsFeed,
+        crate::feeds::FearAnswer, crate::feeds::ShortsAnswer, crate::feeds::ListingAnswer, crate::feeds::NewsSymbolAnswer, crate::following::WatchlistAnswer, crate::following::TilesAnswer,
         crate::http::markets::Listing, crate::http::markets::Fear, crate::http::markets::ShortsQuery, crate::http::markets::GlanceAnswer,
-        crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::WatchlistBody, crate::http::markets::TilesSet,
-        bagholder_store::feeds::WatchedListing, bagholder_model::input::TileRef,
+        crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::WatchlistBody, crate::http::markets::WatchlistRemove, crate::http::markets::TilesSet,
+        crate::http::markets::TileRef,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { MarketTile, SymbolMatch } from './wire'\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { Dec } from '../dec'\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { SymbolMatch } from './wire'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -364,7 +364,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportRequest" | "ImportReport" | "WatchRequest" | "WatchStatus" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
-        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
+        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
@@ -430,10 +430,13 @@ fn figures_declarations() -> String {
         crate::wire::Fig<()>,
         Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
         Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
-        BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc, ExposureDoc, MarketsDoc,
+        BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc,
+        crate::wire::markets::MarketTile, crate::wire::markets::WatchItem, crate::wire::markets::DirectoryEntry, crate::wire::markets::MarketsDoc,
+        crate::wire::markets::HeatTile, crate::wire::markets::HeatBlock, crate::wire::markets::HeatCounts, crate::wire::markets::HeatmapDoc, crate::wire::markets::ExposureDoc,
+        crate::wire::news::NewsTag, crate::wire::news::Filed, crate::wire::news::Headline, crate::wire::news::ChipKinds, crate::wire::news::HeadlinesDoc,
         crate::wire::filters::Range, crate::wire::filters::Filters, crate::views::Dir, crate::views::Sort, crate::views::Params,
     ];
-    let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\nimport type { Markets, ExposureSlice } from './wire'\n\n");
+    let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -464,13 +467,15 @@ fn test_no_amount_on_the_figures_wire_is_a_number() {
     ];
     const MORE: [&str; 8] = ["pnlPct", "unrealPct", "percentChange", "held", "avgHold", "unrealizedPct", "marginUsedPct", "cashPct"];
     const MORE2: [&str; 8] = ["dayChangePct", "yield", "yoc", "currentYield", "vs", "total", "rowsTotal", "limit"];
+    // the Markets tab's counts, and how many decimals a tile's instrument is quoted to
+    const MORE3: [&str; 9] = ["holdings", "watchlist", "both", "ca", "us", "intl", "releases", "stories", "decimals"];
     // the declarations without their doc comments
     let text = regex::Regex::new(r"(?s)/\*\*.*?\*/").unwrap().replace_all(&figures_declarations(), "").to_string();
     let field = regex::Regex::new(r"(\w+)\??: ([^,;}]*)").unwrap();
     let mut numbers: Vec<String> = field.captures_iter(&text).filter(|c| c[2].contains("number")).map(|c| c[1].to_string()).collect();
     numbers.sort();
     numbers.dedup();
-    let allowed: Vec<&str> = NUMBERS.iter().chain(MORE.iter()).chain(MORE2.iter()).copied().collect();
+    let allowed: Vec<&str> = NUMBERS.iter().chain(MORE.iter()).chain(MORE2.iter()).chain(MORE3.iter()).copied().collect();
     let stray: Vec<&String> = numbers.iter().filter(|n| !allowed.contains(&n.as_str())).collect();
     assert!(stray.is_empty(), "a number on the figures wire that is not a ratio, count or day: {stray:?}");
     // the scan finds what it looks for
@@ -490,8 +495,10 @@ fn keys_declarations() -> String {
         ("trades", keys_of::<crate::wire::figures::TradesDoc>()),
         ("cashflow", keys_of::<crate::wire::figures::CashflowDoc>()),
         ("trade", keys_of::<crate::wire::figures::TradeDoc>()),
-        ("exposure", keys_of::<crate::wire::figures::ExposureDoc>()),
-        ("markets", keys_of::<crate::wire::figures::MarketsDoc>()),
+        ("exposure", keys_of::<crate::wire::markets::ExposureDoc>()),
+        ("markets", keys_of::<crate::wire::markets::MarketsDoc>()),
+        ("heatmap", keys_of::<crate::wire::markets::HeatmapDoc>()),
+        ("headlines", keys_of::<crate::wire::news::HeadlinesDoc>()),
         ("status", keys_of::<crate::status::Status>()),
         ("orders", keys_of::<crate::orders::OrdersDoc>()),
         ("shorts", keys_of::<crate::feeds::ShortsFeed>()),

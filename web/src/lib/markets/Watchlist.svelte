@@ -67,7 +67,7 @@
       const k = bareSymbol(p.symbol) + '@' + String(p.exchange || '').toUpperCase()
       if (watchedKeys.has(k) || seen.has(k)) return
       seen.add(k)
-      out.push({ symbol: bareSymbol(p.symbol), exchange: p.exchange || '', name: p.name || '', currency: p.currency || '', last: p.last, percentChange: p.percentChange == null ? null : p.percentChange * 100 }) // a holding's day change is a fraction; these rows' a percentage
+      out.push({ symbol: bareSymbol(p.symbol), exchange: p.exchange || '', name: p.name || '', currency: p.currency || '', last: p.last, percentChange: p.percentChange })
     })
     return out.slice(0, 4)
   })
@@ -92,7 +92,7 @@
           const k = bareSymbol(m.symbol) + '@' + String(m.exchange || '').toUpperCase()
           if (watchedKeys.has(k) || out.some((x) => bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase() === k)) return
           const p = (positions.data?.positions || []).find((x) => x.symbol === m.symbol)
-          out.push({ symbol: bareSymbol(m.symbol), exchange: m.exchange || '', name: m.name || '', currency: m.currency || (p ? p.currency : ''), last: p ? p.last : null, percentChange: p && p.percentChange != null ? p.percentChange * 100 : null })
+          out.push({ symbol: bareSymbol(m.symbol), exchange: m.exchange || '', name: m.name || '', currency: m.currency || (p ? p.currency : ''), last: p ? p.last : null, percentChange: p ? p.percentChange : null })
         })
         matches = out.slice(0, 4)
       })
@@ -185,7 +185,7 @@
           <div style="font-size:12px;color:var(--ink55);text-align:right">{w.exchange || ''}</div>
           <div class="tab" style="text-align:right;font-size:13px">{w.last == null ? '—' : px(w.last)}</div>
           <div class="tab" style="text-align:right;font-size:13px;color:{chgColor(w.percentChange)}">{signedPct(w.percentChange)}</div>
-          <button class="wl-trash" aria-label="Remove {symText(w.symbol)} from the watchlist" onclick={(e) => { e.stopPropagation(); removeWatch(w.symbol, w.exchange) }}><Icon d={ICONS.trash} /></button>
+          <button class="wl-trash" aria-label="Remove {symText(w.symbol)} from the watchlist" onclick={(e) => { e.stopPropagation(); removeWatch(w.id, w.symbol) }}><Icon d={ICONS.trash} /></button>
         </div>
       {/each}
     </div>

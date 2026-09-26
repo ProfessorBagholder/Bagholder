@@ -9,8 +9,28 @@ use std::sync::Arc;
 
 use crate::activity::Kind;
 use crate::exposure::Exposures;
-use crate::input::{NewsRow, Quotes, TileRef, UniverseRow, WatchRow};
-use crate::wire::{Ordered, Position};
+use crate::input::{NewsRow, TileRef, UniverseRow, WatchRow};
+use crate::wire::Ordered;
+
+/// A holding as the market readers ask of one: what it is and where, never what
+/// it is worth (a figure is the engine's, not theirs).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Held {
+    pub id: String,
+    pub symbol: String,
+    pub underlying: String,
+    pub name: String,
+    pub exchange: String,
+    pub kind: Kind,
+    pub account: String,
+    pub account_id: String,
+    /// The instrument's own currency, which says what venue an option's
+    /// underlying is read on.
+    pub currency: String,
+    pub security_id: String,
+    pub short: bool,
+    pub opened: String,
+}
 
 /// A round trip as the market readers ask of one: what it traded, and when.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,11 +47,9 @@ pub struct Traded {
 #[derive(Clone, Debug)]
 pub struct MarketBase {
     pub today: String,
-    /// Every holding, its value (`mv`) in CAD; its currency is the instrument's,
-    /// which says what venue an option's underlying is read on.
-    pub positions: Arc<Vec<Position>>,
+    /// Every holding.
+    pub positions: Arc<Vec<Held>>,
     pub traded: Arc<Vec<Traded>>,
-    pub quotes: Arc<Quotes>,
     pub exposures: Arc<Exposures>,
     pub watchlist: Arc<Vec<WatchRow>>,
     pub news: Arc<Vec<NewsRow>>,
@@ -40,13 +58,25 @@ pub struct MarketBase {
 }
 
 impl MarketBase {
-    /// The context of an earlier model's base, for the comparison with it: its
-    /// holdings valued in CAD at its own rates.
+    /// The context of an earlier model's base, for the comparison with it.
     pub fn of_base(b: &crate::base::Base) -> MarketBase {
         let positions = b
             .positions
             .iter()
-            .map(|p| Position { mv: crate::fx::to_cad(&b.fx, p.mv, &p.currency, &b.today), ..p.clone() })
+            .map(|p| Held {
+                id: p.id.clone(),
+                symbol: p.symbol.clone(),
+                underlying: p.underlying.clone(),
+                name: p.name.clone(),
+                exchange: p.exchange.clone(),
+                kind: p.kind,
+                account: p.account.clone(),
+                account_id: p.account_id.clone(),
+                currency: p.currency.clone(),
+                security_id: p.security_id.clone(),
+                short: p.short,
+                opened: p.opened.clone(),
+            })
             .collect();
         let traded = b
             .trades
@@ -57,7 +87,6 @@ impl MarketBase {
             today: b.today.clone(),
             positions: Arc::new(positions),
             traded: Arc::new(traded),
-            quotes: b.quotes.clone(),
             exposures: b.exposures.clone(),
             watchlist: b.watchlist.clone(),
             news: b.news.clone(),

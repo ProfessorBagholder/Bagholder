@@ -61,11 +61,11 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
 }
 
 /// An instrument as the sources ask for it: its kind and currency, its symbol and
-/// venue now, and the ways to ask for it the book holds.
-fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String> {
+/// venue now (its records', else what the person picked it as), and the ways to
+/// ask for it the book holds.
+pub fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String> {
     let i = book.instrument(id).map_err(err)?;
-    let names = book.names(id).map_err(err)?;
-    let Some(now) = names.last() else { return Ok(None) };
+    let Some(now) = book.current_name(id).map_err(err)? else { return Ok(None) };
     let mut routes: BTreeMap<RefScheme, Vec<String>> = BTreeMap::new();
     for r in book.instrument_refs(id).map_err(err)? {
         if !r.identifies() {

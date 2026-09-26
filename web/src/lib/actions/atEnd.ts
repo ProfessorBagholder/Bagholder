@@ -3,7 +3,8 @@
 
 export function atEnd(node: HTMLElement, reached: () => void): { update: (r: () => void) => void; destroy: () => void } {
   let fn = reached
-  const root = node.closest('.scroll-xy') as HTMLElement | null
+  // the box that scrolls the list: a table's, or a card's own list
+  const root = (node.closest('.scroll-xy') ?? node.closest('.scroll')) as HTMLElement | null
   const io = new IntersectionObserver((entries) => {
     if (entries.some((e) => e.isIntersecting)) fn()
   }, { root, rootMargin: '0px 0px 400px 0px' })

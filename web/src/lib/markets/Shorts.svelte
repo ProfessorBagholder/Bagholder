@@ -3,7 +3,7 @@
   // watches, ranked, from what the sweep has stored (/api/shorts/feed); the search
   // box reaches any ticker (/api/shorts?symbol=).
   import type { ShortsFeedRow } from '../model'
-  import { qty } from '../fmt'
+  import { qty, pctPlain } from '../fmt'
   import { n2, shortDay } from './util'
   import { sort, sortRows } from '../sort.svelte'
   import { bareSymbol } from '../sym'
@@ -22,7 +22,7 @@
     { key: 'shares', label: 'Short shares', align: 'right' as const },
     { key: 'ofFloat', label: 'Of float', align: 'right' as const },
     { key: 'daysToCover', label: 'Days to cover', align: 'right' as const },
-    { key: 'volumePct', label: 'Short volume', align: 'right' as const },
+    { key: 'ofVolume', label: 'Short volume', align: 'right' as const },
     { key: 'asOf', label: 'As of', align: 'right' as const },
   ]
 
@@ -89,7 +89,7 @@
       }
     }
     return sortRows(pool, s.key, s.dir, (r, k) =>
-      k === 'symbol' ? String(r.symbol || '').toLowerCase() : k === 'exchange' ? String(r.exchange || '').toLowerCase() : k === 'asOf' ? String(r.asOf || '') : ((r as unknown as Record<string, number | null>)[k] == null ? -Infinity : (r as unknown as Record<string, number>)[k]),
+      k === 'symbol' ? String(r.symbol || '').toLowerCase() : k === 'exchange' ? String(r.exchange || '').toLowerCase() : k === 'asOf' ? String(r.asOf || '') : ((r as unknown as Record<string, unknown>)[k] ?? null),
     )
   })
 
@@ -127,9 +127,9 @@
           <div><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">{r.symbol}</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">{r.name || ''}</div></div>
           <div style="font-size:12px;color:var(--ink55);text-align:right">{r.exchange || ''}</div>
           <div class="tab" style="text-align:right;font-size:13px">{qty(r.shares)}</div>
-          <div class="tab" style="text-align:right;font-size:13px">{r.ofFloat == null ? '—' : n2(r.ofFloat, 2) + '%'}</div>
+          <div class="tab" style="text-align:right;font-size:13px">{r.ofFloat == null ? '—' : pctPlain(r.ofFloat, 2)}</div>
           <div class="tab" style="text-align:right;font-size:13px;color:var(--ink55)">{r.daysToCover == null ? '—' : n2(r.daysToCover, 1)}</div>
-          <div class="tab" style="text-align:right;font-size:13px;color:var(--ink55)">{r.volumePct == null ? '—' : n2(r.volumePct, 1) + '%'}</div>
+          <div class="tab" style="text-align:right;font-size:13px;color:var(--ink55)">{r.ofVolume == null ? '—' : pctPlain(r.ofVolume, 1)}</div>
           <div class="tab" style="text-align:right;font-size:11.5px;color:var(--ink55)">{shortDay(r.asOf)}</div>
         </div>
       {/each}

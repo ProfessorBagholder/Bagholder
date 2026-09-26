@@ -63,7 +63,7 @@ chart.result[].meta.fulldayPrice
 chart.result[].meta.gmtoffset
 chart.result[].meta.hasPrePostMarketData
 chart.result[].meta.instrumentType
-chart.result[].meta.longName
+chart.result[].meta.longName ?
 chart.result[].meta.priceHint
 chart.result[].meta.range
 chart.result[].meta.regularMarketChangePercent

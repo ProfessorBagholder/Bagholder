@@ -37,10 +37,10 @@ test('Escape in the News box clears the words typed; in the Short interest box t
 })
 
 test('the News card reads Reading… while the server\'s pass still has the market feed to read', async ({ page, request }) => {
-  const noNews = (m: Record<string, unknown>) => { (m.markets as { news: unknown[] }).news = [] }
-  await openWithStatus(page, request, {}, '#markets', noNews, { news: { reading: ['*'] } })
+  const noNews = { headlines: { items: [], total: 0, chip: null, filedFailed: null } }
+  await openWithStatus(page, request, {}, '#markets', () => {}, { ...noNews, news: { reading: ['*'] } })
   await expect(page.locator('#page')).toContainText('Reading…')
-  await openWithStatus(page, request, {}, '#markets', noNews, { news: { reading: [] } })
+  await openWithStatus(page, request, {}, '#markets', () => {}, { ...noNews, news: { reading: [] } })
   await expect(page.locator('#page')).toContainText('No news.')
 })
 

@@ -77,8 +77,8 @@ async fn view(State(state): State<AppState>, Params(q): Params<ViewQuery>) -> Ap
         };
         let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
         let names = f.names().map_err(ApiError::Failed)?;
-        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
-        f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, base: &base }, &key, params))
+        let context = app.market_context().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
+        f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, tables: &crate::wire::context::Door { built: &context, app: &app }, following: &context.following }, &key, params))
             .ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?
             .map_err(ApiError::BadRequest)
     })
@@ -118,8 +118,8 @@ async fn figures_trades(State(state): State<AppState>, Params(q): Params<TradesQ
         let sort = crate::views::Sort { key: q.sort.unwrap_or_else(|| "exitDate".into()), dir };
         let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
         let names = f.names().map_err(ApiError::Failed)?;
-        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
-        f.read(|e| crate::views::all_trades(&crate::views::Cx { engine: e, names: &names, base: &base }, filters, sort))
+        let context = app.market_context().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
+        f.read(|e| crate::views::all_trades(&crate::views::Cx { engine: e, names: &names, tables: &crate::wire::context::Door { built: &context, app: &app }, following: &context.following }, filters, sort))
             .ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?
             .map_err(ApiError::BadRequest)
     })

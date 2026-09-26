@@ -163,7 +163,7 @@ pub fn coin_pairs(l: &crate::contract::Listing) -> Vec<String> {
     pairs
 }
 
-fn store(ctx: &Ctx, id: InstrumentId, closes: &[(Date, Dec)], currency: Currency, source: &SourceName, host: &str) -> Result<()> {
+pub(crate) fn store(ctx: &Ctx, id: InstrumentId, closes: &[(Date, Dec)], currency: Currency, source: &SourceName, host: &str) -> Result<()> {
     let disagreements = ctx.cache.store_closes(id, closes, currency, source, ctx.now)?;
     for d in disagreements {
         // a later value for a closed day: the first stands, and this is a meaning outcome

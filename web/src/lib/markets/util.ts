@@ -4,15 +4,15 @@
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-// en-US grouping with a fixed number of decimals (ledger's n2).
+// A ratio or a score with en-US grouping and a fixed number of decimals (ledger's n2).
 export function n2(v: number, dp: number): string {
-  return Number(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  return v.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
 }
 
-// A signed percentage already in percent units (not a fraction): +3.92%, −1.67%,
-// the em-minus, two decimals, "—" when absent. This is ledger's signedPct.
+// A day's change, a fraction, as a signed percentage: +3.92%, −1.67%, the
+// em-minus, two decimals, "—" when absent. This is ledger's signedPct.
 export function signedPct(v: number | null | undefined): string {
-  return v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2) + '%'
+  return v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v * 100).toFixed(2) + '%'
 }
 
 // "Sep 19" from an ISO date; "" when it is not a full YYYY-MM-DD.

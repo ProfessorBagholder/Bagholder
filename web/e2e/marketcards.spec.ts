@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { openWithStatus, ready, figures, bareSymbol, subUrl, saidShown } from './helpers'
+import { openWithStatus, ready, figures, bareSymbol, subUrl, saidShown, drivenStream, send, modelDoc, docsOf } from './helpers'
 
 // SPEC §3, Markets: the tile row, Fear & Greed, the Heatmap card, the Watchlist,
 // Short interest and News cards; and §4/§6 Disclosures, the card on a trade or
@@ -7,9 +7,15 @@ import { openWithStatus, ready, figures, bareSymbol, subUrl, saidShown } from '.
 // the Escape/Enter behaviours, the heatmap on its own and the listing-page
 // routing already, and are not repeated here.
 
-const tile = (symbol: string, sector: string, value: number, percentChange: number | null = 1.2) => ({
-  id: null, symbol, exchange: 'NASDAQ', name: symbol + ' Inc.', value, percentChange, sector,
+// A heatmap document as the server sends it: its sector blocks, each tile with its key.
+type HeatTile = { key: string; id: string | null; symbol: string; exchange: string; currency: string; name: string; value: string; percentChange: number | null; other: boolean }
+const tile = (symbol: string, value: string, over: Partial<HeatTile> = {}): HeatTile => ({
+  key: symbol, id: null, symbol, exchange: 'NASDAQ', currency: 'USD', name: symbol + ' Inc.', value, percentChange: 0.012, other: false, ...over,
 })
+const folded = (n: number, sector: string, value: string): HeatTile => ({ key: 'other|' + sector, id: null, symbol: 'Other (' + n + ')', exchange: '', currency: '', name: '', value, percentChange: 0.012, other: true })
+const block = (label: string, value: string, tiles: HeatTile[]) => ({ label, value, percentChange: 0.012, tiles })
+const heatmap = (universe: string, size: string, blocks: ReturnType<typeof block>[]) => ({ heatmap: { universe, size, blocks, counts: { holdings: 0, watchlist: 0, both: 0, ca: 0, us: 0, intl: 0, [universe]: blocks.reduce((n, b) => n + b.tiles.length, 0) } } })
+const showing = (universe: string, size = 'value') => (page: Page) => page.addInitScript((h) => localStorage.setItem('bh2.heatmap', JSON.stringify(h)), { universe, size })
 
 // The picker's plus cell is not rendered once the row is full (the demo book starts
 // at exactly six tiles); a test that opens the picker for real must first free
@@ -133,7 +139,7 @@ test.describe('Market tiles', () => {
   })
 
   test('with more than six tiles, "Show N more" opens a second row, remembered in the browser; a plus does not render at twelve', async ({ page, request }) => {
-    const many = Array.from({ length: 8 }, (_, i) => ({ symbol: 'T' + i, exchange: 'NASDAQ', label: 'T' + i, name: 'Tile ' + i, kind: 'Index', last: 100, change: 1, percentChange: 1, decimals: 2 }))
+    const many = Array.from({ length: 8 }, (_, i) => ({ id: 'tile-' + i, symbol: 'T' + i, exchange: 'NASDAQ', label: 'T' + i, name: 'Tile ' + i, kind: 'Index', last: '100', change: '1', percentChange: 0.01, decimals: 2, pricedAsRate: false, rate: null, rateChange: null }))
     await openWithStatus(page, request, {}, '#markets', (m) => { (m.markets as { tiles: unknown[] }).tiles = many })
     await expect(page.locator('.mt-tile')).toHaveCount(6)
     await expect(page.getByRole('button', { name: 'Show 2 more' })).toBeVisible()
@@ -145,7 +151,7 @@ test.describe('Market tiles', () => {
     await ready(page)
     await expect(page.locator('.mt-tile')).toHaveCount(8) // remembered
 
-    const twelve = Array.from({ length: 12 }, (_, i) => ({ ...many[0], symbol: 'Z' + i, label: 'Z' + i }))
+    const twelve = Array.from({ length: 12 }, (_, i) => ({ ...many[0], id: 'z-' + i, symbol: 'Z' + i, label: 'Z' + i }))
     await openWithStatus(page, request, {}, '#markets', (m) => { (m.markets as { tiles: unknown[] }).tiles = twelve })
     await expect(page.locator('.mt-tile')).toHaveCount(12)
     await expect(page.getByRole('button', { name: 'Add a tile' })).toHaveCount(0)
@@ -221,44 +227,46 @@ test.describe('Fear & Greed', () => {
 })
 
 test.describe('Heatmap card', () => {
-  const withTiles = (tiles: ReturnType<typeof tile>[]) => (m: Record<string, unknown>) => {
-    const mk = m.markets as { universes: Record<string, unknown[]>; holdings: unknown[]; watchlist: unknown[] }
-    mk.universes = { ...mk.universes, us: tiles, ca: [], intl: [] }
-    mk.holdings = []
-  }
-
-  test('the legend shows the ramp from −3% to +3%, and the universe and size controls pick the tiles shown', async ({ page, request }) => {
-    await openWithStatus(page, request, {}, '#markets', withTiles([tile('AAA', 'Technology', 1000), tile('BBB', 'Energy', 10)]))
+  test('the legend shows the ramp from −3% to +3%; the universe and size controls ask for what they pick', async ({ page, request }) => {
+    const said = saidShown(page)
+    await showing('us')(page)
+    await openWithStatus(page, request, {}, '#markets', () => {}, heatmap('us', 'value', [block('Technology', '1000', [tile('AAA', '1000')]), block('Energy', '10', [tile('BBB', '10')])]))
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
     await expect(card).toContainText('−3%')
     await expect(card).toContainText('+3%')
     const box = card.locator('#heatBox')
-    await expect(card).toContainText('No open positions.') // still on Holdings, which is empty here
-
-    await card.locator('.mseg-opt', { hasText: 'US' }).click()
     await expect(box.locator('.heat-tile')).toHaveCount(2)
     await expect(box).toContainText('AAA')
     await expect(box).toContainText('BBB')
-
-    // Equal size makes every tile the same area (tiles animate into place over .42s)
+    // each block by its value: the larger block the larger area
+    const a = await box.locator('.heat-tile', { hasText: 'AAA' }).boundingBox()
+    const b = await box.locator('.heat-tile', { hasText: 'BBB' }).boundingBox()
+    expect(a!.width * a!.height).toBeGreaterThan(b!.width * b!.height)
+    // a control asks the server for the heatmap it picks
     await card.locator('.mseg-opt', { hasText: 'Equal' }).click()
-    await page.waitForTimeout(500)
+    await expect.poll(() => said.some((d) => JSON.stringify(d.heatmap ?? {}).includes('"size":"equal"'))).toBe(true)
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    await expect.poll(() => said.some((d) => JSON.stringify(d.heatmap ?? {}).includes('"universe":"holdings","size":"equal"'))).toBe(true)
+  })
+
+  test('equal sizing draws every tile the same area', async ({ page, request }) => {
+    await showing('us', 'equal')(page)
+    await openWithStatus(page, request, {}, '#markets', () => {}, heatmap('us', 'equal', [block('Technology', '1', [tile('AAA', '1')]), block('Energy', '1', [tile('BBB', '1')])]))
+    const box = page.locator('#heatBox')
+    await expect(box.locator('.heat-tile')).toHaveCount(2)
     const a = await box.locator('.heat-tile', { hasText: 'AAA' }).boundingBox()
     const b = await box.locator('.heat-tile', { hasText: 'BBB' }).boundingBox()
     expect(Math.abs(a!.width * a!.height - b!.width * b!.height)).toBeLessThan(400)
   })
 
   test('a tile\'s symbol and change render at 16/12px once it is big enough, 13/11 when merely mid-sized, and 11px alone when small', async ({ page, request }) => {
-    // one big tile filling almost the whole box, and two tiny ones squeezed beside it
-    const tiles = [tile('BIG', 'Technology', 5000), tile('MID', 'Technology', 40), tile('WEE', 'Technology', 1)]
-    await openWithStatus(page, request, {}, '#markets', withTiles(tiles))
-    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
-    await card.locator('.mseg-opt', { hasText: 'US' }).click()
-    const box = card.locator('#heatBox')
+    // one big tile filling almost the whole box, and the server's fold of the two small ones (40 and 1) beside it
+    await showing('us')(page)
+    await openWithStatus(page, request, {}, '#markets', () => {}, heatmap('us', 'value', [block('Technology', '5041', [tile('BIG', '5000'), folded(2, 'Technology', '41')])]))
+    const box = page.locator('#heatBox')
     const big = box.locator('.heat-tile[data-sym="BIG"] .heat-sym')
     await expect(big).toHaveCSS('font-size', '16px')
     await expect(box.locator('.heat-tile[data-sym="BIG"] .heat-chg')).toHaveCSS('font-size', '12px')
-    // the smallest positions under 1.5% of the block fold into "Other" and read 11px alone, no change line
     const other = box.locator('.heat-tile', { hasText: 'Other' })
     await expect(other).toBeVisible()
     await expect(other.locator('.heat-sym')).toHaveCSS('font-size', '11px')
@@ -267,24 +275,91 @@ test.describe('Heatmap card', () => {
 
   test('a held tile opens its holding; a watched-but-unheld tile opens its listing', async ({ page, request }) => {
     const vfv = ((await figures(request)).positions as { id: string; symbol: string }[]).find((p) => p.symbol === 'VFV')!
-    await openWithStatus(page, request, {}, '#markets', (m) => {
-      const mk = m.markets as { holdings: unknown[]; watchlist: unknown[] }
-      mk.holdings = [{ id: vfv.id, symbol: 'VFV', exchange: 'TSX', value: 53724, percentChange: 0.4, sector: 'Not classified' }]
-      mk.watchlist = [{ symbol: 'ZZZQ', exchange: 'TSX', name: 'Zzzq Corp', currency: 'CAD', last: 12, priceChange: 0.1, percentChange: 0.8, sector: 'Not classified', kind: 'Shares', positionId: null }]
-    })
-    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
-    await card.locator('.mseg-opt', { hasText: 'Both' }).click()
-    const box = card.locator('#heatBox')
+    await showing('both')(page)
+    await openWithStatus(page, request, {}, '#markets', () => {}, heatmap('both', 'value', [
+      block('Not classified', '53736', [tile('VFV', '53724', { id: vfv.id, exchange: 'TSX', currency: 'CAD', name: 'Vanguard S&P 500' }), tile('ZZZQ', '12', { exchange: 'TSX', currency: 'CAD', name: 'Zzzq Corp' })]),
+    ]))
+    const box = page.locator('#heatBox')
     await box.locator('.heat-tile[data-sym="VFV"]').first().click()
     await expect(page).toHaveURL(subUrl('portfolio', vfv.id))
 
     await page.goto('/#markets')
     await ready(page)
-    await page.locator('.card', { has: page.locator('h5', { hasText: 'Heatmap' }) }).locator('.mseg-opt', { hasText: 'Both' }).click()
     await page.locator('#heatBox .heat-tile[data-sym="ZZZQ"]').click()
     // the address reads markets/listing:SYMBOL@VENUE, as SPEC names it
     await expect(page).toHaveURL(/#markets\/listing:ZZZQ@TSX$/)
     await expect(page.locator('#page')).toContainText('Zzzq Corp')
+  })
+})
+
+test.describe('Heatmap changes', () => {
+  // A quote moving is written into the tile that shows it (and its block's change, the
+  // server's), never the rest of the heatmap: the element test, in the browser.
+  async function drawn(page: Page, request: APIRequestContext) {
+    await drivenStream(page)
+    await showing('both')(page)
+    await page.addInitScript(() => {
+      const w = window as unknown as { __seen: MutationRecord[]; __watch: () => void }
+      w.__seen = []
+      w.__watch = () => new MutationObserver((r) => w.__seen.push(...r)).observe(document.getElementById('heatBox')!, { subtree: true, childList: true, characterData: true, attributes: true })
+    })
+    await page.goto('/#markets')
+    const model = await modelDoc(request)
+    await send(page, 'hello', { id: 1, book: 'test' })
+    for (const [doc, data] of Object.entries(docsOf(model))) await send(page, 'snapshot', { doc, data, v: 'v1' })
+    // the heatmap is sent once its card asks for it
+    await expect(page.locator('.card h5', { hasText: 'Heatmap' })).toBeVisible()
+    const heat = heatmap('both', 'value', [
+      block('Energy', '1500', [tile('ENB', '1000', { id: 'p-enb', exchange: 'TSX', currency: 'CAD' }), tile('SU', '500', { exchange: 'TSX', currency: 'CAD' })]),
+      block('Technology', '800', [tile('SHOP', '800', { id: 'p-shop', exchange: 'TSX', currency: 'CAD' })]),
+    ]).heatmap
+    await send(page, 'snapshot', { doc: 'heatmap', data: heat, v: 'v1' })
+    await expect(page.locator('#heatBox .heat-tile')).toHaveCount(3)
+    // tiles settle into place before anything is watched
+    await page.waitForTimeout(600)
+    await page.evaluate(() => (window as unknown as { __watch: () => void }).__watch())
+  }
+  // each mutation's element: the tile or the block header it is in, by what it shows
+  const touched = (page: Page) =>
+    page.evaluate(() =>
+      [...new Set((window as unknown as { __seen: MutationRecord[] }).__seen.map((m) => {
+        const el = (m.target instanceof Element ? m.target : m.target.parentElement)!
+        const t = el.closest('.heat-tile') as HTMLElement | null
+        if (t) return 'tile:' + t.dataset.sym
+        const b = el.closest('.heat-blk')
+        return b ? 'block:' + b.querySelector('.heat-hl')!.textContent : 'box'
+      }))].sort(),
+    )
+
+  test('a watched listing\'s quote writes in its tile, and its block\'s change', async ({ page, request }) => {
+    await drawn(page, request)
+    await send(page, 'patch', { doc: 'heatmap', v: 'v2', ops: [
+      ['set', ['blocks', { k: 'label', v: 'Energy' }, 'tiles', { k: 'key', v: 'SU' }, 'percentChange'], 0.031],
+      ['set', ['blocks', { k: 'label', v: 'Energy' }, 'percentChange'], 0.0184],
+    ] })
+    await expect(page.locator('#heatBox .heat-tile[data-sym="SU"]')).toContainText('+3.10%')
+    await expect.poll(() => touched(page)).toEqual(['block:Energy', 'tile:SU'])
+  })
+
+  test('the watch sees a whole heatmap sent again: the check can fail', async ({ page, request }) => {
+    await drawn(page, request)
+    const again = heatmap('both', 'value', [
+      block('Energy', '1500', [tile('ENB2', '1000'), tile('SU2', '500')]),
+      block('Technology', '800', [tile('SHOP2', '800')]),
+    ]).heatmap
+    await send(page, 'patch', { doc: 'heatmap', v: 'v2', ops: [['set', ['blocks'], again.blocks]] })
+    await expect(page.locator('#heatBox .heat-tile[data-sym="SU2"]')).toBeVisible()
+    await expect.poll(async () => (await touched(page)).filter((t) => t.startsWith('tile:') || t === 'box').length).toBeGreaterThan(2)
+  })
+
+  test('a holding\'s quote writes in its tile and its block, and moves no other tile', async ({ page, request }) => {
+    await drawn(page, request)
+    await send(page, 'patch', { doc: 'heatmap', v: 'v2', ops: [
+      ['set', ['blocks', { k: 'label', v: 'Technology' }, 'tiles', { k: 'key', v: 'SHOP' }, 'percentChange'], -0.022],
+      ['set', ['blocks', { k: 'label', v: 'Technology' }, 'percentChange'], -0.022],
+    ] })
+    await expect(page.locator('#heatBox .heat-tile[data-sym="SHOP"]')).toContainText('−2.20%')
+    await expect.poll(() => touched(page)).toEqual(['block:Technology', 'tile:SHOP'])
   })
 })
 
@@ -473,38 +548,37 @@ test.describe('Short interest', () => {
 })
 
 test.describe('News', () => {
-  const item = (id: string, headline: string, opts: Partial<{ tag: { symbol: string; exchange: string; held: boolean; watched: boolean; percentChange: number | null }; market: boolean; kind: string }> = {}) => ({
+  type Tag = { symbol: string; exchange: string; held: boolean; watched: boolean; percentChange: number | null; positionId: string | null }
+  const item = (id: string, headline: string, opts: Partial<{ tag: Omit<Tag, 'positionId'>; market: boolean; kind: string }> = {}) => ({
     id, headline, source: 'The Wire', url: 'https://example.com/' + id, publishedAt: '2026-09-19T12:00:00Z',
-    market: opts.market ?? false, kind: opts.kind ?? 'story', tags: opts.tag ? [opts.tag] : [],
+    market: opts.market ?? false, kind: opts.kind ?? 'story', tags: opts.tag ? [{ ...opts.tag, positionId: null }] : [], filed: null,
   })
+  const headlines = (items: ReturnType<typeof item>[], total = items.length, chip: { stories: number; releases: number } | null = null) => ({ headlines: { items, total, chip, filedFailed: null } })
+  const two = headlines([
+    item('a', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 0.01 } }),
+    item('b', 'Gadget Co announces buyback', { tag: { symbol: 'GAD', exchange: 'NASDAQ', held: true, watched: false, percentChange: -0.01 } }),
+  ])
+  // what the page last asked of the News card's list
+  const asked = (said: Record<string, unknown>[]) => () => (said.filter((d) => 'headlines' in d).at(-1)?.headlines as Record<string, unknown> | undefined) ?? {}
 
-  test('the search box narrows by symbol or headline words within the current scope', async ({ page, request }) => {
-    await openWithStatus(page, request, {}, '#markets', (m) => {
-      (m.markets as { news: unknown[] }).news = [
-        item('a', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 1 } }),
-        item('b', 'Gadget Co announces buyback', { tag: { symbol: 'GAD', exchange: 'NASDAQ', held: true, watched: false, percentChange: -1 } }),
-      ]
-    })
+  test('the rows are the server\'s, each with its symbol and its change; the scope and the words typed are asked of the server', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    await expect.poll(() => last().scope).toBe('holdings')
     await expect(card.locator('.nw-row')).toHaveCount(2)
-    const box = page.getByLabel('Search the news')
-    await box.fill('WID')
-    await expect(card.locator('.nw-row')).toHaveCount(1)
-    await expect(card).toContainText('Widgets soar')
-    await box.fill('')
-    await box.fill('buyback')
-    await expect(card.locator('.nw-row')).toHaveCount(1)
-    await expect(card).toContainText('Gadget Co')
+    await expect(card.locator('.nw-row', { hasText: 'Widgets soar' })).toContainText('+1.00%')
+    await expect(card.locator('.nw-row', { hasText: 'Gadget Co' })).toContainText('−1.00%')
+    await page.getByLabel('Search the news').fill('buyback')
+    await expect.poll(() => last().query).toBe('buyback')
   })
 
   test('a word typed takes the chip only where it names a listing; any other word stays a text search', async ({ page, request }) => {
-    await openWithStatus(page, request, {}, '#markets', (m) => {
-      (m.markets as { news: unknown[] }).news = [
-        item('a', 'Widgets beat on earnings', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 1 } }),
-        item('b', 'Gadget Co announces buyback', { tag: { symbol: 'GAD', exchange: 'NASDAQ', held: true, watched: false, percentChange: -1 } }),
-      ]
-    })
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
     // the directory answers every word with a listing whose name holds it, and names a ticker only for ZQXW
     await page.route('**/api/symbols/search?*', (route) => {
       const q = new URL(route.request().url()).searchParams.get('q')!.toUpperCase()
@@ -512,7 +586,6 @@ test.describe('News', () => {
       if (q === 'ZQXW') matches.push({ symbol: 'ZQXW', exchange: 'NYSE', name: 'Zqxw Inc', currency: 'USD' })
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches }) })
     })
-    await page.route('**/api/news/symbol?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, count: 0, source: '', exchange: 'NYSE' }) }))
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
     const box = page.getByLabel('Search the news')
@@ -522,34 +595,28 @@ test.describe('News', () => {
     await page.waitForTimeout(300)
     await expect(card.locator('.chip')).toHaveCount(0)
     await expect(box).toHaveValue('beat')
-    await expect(card.locator('.nw-row')).toHaveCount(1)
-    await expect(card).toContainText('Widgets beat')
+    await expect.poll(() => last().query).toBe('beat')
     await box.fill('zqxw')
     await expect(card.locator('.chip')).toContainText('ZQXW')
+    await expect.poll(() => [last().symbol, last().exchange, last().query]).toEqual(['ZQXW', 'NYSE', ''])
   })
 
-  test('clicking a row\'s symbol opens the Symbol chip, scoping the card until it is cleared', async ({ page, request }) => {
-    await openWithStatus(page, request, {}, '#markets', (m) => {
-      (m.markets as { news: unknown[] }).news = [
-        item('a', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 1 } }),
-        item('b', 'Gadget Co announces buyback', { tag: { symbol: 'GAD', exchange: 'NASDAQ', held: true, watched: false, percentChange: -1 } }),
-      ]
-    })
+  test('clicking a row\'s symbol opens the Symbol chip, asking for that listing\'s items until it is cleared', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
     await card.locator('.nw-sym', { hasText: 'WID' }).click()
     await expect(card.locator('.chip')).toContainText('WID')
-    await expect(card.locator('.nw-row')).toHaveCount(1)
-    await expect(card).toContainText('Widgets soar')
+    await expect.poll(() => [last().symbol, last().exchange]).toEqual(['WID', 'NASDAQ'])
     await card.locator('.chip .cx').click()
     await expect(card.locator('.chip')).toHaveCount(0)
-    await expect(card.locator('.nw-row')).toHaveCount(2)
+    await expect.poll(() => last().symbol ?? null).toBeNull()
   })
 
   test('clicking anywhere else on a row opens the article in a new tab', async ({ page, request }) => {
-    await openWithStatus(page, request, {}, '#markets', (m) => {
-      (m.markets as { news: unknown[] }).news = [item('a', 'Widgets soar on earnings beat', { market: true })]
-    })
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([item('a', 'Widgets soar on earnings beat', { market: true })]))
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
@@ -557,6 +624,18 @@ test.describe('News', () => {
     ])
     expect(popup.url()).toBe('https://example.com/a')
     await popup.close()
+  })
+
+  test('the list is sent as far as it has scrolled, with how many there are; its end asks for the next rows', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    const hundred = Array.from({ length: 100 }, (_, i) => item('n' + i, 'Story number ' + i, { market: true }))
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines(hundred, 250))
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await expect(card.locator('.nw-row')).toHaveCount(100)
+    await expect.poll(() => last().limit).toBe(100)
+    await card.locator('.nw-row').last().scrollIntoViewIfNeeded()
+    await expect.poll(() => last().limit).toBe(200)
   })
 })
 

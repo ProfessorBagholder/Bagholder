@@ -14,7 +14,7 @@
       "syncStep": "",
       "error": "",
       "summaryReady": false,
-      "protocol": "2026-09-26.1",
+      "protocol": "2026-09-26.2",
       "startedAt": "<startedAt>",
       "version": "1.47.0",
       "latestVersion": "",
@@ -178,10 +178,8 @@
   "symbols_quote_empty": {
     "status": 200,
     "body": {
-      "ok": true,
-      "price": null,
-      "priceChange": null,
-      "percentChange": null
+      "ok": false,
+      "error": "a symbol is required"
     }
   },
   "listing_missing_symbol": {
@@ -202,21 +200,20 @@
     "status": 200,
     "body": {
       "ok": false,
-      "error": "symbol required"
+      "error": "a symbol is required"
     }
   },
   "watchlist_remove_missing_symbol": {
     "status": 200,
     "body": {
       "ok": false,
-      "error": "symbol required"
+      "error": "the listing to stop watching is required"
     }
   },
   "tiles_set_empty": {
     "status": 200,
     "body": {
-      "ok": true,
-      "tiles": []
+      "ok": true
     }
   },
   "filings_missing_symbol": {

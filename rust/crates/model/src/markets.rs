@@ -6,7 +6,7 @@
 use crate::activity::Kind;
 use crate::context::MarketBase as Base;
 use crate::exposure::{norm_sector, underlying_exposure, Exposure, Exposures, UNCLASSIFIED};
-use crate::input::Listing;
+use crate::input::{Listing, Quotes};
 use crate::instruments;
 use crate::venues::{tmx_symbol, watch_exposure_key};
 use crate::wire::{HeldTile, MarketInstrument, MarketTile, Markets, NewsItem, NewsTag, Ordered, Position, UniverseTile, WatchItem};
@@ -64,11 +64,11 @@ fn tile_decimals(inst: &instruments::Instrument) -> i64 {
     }
 }
 
-pub fn tile_rows(base: &Base) -> Vec<MarketTile> {
+pub fn tile_rows(base: &Base, quotes: &Quotes) -> Vec<MarketTile> {
     tile_list(base)
         .into_iter()
         .map(|inst| {
-            let quote = base.quotes.get(&watch_quote_key(inst.symbol, inst.exchange));
+            let quote = quotes.get(&watch_quote_key(inst.symbol, inst.exchange));
             let last = quote.and_then(|q| q.price);
             let change = quote.and_then(|q| q.price_change);
             // A contract quoted as 100 minus the rate carries that rate beside its
@@ -147,11 +147,11 @@ fn lk(symbol: &str, exchange: &str) -> (String, String) {
     (tmx_symbol(symbol), exchange.trim().to_uppercase())
 }
 
-pub fn watch_rows(base: &Base, positions: &[&Position]) -> Vec<WatchItem> {
+pub fn watch_rows(base: &Base, quotes: &Quotes, positions: &[&Position]) -> Vec<WatchItem> {
     base.watchlist
         .iter()
         .map(|w| {
-            let quote = base.quotes.get(&watch_quote_key(&w.symbol, &w.exchange));
+            let quote = quotes.get(&watch_quote_key(&w.symbol, &w.exchange));
             let held = positions.iter().find(|p| p.symbol == w.symbol && p.exchange.to_uppercase() == w.exchange.to_uppercase());
             let inst = instruments::find(&w.symbol, &w.exchange);
             let crypto = w.exchange.to_uppercase() == "CRYPTO";
@@ -373,10 +373,10 @@ pub fn news_rows(base: &Base, positions: &[&Position], watch: &[WatchItem]) -> V
     drop_translations(rows)
 }
 
-pub fn markets_view(base: &Base, positions: &[&Position]) -> Markets {
+pub fn markets_view(base: &Base, quotes: &Quotes, positions: &[&Position]) -> Markets {
     // a holding's value is already in CAD
     let cad = |amount: f64, _currency: &str| amount;
-    let watchlist = watch_rows(base, positions);
+    let watchlist = watch_rows(base, quotes, positions);
     let universes = base
         .universes
         .0
@@ -394,7 +394,7 @@ pub fn markets_view(base: &Base, positions: &[&Position]) -> Markets {
         news: news_rows(base, positions, &watchlist),
         watchlist,
         universes: Ordered(universes),
-        tiles: tile_rows(base),
+        tiles: tile_rows(base, quotes),
         instruments: instruments::INSTRUMENTS.iter().map(|r| MarketInstrument { symbol: r.symbol, label: instruments::label(r.symbol), name: r.name, exchange: r.exchange, kind: r.kind, aliases: r.aliases }).collect(),
     }
 }

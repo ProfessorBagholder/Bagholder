@@ -103,13 +103,13 @@ pub fn kind_word(k: InstrumentKind) -> &'static str {
 }
 
 /// What the page shows of an instrument: its symbol, name and venue now.
-struct Shown {
-    symbol: String,
-    name: String,
-    exchange: String,
+pub(crate) struct Shown {
+    pub(crate) symbol: String,
+    pub(crate) name: String,
+    pub(crate) exchange: String,
 }
 
-fn shown(inputs: &Inputs, i: InstrumentId) -> Shown {
+pub(crate) fn shown(inputs: &Inputs, i: InstrumentId) -> Shown {
     let info = inputs.ledger.instruments.get(&i);
     let name = info.and_then(|x| x.current_name());
     let crypto = info.is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto);
@@ -544,21 +544,6 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
     }
 }
 
-/// The market's context for the holdings in `pf`: each with its value in CAD.
-pub fn context_of(engine: &Engine, names: &Names, links: &Links, pf: &bagholder_engine::scope::Portfolio, base: &super::context::MarketBase) -> super::context::Context {
-    let inputs = engine.inputs();
-    let figs = engine.figures();
-    let valued: Vec<(Position, Option<f64>)> = pf
-        .positions
-        .iter()
-        .map(|i| {
-            let p = &figs.positions[*i];
-            (position_row(inputs, names, links, p), p.market_cad.as_ref().ok().map(|m| m.amount.to_f64()))
-        })
-        .collect();
-    super::context::context(base, &valued)
-}
-
 /// The Cashflow tab under `filters`, over the holdings' part of the scope.
 pub fn cashflow_doc(engine: &Engine, filters: &Filters, pf: &bagholder_engine::scope::Portfolio) -> Cashflow {
     let c = engine.cashflow(filters, pf);
@@ -805,7 +790,9 @@ mod tests {
     #[test]
     fn the_document_from_a_real_month_names_every_row_by_its_id() {
         let _g = crate::tests_common::guard();
-        let base = crate::tests_common::app().market_base().unwrap();
+        let a = crate::tests_common::app();
+        let context = a.market_context().unwrap();
+        let door = crate::wire::context::Door { built: &context, app: &a };
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
@@ -824,7 +811,7 @@ mod tests {
         }
         let book = f.book().unwrap();
         let names = f.read(|e| Names::load(&book, e.inputs())).unwrap().unwrap();
-        let page = f.read(|e| crate::views::every_view(&crate::views::Cx { engine: e, names: &names, base: &base }, &Default::default())).unwrap().unwrap();
+        let page = f.read(|e| crate::views::every_view(&crate::views::Cx { engine: e, names: &names, tables: &door, following: &context.following }, &Default::default())).unwrap().unwrap();
         let rows = |k: &str, path: &[&str]| -> Vec<serde_json::Value> {
             let mut v = &page[k];
             for p in path {

@@ -11,7 +11,7 @@ use ts_rs::TS;
 
 use super::extract::{flag, text, trimmed};
 use super::{answer, api_routes, blocking, Api, ApiError, AppState, Body, Params, Routed};
-use crate::feeds;
+use crate::{feeds, following};
 
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
@@ -87,29 +87,32 @@ async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>)
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
-/// its price and day change, not stored.
+/// its price and day change, not stored; or why its source gave none.
 #[derive(Serialize, TS)]
-pub struct GlanceAnswer {
-    ok: bool,
-    price: Option<f64>,
-    #[serde(rename = "priceChange")]
-    price_change: Option<f64>,
-    #[serde(rename = "percentChange")]
-    percent_change: Option<f64>,
+#[serde(untagged)]
+pub enum GlanceAnswer {
+    Ok {
+        #[ts(type = "true")]
+        ok: bool,
+        price: crate::wire::Dec,
+        /// The day's change in points, where the source states it.
+        change: Option<crate::wire::Dec>,
+        /// The day's change, as a fraction.
+        #[serde(rename = "percentChange")]
+        percent_change: Option<f64>,
+    },
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+    },
 }
 
 async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<GlanceAnswer> {
     let app = state.app;
-    answer(move || {
-        let mut glance = bagholder_market::quotes::Glance::default();
-        if !l.symbol.is_empty() {
-            let rec = bagholder_model::input::Listing::new(l.symbol, l.exchange, l.currency, "Shares");
-            if let Ok(conn) = app.open() {
-                let (today, _, _) = bagholder_market::clock_now();
-                glance = bagholder_market::quotes::peek_quote(&conn, &rec, &today).unwrap_or_default();
-            }
-        }
-        GlanceAnswer { ok: true, price: glance.price, price_change: glance.price_change, percent_change: glance.percent_change }
+    answer(move || match following::glance(&app, &l.symbol, &l.exchange, &l.currency) {
+        Ok(g) => GlanceAnswer::Ok { ok: true, price: g.price, change: g.change, percent_change: g.percent_change },
+        Err(e) => GlanceAnswer::Err { ok: false, error: e },
     })
     .await
 }
@@ -234,14 +237,14 @@ async fn history(State(state): State<AppState>, Params(q): Params<feeds::History
     answer(move || feeds::history_payload(&state.app, &q)).await
 }
 
-// The three writes below hand their body to the module that owns the rows; it
-// becomes a typed request with the typed watchlist and tiles (stage 5).
-
-/// `POST /api/watchlist/add`, `POST /api/watchlist/remove`: the listing to
-/// follow or drop; `add` alone reads `name`, `currency` and `securityId`.
+/// `POST /api/watchlist/add`: the listing to follow, found as `following` says:
+/// by `id` when the page knows the instrument, else by what it is called.
 #[derive(Deserialize, Serialize, Default, TS)]
 #[serde(default)]
 pub struct WatchlistBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) id: Option<String>,
     #[serde(deserialize_with = "text")]
     pub(crate) symbol: String,
     #[serde(deserialize_with = "text")]
@@ -257,22 +260,45 @@ pub struct WatchlistBody {
     pub(crate) security_id: Option<String>,
 }
 
-async fn watchlist_add(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<feeds::WatchlistAnswer> {
-    answer(move || feeds::watch_add(&state.app, &body)).await
+async fn watchlist_add(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<following::WatchlistAnswer> {
+    let n = following::Named {
+        instrument: body.id,
+        symbol: body.symbol,
+        exchange: body.exchange,
+        name: body.name.unwrap_or_default(),
+        currency: body.currency.unwrap_or_default(),
+        security_id: body.security_id.unwrap_or_default(),
+    };
+    answer(move || following::watch(&state.app, &n)).await
 }
 
-async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<feeds::WatchlistAnswer> {
-    answer(move || feeds::watch_remove(&state.app, &body)).await
+/// `POST /api/watchlist/remove`: the instrument to stop following.
+#[derive(Deserialize, Serialize, Default, TS)]
+#[serde(default, deny_unknown_fields)]
+pub struct WatchlistRemove {
+    pub(crate) id: String,
+}
+
+async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<WatchlistRemove>) -> Api<following::WatchlistAnswer> {
+    answer(move || following::unwatch(&state.app, &body.id)).await
+}
+
+/// One tile of the row: an instrument of the directory, by its symbol and venue.
+#[derive(Deserialize, Default, TS)]
+#[serde(default, deny_unknown_fields)]
+pub struct TileRef {
+    symbol: String,
+    exchange: String,
 }
 
 /// What `POST /api/tiles/set` accepts: the tile row, in order.
 #[derive(Deserialize, Default, TS)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TilesSet {
-    #[serde(deserialize_with = "bagholder_model::lenient::list")]
-    tiles: Vec<bagholder_model::input::TileRef>,
+    tiles: Vec<TileRef>,
 }
 
-async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api<feeds::TilesAnswer> {
-    answer(move || feeds::tiles_set(&state.app, &body.tiles)).await
+async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api<following::TilesAnswer> {
+    let tiles: Vec<(String, String)> = body.tiles.into_iter().map(|t| (t.symbol, t.exchange)).collect();
+    answer(move || following::set_tiles(&state.app, &tiles)).await
 }

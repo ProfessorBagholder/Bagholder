@@ -8,6 +8,7 @@ pub mod account;
 pub mod adjustment;
 pub mod bracket;
 pub mod dec;
+pub mod directory;
 pub mod distribution;
 pub mod ids;
 pub mod json;

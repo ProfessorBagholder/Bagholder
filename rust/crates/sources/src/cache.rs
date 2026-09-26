@@ -306,6 +306,20 @@ impl MarketCache {
         Ok(out)
     }
 
+    /// An instrument's standing closes from `from` through `to`, the newest first,
+    /// each in the currency it was kept in.
+    pub fn closes_between(&self, id: InstrumentId, from: Date, to: Date) -> Result<Vec<(Date, Money)>> {
+        const T: &str = "daily_closes";
+        let mut stmt = self.conn.prepare("SELECT day, close, currency FROM daily_closes WHERE instrument_id = ?1 AND first = 1 AND day >= ?2 AND day <= ?3 ORDER BY day DESC")?;
+        let rows = stmt.query_map(params![id.to_string(), from.to_string(), to.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (d, c, cur) = row?;
+            out.push((day(T, "day", &d)?, Money::new(dec(T, "close", &c)?, currency(T, "currency", &cur)?)));
+        }
+        Ok(out)
+    }
+
     /// The last day an instrument has a close for.
     pub fn last_close_day(&self, id: InstrumentId) -> Result<Option<Date>> {
         let d: Option<String> = self.conn.query_row("SELECT MAX(day) FROM daily_closes WHERE instrument_id = ?1", params![id.to_string()], |r| r.get(0))?;

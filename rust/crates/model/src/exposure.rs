@@ -45,6 +45,8 @@ const SECTOR_ALIAS: &[(&str, &str)] = &[
     ("communications", "Communication Services"),
     ("communication", "Communication Services"),
     ("media", "Communication Services"),
+    // TMX Money's name for it
+    ("media & telecommunications", "Communication Services"),
     ("telecommunications services", "Communication Services"),
     ("telecommunications", "Communication Services"),
     ("telecommunication services", "Communication Services"),

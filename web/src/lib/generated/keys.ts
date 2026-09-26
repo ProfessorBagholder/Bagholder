@@ -35,17 +35,21 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
   'trade': {
   },
   'exposure': {
-    'sectors': 'name',
-    'regions': 'name',
+    'sectors': 'label',
+    'regions': 'label',
   },
   'markets': {
-    'markets.holdings': 'id',
-    'markets.watchlist': 'symbol',
-    'markets.news': 'id',
-    'markets.news.*.tags': 'symbol',
-    'markets.universes.*': 'id',
-    'markets.tiles': 'symbol',
-    'markets.instruments': 'symbol',
+    'tiles': 'id',
+    'watchlist': 'id',
+    'directory': 'key',
+  },
+  'heatmap': {
+    'blocks': 'label',
+    'blocks.*.tiles': 'key',
+  },
+  'headlines': {
+    'items': 'id',
+    'items.*.tags': 'symbol',
   },
   'status': {
   },

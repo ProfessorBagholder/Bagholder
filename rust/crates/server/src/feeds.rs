@@ -61,7 +61,7 @@ pub struct FeedsState {
 /// `feed` has failed: said in the header, in `why`'s words, until it next answers.
 /// A request refused by `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the
 /// feed's and is not said (as the market sources' cache does not record one).
-fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
+pub(crate) fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
     if bagholder_net::client::is_offline_refusal(&why) {
         return;
     }
@@ -72,7 +72,7 @@ fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
 }
 
 /// `feed` has answered: its failure, if one was standing, is no longer said.
-fn feed_answered(app: &Arc<App>, feed: &str) {
+pub(crate) fn feed_answered(app: &Arc<App>, feed: &str) {
     if app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).remove(feed).is_some() {
         app.events.signal();
     }
@@ -238,131 +238,28 @@ pub fn exposure_loop(app: Arc<App>) {
 // watchlist and tiles
 // ---------------------------------------------------------------------------
 
-pub const TILES_MAX: usize = 12;
-
-fn refresh_quote_symbols(app: &Arc<App>, what: &str, sym: &str) -> bool {
-    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return false };
-    let (today_s, now, stamp) = bagholder_market::clock_now();
-    match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::markets::quote_symbols(&b), &today_s, now, &stamp) {
-        Ok(_) => {
-            true
-        }
-        Err(e) => {
-            if what == "watchlist" {
-                log(&format!("bagholder watchlist: quote for {} failed: {}", sym, e));
-            } else {
-                log(&format!("bagholder tiles: quotes failed: {}", e));
-            }
-            false
-        }
+/// A watched listing's sector, read once when it is added, from the same public
+/// sources a holding's record is (an instrument of the directory and a coin have
+/// none to read).
+pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
+    if instruments::find(&n.symbol, &n.exchange).is_some() || n.exchange.eq_ignore_ascii_case("CRYPTO") {
+        return;
     }
-}
-
-/// `POST /api/watchlist/add`, `POST /api/watchlist/remove`: refused, or the
-/// watchlist as it stands after.
-#[derive(Clone, Debug, Serialize, ts_rs::TS)]
-#[serde(untagged)]
-pub enum WatchlistAnswer {
-    Ok {
-        #[ts(type = "true")]
-        ok: bool,
-        watchlist: Vec<bagholder_store::feeds::WatchedListing>,
-    },
-    Err {
-        #[ts(type = "false")]
-        ok: bool,
-        error: String,
-    },
-}
-
-impl WatchlistAnswer {
-    fn err(e: impl Into<String>) -> WatchlistAnswer {
-        WatchlistAnswer::Err { ok: false, error: e.into() }
-    }
-}
-
-pub fn watch_add(app: &Arc<App>, body: &crate::http::markets::WatchlistBody) -> WatchlistAnswer {
-    let sym = tmx_symbol(&body.symbol);
-    if sym.is_empty() {
-        return WatchlistAnswer::err("symbol required");
-    }
-    let ex = body.exchange.clone();
-    let inst = instruments::find(&sym, &ex);
-    let c = match conn(app) { Some(c) => c, None => return WatchlistAnswer::err("store unavailable") };
-    let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| body.name.clone().unwrap_or_default());
-    let ccy = inst.map(|i| i.currency.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| body.currency.clone().unwrap_or_default());
-    let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &body.security_id.clone().unwrap_or_default(), &now_iso()).ok().flatten().unwrap_or_default();
-    let is_inst = inst.is_some();
-    let crypto = ex.to_uppercase() == "CRYPTO";
-    let sym2 = sym.clone();
+    let (symbol, exchange, currency) = (tmx_symbol(&n.symbol), n.exchange.clone(), n.currency.clone());
     let a = app.clone();
-    spawn("watch-fetch", move || {
-        // its quote and its sector, from the same public sources a holding uses
-        refresh_quote_symbols(&a, "watchlist", &sym2);
-        if is_inst || crypto {
-            return;
-        }
+    spawn("watch-sector", move || {
         if let Some(c) = conn(&a) {
             let ctx = exposure::Ctx { conn: &c, pool: a.store(), today: today() };
-            exposure::share_exposure(&ctx, &row.symbol, &row.exchange, &row.currency);
+            exposure::share_exposure(&ctx, &symbol, &exchange, &currency);
         }
     });
-    WatchlistAnswer::Ok { ok: true, watchlist: sf::list_watchlist(&c).unwrap_or_default() }
 }
 
-pub fn watch_remove(app: &Arc<App>, body: &crate::http::markets::WatchlistBody) -> WatchlistAnswer {
-    let sym = tmx_symbol(&body.symbol);
-    if sym.is_empty() {
-        return WatchlistAnswer::err("symbol required");
-    }
-    let c = match conn(app) { Some(c) => c, None => return WatchlistAnswer::err("store unavailable") };
-    let ex = body.exchange.clone();
-    let _ = sf::remove_watch(&c, &sym, &ex);
-    // a row kept under Wealthsimple's form
-    let _ = sf::remove_watch(&c, &body.symbol.trim().to_uppercase(), &ex);
-    let _ = sf::forget_news(&c, &sym, &ex);
-    WatchlistAnswer::Ok { ok: true, watchlist: sf::list_watchlist(&c).unwrap_or_default() }
-}
-
-/// `POST /api/tiles/set`: refused, or the tab's row as it stands after.
-#[derive(Clone, Debug, Serialize, ts_rs::TS)]
-#[serde(untagged)]
-pub enum TilesAnswer {
-    Ok {
-        #[ts(type = "true")]
-        ok: bool,
-        tiles: Vec<bagholder_model::wire::MarketTile>,
-    },
-    Err {
-        #[ts(type = "false")]
-        ok: bool,
-        error: String,
-    },
-}
-
-/// The Markets tab's tile row, only instruments the
-/// directory knows, twelve at most.
-pub fn tiles_set(app: &Arc<App>, tiles: &[bagholder_model::input::TileRef]) -> TilesAnswer {
-    let mut rows: Vec<bagholder_model::input::TileRef> = Vec::new();
-    let mut seen: HashSet<&'static str> = HashSet::new();
-    for r in tiles {
-        if let Some(inst) = instruments::find(&r.symbol, &r.exchange) {
-            if seen.insert(inst.symbol) {
-                rows.push(bagholder_model::input::TileRef { symbol: inst.symbol.to_string(), exchange: inst.exchange.to_string() });
-            }
-        }
-    }
-    if rows.len() > TILES_MAX {
-        return TilesAnswer::Err { ok: false, error: format!("at most {} tiles", TILES_MAX) };
-    }
-    let c = match conn(app) { Some(c) => c, None => return TilesAnswer::Err { ok: false, error: "store unavailable".into() } };
-    let _ = bagholder_store::admin::save_tiles(&c, &rows);
-    let a = app.clone();
-    spawn("tiles-fetch", move || {
-        refresh_quote_symbols(&a, "tiles", "");
-    });
-    let tiles = base(app).map(|b| bagholder_model::markets::tile_rows(&b)).unwrap_or_default();
-    TilesAnswer::Ok { ok: true, tiles }
+/// Forget the news read for a listing no longer watched.
+pub fn forget_news(app: &Arc<App>, symbol: &str, exchange: &str) -> Result<(), String> {
+    let c = conn(app).ok_or("the store could not be opened")?;
+    sf::forget_news(&c, &tmx_symbol(symbol), exchange).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -704,13 +601,13 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymb
         }
     }
     if has("watched") || has("all") {
-        if let Some(c) = conn(app) {
-            rows.extend(sf::list_watchlist(&c).unwrap_or_default().into_iter().map(|w| FilingCandidate {
-                symbol: w.symbol,
-                exchange: w.exchange,
-                currency: w.currency,
+        if let Some(b) = base(app) {
+            rows.extend(b.watchlist.iter().map(|w| FilingCandidate {
+                symbol: w.symbol.clone(),
+                exchange: w.exchange.clone(),
+                currency: w.currency.clone(),
                 kind: String::new(),
-                name: w.name,
+                name: w.name.clone(),
             }));
         }
     }
@@ -858,6 +755,48 @@ pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> FilingsFeed {
     FilingsFeed { ok: true, scope: key, filings: rows, reading: enrich::summary_available() }
 }
 
+/// The issuers' own news releases as they filed them, for the News card's
+/// Releases tab: every listing's in `scope` (`all`, `holdings`, `watchlist`), or
+/// the chip's listing's alone. Read as stored, a named document's title as its
+/// name gives it, and nothing written: a title is read by the disclosures'
+/// own reading.
+pub fn filed_releases(app: &Arc<App>, scope: &str, chip: Option<(&str, &str)>) -> Result<Vec<crate::wire::news::FiledRelease>, String> {
+    let c = conn(app).ok_or("the store could not be opened")?;
+    let listings: Vec<(String, String)> = match chip {
+        Some((symbol, exchange)) => vec![(symbol.trim().to_uppercase(), exchange.to_string())],
+        None => known_filing_symbols(app, &feed_scope(scope)).into_iter().map(|f| (f.symbol, f.exchange)).collect(),
+    };
+    let reading = enrich::summary_available();
+    let mut out = Vec::new();
+    for (symbol, exchange) in listings {
+        for mut r in sf::filings_for(&c, &symbol).map_err(|e| e.to_string())? {
+            if !is_news_release(&r) {
+                continue;
+            }
+            if r.enrich_version.unwrap_or(0) < ENRICH_VERSION {
+                r.subject = String::new();
+            }
+            if r.subject.is_empty() {
+                if let Some(t) = disclosures::quick_title(&r.doc) {
+                    r.subject = t;
+                }
+            }
+            out.push(crate::wire::news::FiledRelease {
+                pending: r.subject.is_empty() && !r.enrich_final && reading,
+                id: r.doc.id.clone(),
+                symbol: symbol.clone(),
+                exchange: exchange.clone(),
+                subject: r.subject.clone(),
+                form: r.doc.form.clone(),
+                source: r.doc.source.as_str().to_string(),
+                url: r.doc.url.clone(),
+                date: r.doc.date.clone(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// A filed document that is the company's own
 /// press release.
 pub fn is_news_release(filing: &Filing) -> bool {
@@ -893,7 +832,9 @@ pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Optio
         }
     }
     if scopes.iter().any(|x| x == "watched") {
-        return sf::list_watchlist(c).map(|w| w.iter().any(|w| same(&w.symbol))).unwrap_or(false);
+        if let Some(b) = base(app) {
+            return b.watchlist.iter().any(|w| same(&w.symbol));
+        }
     }
     false
 }
@@ -2068,6 +2009,110 @@ pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str,
     Some(stored)
 }
 
+/// One report of the position sold short.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, Diff)]
+#[diff(key = date)]
+pub struct ShortReport {
+    pub date: String,
+    pub shares: crate::wire::Dec,
+}
+
+/// One listing's short selling as the page is sent it: every share count the
+/// regulator states as exact decimal text, and the ratios the cards draw worked
+/// out here (`docs/plans/stage-5-interface-and-running.md`, A2).
+#[derive(Clone, Debug, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+#[diff(key = symbol)]
+pub struct ShortsView {
+    pub symbol: String,
+    pub exchange: String,
+    pub market: bagholder_store::feeds::ShortMarket,
+    pub name: String,
+    pub as_of: String,
+    /// The position sold short.
+    pub shares: Option<crate::wire::Dec>,
+    pub previous: Option<crate::wire::Dec>,
+    pub previous_of: String,
+    pub change: Option<crate::wire::Dec>,
+    pub float: Option<crate::wire::Dec>,
+    /// The float not sold short: the float less the position.
+    pub unshorted: Option<crate::wire::Dec>,
+    /// The position over the float, as a fraction.
+    pub of_float: Option<f64>,
+    pub average_volume: Option<crate::wire::Dec>,
+    pub days_to_cover: Option<f64>,
+    pub volume_of: String,
+    pub volume_span: Option<bagholder_store::feeds::VolumeSpan>,
+    pub short_volume: Option<crate::wire::Dec>,
+    pub total_volume: Option<crate::wire::Dec>,
+    /// The shares traded that were not sold short.
+    pub long_volume: Option<crate::wire::Dec>,
+    /// The short volume over the total, as a fraction.
+    pub of_volume: Option<f64>,
+    /// The reports behind the position, oldest first; `None` where they were not read.
+    pub series: Option<Vec<ShortReport>>,
+    pub fetched_at: String,
+}
+
+/// A share count the earlier store keeps as a float, as the exact decimal it was
+/// read as: a count is a whole number far inside a float's exact range, and the
+/// shortest text that reads back as the float is the source's own.
+fn count_of(what: &str, symbol: &str, v: Option<f64>) -> Result<Option<crate::wire::Dec>, String> {
+    match v {
+        None => Ok(None),
+        Some(x) if x.is_finite() => bagholder_core::Dec::parse(&format!("{x}")).map(|d| Some(crate::wire::Dec(d))).map_err(|e| format!("{symbol}'s {what} {x}: {e}")),
+        Some(x) => Err(format!("{symbol}'s {what} is {x}, not a count")),
+    }
+}
+
+impl ShortsView {
+    pub fn of(r: &StoredShorts) -> Result<ShortsView, String> {
+        let s = &r.shorts;
+        let sym = s.symbol.as_str();
+        let shares = count_of("short position", sym, s.shares)?;
+        let float = count_of("float", sym, s.float)?;
+        let short_volume = count_of("short volume", sym, s.short_volume)?;
+        let total_volume = count_of("volume", sym, s.total_volume)?;
+        let less = |a: Option<crate::wire::Dec>, b: Option<crate::wire::Dec>| -> Result<Option<crate::wire::Dec>, String> {
+            match (a, b) {
+                (Some(a), Some(b)) => a.0.checked_sub(b.0).map(|d| Some(crate::wire::Dec(d))).map_err(|e| format!("{sym}: {e}")),
+                _ => Ok(None),
+            }
+        };
+        let over = |a: Option<crate::wire::Dec>, b: Option<crate::wire::Dec>| match (a, b) {
+            (Some(a), Some(b)) if !b.0.is_zero() => Some(a.0.to_f64() / b.0.to_f64()),
+            _ => None,
+        };
+        Ok(ShortsView {
+            symbol: s.symbol.clone(),
+            exchange: s.exchange.clone(),
+            market: s.market,
+            name: s.name.clone(),
+            as_of: s.as_of.clone(),
+            shares,
+            previous: count_of("previous short position", sym, s.previous)?,
+            previous_of: s.previous_of.clone(),
+            change: count_of("change in the short position", sym, s.change)?,
+            float,
+            unshorted: less(float, shares)?,
+            of_float: over(shares, float),
+            average_volume: count_of("average volume", sym, s.average_volume)?,
+            days_to_cover: s.days_to_cover,
+            volume_of: s.volume_of.clone(),
+            volume_span: s.volume_span,
+            short_volume,
+            total_volume,
+            long_volume: less(total_volume, short_volume)?,
+            of_volume: over(short_volume, total_volume),
+            series: match &s.series {
+                None => None,
+                Some(points) => Some(points.iter().map(|p| Ok(ShortReport { date: p.date.clone(), shares: count_of("reported position", sym, Some(p.shares))?.expect("a count given") })).collect::<Result<Vec<_>, String>>()?),
+            },
+            fetched_at: r.fetched_at.clone(),
+        })
+    }
+}
+
 /// What `shorts_payload` sends a page asking for one listing's short selling.
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2075,7 +2120,7 @@ pub struct ShortsPayload {
     #[ts(type = "true")]
     pub ok: bool,
     pub covered: bool,
-    pub shorts: Option<StoredShorts>,
+    pub shorts: Option<ShortsView>,
 }
 
 /// `GET /api/shorts`.
@@ -2138,11 +2183,11 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
                     read_shorts(&a, &s2, &e2, &c2, true, &n2);
                 });
             }
-            return Ok(ShortsPayload { ok: true, covered: true, shorts: Some(held) });
+            return Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&held)?) });
         }
     }
     match read_shorts(app, &sym, &ex, &ccy, trend, &listed_as) {
-        Some(rec) => Ok(ShortsPayload { ok: true, covered: true, shorts: Some(rec) }),
+        Some(rec) => Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&rec)?) }),
         None => Ok(ShortsPayload { ok: true, covered: false, shorts: None }),
     }
 }
@@ -2155,7 +2200,7 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
 pub struct ShortsFeedRow {
     #[serde(flatten)]
     #[ts(flatten)]
-    pub shorts: StoredShorts,
+    pub shorts: ShortsView,
     pub position_id: Option<String>,
     pub held: bool,
     pub watched: bool,
@@ -2200,7 +2245,10 @@ pub fn shorts_feed(app: &Arc<App>) -> ShortsFeed {
         }
         r.shorts.name = if source.name.is_empty() { r.shorts.name.clone() } else { source.name.clone() };
         r.shorts.exchange = if source.exchange.is_empty() { key.1.clone() } else { source.exchange.clone() };
-        rows.push(ShortsFeedRow { position_id: source.position_id.clone(), held: held.contains_key(&key), watched: watched.contains_key(&key), shorts: r });
+        match ShortsView::of(&r) {
+            Ok(v) => rows.push(ShortsFeedRow { position_id: source.position_id.clone(), held: held.contains_key(&key), watched: watched.contains_key(&key), shorts: v }),
+            Err(e) => feed_failed(app, "shorts", e),
+        }
     }
     ShortsFeed { ok: true, rows, reading: app.feeds.shorts_left.load(Ordering::SeqCst) > 0 }
 }
@@ -2233,9 +2281,14 @@ pub enum ListingAnswer {
         #[serde(rename = "securityId")]
         security_id: String,
         fills: Vec<crate::wire::figures::Fill>,
-        price: Option<f64>,
+        /// Its price for a glance, where its source gave one.
+        price: Option<crate::wire::Dec>,
+        /// The day's change, as a fraction.
         #[serde(rename = "percentChange")]
         percent_change: Option<f64>,
+        /// Why there is no price, when its source did not answer.
+        #[serde(rename = "priceFailed")]
+        price_failed: Option<String>,
     },
 }
 
@@ -2252,13 +2305,12 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
     if sym.is_empty() {
         return ListingAnswer::err("symbol required");
     }
-    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return ListingAnswer::err("store unavailable") };
+    let Some(b) = base(app) else { return ListingAnswer::err("store unavailable") };
     let Some(f) = app.figures.get() else { return ListingAnswer::err("the figures are not open") };
     let names = match f.names() {
         Ok(n) => n,
         Err(e) => return ListingAnswer::err(e),
     };
-    let day = today();
     let named = |symbol: &str| tmx_symbol(symbol).trim().to_uppercase() == sym;
     // the book's holdings and trades of that ticker, by the figures' own ids
     let Some((positions, trades)) = f.read(|e| crate::wire::build::listed(e, &names, &named)) else { return ListingAnswer::err("no page has stated its zone yet") };
@@ -2267,9 +2319,7 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
         log(&format!("bagholder: the book's securities could not be read for {sym}: {e}"));
         vec![]
     });
-    listing_payload_in(&securities, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|rec| {
-        bagholder_market::quotes::peek_quote(&c, rec, &day)
-    })
+    listing_payload_in(&securities, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|s, ex, ccy| crate::following::glance(app, s, ex, ccy))
 }
 
 /// A row of the book as the listing page reads it: a holding, a trade or a watched listing.
@@ -2296,7 +2346,7 @@ pub fn listing_payload_in(
     exchange: &str,
     currency: &str,
     name: &str,
-    peek_quote: &dyn Fn(&bagholder_model::input::Listing) -> Option<bagholder_market::quotes::Glance>,
+    glance: &dyn Fn(&str, &str, &str) -> Result<crate::following::Glanced, String>,
 ) -> ListingAnswer {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
     if sym.is_empty() {
@@ -2341,13 +2391,17 @@ pub fn listing_payload_in(
             if !known.name.is_empty() { known.name.clone() } else if meta.0 != sym { meta.0.clone() } else { String::new() }
         }
     };
-    let (mut price, mut percent_change) = (None, None);
+    let (mut price, mut percent_change, mut price_failed) = (None, None, None);
     if kind == "Shares" {
-        let q = peek_quote(&bagholder_model::input::Listing::new(sym.clone(), ex.clone(), ccy.clone(), kind.clone())).unwrap_or_default();
-        price = q.price;
-        percent_change = q.percent_change;
+        match glance(&sym, &ex, &ccy) {
+            Ok(g) => {
+                price = Some(g.price);
+                percent_change = g.percent_change;
+            }
+            Err(e) => price_failed = Some(e),
+        }
     }
-    ListingAnswer::Full { ok: true, symbol: sym, exchange: ex, currency: ccy, kind, name: nm, security_id: known.security_id.clone(), fills, price, percent_change }
+    ListingAnswer::Full { ok: true, symbol: sym, exchange: ex, currency: ccy, kind, name: nm, security_id: known.security_id.clone(), fills, price, percent_change, price_failed }
 }
 
 /// The shares held and the listings watched whose
@@ -2567,20 +2621,6 @@ pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
     app.root.join("ledger.html")
 }
 
-/// Prices for the watched listings and the Markets tiles: what the market's
-/// context shows. A holding's price is the figure path's (`due.rs`).
-pub fn refresh_quotes(app: &Arc<App>) -> usize {
-    app.single_flight("quotes", 0, || {
-        let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return 0 };
-        let syms = bagholder_model::markets::quote_symbols(&b);
-        let (today_s, now, stamp) = bagholder_market::clock_now();
-        let n = bagholder_market::quotes::refresh_quotes(&c, &syms, &today_s, now, &stamp).unwrap_or(0);
-        if n > 0 {
-        }
-        n
-    })
-}
-
 /// A few instruments per call.
 pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String> {
     app.single_flight("archive", vec![], || {
@@ -2662,22 +2702,6 @@ pub fn archive_loop(app: Arc<App>) {
             batch = (batch * 2).min(history::ARCHIVE_BATCH);
         }
         delay = ARCHIVE_MIN_SEC.max(spent * ARCHIVE_DUTY);
-    }
-}
-
-/// The watchlist's and the Markets tiles' prices, every QUOTE_REFRESH_MINUTES,
-/// while a page shows the Markets tab.
-pub fn quote_loop(app: Arc<App>) {
-    // The exchanges offer no push, so prices are asked for; but only while a page
-    // shows them. Parked, at no cost, until a page opens the Markets tab; then read
-    // at once and each minute while one shows it. Which
-    // listings are asked is narrowed again by whether their market can have moved
-    // (`market::quotes::can_have_moved`).
-    while app.events.park_until(&app, || app.events.showing(&["markets"])) {
-        refresh_quotes(&app);
-        if app.wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
-            return;
-        }
     }
 }
 
@@ -3609,19 +3633,50 @@ mod tests {
     const LATER: &str = "2026-04-09T15:02:00Z";
     const EARLIER: &str = "2026-01-05T14:40:00Z";
 
-    fn listing(positions: &[Value], trades: &[Value], watchlist: &[Value], q: (f64, f64), args: (&str, &str, &str, &str)) -> Value {
+    fn listing(positions: &[Value], trades: &[Value], watchlist: &[Value], q: (&str, f64), args: (&str, &str, &str, &str)) -> Value {
         let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(row).collect() };
         let (positions, trades, watchlist) = (&rows(positions), &rows(trades), &rows(watchlist));
-        let quote = move |_: &bagholder_model::input::Listing| {
-            Some(bagholder_market::quotes::Glance { price: Some(q.0), percent_change: Some(q.1), ..Default::default() })
+        let quote = move |_: &str, _: &str, _: &str| -> Result<crate::following::Glanced, String> {
+            Ok(crate::following::Glanced { price: bagholder_core::Dec::parse(q.0).unwrap().into(), change: None, percent_change: Some(q.1) })
         };
         serde_json::to_value(listing_payload_in(&[], positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)).unwrap()
+    }
+
+    /// Each share count as the decimal the source stated, the float's rest and the
+    /// short volume's rest worked out exactly, the two ratios the cards draw as
+    /// fractions; a count that is not a number fails the whole reading.
+    #[test]
+    fn test_short_selling_is_sent_in_exact_counts_with_its_ratios() {
+        use bagholder_store::feeds::{ShortMarket, ShortPoint, Shorts};
+        let stored = |shares: f64| StoredShorts {
+            shorts: Shorts {
+                symbol: "QNC".into(), exchange: "TSX-V".into(), market: ShortMarket::Ca, name: "Quantum eMotion".into(), as_of: "2026-09-15".into(),
+                shares: Some(shares), previous: Some(1_150_000.0), previous_of: "2026-08-31".into(), change: Some(shares - 1_150_000.0),
+                float: Some(160_000_000.0), of_float: Some(0.75), average_volume: Some(812_345.5), days_to_cover: Some(1.48),
+                volume_of: "2026-09-12".into(), volume_span: None, short_volume: Some(210_000.0), total_volume: Some(900_000.0), volume_pct: Some(23.3),
+                series: Some(vec![ShortPoint { date: "2026-08-31".into(), shares: 1_150_000.0 }]),
+            },
+            fetched_at: "2026-09-15T14:00:00Z".into(),
+            read_version: 1,
+        };
+        let v = serde_json::to_value(ShortsView::of(&stored(1_200_000.0)).unwrap()).unwrap();
+        assert_eq!((&v["shares"], &v["change"], &v["float"], &v["unshorted"], &v["averageVolume"]), (&json!("1200000"), &json!("50000"), &json!("160000000"), &json!("158800000"), &json!("812345.5")));
+        assert_eq!((&v["shortVolume"], &v["longVolume"], &v["series"]), (&json!("210000"), &json!("690000"), &json!([{"date": "2026-08-31", "shares": "1150000"}])));
+        assert_eq!((v["ofFloat"].as_f64(), v["ofVolume"].as_f64()), (Some(0.0075), Some(210_000.0 / 900_000.0)));
+        assert!(ShortsView::of(&stored(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn test_a_listing_whose_quote_fails_says_so_in_place_of_the_price() {
+        let failed = |_: &str, _: &str, _: &str| -> Result<crate::following::Glanced, String> { Err("Yahoo answered 429".into()) };
+        let out = serde_json::to_value(listing_payload_in(&[], &[], &[], &[], "RY", "TSX", "CAD", "", &failed)).unwrap();
+        assert_eq!((&out["ok"], &out["price"], &out["priceFailed"]), (&json!(true), &Value::Null, &json!("Yahoo answered 429")));
     }
 
     #[test]
     fn test_a_listing_the_book_holds_answers_with_the_holding_whose_page_it_is() {
         let held = [json!({"id": "rt:1", "symbol": "QNC", "exchange": "TSX-V", "currency": "CAD", "kind": "Shares", "name": "Quantum eMotion Corp"})];
-        let out = listing(&held, &[], &[], (1.25, -2.0), ("QNC", "TSX-V", "", ""));
+        let out = listing(&held, &[], &[], ("1.25", -0.02), ("QNC", "TSX-V", "", ""));
         assert_eq!((&out["ok"], &out["positionId"]), (&json!(true), &json!("rt:1")));
     }
 
@@ -3635,42 +3690,42 @@ mod tests {
                    "fills": [fill("2026-02-02T14:00:00Z", "BUY", 1.0, 1.1)]}),
             json!({"id": "t4", "symbol": "QNC", "exchange": "NYSE", "currency": "USD", "kind": "Shares", "fills": [fill("2026-02-03T14:00:00Z", "BUY", 9.0, 2.2)]}),
         ];
-        let out = listing(&[], &trades, &[], (1.8, 1.5), ("QNC", "TSX-V", "", ""));
+        let out = listing(&[], &trades, &[], ("1.80", 0.015), ("QNC", "TSX-V", "", ""));
         assert!(out.get("positionId").map(|v| v.is_null()).unwrap_or(true));
         let whens: Vec<String> = out["fills"].as_array().unwrap().iter().map(|x| f(x, "when")).collect();
         assert_eq!(whens, [EARLIER, FILL, LATER], "the listing's own trades, oldest first; an option is not the share, and another venue is another listing");
         assert_eq!((f(&out, "name"), f(&out, "exchange"), f(&out, "currency"), f(&out, "kind")),
                    ("Quantum eMotion Corp".into(), "TSX-V".into(), "CAD".into(), "Shares".into()));
-        assert_eq!((out["price"].as_f64(), out["percentChange"].as_f64()), (Some(1.8), Some(1.5)));
+        assert_eq!((out["price"].as_str(), out["percentChange"].as_f64()), (Some("1.8"), Some(0.015)));
     }
 
     #[test]
     fn test_a_listing_never_traded_is_named_by_the_watchlist_and_has_no_executions() {
         let watch = [json!({"symbol": "YES", "exchange": "TSX-V", "currency": "CAD", "kind": "Shares", "name": "Char Technologies Ltd."})];
-        let out = listing(&[], &[], &watch, (0.265, 0.0), ("YES", "TSX-V", "", ""));
+        let out = listing(&[], &[], &watch, ("0.265", 0.0), ("YES", "TSX-V", "", ""));
         assert_eq!(out["fills"], json!([]));
         assert_eq!((f(&out, "name"), f(&out, "currency")), ("Char Technologies Ltd.".into(), "CAD".into()));
     }
 
     #[test]
     fn test_a_listing_the_book_has_never_seen_answers_with_what_was_asked_for() {
-        let out = listing(&[], &[], &[], (284.21, -0.34), ("RY", "TSX", "CAD", "Royal Bank of Canada"));
+        let out = listing(&[], &[], &[], ("284.21", -0.0034), ("RY", "TSX", "CAD", "Royal Bank of Canada"));
         assert_eq!((&out["ok"], f(&out, "symbol"), f(&out, "exchange"), f(&out, "name"), &out["fills"]),
                    (&json!(true), "RY".into(), "TSX".into(), "Royal Bank of Canada".into(), &json!([])));
-        assert_eq!(out["price"].as_f64(), Some(284.21));
+        assert_eq!(out["price"].as_str(), Some("284.21"));
     }
 
     #[test]
     fn test_a_ticker_with_no_venue_matches_the_book_whatever_venue_it_holds_it_on() {
         let trades = [json!({"id": "t1", "symbol": "SHOP.TO", "exchange": "TSX", "currency": "CAD", "kind": "Shares", "name": "Shopify Inc.",
                              "fills": [fill(FILL, "BUY", 10.0, 5.0)]})];
-        let out = listing(&[], &trades, &[], (1.25, -2.0), ("SHOP", "", "", ""));
+        let out = listing(&[], &trades, &[], ("1.25", -0.02), ("SHOP", "", "", ""));
         assert_eq!((f(&out, "symbol"), f(&out, "exchange"), f(&out, "name")), ("SHOP".into(), "TSX".into(), "Shopify Inc.".into()));
         assert_eq!(out["fills"].as_array().unwrap().len(), 1);
     }
 
     #[test]
     fn test_a_ticker_that_is_not_one_is_refused() {
-        assert_eq!(listing(&[], &[], &[], (1.25, -2.0), ("  ", "", "", ""))["ok"], false);
+        assert_eq!(listing(&[], &[], &[], ("1.25", -0.02), ("  ", "", "", ""))["ok"], false);
     }
 }

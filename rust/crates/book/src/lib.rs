@@ -21,6 +21,7 @@ pub mod schema;
 pub mod settings;
 pub mod statements;
 pub mod trades;
+pub mod watched;
 pub mod zones;
 
 mod text;

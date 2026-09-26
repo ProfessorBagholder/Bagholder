@@ -25,6 +25,34 @@ pub fn market_of(mic: Option<&str>) -> Option<Market> {
     }
 }
 
+/// The market identifier code of a venue as a broker, a directory or a person
+/// writes it in words (`TSX-V`, `NASDAQ`, `Cboe Canada`); none for words no venue
+/// here is known by.
+pub fn mic_of(words: &str) -> Option<&'static str> {
+    match words.trim().to_ascii_uppercase().as_str() {
+        "TSX" | "XTSE" => Some("XTSE"),
+        "TSX-V" | "TSXV" | "TSX VENTURE" | "XTSX" => Some("XTSX"),
+        "CSE" | "XCNQ" => Some("XCNQ"),
+        "CBOE CANADA" | "CBOE CA" | "NEO" | "NEOE" => Some("NEOE"),
+        "ALPHA" | "ALPHA EXCHANGE" | "XATS" => Some("XATS"),
+        "NASDAQ" | "XNAS" => Some("XNAS"),
+        "NYSE" | "XNYS" => Some("XNYS"),
+        "NYSE ARCA" | "ARCA" | "ARCX" => Some("ARCX"),
+        "NYSE AMERICAN" | "AMEX" | "XASE" => Some("XASE"),
+        "BATS" | "CBOE BZX" => Some("BATS"),
+        _ => None,
+    }
+}
+
+/// The currency a venue's listings trade in, where the venue says it.
+pub fn currency_of(mic: &str) -> Option<bagholder_core::Currency> {
+    match market_of(Some(mic))? {
+        Market::Canada | Market::CboeCanada => Some(bagholder_core::Currency::CAD),
+        Market::UnitedStates => Some(bagholder_core::Currency::USD),
+        _ => None,
+    }
+}
+
 /// The symbol without a Yahoo venue suffix a record may carry (`ENB.TO` → `ENB`).
 /// A class or unit suffix (`BBD.A`, `BEP.UN`) is part of the symbol and stays.
 pub fn root(symbol: &str) -> String {
@@ -106,6 +134,17 @@ pub fn yahoo_forms(symbol: &str, mic: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_venue_in_words_is_its_code_and_its_market_s_currency() {
+        assert_eq!(mic_of("TSX-V"), Some("XTSX"));
+        assert_eq!(mic_of("Cboe Canada"), Some("NEOE"));
+        assert_eq!(mic_of(" nasdaq "), Some("XNAS"));
+        assert_eq!(mic_of("CRYPTO"), None);
+        assert_eq!(currency_of("XCNQ"), Some(bagholder_core::Currency::CAD));
+        assert_eq!(currency_of("BATS"), Some(bagholder_core::Currency::USD));
+        assert_eq!(currency_of("XLON"), None);
+    }
 
     #[test]
     fn a_record_suffix_is_dropped_and_a_class_kept() {

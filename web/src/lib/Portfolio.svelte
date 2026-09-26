@@ -1,6 +1,6 @@
 <script lang="ts">
   import { roll } from './actions/roll'
-  import type { PositionsDoc, ExposureDoc } from './model'
+  import type { PositionsDoc, ExposureDoc, Slice } from './model'
   import { money0, signedMoney, pct, pctPlain, px, cls, color, waiting } from './fmt'
   import { waits } from './dec'
   import { symText } from './sym'
@@ -70,15 +70,15 @@
   const allocItems = $derived<DonutItem[]>((pf.allocation || []).map((x, i) => ({ label: x.label, v: x.value, share: x.share, color: 'var(--pie-' + ((i % 11) + 1) + ')' })))
 
   // --- Sectors / Regions donuts (exposureSlices) ---
-  // the server folds the long tail into `Other (n)` and puts what is not classified last
-  type ExpRow = { name: string; value: number; share: number }
+  // the server folds the long tail into `Other (n)`, puts what is not classified last,
+  // and sends only slices worth something, each with its share
   const UNCLASSIFIED = 'Not classified'
-  function exposureSlices(rows: ExpRow[]): DonutItem[] {
-    return rows.map((x, i) => ({ label: x.name, v: x.value, share: x.share, color: x.name === UNCLASSIFIED ? 'rgba(var(--ink-rgb),.28)' : 'var(--pie-' + ((i % 11) + 1) + ')' }))
+  function exposureSlices(rows: Slice[]): DonutItem[] {
+    return rows.map((x, i) => ({ label: x.label, v: x.value, share: x.share, color: x.label === UNCLASSIFIED ? 'rgba(var(--ink-rgb),.28)' : 'var(--pie-' + ((i % 11) + 1) + ')' }))
   }
   // the classified names the positions cover: the server's `Other (n)` counts as its n
-  const expCount = (rows: ExpRow[]) =>
-    String(rows.filter((x) => x.name !== UNCLASSIFIED && x.value > 0).reduce((n, x) => n + (Number(/^Other \((\d+)\)$/.exec(x.name)?.[1]) || 1), 0))
+  const expCount = (rows: Slice[]) =>
+    String(rows.filter((x) => x.label !== UNCLASSIFIED).reduce((n, x) => n + (Number(/^Other \((\d+)\)$/.exec(x.label)?.[1]) || 1), 0))
   const sec = $derived(exposureSlices(exposure.sectors))
   const reg = $derived(exposureSlices(exposure.regions))
 

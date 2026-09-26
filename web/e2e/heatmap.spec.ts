@@ -3,11 +3,16 @@ import { openWithStatus, ready, saidShown } from './helpers'
 
 // SPEC §3 Markets, "The heatmap on its own" and "The slideshow".
 
-const tile = (symbol: string, sector: string) => ({ id: null, symbol, exchange: 'NYSE', name: symbol, value: 100, percentChange: 1.2, sector })
-const withUs = (m: Record<string, unknown>) => {
-  const mk = m.markets as { universes: Record<string, unknown[]> }
-  mk.universes = { ...mk.universes, us: [tile('AAA', 'Technology'), tile('BBB', 'Energy')], ca: [], intl: [] }
-}
+// The heatmap document as the server sends it: its sector blocks, each tile with its key,
+// and how many tiles each universe has.
+type Tile = { key: string; id: string | null; symbol: string; exchange: string; currency: string; name: string; value: string; percentChange: number | null; other: boolean }
+const tile = (symbol: string, value = '100', other = false, key = symbol): Tile => ({ key, id: null, symbol, exchange: other ? '' : 'NYSE', currency: other ? '' : 'USD', name: other ? '' : symbol, value, percentChange: 0.012, other })
+const block = (label: string, tiles: Tile[], value = '200') => ({ label, value, percentChange: 0.012, tiles })
+const counts = (c: Partial<Record<'holdings' | 'watchlist' | 'both' | 'ca' | 'us' | 'intl', number>> = {}) => ({ holdings: 0, watchlist: 0, both: 0, ca: 0, us: 0, intl: 0, ...c })
+const heatmapDoc = (universe: string, size: string, blocks: ReturnType<typeof block>[], n = counts()) => ({ universe, size, blocks, counts: n })
+// the US universe read, Canada's and the international one not; the book holds something
+const usRead = { heatmap: heatmapDoc('us', 'value', [block('Technology', [tile('AAA')]), block('Energy', [tile('BBB')])], counts({ holdings: 3, both: 3, us: 2 })) }
+const nothingRead = { heatmap: heatmapDoc('us', 'value', [], counts({ holdings: 3, both: 3 })) }
 
 test('the card opens it at an address that says what it shows; × and Esc return to Markets', async ({ page }) => {
   await page.goto('/#markets')
@@ -34,7 +39,7 @@ test('the card opens it at an address that says what it shows; × and Esc return
 })
 
 test('an address is read into the view and remembered; a control rewrites it without a history entry', async ({ page, request }) => {
-  await openWithStatus(page, request, {}, '#heatmap/us/equal', withUs)
+  await openWithStatus(page, request, {}, '#heatmap/us/equal', () => {}, usRead)
   await expect(page.locator('#heatFull .mseg-opt.on', { hasText: 'US' })).toBeVisible()
   await expect(page.locator('#heatFull .mseg-opt.on', { hasText: 'Equal' })).toBeVisible()
   await expect(page.locator('#heatFull')).toContainText('AAA')
@@ -52,7 +57,7 @@ test('an address is read into the view and remembered; a control rewrites it wit
 
 test('a list of scopes with a dwell cycles through those with something to show; a scope picked by hand stops it', async ({ page, request }) => {
   await page.clock.install()
-  await openWithStatus(page, request, {}, '#heatmap/holdings,ca,us/value/20', withUs)
+  await openWithStatus(page, request, {}, '#heatmap/holdings,ca,us/value/20', () => {}, usRead)
   const lit = page.locator('#heatFull .mseg-opt.on').first()
   await expect(lit).toHaveText('Holdings')
   await expect(page.getByRole('button', { name: 'Stop cycling' })).toBeVisible()
@@ -70,7 +75,7 @@ test('a list of scopes with a dwell cycles through those with something to show;
 })
 
 test('the play button starts a cycle over every scope at twenty seconds and writes it in the address; pressed again, it stops', async ({ page, request }) => {
-  await openWithStatus(page, request, {}, '#heatmap/holdings/value', withUs)
+  await openWithStatus(page, request, {}, '#heatmap/holdings/value', () => {}, usRead)
   await page.getByRole('button', { name: 'Cycle through the scopes' }).click()
   await expect(page).toHaveURL(/#heatmap\/holdings,watchlist,both,ca,us,intl\/value\/20$/)
   await page.getByRole('button', { name: 'Stop cycling' }).click()
@@ -89,10 +94,7 @@ const universesIn = (docs: string[] | undefined) => (docs ?? []).filter((k) => k
 for (const u of ['ca', 'us', 'intl']) {
   test(`a market universe addressed with no rows is asked for from the address alone (${u})`, async ({ page, request }) => {
     const said = watched(page)
-    await openWithStatus(page, request, {}, `#heatmap/${u}/value`, (m) => {
-      const mk = m.markets as { universes: Record<string, unknown[]> }
-      mk.universes = { ca: [], us: [], intl: [] }
-    })
+    await openWithStatus(page, request, {}, `#heatmap/${u}/value`, () => {}, nothingRead)
     await expect(page.locator('#heatFull')).toContainText('Not read yet.')
     await expect.poll(() => universesIn(said.last())).toEqual([`universe:${u}`])
   })
@@ -100,10 +102,7 @@ for (const u of ['ca', 'us', 'intl']) {
   test(`a market universe remembered with no rows is asked for when Markets opens (${u})`, async ({ page, request }) => {
     const said = watched(page)
     await page.addInitScript((universe) => localStorage.setItem('bh2.heatmap', JSON.stringify({ universe, size: 'value' })), u)
-    await openWithStatus(page, request, {}, '#markets', (m) => {
-      const mk = m.markets as { universes: Record<string, unknown[]> }
-      mk.universes = { ca: [], us: [], intl: [] }
-    })
+    await openWithStatus(page, request, {}, '#markets', () => {}, nothingRead)
     const card = page.locator('#page .card', { has: page.locator('h5', { hasText: 'Heatmap' }) })
     await expect(card).toContainText('Not read yet.')
     await expect.poll(() => universesIn(said.last())).toEqual([`universe:${u}`])
@@ -115,34 +114,26 @@ for (const u of ['ca', 'us', 'intl']) {
 
 test('a slideshow asks for every market it goes through, not only the one on show', async ({ page, request }) => {
   const said = watched(page)
-  await openWithStatus(page, request, {}, '#heatmap/holdings,ca,intl/value/20', withUs)
+  await openWithStatus(page, request, {}, '#heatmap/holdings,ca,intl/value/20', () => {}, usRead)
   await expect.poll(() => universesIn(said.last())).toEqual(['universe:ca', 'universe:intl'])
 })
 
 test("a market universe whose read failed says what failed instead of 'Not read yet.'", async ({ page, request }) => {
-  await openWithStatus(page, request, {}, '#heatmap/ca/value', withUs, { 'universe:ca': { failed: 'TMX Money could not be reached.' } })
+  await openWithStatus(page, request, {}, '#heatmap/ca/value', () => {}, { ...nothingRead, 'universe:ca': { failed: 'TMX Money could not be reached.' } })
   await expect(page.locator('#heatFull')).toContainText('TMX Money could not be reached.')
   await expect(page.locator('#heatFull')).not.toContainText('Not read yet.')
 })
 
-test('two sectors that each fold their small symbols to `Other (2)` both draw, and nothing breaks', async ({ page, request }) => {
+test('two sectors that each fold their small symbols to `Other (2)` both draw, each under its own key, and nothing breaks', async ({ page, request }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
-  const sector = (name: string, p: string) => [
-    { ...tile(p + 'BIG', name), value: 1000 },
-    { ...tile(p + 'S1', name), value: 1 },
-    { ...tile(p + 'S2', name), value: 1 },
-  ]
-  await openWithStatus(page, request, {}, '#heatmap/us/value', (m) => {
-    const mk = m.markets as { universes: Record<string, unknown[]> }
-    mk.universes = { ...mk.universes, us: [...sector('Technology', 'T'), ...sector('Energy', 'E')] }
-  })
+  const sector = (name: string, p: string) => block(name, [tile(p + 'BIG', '1000'), tile('Other (2)', '2', true, 'other|' + name)], '1002')
+  await openWithStatus(page, request, {}, '#heatmap/us/value', () => {}, { heatmap: heatmapDoc('us', 'value', [sector('Technology', 'T'), sector('Energy', 'E')], counts({ us: 6 })) })
   await expect(page.locator('#heatBox .heat-tile', { hasText: 'Other (2)' })).toHaveCount(2)
   await expect(page.locator('#heatBox .heat-tile')).toHaveCount(4)
-  // and re-tiling with them on screen still works
-  await page.locator('#heatFull .mseg-opt', { hasText: 'Equal' }).click()
-  await expect(page.locator('#heatBox .heat-tile')).toHaveCount(6)
-  await page.locator('#heatFull .mseg-opt', { hasText: 'Market value' }).click()
-  await expect(page.locator('#heatBox .heat-tile', { hasText: 'Other (2)' })).toHaveCount(2)
+  await expect(page.locator('#heatBox .heat-blk')).toHaveCount(2)
+  // a folded tile opens nothing
+  await page.locator('#heatBox .heat-tile', { hasText: 'Other (2)' }).first().click()
+  await expect(page).toHaveURL(/#heatmap\/us\/value$/)
   expect(errors).toEqual([])
 })

@@ -5,13 +5,14 @@
   // history line chart. Nothing is drawn where the regulator does not cover the
   // listing.
   import type { Trade } from '../model'
-  import { qty } from '../fmt'
+  import { qty, pctPlain } from '../fmt'
+  import { digits, plot, sign } from '../dec'
   import Donut, { type DonutItem } from '../Donut.svelte'
   import { ensureShorts, reportsShorts, shortsKey, shortDay, shortSpan, shortsStore } from './shorts.svelte'
 
   let { trade }: { trade: Trade } = $props()
 
-  const n2 = (v: number, dp: number) => Number(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  const n2 = (v: number, dp: number) => v.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
 
   // Asked for when the card is shown, and again when the reader comes back to the tab
   // with a reading more than thirty minutes old (ensureShorts keeps a younger one). No
@@ -41,32 +42,33 @@
 
   const volume = $derived.by<Ring | null>(() => {
     if (!s) return null
-    const pct = s.volumePct ?? null
-    const share = pct == null ? null : Math.max(0, Math.min(1, pct / 100))
-    const rest = s.totalVolume != null && s.shortVolume != null ? Math.max(0, s.totalVolume - s.shortVolume) : null
+    // the short part of the volume, and the rest traded, as the server worked them out
+    const pct = s.ofVolume ?? null
+    const share = pct == null ? null : Math.max(0, Math.min(1, pct))
     const parts: DonutItem[] | null =
       share == null
         ? null
         : [
-            { label: 'Short volume', v: 0, share, count: s.shortVolume == null ? null : Math.round(s.shortVolume), color: 'var(--pie-1)' },
-            { label: 'Shares traded', v: 0, share: 1 - share, count: rest == null ? null : Math.round(rest), color: 'rgba(var(--ink-rgb),.16)' },
+            { label: 'Short volume', v: 0, share, count: s.shortVolume, color: 'var(--pie-1)' },
+            { label: 'Shares traded', v: 0, share: 1 - share, count: s.longVolume, color: 'rgba(var(--ink-rgb),.16)' },
           ]
-    const cover = s.daysToCover == null ? '' : n2(s.daysToCover, 1) + ' days to cover' + (s.averageVolume ? ' at ' + qty(Math.round(s.averageVolume)) + ' a day' : '')
+    const cover = s.daysToCover == null ? '' : n2(s.daysToCover, 1) + ' days to cover' + (s.averageVolume && sign(s.averageVolume) > 0 ? ' at ' + digits(s.averageVolume, 0) + ' a day' : '')
     return { key: 'sivol', title: 'Short volume', when: s.volumeOf ? shortSpan(s.volumeOf) : '', pct, parts, footer: cover, missing: 'No trading is reported for this listing.' }
   })
 
   const float = $derived.by<Ring | null>(() => {
     if (!s) return null
+    // the position over the float, and the float not sold short, as the server worked them out
     const pct = s.ofFloat ?? null
-    const share = pct == null || !s.float || s.shares == null ? null : Math.max(0, Math.min(1, s.shares / s.float))
+    const share = pct == null ? null : Math.max(0, Math.min(1, pct))
     const parts: DonutItem[] | null =
       share == null
         ? null
         : [
-            { label: 'Short interest', v: 0, share, count: Math.round(s.shares as number), color: 'var(--pie-1)' },
-            { label: 'Float', v: 0, share: 1 - share, count: Math.round((s.float as number) - (s.shares as number)), color: 'rgba(var(--ink-rgb),.16)' },
+            { label: 'Short interest', v: 0, share, count: s.shares, color: 'var(--pie-1)' },
+            { label: 'Float', v: 0, share: 1 - share, count: s.unshorted, color: 'rgba(var(--ink-rgb),.16)' },
           ]
-    const change = s.change == null ? '' : (s.change > 0 ? '+' : '') + qty(s.change) + (s.previousOf ? ' since ' + shortDay(s.previousOf) : '')
+    const change = s.change == null ? '' : (sign(s.change) > 0 ? '+' : '') + qty(s.change) + (s.previousOf ? ' since ' + shortDay(s.previousOf) : '')
     const held = s.shares == null ? '' : qty(s.shares) + ' shares short'
     return {
       key: 'sifloat',
@@ -82,21 +84,23 @@
   // --- history line chart geometry (shortsHistoryHtml) ---
   const W = 880, H = 180, TOP = 8, BOT = H - 12
   const pts = $derived((s?.series || []).filter((p) => p && p.shares != null))
+  // each report's position as a plotted height; the axis's marks are the plot's own
+  const heights = $derived(pts.map((p) => plot(p.shares)))
   const geo = $derived.by(() => {
     if (pts.length < 3) return null
-    const lo = Math.min(...pts.map((p) => p.shares))
-    const hi = Math.max(...pts.map((p) => p.shares))
+    const lo = Math.min(...heights)
+    const hi = Math.max(...heights)
     const span = hi - lo || 1
     const x = (i: number) => (i / (pts.length - 1)) * W
     const y = (v: number) => TOP + (1 - (v - lo) / span) * (BOT - TOP)
-    const line = pts.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.shares).toFixed(1)).join(' ')
+    const line = heights.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ')
     const ticks: [number, number][] = [
       [hi, TOP],
       [lo + (span * 2) / 3, TOP + (BOT - TOP) / 3],
       [lo + span / 3, TOP + ((BOT - TOP) * 2) / 3],
       [lo, BOT],
     ]
-    const ys = pts.map((p) => y(p.shares))
+    const ys = heights.map((v) => y(v))
     const want = Math.min(6, pts.length)
     const marks: string[] = []
     for (let i = 0; i < want; i++) marks.push(shortDay(pts[Math.round((i * (pts.length - 1)) / Math.max(1, want - 1))].date))
@@ -136,7 +140,7 @@
     <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>{r.title}</h5><span style="margin-left:auto;font-size:11px;color:var(--ink55)">{r.when}</span></div>
     {#if r.pct != null && r.parts}
       <div style="display:flex;flex-direction:column-reverse;align-items:center;gap:14px;flex:1;min-height:0;justify-content:center">
-        <Donut items={r.parts} total={null} centreLabel="Short" centreText={n2(r.pct, 2) + '%'} side="row" size={210} />
+        <Donut items={r.parts} total={null} centreLabel="Short" centreText={pctPlain(r.pct, 2)} side="row" size={210} />
       </div>
     {:else}
       <div class="muted empty" style="flex:1;font-size:12px">{r.missing}</div>
@@ -164,7 +168,7 @@
           <div class="xline" hidden={hi < 0} style="left:{hx}"></div>
           <div class="line-dot" hidden={hi < 0} style="left:{hx};top:{hy};background:var(--accent)"></div>
           <div class="tip" hidden={hi < 0} style="left:{hx};transform:translateX({tipShift})">
-            <div class="tv">{hi >= 0 ? qty(Math.round(pts[hi].shares)) : ''}</div>
+            <div class="tv">{hi >= 0 ? qty(pts[hi].shares) : ''}</div>
             <div class="tl">{hi >= 0 ? shortDay(pts[hi].date) : ''}</div>
           </div>
           <svg bind:this={svgEl} viewBox="0 0 {W} {H}" preserveAspectRatio="none" style="width:100%;height:{H}px;display:block">

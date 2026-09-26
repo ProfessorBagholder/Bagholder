@@ -2,7 +2,6 @@
 //! check, history endpoint, versions, tiles, watchlist and in-app update
 //! (the parts reachable without a network or a child process).
 use rusqlite::Connection;
-use bagholder_model::input::Listing;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -258,110 +257,6 @@ fn test_a_row_moves_both() {
     assert_ne!(core_before, core_after);
 }
 
-// ---------------------------------------------------------------------------
-// TilesTest
-// ---------------------------------------------------------------------------
-
-fn base_of(conn: &Connection, quotes: Option<Value>) -> bagholder_model::context::MarketBase {
-    if let Some(q) = quotes {
-        for (key, v) in q.as_object().cloned().unwrap_or_default() {
-            let rec = bagholder_store::market::QuoteRecord {
-                price: v.get("price").and_then(|x| x.as_f64()),
-                price_change: v.get("priceChange").and_then(|x| x.as_f64()),
-                percent_change: v.get("percentChange").and_then(|x| x.as_f64()),
-                ..Default::default()
-            };
-            bagholder_store::market::upsert_quote(conn, &key, &rec, "test", "2026-01-01T00:00:00Z").unwrap();
-        }
-    }
-    crate::market_context::tables_only(conn, &bagholder_model::clock::today_local())
-}
-
-/// The model half; the store half is in crates/store/tests/tables.rs.
-#[test]
-fn test_the_row_is_the_default_until_saved_and_then_what_was_saved() {
-    let d = db();
-    let rows = |d: &Db| bagholder_model::testing::sent(&bagholder_model::markets::tile_rows(&base_of(&d.conn, None)));
-    let got: Vec<(String, String, i64)> = rows(&d).iter().map(|t| (app::f(t, "symbol"), app::f(t, "label"), t["decimals"].as_i64().unwrap())).collect();
-    let want: Vec<(String, String, i64)> = [("SPX", "SPX", 2), ("NDX", "NDX", 2), ("DJI", "DJI", 2), ("VIX", "VIX", 2), ("GC", "GOLD", 2), ("BTCUSD", "BITCOIN", 0)]
-        .iter()
-        .map(|(a, b, c)| (a.to_string(), b.to_string(), *c))
-        .collect();
-    assert_eq!(got, want);
-    let before = crate::versions::data_version(&d.conn).unwrap();
-    let tiles_in: Vec<bagholder_model::input::TileRef> = bagholder_model::lenient::rows(&json!([{"symbol": "tnx", "exchange": "index"}, {"symbol": "usdcad", "exchange": "fx"}, {"symbol": "", "exchange": "x"}, "junk"]));
-    bagholder_store::admin::save_tiles(&d.conn, &tiles_in).unwrap();
-    assert_ne!(crate::versions::data_version(&d.conn).unwrap(), before, "the row is part of the data version");
-    let r = rows(&d);
-    let got: Vec<(String, String, String, i64)> = r.iter().map(|t| (app::f(t, "symbol"), app::f(t, "label"), app::f(t, "kind"), t["decimals"].as_i64().unwrap())).collect();
-    assert_eq!(got, vec![("TNX".into(), "10Y".into(), "Rate".into(), 3), ("USDCAD".into(), "USD/CAD".into(), "Currency".into(), 4)]);
-    assert_eq!(r.iter().map(|t| t["last"].clone()).collect::<Vec<_>>(), vec![Value::Null, Value::Null], "no quote yet: a dash, never a zero");
-    bagholder_store::admin::save_tiles(&d.conn, &[]).unwrap();
-    assert!(rows(&d).is_empty(), "an emptied row stays empty");
-}
-
-#[test]
-fn test_the_row_reads_its_quotes_where_a_watched_instrument_would() {
-    let d = db();
-    bagholder_store::admin::save_tiles(&d.conn, &[bagholder_model::input::TileRef { symbol: "SPX".into(), exchange: "Index".into() }]).unwrap();
-    let base = base_of(&d.conn, None);
-    let q: Vec<(String, String, String)> = bagholder_model::markets::quote_symbols(&base).into_iter().map(|r| (r.quote_key.unwrap_or_default(), r.yahoo.unwrap_or_default(), r.kind)).collect();
-    assert_eq!(q, vec![("SPX@INDEX".to_string(), "^GSPC".to_string(), "Instrument".to_string())], "quoted through the watch path");
-    let base = base_of(&d.conn, Some(json!({"SPX@INDEX": {"price": 6742.18, "priceChange": 42.18, "percentChange": 0.63}})));
-    let row = &bagholder_model::testing::sent(&bagholder_model::markets::tile_rows(&base))[0];
-    assert_eq!((row["last"].as_f64(), row["change"].as_f64(), row["percentChange"].as_f64()), (Some(6742.18), Some(42.18), Some(0.63)));
-}
-
-/// Only the refusal: an accepted save starts a quote fetch against the live
-/// sources, which a test must not reach.
-#[test]
-fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twelve() {
-    let _g = guard();
-    let conn = app_ref().open().unwrap();
-    let saved = bagholder_store::tables::get_meta(&conn, bagholder_store::rows::TILES_META, "").unwrap();
-    bagholder_store::admin::save_tiles(&conn, &[bagholder_model::input::TileRef { symbol: "VIX".into(), exchange: "Index".into() }, bagholder_model::input::TileRef { symbol: "GC".into(), exchange: "COMEX".into() }]).unwrap();
-    let too_many: Vec<Value> = ["SPX", "NDX", "IXIC", "DJI", "RUT", "VIX", "TSX", "FTSE", "DAX", "N225", "HSI", "STOXX50E", "DXY"].iter().map(|s| json!({"symbol": s, "exchange": "Index"})).collect();
-    let too_many_tiles: Vec<bagholder_model::input::TileRef> = too_many.iter().map(|v| bagholder_model::input::TileRef { symbol: v["symbol"].as_str().unwrap().to_string(), exchange: v["exchange"].as_str().unwrap().to_string() }).collect();
-    assert_eq!(serde_json::to_value(crate::feeds::tiles_set(&app(), &too_many_tiles)).unwrap()["ok"], false);
-    let b = app().market_base().unwrap();
-    let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| t.symbol.to_string()).collect();
-    assert_eq!(syms, vec!["VIX", "GC"], "a refused save changes nothing");
-    if saved.is_empty() {
-        conn.execute("DELETE FROM meta WHERE key = ?", [bagholder_store::rows::TILES_META]).unwrap();
-    } else {
-        bagholder_store::tables::set_meta(&conn, bagholder_store::rows::TILES_META, &saved).unwrap();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// WatchlistTest
-// ---------------------------------------------------------------------------
-
-/// The data-version half of test_add_list_remove (the rest is the store's).
-#[test]
-fn test_add_list_remove() {
-    let d = db();
-    let before = crate::versions::data_version(&d.conn).unwrap();
-    bagholder_store::feeds::add_watch(&d.conn, "shop", "tsx", "Shopify Inc.", "cad", "", "2026-09-11T14:00:00Z").unwrap();
-    assert_ne!(crate::versions::data_version(&d.conn).unwrap(), before, "the model's fingerprint follows the list");
-}
-
-#[test]
-fn test_quote_refresh_keys_a_watched_listing_by_venue() {
-    let d = db();
-    let needing = bagholder_market::quotes::quote_symbols_needing_refresh(
-        &d.conn,
-        &[
-            Listing::new("AAPL", "NEO", "CAD", "Shares"),
-            Listing { quote_key: Some("AAPL@NASDAQ".into()), ..Listing::new("AAPL", "NASDAQ", "USD", "Shares") },
-        ],
-        app::now_unix(),
-        15.0,
-    )
-    .unwrap();
-    let got: Vec<(String, String)> = needing.into_iter().map(|(k, src, _)| (k, src)).collect();
-    assert_eq!(got, vec![("AAPL".to_string(), "cboe_ca".to_string()), ("AAPL@NASDAQ".to_string(), "yahoo_quote".to_string())], "the held CDR and the watched US listing keep separate quotes, each from a feed live for its market");
-}
 
 // ---------------------------------------------------------------------------
 // InAppUpdateTest
@@ -516,7 +411,7 @@ const TIMED_WAITS: [(&str, usize, &str); 18] = [
     ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
     ("server/src/events.rs", 6, "`park_until_or` itself, the 40 ms gather; three in its tests (the day turning is the scheduler's, `due.rs`)"),
-    ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/feeds.rs", 13, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/http/stream.rs", 1, "the event stream's keep-alive comment, every fifteen seconds while it is idle, so a connection that died is noticed: the transport's, not a poll"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),

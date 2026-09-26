@@ -3,15 +3,20 @@
   // The market-tiles row (marketTilesHtml): draggable KPI tiles, a plus cell that
   // opens the instrument picker, and a "more" expander. Order is persisted through
   // /api/tiles/set exactly as the reference page does.
-  import type { MarketTile, MarketInstrument } from '../model'
+  import type { MarketTile, DirectoryEntry } from '../model'
   import { ICONS } from '../icons'
   import Icon from './Icon.svelte'
-  import { n2, signedPct } from './util'
+  import { signedPct } from './util'
+  import { digits, sign, type Dec } from '../dec'
   import { call } from '../api'
   import { focusOnMount } from '../actions/focus'
   import { escapable } from '../escape'
 
-  let { tiles: propTiles, instruments }: { tiles: MarketTile[]; instruments: MarketInstrument[] } = $props()
+  let { tiles: propTiles, directory }: { tiles: MarketTile[]; directory: DirectoryEntry[] } = $props()
+
+  // a price or a rate at the instrument's own scale, from the exact text
+  const num = (d: Dec, dp: number) => (sign(d) < 0 ? '−' : '') + digits(d, dp)
+  const signed = (d: Dec, dp: number) => (sign(d) < 0 ? '−' : '+') + digits(d, dp)
 
   const TILES_MAX = 12
   const TILES_ROW = 6
@@ -57,12 +62,12 @@
   function tileRemove(sym: string) {
     postTiles(tiles.filter((t) => t.symbol !== sym))
   }
-  function tileToggle(inst: MarketInstrument) {
+  function tileToggle(inst: DirectoryEntry) {
     const has = tiles.some((t) => t.symbol === inst.symbol)
     if (!has && tiles.length >= TILES_MAX) return
     const next = has
       ? tiles.filter((t) => t.symbol !== inst.symbol)
-      : tiles.concat([{ symbol: inst.symbol, exchange: inst.exchange, label: inst.label, name: inst.name, kind: inst.kind, last: null, change: null, percentChange: null, decimals: 2 }])
+      : tiles.concat([{ id: '', symbol: inst.symbol, exchange: inst.exchange, label: inst.label, name: inst.name, kind: inst.kind, last: null, change: null, percentChange: null, decimals: 2, pricedAsRate: false, rate: null, rateChange: null }])
     if (!has && next.length > TILES_ROW && !tilesOpen) {
       tilesOpen = true
       try { localStorage.setItem('bh2.tilesOpen', '1') } catch { /* ignore */ }
@@ -104,7 +109,7 @@
   const on = $derived(new Set(tiles.map((t) => t.symbol)))
   const pickerRows = $derived.by(() => {
     const q = tileQuery.trim().toUpperCase()
-    return (instruments || []).filter((r) => !q || r.symbol.indexOf(q) >= 0 || r.label.indexOf(q) >= 0 || r.name.toUpperCase().indexOf(q) >= 0 || (r.aliases || []).some((a) => a.toUpperCase().indexOf(q) >= 0))
+    return (directory || []).filter((r) => !q || r.symbol.indexOf(q) >= 0 || r.label.indexOf(q) >= 0 || r.name.toUpperCase().indexOf(q) >= 0 || (r.aliases || []).some((a) => a.toUpperCase().indexOf(q) >= 0))
   })
 
   // --- drag reorder (pointer events) ---
@@ -165,14 +170,15 @@
       <div class="mt-cell" data-sym={t.symbol}>
         <div class="card elev-sm kpi mt-tile" class:mt-drag={dragSym === t.symbol} data-sym={t.symbol} data-ex={t.exchange} onpointerdown={(e) => onPointerDown(e, t.symbol)}>
           <div class="lbl">{t.label}</div>
-          <div class="v" use:roll={t.rate != null ? n2(t.rate, 2) + '%' : t.last == null ? '—' : n2(t.last, t.decimals)}></div>
+          <div class="v" use:roll={t.rate != null ? num(t.rate, 2) + '%' : t.last == null ? '—' : num(t.last, t.decimals)}></div>
           {#if t.rate != null}
             {@const m = t.rateChange}
-            <div class="s" style="color:var(--ink55)">{t.last == null ? '—' : n2(t.last, t.decimals)}{#if m != null} <span style="color:var(--{m < 0 ? 'neg' : 'pos'})">({m < 0 ? '−' : '+'}{n2(Math.abs(m), t.decimals)})</span>{/if}</div>
+            <div class="s" style="color:var(--ink55)">{t.last == null ? '—' : num(t.last, t.decimals)}{#if m != null} <span style="color:var(--{sign(m) < 0 ? 'neg' : 'pos'})">({signed(m, t.decimals)})</span>{/if}</div>
           {:else if t.change == null || t.percentChange == null}
             <div class="s">—</div>
           {:else}
-            <div class="s {t.change < 0 ? 'neg' : 'pos'}" style="color:var(--{t.change < 0 ? 'neg' : 'pos'})">{t.change < 0 ? '−' : '+'}{n2(Math.abs(t.change), t.decimals)} ({signedPct(t.percentChange)})</div>
+            {@const up = sign(t.change) >= 0}
+            <div class="s {up ? 'pos' : 'neg'}" style="color:var(--{up ? 'pos' : 'neg'})">{signed(t.change, t.decimals)} ({signedPct(t.percentChange)})</div>
           {/if}
           <button class="mt-x" aria-label="Remove {t.label}" onclick={() => tileRemove(t.symbol)}><Icon d={ICONS.x} /></button>
         </div>
@@ -201,7 +207,7 @@
       <div class="lbl" style="padding:2px 7px 7px">{tileQuery.trim() ? 'Matches' : 'Market instruments'}</div>
       {#if pickerRows.length}
         <div class="scroll" style="max-height:264px;display:flex;flex-direction:column;gap:1px">
-          {#each pickerRows as r (r.symbol)}
+          {#each pickerRows as r (r.key)}
             <div class="pop-row mt-row" class:on={on.has(r.symbol)} class:off={!on.has(r.symbol) && tiles.length >= TILES_MAX} role="button" tabindex="-1" onclick={() => tileToggle(r)} onkeydown={(e) => { if (e.key === 'Enter') tileToggle(r) }}>
               <span style="min-width:0"><span class="mt-sym" style="display:block;font-weight:500">{r.symbol}</span><span style="display:block;font-size:11px;color:rgba(var(--ink-rgb),.45);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.name}</span></span>
               <span style="margin-left:auto;font-size:11px;color:rgba(var(--ink-rgb),.4);white-space:nowrap">{r.exchange}</span>

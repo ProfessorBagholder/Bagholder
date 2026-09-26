@@ -6,19 +6,30 @@
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import markets from '../../../tests/wire/scenario_markets.json'
 import journal from '../../../tests/wire/case_dashboard_journal_monthly_by_symbol_queue.json'
 import Watchlist from './markets/Watchlist.svelte'
 import News from './markets/News.svelte'
 import MarketTiles from './markets/MarketTiles.svelte'
 import Trades from './Trades.svelte'
 import { applyOps, type Op } from './live.svelte'
-import type { Markets, Trade } from './model'
+import { headlines } from './subs.svelte'
+import type { Dec } from './dec'
+import type { Trade, MarketsDoc, WatchItem, MarketTile, Headline, HeadlinesDoc } from './model'
 
-// the old recorded model's parts, as the Markets tab's and the Trades list's documents carry them
-type Model = { markets: Markets; trades: Trade[] }
+// the old recorded model's trades, as the Trades list's document carries them
+type Model = { trades: Trade[] }
 const book = (from: { wire: unknown }): Model => structuredClone(from.wire) as unknown as Model
 
+const d = (s: string) => s as Dec
+const watched = (id: string, symbol: string, last: string, pct: number): WatchItem => ({ id, symbol, exchange: 'TSX', name: symbol + ' Inc.', currency: 'CAD', last: d(last), change: null, percentChange: pct, sector: 'Energy', kind: 'Shares', positionId: null })
+const tile = (id: string, symbol: string, last: string): MarketTile => ({ id, symbol, exchange: 'Index', label: symbol, name: symbol, kind: 'Index', last: d(last), change: d('12.5'), percentChange: 0.0021, decimals: 2, pricedAsRate: false, rate: null, rateChange: null })
+// the Markets tab's document as the server sends it
+const marketsDoc = (): MarketsDoc => ({
+  tiles: [tile('t-spx', 'SPX', '7713.20'), tile('t-ndx', 'NDX', '25010.75'), tile('t-dji', 'DJI', '46120.00')],
+  watchlist: [watched('w-enb', 'ENB', '55.10', 0.004), watched('w-su', 'SU', '61.02', -0.011), watched('w-cnq', 'CNQ', '44.87', 0.002)],
+  directory: [],
+})
+const headline = (id: string, text: string, at: string): Headline => ({ id, headline: text, source: 'Newswire', url: '', publishedAt: at, market: true, kind: 'story', tags: [], filed: null })
 function watch(root: Node) {
   const seen: MutationRecord[] = []
   const mo = new MutationObserver((r) => seen.push(...r))
@@ -35,20 +46,21 @@ const elementsMoved = (seen: MutationRecord[]) =>
 
 describe('a watched listing\'s quote moves', () => {
   it('writes in that row and no other, and no row is made or taken away', () => {
-    const model = $state(book(markets))
-    const { container } = render(Watchlist, { props: { watchlist: model.markets.watchlist } })
+    const model = $state(marketsDoc())
+    const { container } = render(Watchlist, { props: { watchlist: model.watchlist } })
     flushSync()
     const rows = [...container.querySelectorAll('.wl-row')]
     const enb = rows.find((r) => r.textContent!.includes('ENB'))!
     const stop = watch(container)
     applyOps(model, [
-      ['set', ['markets', 'watchlist', { k: 'symbol', v: 'ENB' }, 'last'], 56.25],
-      ['set', ['markets', 'watchlist', { k: 'symbol', v: 'ENB' }, 'percentChange'], 1.35],
+      ['set', ['watchlist', { k: 'id', v: 'w-enb' }, 'last'], '56.25'],
+      ['set', ['watchlist', { k: 'id', v: 'w-enb' }, 'percentChange'], 0.0135],
     ] as Op[])
     flushSync()
     const seen = stop()
     expect(seen.length).toBeGreaterThan(0)
     expect(enb.textContent).toContain('56.25')
+    expect(enb.textContent).toContain('+1.35%')
     expect(elementsMoved(seen)).toEqual([])
     expect(seen.filter((m) => within(m.target, '.wl-row') !== enb).map((m) => m.target.textContent)).toEqual([])
     expect([...container.querySelectorAll('.wl-row')]).toEqual(rows)
@@ -57,15 +69,15 @@ describe('a watched listing\'s quote moves', () => {
 
 describe('a news item arrives', () => {
   it('is one row put in; the rows already there are the same elements, untouched', () => {
-    const model = $state(book(markets))
-    const { container } = render(News, { props: { news: model.markets.news } })
+    const doc: HeadlinesDoc = { items: [headline('n1', 'Stocks rise', '2026-09-20T14:00:00Z'), headline('n2', 'Oil slips', '2026-09-20T13:00:00Z')], total: 2, chip: null, filedFailed: null }
+    headlines.data = doc
+    const { container } = render(News)
     flushSync()
     const before = [...container.querySelectorAll('.nw-row')]
-    expect(before.length).toBeGreaterThan(0)
-    const fresh = { ...structuredClone($state.snapshot(model.markets.news[0])), id: 'news-new', headline: 'A headline nobody has seen yet', publishedAt: '2099-01-01T00:00:00Z' }
-    const order = ['news-new', ...model.markets.news.map((n) => n.id)]
+    expect(before.length).toBe(2)
+    const fresh = headline('n-new', 'A headline nobody has seen yet', '2099-01-01T00:00:00Z')
     const stop = watch(container)
-    applyOps(model, [['rows', ['markets', 'news'], 'id', order, { 'news-new': fresh }]] as Op[])
+    applyOps(headlines.data!, [['set', ['total'], 3], ['rows', ['items'], 'id', ['n-new', 'n1', 'n2'], { 'n-new': fresh }]] as Op[])
     flushSync()
     const seen = stop()
     expect(container.textContent).toContain('A headline nobody has seen yet')
@@ -76,18 +88,19 @@ describe('a news item arrives', () => {
     for (const r of before) expect(r.isConnected).toBe(true)
     // nothing written inside a row that was already there
     expect(seen.filter((m) => m.type !== 'childList' && before.some((r) => r.contains(m.target))).length).toBe(0)
+    headlines.data = null
   })
 })
 
 describe('a market tile\'s quote moves', () => {
   it('writes in that tile and no other', () => {
-    const model = $state(book(markets))
-    const { container } = render(MarketTiles, { props: { tiles: model.markets.tiles, instruments: model.markets.instruments } })
+    const model = $state(marketsDoc())
+    const { container } = render(MarketTiles, { props: { tiles: model.tiles, directory: model.directory } })
     flushSync()
     const tiles = [...container.querySelectorAll('.mt-tile')] as HTMLElement[]
     const spx = tiles.find((t) => t.dataset.sym === 'SPX')!
     const stop = watch(container)
-    applyOps(model, [['set', ['markets', 'tiles', { k: 'symbol', v: 'SPX' }, 'last'], 7713.5]] as Op[])
+    applyOps(model, [['set', ['tiles', { k: 'id', v: 't-spx' }, 'last'], '7713.50']] as Op[])
     flushSync()
     const seen = stop()
     expect(seen.length).toBeGreaterThan(0)

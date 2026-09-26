@@ -150,8 +150,10 @@ pub fn parse_quote(v: &Value, form: &str) -> Outcome<TmxQuote> {
 fn read_quote(root: &Node, form: &str) -> Result<Result<TmxQuote, String>, Mismatch> {
     let q = root.obj("data")?.obj("getQuoteBySymbol")?;
     let symbol = q.text("symbol")?;
+    // a TSX or TSX-V listing is answered by its bare ticker, any other venue's by
+    // the form itself (`QIMC:CNX`)
     let bare = form.split(':').next().unwrap_or(form);
-    if !symbol.eq_ignore_ascii_case(bare) {
+    if !symbol.eq_ignore_ascii_case(bare) && !symbol.eq_ignore_ascii_case(form) {
         return Ok(Err(format!("TMX answered {symbol} for {form}")));
     }
     let price = q.dec("price")?;

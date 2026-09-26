@@ -22,11 +22,13 @@ pub struct Clearing {
     pub market: bool,
     /// The orders Bagholder sent and its brackets, with their logs.
     pub orders: bool,
+    /// The watched listings and the tile row.
+    pub following: bool,
 }
 
 impl Clearing {
     pub fn all() -> Clearing {
-        Clearing { broker: true, entries: true, journal: true, market: true, orders: true }
+        Clearing { broker: true, entries: true, journal: true, market: true, orders: true, following: true }
     }
 }
 
@@ -39,6 +41,8 @@ pub enum Holds {
     Journal,
     Market,
     Orders,
+    /// The watched listings and the tile row, with the names the person picked.
+    Following,
     /// What records and statements name: kept while anything left names it.
     Named,
     /// The person's settings: the watched folder's go with the entries; the zone
@@ -86,6 +90,9 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("order_events", Holds::Orders),
     ("brackets", Holds::Orders),
     ("bracket_events", Holds::Orders),
+    ("watched", Holds::Following),
+    ("tiles", Holds::Following),
+    ("listings_named", Holds::Following),
     ("broker_connections", Holds::Named),
     ("accounts", Holds::Named),
     ("account_refs", Holds::Named),
@@ -176,6 +183,9 @@ impl Book {
             if what.orders {
                 c.execute_batch("DELETE FROM order_events; DELETE FROM orders; DELETE FROM bracket_events; DELETE FROM brackets;")?;
             }
+            if what.following {
+                c.execute_batch("DELETE FROM watched; DELETE FROM tiles; DELETE FROM settings WHERE key = 'tiles.chosen';")?;
+            }
             self.clear_unnamed()
 
         })
@@ -199,7 +209,9 @@ impl Book {
                     AND id NOT IN (SELECT instrument_id FROM declared_reads)
                     AND id NOT IN (SELECT instrument_id FROM stated_frequencies)
                     AND id NOT IN (SELECT instrument_id FROM instrument_sightings)
-                    AND id NOT IN (SELECT underlying_id FROM option_terms);",
+                    AND id NOT IN (SELECT underlying_id FROM option_terms)
+                    AND id NOT IN (SELECT instrument_id FROM watched)
+                    AND id NOT IN (SELECT instrument_id FROM tiles);",
             )?;
             let n: i64 = c.query_row("SELECT COUNT(*) FROM temp.unnamed", [], |r| r.get(0))?;
             if n == 0 {
@@ -207,6 +219,7 @@ impl Book {
             }
             c.execute_batch(
                 "DELETE FROM option_terms WHERE instrument_id IN (SELECT id FROM temp.unnamed);
+                 DELETE FROM listings_named WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instrument_refs WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instrument_routes WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instruments WHERE id IN (SELECT id FROM temp.unnamed);",
