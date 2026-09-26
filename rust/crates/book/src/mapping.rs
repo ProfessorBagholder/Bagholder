@@ -92,6 +92,8 @@ pub struct Draft {
     pub fx_rate: Option<Dec>,
     /// For a payment, the units it was paid on, where the record states them.
     pub paid_on: Option<Dec>,
+    /// For units that moved in, what the record states they were worth as they arrived.
+    pub value: Option<Money>,
 }
 
 /// An instrument as a source describes it: what identifies it, and what to

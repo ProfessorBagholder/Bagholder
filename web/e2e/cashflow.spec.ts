@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ready, openWithStatus, figures, money, money0, signedMoney, pctPlain, qty, px, perUnit, leftOut, cmp, type Waits } from './helpers'
+import { ready, openWithStatus, figures, money, money0, signedMoney, pctPlain, qty, px, perUnit, cmp, type Waits } from './helpers'
 
 // SPEC §6, Cashflow: the six tiles, the monthly bar chart with its hover tip,
 // the Cashflow Positions table, the Allocation donut and Distribution history.
@@ -17,8 +17,8 @@ const MON_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July'
 function monthLong(key: string): string {
   return MON_LONG[+key.slice(5, 7) - 1] + ' ' + key.slice(0, 4)
 }
-// a total, and under it how many it left out
-const partial = (p: Partial) => money0(p.total) + leftOut(p.leftOut)
+// a total; what it left out is not counted on the page
+const partial = (p: Partial) => money0(p.total)
 const negate = (d: string) => (d.startsWith('-') ? d.slice(1) : '-' + d)
 
 test('the tiles are two rolling years, YTD, All time, Margin used and Yield on cost, with a margin account in scope', async ({ page, request }) => {
@@ -44,7 +44,7 @@ test('the tiles are two rolling years, YTD, All time, Margin used and Yield on c
       await expect(kpis.nth(i).locator('.lbl')).toHaveText(label)
       await expect(kpis.nth(i).locator('.v')).toHaveText(money0(t.total.total))
       const sub = t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'
-      await expect(kpis.nth(i).locator('.s')).toHaveText(sub + (t.total.leftOut ? ' · ' + leftOut(t.total.leftOut) : ''))
+      await expect(kpis.nth(i).locator('.s')).toHaveText(sub)
     }
   }
 })

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ready, openWithStatus, figures, money, money0, signedMoney, pct, pctPlain, qty, px, hold, leftOut, cmp, waits, subUrl, symText, type Waits } from './helpers'
+import { ready, openWithStatus, figures, money, money0, signedMoney, pct, pctPlain, qty, px, hold, cmp, waits, subUrl, symText, type Waits } from './helpers'
 
 // SPEC §6, Portfolio: tiles, Allocation/Sectors/Regions donuts, the Holdings
 // table and a holding's own page. Figures are checked against the figures document
@@ -13,8 +13,8 @@ interface Position {
   unrealPct: number | null; held: number | Waits
 }
 
-// a total's sub line, with how many it left out
-const also = (sub: string, n: number) => (n ? sub + ' · ' + leftOut(n) : sub)
+// a total's sub line; what it left out is not counted on the page
+const also = (sub: string, _n: number) => sub
 
 test('the tiles are the six CAD figures the spec gives, with a margin account in scope', async ({ page, request }) => {
   const m = await figures(request)

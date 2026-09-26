@@ -22,11 +22,12 @@ test('value-axis labels that would touch are not both shown', async ({ page, req
   expect(overlapping).toBe(false)
 })
 
-test('Cashflow names the filters it ignored', async ({ page, request }) => {
+test('Cashflow writes nothing about the filters it does not read', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '#cashflow', (m) => {
     ;(m.cashflow as Record<string, unknown>).skippedFilters = ['grade', 'tag']
   })
-  await expect(page.locator('#page')).toContainText('grade, tag filters do not apply to distributions — only account, date and symbol narrow this page.')
+  await expect(page.locator('#page .kpi').first()).toBeVisible()
+  await expect(page.locator('#page')).not.toContainText('apply to distributions')
 })
 
 test('Cashflow says nothing of filters when it ignored none', async ({ page }) => {

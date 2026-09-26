@@ -92,4 +92,7 @@ pub struct Transaction {
     /// For a payment (a distribution, interest on a holding), the units it was
     /// paid on, where the source states them: never a change to the position.
     pub paid_on: Option<Dec>,
+    /// For units that moved in, what the source states they were worth as they
+    /// arrived (Wealthsimple's amount on a coin moved in): never cash that moved.
+    pub value: Option<Money>,
 }

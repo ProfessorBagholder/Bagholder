@@ -211,6 +211,7 @@ impl Mapping for PersonMapping {
                     fee: fee.as_ref().map(money).transpose()?,
                     fx_rate: None,
                     paid_on: None,
+                    value: None,
                 })
             };
             return match read() {

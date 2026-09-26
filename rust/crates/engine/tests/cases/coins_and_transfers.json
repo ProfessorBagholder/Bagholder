@@ -1,5 +1,41 @@
 [
   {
+    "name": "a coin moved in costs what the source states it was worth as it arrived",
+    "spec": "SPEC.md §2 What you enter: units that moved in cost the value the source states on arrival, unless the person states their own",
+    "working": [
+      "1 BTC bought for 50,000 (Jan 5); 1 BTC transferred in, stated worth 55,000 as it arrived (Jan 6); 2 BTC sold for 120,000 (60,000 each)",
+      "first in first out: the bought coin 60,000 − 50,000 = 10,000; the arrived coin 60,000 − 55,000 = 5,000",
+      "realized: 15,000 over 2 trades, none left out"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "BTC", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "1", "cash": "-50000"},
+      {"id": "t2", "account": "C", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "1", "value": "55000"},
+      {"id": "t3", "account": "C", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "BTC", "qty": "-2", "cash": "120000"}
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [{"opened_by": "t1", "pnl": "10000.00"}, {"opened_by": "t2", "pnl": "5000.00", "flags": ["deposited"]}],
+      "kpi": {"realized": "15000.00", "count": 2, "left_out": 0}
+    }
+  },
+  {
+    "name": "the person's cost for an arrival wins over the value the source states",
+    "spec": "SPEC.md §2 What you enter: the person's stated cost comes before the source's stated value",
+    "working": ["1 ETH transferred in, stated worth 2,500; the person states it cost 2,000 on 2025-06-01; sold for 3,000: P&L 1,000, opened 2025-06-01"],
+    "today": "2026-04-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "ETH", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-03-01", "at": "2026-03-01T15:00:00Z", "kind": "transfer-in", "instrument": "ETH", "qty": "1", "value": "2500"},
+      {"id": "t2", "account": "C", "day": "2026-03-15", "at": "2026-03-15T15:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-1", "cash": "3000"}
+    ],
+    "adjustments": [{"applies_to": "t1", "source": "person", "legs": [{"to": "ETH", "cost": "2000", "acquired": "2025-06-01"}]}],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "1000.00", "opened": "2025-06-01"}]}
+  },
+  {
     "name": "a staking reward opens a lot at no cost",
     "spec": "SPEC.md §2 Trade, Crypto: staking rewards open a lot at zero cost and carry a reward flag",
     "working": ["0.5 ETH rewarded (cost 0), sold for 1,000: P&L 1,000, marked reward"],

@@ -1224,11 +1224,13 @@ impl<'a> Matcher<'a> {
                 // its lots arrive with the linked transfer out
                 return;
             }
-            // what the asset cost: the person's stated cost, else not on the record
+            // what the asset cost: the person's stated cost, else what the source
+            // states it was worth as it arrived, else not on the record
             let stated = self.inputs.facts.adjustments.get(&t.id).and_then(|a| a.legs.iter().find(|l| l.from.is_none() && l.to == Some(instrument) && l.cost.is_some()).cloned());
             let (value, day) = match stated {
                 Some(leg) => (Ok(leg.cost.expect("filtered")), leg.acquired.unwrap_or(t.trade_date)),
                 None if self.inputs.facts.adjustments.in_conflict(&t.id) => (Err(Gaps::of(Gap::AdjustmentConflict(t.id.clone()))), t.trade_date),
+                None if t.value.is_some() => (Ok(t.value.expect("tested")), t.trade_date),
                 None => {
                     self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::CostOfArrival, account, instrument, day: t.trade_date, units: Some(qty) });
                     (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date)
@@ -1893,6 +1895,7 @@ mod fill_price_tests {
             fee: fee.map(usd),
             fx_rate: None,
             paid_on: None,
+            value: None,
         }
     }
 

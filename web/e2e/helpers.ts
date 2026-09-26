@@ -172,7 +172,6 @@ export function pctPlain(v: number | null | undefined | Waits, dp = 1): string {
 }
 export const hold = (d: number | null | undefined) => (d == null ? '—' : Math.round(d).toLocaleString('en-US') + 'd')
 /** A total's second line: how many it left out because their figures wait. */
-export const leftOut = (n: number) => (n ? n + ' waiting' : '')
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export const stamp = (iso: string) => MON[+iso.slice(5, 7) - 1] + " '" + iso.slice(2, 4)

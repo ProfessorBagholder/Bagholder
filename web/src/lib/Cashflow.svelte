@@ -1,7 +1,7 @@
 <script lang="ts">
   import { roll } from './actions/roll'
   import type { Model, Partial } from './model'
-  import { money, money0, signedMoney, pctPlain, qty, px, color, leftOut, waiting } from './fmt'
+  import { money, money0, signedMoney, pctPlain, qty, px, color, waiting } from './fmt'
   import { absBelow, plot, sign, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
@@ -53,10 +53,6 @@
     for (let i = 0; i < want; i++) a.push(ms[Math.round((i * (ms.length - 1)) / Math.max(1, want - 1))].label)
     return [...new Set(a)]
   })
-  const note = $derived.by(() => {
-    const skipped = c.skippedFilters || []
-    return skipped.length ? skipped.join(', ') + (skipped.length > 1 ? ' filters do not' : ' filter does not') + ' apply to distributions — only account, date and symbol narrow this page.' : ''
-  })
 
   // a total sorts by what it adds; the projection column shows a month of it
   const sortValue = (r: Record<string, unknown>, k: string) => {
@@ -106,14 +102,11 @@
       {:else if t.kind === 'yield'}
         <div class="card elev-sm kpi"><div class="lbl">Yield on cost</div><div class="tab v" style="color:var(--accent-300)" use:roll={t.yield == null ? '—' : pctPlain(t.yield, 2)}></div><div class="s">{money0(t.projected)}/mo</div></div>
       {:else}
-        <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v" use:roll={money0(t.total.total)}></div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}{t.total.leftOut ? ' · ' + leftOut(t.total.leftOut) : ''}</div></div>
+        <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v" use:roll={money0(t.total.total)}></div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}</div></div>
       {/if}
     {/each}
   </div>
 
-  {#if note}
-    <div class="dim" style="font-size:11px;line-height:1.5">{note}</div>
-  {/if}
 
   <div class="card elev-sm" style="padding:16px 18px 12px">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px"><h5>Cashflow</h5>
@@ -226,7 +219,6 @@
               {:else}
                 <div class="lbl">Projected</div>
                 <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{pieFmt(pie.total.total)}</div>
-                {#if pie.total.leftOut}<div class="muted" style="font-size:11px;margin-top:2px">{leftOut(pie.total.leftOut)}</div>{/if}
               {/if}
             </div>
           </div>
@@ -283,4 +275,4 @@
 </div>
 
 <!-- a total, and under it how many it left out -->
-{#snippet partial(p: Partial)}{money0(p.total)}{#if p.leftOut}<div class="dim" style="font-size:10.5px">{leftOut(p.leftOut)}</div>{/if}{/snippet}
+{#snippet partial(p: Partial)}{money0(p.total)}{/snippet}

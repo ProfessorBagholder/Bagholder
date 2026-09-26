@@ -417,3 +417,17 @@ fn a_row_stamped_at_midnight_toronto_is_that_day_whatever_the_season_and_the_vie
         day = day.tomorrow().unwrap();
     }
 }
+
+#[test]
+fn a_coin_moved_in_keeps_the_value_wealthsimple_states_it_arrived_at() {
+    let rows = all();
+    let arrivals: Vec<&(Value, Mapped)> = rows.iter().filter(|(r, _)| text(r, "type") == Some("CRYPTO_TRANSFER") && text(r, "subType") == Some("TRANSFER_IN") && text(r, "unifiedStatus") == Some("COMPLETED")).collect();
+    assert!(!arrivals.is_empty(), "the replies hold a coin moved in");
+    for (row, m) in arrivals {
+        let leg = m.legs.first().expect("a leg");
+        let amount = dec(text(row, "amount").expect("an amount"));
+        let currency: Currency = text(row, "currency").expect("a currency").parse().unwrap();
+        assert_eq!(leg.value, Some(bagholder_core::Money::new(amount.abs(), currency)), "the stated value is the arrival's");
+        assert_eq!(leg.cash, None, "no cash moved");
+    }
+}

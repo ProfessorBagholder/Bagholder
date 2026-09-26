@@ -217,6 +217,7 @@ impl Mapping for Imported {
                 fee: None,
                 fx_rate: None,
                 paid_on: None,
+                value: None,
             }],
             problems: vec![],
             adjustments: vec![],

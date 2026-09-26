@@ -45,8 +45,7 @@ test('the six KPI tiles show label, value and subtitle against the model kpi blo
 
   await expect(tiles.nth(0).locator('.lbl')).toHaveText('Realized P&L')
   await expect(tiles.nth(0).locator('.v')).toHaveText(money(k.realized))
-  const realizedWaiting = k.realizedLeftOut ? ' · ' + k.realizedLeftOut + ' waiting' : ''
-  await expect(tiles.nth(0).locator('.s')).toHaveText(k.count + (k.count === 1 ? ' trade' : ' trades') + realizedWaiting)
+  await expect(tiles.nth(0).locator('.s')).toHaveText(k.count + (k.count === 1 ? ' trade' : ' trades'))
 
   await expect(tiles.nth(1).locator('.lbl')).toHaveText('Win rate')
   await expect(tiles.nth(1).locator('.v')).toHaveText(k.winRate == null ? '—' : pctPlain(k.winRate))
@@ -144,7 +143,8 @@ test('the equity curve opens on P&L, a running total that reaches below zero, an
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })
   await expect(card.getByRole('button', { name: 'P&L' })).toHaveClass(/on/)
-  await expect(card).toContainText('2 waiting')
+  // what the running total left out is not counted on the card (docs/decisions.md)
+  await expect(card).not.toContainText('waiting')
   // the axis runs from below zero to above the peak
   await expect(card.locator('.tab span').first()).toHaveText('$1,200')
   await expect(card.locator('.tab span').last()).toHaveText('−$420')
@@ -155,10 +155,9 @@ test('the equity curve opens on P&L, a running total that reaches below zero, an
   await expect(card.locator('.tip .tv')).toHaveClass(/neg/)
   await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2)
   await expect(card.locator('.tip .tv')).toHaveText('$1,200')
-  // the value names the filters it does not read; P&L reads them all
-  await expect(card).not.toContainText('do not apply')
+  // nothing is written under the chart, whichever line it shows
   await card.getByRole('button', { name: 'Value' }).click()
-  await expect(card).toContainText("date, symbol filters do not apply to the accounts' value — only the account narrows it.")
+  await expect(card).not.toContainText('apply')
   await expect(card).not.toContainText('waiting')
   await page.reload()
   await ready(page)

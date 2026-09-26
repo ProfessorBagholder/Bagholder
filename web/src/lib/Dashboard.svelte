@@ -76,10 +76,6 @@
     for (let i = 0; i < want; i++) out.push(stamp(s[Math.round((i * (s.length - 1)) / Math.max(1, want - 1))].d))
     return [...new Set(out)]
   })
-  const eqNote = $derived.by(() => {
-    const skipped = eqMode === 'value' ? model.equity.skippedFilters : []
-    return skipped.length ? skipped.join(', ') + (skipped.length > 1 ? ' filters do not' : ' filter does not') + ' apply to the accounts\' value — only the account narrows it.' : ''
-  })
 
   // equity hover — crosshair, dot, tip, and the dim-after-cursor mask
   let eqPlot = $state<HTMLElement>()
@@ -217,7 +213,7 @@
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
   <!-- KPI row -->
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
-    <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}{k.realizedLeftOut ? ' · ' + k.realizedLeftOut + ' waiting' : ''}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v" use:roll={k.winRate == null ? '—' : pctPlain(k.winRate)}></div><div class="s">{k.wins} W · {k.losses} L{k.breakeven ? ' · ' + k.breakeven + ' BE' : ''}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v" use:roll={pf}></div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Expectancy</div><div class="v" use:roll={k.expectancy == null ? '—' : money(k.expectancy)}></div><div class="s">Avg W {money0(k.avgWin)} · L {money0(k.avgLoss)}</div></div>
@@ -231,7 +227,6 @@
     <div class="card elev-sm" style="padding:16px 18px 12px">
       <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px">
         <h5>Equity curve</h5>
-        {#if eqMode === 'pnl' && model.equity.pnl.leftOut}<span class="muted" style="font-size:11px">{model.equity.pnl.leftOut} waiting</span>{/if}
         <div style="display:flex;gap:4px;margin-left:auto">
           {#each [['pnl', 'P&L'], ['value', 'Value']] as const as m (m[0])}
             <button class="pill" class:on={eqMode === m[0]} style="padding:2px 8px;font-size:11px;width:auto" onclick={() => setEqMode(m[0])}>{m[1]}</button>
@@ -262,7 +257,6 @@
           {#each eqAxis as a (a)}<span>{a}</span>{/each}
         </div>
       {/if}
-      {#if eqNote}<div class="dim" style="font-size:11px;line-height:1.5;margin-top:6px">{eqNote}</div>{/if}
     </div>
 
     <!-- annualized returns -->

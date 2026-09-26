@@ -64,9 +64,6 @@ export function waiting(f: Waits): string {
 type Amount = Fig<Dec> | number | null | undefined
 
 /** A total's second line: how many it left out because their figures wait (SPEC §1). */
-export function leftOut(n: number): string {
-  return n ? n + ' waiting' : ''
-}
 
 /** A money amount: U+2212 minus, en-US grouping, never a currency label. Exact text is written as it states. */
 export function money(v: Amount, _ccy?: string, dp?: number): string {

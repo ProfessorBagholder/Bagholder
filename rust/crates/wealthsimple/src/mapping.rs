@@ -70,8 +70,9 @@ impl Mapping for WealthsimpleMapping {
 
     /// 2: a distribution keeps the units Wealthsimple states it was paid on.
     /// 3: a row's day is Toronto's, where Wealthsimple states its days.
+    /// 4: a coin moved in keeps the value Wealthsimple states it arrived at.
     fn version(&self) -> u32 {
-        3
+        4
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -292,6 +293,7 @@ impl Base {
             fee: None,
             fx_rate: None,
             paid_on: None,
+            value: None,
         }
     }
 }
@@ -330,6 +332,14 @@ fn single(root: &Node, row: &Row, base: &Base, r: &Rule, out: &mut Mapped) -> Re
     // never a change to the holding
     if r.kind == Kind::Dividend {
         d.paid_on = row.quantity.filter(|q| q.is_positive());
+    }
+    // units moved in with no cash: the row's amount is what Wealthsimple states they
+    // were worth as they arrived (a coin from a wallet), the arrival's cost where the
+    // person states none
+    if r.kind == Kind::TransferIn && r.units == Units::In && r.cash == Cash::None {
+        if let (Some(amount), Some(currency)) = (row.amount, row.currency) {
+            d.value = Some(Money::new(amount.abs(), currency)).filter(|m| !m.amount.is_zero());
+        }
     }
     match (r.units, row.quantity) {
         (Units::None, _) => {}

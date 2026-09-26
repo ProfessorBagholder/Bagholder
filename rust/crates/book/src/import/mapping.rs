@@ -192,8 +192,9 @@ impl Mapping for ImportMapping {
 
     /// 3: a dividend keeps the units the row states it was paid on.
     /// 4: a row's day is Toronto's, where Wealthsimple states its days.
+    /// 5: units moved in keep the value the row states they arrived at.
     fn version(&self) -> u32 {
-        4
+        5
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -274,6 +275,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
             fee: None,
             fx_rate: None,
             paid_on: None,
+            value: None,
         };
         return Ok(Mapped { legs: vec![leg], problems, ..Mapped::default() });
     };
@@ -356,6 +358,12 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
         quantity
     };
     let price = if quantity.is_some() { price } else { None };
+    // units moved in: the amount the earlier app kept on the row is what Wealthsimple
+    // stated they were worth as they arrived, never cash that moved
+    let value = match (rule.kind, rule.cash, cash_stated, quantity) {
+        (Kind::TransferIn, Cash::None, Some(c), Some(_)) if !c.is_zero() => Some(Money::new(c.abs(), currency)),
+        _ => None,
+    };
 
     let paid_on = if rule.kind == Kind::Dividend { row_quantity.filter(|q| q.is_positive()) } else { None };
     let leg = Draft {
@@ -373,6 +381,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
         fee,
         fx_rate: None,
         paid_on,
+        value,
     };
     Ok(Mapped { legs: vec![leg], problems, ..Mapped::default() })
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { roll } from './actions/roll'
   import type { Model } from './model'
-  import { money0, signedMoney, pct, pctPlain, px, cls, color, leftOut, waiting } from './fmt'
+  import { money0, signedMoney, pct, pctPlain, px, cls, color, waiting } from './fmt'
   import { waits } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
@@ -15,7 +15,6 @@
   // a share under a tile: its word where it waits, a dash where there is none
   const share = (v: number | null | { gaps: string[] }, then: (x: number) => string) => (v == null ? '—' : waits(v) ? waiting(v) : then(v))
   // a total's sub line, with how many it left out
-  const also = (sub: string, n: number) => (n ? sub + ' · ' + leftOut(n) : sub)
   const tiles = $derived.by(() => {
     const n = pf.positionCount || 0
     const positions = n + (n === 1 ? ' position' : ' positions')
@@ -27,7 +26,7 @@
         sub: pf.nav == null ? '—' : pf.navAccounts + (pf.navAccounts === 1 ? ' account, ' : ' accounts, ') + positions,
         vcls: '',
       },
-      { label: 'Cost basis', value: money0(pf.costBasis.total), sub: also('Total book value', pf.costBasis.leftOut), vcls: '' },
+      { label: 'Cost basis', value: money0(pf.costBasis.total), sub: 'Total book value', vcls: '' },
     ]
     if (pf.hasMargin) {
       out.push({
@@ -53,13 +52,13 @@
     out.push({
       label: '1d change',
       value: pf.dayChange == null ? '—' : signedMoney(pf.dayChange.total, undefined, 2),
-      sub: also(share(pf.dayChangePct, (x) => pct(x) + ' today'), pf.dayChange?.leftOut ?? 0),
+      sub: share(pf.dayChangePct, (x) => pct(x) + ' today'),
       vcls: pf.dayChange == null ? '' : cls(pf.dayChange.total),
     })
     out.push({
       label: 'Unrealized P&L',
       value: signedMoney(pf.unrealized.total, undefined, 2),
-      sub: also(share(pf.unrealizedPct, (x) => pct(x) + (x >= 0 ? ' gain' : ' loss')), pf.unrealized.leftOut),
+      sub: share(pf.unrealizedPct, (x) => pct(x) + (x >= 0 ? ' gain' : ' loss')),
       vcls: cls(pf.unrealized.total),
     })
     return out
@@ -118,7 +117,7 @@
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px"><h5>Allocation</h5></div>
       {#if allocItems.length}
         <div style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">
-          <Donut items={allocItems} total={pf.marketValue.total} totalLeftOut={pf.marketValue.leftOut} centreLabel="Market value" side="l" />
+          <Donut items={allocItems} total={pf.marketValue.total} centreLabel="Market value" side="l" />
         </div>
       {:else}
         <div class="muted empty" style="flex:1;font-size:12px">No open positions in scope.</div>

@@ -3,7 +3,7 @@
   // the centre reading the label and total (or a hovered slice), and the legend
   // as an aligned grid. Ported from ledger.html donutPieces/donutHover, with the
   // hover expressed as reactive state instead of DOM mutation.
-  import { money0, pctPlain, qty, leftOut } from './fmt'
+  import { money0, pctPlain, qty } from './fmt'
   import { symText } from './sym'
   import type { Dec, Fig } from './dec'
 
@@ -18,7 +18,6 @@
   let {
     items,
     total = null,
-    totalLeftOut = 0,
     centreLabel,
     centreText = '',
     side = 'l',
@@ -29,7 +28,6 @@
     items: DonutItem[]
     total?: Fig<Dec> | number | null
     /** How many the total left out because their figures wait. */
-    totalLeftOut?: number
     centreLabel: string
     centreText?: string
     side?: 'l' | 'r' | 'row'
@@ -92,7 +90,6 @@
     {:else}
       <div class="lbl">{centreLabel}</div>
       <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{total == null ? centreText : money0(total)}</div>
-      {#if totalLeftOut}<div class="muted" style="font-size:11px;margin-top:2px">{leftOut(totalLeftOut)}</div>{/if}
     {/if}
   </div>
 </div>
