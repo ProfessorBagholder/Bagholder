@@ -3,7 +3,9 @@
 //! what the target gains, the order's value in CAD and its share of the accounts'
 //! value, and the cash or available margin after it. Worked out exactly from what the
 //! person typed and what the quote states, on the server, so the page does no money
-//! arithmetic; the page shows each as it comes.
+//! arithmetic; the page shows each as it comes. The order's value in CAD is at the
+//! Bank of Canada's rate for the quote's currency today, as the figures hold it; a
+//! currency they hold no rate for leaves it, and what follows from it, waiting.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -11,6 +13,7 @@ use ts_rs::TS;
 use bagholder_core::{Dec, Rounding};
 
 use crate::wire::Dec as Text;
+use crate::wire::Fig;
 
 /// What the ticket holds, as the page sends it: every amount as the text typed or
 /// the quote's own figure, none where it is not set.
@@ -30,7 +33,6 @@ pub struct PreviewRequest {
     pub sl: StopInput,
     pub tp: TargetInput,
     pub quote: QuoteInput,
-    pub fx_usd_cad: Option<String>,
     pub margin_rate: Option<String>,
     pub margin_available: Option<String>,
     pub cash: Option<String>,
@@ -107,14 +109,15 @@ pub struct Preview {
     pub stop_loss_pct: Option<f64>,
     pub take_profit_pct: Option<f64>,
     pub reward_to_risk: Option<f64>,
-    /// The order's value in CAD, and its share of the accounts' value.
-    pub cad: Option<Text>,
-    pub position_share: Option<f64>,
+    /// The order's value in CAD, and its share of the accounts' value: waiting where
+    /// the quote's currency has no rate.
+    pub cad: Option<Fig<Text>>,
+    pub position_share: Option<Fig<f64>>,
     /// The margin account's available margin after the order.
-    pub margin_after: Option<Text>,
+    pub margin_after: Option<Fig<Text>>,
     /// What the review's last line shows: available margin after on a margin
     /// account, cash after on any other.
-    pub after: Option<Text>,
+    pub after: Option<Fig<Text>>,
     /// The whole units the buying power covers at the working price (a Buy).
     pub max_quantity: Option<Text>,
 }
@@ -147,8 +150,33 @@ fn ratio(n: Dec, over: Dec) -> Option<f64> {
     (!over.is_zero()).then(|| n.div_rounded(over, 12, Rounding::HalfEven).ok()).flatten().map(|r| r.to_f64())
 }
 
-/// The ticket's figures from what it holds.
-pub fn preview(r: &PreviewRequest) -> Result<Preview, Unread> {
+/// CAD per unit of the quote's currency today, or the gaps it waits on; `None`
+/// before a quote has named a currency.
+pub type ToCad = Option<Result<Dec, Vec<String>>>;
+
+/// The ticket's figures, the rate to CAD for the quote's currency looked up in the
+/// figures (the Bank of Canada's, for today).
+pub fn preview_for(app: &std::sync::Arc<crate::app::App>, r: &PreviewRequest) -> Result<Preview, crate::http::ApiError> {
+    use crate::http::ApiError;
+    let named = r.quote.currency.trim();
+    let to_cad: ToCad = if named.is_empty() {
+        None
+    } else {
+        let currency = bagholder_core::Currency::parse(&named.to_uppercase()).map_err(|_| ApiError::BadRequest(format!("the quote's currency {named:?} is not a currency")))?;
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("The figures are not open.".into()))?;
+        let rate = f
+            .read(|e| {
+                let i = e.inputs();
+                bagholder_engine::fx::rate(&i.facts.rates, &i.clock, currency, i.clock.today)
+            })
+            .ok_or_else(|| ApiError::Failed("The figures are not built yet.".into()))?;
+        Some(rate.map_err(|g| g.words().into_iter().map(String::from).collect()))
+    };
+    preview(r, &to_cad).map_err(|Unread(why)| ApiError::BadRequest(why))
+}
+
+/// The ticket's figures from what it holds, and the rate to CAD of its currency.
+pub fn preview(r: &PreviewRequest, to_cad: &ToCad) -> Result<Preview, Unread> {
     let buy = r.side.eq_ignore_ascii_case("BUY");
     let dir = if buy { Dec::ONE } else { Dec::ONE.neg() };
     let hundred = d("100");
@@ -244,28 +272,33 @@ pub fn preview(r: &PreviewRequest) -> Result<Preview, Unread> {
         (Some(rk), Some(g)) if stop_loss_on && take_profit_on && rk.is_positive() => ratio(g, rk),
         _ => None,
     };
-    let fx = match field("the USD rate", &r.fx_usd_cad)? {
-        Some(f) if r.quote.currency == "USD" => f,
-        _ => Dec::ONE,
+    // the order's value in CAD at today's rate: a currency with no rate waits, never 1:1
+    let cad: Option<Fig<Dec>> = match (notional, to_cad) {
+        (Some(n), Some(Ok(rate))) => Some(Fig::Stated(mul(n, *rate)?)),
+        (Some(_), Some(Err(gaps))) => Some(Fig::Waits { gaps: gaps.clone() }),
+        _ => None,
     };
-    let cad = notional.map(|n| mul(n, fx)).transpose()?;
-    let position_share = match (cad, field("the accounts' value", &r.nav)?) {
-        (Some(c), Some(n)) if n.is_positive() => ratio(c, n),
+    let nav = field("the accounts' value", &r.nav)?.filter(|n| n.is_positive());
+    let position_share = match (&cad, nav) {
+        (Some(Fig::Stated(c)), Some(n)) => ratio(*c, n).map(Fig::Stated),
+        (Some(Fig::Waits { gaps }), Some(_)) => Some(Fig::Waits { gaps: gaps.clone() }),
         _ => None,
     };
     let rate = field("the margin rate", &r.margin_rate)?.unwrap_or(Dec::ONE);
-    let margin_after = match (r.margin || r.linked_margin, field("the available margin", &r.margin_available)?, cad) {
-        (true, Some(m), Some(c)) => Some(sub(m, mul(mul(dir, c)?, rate)?)?),
+    let margin_after = match (r.margin || r.linked_margin, field("the available margin", &r.margin_available)?, &cad) {
+        (true, Some(m), Some(Fig::Stated(c))) => Some(Fig::Stated(sub(m, mul(mul(dir, *c)?, rate)?)?)),
+        (true, Some(_), Some(Fig::Waits { gaps })) => Some(Fig::Waits { gaps: gaps.clone() }),
         _ => None,
     };
     let after = if r.margin {
-        margin_after
+        margin_after.clone()
     } else {
         match (field("the cash", &r.cash)?, notional) {
-            (Some(c), Some(n)) => Some(sub(c, mul(dir, n)?)?),
+            (Some(c), Some(n)) => Some(Fig::Stated(sub(c, mul(dir, n)?)?)),
             _ => None,
         }
     };
+    let fig_text = |v: Option<Fig<Dec>>| v.map(|f| match f { Fig::Stated(d) => Fig::Stated(Text(d)), Fig::Waits { gaps } => Fig::Waits { gaps } });
     let max_quantity = match (buy, field("the buying power", &r.buying_power)?, entry) {
         (true, Some(bp), Some(e)) if e.is_positive() => {
             let whole = div(bp, mul(e, mult)?)?.round(0, Rounding::TowardZero);
@@ -294,10 +327,10 @@ pub fn preview(r: &PreviewRequest) -> Result<Preview, Unread> {
         stop_loss_pct,
         take_profit_pct,
         reward_to_risk,
-        cad: text(cad),
+        cad: fig_text(cad),
         position_share,
-        margin_after: text(margin_after),
-        after: text(after),
+        margin_after: fig_text(margin_after),
+        after: fig_text(after),
         max_quantity: text(max_quantity),
     })
 }
@@ -329,9 +362,24 @@ mod tests {
         v.map(|t| t.0)
     }
 
+    fn stated(v: &Option<Fig<Text>>) -> Option<Dec> {
+        match v {
+            Some(Fig::Stated(t)) => Some(t.0),
+            Some(Fig::Waits { gaps }) => panic!("waits on {gaps:?}"),
+            None => None,
+        }
+    }
+
+    /// No rate: as before the quote names a currency.
+    const NONE: ToCad = None;
+
+    fn at(rate: &str) -> ToCad {
+        Some(Ok(d(rate)))
+    }
+
     #[test]
     fn a_buy_limit_with_a_5pc_stop_and_10pc_target_risks_50_to_gain_100() {
-        let p = preview(&ticket()).unwrap();
+        let p = preview(&ticket(), &NONE).unwrap();
         assert_eq!((dec(&p.entry), dec(&p.notional)), (Some(d("100")), Some(d("1000"))));
         assert_eq!((dec(&p.stop_loss_price), dec(&p.take_profit_price)), (Some(d("95")), Some(d("110"))));
         assert_eq!((dec(&p.risk), dec(&p.gain)), (Some(d("50")), Some(d("100"))));
@@ -343,7 +391,7 @@ mod tests {
     fn a_trailing_stop_loses_exactly_its_distance() {
         let mut r = ticket();
         r.sl = StopInput { on: true, kind: "trail".into(), price_unit: "amt".into(), trail: t("5"), unit: "pct".into(), ..Default::default() };
-        let p = preview(&r).unwrap();
+        let p = preview(&r, &NONE).unwrap();
         assert!(p.trailing);
         assert_eq!((dec(&p.stop_loss_price), dec(&p.trail_distance), dec(&p.risk)), (Some(d("95")), Some(d("5")), Some(d("50"))));
     }
@@ -352,7 +400,7 @@ mod tests {
     fn a_sell_has_no_brackets_and_no_reward_to_risk() {
         let mut r = ticket();
         r.side = "SELL".into();
-        let p = preview(&r).unwrap();
+        let p = preview(&r, &NONE).unwrap();
         assert!(!p.stop_loss_on && !p.take_profit_on);
         assert_eq!(p.reward_to_risk, None);
     }
@@ -361,15 +409,14 @@ mod tests {
     fn cash_after_a_buy_is_the_cash_less_the_order_and_margin_after_less_its_margin() {
         let mut r = ticket();
         r.cash = t("5000");
-        assert_eq!(dec(&preview(&r).unwrap().after), Some(d("4000")));
+        assert_eq!(stated(&preview(&r, &NONE).unwrap().after), Some(d("4000")));
         r.margin = true;
         r.margin_available = t("12680.45");
         r.margin_rate = t("0.3");
-        r.fx_usd_cad = t("1.3712");
-        let p = preview(&r).unwrap();
+        let p = preview(&r, &at("1.3712")).unwrap();
         // 1000 USD at 1.3712 is 1371.20 CAD, a third of it drawn at a 30% rate
-        assert_eq!((dec(&p.cad), dec(&p.margin_after), dec(&p.after)), (Some(d("1371.2")), Some(d("12269.09")), Some(d("12269.09"))));
-        assert!((p.position_share.unwrap() - 0.13712).abs() < 1e-12);
+        assert_eq!((stated(&p.cad), stated(&p.margin_after), stated(&p.after)), (Some(d("1371.2")), Some(d("12269.09")), Some(d("12269.09"))));
+        assert_eq!(p.position_share, Some(Fig::Stated(0.13712)));
     }
 
     #[test]
@@ -378,13 +425,13 @@ mod tests {
         r.limit = None;
         r.stop = None;
         r.quote.last = t("0.62345");
-        let p = preview(&r).unwrap();
+        let p = preview(&r, &NONE).unwrap();
         assert_eq!(dec(&p.limit), Some(d("0.6235")), "four places under a dollar");
         assert_eq!(dec(&p.stop), Some(d("0.64")), "2% through the last, to the cent");
         r.quote.last = t("12.345");
-        assert_eq!(dec(&preview(&r).unwrap().limit), Some(d("12.35")));
+        assert_eq!(dec(&preview(&r, &NONE).unwrap().limit), Some(d("12.35")));
         r.kind = "MARKET".into();
-        assert_eq!(dec(&preview(&r).unwrap().entry), Some(d("101")), "a market buy works at the ask");
+        assert_eq!(dec(&preview(&r, &NONE).unwrap().entry), Some(d("101")), "a market buy works at the ask");
     }
 
     #[test]
@@ -392,23 +439,55 @@ mod tests {
         let mut r = ticket();
         r.buying_power = t("1050");
         r.quote.multiplier = t("100");
-        assert_eq!(dec(&preview(&r).unwrap().max_quantity), Some(d("0")), "not one contract of 100 at 100");
+        assert_eq!(dec(&preview(&r, &NONE).unwrap().max_quantity), Some(d("0")), "not one contract of 100 at 100");
         r.quote.multiplier = None;
-        assert_eq!(dec(&preview(&r).unwrap().max_quantity), Some(d("10")));
+        assert_eq!(dec(&preview(&r, &NONE).unwrap().max_quantity), Some(d("10")));
+    }
+
+    /// The order's value in CAD is the notional at the rate given for its currency,
+    /// whatever the currency; a currency with no rate waits, and so does everything
+    /// worked from it, never taken 1:1.
+    #[test]
+    fn the_value_in_cad_is_at_the_currencys_rate_and_waits_without_one() {
+        for rate in ["1", "1.3712", "0.0093", "1.8", "0.7431"] {
+            let mut r = ticket();
+            r.margin = true;
+            r.margin_available = t("12680.45");
+            r.margin_rate = t("0.3");
+            let p = preview(&r, &at(rate)).unwrap();
+            let cad = d("1000").checked_mul(d(rate)).unwrap();
+            assert_eq!(stated(&p.cad), Some(cad), "at {rate}");
+            assert_eq!(p.position_share, ratio(cad, d("10000")).map(Fig::Stated), "at {rate}");
+        }
+        let mut r = ticket();
+        r.margin = true;
+        r.margin_available = t("12680.45");
+        let gaps = vec!["rate-not-held".to_string()];
+        let p = preview(&r, &Some(Err(gaps.clone()))).unwrap();
+        let waits = Some(Fig::Waits { gaps: gaps.clone() });
+        assert_eq!((&p.cad, &p.margin_after, &p.after), (&waits, &waits, &waits));
+        assert_eq!(p.position_share, Some(Fig::Waits { gaps }));
+        assert_eq!(dec(&p.notional), Some(d("1000")), "the order's own value stands in its own currency");
+        // a cash account's cash after is in the order's currency: no rate needed
+        r.margin = false;
+        r.cash = t("5000");
+        assert_eq!(stated(&preview(&r, &Some(Err(vec!["rate-not-held".into()]))).unwrap().after), Some(d("4000")));
+        // before a quote names a currency there is no value in CAD to state
+        assert_eq!(preview(&r, &NONE).unwrap().cad, None);
     }
 
     #[test]
     fn a_field_that_does_not_read_is_named() {
         let mut r = ticket();
         r.quantity = t("ten");
-        assert_eq!(preview(&r).unwrap_err(), Unread("the quantity \"ten\" is not a number".into()));
+        assert_eq!(preview(&r, &NONE).unwrap_err(), Unread("the quantity \"ten\" is not a number".into()));
     }
 
     #[test]
     fn an_amount_typed_buys_the_whole_units_it_covers() {
         let mut r = ticket();
         r.amount = t("1,055");
-        let p = preview(&r).unwrap();
+        let p = preview(&r, &NONE).unwrap();
         assert_eq!((p.quantity.0, dec(&p.notional)), (d("10"), Some(d("1000"))));
     }
 }

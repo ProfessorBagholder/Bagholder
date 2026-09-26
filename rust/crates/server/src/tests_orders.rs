@@ -867,6 +867,51 @@ fn test_open_orders_are_counted_for_the_header_badge() {
     assert_eq!(o::open_orders_count(&app(), None), 0);
 }
 
+/// SPEC §4, Review: Position size is the order's cost in CAD at today's rate. The
+/// rate is the figures' own (the Bank of Canada's) for the quote's currency, whatever
+/// the currency; one the figures hold no rate for waits, never taken 1:1.
+#[test]
+fn test_the_reviews_value_in_cad_is_at_the_figures_rate_for_any_currency() {
+    use crate::orders::preview::{preview_for, PreviewRequest, QuoteInput};
+    use crate::wire::Fig;
+    let _g = setup();
+    let a = app();
+    let f = a.figures.get().unwrap();
+    let (mut rated, mut waiting) = (0, 0);
+    for code in ["CAD", "USD", "EUR", "GBP", "JPY", "AUD", "CHF", "HKD", "MXN", "ZZZ"] {
+        let currency = bagholder_core::Currency::parse(code).unwrap();
+        let expected = f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, currency, e.inputs().clock.today)).unwrap();
+        let r = PreviewRequest {
+            side: "BUY".into(),
+            kind: "LIMIT".into(),
+            quantity: Some("10".into()),
+            limit: Some("100".into()),
+            quote: QuoteInput { last: Some("100".into()), currency: code.into(), ..Default::default() },
+            nav: Some("10000".into()),
+            ..Default::default()
+        };
+        let p = preview_for(&a, &r).unwrap();
+        match expected {
+            Ok(rate) => {
+                rated += 1;
+                let cad = bagholder_core::Dec::parse("1000").unwrap().checked_mul(rate).unwrap();
+                assert_eq!(p.cad, Some(Fig::Stated(crate::wire::Dec(cad))), "{code}");
+                if code == "CAD" {
+                    assert_eq!(rate, bagholder_core::Dec::ONE);
+                }
+            }
+            Err(g) => {
+                waiting += 1;
+                let gaps: Vec<String> = g.words().into_iter().map(String::from).collect();
+                assert!(!gaps.is_empty());
+                assert_eq!(p.cad, Some(Fig::Waits { gaps: gaps.clone() }), "{code}: waits, never 1:1");
+                assert_eq!(p.position_share, Some(Fig::Waits { gaps }), "{code}");
+            }
+        }
+    }
+    assert!(rated >= 1 && waiting >= 1, "both kinds walked: {rated} rated, {waiting} waiting");
+}
+
 /// SPEC §4, Orders, Status: a row left `sending` -- written, and the app stopped before
 /// Wealthsimple answered -- may or may not have reached Wealthsimple. It is read back
 /// by the id it was sent with and Wealthsimple decides it; one Wealthsimple has no

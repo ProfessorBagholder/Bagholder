@@ -1,8 +1,8 @@
 <script lang="ts">
   import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty, refreshPreview, switchSide } from './ticket.svelte'
-  import { neg, sign, ticketNumber } from '../dec'
+  import { neg, sign, ticketNumber, waits } from '../dec'
   import { plain, parseNum, amt as tkAmt, sAmt as tkSAmt } from './vals'
-  import { px, pct, money, qty as qtyFmt, num } from '../fmt'
+  import { px, pct, pctPlain, waiting, money, qty as qtyFmt, num } from '../fmt'
   import { symText } from '../sym'
   import { ICONS } from '../icons'
 
@@ -205,10 +205,10 @@
             <div class="tk-row"><span class="l">Target</span><span class="num" style="text-align:right;color:var(--pos);font-weight:500">{v.tpOn && v.gain != null ? tkSAmt(v.gain) + ' (' + pct(v.tpPct) + ')' : '—'}</span></div>
             <div class="tk-row"><span class="l">Risk / reward</span><span class="num" style="text-align:right">{rrStr}</span></div>
           {/if}
-          <div class="tk-row"><span class="l">Position size</span><span class="num" style="text-align:right">{v.positionShare != null ? (v.positionShare * 100).toFixed(1) + '% of net asset value' : '—'}</span></div>
-          <div class="tk-row"><span class="l">{v.isMargin ? 'Available margin after' : 'Cash after'}</span><span class="num" style="text-align:right{v.after != null && sign(v.after) < 0 ? ';color:var(--neg)' : ''}">{v.after == null ? '—' : money(v.after, '', 0)}</span></div>
+          <div class="tk-row"><span class="l">Position size</span><span class="num" style="text-align:right">{v.positionShare == null ? '—' : waits(v.positionShare) ? waiting(v.positionShare) : pctPlain(v.positionShare) + ' of net asset value'}</span></div>
+          <div class="tk-row"><span class="l">{v.isMargin ? 'Available margin after' : 'Cash after'}</span><span class="num" style="text-align:right{v.after != null && !waits(v.after) && sign(v.after) < 0 ? ';color:var(--neg)' : ''}">{v.after == null ? '—' : money(v.after, '', 0)}</span></div>
           {#if v.linkedMargin}
-            <div class="tk-row"><span class="l">Available margin after</span><span class="num" style="text-align:right{v.marginAfter != null && sign(v.marginAfter) < 0 ? ';color:var(--neg)' : ''}">{v.marginAfter == null ? '—' : money(v.marginAfter, '', 0)}</span></div>
+            <div class="tk-row"><span class="l">Available margin after</span><span class="num" style="text-align:right{v.marginAfter != null && !waits(v.marginAfter) && sign(v.marginAfter) < 0 ? ';color:var(--neg)' : ''}">{v.marginAfter == null ? '—' : money(v.marginAfter, '', 0)}</span></div>
           {/if}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:16px;box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.10)"><span style="font-size:13px;font-weight:500">{v.buy ? 'Estimated cost' : 'Estimated proceeds'}</span><span class="num" style="font-size:20px;line-height:1.2;font-weight:500">{(t.type === 'MARKET' ? '≈ ' : '') + tkAmt(v.notional)}</span></div>

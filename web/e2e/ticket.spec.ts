@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus, ready, figures } from './helpers'
+import { openWithStatus, ready, figures, waits, waiting, pctPlain, money } from './helpers'
 
 // SPEC.md "### Order ticket". The made-up book (e2e/serve.mjs -> demo_book.rs) already
 // holds NVDA and AAPL as open positions in the USD margin account ("Trading"; NVDA in the
@@ -265,10 +265,13 @@ test('the review step shows the order, the risk, and Available margin after on a
     [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: {
       ok: true,
       quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' },
-      fxUsdCad: 1, marginRate: 0.4, marginAvailable: 5000,
+      marginRate: 0.4, marginAvailable: 5000,
     },
   })
   await ready(page)
+  // the figures the review shows are the server's: its last answer for what the ticket holds
+  let preview: Record<string, unknown> | null = null
+  page.on('response', async (r) => { if (r.url().endsWith('/api/order/preview') && r.ok()) preview = await r.json() })
   await page.keyboard.press('Control+k')
   await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
   await page.getByRole('button', { name: 'Buy NVDA', exact: true }).click()
@@ -285,10 +288,12 @@ test('the review step shows the order, the risk, and Available margin after on a
   await expect(rows.filter({ hasText: 'At risk' })).toContainText('−$206.75 (−5.0%)')
   await expect(rows.filter({ hasText: 'Target' })).toContainText('+$413.50 (+10.0%)')
   await expect(rows.filter({ hasText: 'Risk / reward' })).toContainText('1:2')
-  // the order's CAD cost (25 × 165.40 at a rate of 1) over the accounts' value
-  const nav = Number((await figures(request)).navTotal)
-  await expect(rows.filter({ hasText: 'Position size' })).toContainText(((4135 / nav) * 100).toFixed(1) + '% of net asset value')
-  await expect(rows.filter({ hasText: 'Available margin after' })).toContainText('$3,346')
+  // the order's CAD cost (25 × 165.40 at the figures' USD rate, the server's) over the
+  // accounts' value; a rate the figures do not hold would read as waiting on it
+  await expect.poll(() => preview && preview.positionShare != null).toBe(true)
+  const p = preview as unknown as { positionShare: number | { gaps: string[] }; marginAfter: string | { gaps: string[] } }
+  await expect(rows.filter({ hasText: 'Position size' })).toContainText(waits(p.positionShare) ? waiting(p.positionShare) : pctPlain(p.positionShare) + ' of net asset value')
+  await expect(rows.filter({ hasText: 'Available margin after' })).toContainText(money(p.marginAfter, 0))
   await expect(page.locator('.tk-body')).toContainText('Estimated cost')
   await expect(page.locator('.tk-body')).toContainText('$4,135')
 })

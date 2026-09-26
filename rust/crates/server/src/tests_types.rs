@@ -35,7 +35,7 @@ fn declarations() -> String {
         PlaceTicketAnswer,
         crate::orders::preview::StopInput, crate::orders::preview::TargetInput, crate::orders::preview::QuoteInput, crate::orders::preview::PreviewRequest, crate::orders::preview::Preview,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\nimport type { Dec } from '../dec'\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\nimport type { Dec } from '../dec'\nimport type { Fig } from './figures'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());

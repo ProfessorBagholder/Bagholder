@@ -75,8 +75,8 @@ pub fn order_accounts(app: &Arc<App>) -> Result<Vec<OrderAccount>, String> {
 }
 
 /// What a margin account can borrow, as the broker last stated it, by the
-/// broker's id for the account; and the Bank's USD rate today. From the book.
-fn ticket_figures(app: &Arc<App>, margin_account: &str) -> Result<(Option<f64>, Option<f64>), String> {
+/// broker's id for the account. From the book.
+fn ticket_figures(app: &Arc<App>, margin_account: &str) -> Result<Option<f64>, String> {
     let f = app.figures.get().ok_or("the figures are not open")?;
     let names = f.names()?;
     f.read(|e| {
@@ -89,8 +89,7 @@ fn ticket_figures(app: &Arc<App>, margin_account: &str) -> Result<(Option<f64>, 
             .and_then(|b| b.buying_power.as_ref())
             .and_then(|bp| bp.as_ref().ok())
             .map(|d| d.to_f64());
-        let usd = bagholder_engine::fx::rate(&i.facts.rates, &i.clock, bagholder_core::Currency::USD, i.clock.today).ok().map(|d| d.to_f64());
-        (available, usd)
+        available
     })
     .ok_or_else(|| "the figures are not built yet".to_string())
 }
@@ -338,7 +337,6 @@ pub struct TicketQuoteOk {
     pub buying_power: Option<f64>,
     pub cash: Option<f64>,
     pub margin_available: Option<f64>,
-    pub fx_usd_cad: Option<f64>,
     pub live: bool,
 }
 
@@ -432,7 +430,7 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
             Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", a.id, e)),
         }
     }
-    let (margin_available, fx_usd_cad) = match ticket_figures(app, acct.as_ref().map_or("", |a| a.margin_account_id.as_str())) {
+    let margin_available = match ticket_figures(app, acct.as_ref().map_or("", |a| a.margin_account_id.as_str())) {
         Ok(v) => v,
         Err(e) => return TicketQuote::err(format!("The book could not be read: {e}")),
     };
@@ -447,7 +445,6 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         buying_power: balance.buying_power,
         cash: balance.cash,
         margin_available,
-        fx_usd_cad,
         live: orders_live(),
     })
 }

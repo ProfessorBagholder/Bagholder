@@ -3,6 +3,7 @@
 
 import type { OkOr } from './common'
 import type { Dec } from '../dec'
+import type { Fig } from './figures'
 
 export type Side = "" | "BUY" | "SELL";
 
@@ -73,7 +74,7 @@ marginAccountId: string, };
 
 export type TicketQuoteDetail = { securityId: string, symbol: string, name: string, exchange: string, currency: string, securityType: string, buyable: boolean, sellable: boolean, tradeEligible: boolean, status: string, last: number | null, bid: number | null, ask: number | null, bidSize: number | null, askSize: number | null, mid: number | null, change: number | null, changePct: number | null, marketStatus: string, quotedAsOf: string, multiplier: number | null, };
 
-export type TicketQuoteOk = { ok: true, quote: TicketQuoteDetail, orderTypes: Array<string>, marginRate: number | null, accounts: Array<OrderAccount>, account: OrderAccount | null, buyingPower: number | null, cash: number | null, marginAvailable: number | null, fxUsdCad: number | null, live: boolean, };
+export type TicketQuoteOk = { ok: true, quote: TicketQuoteDetail, orderTypes: Array<string>, marginRate: number | null, accounts: Array<OrderAccount>, account: OrderAccount | null, buyingPower: number | null, cash: number | null, marginAvailable: number | null, live: boolean, };
 
 export type TicketQuote = TicketQuoteOk | OkOr;
 
@@ -123,7 +124,7 @@ type: string, quantity: string | null,
 /**
  * The order's value typed in Amount: the quantity becomes the whole units it buys.
  */
-amount: string | null, limit: string | null, stop: string | null, sl: StopInput, tp: TargetInput, quote: QuoteInput, fxUsdCad: string | null, marginRate: string | null, marginAvailable: string | null, cash: string | null, buyingPower: string | null, 
+amount: string | null, limit: string | null, stop: string | null, sl: StopInput, tp: TargetInput, quote: QuoteInput, marginRate: string | null, marginAvailable: string | null, cash: string | null, buyingPower: string | null, 
 /**
  * The account borrows; `linked_margin`, it backs a margin account.
  */
@@ -156,18 +157,19 @@ trail: Dec | null, trailDistance: Dec | null, stopLossPctIn: Dec, stopLossPrice:
  */
 risk: Dec | null, gain: Dec | null, stopLossPct: number | null, takeProfitPct: number | null, rewardToRisk: number | null, 
 /**
- * The order's value in CAD, and its share of the accounts' value.
+ * The order's value in CAD, and its share of the accounts' value: waiting where
+ * the quote's currency has no rate.
  */
-cad: Dec | null, positionShare: number | null, 
+cad: Fig<Dec> | null, positionShare: Fig<number> | null, 
 /**
  * The margin account's available margin after the order.
  */
-marginAfter: Dec | null, 
+marginAfter: Fig<Dec> | null, 
 /**
  * What the review's last line shows: available margin after on a margin
  * account, cash after on any other.
  */
-after: Dec | null, 
+after: Fig<Dec> | null, 
 /**
  * The whole units the buying power covers at the working price (a Buy).
  */

@@ -163,7 +163,6 @@ fn quote(bid: f64, ask: f64, last: f64) -> crate::orders::TicketQuote {
         buying_power: Some(500.0),
         cash: Some(500.0),
         margin_available: None,
-        fx_usd_cad: Some(1.38),
         live: true,
     })
 }

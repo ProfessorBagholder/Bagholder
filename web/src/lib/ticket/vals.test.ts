@@ -14,7 +14,7 @@ function ticket(over: Partial<Ticket> = {}): Ticket {
     qty: 10, limit: 100, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: 5, priceUnit: 'pct', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: 10, unit: 'pct' },
-    text: {}, data: { quote: { last: 100, ask: 101, bid: 99, mid: 100, currency: 'USD', multiplier: 1 }, cash: 5000, fxUsdCad: 1.3712 },
+    text: {}, data: { quote: { last: 100, ask: 101, bid: 99, mid: 100, currency: 'USD', multiplier: 1 }, cash: 5000 },
     error: '', busy: false, submitError: '',
     ...over,
   }
@@ -24,7 +24,7 @@ const ctx: ValsCtx = { nav: '10000' as Dec, accounts: [{ id: 'a', name: 'A', mar
 describe('the ticket asks the server for its figures', () => {
   it('with what it holds as decimal text, never a figure of its own', () => {
     const r = previewRequest(ticket(), ctx)
-    expect(r).toMatchObject({ side: 'BUY', type: 'LIMIT', quantity: '10', limit: '100', stop: null, nav: '10000', cash: '5000', fxUsdCad: '1.3712', margin: false, linkedMargin: true })
+    expect(r).toMatchObject({ side: 'BUY', type: 'LIMIT', quantity: '10', limit: '100', stop: null, nav: '10000', cash: '5000', margin: false, linkedMargin: true })
     expect(r.sl).toEqual({ on: true, kind: 'stop', priceUnit: 'pct', price: null, pct: '5', trail: null, unit: 'pct' })
     expect(r.quote).toEqual({ last: '100', ask: '101', bid: '99', multiplier: '1', currency: 'USD' })
   })

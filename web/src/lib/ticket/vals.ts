@@ -16,7 +16,7 @@ export interface Quote {
   name?: string; exchange?: string; securityId?: string
 }
 export interface TicketData {
-  quote?: Quote; orderTypes?: string[]; fxUsdCad?: number | null
+  quote?: Quote; orderTypes?: string[]
   marginRate?: number | null; marginAvailable?: number | null; cash?: number | null
   buyingPower?: number | null; accounts?: TicketAccount[]
 }
@@ -58,7 +58,7 @@ export function previewRequest(t: Ticket, ctx: ValsCtx): PreviewRequest {
     sl: { on: t.sl.on, kind: t.sl.kind, priceUnit: t.sl.priceUnit, price: txt(t.sl.price), pct: txt(t.sl.pct), trail: txt(t.sl.trail), unit: t.sl.unit },
     tp: { on: t.tp.on, unit: t.tp.unit, price: txt(t.tp.price), pct: txt(t.tp.pct) },
     quote: { last: txt(q.last), ask: txt(q.ask), bid: txt(q.bid), multiplier: txt(q.multiplier), currency: q.currency ?? '' },
-    fxUsdCad: txt(d.fxUsdCad), marginRate: txt(d.marginRate), marginAvailable: txt(d.marginAvailable), cash: txt(d.cash), buyingPower: txt(d.buyingPower),
+    marginRate: txt(d.marginRate), marginAvailable: txt(d.marginAvailable), cash: txt(d.cash), buyingPower: txt(d.buyingPower),
     margin: !!(acct && acct.margin), linkedMargin: !!(acct && !acct.margin && acct.marginAccountId), nav: ctx.nav,
   }
 }
