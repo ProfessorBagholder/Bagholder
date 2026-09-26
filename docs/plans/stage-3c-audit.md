@@ -38,8 +38,8 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] A remembered or addressed universe with no rows is never read until clicked. `heat.svelte.ts:35`. — fixed (7dd46288).
 - [x] The tile picker opens inside the tile row, not under the header. `MarketTiles.svelte:142`. — fixed (9ffdfb6a).
 - [x] News search: any 1–6 letter word becomes a chip. Old page same. `News.svelte:205`. — fixed (0a803fbd): the book's rows, then the directories, by the ticker itself. Not yet: SPEC's last step, a ticker no directory carries settled by the security records and TMX's resolver, needs a server lookup the page can ask without reading news; such a ticker stays a text search until it is built.
-- [ ] Brackets: the stop leg never reads `Watching`; an ended bracket reads `Cancelled` not `Off`; a card being cancelled has no `Cancelling`. (Fixed in 1d95dcda: a quantity changed at Wealthsimple is adopted; a refusal for shares not there ends the bracket; the checks run through a sync; trailing moves at half a percent.)
-- [ ] Ticket: switching Buy/Sell keeps the quantity and account; a draft card shows no amount or legs; the badge counts every account while the panel follows the filter. Old page same for the first two.
+- [x] Brackets: the stop leg never reads `Watching`; an ended bracket reads `Cancelled` not `Off`; a card being cancelled has no `Cancelling`. — fixed (97fcf251). (Fixed in 1d95dcda: a quantity changed at Wealthsimple is adopted; a refusal for shares not there ends the bracket; the checks run through a sync; trailing moves at half a percent.)
+- [x] Ticket: switching Buy/Sell keeps the quantity and account; a draft card shows no amount or legs; the badge counts every account while the panel follows the filter. Old page same for the first two. — fixed: the switch (485d3cdf); the draft card, from the server's figures (6a42f80b); the badge, per page's scope (4497882a).
 - [x] Disclosures: the Summary column is drawn with no summary; half-filled rows are read again without limit; a titled row without a sentence waits until shown again; the re-read button shows no reading state. — fixed (1684d6de: two reads that could have answered settle a row, a read with no model up does not count and the row waits, the background reader takes titled rows without a sentence; e5af0731: the Summary column only with a summary, Reading until a forced read answers).
 - [x] Filters: single-list filters other than Symbol and Tag have no keys; a found instrument row has two icons and does nothing on click. Old page same for the second. — fixed (8ef8d0a6).
 
@@ -59,10 +59,11 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] Short interest: a searched ticker outside the scope, or among prefix matches, is not added. — fixed (825920d8).
 - [x] Listing addresses are percent-encoded. — fixed (55d05da4).
 - [x] Watchlist match quotes never expire. — fixed (024b887b).
-- [ ] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged.
+- [x] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged. — fixed: `sending` rows read back and shown (1c1718c3); orders off and no session (edafb4a2); the trade page's Buy/Sell kept by the owner, SPEC updated (87e1c54c); Max on a Sell (485d3cdf); trailing at half a percent (1d95dcda); position size at the Bank's rate for any currency (9b928696); no margin interest subtitle with no month charged (1598c6c4).
 - [ ] The skeleton's removal uses an animation callback. (Fixed: Disclosures `Opening…`, 47dbc752; the data modal's entrance motion, ab423bc7.)
 - [x] The store runs `synchronous = NORMAL`. — fixed (b319efa3): FULL, every commit flushed.
 - [x] A replaced database is not migrated until restart. — fixed (f54d5c93): each borrow checks the file is the one kept connections hold and reads its stamped version; a replaced or rolled-back file is prepared on that borrow.
+- [ ] Disclosures `Opening…`; the data modal has no entrance motion; the skeleton's removal uses an animation callback; the store runs `synchronous = NORMAL`; a replaced database is not migrated until restart.
 
 ## SPEC text to correct (the build is right)
 
