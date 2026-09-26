@@ -182,7 +182,7 @@
     const s = status
     if (!s) return ''
     if (s.syncing) return s.syncStep || 'Syncing…'
-    if (s.error && !showingEmpty) return s.error.length > 60 ? s.error.slice(0, 57) + '…' : s.error
+    if (s.error && !showingEmpty) return s.error
     if (!s.connected) return 'Not connected'
     minuteNow() // said again as the minutes pass
     return 'Synced ' + (relTime(s.lastSync) || '—')
@@ -278,7 +278,7 @@
 {:else}
   <!-- header: drawn before the model is, so the app is there at once -->
   <div id="hdr" style="display:flex;align-items:center;gap:22px;padding:12px 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">
-    <div style="display:flex;align-items:center;gap:9px;margin-right:8px">
+    <div style="display:flex;align-items:center;gap:9px;margin-right:8px;flex:none;white-space:nowrap">
       <img src="/favicon.png" alt="" style="width:24px;height:24px;border-radius:6px" />
       <span style="font-size:15px;font-weight:600;letter-spacing:var(--brand-spacing);color:var(--brand-color);text-transform:var(--brand-transform)">Bagholder</span>
       {#if status?.version}<span class="muted" style="font-size:11px;margin-left:8px">v{status.version}</span>{/if}
@@ -290,8 +290,8 @@
         {/if}
       {/if}
     </div>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
-      <span id="syncline" style="font-size:12px;color:var(--ink55)">
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px;min-width:0">
+      <span id="syncline" style="font-size:12px;color:var(--ink55);min-width:0;text-align:right">
         {#if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
         {:else if status?.updating}<span class="spin"></span>{status.updating}
         {:else if status?.updateError}<span class="status-err">{status.updateError}</span>
@@ -299,26 +299,26 @@
         {:else if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
         {:else if ui.busy === 'refresh'}<span class="spin"></span>Refreshing session…
         {:else if status?.syncing}<span class="spin"></span>{status.syncStep || 'Syncing…'}
-        {:else if status?.error && !showingEmpty}<span class="status-err">{status.error.length > 60 ? status.error.slice(0, 57) + '…' : status.error}</span>
+        {:else if status?.error && !showingEmpty}<span class="status-err">{status.error}</span>
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>
-      <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ui.ordersOpen = true)}>
+      <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative;flex:none" onclick={() => (ui.ordersOpen = true)}>
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.receipt} /></svg>
         {#if status?.openOrders}<span class="od-badge quiet">{status.openOrders}</span>{/if}
       </button>
-      <button class="btn btn-icon btn-secondary" aria-label="Notifications" style="position:relative" onclick={() => (ui.notesOpen = true)}>
+      <button class="btn btn-icon btn-secondary" aria-label="Notifications" style="position:relative;flex:none" onclick={() => (ui.notesOpen = true)}>
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.bell} /></svg>
         {#if notesUnread}<span class="od-badge">{notesUnread}</span>{/if}
       </button>
-      <div style="position:relative">
+      <div style="position:relative;flex:none">
         <button class="btn btn-icon btn-secondary" aria-label="Filters" onclick={() => (filterOpen = !filterOpen)}>
           <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
         </button>
         {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
         {#if filterOpen && store.model}{#key filterOpened}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
       </div>
-      <div style="position:relative" bind:this={menuWrap}>
+      <div style="position:relative;flex:none" bind:this={menuWrap}>
         <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>
           <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.menu} /></svg>
         </button>

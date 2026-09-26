@@ -47,3 +47,32 @@ test('refreshing the session says so while it runs', async ({ page, request }) =
   release()
   await expect(page.locator('#syncline')).toHaveText('Session refreshed')
 })
+
+// SPEC §4, the header: a sync error takes the sync status in full, whatever its
+// length, and the header holds it at every width the page is laid out for.
+test('a sync error is shown whole in the header, which it never overflows', async ({ page, request }) => {
+  const sentence = 'The account named in this answer could not be read, and the figure stored before it stays until a read answers.'
+  for (const error of [sentence.slice(0, 61), sentence, (sentence + ' ').repeat(4).trim()]) {
+    for (const width of [1200, 1340, 1440, 1680]) {
+      await page.setViewportSize({ width, height: 800 })
+      await openWithStatus(page, request, { connected: true, error })
+      const line = page.locator('#syncline')
+      await expect(line.locator('.status-err')).toHaveText(error)
+      const fit = await page.evaluate(() => {
+        const hdr = document.getElementById('hdr')!
+        const line = document.getElementById('syncline')!.getBoundingClientRect()
+        const brand = hdr.firstElementChild!.getBoundingClientRect()
+        const buttons = [...hdr.querySelectorAll('button[aria-label]')].map((b) => b.getBoundingClientRect())
+        return {
+          hdrFits: hdr.scrollWidth <= hdr.clientWidth,
+          pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+          clearOfBrand: line.left >= brand.right,
+          clearOfButtons: buttons.every((b) => line.right <= b.left || line.left >= b.right),
+          // every header button at its own size, none squeezed by the text
+          buttonsShown: buttons.every((b) => b.width === buttons[0].width && b.height === buttons[0].height && b.right <= window.innerWidth),
+        }
+      })
+      expect(fit, `${error.length} characters at ${width} px`).toEqual({ hdrFits: true, pageFits: true, clearOfBrand: true, clearOfButtons: true, buttonsShown: true })
+    }
+  }
+})
