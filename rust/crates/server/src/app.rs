@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "1.46.3";
+pub const APP_VERSION: &str = "1.47.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-19.1";
 /// Bump when title/summary logic improves, so a row that is missing a half is
