@@ -348,14 +348,30 @@ function watched(w: Awaited<ReturnType<typeof call<'GET /api/watch'>>>): void {
     ui.watch = w
   }
 }
+/**
+ * The header's notice after a scan of the watched folder (SPEC §4, the header): the
+ * rows the scan's files added that the book did not hold, from the server's report of
+ * each file it read in that scan. None when the scan failed: the folder's dialog says why.
+ */
+export function scanNotice(w: WatchStatus): string | null {
+  if (w.scanError) return null
+  let added = 0
+  for (const f of w.files) if (f.scannedAt === w.lastScan && f.read.outcome === 'imported') added += f.read.report.added
+  return added ? `${added} new ${added === 1 ? 'activity' : 'activities'} imported` : 'Folder scanned · nothing new'
+}
+function scanned(w: Awaited<ReturnType<typeof call<'POST /api/watch/scan'>>>): void {
+  watched(w)
+  const notice = w.ok === false ? null : scanNotice(w)
+  if (notice) flash(notice)
+}
 export function watchFolder(): void {
   ui.busy = 'folder'
   ui.folderError = ''
-  call('POST /api/watch', { body: { path: ui.folderPath, account: ui.importAccount } }).then(watched)
+  call('POST /api/watch', { body: { path: ui.folderPath, account: ui.importAccount } }).then(scanned)
 }
 export function scanFolder(): void {
   ui.busy = 'folder'
-  call('POST /api/watch/scan').then(watched)
+  call('POST /api/watch/scan').then(scanned)
 }
 export function stopWatch(): void {
   call('POST /api/watch/clear').then((w) => {

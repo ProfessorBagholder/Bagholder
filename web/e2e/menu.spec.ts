@@ -228,10 +228,24 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(dlg).toContainText('Watching /some/watched/folder')
   await expect(dlg).toContainText('Manual · activities · 3 rows · 2 new · 0 linked · 1 already stored')
   await expect(dlg).toContainText('the file is not UTF-8 text')
+  // the header says what the scan brought in, for four seconds, not in red
+  const notice = page.locator('#syncline')
+  await expect(notice).toHaveText('2 new activities imported')
+  await expect(notice.locator('.status-err')).toHaveCount(0)
+  await expect(notice).not.toHaveText('2 new activities imported', { timeout: 6000 })
 
+  // Scan now reads every file again: rows held already are nothing new
+  const again = { ...report, added: 0, unchanged: 3 }
+  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, files: [{ ...watched.files[0], read: { outcome: 'imported', report: again } }, watched.files[1]] } }))
+  await page.getByRole('button', { name: 'Scan now' }).click()
+  await expect(notice).toHaveText('Folder scanned · nothing new')
+  await expect(notice).not.toHaveText('Folder scanned · nothing new', { timeout: 6000 })
+
+  await page.unroute('**/api/watch/scan')
   await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, scanError: 'the folder: No such file or directory' } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
   await expect(dlg.locator('.status-err')).toHaveText('the folder: No such file or directory')
+  await expect(notice).not.toContainText('Folder scanned')
 
   await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { path: '', watching: false, account: '', lastScan: '', scanError: '', files: [] } }))
   await page.getByRole('button', { name: 'Stop watching' }).click()
