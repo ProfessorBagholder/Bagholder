@@ -49,7 +49,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] The page's 3-minute connect timer races the server's own message.
 - [ ] Win rate hides a zero breakeven count; Grade vs P&L and Review queue carry subtitles and empty states SPEC does not list. Old page same.
 - [ ] A holding row has no hover text naming its account. Old page same.
-- [ ] Opening a page does not read cash and buying power when they are under five minutes old.
+- [x] Opening a page does not read cash and buying power when they are under five minutes old. — fixed: every page opening, a second beside an open one included, wakes the broker's loop and reads them.
 - [ ] Available margin's subtitle reads `Buying power` while its value waits.
 - [ ] Event entry makes its own required-field messages and flashes `Entered`.
 - [ ] Trade and holding pages pick Buy/Sell by symbol in any account, not by the holding's id.

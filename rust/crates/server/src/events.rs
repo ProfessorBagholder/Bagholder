@@ -46,7 +46,10 @@ pub struct Bus {
     /// stream is a task on the runtime): a channel that holds the count.
     ticker: tokio::sync::watch::Sender<u64>,
     watchers: AtomicUsize,
-    streams: Mutex<HashMap<u64, Arc<Mutex<Wanted>>>>,
+    /// Pages opened since the app started: what a read due "when a page opens"
+    /// compares against the count it last served.
+    opened: AtomicU64,
+    streams:Mutex<HashMap<u64, Arc<Mutex<Wanted>>>>,
     next_stream: AtomicU64,
     /// Streams whose page saw a message out of its order: each is sent its whole
     /// state again at its next step.
@@ -59,6 +62,7 @@ impl Bus {
             bell: (Mutex::new(0), Condvar::new()),
             ticker: tokio::sync::watch::channel(0).0,
             watchers: AtomicUsize::new(0),
+            opened: AtomicU64::new(0),
             streams: Mutex::new(HashMap::new()),
             next_stream: AtomicU64::new(1),
             resync: Mutex::new(std::collections::HashSet::new()),
@@ -83,6 +87,12 @@ impl Bus {
     /// before it runs: nobody watching, nothing to fetch.
     pub fn watchers(&self) -> usize {
         self.watchers.load(Ordering::SeqCst)
+    }
+
+    /// Pages opened since the app started, each opening counted, a second page
+    /// beside an open one included.
+    pub fn opened(&self) -> u64 {
+        self.opened.load(Ordering::SeqCst)
     }
 
     /// Sleep until `ready` says so, looking again only when something signals: no
@@ -181,10 +191,11 @@ pub async fn changed(rx: &mut tokio::sync::watch::Receiver<u64>) {
     while let Ok(Ok(())) = tokio::time::timeout(GATHER, rx.changed()).await {}
 }
 
-struct Watching(Arc<Bus>);
+pub(crate) struct Watching(Arc<Bus>);
 impl Watching {
-    fn new(bus: &Arc<Bus>) -> Watching {
+    pub(crate) fn new(bus: &Arc<Bus>) -> Watching {
         bus.watchers.fetch_add(1, Ordering::SeqCst);
+        bus.opened.fetch_add(1, Ordering::SeqCst);
         bus.signal(); // work that waits for someone to look can start
         Watching(bus.clone())
     }

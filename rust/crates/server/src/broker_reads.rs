@@ -1,7 +1,7 @@
 //! Wealthsimple read on the figure path (`docs/plans/stage-3c-switch.md`, §3):
 //! the pull, on weekdays after 2 PM Mountain and on Sync now, and the balances
-//! (cash, and what a margin account can borrow), every five minutes while a page
-//! is open. Each through the adapter over the one saved sign-in, each stored in
+//! (cash, and what a margin account can borrow), when a page opens and every five
+//! minutes while one is open. Each through the adapter over the one saved sign-in, each stored in
 //! the book and applied to the figures (`Figures::record_changed`,
 //! `Figures::broker_changed`).
 //!
@@ -134,10 +134,12 @@ pub fn run(app: Arc<App>) {
         Err(e) => log(&format!("bagholder: when Wealthsimple was last pulled could not be read: {e}")),
     }
     let mut rest = Rest::default();
+    // the page openings the balances have been read for
+    let mut served = 0;
     while !app.stopping() {
         let now = Timestamp::now();
         let before = f.version();
-        let next = match pass(&app, f, now, &mut rest) {
+        let next = match pass(&app, f, now, &mut rest, &mut served) {
             Ok(next) => next,
             Err(e) => {
                 app.state.lock().unwrap().error = format!("Wealthsimple could not be read: {e}");
@@ -149,10 +151,9 @@ pub fn run(app: Arc<App>) {
         if f.version() != before {
             app.events.signal();
         }
-        let signed_in = session_file(&app).load().ok().flatten().is_some();
-        let open = app.events.watchers() > 0;
+        let seen = Seen::now(&app, served, rest.resting(Timestamp::now()));
         // until the next deadline, or until Sync now, a sign-in or a page opening
-        let changed = || app.pull_asked.load(Ordering::SeqCst) || session_file(&app).load().ok().flatten().is_some() != signed_in || (app.events.watchers() > 0) != open;
+        let changed = || seen.changed(&app);
         match next {
             Some(n) => {
                 let wait = Duration::from_secs(n.duration_since(Timestamp::now()).as_secs().max(1) as u64);
@@ -162,6 +163,52 @@ pub fn run(app: Arc<App>) {
                 app.events.park_until(&app, changed);
             }
         }
+    }
+}
+
+/// What the loop parked on: it wakes when any of it moves.
+pub(crate) struct Seen {
+    signed_in: bool,
+    open: bool,
+    /// The page openings already served by a read.
+    served: u64,
+    /// A failed read is resting: an opening waits for the rest's end, which the
+    /// loop's deadline already is.
+    resting: bool,
+}
+
+impl Seen {
+    pub(crate) fn now(app: &App, served: u64, resting: bool) -> Seen {
+        Seen { signed_in: session_file(app).load().ok().flatten().is_some(), open: app.events.watchers() > 0, served, resting }
+    }
+
+    /// Sync now, a sign-in or its end, the last page closing, or a page opening
+    /// (a second one beside an open page too) that no read has served.
+    pub(crate) fn changed(&self, app: &App) -> bool {
+        app.pull_asked.load(Ordering::SeqCst)
+            || session_file(app).load().ok().flatten().is_some() != self.signed_in
+            || (app.events.watchers() > 0) != self.open
+            || (!self.resting && app.events.opened() != self.served)
+    }
+}
+
+/// Which read a pass makes.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Due {
+    Pull,
+    Balances,
+}
+
+/// The pull when asked or due (a sync reads the balances too); else the
+/// balances while a page is open, when one has opened since the last read or
+/// the last read is five minutes old (`SPEC.md` §4 Portfolio, Refresh).
+pub(crate) fn due(pull: bool, open: bool, page_opened: bool, last_cash: Option<Timestamp>, now: Timestamp) -> Option<Due> {
+    if pull {
+        Some(Due::Pull)
+    } else if open && (page_opened || last_cash.is_none_or(|t| now.duration_since(t) >= BALANCES_EVERY)) {
+        Some(Due::Balances)
+    } else {
+        None
     }
 }
 
@@ -202,11 +249,14 @@ pub(crate) fn fill_pull_due(app: &Arc<App>, book: &Book, conn: ConnectionId, las
 
 /// One pass: the pull when it is due or asked for, else the balances when a page
 /// is open and they are due. The next instant either can be due.
-fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest) -> Result<Option<Timestamp>, String> {
+fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &mut u64) -> Result<Option<Timestamp>, String> {
     let file = session_file(app);
+    // taken before any read, so a page opening during one is served by the next
+    let opened = app.events.opened();
     if file.load().map_err(|e| e.to_string())?.is_none() {
-        // no sign-in: nothing to read until one
+        // no sign-in: nothing to read until one, and the sign-in's pull reads the balances
         app.pull_asked.store(false, Ordering::SeqCst);
+        *served = opened;
         return Ok(None);
     }
     let asked = app.pull_asked.swap(false, Ordering::SeqCst);
@@ -219,16 +269,18 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest) -> Result<
     let open = app.events.watchers() > 0;
     let last_pull = book.last_read(conn, "accounts").map_err(|e| e.to_string())?;
     let last_cash = book.last_read(conn, "cash").map_err(|e| e.to_string())?;
-    let balances_due = |last: Option<Timestamp>| last.is_none_or(|t| now.duration_since(t) >= BALANCES_EVERY);
     // a fill of Bagholder's own order is in the book once Wealthsimple's own row
     // for it is: until then it is pulled for again, soon at first
     let fill_due = fill_pull_due(app, &book, conn, last_pull, now)?;
-    let outcome = if asked || pull_due(last_pull, now, &zone) || fill_due.is_some_and(|d| d <= now) {
-        Some(pull_now(app, f, &book, conn, file, now)?)
-    } else if open && balances_due(last_cash) {
-        Some(balances_now(app, f, &book, conn, file, now)?)
-    } else {
-        None
+    let pull = asked || pull_due(last_pull, now, &zone) || fill_due.is_some_and(|d| d <= now);
+    let read = due(pull, open, opened != *served, last_cash, now);
+    // every opening up to here is served by this pass, whatever the read's outcome
+    // (a failed one is read again after its rest)
+    *served = opened;
+    let outcome = match read {
+        Some(Due::Pull) => Some(pull_now(app, f, &book, conn, file, now)?),
+        Some(Due::Balances) => Some(balances_now(app, f, &book, conn, file, now)?),
+        None => None,
     };
     match outcome {
         Some(Read::Lapsed) => {
@@ -478,5 +530,40 @@ mod tests {
         assert!(r.resting(now));
         r.cleared();
         assert!(!r.resting(now));
+    }
+
+    /// A page opening reads the balances whatever the last read's age; with no
+    /// opening they wait for five minutes; with no page open nothing is read.
+    #[test]
+    fn test_a_page_opening_reads_the_balances_however_fresh_they_are() {
+        let now: Timestamp = "2026-03-02T15:00:00Z".parse().unwrap();
+        let ages = [0, 1, 60, BALANCES_EVERY.as_secs() - 1, BALANCES_EVERY.as_secs(), 86_400];
+        for age in ages {
+            let last = Some(now.checked_sub(SignedDuration::from_secs(age)).unwrap());
+            assert_eq!(due(false, true, true, last, now), Some(Due::Balances), "a page opened, last read {age} s ago");
+            let aged = age >= BALANCES_EVERY.as_secs();
+            assert_eq!(due(false, true, false, last, now), aged.then_some(Due::Balances), "no page opened, last read {age} s ago");
+            assert_eq!(due(false, false, true, last, now), None, "no page open, last read {age} s ago");
+            assert_eq!(due(true, true, true, last, now), Some(Due::Pull), "a sync reads the balances with it");
+        }
+        assert_eq!(due(false, true, false, None, now), Some(Due::Balances), "never read");
+    }
+
+    /// The loop wakes for every page opening, a second page beside an open one
+    /// included, and not while a failed read rests.
+    #[test]
+    fn test_the_loop_wakes_when_a_page_opens() {
+        use crate::events::Watching;
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let first = Watching::new(&app.events);
+        let seen = Seen::now(&app, app.events.opened(), false);
+        assert!(!seen.changed(&app), "nothing moved");
+        let second = Watching::new(&app.events);
+        assert!(seen.changed(&app), "a second page opening beside an open one wakes the loop");
+        let resting = Seen::now(&app, app.events.opened() - 1, true);
+        assert!(!resting.changed(&app), "a resting read waits for its rest, which is the loop's deadline");
+        drop(second);
+        drop(first);
     }
 }
