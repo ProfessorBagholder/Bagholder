@@ -102,7 +102,11 @@ account: string, lastScan: string,
 /**
  * Why the last scan of the folder failed, until one succeeds.
  */
-scanError: string, files: Array<WatchedFile>, };
+scanError: string, 
+/**
+ * The rows the last scan's files added that the book did not hold.
+ */
+lastScanAdded: number, files: Array<WatchedFile>, };
 
 export type WatchedFile = { file: string, size: number, modified: string, scannedAt: string, read: FileOutcome, };
 

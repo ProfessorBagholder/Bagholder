@@ -350,13 +350,12 @@ function watched(w: Awaited<ReturnType<typeof call<'GET /api/watch'>>>): void {
 }
 /**
  * The header's notice after a scan of the watched folder (SPEC §4, the header): the
- * rows the scan's files added that the book did not hold, from the server's report of
- * each file it read in that scan. None when the scan failed: the folder's dialog says why.
+ * rows the scan's files added that the book did not hold, as the server counts them.
+ * None when the scan failed: the folder's dialog says why.
  */
 export function scanNotice(w: WatchStatus): string | null {
   if (w.scanError) return null
-  let added = 0
-  for (const f of w.files) if (f.scannedAt === w.lastScan && f.read.outcome === 'imported') added += f.read.report.added
+  const added = w.lastScanAdded
   return added ? `${added} new ${added === 1 ? 'activity' : 'activities'} imported` : 'Folder scanned · nothing new'
 }
 function scanned(w: Awaited<ReturnType<typeof call<'POST /api/watch/scan'>>>): void {

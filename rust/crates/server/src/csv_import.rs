@@ -281,6 +281,8 @@ pub struct WatchStatus {
     pub last_scan: String,
     /// Why the last scan of the folder failed, until one succeeds.
     pub scan_error: String,
+    /// The rows the last scan's files added that the book did not hold.
+    pub last_scan_added: u32,
     pub files: Vec<WatchedFile>,
 }
 
@@ -303,7 +305,16 @@ pub fn watch_status(f: &Figures) -> Result<WatchStatus, String> {
         None => BTreeMap::new(),
         Some(text) => serde_json::from_str(&text).map_err(|e| format!("the watched files kept in the book do not read: {e}"))?,
     };
-    Ok(WatchStatus { watching: !path.is_empty(), path, account: setting(&book, WATCH_ACCOUNT)?, last_scan: setting(&book, WATCH_LAST)?, scan_error: setting(&book, WATCH_ERROR)?, files: files.into_values().collect() })
+    let last_scan = setting(&book, WATCH_LAST)?;
+    let last_scan_added = files
+        .values()
+        .filter(|f| f.scanned_at == last_scan)
+        .map(|f| match &f.read {
+            FileOutcome::Imported { report } => report.added,
+            FileOutcome::Failed { .. } => 0,
+        })
+        .sum();
+    Ok(WatchStatus { watching: !path.is_empty(), path, account: setting(&book, WATCH_ACCOUNT)?, last_scan, scan_error: setting(&book, WATCH_ERROR)?, last_scan_added, files: files.into_values().collect() })
 }
 
 fn home_expanded(p: &str) -> String {
@@ -629,13 +640,17 @@ mod tests {
         assert_eq!(s.files.iter().map(|w| w.file.as_str()).collect::<Vec<_>>(), vec!["a.csv", "b.CSV"]);
         assert!(matches!(&s.files[0].read, FileOutcome::Imported { report } if report.added == 1));
         assert!(matches!(&s.files[1].read, FileOutcome::Failed { error } if error == "the file is not UTF-8 text"));
-        // unchanged: not read again
+        // the scan says what it added over every file it read, a file that failed adding none
+        assert_eq!(s.last_scan_added, 1);
+        // unchanged: not read again, and a scan that read nothing added nothing
         let later: bagholder_core::jiff::Timestamp = "2025-11-19T22:00:00Z".parse().unwrap();
         let s = scan(&f, false, later).unwrap();
         assert_eq!(s.files[0].scanned_at, now().to_string());
+        assert_eq!(s.last_scan_added, 0, "the earlier scan's rows are not this one's");
         // every file read again when asked; the row is the same record
         let s = scan(&f, true, later).unwrap();
         assert!(matches!(&s.files[0].read, FileOutcome::Imported { report } if report.unchanged == 1 && report.added == 0));
+        assert_eq!(s.last_scan_added, 0, "rows the book already held are not counted");
         // the folder gone: the scan fails, and the status says why until one succeeds
         drop(dir);
         assert!(scan(&f, false, later).is_err());

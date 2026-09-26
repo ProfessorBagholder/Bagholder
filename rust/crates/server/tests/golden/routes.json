@@ -61,6 +61,7 @@
       "account": "",
       "lastScan": "",
       "scanError": "",
+      "lastScanAdded": 0,
       "files": []
     }
   },
@@ -86,6 +87,7 @@
       "account": "",
       "lastScan": "",
       "scanError": "",
+      "lastScanAdded": 0,
       "files": []
     }
   },

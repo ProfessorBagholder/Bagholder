@@ -209,7 +209,7 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
 
   const report = { file: 'a.csv', layout: 'activities', account: 'Manual', rows: 3, added: 2, unchanged: 1, linked: 0, ambiguous: [], problems: [] }
   const watched = {
-    path: '/some/watched/folder', watching: true, account: '', lastScan: '2026-09-20T12:00:00Z', scanError: '',
+    path: '/some/watched/folder', watching: true, account: '', lastScan: '2026-09-20T12:00:00Z', scanError: '', lastScanAdded: 2,
     files: [
       { file: 'a.csv', size: 10, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'imported', report } },
       { file: 'b.csv', size: 3, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'failed', error: 'the file is not UTF-8 text' } },
@@ -236,7 +236,7 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
 
   // Scan now reads every file again: rows held already are nothing new
   const again = { ...report, added: 0, unchanged: 3 }
-  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, files: [{ ...watched.files[0], read: { outcome: 'imported', report: again } }, watched.files[1]] } }))
+  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, lastScanAdded: 0, files: [{ ...watched.files[0], read: { outcome: 'imported', report: again } }, watched.files[1]] } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
   await expect(notice).toHaveText('Folder scanned · nothing new')
   await expect(notice).not.toHaveText('Folder scanned · nothing new', { timeout: 6000 })
@@ -247,7 +247,7 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(dlg.locator('.status-err')).toHaveText('the folder: No such file or directory')
   await expect(notice).not.toContainText('Folder scanned')
 
-  await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { path: '', watching: false, account: '', lastScan: '', scanError: '', files: [] } }))
+  await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { path: '', watching: false, account: '', lastScan: '', scanError: '', lastScanAdded: 0, files: [] } }))
   await page.getByRole('button', { name: 'Stop watching' }).click()
   await expect(page.getByRole('button', { name: 'Stop watching' })).toHaveCount(0)
   await expect(page.getByLabel('Folder')).toHaveValue('')
@@ -259,7 +259,7 @@ test('Load folder: the watched folder arriving late does not replace what was ty
   await page.route('**/api/watch', async (route) => {
     if (route.request().method() !== 'GET') return route.continue()
     await held
-    return route.fulfill({ json: { path: '/the/watched/one', watching: true, account: '', lastScan: '', scanError: '', files: [] } })
+    return route.fulfill({ json: { path: '/the/watched/one', watching: true, account: '', lastScan: '', scanError: '', lastScanAdded: 0, files: [] } })
   })
   await page.goto('/')
   await ready(page)
