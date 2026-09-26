@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 use ts_rs::TS;
 
-use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::journal::Grade;
 use bagholder_core::{AccountId, InstrumentId};
 use bagholder_engine::ledger::Direction;
@@ -109,14 +108,8 @@ impl Filters {
                         f.tags.insert(v.clone());
                     }
                     "kind" => {
-                        let kinds: &[InstrumentKind] = match v.as_str() {
-                            "Shares" => &[InstrumentKind::Security],
-                            "Options" => &[InstrumentKind::OptionContract],
-                            "Crypto" => &[InstrumentKind::Crypto],
-                            "Futures" => &[InstrumentKind::Future],
-                            other => return Err(format!("no kind {other:?}")),
-                        };
-                        f.kinds.extend(kinds.iter().copied());
+                        let kind = super::build::KIND_WORDS.iter().find(|(_, w)| w == v).map(|(k, _)| *k).ok_or_else(|| format!("no kind {v:?}"))?;
+                        f.kinds.insert(kind);
                     }
                     "exchange" => {
                         f.venues.insert(v.clone());

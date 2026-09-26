@@ -75,12 +75,31 @@ fn month_label(year: i16, month: i8) -> String {
 }
 
 /// The page's word for what an instrument is.
-fn kind_word(k: InstrumentKind) -> &'static str {
+/// Each kind of instrument and the word the page and the Kind filter know it by:
+/// one table, so the word sent and the word read back are the same, and no kind
+/// passes for another.
+pub const KIND_WORDS: [(InstrumentKind, &str); 8] = [
+    (InstrumentKind::Security, "Shares"),
+    (InstrumentKind::OptionContract, "Options"),
+    (InstrumentKind::Crypto, "Crypto"),
+    (InstrumentKind::Future, "Futures"),
+    (InstrumentKind::EventContract, "Event contracts"),
+    (InstrumentKind::Index, "Indices"),
+    (InstrumentKind::Rate, "Rates"),
+    (InstrumentKind::CurrencyPair, "Currencies"),
+];
+
+/// Exhaustive, so a new kind cannot compile without a word; the test holds it to `KIND_WORDS`.
+pub fn kind_word(k: InstrumentKind) -> &'static str {
     match k {
+        InstrumentKind::Security => "Shares",
         InstrumentKind::OptionContract => "Options",
         InstrumentKind::Crypto => "Crypto",
         InstrumentKind::Future => "Futures",
-        _ => "Shares",
+        InstrumentKind::EventContract => "Event contracts",
+        InstrumentKind::Index => "Indices",
+        InstrumentKind::Rate => "Rates",
+        InstrumentKind::CurrencyPair => "Currencies",
     }
 }
 
@@ -297,7 +316,7 @@ fn options(inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig]) -> O
     let sorted = |v: BTreeSet<String>| v.into_iter().collect::<Vec<_>>();
     let tags = sorted(trades.iter().flat_map(|t| t.journal.tags.iter().cloned()).collect());
     let exchanges = sorted(traded.iter().map(|i| i.exchange.clone()).filter(|e| !e.is_empty()).collect());
-    let kinds: Vec<String> = ["Shares", "Options", "Crypto", "Futures"].iter().filter(|k| traded.iter().any(|i| i.kind == **k)).map(|k| k.to_string()).collect();
+    let kinds: Vec<String> = KIND_WORDS.iter().map(|(_, w)| *w).filter(|w| traded.iter().any(|i| i.kind == *w)).map(|w| w.to_string()).collect();
     let mut instruments = traded;
     instruments.extend(underlyings.iter().filter_map(option));
     let mut years: Vec<String> = trades.iter().filter_map(|t| t.closed_on).map(|d| d.year().to_string()).collect::<BTreeSet<_>>().into_iter().collect();
@@ -789,5 +808,25 @@ mod tests {
         // money is text on the wire
         let json = serde_json::to_value(&doc).unwrap();
         assert!(json["positions"][0]["cost"].is_string() || json["positions"][0]["cost"]["gaps"].is_array());
+    }
+}
+
+#[cfg(test)]
+mod kind_words {
+    use super::*;
+
+    #[test]
+    fn every_kind_has_its_own_word_and_reads_back() {
+        let kinds = [
+            InstrumentKind::Security, InstrumentKind::OptionContract, InstrumentKind::Crypto, InstrumentKind::EventContract,
+            InstrumentKind::Index, InstrumentKind::Future, InstrumentKind::Rate, InstrumentKind::CurrencyPair,
+        ];
+        assert_eq!(KIND_WORDS.len(), kinds.len());
+        let words: std::collections::BTreeSet<&str> = kinds.iter().map(|k| kind_word(*k)).collect();
+        assert_eq!(words.len(), kinds.len(), "no two kinds share a word");
+        for k in kinds {
+            let back = KIND_WORDS.iter().find(|(_, w)| *w == kind_word(k)).map(|(k, _)| *k);
+            assert_eq!(back, Some(k));
+        }
     }
 }
