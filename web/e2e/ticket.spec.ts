@@ -77,6 +77,32 @@ test('opens from the holding\'s own page, and Buy defaults to one share', async 
   await expect(page.locator('#tk-qty')).toHaveValue('1')
 })
 
+test("a holding's own page sells that holding, in its own account, whatever else holds the symbol", async ({ page, request }) => {
+  const model = await figures(request)
+  type P = { id: string; symbol: string; kind: string; accountId: string; qty: string }
+  type A = { id: string; brokerAccount: string | null; tradable: boolean; status: string }
+  const accounts = model.accounts as A[]
+  const tradable = (p: P) => { const a = accounts.find((x) => x.id === p.accountId); return !!a && a.tradable && a.status !== 'closed' && a.brokerAccount != null }
+  const positions = (model.positions as P[]).filter((p) => p.kind === 'Shares' && tradable(p))
+  // a symbol held in more than one account: each holding's page is its own
+  const shared = positions.filter((p) => positions.filter((q) => q.symbol === p.symbol).length > 1)
+  expect(shared.length, 'the book holds a symbol in two accounts').toBeGreaterThan(1)
+  for (const p of shared) {
+    await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(p.id))
+    await ready(page)
+    await page.getByRole('button', { name: 'Sell ' + p.symbol, exact: true }).click()
+    await expect(page.getByRole('dialog', { name: 'New order' })).toBeVisible()
+    await expect(page.locator('#tk-account'), p.id).toHaveValue(accounts.find((a) => a.id === p.accountId)!.brokerAccount!)
+    await expect(page.locator('#tk-qty'), p.id).toHaveValue(p.qty)
+    // Buy and back: the Sell is still this holding's
+    await page.locator('.tk-segopt.buy').click()
+    await page.locator('.tk-segopt.sell').click()
+    await expect(page.locator('#tk-account'), p.id).toHaveValue(accounts.find((a) => a.id === p.accountId)!.brokerAccount!)
+    await expect(page.locator('#tk-qty'), p.id).toHaveValue(p.qty)
+    await page.getByRole('button', { name: 'Cancel' }).click()
+  }
+})
+
 test('switching Buy and Sell recomputes the defaults: a Sell sells the held shares where they are, a Buy one share', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '')
   await ready(page)

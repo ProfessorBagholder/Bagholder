@@ -123,13 +123,13 @@
         { side: 'SELL', on: false },
       ]
     }
-    const m = store.model
-    const pos = (m?.positions || []).find((p) => p.symbol === trade.symbol) || null
-    const found = pos || (m?.trades || []).find((x) => x.symbol === trade.symbol) || null
-    const share = (found ? found.kind : '') === 'Shares'
+    // this page's own holding, by its id (the holding's page, or the holding an open trade
+    // is): never the same symbol held in another account
+    const pos = trade.position ? (store.model?.positions || []).find((p) => p.id === trade.position) ?? null : null
+    const holding = pos?.id ?? ''
     return [
-      { side: 'BUY', on: share, open: () => openTicket(trade.symbol, 'BUY') },
-      { side: 'SELL', on: share && !!pos, open: () => openTicket(trade.symbol, 'SELL') },
+      { side: 'BUY', on: true, open: () => openTicket(trade.symbol, 'BUY', trade.exchange || '', trade.security, holding) },
+      { side: 'SELL', on: !!pos, open: () => openTicket(trade.symbol, 'SELL', trade.exchange || '', trade.security, holding) },
     ]
   })
 

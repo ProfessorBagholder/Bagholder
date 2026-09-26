@@ -31,7 +31,7 @@ const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl',
 
 // what the book knows about the listing the broker names `securityId` (or, with none
 // given, the one symbol it holds by that text): its kind and the open position
-function tkLookup(symbol: string, securityId: string): { securityId: string; kind: string; position: Position | null } {
+function tkLookup(symbol: string, securityId: string, holding = ''): { securityId: string; kind: string; position: Position | null } {
   const m = store.model
   const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
   // held in more than one account: the margin account among them, else the first by name
@@ -40,13 +40,16 @@ function tkLookup(symbol: string, securityId: string): { securityId: string; kin
     const a = accounts.find((x) => x.id === accountId)
     return [a?.margin ? 0 : 1, a?.name ?? ''] as const
   }
+  // opened from a holding's own page: that holding, whatever else holds the symbol
+  const own = holding ? (m?.positions ?? []).find((p) => p.id === holding) ?? null : null
   const pos =
-    (m?.positions ?? [])
+    own ??
+    ((m?.positions ?? [])
       .filter(is)
       .sort((a, b) => {
         const [x, y] = [rank(a.accountId), rank(b.accountId)]
         return x[0] - y[0] || x[1].localeCompare(y[1])
-      })[0] || null
+      })[0] || null)
   const t = pos || (m?.trades ?? []).find(is) || null
   return { securityId: t ? t.security : securityId, kind: t ? t.kind : '', position: pos }
 }
@@ -120,8 +123,8 @@ function heldIn(symbol: string, securityId: string, accountId: string): number |
 // What a side starts from (SPEC.md §4, Order ticket): a Sell goes where the shares
 // are and sells them all; a Buy is one share in the account used last, else the
 // holding's, else the margin account.
-function sideDefaults(symbol: string, securityId: string, side: 'BUY' | 'SELL'): { accountId: string; qty: number | null } {
-  const info = tkLookup(symbol, securityId)
+function sideDefaults(symbol: string, securityId: string, side: 'BUY' | 'SELL', holding = ''): { accountId: string; qty: number | null } {
+  const info = tkLookup(symbol, securityId, holding)
   const accounts = ticketAccounts()
   const held = info.position
   const heldAt = held ? brokerAccount(held.accountId) : ''
@@ -136,7 +139,7 @@ function sideDefaults(symbol: string, securityId: string, side: 'BUY' | 'SELL'):
 export function switchSide(side: 'BUY' | 'SELL') {
   const t = ticketStore.t
   if (!t || t.side === side) return
-  const d = sideDefaults(t.symbol, t.securityId, side)
+  const d = sideDefaults(t.symbol, t.securityId, side, t.holding)
   const accountChanged = d.accountId !== t.accountId
   t.side = side
   t.accountId = d.accountId
@@ -177,13 +180,13 @@ loadDraftFromStorage()
 
 // Signature preserved: openTicket(symbol, side, exchange='', securityId='') — the
 // command palette and the trade detail wire their Buy/Sell to exactly this.
-export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', securityId = '') {
-  const info = tkLookup(symbol, securityId)
-  const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY')
+export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', securityId = '', holding = '') {
+  const info = tkLookup(symbol, securityId, holding)
+  const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY', holding)
   ui.menuOpen = false
   const t: Ticket = {
     step: 'form', symbol, securityId: securityId || info.securityId, exchange,
-    side: side === 'SELL' ? 'SELL' : 'BUY', accountId, type: 'LIMIT', tif: 'DAY',
+    side: side === 'SELL' ? 'SELL' : 'BUY', accountId, holding: holding || undefined, type: 'LIMIT', tif: 'DAY',
     qty, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: null, unit: 'amt' },

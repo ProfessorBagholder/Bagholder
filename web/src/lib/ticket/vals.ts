@@ -26,6 +26,8 @@ export interface Ticket {
   step: 'form' | 'review'
   symbol: string; securityId: string; exchange: string
   side: 'BUY' | 'SELL'; accountId: string
+  /** The holding the ticket was opened from, by its id: its account and quantity are the defaults. */
+  holding?: string
   type: string; tif: string
   qty: number | null; limit: number | null; stop: number | null
   sl: { on: boolean; kind: string; price: number | null; pct: number | null; priceUnit: string; trail: number | null; unit: string }
