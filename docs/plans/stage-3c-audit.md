@@ -40,7 +40,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] News search: any 1–6 letter word becomes a chip. Old page same. `News.svelte:205`. — fixed (0a803fbd): the book's rows, then the directories, by the ticker itself. Not yet: SPEC's last step, a ticker no directory carries settled by the security records and TMX's resolver, needs a server lookup the page can ask without reading news; such a ticker stays a text search until it is built.
 - [ ] Brackets: the stop leg never reads `Watching`; an ended bracket reads `Cancelled` not `Off`; a card being cancelled has no `Cancelling`. (Fixed in 1d95dcda: a quantity changed at Wealthsimple is adopted; a refusal for shares not there ends the bracket; the checks run through a sync; trailing moves at half a percent.)
 - [ ] Ticket: switching Buy/Sell keeps the quantity and account; a draft card shows no amount or legs; the badge counts every account while the panel follows the filter. Old page same for the first two.
-- [ ] Disclosures: the Summary column is drawn with no summary; half-filled rows are read again without limit; a titled row without a sentence waits until shown again; the re-read button shows no reading state.
+- [x] Disclosures: the Summary column is drawn with no summary; half-filled rows are read again without limit; a titled row without a sentence waits until shown again; the re-read button shows no reading state. — fixed (1684d6de: two reads that could have answered settle a row, a read with no model up does not count and the row waits, the background reader takes titled rows without a sentence; e5af0731: the Summary column only with a summary, Reading until a forced read answers).
 - [x] Filters: single-list filters other than Symbol and Tag have no keys; a found instrument row has two icons and does nothing on click. Old page same for the second. — fixed (8ef8d0a6).
 
 ## Low
@@ -54,9 +54,9 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] Available margin's subtitle reads `Buying power` while its value waits. — fixed (9b215d20).
 - [x] Event entry makes its own required-field messages and flashes `Entered`. — fixed (891c39b6).
 - [x] Trade and holding pages pick Buy/Sell by symbol in any account, not by the holding's id. — fixed (7307d68a).
-- [ ] Fear & Greed: only the meter on show is kept fresh; "did not answer" shows while the first read runs; the word is not in the band's colour.
-- [ ] News is read only while a page is open.
-- [ ] Short interest: a searched ticker outside the scope, or among prefix matches, is not added.
+- [x] Fear & Greed: only the meter on show is kept fresh; "did not answer" shows while the first read runs; the word is not in the band's colour. — fixed (8467b31f: both meters watched while the card shows; `Reading…` while a read is in the air; the word in the band's colour; SPEC says both are refreshed while a page shows the card).
+- [x] News is read only while a page is open. — decided and fixed (2dd5f539): read while a page shows the News card or a Releases notification set is on, not at start for nobody and not for a page on another tab; SPEC corrected.
+- [x] Short interest: a searched ticker outside the scope, or among prefix matches, is not added. — fixed (825920d8).
 - [x] Listing addresses are percent-encoded. — fixed (55d05da4).
 - [x] Watchlist match quotes never expire. — fixed (024b887b).
 - [ ] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged.
