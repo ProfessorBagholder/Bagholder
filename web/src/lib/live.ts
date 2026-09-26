@@ -15,6 +15,7 @@
 import type { Model } from './model'
 
 import { post } from './api'
+import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
 
 export type Step = string | { k: string; v: string }
@@ -181,12 +182,38 @@ export function onChange(fn: (touched: Set<string> | 'all') => void): void {
   afterChange = fn
 }
 
-/** What runs when the view arrives from a server started since the one that sent the last: what was kept of its answers is no longer its word. */
-let afterRestart: () => void = () => {}
-export function onRestart(fn: () => void): void {
+/** Which server answered: when it started, the version it runs and the protocol it speaks (from its status). */
+export interface ServerStamp {
+  startedAt: string
+  version: string
+  protocol: string
+}
+function stamp(m: unknown): ServerStamp | null {
+  if (!isObj(m) || !isObj(m.status) || typeof m.status.startedAt !== 'string' || !m.status.startedAt) return null
+  const { startedAt, version, protocol } = m.status
+  return { startedAt, version: typeof version === 'string' ? version : '', protocol: typeof protocol === 'string' ? protocol : '' }
+}
+
+/**
+ * Whether the server answering after a restart runs other code than this page: a
+ * version other than the one the page last heard, or a protocol other than the one
+ * the page was built to speak. The page is then the old build and loads itself again
+ * (SPEC §2, Versions). The page that loads is the new build, and its first answer is
+ * no restart, so it does not load again.
+ */
+export function isUpdate(was: ServerStamp, now: ServerStamp, built: string = PROTOCOL): boolean {
+  return now.version !== was.version || (!!now.protocol && now.protocol !== built)
+}
+
+/**
+ * What runs when the view arrives from a server started since the one that sent the
+ * last: what was kept of its answers is no longer its word. After an update it runs
+ * before the view is taken, which the old build then does not take at all.
+ */
+let afterRestart: (was: ServerStamp, now: ServerStamp) => void = () => {}
+export function onRestart(fn: (was: ServerStamp, now: ServerStamp) => void): void {
   afterRestart = fn
 }
-const startedAt = (m: unknown): unknown => (isObj(m) && isObj(m.status) ? m.status.startedAt : undefined)
 
 // Tell the server what this page is showing beyond the model: once per turn of the
 // page however many things opened and closed in it, and not at all when the set is
@@ -255,10 +282,16 @@ export function connect(sink: Sink, filters: unknown): void {
     const { doc, data } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown }
     if (doc === 'model') {
       const shown = !!sink.model
-      const was = startedAt(sink.model)
+      const was = stamp(sink.model)
+      const now = stamp(data)
+      const restarted = was && now && was.startedAt !== now.startedAt
+      if (restarted && isUpdate(was, now)) {
+        afterRestart(was, now) // the page loads itself again: this build does not take the new server's view
+        return
+      }
       if (sink.model) reconcile(sink.model as unknown as Obj, data as Obj, ROW_KEYS.model)
       else sink.model = data as Model
-      if (was && startedAt(data) && was !== startedAt(data)) afterRestart()
+      if (restarted) afterRestart(was, now)
       if (shown) afterChange('all') // a view over the one shown: anything in it may have moved while away
       sink.error = null
       sink.loading = false

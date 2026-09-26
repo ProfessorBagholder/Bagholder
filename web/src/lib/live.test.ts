@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyOps, numbering, reconcile, type Op } from './live'
+import { applyOps, isUpdate, numbering, reconcile, type Op } from './live'
 import { ROW_KEYS } from './generated/keys'
 
 // The page holds each entity as one object for as long as the entity lives, and a
@@ -138,5 +138,25 @@ describe('the numbers of a stream\'s messages', () => {
     seen('') // a message without a number (the keep-alive) says nothing
     seen('3')
     expect(gaps).toBe(1)
+  })
+})
+
+describe('a server answering after a restart', () => {
+  const at = (startedAt: string, version: string, protocol: string) => ({ startedAt, version, protocol })
+  const built = 'p1'
+
+  it('is an update when it runs another version, whichever way the version moved', () => {
+    expect(isUpdate(at('t1', '2.0.0', 'p1'), at('t2', '2.1.0', 'p1'), built)).toBe(true)
+    expect(isUpdate(at('t1', '2.1.0', 'p1'), at('t2', '2.0.0', 'p1'), built)).toBe(true) // a failed update put back
+  })
+
+  it('is an update when it speaks a protocol other than the page was built for', () => {
+    expect(isUpdate(at('t1', '2.0.0', 'p1'), at('t2', '2.0.0', 'p2'), built)).toBe(true)
+  })
+
+  it('is not an update when it runs what the page was built for, so the page loads only once', () => {
+    expect(isUpdate(at('t1', '2.0.0', 'p1'), at('t2', '2.0.0', 'p1'), built)).toBe(false)
+    // the page loaded again from the new server: its build and the server agree
+    expect(isUpdate(at('t2', '2.1.0', 'p2'), at('t3', '2.1.0', 'p2'), 'p2')).toBe(false)
   })
 })

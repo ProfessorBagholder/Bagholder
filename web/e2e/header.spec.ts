@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openWithStatus } from './helpers'
+import { modelDoc, openWithStatus, ready, streamBody } from './helpers'
 
 // SPEC §3, the header: what the status line says, in the order it says it, and the
 // update on offer beside the version.
@@ -30,6 +30,36 @@ test('a server of another protocol is told apart: restart to finish the update',
   await openWithStatus(page, request, { protocol: '1999-01-01.1' })
   await expect(page.locator('#syncline')).toHaveText('Restart Bagholder to finish the update')
 })
+
+// SPEC §2, Versions: the page reloads itself when it sees a new version answering.
+// The stream here ends after each view and the page connects again every 200 ms, so
+// each change of `server` is heard at the next connection.
+for (const [what, next] of [
+  ['a new version', (s: { version: string }) => ({ version: s.version + '-next' })],
+  ['a server of another protocol', () => ({ protocol: '1999-01-01.1' })],
+] as const) {
+  test(`${what} answering after a restart loads the page again, once; a restart of the same build does not`, async ({ page, request }) => {
+    const model = await modelDoc(request)
+    let server: Record<string, unknown> = { startedAt: 'A' }
+    await page.route('**/api/events?*', (route) =>
+      route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody({ ...model, status: { ...model.status, ...server } }) }),
+    )
+    let loads = 0
+    page.on('request', (r) => { if (r.resourceType() === 'document') loads++ })
+    await page.goto('/')
+    await ready(page)
+    expect(loads).toBe(1)
+    server = { startedAt: 'B' } // started again, the same build
+    await page.waitForTimeout(1000)
+    expect(loads).toBe(1)
+    server = { startedAt: 'C', ...next(model.status) }
+    await expect.poll(() => loads).toBe(2)
+    await ready(page)
+    // the page now loaded hears the same server at every connection: it does not load again
+    await page.waitForTimeout(1500)
+    expect(loads).toBe(2)
+  })
+}
 
 test('the status line on the book as it is: not connected, and nothing on offer', async ({ page }) => {
   await page.goto('/')

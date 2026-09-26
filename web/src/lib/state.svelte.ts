@@ -1,6 +1,6 @@
 import type { Fill, Model } from './model'
 import { filters } from './filters.svelte'
-import { connect, disconnect, onChange, onRestart } from './live'
+import { connect, disconnect, isUpdate, onChange, onRestart } from './live'
 import { forgetHistory } from './trade/chart'
 import { call } from './api'
 import { leaveSub, route } from './router.svelte'
@@ -58,10 +58,16 @@ onChange((touched) => {
   if (detail.id && (touched === 'all' || touched.has(detail.id))) loadDetail(detail.id)
 })
 
-// The server this page talks to was started again: the chart's kept bars are forgotten,
-// and a chart that is open asks again.
+// The server this page talks to was started again. After an update it runs a new
+// version, or speaks another protocol: this page is the old build, and loads itself
+// again from the new server (SPEC §2, Versions). Otherwise the chart's kept bars are
+// forgotten, and a chart that is open asks again.
 export const server = $state({ restarts: 0 })
-onRestart(() => {
+onRestart((was, now) => {
+  if (isUpdate(was, now)) {
+    location.reload()
+    return
+  }
   forgetHistory()
   server.restarts++
 })
