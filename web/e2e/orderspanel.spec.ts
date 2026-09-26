@@ -312,6 +312,16 @@ test('after Cancel is accepted the card reads Cancelling on its second line, wit
   await expect(card.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
 })
 
+test('an order Wealthsimple has not answered for is a Pending card reading Sent, with nothing to act on yet', async ({ page, request }) => {
+  const unanswered = { ...oPending, status: 'sending' }
+  await openPanel(page, request, { ok: true, live: true, orders: [unanswered], brackets: [] } as never, { openOrders: 1 })
+  const card = page.locator('.od-card', { hasText: 'TSX-V: QNC' })
+  await expect(card.locator('.od-line')).toHaveText('100 at 1.75 limit · GTC')
+  await expect(card.locator('.od-state')).toHaveText('Sent')
+  await expect(card.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+  await expect(page.locator('button[aria-label="Orders"] .od-badge')).toHaveText('1')
+})
+
 test('the orders document updates a card in place, with the panel open', async ({ page, request }) => {
   // o-3 (AAPL) stays pending and stays a card; only its third line -- the fill so
   // far -- should move, proving the document patches that one card rather than the

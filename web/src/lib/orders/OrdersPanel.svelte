@@ -55,7 +55,8 @@
       const offs = endedBrackets.filter((b) => !bracketExited(b))
       return { state: 'ok' as const, head: 'Cancelled and rejected', cards: mixed(rows, offs), empty: rows.length || offs.length ? '' : 'Nothing cancelled or rejected.' }
     }
-    const cards = (entries.filter((o) => ORDER_LIVE[o.status]).map((o) => ({ kind: 'order' as const, at: o.createdAt, o })) as Card[])
+    // an order being sent, or left being sent when the app stopped, is pending until Wealthsimple is read
+    const cards = (entries.filter((o) => ORDER_LIVE[o.status] || o.status === 'sending').map((o) => ({ kind: 'order' as const, at: o.createdAt, o })) as Card[])
       .concat((data.brackets || []).filter((b) => BRACKET_LIVE[b.status] && b.status !== 'waiting' && (() => { const e = orderById(b.orderId); return !e || inOrdersScope(e.accountId) })()).map((b) => ({ kind: 'bracket' as const, at: (b.armedAt || b.createdAt) as string, b })))
       .sort((a, c) => (a.at < c.at ? 1 : a.at > c.at ? -1 : 0))
     return { state: 'ok' as const, head: 'Pending orders', cards, empty: cards.length ? '' : draftStore.d ? '' : 'No pending orders.' }
@@ -166,7 +167,7 @@
                     {#if panel.orderEdit.error}<div class="status-err" style="font-size:12px">{panel.orderEdit.error}</div>{/if}
                   </div>
                 {/if}
-                <div class="od-foot"><span class="od-when">{orderWhenWord(o.createdAt)}</span>{#if live && !editing}<span class="od-foot-acts"><button class="od-link" disabled={!orderCanEdit(o)} onclick={() => editOrder(o.id)}>Edit</button><button class="od-link neg" onclick={() => (ui.confirm = 'cancel:' + o.id)}>Cancel</button></span>{:else if ended}<span class="od-state{ended[1] === 'neg' ? ' neg' : ''}">{ended[0]}</span>{/if}</div>
+                <div class="od-foot"><span class="od-when">{orderWhenWord(o.createdAt)}</span>{#if live && !editing}<span class="od-foot-acts"><button class="od-link" disabled={!orderCanEdit(o)} onclick={() => editOrder(o.id)}>Edit</button><button class="od-link neg" onclick={() => (ui.confirm = 'cancel:' + o.id)}>Cancel</button></span>{:else if ended}<span class="od-state{ended[1] === 'neg' ? ' neg' : ''}">{ended[0]}</span>{:else if o.status === 'sending'}<span class="od-state">{orderPill(o)[0]}</span>{/if}</div>
               </div>
             {:else if card.kind === 'bracket' && card.b}
               {@const b = card.b}

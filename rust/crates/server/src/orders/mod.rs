@@ -128,6 +128,9 @@ pub struct OrdersState {
     /// Listings the book does not hold, as Wealthsimple's search found them, by
     /// symbol: a ticket on one asks the search once while the app runs.
     pub(crate) found: Mutex<HashMap<String, bagholder_model::securities::Security>>,
+    /// The orders this run is sending now, written and not yet answered. A row left
+    /// `sending` that is not among them was being sent when an earlier run stopped.
+    pub(crate) sending: Mutex<HashSet<String>>,
 }
 
 #[cfg(test)]

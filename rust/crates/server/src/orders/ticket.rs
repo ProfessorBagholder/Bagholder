@@ -702,6 +702,15 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicket
             return PlaceTicketAnswer::err_with_id("Not connected.", id);
         }
     };
+    // known to be in flight before its row can be read as `sending`
+    struct Sending<'a>(&'a App, String);
+    impl Drop for Sending<'_> {
+        fn drop(&mut self) {
+            self.0.orders.sending.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
+        }
+    }
+    app.orders.sending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone());
+    let _sending = Sending(app, id.clone());
     row.status = OrderStatus::Sending;
     must(so::typed::insert_order(&db(app), row, &now_iso()));
     let data: wire::CreateOrderAnswer = match gql_as(app, &sess, "SoOrdersOrderCreate", json!({"input": req})) {

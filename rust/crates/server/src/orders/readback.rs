@@ -317,6 +317,100 @@ impl RefreshOrdersAnswer {
     }
 }
 
+/// Take what Wealthsimple says of an order into its row: where it stands and what
+/// filled, and, for an order not written here or one the engine placed, its terms as
+/// Wealthsimple has them. The person is told of a change, and a fill's own row is
+/// pulled for the book.
+fn apply_reading(app: &Arc<App>, o: &Order, upd: &Reading) {
+    let said = |t: &String| Some(t.clone()).filter(|t| !t.is_empty());
+    let mut patch = OrderPatch {
+        ws_status: Some(upd.ws_status.clone()),
+        status: Some(upd.status),
+        submitted_at: Some(upd.submitted_at.clone()),
+        expires_at: Some(upd.expires_at.clone()),
+        filled_qty: upd.filled_qty.map(Some),
+        avg_fill: upd.avg_fill.map(Some),
+        error: said(&upd.error),
+        ..OrderPatch::default()
+    };
+    // an order not written here, or one the engine placed, is as Wealthsimple has it
+    if o.source == Source::Wealthsimple || matches!(o.role, Role::Stop | Role::Target) {
+        patch.tif = said(&upd.tif);
+        patch.currency = said(&upd.currency);
+        patch.quantity = upd.quantity.map(Some);
+        patch.limit_price = upd.limit_price.map(Some);
+        patch.stop_price = upd.stop_price.map(Some);
+        let name = book_symbol(app, &o.security_id);
+        if !name.is_empty() && name != o.symbol {
+            patch.symbol = Some(name);
+        }
+    }
+    let notice = order_notice(o, upd);
+    patch_order(app, &o.id, patch);
+    if let Some((kind, key, title, body)) = notice {
+        emit(app, &kind, &key, &title, &body);
+    }
+    if upd.status == OrderStatus::Filled {
+        let current = order(app, &o.id).unwrap_or_else(|| o.clone());
+        if catch_unwind(AssertUnwindSafe(|| book_order_fill(app, &current, upd))).is_err() {
+            log(&format!("bagholder orders: {} fill not booked locally", o.id));
+        }
+    }
+}
+
+/// What an order left `sending` reads as when Wealthsimple has no record of it.
+pub const NEVER_REACHED: &str = "Wealthsimple has no record of it: the app stopped while sending it.";
+
+/// Rows left `sending` by a run that stopped before Wealthsimple answered: written and
+/// not being sent now (`OrdersState::sending`). Each may or may not have reached
+/// Wealthsimple, so each is read back by the external id it was sent with, and
+/// Wealthsimple's answer decides it: an order it holds takes its status (an entry that
+/// asked for a stop or a target gets the bracket its send never lived to make); an
+/// order it has no record of never reached it, and fails with that reason. A row that
+/// cannot be read now stays as it is, for the next pass. (rows read, reads failed)
+pub(super) fn settle_unanswered(app: &Arc<App>, sess: &bagholder_ws::session::Session) -> (i64, i64) {
+    let in_flight = app.orders.sending.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let left: Vec<Order> = orders_all(app).into_iter().filter(|o| o.status == OrderStatus::Sending && !in_flight.contains(&o.id)).collect();
+    let (mut read, mut failed) = (0, 0);
+    for o in &left {
+        match fetch_extended_order(app, sess, &o.id) {
+            Ok(Some(upd)) => {
+                apply_reading(app, o, &upd);
+                read += 1;
+                log(&format!("bagholder orders: {} was being sent when the app stopped; Wealthsimple has it as {}", o.id, upd.ws_status));
+                let wants_exits = o.role == Role::Entry && (o.stop_loss.is_some() || o.take_profit.is_some());
+                let placed = matches!(upd.status, OrderStatus::Pending | OrderStatus::Cancelling | OrderStatus::Filled) || (upd.filled_qty.unwrap_or(0.0) > 0.0);
+                if wants_exits && placed && must(so::typed::bracket_for_order(&db(app), &o.id)).is_none() {
+                    if let Some(entry) = order(app, &o.id) {
+                        let b = create_bracket(app, &entry);
+                        log(&format!("bagholder bracket: {} for {}: made for the entry the app stopped while sending", b.id, b.symbol));
+                    }
+                }
+            }
+            Ok(None) => {
+                let reading = Reading { status: OrderStatus::Failed, error: NEVER_REACHED.into(), ..Reading::default() };
+                let notice = order_notice(o, &reading);
+                patch_order(app, &o.id, OrderPatch { status: Some(OrderStatus::Failed), error: Some(NEVER_REACHED.into()), ..OrderPatch::default() });
+                read += 1;
+                log(&format!("bagholder orders: {} was being sent when the app stopped; Wealthsimple has no record of it", o.id));
+                if let Some((kind, key, title, body)) = notice {
+                    emit(app, &kind, &key, &title, &body);
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                log(&format!("bagholder orders: {} was being sent when the app stopped, and could not be read back: {}", o.id, err_text(&e)));
+            }
+        }
+    }
+    (read, failed)
+}
+
+/// Whether a row is left `sending` by a run that stopped: one this run must settle.
+pub(super) fn unanswered(app: &App, o: &Order) -> bool {
+    o.status == OrderStatus::Sending && !app.orders.sending.lock().unwrap_or_else(|e| e.into_inner()).contains(&o.id)
+}
+
 pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> RefreshOrdersAnswer {
     let sess = match ticket_session(app) {
         Some(s) => s,
@@ -338,43 +432,13 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> RefreshOrdersAnswer {
             }
         };
         let Some(upd) = upd else { continue };
-        let said = |t: &String| Some(t.clone()).filter(|t| !t.is_empty());
-        let mut patch = OrderPatch {
-            ws_status: Some(upd.ws_status.clone()),
-            status: Some(upd.status),
-            submitted_at: Some(upd.submitted_at.clone()),
-            expires_at: Some(upd.expires_at.clone()),
-            filled_qty: upd.filled_qty.map(Some),
-            avg_fill: upd.avg_fill.map(Some),
-            error: said(&upd.error),
-            ..OrderPatch::default()
-        };
-        // an order not written here, or one the engine placed, is as Wealthsimple has it
-        if o.source == Source::Wealthsimple || matches!(o.role, Role::Stop | Role::Target) {
-            patch.tif = said(&upd.tif);
-            patch.currency = said(&upd.currency);
-            patch.quantity = upd.quantity.map(Some);
-            patch.limit_price = upd.limit_price.map(Some);
-            patch.stop_price = upd.stop_price.map(Some);
-            let name = book_symbol(app, &o.security_id);
-            if !name.is_empty() && name != o.symbol {
-                patch.symbol = Some(name);
-            }
-        }
-        let notice = order_notice(o, &upd);
-        patch_order(app, &o.id, patch);
+        apply_reading(app, o, &upd);
         read += 1;
-        if let Some((kind, key, title, body)) = notice {
-            emit(app, &kind, &key, &title, &body);
-        }
-        if upd.status == OrderStatus::Filled {
-            let current = order(app, &o.id).unwrap_or_else(|| o.clone());
-            if catch_unwind(AssertUnwindSafe(|| book_order_fill(app, &current, &upd))).is_err() {
-                log(&format!("bagholder orders: {} fill not booked locally", o.id));
-            }
-        }
     }
     if only_id.is_empty() {
+        let (r, f) = settle_unanswered(app, &sess);
+        read += r;
+        failed += f;
         let identity = sess.identity();
         if !identity.is_empty() {
             let rows = orders_all(app);
@@ -415,7 +479,7 @@ pub fn orders_loop(app: &Arc<App>) {
             // matters -- an order is live, or the panel is open on some page -- and
             // otherwise only often enough to hear of an order placed in Wealthsimple's
             // own app, which the fills notification is owed.
-            let closely = orders_all(app).iter().any(|o| o.status.is_live()) || app.events.watched("orders");
+            let closely = orders_all(app).iter().any(|o| o.status.is_live() || unanswered(app, o)) || app.events.watched("orders");
             let age = parse_z(&refreshed_at(app)).map(|t| now_unix() - t as f64);
             if !closely && age.map_or(false, |a| a < (ORDERS_REFRESH_SEC * 10) as f64) {
                 return;
@@ -512,12 +576,12 @@ pub fn orders_payload(app: &Arc<App>, kick: bool) -> OrdersDoc {
 }
 
 /// What the header's badge counts: the Orders panel's Pending cards (`SPEC.md` §4,
-/// Orders), so the two agree -- every order still with the broker that is not a
-/// bracket's own exit, and every bracket at work -- in the accounts in scope, named
+/// Orders), so the two agree -- every order still with the broker or being sent that
+/// is not a bracket's own exit, and every bracket at work -- in the accounts in scope, named
 /// by the broker's id for each (`None`: every account).
 pub fn open_orders_count(app: &Arc<App>, accounts: Option<&HashSet<String>>) -> i64 {
     let within = |account: &str| accounts.map_or(true, |a| a.contains(account));
-    let entries = orders_all(app).iter().filter(|o| o.status.is_live() && !matches!(o.role, Role::Stop | Role::Target) && within(&o.account_id)).count();
+    let entries = orders_all(app).iter().filter(|o| (o.status.is_live() || o.status == OrderStatus::Sending) && !matches!(o.role, Role::Stop | Role::Target) && within(&o.account_id)).count();
     let at_work = must(so::typed::list_brackets(&db(app), &[])).iter().filter(|b| b.status.is_live() && b.status != BracketStatus::Waiting && within(&b.account_id)).count();
     (entries + at_work) as i64
 }

@@ -94,6 +94,8 @@ export function orderPill(o: Order): [string, string] {
   switch (o.status) {
     case 'pending': return filled && filled < (o.quantity ?? 0) ? ['Partially filled', 'accent'] : ['Pending', 'accent']
     case 'sent': return ['Pending', 'accent']
+    // written, and Wealthsimple not heard from yet: the app's own word for it
+    case 'sending': return ['Sent', 'accent']
     case 'cancelling': return ['Cancelling', 'accent']
     case 'filled': return ['Filled', 'pos']
     case 'cancelled': return ['Cancelled', '']

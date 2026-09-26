@@ -867,6 +867,62 @@ fn test_open_orders_are_counted_for_the_header_badge() {
     assert_eq!(o::open_orders_count(&app(), None), 0);
 }
 
+/// SPEC §4, Orders, Status: a row left `sending` -- written, and the app stopped before
+/// Wealthsimple answered -- may or may not have reached Wealthsimple. It is read back
+/// by the id it was sent with and Wealthsimple decides it; one Wealthsimple has no
+/// record of fails with that reason; one that cannot be read waits for the next pass;
+/// one this run is still sending is never touched.
+#[test]
+fn test_a_row_left_sending_by_a_stopped_run_is_read_back_and_wealthsimple_decides_it() {
+    let _g = setup();
+    let write = |over: Value| -> String {
+        let (mut row, _) = o::ticket_order(&app(), &o::Ticket::from_json(&ticket(over))).unwrap();
+        row.status = so::OrderStatus::Sending;
+        so::typed::insert_order(&conn(), &row, &now_iso()).unwrap();
+        row.id
+    };
+    let held = write(json!({}));
+    let held_bare = write(json!({"stopLoss": null, "takeProfit": null}));
+    let unknown = write(json!({}));
+    let unread = write(json!({}));
+    let sending_now = write(json!({}));
+    app_ref().orders.sending.lock().unwrap().insert(sending_now.clone());
+    assert_eq!(o::open_orders_count(&app(), None), 5, "a row being sent is a Pending card");
+    let asked: Sent = Arc::default();
+    {
+        let (asked, held, held_bare, unknown) = (asked.clone(), held.clone(), held_bare.clone(), unknown.clone());
+        set_gql(move |op, vars| {
+            asked.lock().unwrap().push((op.to_string(), vars.clone()));
+            assert_eq!(op, "FetchSoOrdersExtendedOrder");
+            let id = st(vars, "externalId");
+            if id == held || id == held_bare {
+                Ok(json!({"soOrdersExtendedOrder": {"status": "SUBMITTED", "submittedQuantity": 25, "timeInForce": "DAY"}}))
+            } else if id == unknown {
+                Ok(json!({"soOrdersExtendedOrder": null}))
+            } else {
+                Err(CallError::Failed("FetchSoOrdersExtendedOrder: boom".into()))
+            }
+        });
+    }
+    set_session(Some(tok()));
+    let r = o::refresh_orders(&app(), "");
+    unpatch();
+    let ids: Vec<String> = asked.lock().unwrap().iter().map(|(_, v)| st(v, "externalId")).collect();
+    assert!(!ids.contains(&sending_now), "the row this run is sending is not read: {ids:?}");
+    assert_eq!((n(&r, "read"), n(&r, "failed")), (3.0, 1.0), "{r:?}");
+    let row = get_order(&held);
+    assert_eq!((row.status, row.ws_status.as_str()), (so::OrderStatus::Pending, "SUBMITTED"), "as Wealthsimple has it");
+    let b = so::typed::bracket_for_order(&conn(), &held).unwrap().expect("the entry asked for a stop and a target: its bracket is made");
+    assert_eq!((b.status, b.sl_price, b.tp_price), (so::BracketStatus::Waiting, Some(157.13), Some(181.94)));
+    assert!(so::typed::bracket_for_order(&conn(), &held_bare).unwrap().is_none(), "no exits asked, no bracket");
+    let row = get_order(&unknown);
+    assert_eq!((row.status, row.error.as_str()), (so::OrderStatus::Failed, o::NEVER_REACHED));
+    assert!(so::typed::bracket_for_order(&conn(), &unknown).unwrap().is_none(), "never placed: nothing to guard");
+    assert_eq!(get_order(&unread).status, so::OrderStatus::Sending, "unread: decided on a later pass");
+    assert_eq!(get_order(&sending_now).status, so::OrderStatus::Sending);
+    app_ref().orders.sending.lock().unwrap().clear();
+}
+
 /// SPEC §4, Orders: the badge counts the panel's Pending cards, and the panel follows
 /// the page's account filter, so a page's badge counts only the accounts in its scope.
 #[test]

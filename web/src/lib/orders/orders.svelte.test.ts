@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ordersStore, bracketLegs, orderDetailLine, type Order, type Bracket } from './orders.svelte'
+import { ordersStore, bracketLegs, orderDetailLine, orderPill, type Order, type Bracket } from './orders.svelte'
 
 // SPEC.md §4, Orders: what a card's second line and a bracket's leg rows say in each
 // state the server can send. The rules, not examples: every ended state and every
@@ -33,6 +33,12 @@ describe('an order whose cancel is out', () => {
   })
   it('and no other live state says it', () => {
     for (const status of ['sent', 'pending'] as const) expect(orderDetailLine(order({ status }))).not.toContain('Cancelling')
+  })
+})
+
+describe('an order Wealthsimple has not answered for yet', () => {
+  it('reads as the app\'s own Sent while it is written and not answered', () => {
+    expect(orderPill(order({ status: 'sending' }))[0]).toBe('Sent')
   })
 })
 
