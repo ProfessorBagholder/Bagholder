@@ -130,7 +130,8 @@
       if (e.key === 'Escape') { e.preventDefault(); go('markets') }
       if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') return
     }
-    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !filterOpen && !ui.menuOpen && !ui.modal && !ui.confirm && !isFieldFocused()) {
+    // the arrows change tabs only with nothing open: not under a panel, a popover or a dialog
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !filterOpen && !ui.menuOpen && !ui.notesOpen && !ticketStore.t && !ui.modal && !ui.confirm && !isFieldFocused()) {
       const j = TABS.indexOf(route.tab) + (e.key === 'ArrowRight' ? 1 : -1)
       if (j >= 0 && j < TABS.length) { e.preventDefault(); go(TABS[j]) }
       return
