@@ -23,7 +23,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] **A sync error is cut to 57 characters in the header** (§4 header). The Chrome-closed message reads "…Choo…". Old page same. `App.svelte:185,302`.
 - [ ] **The market universes are never read at start or every 30 minutes** (§4 Markets). Only a click on an unread one reads it; after that their day changes go stale. `feeds.rs:2305`.
 - [x] **A Sell from the ticket on shares a bracket holds does not wait for the stop's cancel** (fc293360: it waits for the confirmation, and without it nothing is sold) (§4 Order ticket, Nothing left behind). After 8 s it sends the sell whatever the cancel's state, so a stop and a sell can both rest on the same shares. `orders/ticket.rs:735`.
-- [ ] **A fill of a Bagholder order is not written at once** (§4 Orders). It waits for Wealthsimple's activity feed. `orders/readback.rs:262`.
+- [x] **A fill of a Bagholder order is not written at once** (§4 Orders). It asked one pull and, if Wealthsimple had not listed the fill yet, nothing more until the next day's sync. Now it is pulled for until Wealthsimple's own row for that order is in the book, soon at first and hourly after three hours; SPEC describes the pull (the broker's row, never a synthetic one), not the local trade it used to name.
 
 ## Medium
 

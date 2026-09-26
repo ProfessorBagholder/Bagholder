@@ -127,6 +127,9 @@ pub struct App {
     pub net: bagholder_net::Net,
     /// Sync now was asked: the broker's reads pull at once (`broker_reads`).
     pub pull_asked: AtomicBool,
+    /// Fills of Bagholder's own orders whose Wealthsimple row the book does not
+    /// hold yet, by Wealthsimple's order id, and when each was first seen waiting.
+    pub fill_waits: Mutex<std::collections::BTreeMap<String, bagholder_core::jiff::Timestamp>>,
 }
 
 impl App {
@@ -163,6 +166,7 @@ impl App {
             figures: std::sync::OnceLock::new(),
             net,
             pull_asked: AtomicBool::new(false),
+            fill_waits: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
 

@@ -283,6 +283,16 @@ pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
     true
 }
 
+/// Wealthsimple's order ids of the fills of Bagholder's own orders that have been
+/// read back filled, for the broker's reads to see into the book.
+pub fn own_fills_booked(app: &Arc<App>) -> Vec<String> {
+    orders_all(app)
+        .into_iter()
+        .filter(|o| o.source != Source::Wealthsimple && o.fill_booked_qty.is_some_and(|q| q > 0.0) && !o.ws_order_id.is_empty())
+        .map(|o| o.ws_order_id)
+        .collect()
+}
+
 /// `POST /api/orders/refresh`.
 #[derive(Debug, Serialize, TS)]
 pub struct RefreshOrdersAnswer {

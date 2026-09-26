@@ -694,6 +694,49 @@ fn test_a_fill_that_grows_asks_again_for_what_filled_beyond() {
     assert_eq!(n(&get_order(&oid), "fillBookedQty"), 10.0);
 }
 
+#[test]
+fn test_a_fill_is_pulled_for_again_until_wealthsimple_s_row_for_it_is_in_the_book() {
+    use bagholder_core::jiff::{SignedDuration, Timestamp};
+    let _g = setup();
+    pull_asked();
+    let oid = place_live("order-stop-9", "QNC", "sec-s-us", 5.0, "STOP", "stop");
+    update_order(&oid, json!({"wsOrderId": "order-not-listed-yet"}));
+    fill(&oid, 5.0, 1.6374, None);
+    let a = app();
+    let f = a.figures.get().expect("the figure path");
+    let book = f.book().unwrap();
+    let ws = bagholder_core::Broker::named("wealthsimple");
+    let conn = book.connections().unwrap().into_iter().find(|c| c.broker == ws).unwrap().id;
+    let now: Timestamp = "2026-09-25T15:00:00Z".parse().unwrap();
+    let last = now.checked_sub(SignedDuration::from_secs(3)).unwrap();
+    app().fill_waits.lock().unwrap().clear();
+    // Wealthsimple has not listed the fill: the next pull is due soon after the last
+    let due = crate::broker_reads::fill_pull_due(&app(), &book, conn, Some(last), now).unwrap();
+    assert_eq!(due, Some(last.checked_add(SignedDuration::from_secs(10)).unwrap()));
+    // still missing an hour on: pulled for less often, but still pulled for
+    let later = now.checked_add(SignedDuration::from_secs(3600)).unwrap();
+    let due = crate::broker_reads::fill_pull_due(&app(), &book, conn, Some(later), later).unwrap();
+    assert_eq!(due, Some(later.checked_add(crate::broker_reads::fill_pull_step(SignedDuration::from_secs(3600))).unwrap()));
+    // its row arrived (the order's Wealthsimple id is a record the book holds): nothing more is due
+    let key: String = rusqlite::Connection::open(app().home.join("figures").join(bagholder_book::BOOK_FILE))
+        .unwrap()
+        .query_row("SELECT source_key FROM source_records WHERE source = 'wealthsimple' LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    update_order(&oid, json!({"wsOrderId": key}));
+    assert_eq!(crate::broker_reads::fill_pull_due(&app(), &book, conn, Some(later), later).unwrap(), None);
+    assert!(app().fill_waits.lock().unwrap().is_empty(), "a fill whose row arrived stops waiting");
+}
+
+#[test]
+fn test_a_missing_fill_is_pulled_for_soon_at_first_then_less_often() {
+    use bagholder_core::jiff::SignedDuration;
+    let step = |s: i64| crate::broker_reads::fill_pull_step(SignedDuration::from_secs(s)).as_secs();
+    let waits: Vec<i64> = [0, 59, 60, 299, 300, 1799, 1800, 3 * 3600 - 1, 3 * 3600, 30 * 86400].iter().map(|s| step(*s)).collect();
+    assert!(waits.windows(2).all(|w| w[0] <= w[1]), "never more often as the wait grows: {waits:?}");
+    assert_eq!(waits.first(), Some(&10));
+    assert_eq!(waits.last(), Some(&3600), "hourly for as long as it is missing");
+}
+
 fn booked_rows() -> Vec<Value> {
     activities().into_iter().filter(|a| st(a, "source") == "bagholder-fill").collect()
 }

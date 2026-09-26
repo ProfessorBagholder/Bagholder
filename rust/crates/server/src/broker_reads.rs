@@ -165,6 +165,41 @@ pub fn run(app: Arc<App>) {
     }
 }
 
+/// How long after the last pull a fill still missing its row asks for the next,
+/// by how long it has waited: Wealthsimple usually lists a fill within seconds,
+/// so soon at first, then less often, and hourly after three hours, for as long
+/// as it is missing.
+pub(crate) fn fill_pull_step(waited: SignedDuration) -> SignedDuration {
+    let s = waited.as_secs();
+    SignedDuration::from_secs(match s {
+        s if s < 60 => 10,
+        s if s < 5 * 60 => 30,
+        s if s < 30 * 60 => 2 * 60,
+        s if s < 3 * 3600 => 15 * 60,
+        _ => 3600,
+    })
+}
+
+/// When the next pull is due for the fills of Bagholder's own orders whose
+/// Wealthsimple row the book does not hold yet, if any. A fill is first seen
+/// waiting on this pass; one whose row arrived stops waiting.
+pub(crate) fn fill_pull_due(app: &Arc<App>, book: &Book, conn: ConnectionId, last_pull: Option<Timestamp>, now: Timestamp) -> Result<Option<Timestamp>, String> {
+    let source = bagholder_wealthsimple::mapping::source();
+    let mut missing = Vec::new();
+    for id in crate::orders::own_fills_booked(app) {
+        if book.record_by_key(Some(conn), &source, &id).map_err(|e| e.to_string())?.is_none() {
+            missing.push(id);
+        }
+    }
+    let mut waits = app.fill_waits.lock().unwrap_or_else(|e| e.into_inner());
+    waits.retain(|id, _| missing.contains(id));
+    for id in &missing {
+        waits.entry(id.clone()).or_insert(now);
+    }
+    let Some(last) = last_pull else { return Ok(waits.values().next().map(|_| now)) };
+    Ok(waits.values().filter_map(|since| last.checked_add(fill_pull_step(now.duration_since(*since))).ok()).min())
+}
+
 /// One pass: the pull when it is due or asked for, else the balances when a page
 /// is open and they are due. The next instant either can be due.
 fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest) -> Result<Option<Timestamp>, String> {
@@ -185,7 +220,10 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest) -> Result<
     let last_pull = book.last_read(conn, "accounts").map_err(|e| e.to_string())?;
     let last_cash = book.last_read(conn, "cash").map_err(|e| e.to_string())?;
     let balances_due = |last: Option<Timestamp>| last.is_none_or(|t| now.duration_since(t) >= BALANCES_EVERY);
-    let outcome = if asked || pull_due(last_pull, now, &zone) {
+    // a fill of Bagholder's own order is in the book once Wealthsimple's own row
+    // for it is: until then it is pulled for again, soon at first
+    let fill_due = fill_pull_due(app, &book, conn, last_pull, now)?;
+    let outcome = if asked || pull_due(last_pull, now, &zone) || fill_due.is_some_and(|d| d <= now) {
         Some(pull_now(app, f, &book, conn, file, now)?)
     } else if open && balances_due(last_cash) {
         Some(balances_now(app, f, &book, conn, file, now)?)
@@ -203,6 +241,10 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest) -> Result<
         None => {}
     }
     let mut next = next_window(now, &zone);
+    let last_pull = book.last_read(conn, "accounts").map_err(|e| e.to_string())?;
+    if let Some(d) = fill_pull_due(app, &book, conn, last_pull, now)? {
+        next = Some(next.map_or(d, |n| n.min(d)));
+    }
     if open {
         let cash = book.last_read(conn, "cash").map_err(|e| e.to_string())?;
         let balances = cash.and_then(|t| t.checked_add(BALANCES_EVERY).ok()).unwrap_or(now);
