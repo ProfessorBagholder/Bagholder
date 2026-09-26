@@ -157,6 +157,8 @@ pub enum BracketEvent {
     Sold { quantity: Dec },
     /// The ticket's sale did not go out: the bracket guards again.
     SaleDropped { why: String },
+    /// A statement of the account's units read at `read_at` lists the position, or not.
+    PositionRead { held: bool, read_at: Timestamp },
 }
 
 impl BracketEvent {
@@ -179,6 +181,7 @@ impl BracketEvent {
             BracketEvent::SaleAsked { .. } => "sale-asked",
             BracketEvent::Sold { .. } => "sold",
             BracketEvent::SaleDropped { .. } => "sale-dropped",
+            BracketEvent::PositionRead { .. } => "position-read",
         }
     }
 }
@@ -223,6 +226,11 @@ pub struct Bracket {
     pub outcome: Option<String>,
     /// A ticket sale waiting for the way to clear.
     pub sale: Option<Dec>,
+    /// A statement of the account's units listed the position since the arming.
+    pub seen_held: bool,
+    /// The statement after that which did not list it: one more without it and the
+    /// position is gone (never on one read).
+    pub missed_at: Option<Timestamp>,
 }
 
 impl Bracket {
@@ -231,7 +239,7 @@ impl Bracket {
     pub fn of(events: &[(Timestamp, BracketEvent)]) -> Option<Bracket> {
         let (first, rest) = events.split_first()?;
         let BracketEvent::Created { quantity, stop, target } = &first.1 else { return None };
-        let mut b = Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, attempts: 0, refused_at: None, why: None, outcome: None, sale: None };
+        let mut b = Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, attempts: 0, refused_at: None, why: None, outcome: None, sale: None, seen_held: false, missed_at: None };
         for (at, e) in rest {
             let _ = b.apply(*at, e);
         }
@@ -406,6 +414,17 @@ impl Bracket {
                     self.phase = if self.exit.is_some() { Closing } else { Ended };
                 }
             }
+            BracketEvent::PositionRead { held, read_at } => {
+                if !self.phase.is_live() || self.phase == Waiting {
+                    return refuse(self);
+                }
+                if *held {
+                    self.seen_held = true;
+                    self.missed_at = None;
+                } else if self.seen_held && self.missed_at.is_none() {
+                    self.missed_at = Some(*read_at);
+                }
+            }
             BracketEvent::SaleDropped { why } => {
                 if self.phase != ClosingForSale {
                     return refuse(self);
@@ -464,6 +483,8 @@ pub struct Seen<'a> {
     pub exit: Option<&'a Exit>,
     /// Why the position is gone, when the book shows it closed elsewhere.
     pub closed_elsewhere: Option<String>,
+    /// The broker takes stop orders for the listing (asked when the bracket arms).
+    pub stop_allowed: bool,
 }
 
 /// A request for the gate.
@@ -569,7 +590,7 @@ pub fn decide(b: &Bracket, seen: &Seen) -> Step {
         return Step::nothing();
     }
     if b.phase == Waiting {
-        return arm(b, seen);
+        return arm(seen);
     }
     // what became of the exit first
     let exit = seen.exit.filter(|x| b.exit.as_ref().is_some_and(|(_, id)| *id == x.order_id));
@@ -736,13 +757,13 @@ fn keep_cancelling(x: &Exit) -> Step {
     }
 }
 
-fn arm(b: &Bracket, seen: &Seen) -> Step {
+fn arm(seen: &Seen) -> Step {
     let Some(entry) = seen.entry else { return Step::nothing() };
     if entry.state.in_flight() || entry.state == OrderState::Dry {
         return Step::nothing();
     }
     if entry.filled.is_positive() {
-        return Step::record(vec![BracketEvent::Armed { quantity: entry.filled, high: entry.average, native: b.native }]);
+        return Step::record(vec![BracketEvent::Armed { quantity: entry.filled, high: entry.average, native: seen.stop_allowed }]);
     }
     Step::record(vec![BracketEvent::EntryEnded { why: format!("entry {}", entry.state.as_str()) }])
 }
@@ -795,6 +816,30 @@ fn reconcile(b: &Bracket, x: &Exit) -> Option<Step> {
             Some(Step::record(vec![BracketEvent::Adopted { level, target, quantity }]))
         }
         _ => None,
+    }
+}
+
+/// What the account's statements since the arming say of the position: why it is
+/// gone (a sale of every share in the book, or two statements after one that listed
+/// it that do not), and what to record of the newest statement. Only a bracket with
+/// nothing resting at the broker is decided on: one with an exit resting ends when
+/// that exit fills.
+pub fn closed_by_reads(b: &Bracket, sold: Dec, newest: Option<(Timestamp, bool)>) -> (Option<String>, Option<BracketEvent>) {
+    if sold.is_positive() && sold >= b.quantity {
+        return (Some(format!("sold: {} shares in the activity feed", sold)), None);
+    }
+    let Some((read_at, held)) = newest else { return (None, None) };
+    if held {
+        let note = (!b.seen_held || b.missed_at.is_some()).then_some(BracketEvent::PositionRead { held: true, read_at });
+        return (None, note);
+    }
+    if !b.seen_held {
+        return (None, None);
+    }
+    match b.missed_at {
+        None => (None, Some(BracketEvent::PositionRead { held: false, read_at })),
+        Some(first) if read_at > first => (Some(format!("position gone: two reads of the account's units without it ({first}, {read_at})")), None),
+        Some(_) => (None, None),
     }
 }
 

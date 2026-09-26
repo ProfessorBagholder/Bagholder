@@ -154,6 +154,11 @@ pub enum OrderEvent {
     CancelAsked,
     /// The broker refused the cancel.
     CancelRefused { why: String },
+    /// A change of the working order's limit or quantity was asked for and sent; what
+    /// it stands at after is the broker's to say (the next read).
+    ModifyAsked { limit_price: Option<Dec>, quantity: Option<Dec> },
+    /// The broker refused the change.
+    ModifyRefused { why: String },
 }
 
 impl OrderEvent {
@@ -168,6 +173,8 @@ impl OrderEvent {
             OrderEvent::Read(_) => "read",
             OrderEvent::CancelAsked => "cancel-asked",
             OrderEvent::CancelRefused { .. } => "cancel-refused",
+            OrderEvent::ModifyAsked { .. } => "modify-asked",
+            OrderEvent::ModifyRefused { .. } => "modify-refused",
         }
     }
 }
@@ -322,6 +329,17 @@ impl OrderFold {
                 }
                 _ => Err(self.refuse(event, "no cancel is outstanding")),
             },
+            OrderEvent::ModifyAsked { .. } => match self.state {
+                Pending | PartlyFilled => Ok(Applied::Updated),
+                _ => Err(self.refuse(event, "only a working order can be changed")),
+            },
+            OrderEvent::ModifyRefused { why } => match self.state {
+                Pending | PartlyFilled | Cancelling => {
+                    self.why = Some(why.clone());
+                    Ok(Applied::Updated)
+                }
+                _ => Err(self.refuse(event, "no change is outstanding")),
+            },
             OrderEvent::Read(r) => self.read(event, r),
         }
     }
@@ -439,6 +457,8 @@ mod tests {
             OrderEvent::Unclear { why: "x".into() },
             OrderEvent::CancelAsked,
             OrderEvent::CancelRefused { why: "x".into() },
+            OrderEvent::ModifyAsked { limit_price: Some(d("9")), quantity: None },
+            OrderEvent::ModifyRefused { why: "x".into() },
         ];
         for s in [BrokerStatus::Open, BrokerStatus::Filled, BrokerStatus::Cancelled, BrokerStatus::Expired, BrokerStatus::Rejected, BrokerStatus::NotFound] {
             v.push(read(s, "0"));

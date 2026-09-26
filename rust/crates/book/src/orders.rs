@@ -438,6 +438,8 @@ fn order_body(e: &OrderEvent) -> Value {
             "price": opt_dec_v(r.price), "quantity": opt_dec_v(r.quantity), "expires_at": r.expires_at.map(at_text),
         }),
         OrderEvent::CancelAsked => json!({}),
+        OrderEvent::ModifyAsked { limit_price, quantity } => json!({ "limit_price": opt_dec_v(*limit_price), "quantity": opt_dec_v(*quantity) }),
+        OrderEvent::ModifyRefused { why } => json!({ "why": why }),
     }
 }
 
@@ -537,6 +539,14 @@ fn order_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<Ord
             f.only(&[])?;
             OrderEvent::CancelAsked
         }
+        "modify-asked" => {
+            f.only(&["limit_price", "quantity"])?;
+            OrderEvent::ModifyAsked { limit_price: f.opt_dec("limit_price")?, quantity: f.opt_dec("quantity")? }
+        }
+        "modify-refused" => {
+            f.only(&["why"])?;
+            OrderEvent::ModifyRefused { why: f.text("why")? }
+        }
         other => return Err(format!("not an order event: {other:?}")),
     })
 }
@@ -586,6 +596,7 @@ fn bracket_body(e: &BracketEvent) -> Value {
         BracketEvent::Ended { outcome } => json!({ "outcome": outcome }),
         BracketEvent::Done => json!({}),
         BracketEvent::SaleAsked { quantity } | BracketEvent::Sold { quantity } => json!({ "quantity": dec_v(*quantity) }),
+        BracketEvent::PositionRead { held, read_at } => json!({ "held": held, "read_at": at_text(*read_at) }),
     }
 }
 
@@ -659,6 +670,10 @@ fn bracket_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<B
         "sold" => {
             f.only(&["quantity"])?;
             BracketEvent::Sold { quantity: f.dec("quantity")? }
+        }
+        "position-read" => {
+            f.only(&["held", "read_at"])?;
+            BracketEvent::PositionRead { held: f.bool("held")?, read_at: f.opt_instant("read_at")?.ok_or("no read_at")? }
         }
         other => return Err(format!("not a bracket event: {other:?}")),
     })

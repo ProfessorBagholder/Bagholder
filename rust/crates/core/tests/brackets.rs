@@ -63,7 +63,7 @@ impl World {
     fn tick(&mut self) {
         for _ in 0..16 {
             let step = {
-                let seen = Seen { now: self.now, open: self.open, tape: self.tape, entry: Some(&self.entry), exit: self.exit.as_ref(), closed_elsewhere: self.closed_elsewhere.clone() };
+                let seen = Seen { now: self.now, open: self.open, tape: self.tape, entry: Some(&self.entry), exit: self.exit.as_ref(), closed_elsewhere: self.closed_elsewhere.clone(), stop_allowed: self.b.native };
                 bracket::decide(&self.b, &seen)
             };
             if step.is_nothing() {
@@ -500,4 +500,30 @@ fn under_any_run_of_broker_answers_and_prices_no_exit_is_placed_while_one_is_in_
             }
         }
     }
+}
+
+#[test]
+fn a_position_is_gone_only_on_a_sale_of_every_share_or_two_statements_without_it_after_one_with_it() {
+    use bagholder_core::bracket::closed_by_reads;
+    let t = |s: &str| -> Timestamp { s.parse().unwrap() };
+    let mut w = armed(World::stop("95"), None, false);
+    assert!(closed_by_reads(&w.b, d("10"), None).0.unwrap().starts_with("sold: 10"));
+    assert_eq!(closed_by_reads(&w.b, d("4"), None), (None, None), "a part sold is not the position gone");
+    // not seen held yet: a statement without it says nothing
+    assert_eq!(closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-02T00:00:00Z"), false))), (None, None));
+    let (why, e) = closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-02T00:00:00Z"), true)));
+    assert!(why.is_none());
+    w.b.apply(w.now, &e.unwrap()).unwrap();
+    // the first statement without it: noted, never an end
+    let (why, e) = closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-03T00:00:00Z"), false)));
+    assert!(why.is_none());
+    w.b.apply(w.now, &e.unwrap()).unwrap();
+    // the same statement again is still one
+    assert_eq!(closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-03T00:00:00Z"), false))), (None, None));
+    // a second, later one without it: gone
+    assert!(closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-04T00:00:00Z"), false))).0.unwrap().starts_with("position gone: two reads"));
+    // a statement listing it again forgets the miss
+    let (_, e) = closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-04T00:00:00Z"), true)));
+    w.b.apply(w.now, &e.unwrap()).unwrap();
+    assert_eq!(w.b.missed_at, None);
 }

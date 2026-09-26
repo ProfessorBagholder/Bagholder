@@ -109,6 +109,8 @@ fn every_order_event() -> Vec<OrderEvent> {
         OrderEvent::Read(Reading { status: BrokerStatus::Expired, filled: d("3.5"), average: Some(d("12.3456")), price: Some(d("12.5")), quantity: Some(d("7")), expires_at: Some(t("2026-12-01T21:00:00Z")) }),
         OrderEvent::CancelAsked,
         OrderEvent::CancelRefused { why: "too late".into() },
+        OrderEvent::ModifyAsked { limit_price: Some(d("12.4")), quantity: None },
+        OrderEvent::ModifyRefused { why: "no".into() },
     ]
 }
 
@@ -156,6 +158,7 @@ fn every_bracket_event() -> Vec<BracketEvent> {
         BracketEvent::SaleAsked { quantity: d("3") },
         BracketEvent::Sold { quantity: d("3") },
         BracketEvent::SaleDropped { why: "refused".into() },
+        BracketEvent::PositionRead { held: false, read_at: t("2026-10-01T20:00:00Z") },
         BracketEvent::Ended { outcome: "stopped".into() },
         BracketEvent::Done,
     ]
