@@ -14,7 +14,7 @@ function ticket(over: Partial<Ticket> = {}): Ticket {
     qty: 10, limit: 100, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: 5, priceUnit: 'pct', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: 10, unit: 'pct' },
-    heldQty: null, text: {}, data: { quote: { last: 100, ask: 101, bid: 99, mid: 100, currency: 'USD', multiplier: 1 }, cash: 5000, fxUsdCad: 1.3712 },
+    text: {}, data: { quote: { last: 100, ask: 101, bid: 99, mid: 100, currency: 'USD', multiplier: 1 }, cash: 5000, fxUsdCad: 1.3712 },
     error: '', busy: false, submitError: '',
     ...over,
   }

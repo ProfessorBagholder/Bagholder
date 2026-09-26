@@ -30,7 +30,6 @@ export interface Ticket {
   qty: number | null; limit: number | null; stop: number | null
   sl: { on: boolean; kind: string; price: number | null; pct: number | null; priceUnit: string; trail: number | null; unit: string }
   tp: { on: boolean; price: number | null; pct: number | null; unit: string }
-  heldQty: number | null
   text: Record<string, string | null>
   data: TicketData | null
   error: string; busy: boolean; submitError: string

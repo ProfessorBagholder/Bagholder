@@ -179,7 +179,6 @@ loadDraftFromStorage()
 // command palette and the trade detail wire their Buy/Sell to exactly this.
 export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', securityId = '') {
   const info = tkLookup(symbol, securityId)
-  const held = info.position
   const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY')
   ui.menuOpen = false
   const t: Ticket = {
@@ -188,7 +187,7 @@ export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', 
     qty, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: null, unit: 'amt' },
-    heldQty: held ? ticketNumber(held.qty) : null, text: {}, data: null, error: '', busy: false, submitError: '',
+    text: {}, data: null, error: '', busy: false, submitError: '',
   }
   const d = draftStore.d // what was typed before the ticket closed
   if (d && d.symbol === symbol && d.side === t.side) for (const k of TK_DRAFT_KEYS) if ((d as unknown as Record<string, unknown>)[k] != null) (t as unknown as Record<string, unknown>)[k] = (d as unknown as Record<string, unknown>)[k]
