@@ -11,6 +11,18 @@ test('not connected: what connecting does, and the button that does it', async (
   await expect(page.getByRole('button', { name: 'Connect Wealthsimple' })).toBeVisible()
 })
 
+test('the wait for a sign-in is ended by the server, never by a clock on the page', async ({ page, request }) => {
+  await page.clock.install()
+  await page.route('**/api/login/start', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
+  await openWithStatus(page, request, { connected: false, capturing: true }, '', empty)
+  await page.getByRole('button', { name: 'Connect Wealthsimple' }).click()
+  const header = page.locator('#syncline')
+  await expect(header).toContainText('Waiting for Wealthsimple login…')
+  await page.clock.fastForward(10 * 60_000)
+  await expect(header).toContainText('Waiting for Wealthsimple login…')
+  await expect(header.locator('.status-err')).toHaveCount(0)
+})
+
 test('connected and syncing: the first pull is under way, and there is nothing to press', async ({ page, request }) => {
   await openWithStatus(page, request, { connected: true, syncing: true, syncStep: 'Reading activity' }, '#trades', empty)
   await expect(page.locator('#page')).toContainText('Pulling your history')

@@ -137,12 +137,10 @@ export function updateNow(): void {
 // Connect to Wealthsimple: start the login browser and show the in-app sign-in
 // window if the server streams one. How it goes is read off the status as it
 // changes: the session landing (then sync), or the attempt ending without one. The
-// one timer is a deadline -- three minutes to sign in -- not a question asked again.
-const NO_SESSION = 'No session yet. Finish login in the Chrome window, then try Sync now.'
+// deadline, three minutes to sign in, is the server's, and so is what the header
+// then says: the page keeps no clock of its own to race it.
 let sawCapturing = false
-let connectDeadline: ReturnType<typeof setTimeout> | undefined
 function endConnect(error: string): void {
-  clearTimeout(connectDeadline)
   ui.connecting = false
   closeLoginView()
   const cur = store.model?.status
@@ -161,8 +159,6 @@ export function connect(): void {
       return
     }
     if (store.model?.status?.loginView) ui.loginView = true
-    clearTimeout(connectDeadline)
-    connectDeadline = setTimeout(() => ui.connecting && endConnect(NO_SESSION), 180000)
   })
 }
 /**
@@ -181,8 +177,8 @@ export function followConnect(): () => void {
     } else if (st.capturing) {
       sawCapturing = true
     } else if (sawCapturing) {
-      // the login window was there and is gone, with no session
-      endConnect((st.error as string) || NO_SESSION)
+      // the login window was there and is gone, with no session: the server says why
+      endConnect((st.error as string) || '')
     }
   })
   })

@@ -22,7 +22,7 @@ describe('the one way to the server', () => {
   // anything: the page is told (live.ts), it does not look.
   it('waits on a clock only where that is accounted for', () => {
     const allowed: Record<string, number> = {
-      '/src/lib/ui.svelte.ts': 2, // how long a notice stays in the header; the sign-in's three-minute deadline
+      '/src/lib/ui.svelte.ts': 1, // how long a notice stays in the header (the sign-in's deadline is the server's)
       '/src/lib/clock.svelte.ts': 1, // the minute, while something on screen says "… ago"
       '/src/lib/scrollbars.ts': 1, // a scrollbar lingers after its list stops: Safari has no scrollend
       '/src/lib/TradeDetail.svelte': 1, // the thesis is saved a moment after typing stops
