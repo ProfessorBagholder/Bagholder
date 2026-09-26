@@ -4,7 +4,6 @@
   // cost this holding takes; for a return of capital, the capital returned a unit.
   import type { Model } from './model'
   import { call } from './api'
-  import { flash } from './ui.svelte'
   import { symText } from './sym'
 
   type Waiting = Model['waiting'][number]
@@ -26,12 +25,11 @@
     return [...seen.entries()].map(([id, symbol]) => ({ id, symbol })).sort((a, b) => a.symbol.localeCompare(b.symbol))
   })
 
+  // What is typed goes to the server as it is; a refusal, a missing value's included,
+  // is said under the row in the server's words and nothing else. An entry taken ends
+  // the wait, and the row goes with it.
   async function save() {
     const text = (v: string) => v.trim().replace(/[$,]/g, '')
-    if (kind === 'spin-off' ? !parent || !text(share) : !text(perUnit)) {
-      error = kind === 'spin-off' ? 'The parent and its share of cost are required.' : 'The capital returned a unit is required.'
-      return
-    }
     busy = true
     error = ''
     const r = await call('POST /api/entries', {
@@ -41,11 +39,7 @@
           : { entry: 'return-of-capital', distribution: event.transaction, perUnit: text(perUnit) },
     })
     busy = false
-    if (!r.ok) {
-      error = r.error || 'Could not save it.'
-      return
-    }
-    flash('Entered')
+    if (!r.ok) error = r.error ?? ''
   }
 </script>
 

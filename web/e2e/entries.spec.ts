@@ -89,6 +89,32 @@ test('an event waiting on a holding is entered beside its journal, as a return o
   await expect.poll(() => sent[1]).toEqual({ entry: 'spin-off', event: w.transaction, parent: choice, children: [{ instrument: p.instrument, costShare: '0.3' }] })
 })
 
+test("an event entry is refused in the server's words and nothing else, and one taken says nothing of its own", async ({ page, request }) => {
+  let p: Doc, w: Doc
+  await openWithStatus(page, request, {}, '', (m) => ({ p, w } = waitingOn(m, 'event')))
+  await ready(page)
+  const refusal = 'refused by the server ' + Date.now()
+  const sent: Doc[] = []
+  let answer: Doc = { ok: false, error: refusal }
+  await page.route('**/api/entries', (route) => { sent.push(route.request().postDataJSON()); return route.fulfill({ status: answer.ok ? 200 : 400, json: answer }) })
+  await page.goto('/#portfolio/' + encodeURIComponent(p.id))
+  await expect(page.getByText('Corporate event · ' + w.day)).toBeVisible()
+  const row = page.locator('#page').getByText('Corporate event · ' + w.day).locator('..')
+  // nothing typed: the server is asked all the same, and its refusal is what shows
+  for (const kind of ['Spin-off', 'Return of capital']) {
+    const before = sent.length
+    await page.locator('.seg-opt', { hasText: kind }).click()
+    await page.getByRole('button', { name: 'Enter' }).click()
+    await expect.poll(() => sent.length).toBe(before + 1)
+    await expect(row.locator('.status-err')).toHaveText(refusal)
+  }
+  answer = { ok: true }
+  await page.getByLabel('Capital returned a unit').fill('0.25')
+  await page.getByRole('button', { name: 'Enter' }).click()
+  await expect(row.locator('.status-err')).toHaveCount(0)
+  await expect(page.locator('#syncline')).not.toContainText('Entered')
+})
+
 test('a holding with nothing waiting has no event form', async ({ page, request }) => {
   const m = await (await request.get('/api/figures')).json()
   const p = m.positions.find((x: Doc) => x.kind === 'Shares')
