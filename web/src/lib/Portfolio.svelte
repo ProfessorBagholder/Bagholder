@@ -143,7 +143,8 @@
           </tr></thead>
           <tbody>
             {#each rows as r (r.id)}
-              <tr class="tab" style="cursor:pointer" onclick={() => goSub('portfolio', r.id)}>
+              <!-- the account is named on hover, in the app's own tip (cuttip.ts), not shown in the row -->
+              <tr class="tab" style="cursor:pointer" data-tip={r.account} onclick={() => goSub('portfolio', r.id)}>
                 <td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">{symText(r.symbol)}{#if r.short}{' '}<span class="muted" style="font-size:10px">SHORT</span>{/if}</td>
                 <td style="text-align:right">{px(r.avg)}</td><td style="text-align:right">{px(r.last)}</td>
                 <td style="text-align:right">{money0(r.cost, r.currency)}</td><td style="text-align:right">{money0(r.mv, r.currency)}</td>

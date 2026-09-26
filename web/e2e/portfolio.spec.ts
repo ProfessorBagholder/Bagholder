@@ -124,6 +124,29 @@ test("Holdings figures are in the position's own currency, unlike Allocation's C
   await expect(shortRow.first()).toContainText(symText(short[0].symbol))
 })
 
+test("hovering a holding's row names its account in the app's own tip; the row never shows it", async ({ page, request }) => {
+  const m = await figures(request)
+  await page.goto('/#portfolio')
+  await ready(page)
+  const rows = page.locator('#page tbody tr[data-tip]')
+  await expect(rows).toHaveCount((m.positions as Position[]).length)
+  // every row names its own holding's account: the same symbol in two accounts names two accounts
+  const named: string[] = []
+  for (let i = 0; i < (await rows.count()); i++) {
+    const row = rows.nth(i)
+    await row.locator('td').nth(1).hover()
+    await expect(page.locator('#cutTip')).toBeVisible()
+    const symbol = ((await row.locator('td').first().textContent()) ?? '').replace(/\s*SHORT$/, '').trim()
+    named.push(symbol + ' · ' + ((await page.locator('#cutTip .tv').textContent()) ?? ''))
+  }
+  expect(named.sort()).toEqual((m.positions as Position[]).map((p) => symText(p.symbol) + ' · ' + p.account).sort())
+  await page.locator('#hdr').hover()
+  await expect(page.locator('#cutTip')).toBeHidden()
+  // the account is not a column: no cell of a row reads it
+  for (const p of m.positions as Position[]) await expect(page.locator('#page tbody td', { hasText: new RegExp('^' + p.account + '$') })).toHaveCount(0)
+  expect(await page.locator('[title]').count()).toBe(0)
+})
+
 test('Holdings sorts by Unrealized P&L first; a header click re-sorts it, and a second click reverses it', async ({ page, request }) => {
   const positions = (await figures(request)).positions as Position[]
   // most unrealized first; a holding whose figure waits sinks, whichever way the rest goes
