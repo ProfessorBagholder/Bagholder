@@ -54,14 +54,17 @@ pub(super) fn release_shares(app: &Arc<App>, b: &Bracket, sold: f64) {
     ));
 }
 
-pub(super) fn await_cancels(app: &Arc<App>, b: &Bracket, seconds: u32) {
+/// Whether Wealthsimple has confirmed every exit of the bracket's gone, reading
+/// them back once a second for at most `seconds`. True with orders off, where
+/// nothing rests.
+pub(super) fn await_cancels(app: &Arc<App>, b: &Bracket, seconds: u32) -> bool {
     if !orders_live() {
-        return;
+        return true;
     }
     for _ in 0..seconds {
         let open: Vec<Order> = own_exit_rows(app, b).into_iter().filter(in_flight).collect();
         if open.is_empty() {
-            return;
+            return true;
         }
         for o in &open {
             refresh_orders(app, &o.id);
@@ -69,6 +72,7 @@ pub(super) fn await_cancels(app: &Arc<App>, b: &Bracket, seconds: u32) {
         #[cfg(not(test))]
         std::thread::sleep(Duration::from_secs(1));
     }
+    own_exit_rows(app, b).into_iter().filter(in_flight).next().is_none()
 }
 
 /// The bracket an entry asked for, waiting for the entry to fill.

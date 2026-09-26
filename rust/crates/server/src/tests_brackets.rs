@@ -493,11 +493,10 @@ fn test_an_exit_resting_with_no_bracket_holding_it_is_swept() {
     assert_eq!(cancels(), vec![stop]);
 }
 
-/// Pins a known mistake of the old app (`docs/old-app-mistakes.md`: a sale
-/// from the ticket does not wait for the stop's cancel to be confirmed; the
-/// stop is still "cancelling" when the sell goes); fixed in stage 4.
+/// SPEC §4, Nothing left behind: a sale from the ticket on shares a bracket holds
+/// ends the bracket and goes out only once Wealthsimple confirms its stop cancelled.
 #[test]
-fn test_known_wrong_a_sell_from_the_ticket_goes_out_before_the_stops_cancel_is_confirmed() {
+fn test_a_sell_from_the_ticket_waits_for_the_stops_cancel_to_be_confirmed() {
     let _g = setup();
     let (oid, b) = entry(json!({}));
     filled(&oid);
@@ -505,15 +504,19 @@ fn test_known_wrong_a_sell_from_the_ticket_goes_out_before_the_stops_cancel_is_c
     let id = sv(&b, "id");
     let stop = sv(&get_bracket(&id), "slOrderId");
     clear();
+    // Wealthsimple has not confirmed the cancel: nothing is sold, and the refusal says so
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
+    assert!(!tv(&r, "ok"), "{:?}", r);
+    assert!(sv(&r, "error").starts_with("Nothing was sold"), "{:?}", r);
+    assert!(ops().iter().all(|x| x != "SoOrdersOrderCreate"), "no sell goes out while the stop may still rest: {:?}", ops());
+    assert_eq!(ops()[0], "SoOrdersOrderCancel", "the resting stop's cancel is sent");
+    assert_eq!(sv(&get_bracket(&id), "outcome"), "sold from the ticket");
+    // confirmed: the same sale goes out
+    update_order(&stop, json!({"status": "cancelled"}));
+    clear();
     let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
     assert!(tv(&r, "ok"), "{:?}", r);
-    let o = ops();
-    assert_eq!(o[0], "SoOrdersOrderCancel", "the resting stop goes first");
-    assert_eq!(o[o.len() - 1], "SoOrdersOrderCreate", "then the sell");
-    assert!(o.iter().position(|x| x == "SoOrdersOrderCancel") < o.iter().position(|x| x == "SoOrdersOrderCreate"));
-    assert_eq!(sv(&get_bracket(&id), "outcome"), "sold from the ticket");
-    assert!(["closing", "done"].contains(&sv(&get_bracket(&id), "status").as_str()));
-    assert_eq!(sv(&get_order(&stop), "status"), "cancelling");
+    assert_eq!(ops().last().map(String::as_str), Some("SoOrdersOrderCreate"));
 }
 
 #[test]
@@ -524,11 +527,17 @@ fn test_selling_part_of_the_shares_keeps_the_bracket_on_the_rest() {
     t0();
     let id = sv(&b, "id");
     let first = sv(&get_bracket(&id), "slOrderId");
+    // the stop's cancel not confirmed: nothing sold, and the bracket guards all 25 again
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
+    assert!(!tv(&r, "ok"), "{:?}", r);
+    assert_eq!(fv(&get_bracket(&id), "quantity"), 25.0, "a sale held back takes no shares out of the bracket");
+    // confirmed: the sale goes out and the bracket keeps the fifteen left
+    update_order(&first, json!({"status": "cancelled"}));
+    clear();
     let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
     assert!(tv(&r, "ok"), "{:?}", r);
     let b = get_bracket(&id);
     assert_eq!((sv(&b, "status"), fv(&b, "quantity"), sv(&b, "slOrderId")), ("armed".into(), 15.0, "".into()));
-    update_order(&first, json!({"status": "cancelled"}));
     clear();
     t0();
     let c = creates();

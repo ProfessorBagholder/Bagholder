@@ -724,6 +724,10 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicket
     PlaceTicketAnswer { ok: true, id: Some(id), status: Some("sent".into()), ws_order_id: Some(ws_id), ..PlaceTicketAnswer::default() }
 }
 
+/// How long a sale from the ticket waits for Wealthsimple to confirm a bracket's
+/// exits cancelled before it is held back.
+const CANCEL_CONFIRM_SECONDS: u32 = 30;
+
 /// Place what a ticket asks for. A sale first takes its shares out from under any
 /// bracket guarding them -- the bracket ended, or kept on what is left -- so that the
 /// bracket's own exits and this sale never sell the same shares twice.
@@ -734,19 +738,38 @@ pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> PlaceTicketAnswer {
     };
     if row.side == Side::Sell {
         let mut left = row.quantity.unwrap_or(0.0);
+        // a bracket kept on fewer shares for this sale, and how many it guarded
+        let mut released: Option<(String, f64)> = None;
         for b in live_brackets(app) {
-            if b.account_id != row.account_id || b.security_id != row.security_id || matches!(b.status, BracketStatus::Waiting | BracketStatus::Closing) {
+            if b.account_id != row.account_id || b.security_id != row.security_id || b.status == BracketStatus::Waiting {
                 continue;
             }
             let held = b.quantity.unwrap_or(0.0);
-            if left >= held {
+            if b.status == BracketStatus::Closing {
+                // already ended: its exits are being cancelled, and the sale waits for that too
+            } else if left >= held {
                 end_bracket(app, &b, "sold from the ticket", "");
-                await_cancels(app, &b, 8);
                 left -= held;
             } else if left > 0.0 {
                 release_shares(app, &b, left);
-                await_cancels(app, &b, 8);
+                released = Some((b.id.clone(), held));
                 left = 0.0;
+            } else {
+                continue;
+            }
+            // the sell goes out only once Wealthsimple confirms the bracket's exits
+            // gone: a stop and this sell never rest on the same shares
+            if !await_cancels(app, &b, CANCEL_CONFIRM_SECONDS) {
+                // a bracket kept on the shares left guards them all again, so trying
+                // the sale again takes its shares out once, not twice
+                if let Some((id, held)) = released.take() {
+                    patch_bracket(app, &id, BracketPatch { quantity: Some(Some(held)), ..BracketPatch::default() });
+                }
+                log(&format!("bagholder order: sell of {} held back: the bracket's stop is not confirmed cancelled", row.symbol));
+                return PlaceTicketAnswer::err(format!(
+                    "Nothing was sold: Wealthsimple has not confirmed the bracket's stop on {} cancelled yet. Try again in a moment.",
+                    row.symbol
+                ));
             }
         }
     }
