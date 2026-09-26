@@ -737,7 +737,16 @@ pub struct MutationResult {
 /// says something is a refusal too, never read as an acceptance: an order is
 /// not taken as placed, cancelled or changed on an answer that objects to it.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Refusal(pub Option<String>);
+pub struct Refusal(pub Option<String>, pub Option<String>);
+
+impl Refusal {
+    /// Wealthsimple's code for the refusal, where it states one
+    /// (`BALANCE_INSUFFICIENT_SHARES`): what a caller decides by, the reason
+    /// being words for a person.
+    pub fn code(&self) -> Option<&str> {
+        self.1.as_deref()
+    }
+}
 
 impl<'de> Deserialize<'de> for Refusal {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -752,13 +761,20 @@ impl<'de> Deserialize<'de> for Refusal {
                 other => bagholder_model::value::s(Some(other)),
             }
         }
+        fn code(v: &Value) -> Option<String> {
+            match v {
+                Value::Object(m) => Some(bagholder_model::value::s(m.get("code"))).filter(|c| !c.is_empty()),
+                _ => None,
+            }
+        }
         let v = Value::deserialize(d)?;
-        Ok(Refusal(match &v {
+        let first = match &v {
             Value::Null | Value::Bool(false) => None,
-            Value::Array(a) => a.first().map(reason),
+            Value::Array(a) => a.first(),
             Value::Object(m) if m.is_empty() => None,
             Value::String(t) if t.is_empty() => None,
-            other => Some(reason(other)),
-        }))
+            other => Some(other),
+        };
+        Ok(Refusal(first.map(reason), first.and_then(code)))
     }
 }

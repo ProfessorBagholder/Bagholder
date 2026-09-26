@@ -247,7 +247,7 @@ pub fn kick_orders_refresh(app: &Arc<App>) -> bool {
             return false;
         }
     }
-    if !connected_not_syncing(app) {
+    if !orders_can_run(app) {
         return false;
     }
     if app.orders.refreshing.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
@@ -407,7 +407,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> RefreshOrdersAnswer {
 
 pub fn orders_loop(app: &Arc<App>) {
     while !app.wait(Duration::from_secs(ORDERS_REFRESH_SEC)) {
-        if !connected_not_syncing(app) {
+        if !orders_can_run(app) {
             continue;
         }
         let r = catch_unwind(AssertUnwindSafe(|| {

@@ -80,8 +80,10 @@ fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
         "SoOrdersOrderCreate" => {
             let mut r = lk(&REJECTIONS);
             if !r.is_empty() {
+                // `CODE|message` states Wealthsimple's code; a bare message comes with code x
                 let m = r.remove(0);
-                json!({"soOrdersCreateOrder": {"errors": [{"code": "x", "message": m}], "order": null}})
+                let (code, m) = m.split_once('|').map(|(c, m)| (c.to_string(), m.to_string())).unwrap_or(("x".into(), m));
+                json!({"soOrdersCreateOrder": {"errors": [{"code": code, "message": m}], "order": null}})
             } else {
                 json!({"soOrdersCreateOrder": {"errors": [], "order": {"orderId": format!("ws-{}", n), "createdAt": "2026-09-10T13:30:00Z"}}})
             }
@@ -457,6 +459,23 @@ fn test_a_price_changed_by_hand_at_wealthsimple_is_adopted() {
 }
 
 #[test]
+fn test_a_quantity_changed_by_hand_at_wealthsimple_is_adopted() {
+    let _g = setup();
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let b = get_bracket(&sv(&b, "id"));
+    assert_eq!(fv(&b, "quantity"), 25.0);
+    update_order(&sv(&b, "slOrderId"), json!({"quantity": 18.0}));
+    clear();
+    t0();
+    let after = get_bracket(&sv(&b, "id"));
+    assert_eq!(fv(&after, "quantity"), 18.0, "the bracket follows the quantity set by hand");
+    assert_eq!(sv(&after, "status"), "armed", "and keeps guarding it");
+    assert!(creates().is_empty(), "nothing is placed again for it");
+}
+
+#[test]
 fn test_an_ending_is_confirmed_before_the_bracket_is_done() {
     let _g = setup();
     let (oid, b) = entry(json!({}));
@@ -619,6 +638,41 @@ fn test_the_balances_feed_never_touches_a_bracket_with_a_resting_order() {
     assert_eq!(sv(&b, "status"), "armed", "reads without the position change nothing while the stop rests");
     assert!(tv(&b, "slOrderId"), "the stop still rests");
     assert!(sent_empty(), "nothing is cancelled on the balances' word");
+}
+
+/// SPEC §4, Brackets after the fill: Wealthsimple refusing an exit for shares that
+/// are not there ends the bracket, the reason on the leg; nothing is tried again.
+#[test]
+fn test_an_exit_refused_for_shares_that_are_not_there_ends_the_bracket_with_the_reason() {
+    for code in ["BALANCE_INSUFFICIENT_SHARES", "NOT_ENOUGH_SHARES", "balance_insufficient_shares"] {
+        let _g = setup();
+        let (oid, b) = entry(json!({}));
+        filled(&oid);
+        *lk(&REJECTIONS) = vec![format!("{code}|You do not have enough shares")];
+        t0();
+        let id = sv(&b, "id");
+        let b = get_bracket(&id);
+        assert!(["done", "closing"].contains(&sv(&b, "status").as_str()), "{code}: {:?}", b);
+        assert_eq!(sv(&b, "outcome"), "the shares are not there");
+        assert!(sv(&b, "error").contains("You do not have enough shares"), "the reason is on the leg");
+        clear();
+        t0();
+        assert!(creates().is_empty(), "{code}: nothing is placed again");
+    }
+}
+
+/// SPEC §4, Trailing: the resting stop moves whenever the new level is at least half
+/// a percent above the current one, and by at least a cent.
+#[test]
+fn test_a_trailing_stop_moves_at_half_a_percent_or_more_and_not_below() {
+    use crate::orders::trail_moves;
+    for current in [0.5, 1.0, 1.99, 2.0, 12.34, 157.13, 999.99, 4321.0] {
+        let step = f64::max(0.01, current * 0.005);
+        assert!(trail_moves(current + step, current), "exactly the step from {current}");
+        assert!(trail_moves(current + step * 1.5, current), "past the step from {current}");
+        assert!(!trail_moves(current + step * 0.9, current), "short of the step from {current}");
+        assert!(!trail_moves(current, current), "no move to the same level");
+    }
 }
 
 #[test]
@@ -791,4 +845,24 @@ fn test_a_resting_target_is_rolled_too_and_placed_again() {
     assert_eq!(c.len(), 1, "{:?}", ops());
     assert_eq!((sv(&c[0], "executionType"), c[0]["limitPrice"].as_f64()), ("LIMIT".into(), Some(181.94)));
     assert_eq!(sv(&get_bracket(&sv(&b, "id")), "status"), "target_placed");
+}
+
+/// SPEC §4, Brackets after the fill: every live bracket is checked while the app
+/// runs connected; a sync in progress does not pause the checks.
+#[test]
+fn test_the_order_and_bracket_checks_run_while_a_sync_does() {
+    let _g = setup();
+    let a = app();
+    let set = |connected: bool, syncing: bool| {
+        let mut st = a.state.lock().unwrap();
+        st.connected = connected;
+        st.syncing = syncing;
+    };
+    for syncing in [false, true] {
+        set(true, syncing);
+        assert!(crate::orders::orders_can_run(&a), "connected, syncing {syncing}: the checks run");
+        set(false, syncing);
+        assert!(!crate::orders::orders_can_run(&a), "not connected: nothing to check with");
+    }
+    set(true, false);
 }

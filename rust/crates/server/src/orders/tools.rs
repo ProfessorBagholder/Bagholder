@@ -199,8 +199,10 @@ pub(super) fn parse_utc_text(t: &str) -> Option<i64> {
 pub(super) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str) {
     notify::emit(app, &db(app), kind, key, title, body, None);
 }
-
-pub(super) fn connected_not_syncing(app: &Arc<App>) -> bool {
-    let st = app.state.lock().unwrap();
-    st.connected && !st.syncing
+/// Whether the order and bracket checks run now: whenever the app is connected.
+/// A sync in progress does not pause them: a stop is watched every few seconds
+/// whatever else reads Wealthsimple (`SPEC.md` §4, Brackets after the fill), and
+/// a token refresh is one at a time, adopted by whoever waited on it.
+pub(crate) fn orders_can_run(app: &Arc<App>) -> bool {
+    app.state.lock().unwrap().connected
 }

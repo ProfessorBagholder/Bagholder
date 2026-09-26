@@ -156,22 +156,22 @@ pub(super) fn exit_body(app: &Arc<App>, b: &Bracket, kind: OrderType, price: Opt
 }
 
 /// (order id, error).
-pub(super) fn place_exit(app: &Arc<App>, b: &Bracket, kind: OrderType, price: Option<f64>, role: Role) -> (String, String) {
+pub(super) fn place_exit(app: &Arc<App>, b: &Bracket, kind: OrderType, price: Option<f64>, role: Role) -> (String, String, Option<String>) {
     let (mut row, req) = match exit_body(app, b, kind, price, role) {
         Ok(x) => x,
-        Err(e) => return (String::new(), e),
+        Err(e) => return (String::new(), e, None),
     };
     if !orders_live() {
         let key = format!("{}|{}|{}", b.id, role, rp(price.map(|p| round_half_even(p, 4))));
         say_once(app, key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, kind, b.symbol, bagholder_store::tables::json_text_sorted(&req)));
-        return (String::new(), String::new());
+        return (String::new(), String::new(), None);
     }
     let r = submit_order(app, &mut row, &req);
     if !r.ok {
         let e = r.error.unwrap_or_default();
-        return (String::new(), if e.is_empty() { "not sent".into() } else { e });
+        return (String::new(), if e.is_empty() { "not sent".into() } else { e }, r.refusal_code);
     }
-    (r.id.unwrap_or_default(), String::new())
+    (r.id.unwrap_or_default(), String::new(), None)
 }
 
 /// Cancel an exit that rests; nothing to do, and no error, for one that does not.
@@ -241,7 +241,17 @@ fn account_tail(app: &Arc<App>, b: &Bracket) -> String {
     if acct.is_empty() { String::new() } else { format!(" · {}", acct) }
 }
 
-pub(super) fn fail(app: &Arc<App>, b: &Bracket, msg: &str) {
+/// Wealthsimple's codes for refusing a sale of shares the account does not hold.
+const NO_SHARES: [&str; 2] = ["BALANCE_INSUFFICIENT_SHARES", "NOT_ENOUGH_SHARES"];
+
+/// An exit Wealthsimple would not take. Refused for shares the account does not
+/// hold, the bracket ends, the reason on the leg (`SPEC.md` §4, Brackets after the
+/// fill); any other refusal is tried again after a rest.
+pub(super) fn fail(app: &Arc<App>, b: &Bracket, msg: &str, code: Option<&str>) {
+    if code.is_some_and(|c| NO_SHARES.contains(&c.to_uppercase().as_str())) {
+        end_bracket(app, b, "the shares are not there", msg);
+        return;
+    }
     let attempts = b.attempts + 1;
     patch_bracket(app, &b.id, BracketPatch { error: Some(msg.into()), attempts: Some(attempts), ..BracketPatch::default() });
     log(&format!("bagholder bracket: {} for {}: {} (attempt {}; next in {} s)", b.id, b.symbol, msg, attempts, retry_wait(attempts)));
@@ -309,9 +319,9 @@ pub(super) fn arm_step(app: &Arc<App>, b: &Bracket, entry: Option<&Order>) {
     if !may_retry(&b) {
         return;
     }
-    let (oid, err) = place_exit(app, &b, OrderType::Stop, b.sl_price, Role::Stop);
+    let (oid, err, code) = place_exit(app, &b, OrderType::Stop, b.sl_price, Role::Stop);
     if !err.is_empty() {
-        fail(app, &b, &format!("stop not placed: {}", err));
+        fail(app, &b, &format!("stop not placed: {}", err), code.as_deref());
     } else if !oid.is_empty() {
         patch_bracket(app, &b.id, BracketPatch {
             sl_order_id: Some(oid), sl_native: Some(true), sl_mode: Some(SlMode::Native), error: Some(String::new()), attempts: Some(0), moved_at: Some(now_iso()),
@@ -635,7 +645,7 @@ pub(super) fn roll_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
         if roll_due(order(app, &b.sl_order_id).as_ref(), tape, now) {
             let err = cancel_exit(app, &b.sl_order_id);
             if !err.is_empty() {
-                fail(app, b, &format!("stop not rolled: {}", err));
+                fail(app, b, &format!("stop not rolled: {}", err), None);
                 return;
             }
             patch_bracket(app, &b.id, BracketPatch { sl_order_id: Some(String::new()), moved_at: Some(now_iso()), error: Some(String::new()), ..BracketPatch::default() });
@@ -646,7 +656,7 @@ pub(super) fn roll_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
             if roll_due(order(app, &b.tp_order_id).as_ref(), tape, now) {
                 let err = cancel_exit(app, &b.tp_order_id);
                 if !err.is_empty() {
-                    fail(app, b, &format!("target not rolled: {}", err));
+                    fail(app, b, &format!("target not rolled: {}", err), None);
                     return;
                 }
                 patch_bracket(app, &b.id, BracketPatch { tp_order_id: Some(String::new()), moved_at: Some(now_iso()), error: Some(String::new()), ..BracketPatch::default() });
@@ -695,6 +705,20 @@ pub(super) fn reconcile_step(app: &Arc<App>, b: &Bracket) -> bool {
         if !b.tp_order_id.is_empty() && resting(tp) && moved(tp.limit_price, b.tp_price) {
             patch_bracket(app, &b.id, BracketPatch { tp_price: Some(tp.limit_price), ..BracketPatch::default() });
             log(&format!("bagholder bracket: {} for {}: target moved by hand to {}; the bracket follows", b.id, b.symbol, rp(tp.limit_price)));
+        }
+    }
+    // a quantity changed by hand at Wealthsimple is adopted as a price is: the
+    // resting exit is what guards the shares, and the bracket follows it
+    let resting_exit = [(&stop_row, &b.sl_order_id), (&tp_row, &b.tp_order_id)]
+        .into_iter()
+        .find_map(|(row, id)| row.as_ref().filter(|r| !id.is_empty() && resting(r)).cloned());
+    if let Some(r) = resting_exit {
+        if let (Some(theirs), Some(ours)) = (r.quantity, b.quantity) {
+            if theirs > 0.0 && (theirs - ours).abs() > 1e-9 {
+                patch_bracket(app, &b.id, BracketPatch { quantity: Some(Some(theirs)), ..BracketPatch::default() });
+                log(&format!("bagholder bracket: {} for {}: quantity changed by hand to {}; the bracket follows", b.id, b.symbol, qty_text(theirs)));
+                b.quantity = Some(theirs);
+            }
         }
     }
     let gone = |r: &&Order| matches!(r.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Failed);
@@ -747,11 +771,11 @@ pub(super) fn watch_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
             patch_bracket(app, &b.id, BracketPatch { high_water: Some(Some(high)), ..BracketPatch::default() });
         }
         let new_stop = round_half_even(high - trail_distance(&b, high).unwrap_or(0.0), 2);
-        if new_stop > sl_price + f64::max(0.01, sl_price * TRAIL_MIN_MOVE) {
+        if trail_moves(new_stop, sl_price) {
             if !b.sl_order_id.is_empty() {
                 let err = cancel_exit(app, &b.sl_order_id);
                 if !err.is_empty() {
-                    fail(app, &b, &format!("stop not moved: {}", err));
+                    fail(app, &b, &format!("stop not moved: {}", err), None);
                     return;
                 }
             }
@@ -767,9 +791,9 @@ pub(super) fn watch_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
         if !may_retry(&b) {
             return;
         }
-        let (oid, err) = place_exit(app, &b, OrderType::Market, b.sl_price, Role::Stop);
+        let (oid, err, code) = place_exit(app, &b, OrderType::Market, b.sl_price, Role::Stop);
         if !err.is_empty() {
-            fail(app, &b, &format!("stop not placed: {}", err));
+            fail(app, &b, &format!("stop not placed: {}", err), code.as_deref());
         } else if !oid.is_empty() {
             patch_bracket(app, &b.id, BracketPatch { sl_order_id: Some(oid), status: Some(BracketStatus::Firing), error: Some(String::new()), ..BracketPatch::default() });
             log(&format!("bagholder bracket: {} for {}: stop hit at {}, market sell placed", b.id, b.symbol, rp(Some(trigger))));
@@ -780,7 +804,7 @@ pub(super) fn watch_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
         if !b.sl_order_id.is_empty() {
             let err = cancel_exit(app, &b.sl_order_id);
             if !err.is_empty() {
-                fail(app, &b, &format!("stop not cancelled for the target: {}", err));
+                fail(app, &b, &format!("stop not cancelled for the target: {}", err), None);
                 return;
             }
             patch_bracket(app, &b.id, BracketPatch { status: Some(BracketStatus::Firing), error: Some(String::new()), ..BracketPatch::default() });
@@ -796,7 +820,7 @@ pub(super) fn watch_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
         if trigger <= sl_price {
             let err = cancel_exit(app, &b.tp_order_id);
             if !err.is_empty() {
-                fail(app, &b, &format!("target not cancelled for the stop: {}", err));
+                fail(app, &b, &format!("target not cancelled for the stop: {}", err), None);
                 return;
             }
             patch_bracket(app, &b.id, BracketPatch { status: Some(BracketStatus::Stopping), tp_order_id: Some(String::new()), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default() });
@@ -809,7 +833,7 @@ pub(super) fn watch_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
         if has_target && trigger < tp_price * (1.0 - TARGET_BACK_OFF) {
             let err = cancel_exit(app, &b.tp_order_id);
             if !err.is_empty() {
-                fail(app, &b, &format!("target not cancelled for the stop: {}", err));
+                fail(app, &b, &format!("target not cancelled for the stop: {}", err), None);
                 return;
             }
             patch_bracket(app, &b.id, BracketPatch {
@@ -824,9 +848,9 @@ pub(super) fn watch_step(app: &Arc<App>, b: &Bracket, tape: Option<Tape>) {
         if !may_retry(&b) || !nothing_resting(app, &b) {
             return;
         }
-        let (oid, err) = place_exit(app, &b, OrderType::Market, b.sl_price, Role::Stop);
+        let (oid, err, code) = place_exit(app, &b, OrderType::Market, b.sl_price, Role::Stop);
         if !err.is_empty() {
-            fail(app, &b, &format!("stop not placed: {}", err));
+            fail(app, &b, &format!("stop not placed: {}", err), code.as_deref());
         } else if !oid.is_empty() {
             patch_bracket(app, &b.id, BracketPatch { sl_order_id: Some(oid), status: Some(BracketStatus::Firing), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default() });
             log(&format!("bagholder bracket: {} for {}: market sell placed at the stop", b.id, b.symbol));
@@ -838,9 +862,9 @@ pub(super) fn fire_target(app: &Arc<App>, b: &Bracket) {
     if !may_retry(b) || !nothing_resting(app, b) {
         return;
     }
-    let (oid, err) = place_exit(app, b, OrderType::Limit, b.tp_price, Role::Target);
+    let (oid, err, code) = place_exit(app, b, OrderType::Limit, b.tp_price, Role::Target);
     if !err.is_empty() {
-        fail(app, b, &format!("target not placed: {}", err));
+        fail(app, b, &format!("target not placed: {}", err), code.as_deref());
     } else if !oid.is_empty() {
         patch_bracket(app, &b.id, BracketPatch { tp_order_id: Some(oid), status: Some(BracketStatus::TargetPlaced), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default() });
         log(&format!("bagholder bracket: {} for {}: limit sell at {} placed", b.id, b.symbol, rp(b.tp_price)));
@@ -954,12 +978,18 @@ pub(super) fn bracket_work(app: &Arc<App>) -> bool {
         .unwrap_or(true) // could not tell: tick, rather than miss a stop
 }
 
+/// Whether a trailing stop at `current` moves to `new`: at least half a percent
+/// above it, and at least a cent (`SPEC.md` §4, Trailing).
+pub(crate) fn trail_moves(new: f64, current: f64) -> bool {
+    new + 1e-9 >= current + f64::max(0.01, current * TRAIL_MIN_MOVE)
+}
+
 pub fn bracket_loop(app: &Arc<App>) {
     while app.events.park_until(app, || bracket_work(app)) {
         if app.wait(Duration::from_secs(BRACKET_POLL_SEC)) {
             return;
         }
-        if !connected_not_syncing(app) {
+        if !orders_can_run(app) {
             continue;
         }
         if let Err(e) = catch_unwind(AssertUnwindSafe(|| bracket_tick(app, None))) {

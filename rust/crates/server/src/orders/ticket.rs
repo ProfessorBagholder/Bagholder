@@ -665,6 +665,10 @@ pub struct PlaceTicketAnswer {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub bracket_id: Option<String>,
+    /// Wealthsimple's code for a refusal, for the server's own decisions; never sent.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub refusal_code: Option<String>,
 }
 
 impl PlaceTicketAnswer {
@@ -708,10 +712,11 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicket
     };
     // an answer that names no order still leaves the order sent: the read-back finds it by our id
     let result = data.so_orders_create_order.unwrap_or_default();
+    let code = result.errors.code().map(str::to_string);
     if let Some(reason) = result.errors.0 {
         now_is(OrderStatus::Rejected, &reason);
-        log(&format!("bagholder order: {} rejected: {}", id, reason));
-        return PlaceTicketAnswer::err_with_id(refused_words("Wealthsimple rejected the order", &reason), id);
+        log(&format!("bagholder order: {} rejected: {}{}", id, reason, code.as_deref().map(|c| format!(" ({c})")).unwrap_or_default()));
+        return PlaceTicketAnswer { refusal_code: code, ..PlaceTicketAnswer::err_with_id(refused_words("Wealthsimple rejected the order", &reason), id) };
     }
     let ws_id = result.order.map(|o| o.order_id).unwrap_or_default();
     patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Sent), ws_order_id: Some(ws_id.clone()), ..OrderPatch::default() });
