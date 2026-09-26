@@ -51,6 +51,11 @@ pub enum Entity {
     Payer(InstrumentId),
     Equity(AccountId),
     BrokerCheck(AccountId),
+    /// A benchmark's total return in CAD, by its key.
+    Benchmark(String),
+    /// What the record is as a whole: its accounts and instruments, the facts it
+    /// waits on the person for, how many transactions it holds, and today.
+    Book,
 }
 
 /// The entities whose figures moved, each with the fields that did; an entity
@@ -62,122 +67,76 @@ impl Moved {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Everything `more` moved, added to this.
+    pub fn merge(&mut self, more: Moved) {
+        for (entity, fields) in more.0 {
+            self.0.entry(entity).or_default().extend(fields);
+        }
+    }
 }
 
-/// An entity's figures, field by field, for finding what moved.
+/// An entity's figures, field by field, for finding what moved: the names of
+/// the fields whose values differ from `other`'s, compared by value.
 pub trait Fields {
-    fn fields(&self) -> Vec<(&'static str, String)>;
+    fn changed(&self, other: &Self) -> BTreeSet<&'static str>;
 }
 
-fn f<T: Debug>(name: &'static str, v: &T) -> (&'static str, String) {
-    (name, format!("{v:?}"))
+/// `Fields` over the named fields of a struct, each compared with `==`.
+macro_rules! fields {
+    ($t:ty; $($f:ident),* $(,)?) => {
+        impl Fields for $t {
+            fn changed(&self, other: &Self) -> BTreeSet<&'static str> {
+                let mut out = BTreeSet::new();
+                $(if self.$f != other.$f {
+                    out.insert(stringify!($f));
+                })*
+                out
+            }
+        }
+    };
 }
 
-impl Fields for TradeFig {
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![
-            f("trade", &self.trade),
-            f("account", &self.account),
-            f("instrument", &self.instrument),
-            f("instruments", &self.instruments),
-            f("direction", &self.direction),
-            f("qty", &self.qty),
-            f("opened_on", &self.opened_on),
-            f("status", &self.status),
-            f("closed_on", &self.closed_on),
-            f("last_on", &self.last_on),
-            f("realized", &self.realized),
-            f("hold_days", &self.hold_days),
-            f("entry", &self.entry),
-            f("exit", &self.exit),
-            f("basis", &self.basis),
-            f("pnl", &self.pnl),
-            f("pnl_cad", &self.pnl_cad),
-            f("fees", &self.fees),
-            f("fees_cad", &self.fees_cad),
-            f("slices", &self.slices),
-            f("fills", &self.fills),
-            f("flags", &self.flags),
-            f("journal", &self.journal),
-            f("locked", &self.locked),
-        ]
+fields!(TradeFig; trade, account, instrument, instruments, direction, qty, opened_on, status, closed_on, last_on, realized, hold_days, entry, exit, basis, pnl, pnl_cad, fees, fees_cad, slices, fills, flags, journal, locked);
+fields!(PositionFig; key, trade, qty, multiplier, book, fees, avg, mark, market, unrealized, day_change, book_cad, market_cad, unrealized_cad, day_change_cad, held_days, opened_on, lots, fills, gaps, flags, journal, broker_qty);
+fields!(CashRow; day, kind, account, instrument, qty, per, amount, amount_cad, in_units);
+fields!(PayerRate; per, source, per_year, frequency_source, next_ex, next_pay);
+fields!(AccountEquity; points, returns, gaps);
+fields!(BrokerCheck; differences, pending);
+
+/// A benchmark's levels, compared whole.
+struct BenchmarkLevels<'a>(&'a crate::stat::benchmark::Levels);
+impl Fields for BenchmarkLevels<'_> {
+    fn changed(&self, other: &Self) -> BTreeSet<&'static str> {
+        if self.0 != other.0 {
+            BTreeSet::from(["levels"])
+        } else {
+            BTreeSet::new()
+        }
     }
 }
 
-impl Fields for PositionFig {
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![
-            f("key", &self.key),
-            f("trade", &self.trade),
-            f("qty", &self.qty),
-            f("multiplier", &self.multiplier),
-            f("book", &self.book),
-            f("fees", &self.fees),
-            f("avg", &self.avg),
-            f("mark", &self.mark),
-            f("market", &self.market),
-            f("unrealized", &self.unrealized),
-            f("day_change", &self.day_change),
-            f("book_cad", &self.book_cad),
-            f("market_cad", &self.market_cad),
-            f("unrealized_cad", &self.unrealized_cad),
-            f("day_change_cad", &self.day_change_cad),
-            f("held_days", &self.held_days),
-            f("opened_on", &self.opened_on),
-            f("lots", &self.lots),
-            f("fills", &self.fills),
-            f("gaps", &self.gaps),
-            f("flags", &self.flags),
-            f("journal", &self.journal),
-            f("broker_qty", &self.broker_qty),
-        ]
-    }
+/// The record as a whole, as `Entity::Book` names it.
+#[derive(Clone, PartialEq)]
+struct BookFig {
+    accounts: BTreeMap<AccountId, crate::input::AccountInfo>,
+    instruments: BTreeMap<InstrumentId, crate::input::InstrumentInfo>,
+    waiting: BTreeMap<TransactionId, crate::ledger::Waiting>,
+    activity: usize,
+    today: Date,
 }
-
-impl Fields for CashRow {
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![
-            f("day", &self.day),
-            f("kind", &self.kind),
-            f("account", &self.account),
-            f("instrument", &self.instrument),
-            f("qty", &self.qty),
-            f("per", &self.per),
-            f("amount", &self.amount),
-            f("amount_cad", &self.amount_cad),
-            f("in_units", &self.in_units),
-        ]
-    }
-}
-
-impl Fields for PayerRate {
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![f("per", &self.per), f("source", &self.source), f("per_year", &self.per_year), f("frequency_source", &self.frequency_source), f("next_ex", &self.next_ex), f("next_pay", &self.next_pay)]
-    }
-}
-
-impl Fields for AccountEquity {
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![f("points", &self.points), f("returns", &self.returns), f("gaps", &self.gaps)]
-    }
-}
-
-impl Fields for BrokerCheck {
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![f("differences", &self.differences), f("pending", &self.pending)]
-    }
-}
+fields!(BookFig; accounts, instruments, waiting, activity, today);
 
 fn diff<'a, T: Fields + 'a>(moved: &mut Moved, before: impl IntoIterator<Item = (Entity, &'a T)>, after: impl IntoIterator<Item = (Entity, &'a T)>) {
-    let before: BTreeMap<Entity, Vec<(&'static str, String)>> = before.into_iter().map(|(k, v)| (k, v.fields())).collect();
-    let mut after: BTreeMap<Entity, Vec<(&'static str, String)>> = after.into_iter().map(|(k, v)| (k, v.fields())).collect();
+    let before: BTreeMap<Entity, &T> = before.into_iter().collect();
+    let mut after: BTreeMap<Entity, &T> = after.into_iter().collect();
     for (k, old) in before {
         match after.remove(&k) {
             None => {
                 moved.0.entry(k).or_default().insert("*");
             }
             Some(new) => {
-                let changed: BTreeSet<&'static str> = old.iter().zip(new.iter()).filter(|(a, b)| a.1 != b.1).map(|(a, _)| a.0).collect();
+                let changed = old.changed(new);
                 if !changed.is_empty() {
                     moved.0.entry(k).or_default().extend(changed);
                 }
@@ -271,6 +230,26 @@ impl Engine {
 
     pub fn scope(&self, filters: &Filters) -> Scoped {
         scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity, &self.benchmarks)
+    }
+
+    /// The trades `filters` shows, in the engine's order.
+    pub fn trades_in_scope(&self, filters: &Filters) -> Vec<TradeKey> {
+        crate::scope::trades_in_scope(filters, &self.inputs, &self.trades)
+    }
+
+    /// The dashboard's part of `filters`' scope.
+    pub fn dashboard(&self, filters: &Filters) -> crate::scope::Dashboard {
+        crate::scope::dashboard(filters, &self.inputs, &self.trades, &self.equity, &self.benchmarks)
+    }
+
+    /// The holdings' part of `filters`' scope.
+    pub fn portfolio(&self, filters: &Filters) -> crate::scope::Portfolio {
+        crate::scope::portfolio_in_scope(filters, &self.inputs, &self.positions)
+    }
+
+    /// The cashflow's part of `filters`' scope, over the holdings' part.
+    pub fn cashflow(&self, filters: &Filters, portfolio: &crate::scope::Portfolio) -> crate::scope::Cashflow {
+        crate::scope::cashflow_in_scope(filters, &self.inputs, &self.positions, &self.cash, &self.payers, portfolio)
     }
 
     /// Whether a close of this instrument can decide a contract's expiry.
@@ -369,6 +348,7 @@ impl Engine {
             }
             Change::Benchmark(k, series) => {
                 // read only by the scoped returns
+                let before = self.snapshot(Parts { benchmarks: true, ..Parts::NONE });
                 match series {
                     Some(s) => {
                         self.benchmarks.insert(k.clone(), total_return_cad(&s, &self.inputs.facts.rates, &self.inputs.clock));
@@ -379,6 +359,7 @@ impl Engine {
                         self.inputs.market.benchmarks.remove(&k);
                     }
                 }
+                self.compare(&before, &mut moved);
             }
             Change::Broker(a, b) => {
                 let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
@@ -420,7 +401,15 @@ impl Engine {
             payers: parts.payers.then(|| self.payers.clone()),
             equity: parts.equity.then(|| self.equity.clone()),
             checks: parts.checks.then(|| self.checks.clone()),
+            benchmarks: parts.benchmarks.then(|| self.benchmarks.clone()),
+            book: parts.book.then(|| self.book_fig()),
         }
+    }
+
+    /// The record as a whole, as `Entity::Book` names it.
+    fn book_fig(&self) -> BookFig {
+        let l = &self.inputs.ledger;
+        BookFig { accounts: l.accounts.clone(), instruments: l.instruments.clone(), waiting: self.matched.waiting.clone(), activity: l.transactions.len(), today: self.inputs.clock.today }
     }
 
     fn compare(&self, before: &Snapshot, m: &mut Moved) {
@@ -442,6 +431,14 @@ impl Engine {
         if let Some(b) = &before.checks {
             diff(m, b.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().map(|c| (Entity::BrokerCheck(c.account), c)));
         }
+        if let Some(b) = &before.benchmarks {
+            let (was, now): (Vec<_>, Vec<_>) = (b.iter().map(|(k, l)| (k, BenchmarkLevels(l))).collect(), self.benchmarks.iter().map(|(k, l)| (k, BenchmarkLevels(l))).collect());
+            diff(m, was.iter().map(|(k, l)| (Entity::Benchmark((*k).clone()), l)), now.iter().map(|(k, l)| (Entity::Benchmark((*k).clone()), l)));
+        }
+        if let Some(b) = &before.book {
+            let now = self.book_fig();
+            diff(m, [(Entity::Book, b)], [(Entity::Book, &now)]);
+        }
     }
 
     /// What differs between this engine's figures and another's, field for
@@ -462,11 +459,13 @@ struct Parts {
     payers: bool,
     equity: bool,
     checks: bool,
+    benchmarks: bool,
+    book: bool,
 }
 
 impl Parts {
-    const ALL: Parts = Parts { trades: true, positions: true, cash: true, payers: true, equity: true, checks: true };
-    const NONE: Parts = Parts { trades: false, positions: false, cash: false, payers: false, equity: false, checks: false };
+    const ALL: Parts = Parts { trades: true, positions: true, cash: true, payers: true, equity: true, checks: true, benchmarks: true, book: true };
+    const NONE: Parts = Parts { trades: false, positions: false, cash: false, payers: false, equity: false, checks: false, benchmarks: false, book: false };
 }
 
 /// The figures of the collections a change recomputes, as they were before it.
@@ -477,4 +476,6 @@ struct Snapshot {
     payers: Option<BTreeMap<InstrumentId, PayerRate>>,
     equity: Option<BTreeMap<AccountId, AccountEquity>>,
     checks: Option<Vec<BrokerCheck>>,
+    benchmarks: Option<BTreeMap<String, crate::stat::benchmark::Levels>>,
+    book: Option<BookFig>,
 }
