@@ -51,6 +51,26 @@ impl OrderState {
     }
 }
 
+text_enum! {
+    /// Which way an order trades.
+    Side "side" { Buy = "buy", Sell = "sell" }
+}
+
+text_enum! {
+    /// How an order is priced.
+    OrderKind "order type" { Market = "market", Limit = "limit", Stop = "stop", StopLimit = "stop-limit" }
+}
+
+text_enum! {
+    /// How long an order works: the day, or until cancelled (the broker's own limit applies).
+    TimeInForce "time in force" { Day = "day", UntilCancel = "until-cancel" }
+}
+
+text_enum! {
+    /// What an order is to its bracket: the entry, or one of its exits.
+    OrderRole "order role" { Entry = "entry", Stop = "stop", Target = "target", Market = "market" }
+}
+
 /// Who asked for something to be done to an order or a bracket.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Asker {
@@ -96,12 +116,23 @@ pub enum BrokerStatus {
     NotFound,
 }
 
-/// A read-back of an order: its status and how much has filled, at what average.
+/// A read-back of an order: its status and how much has filled, at what average,
+/// and the price, quantity and expiry the broker states for it now.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reading {
     pub status: BrokerStatus,
     pub filled: Dec,
     pub average: Option<Dec>,
+    pub price: Option<Dec>,
+    pub quantity: Option<Dec>,
+    pub expires_at: Option<jiff::Timestamp>,
+}
+
+impl Reading {
+    /// A reading of status and fill alone.
+    pub fn of(status: BrokerStatus, filled: Dec, average: Option<Dec>) -> Reading {
+        Reading { status, filled, average, price: None, quantity: None, expires_at: None }
+    }
 }
 
 /// One thing that happened to an order.
@@ -375,7 +406,7 @@ mod tests {
     }
 
     fn read(status: BrokerStatus, filled: &str) -> OrderEvent {
-        OrderEvent::Read(Reading { status, filled: d(filled), average: if filled == "0" { None } else { Some(d("10")) } })
+        OrderEvent::Read(Reading::of(status, d(filled), if filled == "0" { None } else { Some(d("10")) }))
     }
 
     /// An order brought to `state` by the shortest path of allowed events.

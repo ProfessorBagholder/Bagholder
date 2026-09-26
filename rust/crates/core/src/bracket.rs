@@ -87,7 +87,8 @@ impl StopLeg {
     /// The level a trailing stop stands at under `high`, to the cent.
     pub fn trailed(trail: Trail, high: Dec) -> Dec {
         let distance = match trail {
-            Trail::Pct(p) => high.checked_mul(p).and_then(|x| x.div_rounded(Dec::from_int(100), 10, Rounding::HalfEven)).unwrap_or(Dec::ZERO),
+            // a percent is a hundredth
+            Trail::Pct(p) => high.checked_mul(p).and_then(|x| x.checked_mul(Dec::new(1, 2).expect("0.01"))).unwrap_or(Dec::ZERO),
             Trail::Amount(a) => a,
         };
         high.checked_sub(distance).unwrap_or(Dec::ZERO).round(2, Rounding::HalfEven)

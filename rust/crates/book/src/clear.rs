@@ -20,11 +20,13 @@ pub struct Clearing {
     pub journal: bool,
     /// The public facts the figures read: rates, holidays, declared distributions.
     pub market: bool,
+    /// The orders Bagholder sent and its brackets, with their logs.
+    pub orders: bool,
 }
 
 impl Clearing {
     pub fn all() -> Clearing {
-        Clearing { broker: true, entries: true, journal: true, market: true }
+        Clearing { broker: true, entries: true, journal: true, market: true, orders: true }
     }
 }
 
@@ -36,6 +38,7 @@ pub enum Holds {
     Broker,
     Journal,
     Market,
+    Orders,
     /// What records and statements name: kept while anything left names it.
     Named,
     /// The person's settings: the watched folder's go with the entries; the zone
@@ -79,6 +82,10 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("declared_reads", Holds::Market),
     ("declared_distributions", Holds::Market),
     ("stated_frequencies", Holds::Market),
+    ("orders", Holds::Orders),
+    ("order_events", Holds::Orders),
+    ("brackets", Holds::Orders),
+    ("bracket_events", Holds::Orders),
     ("broker_connections", Holds::Named),
     ("accounts", Holds::Named),
     ("account_refs", Holds::Named),
@@ -165,6 +172,9 @@ impl Book {
                     "DELETE FROM declared_distributions; DELETE FROM declared_reads; DELETE FROM stated_frequencies;
                      DELETE FROM fx_rates; DELETE FROM fx_reads; DELETE FROM fx_series; DELETE FROM bank_holidays;",
                 )?;
+            }
+            if what.orders {
+                c.execute_batch("DELETE FROM order_events; DELETE FROM orders; DELETE FROM bracket_events; DELETE FROM brackets;")?;
             }
             self.clear_unnamed()
 

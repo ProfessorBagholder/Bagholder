@@ -52,7 +52,7 @@ impl World {
     }
 
     fn fill_entry(&mut self, qty: &str, avg: &str) {
-        self.entry.apply(&OrderEvent::Read(Reading { status: BrokerStatus::Filled, filled: d(qty), average: Some(d(avg)) })).unwrap();
+        self.entry.apply(&OrderEvent::Read(Reading::of(BrokerStatus::Filled, d(qty), Some(d(avg))))).unwrap();
     }
 
     fn later(&mut self, secs: i64) {
@@ -120,7 +120,7 @@ impl World {
 
     fn broker(&mut self, status: BrokerStatus, filled: &str) {
         let x = self.exit.as_mut().expect("an exit at the broker");
-        x.fold.apply(&OrderEvent::Read(Reading { status, filled: d(filled), average: Some(d("1")) })).unwrap();
+        x.fold.apply(&OrderEvent::Read(Reading::of(status, d(filled), Some(d("1"))))).unwrap();
     }
 
     fn role(&self) -> Option<ExitRole> {
@@ -143,7 +143,7 @@ fn a_fill_arms_the_bracket_for_what_filled_and_places_the_stop_at_once() {
 #[test]
 fn an_entry_that_ends_unfilled_ends_the_bracket() {
     let mut w = World::new(World::stop("95"), None, true);
-    w.entry.apply(&OrderEvent::Read(Reading { status: BrokerStatus::Cancelled, filled: Dec::ZERO, average: None })).unwrap();
+    w.entry.apply(&OrderEvent::Read(Reading::of(BrokerStatus::Cancelled, Dec::ZERO, None))).unwrap();
     w.tick();
     assert_eq!((w.b.phase, w.b.outcome.as_deref()), (Phase::Ended, Some("entry cancelled")));
 }

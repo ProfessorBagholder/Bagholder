@@ -148,7 +148,7 @@ impl std::fmt::Display for Refused {
 
 /// The book's part of the kinds ticked.
 pub fn book_clearing(kinds: &[Kind]) -> Clearing {
-    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market) }
+    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market), orders: kinds.contains(&Kind::Orders) }
 }
 
 /// Empty the earlier store's tables of `kinds`, in one transaction.
@@ -293,6 +293,10 @@ mod tests {
         assert_eq!(tables(&app.open().unwrap()), listed(OLD_TABLES.iter().map(|(t, _)| *t).collect()), "the earlier store's tables and OLD_TABLES");
     }
 
+    fn px_of(s: &str) -> bagholder_core::Dec {
+        bagholder_core::Dec::parse(s).unwrap()
+    }
+
     /// Everything the app keeps, in all three stores: a pulled month, an entry, an
     /// imported file, a note, a rate, and a row in every table of the other stores.
     fn filled(app: &Arc<App>) {
@@ -314,6 +318,16 @@ mod tests {
         let margin_kind = AccountType::Known { kind: AccountKind::Margin, registration: Registration::Unregistered, managed: false, joint: false };
         let margin = book.add_account(ws_account.connection, &[AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "margin-x")], &margin_kind, AccountStatus::Open, Some("Margin"), t).unwrap();
         book.store_margin_backing(ws_account.connection, &[(ws_account.id, margin)], &read).unwrap();
+        // an order and a bracket with their logs
+        use bagholder_core::order::{Asker, OrderKind, OrderRole, Side, TimeInForce};
+        let place = bagholder_book::orders::BracketPlace { id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        book.write_bracket(&place, &bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(px_of("3")) }, &Asker::Person, t).unwrap();
+        let order = bagholder_book::orders::OrderRequest {
+            id: "order-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd,
+            side: Side::Buy, kind: OrderKind::Market, quantity: bagholder_core::Dec::ONE, limit_price: None, stop_price: None, time_in_force: TimeInForce::Day,
+            bracket: Some(("bracket-x".into(), OrderRole::Entry)), request: serde_json::json!({}),
+        };
+        book.write_order(&order, true, &Asker::Person, t).unwrap();
         // the cache's figure tables by its own writes (the engine reads them), the rest stood in for
         let cache = f.cache().unwrap();
         let src = bagholder_core::SourceName::named("yahoo");
