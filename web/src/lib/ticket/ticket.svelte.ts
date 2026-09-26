@@ -103,8 +103,53 @@ export async function refreshPreview(): Promise<void> {
 export function maxQty(): number | null {
   const t = ticketStore.t
   if (!t) return null
-  if (t.side !== 'BUY') return t.heldQty != null && t.heldQty > 0 ? t.heldQty : null
+  if (t.side !== 'BUY') {
+    const held = heldIn(t.symbol, t.securityId, t.accountId)
+    return held != null && held > 0 ? held : null
+  }
   return ticketNumber(ticketStore.preview?.maxQuantity)
+}
+
+// the units of the listing the book holds in the broker account `accountId`
+function heldIn(symbol: string, securityId: string, accountId: string): number | null {
+  const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
+  const pos = (store.model?.positions ?? []).find((p) => is(p) && brokerAccount(p.accountId) === accountId)
+  return pos ? ticketNumber(pos.qty) : null
+}
+
+// What a side starts from (SPEC.md §4, Order ticket): a Sell goes where the shares
+// are and sells them all; a Buy is one share in the account used last, else the
+// holding's, else the margin account.
+function sideDefaults(symbol: string, securityId: string, side: 'BUY' | 'SELL'): { accountId: string; qty: number | null } {
+  const info = tkLookup(symbol, securityId)
+  const accounts = ticketAccounts()
+  const held = info.position
+  const heldAt = held ? brokerAccount(held.accountId) : ''
+  let accountId = held && side === 'SELL' ? heldAt : ''
+  if (!accountId) accountId = tkRememberedAccount(accounts) || heldAt
+  if (!accountId) accountId = (accounts.find((a) => a.margin) || accounts[0] || { id: '' }).id || ''
+  return { accountId, qty: held && side === 'SELL' ? ticketNumber(held.qty) : 1 }
+}
+
+// Switching Buy and Sell recomputes the defaults for the new direction: its account
+// and quantity, and no prices or brackets carried over from the other side.
+export function switchSide(side: 'BUY' | 'SELL') {
+  const t = ticketStore.t
+  if (!t || t.side === side) return
+  const d = sideDefaults(t.symbol, t.securityId, side)
+  const accountChanged = d.accountId !== t.accountId
+  t.side = side
+  t.accountId = d.accountId
+  t.qty = d.qty
+  t.text = {}
+  t.limit = null
+  t.stop = null
+  t.sl.price = null
+  t.sl.pct = null
+  t.sl.trail = null
+  t.tp.price = null
+  t.tp.pct = null
+  if (accountChanged) fetchQuote() // the quote is per account
 }
 
 // the account picked last time, when it is still one the ticket offers
@@ -134,17 +179,13 @@ loadDraftFromStorage()
 // command palette and the trade detail wire their Buy/Sell to exactly this.
 export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', securityId = '') {
   const info = tkLookup(symbol, securityId)
-  const accounts = ticketAccounts()
   const held = info.position
-  const heldIn = held ? brokerAccount(held.accountId) : ''
-  let accountId = held && side === 'SELL' ? heldIn : '' // a sell goes where the shares are
-  if (!accountId) accountId = tkRememberedAccount(accounts) || heldIn
-  if (!accountId) accountId = (accounts.find((a) => a.margin) || accounts[0] || { id: '' }).id || ''
+  const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY')
   ui.menuOpen = false
   const t: Ticket = {
     step: 'form', symbol, securityId: securityId || info.securityId, exchange,
     side: side === 'SELL' ? 'SELL' : 'BUY', accountId, type: 'LIMIT', tif: 'DAY',
-    qty: held && side === 'SELL' ? ticketNumber(held.qty) : 1, limit: null, stop: null,
+    qty, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: null, unit: 'amt' },
     heldQty: held ? ticketNumber(held.qty) : null, text: {}, data: null, error: '', busy: false, submitError: '',

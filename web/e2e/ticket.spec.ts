@@ -77,6 +77,22 @@ test('opens from the holding\'s own page, and Buy defaults to one share', async 
   await expect(page.locator('#tk-qty')).toHaveValue('1')
 })
 
+test('switching Buy and Sell recomputes the defaults: a Sell sells the held shares where they are, a Buy one share', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '')
+  await ready(page)
+  await page.keyboard.press('Control+k')
+  await page.getByRole('textbox', { name: 'Search' }).fill('TD')
+  await page.getByRole('button', { name: 'Buy TD', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'New order' })).toBeVisible()
+  await expect(page.locator('#tk-qty')).toHaveValue('1')
+  await page.locator('.tk-segopt.sell').click()
+  const td = await holding(request, 'TD')
+  await expect(page.locator('#tk-qty')).toHaveValue(td.qty) // every share held, not the Buy's one
+  await expect(page.locator('#tk-account')).toHaveValue(td.account) // where the shares are
+  await page.locator('.tk-segopt.buy').click()
+  await expect(page.locator('#tk-qty')).toHaveValue('1')
+})
+
 test('a Market order hides Limit/Stop price and Time in force; other types show what they need', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '')
   await ready(page)

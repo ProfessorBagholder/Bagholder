@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty, refreshPreview } from './ticket.svelte'
+  import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty, refreshPreview, switchSide } from './ticket.svelte'
   import { neg, sign, ticketNumber } from '../dec'
   import { plain, parseNum, amt as tkAmt, sAmt as tkSAmt } from './vals'
   import { px, pct, money, qty as qtyFmt, num } from '../fmt'
@@ -67,7 +67,7 @@
     if (key === 'tp') { if (!(t.tp.price != null && t.tp.price > 0)) t.tp.price = null; if (!(t.tp.pct != null && t.tp.pct > 0)) t.tp.pct = null }
   }
   function setAccount(id: string) { t.accountId = id; try { localStorage.setItem('bh2.ticketAccount', id) } catch { /* ignore */ } fetchQuote() }
-  function setSide(side: 'BUY' | 'SELL') { t.side = side; t.sl.price = null; t.sl.pct = null; t.sl.trail = null; t.tp.price = null; t.tp.pct = null; t.limit = null; t.stop = null }
+  function setSide(side: 'BUY' | 'SELL') { switchSide(side) }
   function setSlUnit(u: 'amt' | 'pct') { if (t.sl.kind === 'trail') { t.sl.unit = u; t.sl.trail = null; t.text.sltrail = null } else { t.sl.priceUnit = u; t.sl.price = null; t.sl.pct = null; t.text.slprice = null } }
   function setTpUnit(u: 'amt' | 'pct') { t.tp.unit = u; t.tp.price = null; t.tp.pct = null; t.text.tp = null }
   function doMax() { const m = maxQty(); if (m != null) { t.qty = m; t.text.qty = null; t.text.amt = null } }
