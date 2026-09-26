@@ -17,11 +17,11 @@
   import GridHead from './GridHead.svelte'
   import { call } from '../api'
   import { searchSymbols } from '../api'
+  import { tickerKey, bookListing, directoryListing, type Chip } from './newsChip'
   import { escapable } from '../escape'
 
   let { news }: { news: NewsItem[] } = $props()
 
-  interface Chip { symbol: string; exchange: string; name?: string; currency?: string }
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const KIND_OPTS = [['stories', 'Stories'], ['releases', 'Releases'], ['disc', 'Disclosures']] as const
@@ -203,9 +203,9 @@
   // --- on-demand chip lookup: a ticker typed that the card does not hold ---
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
-    const key = query.trim().toUpperCase()
+    const key = tickerKey(query)
     clearTimeout(lookupTimer)
-    if (sym || !/^[A-Z0-9.\-]{1,6}$/.test(key)) return
+    if (sym || !key) return
     lookupTimer = setTimeout(() => {
       if (sym || query.trim().toUpperCase() !== key) return
       const take = (only: Chip) => {
@@ -222,14 +222,12 @@
           })
         }
       }
-      const book = [...(store.model?.markets?.watchlist || []), ...(store.model?.positions || []), ...(store.model?.trades || [])].find((r) => {
-        const s = String(r.symbol || '')
-        return s.indexOf(' ') < 0 && bareSymbol(s).toUpperCase() === key
-      })
-      if (book) return take({ symbol: bareSymbol(String(book.symbol)).toUpperCase(), exchange: String(book.exchange || '').toUpperCase(), name: book.name || '', currency: book.currency || '' })
+      const book = bookListing(key, [...(store.model?.markets?.watchlist || []), ...(store.model?.positions || []), ...(store.model?.trades || [])])
+      if (book) return take(book)
+      // a word no directory names as a ticker stays a text search
       searchSymbols(key).then((m) => {
-        const hit = m.find((x) => bareSymbol(String(x.symbol || '')).toUpperCase() === key) || m[0]
-        take(hit ? { symbol: bareSymbol(String(hit.symbol || '')).toUpperCase(), exchange: String(hit.exchange || '').toUpperCase(), name: hit.name || '', currency: hit.currency || '' } : { symbol: key, exchange: '', name: '', currency: '' })
+        const listed = directoryListing(key, m)
+        if (listed) take(listed)
       })
     }, 500)
   })

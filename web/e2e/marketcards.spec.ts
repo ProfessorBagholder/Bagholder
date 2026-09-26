@@ -379,6 +379,36 @@ test.describe('News', () => {
     await expect(card).toContainText('Gadget Co')
   })
 
+  test('a word typed takes the chip only where it names a listing; any other word stays a text search', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', (m) => {
+      (m.markets as { news: unknown[] }).news = [
+        item('a', 'Widgets beat on earnings', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 1 } }),
+        item('b', 'Gadget Co announces buyback', { tag: { symbol: 'GAD', exchange: 'NASDAQ', held: true, watched: false, percentChange: -1 } }),
+      ]
+    })
+    // the directory answers every word with a listing whose name holds it, and names a ticker only for ZQXW
+    await page.route('**/api/symbols/search?*', (route) => {
+      const q = new URL(route.request().url()).searchParams.get('q')!.toUpperCase()
+      const matches = [{ symbol: q + 'X', exchange: 'NASDAQ', name: q + ' Holdings', currency: 'USD' }]
+      if (q === 'ZQXW') matches.push({ symbol: 'ZQXW', exchange: 'NYSE', name: 'Zqxw Inc', currency: 'USD' })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches }) })
+    })
+    await page.route('**/api/news/symbol?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, count: 0, source: '', exchange: 'NYSE' }) }))
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    const box = page.getByLabel('Search the news')
+    const looked = page.waitForRequest((r) => r.url().includes('/api/symbols/search?'))
+    await box.fill('beat')
+    await looked
+    await page.waitForTimeout(300)
+    await expect(card.locator('.chip')).toHaveCount(0)
+    await expect(box).toHaveValue('beat')
+    await expect(card.locator('.nw-row')).toHaveCount(1)
+    await expect(card).toContainText('Widgets beat')
+    await box.fill('zqxw')
+    await expect(card.locator('.chip')).toContainText('ZQXW')
+  })
+
   test('clicking a row\'s symbol opens the Symbol chip, scoping the card until it is cleared', async ({ page, request }) => {
     await openWithStatus(page, request, {}, '#markets', (m) => {
       (m.markets as { news: unknown[] }).news = [
