@@ -282,7 +282,7 @@
     "status": 200,
     "body": {
       "ok": false,
-      "error": "the index did not answer"
+      "error": "CNN could not be reached."
     }
   },
   "shorts_missing_symbol": {

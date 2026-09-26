@@ -286,9 +286,9 @@ pub fn parse_crypto(data: &Value) -> Option<Gauge> {
     })
 }
 
-/// One index as its publisher gives it now, or nothing where it
-/// did not answer.
-pub fn read(index: &str) -> Option<Gauge> {
+/// One index as its publisher gives it now, or why it could not be had, said as
+/// the header says a source's failure (`CNN could not be reached.`).
+pub fn read(index: &str) -> Result<Gauge, String> {
     let which = index.trim().to_lowercase();
     let stock_headers = [
         ("User-Agent", UA),
@@ -300,12 +300,12 @@ pub fn read(index: &str) -> Option<Gauge> {
     let text = match which.as_str() {
         "stocks" => get_text(STOCK_URL, &stock_headers),
         "crypto" => get_text(&CRYPTO_URL.replace("{}", &DAYS.to_string()), &crypto_headers),
-        _ => return None,
+        _ => return Err(format!("There is no {which:?} Fear & Greed index.")),
     };
-    let data: Value = serde_json::from_str(&text.ok()?).ok()?;
-    match which.as_str() {
-        "stocks" => parse_stocks(&data),
-        "crypto" => parse_crypto(&data),
-        _ => None,
-    }
+    let publisher = SOURCES.iter().find(|(k, _)| *k == which).map_or("The publisher", |(_, name)| name);
+    let text = text.map_err(|e| format!("{publisher} {}.", crate::http::describe_failure(&e)))?;
+    let unreadable = || format!("{publisher} answered in a form Bagholder cannot read.");
+    let data: Value = serde_json::from_str(&text).map_err(|_| unreadable())?;
+    let gauge = if which == "stocks" { parse_stocks(&data) } else { parse_crypto(&data) };
+    gauge.ok_or_else(unreadable)
 }

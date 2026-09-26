@@ -41,6 +41,9 @@ pub struct FeedsState {
     universes: Mutex<UniverseReads>,
     /// The Fear & Greed indexes being read from their publishers this moment.
     fear_reading: Mutex<HashSet<String>>,
+    /// Each feed failing now, by feed, in the header's words, until it next answers
+    /// (SPEC §1: a failure is said in the header until its source succeeds).
+    failing: Mutex<BTreeMap<String, String>>,
     /// The sources a test's universe reads asked, and the failure it told them to
     /// answer with.
     #[cfg(test)]
@@ -53,6 +56,26 @@ pub struct FeedsState {
     pub(crate) record_reads: AtomicI64,
     /// Listings the running short-interest sweep has still to read.
     shorts_left: AtomicI64,
+}
+
+/// `feed` has failed: said in the header, in `why`'s words, until it next answers.
+fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
+    let was = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).insert(feed.to_string(), why.clone());
+    if was.as_deref() != Some(why.as_str()) {
+        app.events.signal();
+    }
+}
+
+/// `feed` has answered: its failure, if one was standing, is no longer said.
+fn feed_answered(app: &Arc<App>, feed: &str) {
+    if app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).remove(feed).is_some() {
+        app.events.signal();
+    }
+}
+
+/// The feeds failing now, one sentence each, in a steady order: part of the header's error line.
+pub fn feed_failures(app: &Arc<App>) -> Vec<String> {
+    app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
 }
 
 fn conn(app: &Arc<App>) -> Option<bagholder_store::pool::Pooled<'_>> {
@@ -408,9 +431,13 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
         app.feeds.news_left.lock().unwrap().clear();
         app.events.signal();
         match got {
-            Ok(n) => n,
+            Ok(n) => {
+                feed_answered(app, "news");
+                n
+            }
             Err(e) => {
                 log(&format!("bagholder news: refresh failed: {}", e));
+                feed_failed(app, "news", format!("The news could not be refreshed: {e}"));
                 0
             }
         }
@@ -1884,22 +1911,30 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
 pub const FEAR_STALE_MIN: f64 = 15.0;
 pub const FEAR_VERSION: i64 = 1;
 
-/// One index read from its publisher and kept.
-pub fn read_fear(app: &Arc<App>, index: &str) -> Option<StoredGauge> {
+/// One index read from its publisher and kept; a read that fails is said in the
+/// header until the index next answers, whatever reading is held meanwhile.
+pub fn read_fear(app: &Arc<App>, index: &str) -> Result<StoredGauge, String> {
     read_fear_with(app, index, || fear::read(index))
 }
 
 /// `read_fear` with the publisher given. While the read is in the air a page showing
 /// the meter is told so (`FearDoc::reading`), so a meter with nothing held yet reads
 /// as being read rather than as a publisher that did not answer.
-fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Option<sf::Gauge>) -> Option<StoredGauge> {
+fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf::Gauge, String>) -> Result<StoredGauge, String> {
     let which = index.trim().to_lowercase();
     app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).insert(which.clone());
     app.events.signal();
     let got = read();
     let rec = got.map(|gauge| StoredGauge { gauge, fetched_at: now_iso(), read_version: FEAR_VERSION });
-    if let (Some(rec), Some(c)) = (rec.as_ref(), conn(app)) {
-        let _ = sf::save_gauge(&c, &which, &rec.gauge, &rec.fetched_at, FEAR_VERSION);
+    let feed = format!("fear:{which}");
+    let rec = rec.and_then(|rec| {
+        let c = conn(app).ok_or_else(|| "The store could not be opened to keep the Fear & Greed reading.".to_string())?;
+        sf::save_gauge(&c, &which, &rec.gauge, &rec.fetched_at, FEAR_VERSION).map_err(|e| format!("The Fear & Greed reading could not be kept: {e}"))?;
+        Ok(rec)
+    });
+    match &rec {
+        Ok(_) => feed_answered(app, &feed),
+        Err(why) => feed_failed(app, &feed, why.clone()),
     }
     app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).remove(&which);
     app.events.signal();
@@ -1954,12 +1989,12 @@ pub fn fear_payload(app: &Arc<App>, index: &str) -> Result<FearDoc, String> {
             let w = which.clone();
             let a = app.clone();
             app.kick(&format!("fear:{}", which), move || {
-                read_fear(&a, &w);
+                let _ = read_fear(&a, &w); // a failure is said in the header
             });
         }
         return Ok(FearDoc { ok: true, gauge: Some(held), reading: fear_in_flight(app, &which) });
     }
-    let rec = read_fear(app, &which).ok_or_else(|| "the index did not answer".to_string())?;
+    let rec = read_fear(app, &which)?;
     Ok(FearDoc { ok: true, gauge: Some(rec), reading: false })
 }
 
@@ -1987,7 +2022,7 @@ pub fn fear_shown(app: Arc<App>, doc: String, index: String) {
             while app.events.watched(&doc) && !app.stopping() {
                 let held = conn(&app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
                 if held.as_ref().map_or(true, fear_stale) {
-                    read_fear(&app, &which);
+                    let _ = read_fear(&app, &which); // a failure is said in the header
                 }
                 if app.wait(Duration::from_secs(FEAR_STALE_MIN as u64 * 60)) {
                     return;
@@ -3445,10 +3480,10 @@ mod tests {
             let mut during = None;
             let got = read_fear_with(&a, index, || {
                 during = Some(fear_stored(&a, index).reading);
-                Some(gauge(62.0))
+                Ok(gauge(62.0))
             });
             assert_eq!(during, Some(true), "while the read is in the air");
-            assert!(got.is_some());
+            assert!(got.is_ok());
             let after = fear_stored(&a, index);
             assert!(!after.reading, "once it has answered");
             assert_eq!(after.gauge.map(|g| g.gauge.score), Some(62.0));
@@ -3460,12 +3495,26 @@ mod tests {
         let _g = crate::tests_common::guard();
         let a = app();
         for index in fear::INDEXES {
-            read_fear_with(&a, index, || Some(gauge(40.0)));
-            assert!(read_fear_with(&a, index, || None).is_none());
+            read_fear_with(&a, index, || Ok(gauge(40.0))).unwrap();
+            let why = format!("{index} could not be reached.");
+            assert_eq!(read_fear_with(&a, index, || Err(why.clone())).unwrap_err(), why);
             let after = fear_stored(&a, index);
             assert!(!after.reading, "a failed read is not still being read");
             assert_eq!(after.gauge.map(|g| g.gauge.score), Some(40.0));
         }
+    }
+
+    #[test]
+    fn test_a_failed_read_is_said_in_the_header_over_the_reading_held_until_the_index_answers() {
+        let _g = crate::tests_common::guard();
+        let a = app();
+        read_fear_with(&a, "stocks", || Ok(gauge(40.0))).unwrap();
+        let _ = read_fear_with(&a, "stocks", || Err("CNN could not be reached.".into()));
+        assert_eq!(feed_failures(&a), vec!["CNN could not be reached.".to_string()]);
+        assert!(crate::status::status(&a).error.contains("CNN could not be reached."), "the header says it");
+        assert_eq!(fear_stored(&a, "stocks").gauge.map(|g| g.gauge.score), Some(40.0), "the older reading stays drawn");
+        read_fear_with(&a, "stocks", || Ok(gauge(55.0))).unwrap();
+        assert!(feed_failures(&a).is_empty(), "gone once the index answers");
     }
 
     // --- News: read for a page showing the card, not for any open page
