@@ -511,10 +511,14 @@ pub fn orders_payload(app: &Arc<App>, kick: bool) -> OrdersDoc {
     orders_doc(app, kick)
 }
 
-/// What the header's badge counts: entries still with the broker, and brackets at work.
-pub fn open_orders_count(app: &Arc<App>) -> i64 {
-    let entries = orders_all(app).iter().filter(|o| o.status.is_live() && o.role == Role::Entry).count();
-    let at_work = must(so::typed::list_brackets(&db(app), &[])).iter().filter(|b| b.status.is_live() && b.status != BracketStatus::Waiting).count();
+/// What the header's badge counts: the Orders panel's Pending cards (`SPEC.md` §4,
+/// Orders), so the two agree -- every order still with the broker that is not a
+/// bracket's own exit, and every bracket at work -- in the accounts in scope, named
+/// by the broker's id for each (`None`: every account).
+pub fn open_orders_count(app: &Arc<App>, accounts: Option<&HashSet<String>>) -> i64 {
+    let within = |account: &str| accounts.map_or(true, |a| a.contains(account));
+    let entries = orders_all(app).iter().filter(|o| o.status.is_live() && !matches!(o.role, Role::Stop | Role::Target) && within(&o.account_id)).count();
+    let at_work = must(so::typed::list_brackets(&db(app), &[])).iter().filter(|b| b.status.is_live() && b.status != BracketStatus::Waiting && within(&b.account_id)).count();
     (entries + at_work) as i64
 }
 

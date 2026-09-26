@@ -68,7 +68,7 @@ pub fn status(app: &Arc<App>) -> Status {
     let upd = update::update_status(app);
     let sess = session::load_session(app);
     let notify_status = conn.as_ref().and_then(|c| notify::status(c).ok()).unwrap_or_default();
-    let open_orders = orders::open_orders_count(app);
+    let open_orders = orders::open_orders_count(app, None);
     let can_update = update::can_update(app, None);
     let off = update::updates_off();
     let sources = app.figures.get().map(|f| f.source_failures().unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default();

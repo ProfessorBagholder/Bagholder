@@ -286,6 +286,29 @@ impl Feed {
         Ok(Some(Arc::new(doc)))
     }
 
+    /// The header's status as this page shows it: its badge counts the Orders panel's
+    /// Pending cards, and the panel follows the page's account filter (`SPEC.md` §4,
+    /// Orders), so the count is of the accounts in this page's scope.
+    pub(crate) fn status_for(&self, status: &dyn Fn(&Arc<App>) -> crate::status::Status) -> crate::status::Status {
+        let mut now = status(&self.app);
+        let Ok(filters) = &self.filters else { return now };
+        if filters.accounts.is_empty() {
+            return now;
+        }
+        // the figures name each account by the broker's id, which an order names
+        let names = match self.app.figures.get().map(|f| f.names()) {
+            Some(Ok(n)) => n,
+            Some(Err(e)) => {
+                crate::app::log(&format!("bagholder orders: the accounts in scope could not be named for the badge: {e}"));
+                return now;
+            }
+            None => return now,
+        };
+        let scope: std::collections::HashSet<String> = filters.accounts.iter().filter_map(|a| names.account.get(a).cloned()).collect();
+        now.open_orders = crate::orders::open_orders_count(&self.app, Some(&scope));
+        now
+    }
+
     /// This stream's id.
     pub fn id(&self) -> u64 {
         self.registered.0
@@ -318,7 +341,7 @@ impl Feed {
             Ok(None) => {
                 // the figures stand: only the status can have moved
                 if let Some((doc, was_status)) = &self.sent {
-                    let now = status(&self.app);
+                    let now = self.status_for(status);
                     let ops = bagholder_diff::typed_under(&["status"], was_status, &now);
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
@@ -327,7 +350,7 @@ impl Feed {
                 }
             }
             Ok(Some(doc)) => {
-                let now = status(&self.app);
+                let now = self.status_for(status);
                 match &self.sent {
                     None => {
                         let mut whole = serde_json::to_value(&*doc).unwrap_or(Value::Null);

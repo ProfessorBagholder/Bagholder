@@ -857,14 +857,44 @@ fn q(last: f64, bid: Option<f64>, status: &str) -> Option<Value> {
 fn test_open_orders_are_counted_for_the_header_badge() {
     let (_g, e) = engine();
     let (oid, b) = e.entry(json!({}));
-    assert_eq!(o::open_orders_count(&app()), 1);
+    assert_eq!(o::open_orders_count(&app(), None), 1);
     assert_eq!(crate::status::status(&app()).open_orders, 1);
     update_order(&oid, json!({"status": "filled", "filledQty": 25}));
     e.tick(None);
     assert_eq!(st(&get_bracket(&st(&b, "id")), "status"), "armed");
-    assert_eq!(o::open_orders_count(&app()), 1);
+    assert_eq!(o::open_orders_count(&app(), None), 1);
     update_bracket(&st(&b, "id"), json!({"status": "done"}));
-    assert_eq!(o::open_orders_count(&app()), 0);
+    assert_eq!(o::open_orders_count(&app(), None), 0);
+}
+
+/// SPEC §4, Orders: the badge counts the panel's Pending cards, and the panel follows
+/// the page's account filter, so a page's badge counts only the accounts in its scope.
+#[test]
+fn test_the_badge_counts_the_pending_cards_of_the_accounts_in_the_pages_scope() {
+    use bagholder_core::account::AccountRef;
+    let (_g, e) = engine();
+    // a live entry, an armed bracket and a bracket's own resting stop in the margin
+    // account; a live entry in the TFSA
+    let (oid, _b) = e.entry(json!({}));
+    update_order(&oid, json!({"status": "filled", "filledQty": 25}));
+    e.tick(None);
+    e.entry(json!({"stopLoss": null, "takeProfit": null}));
+    e.entry(json!({"accountId": "acct-tfsa", "stopLoss": null, "takeProfit": null}));
+    assert!(list_orders().iter().any(|o| o.role == so::Role::Stop && o.status.is_live()), "a bracket's exit rests: never a card");
+    let a = app();
+    let book = a.figures.get().unwrap().book().unwrap();
+    let id = |broker: &str| book.account_by_ref(&AccountRef::new(bagholder_core::Broker::named("wealthsimple"), broker)).unwrap().unwrap().to_string();
+    let badge = |accounts: &[&str]| {
+        let lists = if accounts.is_empty() { json!({}) } else { json!({"account": accounts.iter().map(|b| id(b)).collect::<Vec<_>>()}) };
+        let feed = crate::events::Feed::open(a.clone(), Some(json!({"lists": lists}).to_string()));
+        feed.status_for(&crate::status::status).open_orders
+    };
+    assert_eq!(badge(&[]), 3, "no account named: every account's cards");
+    assert_eq!(badge(&["acct-margin"]), 2, "the entry and the armed bracket");
+    assert_eq!(badge(&["acct-tfsa"]), 1);
+    assert_eq!(badge(&["acct-margin", "acct-tfsa"]), 3);
+    assert_eq!(badge(&["acct-crypto"]), 0, "an account with no card counts none");
+    assert_eq!(crate::status::status(&a).open_orders, 3, "the status alone knows no page's scope");
 }
 
 #[test]
