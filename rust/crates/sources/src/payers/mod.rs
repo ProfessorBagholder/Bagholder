@@ -179,6 +179,16 @@ pub fn checked(mut record: Record, now: Timestamp) -> Result<Record, String> {
             _ => merged.push(r),
         }
     }
+    // A record date more than a week from its stated ex-date is a slip in the page (a
+    // year typed wrong), not the distribution: that date alone is not taken. Nothing a
+    // figure uses comes from it where the ex-date is stated, and one cell never costs
+    // the payer's whole record. Nothing is put in its place.
+    let week = SignedDuration::from_hours(24 * 7);
+    for r in &mut merged {
+        if r.record_date.is_some_and(|rd| rd > r.ex_date.checked_add(week).unwrap_or(Date::MAX) || rd < r.ex_date.checked_sub(week).unwrap_or(Date::MIN)) {
+            r.record_date = None;
+        }
+    }
     record.rows = merged;
     let far = now.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).date().checked_add(SignedDuration::from_hours(24 * 400)).unwrap_or(Date::MAX);
     for w in record.rows.windows(2) {
@@ -189,12 +199,6 @@ pub fn checked(mut record: Record, now: Timestamp) -> Result<Record, String> {
     for r in &record.rows {
         if r.ex_date > far {
             return Err(format!("a distribution goes ex {}, past the fund's life", r.ex_date));
-        }
-        let week = SignedDuration::from_hours(24 * 7);
-        if let Some(rd) = r.record_date {
-            if rd > r.ex_date.checked_add(week).unwrap_or(Date::MAX) || rd < r.ex_date.checked_sub(week).unwrap_or(Date::MIN) {
-                return Err(format!("the distribution going ex {} is on record {rd}", r.ex_date));
-            }
         }
         if let Some(pd) = r.pay_date {
             if pd < r.ex_date || pd > r.ex_date.checked_add(SignedDuration::from_hours(24 * 120)).unwrap_or(Date::MAX) {

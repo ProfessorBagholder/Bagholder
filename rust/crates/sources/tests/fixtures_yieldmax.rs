@@ -127,10 +127,15 @@ fn msty_page_lists_every_row_as_paid_at_the_time() {
 }
 
 #[test]
-fn msty_real_page_is_refused_as_a_whole_for_its_record_date_ten_years_out() {
+fn msty_real_page_keeps_every_row_and_drops_only_a_record_date_ten_years_out() {
     let ran = run_payer(replies("distribution-frequency.json", "page-msty.html"), &msty(), YM);
-    assert_eq!(ran.outcome(), (OutcomeKind::Meaning, "the distribution going ex 2026-07-30 is on record 2036-07-30".to_string()));
-    assert!(ran.wrote_nothing());
+    assert_eq!(ran.outcome().0, OutcomeKind::Answered);
+    let (source, rows) = ran.declared().expect("the record is kept");
+    assert_eq!(source, YM);
+    // the page's 96 rows repeat 27 word for word: 69 distributions, every one kept
+    assert_eq!(rows.len(), 69, "one impossible cell never costs the record");
+    assert!(rows.contains(&stored(date(2026, 7, 30), None, Some(date(2026, 7, 31)), "0.2222", Currency::USD, None)), "that row kept, without its impossible record date");
+    assert!(rows.contains(&stored(date(2026, 7, 23), Some(date(2026, 7, 23)), Some(date(2026, 7, 24)), "0.2231", Currency::USD, None)), "every other date as stated");
 }
 
 #[test]

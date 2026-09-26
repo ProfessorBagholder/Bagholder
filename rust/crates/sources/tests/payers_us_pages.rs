@@ -20,9 +20,12 @@ fn yieldmax_states_a_weekly_schedule_and_rows_as_paid_at_the_time() {
     assert_eq!(rows[0], Distribution { ex_date: date(2026, 9, 24), record_date: Some(date(2026, 9, 24)), pay_date: Some(date(2026, 9, 25)), cash: dec("0.3421"), reinvested: None, currency: Currency::USD });
     // not restated for the 1:5 consolidation of 2025-12-08
     assert!(rows.iter().any(|r| r.ex_date == date(2025, 12, 4) && r.cash == dec("0.1388")));
-    // the page repeats rows and carries a record date ten years out: the record is refused as a whole
-    let err = payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year: Some(52), by_record: vec![] }, "2026-09-24T04:00:00Z".parse().unwrap()).unwrap_err();
-    assert!(err.contains("2036"), "{err}");
+    // the page repeats rows and carries a record date ten years out: each repeat is one
+    // row, and that one date alone is not taken
+    let checked = payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year: Some(52), by_record: vec![] }, "2026-09-24T04:00:00Z".parse().unwrap()).unwrap();
+    assert_eq!(checked.rows.len(), 69);
+    let slip = checked.rows.iter().find(|r| r.ex_date == date(2026, 7, 30)).unwrap();
+    assert_eq!((slip.record_date, slip.pay_date, slip.cash), (None, Some(date(2026, 7, 31)), dec("0.2222")));
 }
 
 #[test]
