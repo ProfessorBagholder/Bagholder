@@ -1320,7 +1320,11 @@ pub fn disclosure_read_loop(app: Arc<App>) {
         if !summary_ready() {
             continue; // more was stored and there is still no model: try bringing one up again
         }
-        while read_one_unread(&app) {
+        // a row a read moved nothing on (the fetch failed, or the model went away
+        // under it) is passed over until the loop is woken again, so it neither
+        // holds the others back nor is fetched over and over
+        let mut passed: HashSet<(String, String)> = HashSet::new();
+        while read_one_unread(&app, &mut passed) {
             if app.wait(Duration::from_secs(READ_GAP_SEC)) {
                 return;
             }
@@ -1334,40 +1338,68 @@ pub fn disclosure_read_loop(app: Arc<App>) {
 /// Counts the times filings were stored: what the reading loop waits on.
 static FILINGS_STORED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The newest stored filing that has never been read, read: the listing on
-/// screen first, then everything else. False when there is none, or nothing
-/// could be read.
-fn read_one_unread(app: &Arc<App>) -> bool {
+/// The newest stored filing a reading could still add to, read: the listing on
+/// screen first, then everything else. False when there is none left to try.
+fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(String, String)>) -> bool {
     let open = app.feeds.looking_at.lock().unwrap().clone();
-    if !open.is_empty() && read_one_of(app, &open) {
+    if !open.is_empty() && read_one_of(app, &open, passed) {
         return true;
     }
-    read_one_of(app, "")
+    read_one_of(app, "", passed)
 }
 
-/// One unread document of `only`, or of every followed listing when it is empty.
-fn read_one_of(app: &Arc<App>, only: &str) -> bool {
+/// One document of `only`, or of every followed listing when it is empty, that a
+/// reading could still add to (`wants_reading`): one never read, and one holding a
+/// title without its sentence or the other way round. True when there was one to
+/// try; one the read moved nothing on is added to `passed`.
+fn read_one_of(app: &Arc<App>, only: &str, passed: &mut HashSet<(String, String)>) -> bool {
     let c = match conn(app) { Some(c) => c, None => return false };
-    let mut best: Option<(String, String, String)> = None;   // date, symbol, id
-    let every = known_filing_symbols(app, &["held".to_string(), "watched".to_string()]);
-    let list: Vec<FilingSymbol> = if only.is_empty() { every } else { vec![FilingSymbol { symbol: only.to_string(), ..Default::default() }] };
-    for inst in list {
-        let sym = inst.symbol;
-        for r in sf::filings_for(&c, &sym).unwrap_or_default() {
-            if !r.subject.is_empty() || r.enrich_final {
+    let list: Vec<String> = if only.is_empty() {
+        known_filing_symbols(app, &["held".to_string(), "watched".to_string()]).into_iter().map(|i| i.symbol).collect()
+    } else {
+        vec![only.to_string()]
+    };
+    read_one_in(&c, &list, passed, &LiveReaders)
+}
+
+/// `read_one_of` on one connection, for the listings given, with the readers given.
+fn read_one_in(c: &Connection, symbols: &[String], passed: &mut HashSet<(String, String)>, readers: &dyn Readers) -> bool {
+    let mut best: Option<(String, String, Filing)> = None;   // date, symbol, row
+    for sym in symbols {
+        let sym = sym.trim().to_uppercase();
+        for r in sf::filings_for(c, &sym).unwrap_or_default() {
+            if !wants_reading(&r) || passed.contains(&(sym.clone(), r.doc.id.clone())) {
                 continue;
             }
             let date = r.doc.date.clone();
             if best.as_ref().map(|(d, _, _)| date > *d).unwrap_or(true) {
-                best = Some((date, sym.clone(), r.doc.id.clone()));
+                best = Some((date, sym.clone(), r));
             }
         }
     }
-    let (_, sym, id) = match best { Some(b) => b, None => return false };
-    match filings_enrich_result(app, &sym, &id) {
-        Ok(out) => !out.subject.is_empty(),
-        Err(_) => false,
+    let (_, sym, before) = match best { Some(b) => b, None => return false };
+    let _ = filings_enrich_in(c, &sym, &before.doc.id, readers);
+    let after = sf::filing(c, &sym, &before.doc.id).ok().flatten();
+    let moved = after.as_ref().map_or(false, |a| {
+        (&a.subject, &a.summary, a.enrich_version, a.enrich_final, a.enrich_reads)
+            != (&before.subject, &before.summary, before.enrich_version, before.enrich_final, before.enrich_reads)
+    });
+    if !moved {
+        passed.insert((sym, before.doc.id));
     }
+    true
+}
+
+/// Two reads that could have answered bound a document's reading: what they
+/// cannot produce, the document does not have, and the row settles with
+/// whichever half it has (SPEC §4 Disclosures).
+pub const ENRICH_READS: i64 = 2;
+
+/// Whether a reading could still add to a stored row: it was never read under the
+/// current logic, or it holds a title without its sentence (or the other way
+/// round) and has not settled. What every reader of documents picks rows by.
+pub fn wants_reading(r: &Filing) -> bool {
+    r.enrich_version.unwrap_or(0) < ENRICH_VERSION || (!r.enrich_final && (r.subject.is_empty() || r.summary.is_empty()))
 }
 
 /// One symbol's disclosures from every covering
@@ -1569,7 +1601,7 @@ pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, e
             while app.events.watched(&doc) && !app.stopping() {
                 let c = match conn(&app) { Some(c) => c, None => break };
                 let mut left: Vec<Filing> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
-                    .filter(|r| (r.subject.is_empty() || r.summary.is_empty()) && !r.enrich_final && !tried.contains(&r.doc.id))
+                    .filter(|r| wants_reading(r) && !tried.contains(&r.doc.id))
                     .collect();
                 left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
                 let Some(next) = left.first().map(|r| r.doc.id.clone()) else { break };
@@ -1719,6 +1751,12 @@ pub struct Enriched {
 }
 
 /// `filings_enrich` on one connection with the readers given.
+///
+/// A row is read until it holds both a title and a sentence, or until two reads
+/// that could have answered have been made: a read counts when it reached the
+/// document with a model up to write the sentence. A read with no model up only
+/// failed to ask; it keeps the title it found and the row waits, fetched again
+/// only once a model is up (SPEC §4 Disclosures).
 pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Readers) -> Result<Enriched, String> {
     let sym = symbol.trim().to_uppercase();
     let row = sf::filing(c, &sym, doc_id).ok().flatten().ok_or_else(|| "no such document".to_string())?;
@@ -1727,17 +1765,31 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
     let mut model = r.summary_available();
     let fresh = row.enrich_version.unwrap_or(0) >= ENRICH_VERSION;
     let attempted = !row.enriched_at.is_empty() && fresh;
+    // reads under an older logic say nothing about what this one can find
+    let reads = if fresh { row.enrich_reads } else { 0 };
     let answer = |subject: &str, summary: &str, avail: bool| Enriched {
         ok: true, id: doc_id.to_string(), subject: subject.to_string(), summary: summary.to_string(),
         summary_available: avail, summary_status: r.summary_status().to_string(),
     };
-    if attempted && (row.enrich_final || (!subject.is_empty() && !summary.is_empty()) || !model) {
+    if attempted && (row.enrich_final || (!subject.is_empty() && !summary.is_empty()) || !model || reads >= ENRICH_READS) {
         return Ok(answer(&subject, &summary, model));
     }
     if !r.disclosures_available() {
         return Ok(answer(&subject, &summary, model));
     }
     let now = now_iso();
+    // No model to write the sentence: what was found is kept under the current
+    // logic's stamp, so the row waits for a model rather than being fetched again,
+    // and the read is not counted against the document.
+    let waits = |subject: &str, summary: &str| {
+        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(subject), Some(summary), Some(ENRICH_VERSION), Some(false), &now);
+        let _ = sf::set_filing_reads(c, &sym, doc_id, reads);
+    };
+    if !fresh {
+        // only the first read under the current logic replaces both halves
+        subject = String::new();
+        summary = String::new();
+    }
     if let Some(exact) = r.enrichment(&row.doc) {
         // What the source can say exactly: the form's own name, and for the
         // forms it can read in full, the sentence too. A name on its own is
@@ -1757,6 +1809,7 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
             return Ok(answer(&subject, "", model));
         }
         if !model {
+            waits(&subject, &summary);
             return Ok(answer(&subject, &summary, model));
         }
     }
@@ -1786,24 +1839,21 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
         let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&named), Some(""), Some(ENRICH_VERSION), Some(true), &now);
         return Ok(answer(&named, "", model));
     }
+    // reading again fills what is missing and never empties what is there
+    if !new_subject.is_empty() {
+        subject = new_subject;
+    }
     if model {
-        if fresh {
-            if !new_subject.is_empty() {
-                subject = new_subject;
-            }
-            if !got_summary.is_empty() {
-                summary = got_summary;
-            }
-        } else {
-            subject = new_subject;
+        if !got_summary.is_empty() {
             summary = got_summary;
         }
-        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(&summary), Some(ENRICH_VERSION), None, &now);
+        // a read that could have answered: two of them settle the row
+        let reads = reads + 1;
+        let settled = (subject.is_empty() || summary.is_empty()) && reads >= ENRICH_READS;
+        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(&summary), Some(ENRICH_VERSION), Some(settled), &now);
+        let _ = sf::set_filing_reads(c, &sym, doc_id, reads);
     } else {
-        if !new_subject.is_empty() {
-            subject = new_subject.clone();
-        }
-        let _ = sf::set_filing_enrichment(c, &sym, doc_id, if new_subject.is_empty() { None } else { Some(&new_subject) }, None, None, None, &now);
+        waits(&subject, &summary);
     }
     Ok(answer(&subject, &summary, r.summary_available()))
 }
@@ -3162,7 +3212,119 @@ mod tests {
         let (out, reads) = run(&c, false, ("A title", ""), false);
         assert_eq!(reads, 1);
         assert_eq!(out["subject"], "A title");
-        assert_eq!(stored(&c).2, 0);
+        assert_eq!(halves(&c), pair("A title", ""), "the title found is kept and shown");
+    }
+
+    #[test]
+    fn test_a_row_that_found_no_model_waits_and_is_not_fetched_again_until_one_is_up() {
+        let c = enrich_store();
+        run(&c, false, ("A title", ""), false);
+        for _ in 0..3 {
+            let (_, reads) = run(&c, false, ("A title", ""), false);
+            assert_eq!(reads, 0, "with no model up, the document is not fetched from the regulator again");
+        }
+        let row = sf::filing(&c, "QNC", DOC).unwrap().unwrap();
+        assert!(wants_reading(&row) && !row.enrich_final, "the row waits rather than finishing");
+        let (out, reads) = run(&c, true, ("A title", "The sentence."), false);
+        assert_eq!(reads, 1, "a model coming up is what reads it again");
+        assert_eq!(out["summary"], "The sentence.");
+    }
+
+    #[test]
+    fn test_a_half_filled_row_is_read_at_most_twice_with_a_model_up_then_settles() {
+        for half in [("A title", ""), ("", "A sentence.")] {
+            let c = enrich_store();
+            let mut fetched = 0;
+            for _ in 0..6 {
+                fetched += run(&c, true, half, false).1;
+            }
+            assert_eq!(fetched, ENRICH_READS as usize, "two reads that could have answered, then no more");
+            let row = sf::filing(&c, "QNC", DOC).unwrap().unwrap();
+            assert_eq!((row.subject.as_str(), row.summary.as_str()), half, "it settles with whichever half it has");
+            assert!(row.enrich_final && !wants_reading(&row));
+        }
+    }
+
+    #[test]
+    fn test_reads_with_no_model_up_do_not_count_against_the_document() {
+        let c = enrich_store();
+        let mut fetched = 0;
+        for _ in 0..4 {
+            fetched += run(&c, false, ("A title", ""), false).1;
+        }
+        assert_eq!(fetched, 1);
+        let mut with_model = 0;
+        for _ in 0..4 {
+            with_model += run(&c, true, ("A title", ""), false).1;
+        }
+        assert_eq!(with_model, ENRICH_READS as usize, "the bound is reads a model could have answered, however many came before");
+    }
+
+    #[test]
+    fn test_reads_under_an_older_logic_do_not_count_under_this_one() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        run(&c, true, ("A title", ""), false);
+        assert!(sf::filing(&c, "QNC", DOC).unwrap().unwrap().enrich_final);
+        enrichment(&c, "QNC", DOC, "A title", "", ENRICH_VERSION - 1);
+        let mut fetched = 0;
+        for _ in 0..4 {
+            fetched += run(&c, true, ("A title", ""), false).1;
+        }
+        assert_eq!(fetched, ENRICH_READS as usize);
+    }
+
+    #[test]
+    fn test_a_count_survives_the_list_being_read_again() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        assert_eq!(sf::filing(&c, "QNC", DOC).unwrap().unwrap().enrich_reads, 1);
+    }
+
+    // --- the reader that works behind the page
+
+    #[test]
+    fn test_the_background_reader_picks_a_titled_row_without_its_sentence() {
+        let c = enrich_store();
+        run(&c, false, ("A title", ""), false);
+        let r = fake(true, ("A title", "The sentence."), false);
+        let mut passed = HashSet::new();
+        assert!(read_one_in(&c, &["QNC".to_string()], &mut passed, &r));
+        assert_eq!(r.reads.get(), 1);
+        assert_eq!(halves(&c), pair("A title", "The sentence."));
+        assert!(!read_one_in(&c, &["QNC".to_string()], &mut passed, &r), "nothing is left to read");
+    }
+
+    #[test]
+    fn test_the_background_reader_ends_on_rows_it_cannot_move() {
+        let c = enrich_store();
+        run(&c, false, ("A title", ""), false);
+        let r = fake(false, ("A title", ""), false);
+        let mut passed = HashSet::new();
+        let mut tries = 0;
+        while read_one_in(&c, &["QNC".to_string()], &mut passed, &r) {
+            tries += 1;
+            assert!(tries < 5, "a row a read cannot move is passed over, not read in a loop");
+        }
+        assert_eq!(r.reads.get(), 0);
+    }
+
+    #[test]
+    fn test_what_wants_reading() {
+        let c = enrich_store();
+        let row = || sf::filing(&c, "QNC", DOC).unwrap().unwrap();
+        assert!(wants_reading(&row()), "never read");
+        enrichment(&c, "QNC", DOC, "A title", "", ENRICH_VERSION);
+        assert!(wants_reading(&row()), "a title without its sentence");
+        enrichment(&c, "QNC", DOC, "", "A sentence.", ENRICH_VERSION);
+        assert!(wants_reading(&row()), "a sentence without its title");
+        enrichment(&c, "QNC", DOC, "A title", "A sentence.", ENRICH_VERSION);
+        assert!(!wants_reading(&row()), "both halves");
+        enrichment(&c, "QNC", DOC, "A title", "A sentence.", ENRICH_VERSION - 1);
+        assert!(wants_reading(&row()), "read under an older logic");
+        sf::set_filing_enrichment(&c, "QNC", DOC, Some("A title"), Some(""), Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
+        assert!(!wants_reading(&row()), "settled");
     }
 
     // --- WaitingForTheModelTest
@@ -3183,7 +3345,8 @@ mod tests {
         let r = Fake { model: false, status: "off", wait: false, read: ("A title", ""), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
         let out = v(filings_enrich_in(&c, "QNC", DOC, &r));
         assert_eq!(out["subject"], "A title");
-        assert_eq!(stored(&c).2, 0);
+        let row = sf::filing(&c, "QNC", DOC).unwrap().unwrap();
+        assert!(wants_reading(&row) && !row.enrich_final && row.enrich_reads == 0, "the read did not count, and the row waits");
     }
 
     // --- RefreshKeepsWhatWasReadTest

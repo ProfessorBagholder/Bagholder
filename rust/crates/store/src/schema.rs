@@ -246,6 +246,7 @@ fn ensure_filings_columns(conn: &Connection) -> Result<()> {
             ("enriched_at", "TEXT"),
             ("enrich_version", "INTEGER"),
             ("enrich_final", "INTEGER"),
+            ("enrich_reads", "INTEGER"),
         ],
     )
 }

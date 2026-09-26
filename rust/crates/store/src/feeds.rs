@@ -555,6 +555,13 @@ pub struct Filing {
     pub enrich_version: Option<i64>,
     /// Read for good: a form read from its own boxes is not read again.
     pub enrich_final: bool,
+    /// How many reads under the current logic could have answered: made while a
+    /// model was up to write the sentence, and reaching the document. Two of them
+    /// settle a row with whichever half it has. The server's own bookkeeping, never
+    /// on the wire.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub enrich_reads: i64,
     pub fetched_at: String,
 }
 
@@ -604,6 +611,10 @@ fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
         enrich_final: match r.as_ref().column_index("enrich_final") {
             Ok(_) => r.get::<_, Option<i64>>("enrich_final")?.map(|v| v != 0).unwrap_or(false),
             Err(_) => false,
+        },
+        enrich_reads: match r.as_ref().column_index("enrich_reads") {
+            Ok(_) => r.get::<_, Option<i64>>("enrich_reads")?.unwrap_or(0),
+            Err(_) => 0,
         },
         fetched_at: maybe(r, "fetched_at"),
     }))
@@ -681,6 +692,16 @@ pub fn set_filing_enrichment(
     Ok(())
 }
 
+/// How many reads that could have answered a document has had under the current
+/// logic (`Filing::enrich_reads`).
+pub fn set_filing_reads(conn: &Connection, symbol: &str, doc_id: &str, reads: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE filings SET enrich_reads = ? WHERE symbol = ? AND id = ?",
+        rusqlite::params![reads, filing_key(symbol), doc_id],
+    )?;
+    Ok(())
+}
+
 /// `replace_filings`: one source's disclosures for a symbol, in place of
 /// what that source had.
 ///
@@ -692,17 +713,17 @@ pub fn set_filing_enrichment(
 pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items: &[FiledDocument], now: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let sym = filing_key(symbol);
-        struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64> }
+        struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64>, reads: Option<i64> }
         let mut kept: Vec<(String, Kept)> = Vec::new();
         {
             let mut stmt = conn.prepare(
-                "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?",
+                "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads FROM filings WHERE symbol = ? AND source = ?",
             )?;
             let mut rows = stmt.query(rusqlite::params![sym, source.as_str()])?;
             while let Some(r) = rows.next()? {
                 kept.push((
                     r.get::<_, String>(0)?,
-                    Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)? },
+                    Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)?, reads: r.get(6)? },
                 ));
             }
         }
@@ -716,7 +737,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items
             let read = kept.iter().find(|(k, _)| *k == it.id).map(|(_, v)| v);
             conn.execute(
                 "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
-                 subject, summary, enriched_at, enrich_version, enrich_final) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
                     sym, it.id, source.as_str(), it.category, it.profile_no, it.issuer,
                     it.form, it.title, it.date, it.date_text,
@@ -726,6 +747,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items
                     read.and_then(|k| k.enriched_at.clone()),
                     read.and_then(|k| k.version),
                     read.and_then(|k| k.final_),
+                    read.and_then(|k| k.reads),
                 ],
             )?;
             n += 1;

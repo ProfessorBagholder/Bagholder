@@ -190,6 +190,7 @@ fn filing(id: &str, form: &str, date: &str) -> Filing {
         enriched_at: String::new(),
         enrich_version: None,
         enrich_final: false,
+        enrich_reads: 0,
         fetched_at: String::new(),
     }
 }

@@ -1213,7 +1213,7 @@ mod tests {
                     form: form.into(), title: String::new(), date: date.into(), date_text: String::new(), size: String::new(), url: url.into(),
                 },
                 subject: subject.into(), summary: summary.into(), enriched_at: String::new(),
-                enrich_version: None, enrich_final: false, fetched_at: String::new(),
+                enrich_version: None, enrich_final: false, enrich_reads: 0, fetched_at: String::new(),
             }
         }
 
