@@ -98,17 +98,11 @@ fn serve() -> i32 {
     let a = app::App::new(home, root_dir(), bind_host.clone());
     // an update the supervisor rolled back is said in the header by the server it started
     update::recall_failure(&a);
-    match a.open() {
-        Ok(conn) => {
-            if let Err(e) = bagholder_store::relabel::ensure(&conn) {
-                log(&format!("bagholder: the store could not be prepared: {}", e));
-                return 1;
-            }
-        }
-        Err(e) => {
-            log(&format!("bagholder: the store could not be opened: {}", e));
-            return 1;
-        }
+    // the first borrow prepares the store (the pool's schema), so a store that
+    // cannot be prepared stops the server here, saying why
+    if let Err(e) = a.open() {
+        log(&format!("bagholder: the store could not be opened or prepared: {}", e));
+        return 1;
     }
     // the figure path: a book this build cannot open stops the server, saying why
     match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {

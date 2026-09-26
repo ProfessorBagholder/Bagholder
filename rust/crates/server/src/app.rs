@@ -147,7 +147,12 @@ impl App {
             std::sync::Arc::new(move || events.signal()) as std::sync::Arc<dyn Fn() + Send + Sync>
         };
         Arc::new(App {
-            store: Arc::new(bagholder_store::pool::Pool::with_hook(&home.join("bagholder.db"), hook)),
+            // the schema and its repairs on the first borrow, and again on the borrow
+            // that finds the file replaced or rolled back under the running app
+            store: Arc::new(
+                bagholder_store::pool::Pool::with_hook(&home.join("bagholder.db"), hook)
+                    .with_schema(bagholder_store::schema::SCHEMA_VERSION as i32, Arc::new(|c| bagholder_store::relabel::ensure(c))),
+            ),
             home,
             root,
             bind_host,

@@ -61,7 +61,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged.
 - [ ] Disclosures `Opening…`; the data modal has no entrance motion; the skeleton's removal uses an animation callback.
 - [x] The store runs `synchronous = NORMAL`. — fixed: FULL, every commit flushed.
-- [ ] A replaced database is not migrated until restart.
+- [x] A replaced database is not migrated until restart. — fixed: each borrow checks the file is the one kept connections hold and reads its stamped version; a replaced or rolled-back file is prepared on that borrow.
 
 ## SPEC text to correct (the build is right)
 
