@@ -90,7 +90,14 @@ fn the_quote_is_the_regular_price_at_its_own_time_and_a_session_counts_once_clos
     assert_eq!(spy.quote.price, dec("767.81"));
     assert_eq!(spy.quote.at, t("2026-09-23T20:00:00Z"));
     assert_eq!(spy.quote.change_pct, Some(dec("-0.72")));
+    assert_eq!(spy.previous_close, Some(dec("773.38")));
     assert_eq!(spy.closes, vec![(date(2026, 9, 23), dec("767.8099975585938"))]);
+    // a chart that states its previous close as `previousClose` and no percent:
+    // the change is measured from that close, and its percent worked out from it
+    let bare = chart("wrong-shape-SPY-range-1d-previous-close-only.json", "SPY", "2026-09-24T04:00:00Z");
+    assert_eq!(bare.previous_close, Some(dec("773.38")));
+    // (767.81 − 773.38) × 100 ÷ 773.38, to four places
+    assert_eq!(bare.quote.change_pct, Some(dec("-0.7202")));
 }
 
 #[test]
@@ -110,7 +117,7 @@ fn quote(name: &str, form: &str) -> Outcome<tmx::TmxQuote> {
 #[test]
 fn a_tmx_quote_states_its_venue_and_schedule() {
     let Outcome::Answered(q) = quote("quote-QCN.json", "QCN") else { panic!() };
-    assert_eq!((q.price, q.change, q.currency, q.per_year), (dec("218.31"), Some(dec("-3.48")), Currency::CAD, Some(4)));
+    assert_eq!((q.price, q.change, q.currency, q.per_year), (Some(dec("218.31")), Some(dec("-3.48")), Currency::CAD, Ok(Some(4))));
     assert_eq!(q.exchange_name, "Toronto Stock Exchange");
     assert!(bagholder_sources::venue::tmx_venue_matches("", &q.exchange_name));
     assert_eq!(quote("quote-ZZZQX-unknown.json", "ZZZQX").kind(), OutcomeKind::NotCarried);
@@ -120,9 +127,15 @@ fn a_tmx_quote_states_its_venue_and_schedule() {
     assert_eq!(quote("quote-ENB.json", "ENB").kind(), OutcomeKind::Answered);
     // a CSE listing, which TMX names by the form asked
     let Outcome::Answered(q) = quote("quote-QIMC-CNX.json", "QIMC:CNX") else { panic!("a CSE listing's own quote") };
-    assert_eq!((q.price, q.change, q.currency, q.exchange_name.as_str()), (dec("0.56"), Some(dec("-0.01")), Currency::CAD, "Canadian Securities Exchange"));
-    assert!(matches!(quote("wrong-shape-quote-ENB-price-null.json", "ENB"), Outcome::Mismatch(m) if m.path == "data.getQuoteBySymbol.price"));
-    assert!(matches!(quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB"), Outcome::Mismatch(m) if m.why.contains("Fortnightly")));
+    assert_eq!((q.price, q.change, q.currency, q.exchange_name.as_str()), (Some(dec("0.56")), Some(dec("-0.01")), Currency::CAD, "Canadian Securities Exchange"));
+    // a halted listing: TMX states no price now, which is an answer, not a failure
+    let Outcome::Answered(q) = quote("edited-quote-ENB-price-null.json", "ENB") else { panic!("a null price is TMX's answer") };
+    assert_eq!((q.price, q.per_year), (None, Ok(Some(4))));
+    // a schedule word the reader does not know: the quote stands, and the schedule
+    // is the mismatch naming it, for the payer's record to refuse
+    let Outcome::Answered(q) = quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB") else { panic!("the price stands") };
+    assert_eq!(q.price, Some(dec("67.47")));
+    assert!(matches!(q.per_year, Err(m) if m.why.contains("Fortnightly") && m.path == "data.getQuoteBySymbol.dividendFrequency"));
     assert!(matches!(quote("wrong-meaning-quote-ENB-another-symbol.json", "ENB"), Outcome::Meaning(w) if w.contains("TRP")));
 }
 

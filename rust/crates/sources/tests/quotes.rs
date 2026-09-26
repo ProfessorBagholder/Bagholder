@@ -15,7 +15,7 @@ use bagholder_core::jiff::Timestamp;
 use bagholder_core::{Currency, Dec, InstrumentId, Money};
 use bagholder_sources::cache::MarketCache;
 use bagholder_sources::contract::{DataKind, Listing};
-use bagholder_sources::outcome::OutcomeKind;
+use bagholder_sources::outcome::{Outcome, OutcomeKind};
 use bagholder_sources::quotes;
 use bagholder_sources::read::Ctx;
 
@@ -82,10 +82,13 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     // the spot price states no time: its reply's date less the origin's sixty seconds
     assert_eq!(q(4), ("coinbase".into(), Money::new(dec("118318.2"), Currency::CAD), t("2026-09-24T04:32:41Z"), 60));
     assert_eq!(q(5), ("coinbase-exchange".into(), Money::new(dec("83895.98"), Currency::USD), t("2026-09-24T04:33:45.647605322Z"), 0));
-    // ENB on the CSE: TMX named another venue, so nothing is kept and no form is learned
-    assert!(!got.contains_key(&id(6)));
+    // ENB on the CSE: TMX named another venue for the CSE form, so the other
+    // Canadian forms are asked, and the bare form's answer on the TSX is kept and
+    // remembered, but not written to the book, whose venue it is not
+    assert_eq!(q(6).1, Money::new(dec("67.47"), Currency::CAD));
     let tmx_rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
-    assert!(tmx_rows.iter().any(|o| o.instrument == Some(id(6)) && o.outcome == OutcomeKind::NotCarried && o.kind == DataKind::Quote));
+    assert!(tmx_rows.iter().any(|o| o.instrument == Some(id(6)) && o.outcome == OutcomeKind::NotCarried && o.kind == DataKind::Quote && o.detail.starts_with("ENB:CNX")));
+    assert_eq!(cache.winner(id(6), DataKind::Quote).unwrap().map(|w| w.1), Some("ENB".to_string()));
     assert!(!got.contains_key(&id(7)));
     let yahoo_rows = cache.outcomes(&bagholder_core::SourceName::named("yahoo")).unwrap();
     assert!(yahoo_rows.iter().any(|o| o.instrument == Some(id(7)) && o.outcome == OutcomeKind::Meaning && o.detail.contains("USD")));
@@ -144,9 +147,10 @@ fn the_directory_s_instruments_are_quoted_by_yahoo_under_their_own_code() {
 }
 
 /// A coin's day change is against the close of the last completed UTC day on its
-/// Coinbase Exchange market: its own pair's, else the USD market's in CAD at that
-/// day's Bank of Canada rate, a day with no rate passed over for the one before;
-/// the closes asked of the Exchange once a day and kept.
+/// Coinbase Exchange market: its own pair's, else the USD market's in CAD at the
+/// Bank of Canada's rate of that day, or the last one published within the week
+/// before it (a weekend's close takes Friday's rate); the closes asked of the
+/// Exchange once a day and kept.
 #[test]
 fn a_coin_s_day_change_is_against_the_last_completed_utc_day() {
     let dir = tempfile::tempdir().unwrap();
@@ -173,11 +177,126 @@ fn a_coin_s_day_change_is_against_the_last_completed_utc_day() {
     let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
     // USD: 83,895.98 against Saturday's close of 79,831.57
     assert_eq!((got[&id(5)].change, got[&id(5)].change_pct), (Some(dec("4064.41")), Some(dec("5.0912"))));
-    // CAD: Saturday has no rate, so Friday's close of 79,675.12 at Friday's 1.38: 109,951.6656
-    assert_eq!((got[&id(4)].change, got[&id(4)].change_pct), (Some(dec("8366.5344")), Some(dec("7.6093"))));
+    // CAD: Saturday's close of 79,831.57 at Friday's 1.38, the last rate the Bank
+    // published: 110,167.5666
+    assert_eq!((got[&id(4)].change, got[&id(4)].change_pct), (Some(dec("8150.6334")), Some(dec("7.3984"))));
     // asked once today: a second read asks the Exchange for no candles
     let candles = || recorded.asked.lock().unwrap().iter().filter(|u| u.contains("/candles")).count();
     let before = candles();
     quotes::read_quotes(&ctx, &listings).unwrap();
     assert_eq!(candles(), before, "the closes are kept, not asked again");
+}
+
+/// A coin's glance carries its day change as a held coin's quote does, in the
+/// currency it is glanced in.
+#[test]
+fn a_coin_s_glance_has_its_day_change_in_its_own_currency() {
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with("https://api.coinbase.com/v2/prices/BTC-CAD/spot", 200, "coinbase", "spot-BTC-CAD.json")
+            .with_prefix("https://api.exchange.coinbase.com/products/BTC-CAD/candles", 404, "coinbase-exchange", "candles-BTC-CAD-status-404.json")
+            .with_prefix("https://api.exchange.coinbase.com/products/BTC-USD/candles", 200, "coinbase-exchange", "candles-BTC-USD-2026-09-01-2026-09-05.json"),
+    );
+    let net = common::net(&recorded, "2026-09-06T12:00:00Z");
+    let friday: bagholder_core::jiff::civil::Date = "2026-09-04".parse().unwrap();
+    let rates = BTreeMap::from([(Currency::USD, BTreeMap::from([(friday, dec("1.3800"))]))]);
+    let of = quotes::GlanceOf { kind: InstrumentKind::Crypto, currency: Currency::CAD, symbol: "BTC".into(), venue_mic: None, yahoo: None };
+    let Outcome::Answered(g) = quotes::glance(&net, t("2026-09-06T12:00:00Z"), &of, &rates) else { panic!("a glance") };
+    assert_eq!(g, quotes::Glance { price: Money::new(dec("118318.2"), Currency::CAD), change: Some(dec("8150.6334")), change_pct: Some(dec("7.3984")) });
+}
+
+fn tmx_world(at: &str) -> (tempfile::TempDir, Book, MarketCache) {
+    let dir = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", t(at)).unwrap();
+    for n in 1..=4 {
+        common::instrument_in_book(&dir.path().join("book.db"), id(n), "security", "CAD");
+    }
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", t(at)).unwrap();
+    (dir, book, cache)
+}
+
+/// A listing whose venue TMX's form does not carry is asked under the other
+/// Canadian forms in turn, each answer checked against the venue its form names;
+/// the form that answers is asked first from then on. A listing no form answers
+/// for is asked again under its first form only, until the next day. A listing
+/// whose record names no venue known here is quoted as its currency's market's.
+#[test]
+fn tmx_is_asked_the_other_canadian_forms_and_remembers_what_answered() {
+    let at = "2026-09-24T04:40:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with_body(TMX, "\"symbol\":\"ENB:CNX\"", 200, "tmx", "quote-ENB-CNX-unknown.json")
+            .with_body(TMX, "\"symbol\":\"ENB\"", 200, "tmx", "quote-ENB.json")
+            .with_body(TMX, "ZZZQX", 200, "tmx", "quote-ZZZQX-unknown.json"),
+    );
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let listings = [
+        // the book says the CSE, where TMX knows no ENB
+        listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XCNQ")),
+        // no venue known here: a CAD listing is Canadian, asked bare first
+        listing(2, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSV-OTC")),
+        listing(3, InstrumentKind::Security, Currency::CAD, "ZZZQX", None),
+    ];
+    let run = |now: &str| {
+        let net = common::net(&recorded, now);
+        let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(now), bank: &zone };
+        let before = recorded.asked.lock().unwrap().len();
+        quotes::read_quotes(&ctx, &listings).unwrap();
+        recorded.asked.lock().unwrap().len() - before
+    };
+    // ENB: ENB:CNX, then ENB; the second: ENB; ZZZQX: its three forms
+    assert_eq!(run(at), 2 + 1 + 3);
+    let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
+    assert_eq!(got[&id(1)].price, Money::new(dec("67.47"), Currency::CAD));
+    assert_eq!(got[&id(2)].price, Money::new(dec("67.47"), Currency::CAD));
+    assert!(!got.contains_key(&id(3)));
+    assert_eq!(cache.winner(id(1), DataKind::Quote).unwrap().map(|w| w.1), Some("ENB".to_string()));
+    // not the book's venue's form: the book learns no route from it
+    assert!(book.instrument_refs(id(1)).unwrap().iter().all(|r| r.scheme != RefScheme::TmxForm));
+    // later that day: the winners first, and ZZZQX under its first form alone
+    assert_eq!(run("2026-09-24T15:00:00Z"), 1 + 1 + 1);
+    // the next day ZZZQX's forms are all asked again
+    assert_eq!(run("2026-09-25T15:00:00Z"), 1 + 1 + 3);
+}
+
+/// A halted listing is answered with no price: the price read last stands, and
+/// TMX's answer is no failure.
+#[test]
+fn a_halted_listing_keeps_the_price_read_last() {
+    let at = "2026-09-24T04:40:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let enb = [listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"))];
+    let read = |name: &str, now: &str| {
+        let recorded = Arc::new(common::Recorded::new().with(TMX, 200, "tmx", name));
+        let net = common::net(&recorded, now);
+        let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(now), bank: &zone };
+        quotes::read_quotes(&ctx, &enb).unwrap();
+    };
+    read("quote-ENB.json", at);
+    read("edited-quote-ENB-price-null.json", "2026-09-24T15:00:00Z");
+    let q = cache.quotes().unwrap();
+    assert_eq!((q.len(), q[0].price, q[0].quoted_at), (1, Money::new(dec("67.47"), Currency::CAD), t("2026-09-24T04:20:30Z")));
+    let tmx_rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
+    assert!(tmx_rows.iter().all(|o| o.outcome == OutcomeKind::Answered), "{tmx_rows:?}");
+}
+
+/// A schedule word TMX states that the reader does not know leaves the price
+/// standing; the payer's record, which reads the schedule, refuses it.
+#[test]
+fn an_unknown_schedule_word_fails_the_payers_record_and_not_the_price() {
+    let at = "2026-09-24T04:40:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let recorded = Arc::new(common::Recorded::new().with_body(TMX, "getQuoteBySymbol", 200, "tmx", "wrong-shape-quote-ENB-schedule-unknown.json"));
+    let net = common::net(&recorded, at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
+    let enb = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"));
+    quotes::read_quotes(&ctx, std::slice::from_ref(&enb)).unwrap();
+    assert_eq!(cache.quotes().unwrap()[0].price, Money::new(dec("67.47"), Currency::CAD));
+    use bagholder_sources::payers::Payer;
+    let need = bagholder_sources::needs::PayerNeed { listing: enb, name: Some("Enbridge Inc.".into()) };
+    let noted = bagholder_sources::payers::exchange::TmxRecord.read(&net, &need, t(at));
+    assert!(matches!(noted.outcome, Outcome::Mismatch(m) if m.why.contains("Fortnightly")));
 }

@@ -379,14 +379,18 @@ fn glance_of(symbol: &str, exchange: &str, currency: &str) -> Result<bagholder_s
         return Ok(bagholder_sources::quotes::GlanceOf { kind: e.instrument_kind(), currency: Currency::parse(e.currency).map_err(err)?, symbol, venue_mic: None, yahoo: Some(e.yahoo.into()) });
     }
     if exchange.trim().eq_ignore_ascii_case("CRYPTO") {
-        return Ok(bagholder_sources::quotes::GlanceOf { kind: InstrumentKind::Crypto, currency: Currency::USD, symbol, venue_mic: None, yahoo: None });
+        // in the currency the page names, US dollars where it names none
+        let currency = if currency.trim().is_empty() { Currency::USD } else { Currency::parse(currency.trim()).map_err(err)? };
+        return Ok(bagholder_sources::quotes::GlanceOf { kind: InstrumentKind::Crypto, currency, symbol, venue_mic: None, yahoo: None });
     }
-    let mic = venue::mic_of(exchange).ok_or_else(|| format!("{symbol} names no venue the app knows ({exchange})"))?;
-    let currency = match Currency::parse(currency.trim()) {
-        Ok(c) => c,
-        Err(_) => venue::currency_of(mic).ok_or_else(|| format!("{symbol} on {exchange} states no currency"))?,
+    // a venue the app does not know: the listing follows its currency
+    let mic = venue::mic_of(exchange);
+    let currency = match (Currency::parse(currency.trim()), mic.and_then(venue::currency_of)) {
+        (Ok(c), _) => c,
+        (Err(_), Some(c)) => c,
+        (Err(_), None) => return Err(format!("{symbol} on {exchange} states no currency")),
     };
-    Ok(bagholder_sources::quotes::GlanceOf { kind: InstrumentKind::Security, currency, symbol, venue_mic: Some(mic.into()), yahoo: None })
+    Ok(bagholder_sources::quotes::GlanceOf { kind: InstrumentKind::Security, currency, symbol, venue_mic: mic.map(str::to_string), yahoo: None })
 }
 
 /// A listing's price and day change, read for a glance and remembered for a
@@ -402,7 +406,12 @@ pub fn glance(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str) -> R
             return g.clone();
         }
     }
-    let got = match bagholder_sources::quotes::glance(&app.net, Timestamp::now(), &of) {
+    // the Bank's rates, for a coin's close kept in another currency than its own
+    let rates = match (of.kind, app.figures.get()) {
+        (InstrumentKind::Crypto, Some(f)) => f.book()?.rates().map_err(err)?,
+        _ => Default::default(),
+    };
+    let got = match bagholder_sources::quotes::glance(&app.net, Timestamp::now(), &of, &rates) {
         bagholder_sources::outcome::Outcome::Answered(g) => Ok(Glanced {
             price: crate::wire::Dec(g.price.amount),
             change: g.change.map(crate::wire::Dec),
@@ -575,5 +584,18 @@ mod tests {
         let d = draft(&b, &named("SHOP", "TSX")).unwrap();
         assert_eq!((d.kind, d.currency), (InstrumentKind::Security, Currency::CAD), "the venue states the currency when the page does not");
         assert_eq!(d.refs[0], Reference::new(RefScheme::Listing, "SHOP@XTSE"));
+    }
+
+    #[test]
+    fn a_glance_at_a_listing_on_an_unknown_venue_follows_its_currency_and_a_coin_keeps_its_own() {
+        // a venue the app does not know, with the currency the page states
+        let g = glance_of("ABC", "OTC", "USD").unwrap();
+        assert_eq!((g.kind, g.currency, g.venue_mic), (InstrumentKind::Security, Currency::USD, None));
+        assert!(glance_of("ABC", "OTC", "").is_err(), "no venue known and no currency: nothing says where it trades");
+        // the old words for a venue still name it
+        assert_eq!(glance_of("ONE", "TSX Venture Exchange", "").unwrap().venue_mic.as_deref(), Some("XTSX"));
+        // a coin in the currency the page names, US dollars where it names none
+        assert_eq!(glance_of("BTC", "CRYPTO", "CAD").unwrap().currency, Currency::CAD);
+        assert_eq!(glance_of("BTC", "CRYPTO", "").unwrap().currency, Currency::USD);
     }
 }

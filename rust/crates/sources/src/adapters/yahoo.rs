@@ -12,7 +12,10 @@
 //! (`113.9010009765625`); a day it states no close for (null) is a day without
 //! one. A bar is a closed session only once that session has ended: before the
 //! day of the reply's current trading period, or that day after its regular end.
-//! The quote is the reply's regular market price at its `regularMarketTime`.
+//! The quote is the reply's regular market price at its `regularMarketTime`,
+//! its day's change against the previous close the chart states
+//! (`chartPreviousClose`, else `previousClose`), in percent as stated, else
+//! worked out from that close.
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::tz::TimeZone;
@@ -59,7 +62,7 @@ pub struct Split {
 pub struct YahooQuote {
     pub price: Dec,
     pub at: Timestamp,
-    /// The day's change in percent, as stated.
+    /// The day's change in percent, as stated, else from the previous close.
     pub change_pct: Option<Dec>,
 }
 
@@ -74,9 +77,9 @@ pub struct Chart {
     pub dividends: Vec<(Date, Dec)>,
     pub splits: Vec<Split>,
     pub quote: YahooQuote,
-    /// The close before the chart's span, as stated (`chartPreviousClose`): for
-    /// the one-day chart a quote is read from, the previous session's close, which
-    /// the day's change is measured from.
+    /// The close before the chart's span, as stated (`chartPreviousClose`, else
+    /// `previousClose`): for the one-day chart a quote is read from, the previous
+    /// session's close, which the day's change is measured from.
     pub previous_close: Option<Dec>,
 }
 
@@ -142,11 +145,11 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
 
     let price = meta.dec("regularMarketPrice")?;
     let at = instant(meta.int("regularMarketTime")?, "meta.regularMarketTime")?;
-    let change_pct = match meta.field("regularMarketChangePercent") {
+    let stated_pct = match meta.field("regularMarketChangePercent") {
         Ok(n) => Some(n.as_dec()?),
         Err(_) => None,
     };
-    let previous_close = match meta.field("chartPreviousClose") {
+    let previous_close = match meta.field("chartPreviousClose").or_else(|_| meta.field("previousClose")) {
         Ok(n) => Some(n.as_dec()?),
         Err(_) => None,
     };
@@ -156,6 +159,8 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
     if price <= Dec::ZERO {
         return Ok(Err(format!("{symbol}'s price is {price}")));
     }
+    // a chart that states no percent: the change over the previous close
+    let change_pct = stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p)));
 
     // the events: splits first, since they undo the rest
     let mut splits = Vec::new();

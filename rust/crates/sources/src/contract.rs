@@ -128,13 +128,15 @@ pub struct Listing {
 }
 
 impl Listing {
-    /// The market the instrument trades in, from its kind and venue; `None` for
-    /// an instrument no source of this part covers (an event contract).
+    /// The market the instrument trades in, from its kind and venue, a listing
+    /// whose venue is none known here by its currency; `None` for an instrument
+    /// no source of this part covers (an event contract, an option contract not
+    /// in US dollars, which no US chain lists).
     pub fn market(&self) -> Option<Market> {
         match self.kind {
             InstrumentKind::Crypto => Some(Market::Crypto),
-            InstrumentKind::OptionContract => Some(Market::UsOptions),
-            InstrumentKind::Security => crate::venue::market_of(self.venue_mic.as_deref()),
+            InstrumentKind::OptionContract if self.currency == Currency::USD => Some(Market::UsOptions),
+            InstrumentKind::Security => crate::venue::market_of_listing(self.venue_mic.as_deref(), self.currency),
             _ => None,
         }
     }

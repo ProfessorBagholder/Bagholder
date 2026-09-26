@@ -2,12 +2,18 @@
 //! "Quotes, daily closes and benchmarks"): each listing asked of its market's
 //! source, every quote kept with the time its source states for it.
 //!
-//! - **Canadian listings (TSX, TSX Venture, CSE, Alpha):** TMX's quote, for the
-//!   book's TMX form, else the one its venue gives. A form TMX answers for on the
-//!   venue it asks is written back to the book as a routing reference. TMX states
-//!   no trade time: its quote's time is when it served the quote, which is what
-//!   is kept. It says the price is current then; it is never presented as the
-//!   time of a trade.
+//! - **Canadian listings (TSX, TSX Venture, CSE, Alpha, and a CAD listing whose
+//!   venue is none known):** TMX's quote, for the form that answered last, else
+//!   the book's TMX form, else the one its venue gives (bare where it gives
+//!   none); where that form is not carried, the other Canadian venues' forms in
+//!   turn, each answer checked against the venue its form names (`SPEC.md` §2,
+//!   TMX Money). The form that answers is remembered, and written back to the
+//!   book as a routing reference where it is the book's own venue's; a listing
+//!   no form answers for is asked again under its first form only, until the next
+//!   day. A null price is TMX's word that it has none now (a halted listing): the
+//!   price read last stands. TMX states no trade time: its quote's time is when it
+//!   served the quote, which is what is kept. It says the price is current then;
+//!   it is never presented as the time of a trade.
 //! - **Cboe Canada listings:** Cboe Canada's own quote.
 //! - **US listings:** Yahoo's chart, its forms in order, the winner first, the
 //!   day's change in points from the previous close the chart states.
@@ -17,14 +23,19 @@
 //!   which states its time, for a USD pair; otherwise the spot price, stamped with
 //!   its reply's date less the age its origin allows. The day's change is against
 //!   the close of the last completed UTC day on the pair's Coinbase Exchange
-//!   market, the USD market's converted at that day's Bank of Canada rate where
-//!   the pair has none (`SPEC.md` §2, Coinbase): the closes the cache keeps, else
-//!   asked of the Exchange once a day and kept.
+//!   market, the USD market's where the pair has none, converted at the Bank of
+//!   Canada's rate of that day or the last one published within the week before
+//!   it, so a weekend's close takes Friday's rate (`SPEC.md` §2, Coinbase): the
+//!   closes the cache keeps, else asked of the Exchange once a day and kept.
 //!
 //! Option contracts are quoted from their chains with their closes (`options`).
 
+use std::collections::BTreeMap;
+
 use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
-use bagholder_core::{Currency, InstrumentId, Money, SourceName};
+use bagholder_core::jiff::civil::Date;
+use bagholder_core::jiff::{tz::TimeZone, SignedDuration, Timestamp};
+use bagholder_core::{Currency, Dec, InstrumentId, Money, SourceName};
 
 use crate::adapters::{cboe_ca, coinbase, tmx, yahoo};
 use crate::cache::StoredQuote;
@@ -34,7 +45,7 @@ use crate::outcome::{Noted, Outcome};
 use crate::read::{Ctx, Result};
 use crate::venue;
 
-fn keep(ctx: &Ctx, id: InstrumentId, source: SourceName, price: Money, change: Option<bagholder_core::Dec>, change_pct: Option<bagholder_core::Dec>, at: bagholder_core::jiff::Timestamp, allowance: std::time::Duration) -> Result<()> {
+fn keep(ctx: &Ctx, id: InstrumentId, source: SourceName, price: Money, change: Option<Dec>, change_pct: Option<Dec>, at: Timestamp, allowance: std::time::Duration) -> Result<()> {
     ctx.cache.store_quote(&StoredQuote { instrument: id, source, price, change, change_pct, quoted_at: at, allowance, received_at: ctx.now })?;
     Ok(())
 }
@@ -44,13 +55,22 @@ fn not_carried(ctx: &Ctx, source: &SourceName, host: &str, id: InstrumentId, why
     ctx.record(source, host, DataKind::Quote, Some(id), &noted)
 }
 
+/// A day's change in percent of the close it is measured from, as every source
+/// states one: to four places.
+pub fn percent_of(change: Dec, base: Dec) -> Option<Dec> {
+    if base.is_zero() {
+        return None;
+    }
+    change.checked_mul(Dec::new(100, 0).ok()?).ok()?.div_rounded(base, 4, bagholder_core::Rounding::HalfEven).ok()
+}
+
 /// An answer in another currency than the listing's is for another listing: a
 /// meaning failure, never kept.
 pub(crate) fn same_currency<A>(outcome: &mut Outcome<A>, currency: impl Fn(&A) -> Currency, l: &Listing) {
     same_currency_as(outcome, currency, &l.symbol, l.currency)
 }
 
-fn same_currency_as<A>(outcome: &mut Outcome<A>, currency: impl Fn(&A) -> Currency, symbol: &str, want: Currency) {
+pub(crate) fn same_currency_as<A>(outcome: &mut Outcome<A>, currency: impl Fn(&A) -> Currency, symbol: &str, want: Currency) {
     if let Outcome::Answered(a) = &*outcome {
         let c = currency(a);
         if c != want {
@@ -101,23 +121,7 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
             continue;
         }
         match l.market() {
-            Some(Market::Canada) => {
-                let routed = l.route(&RefScheme::TmxForm).map(str::to_string);
-                let Some(form) = routed.clone().or_else(|| l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic))) else {
-                    not_carried(ctx, &tmx::source(), tmx::HOST, id, format!("{} names no venue TMX quotes", l.symbol))?;
-                    continue;
-                };
-                let mut noted = tmx::ask_quote(ctx.net, &form);
-                same_currency(&mut noted.outcome, |q| q.currency, l);
-                ctx.record_detail(&tmx::source(), tmx::HOST, DataKind::Quote, Some(id), &noted, &form)?;
-                if let Outcome::Answered(q) = noted.outcome {
-                    keep(ctx, id, tmx::source(), Money::new(q.price, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
-                    // the reply is for the venue the form asks: the form is this listing's
-                    if routed.is_none() {
-                        ctx.book.add_instrument_ref(id, &Reference { scheme: RefScheme::TmxForm, value: form })?;
-                    }
-                }
-            }
+            Some(Market::Canada) => read_tmx(ctx, l)?,
             Some(Market::CboeCanada) => {
                 let symbol = venue::root(&l.symbol);
                 let noted = cboe_ca::ask(ctx.net, &symbol);
@@ -165,15 +169,69 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
     Ok(())
 }
 
+/// Read a Canadian listing's quote from TMX: the form that answered last first,
+/// else the book's, else its venue's own; where that is not carried, the other
+/// Canadian forms in turn, unless none answered earlier today.
+fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
+    let id = l.id;
+    let source = tmx::source();
+    let routed = l.route(&RefScheme::TmxForm).map(str::to_string);
+    // the venue's own form, where the book names a venue TMX does
+    let own = l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic));
+    let won = ctx.cache.winner(id, DataKind::Quote)?.filter(|(by, _)| *by == source).map(|w| w.1);
+    let mut forms: Vec<String> = Vec::new();
+    for f in won.into_iter().chain(routed.clone()).chain(venue::tmx_forms(&l.symbol, l.venue_mic.as_deref(), l.currency)) {
+        if !forms.contains(&f) {
+            forms.push(f);
+        }
+    }
+    if forms.is_empty() {
+        return not_carried(ctx, &source, tmx::HOST, id, format!("{} names no venue TMX quotes", l.symbol));
+    }
+    // no form answered earlier today: only the first is asked until tomorrow
+    let subject = id.to_string();
+    let today = ctx.today();
+    let missed = ctx.cache.reads(&subject, DataKind::Quote)?.iter().any(|r| r.source == source && r.outcome == crate::outcome::OutcomeKind::NotCarried && r.first == today);
+    if missed {
+        forms.truncate(1);
+    }
+    for form in forms {
+        let mut noted = tmx::ask_quote(ctx.net, &form);
+        same_currency(&mut noted.outcome, |q| q.currency, l);
+        ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &noted, &form)?;
+        match noted.outcome {
+            Outcome::Answered(q) => {
+                // a null price: TMX has none now, and the price read last stands
+                if let Some(price) = q.price {
+                    keep(ctx, id, source.clone(), Money::new(price, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
+                }
+                ctx.cache.won(id, DataKind::Quote, &source, &form, ctx.now)?;
+                // the reply is for the venue the form asks: where that is the venue
+                // the book names, the form is this listing's
+                if routed.is_none() && own.as_deref() == Some(form.as_str()) {
+                    ctx.book.add_instrument_ref(id, &Reference { scheme: RefScheme::TmxForm, value: form })?;
+                }
+                return Ok(());
+            }
+            Outcome::NotCarried(_) => continue,
+            // a failure stops the chain: nothing is learned from no answer
+            _ => return Ok(()),
+        }
+    }
+    if !missed {
+        ctx.cache.store_read(&subject, DataKind::Quote, &crate::cache::ReadRow { source, first: today, last: today, outcome: crate::outcome::OutcomeKind::NotCarried, at: ctx.now })?;
+    }
+    Ok(())
+}
+
 /// A coin's day change at `price`, in points and in percent: against the close of
 /// the last completed UTC day the cache keeps for it (the newest of the last four
 /// days, as the Exchange closes a day at midnight UTC), converted into the price's
-/// currency at that day's Bank of Canada rate when it was kept in another. With no
+/// currency at the Bank of Canada's rate of that day, or the last one published
+/// within the week before it, when it was kept in another. With no
 /// close of yesterday kept and none asked for today, the Exchange is asked for the
 /// four days, each pair in turn, and what it answers kept.
-fn coin_change(ctx: &Ctx, l: &Listing, price: Money) -> Result<(Option<bagholder_core::Dec>, Option<bagholder_core::Dec>)> {
-    use bagholder_core::jiff::{tz::TimeZone, SignedDuration};
-    use bagholder_core::{Dec, Rounding};
+fn coin_change(ctx: &Ctx, l: &Listing, price: Money) -> Result<(Option<Dec>, Option<Dec>)> {
     let today = ctx.now.to_zoned(TimeZone::UTC).date();
     let day = |n: i64| today.checked_sub(SignedDuration::from_hours(24 * n));
     let (Ok(yesterday), Ok(from)) = (day(1), day(4)) else { return Ok((None, None)) };
@@ -204,23 +262,28 @@ fn coin_change(ctx: &Ctx, l: &Listing, price: Money) -> Result<(Option<bagholder
         }
     }
     let rates = if kept.iter().any(|(_, c)| c.currency != price.currency) { ctx.book.rates()? } else { Default::default() };
-    for (d, close) in kept {
+    Ok(change_against(price, &kept, &rates))
+}
+
+/// The day change of `price` against the newest of `closes` (newest first) that
+/// can be read in its currency: a close in USD, for a CAD price, at the Bank's
+/// rate of its day or the last one published within the week before it; a close
+/// no rate converts is passed over for the one before.
+fn change_against(price: Money, closes: &[(Date, Money)], rates: &BTreeMap<Currency, BTreeMap<Date, Dec>>) -> (Option<Dec>, Option<Dec>) {
+    for (d, close) in closes {
         let prev = if close.currency == price.currency {
             Some(close.amount)
         } else if price.currency == Currency::CAD {
-            // a close in another currency, in CAD at that day's rate; a day with no rate is passed over
-            rates.get(&close.currency).and_then(|r| r.get(&d)).and_then(|r| close.amount.checked_mul(*r).ok())
+            let week_before = d.checked_sub(SignedDuration::from_hours(24 * 6)).ok();
+            rates.get(&close.currency).and_then(|r| r.range(..=*d).next_back()).filter(|(on, _)| week_before.is_some_and(|w| **on >= w)).and_then(|(_, r)| close.amount.checked_mul(*r).ok())
         } else {
             None
         };
         let Some(prev) = prev.filter(|p| !p.is_zero()) else { continue };
         let Ok(change) = price.amount.checked_sub(prev) else { continue };
-        // in percent, as every source states a day change
-    let hundred = Dec::new(100, 0).expect("a hundred");
-    let pct = change.checked_mul(hundred).ok().and_then(|x| x.div_rounded(prev, 4, Rounding::HalfEven).ok());
-        return Ok((Some(change), pct));
+        return (Some(change), percent_of(change, prev));
     }
-    Ok((None, None))
+    (None, None)
 }
 
 /// A listing's quote for a glance: asked of its market's source, as a held
@@ -230,9 +293,9 @@ fn coin_change(ctx: &Ctx, l: &Listing, price: Money) -> Result<(Option<bagholder
 pub struct Glance {
     pub price: Money,
     /// The day's change in points, where the source states it or its previous close.
-    pub change: Option<bagholder_core::Dec>,
-    /// The day's change in percent, as stated.
-    pub change_pct: Option<bagholder_core::Dec>,
+    pub change: Option<Dec>,
+    /// The day's change in percent, as stated, else from its previous close.
+    pub change_pct: Option<Dec>,
 }
 
 /// What a glance is asked for: a listing no record may name yet.
@@ -246,9 +309,31 @@ pub struct GlanceOf {
     pub yahoo: Option<String>,
 }
 
+/// A coin's last completed UTC day's close for a glance, newest first: asked of
+/// the Exchange, its own pair's market first, else its USD market's.
+fn glance_closes(net: &bagholder_net::Net, now: Timestamp, symbol: &str, currency: Currency) -> Vec<(Date, Money)> {
+    let today = now.to_zoned(TimeZone::UTC).date();
+    let day = |n: i64| today.checked_sub(SignedDuration::from_hours(24 * n));
+    let (Ok(yesterday), Ok(from)) = (day(1), day(4)) else { return vec![] };
+    let base = symbol.trim().to_ascii_uppercase();
+    let mut pairs = vec![(format!("{base}-{}", currency.as_str()), currency)];
+    if currency != Currency::USD {
+        pairs.push((format!("{base}-USD"), Currency::USD));
+    }
+    for (pair, quoted) in pairs {
+        match coinbase::ask_candles(net, &pair, from, yesterday, now).outcome {
+            Outcome::Answered(closes) => return closes.into_iter().rev().map(|(d, c)| (d, Money::new(c, quoted))).collect(),
+            Outcome::NotCarried(_) => continue,
+            _ => break,
+        }
+    }
+    vec![]
+}
+
 /// The glance's quote, or why there is none: the first source's answer, else its
-/// failure.
-pub fn glance(net: &bagholder_net::Net, now: bagholder_core::jiff::Timestamp, g: &GlanceOf) -> Outcome<Glance> {
+/// failure. `rates` are the Bank's, for a coin's close kept in another currency
+/// than the one it is glanced in.
+pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BTreeMap<Currency, BTreeMap<Date, Dec>>) -> Outcome<Glance> {
     let not_carried = |why: String| Outcome::NotCarried(why);
     let yahoo_first = |forms: Vec<String>| -> Outcome<Glance> {
         let mut last = not_carried(format!("{} names no venue Yahoo carries", g.symbol));
@@ -273,21 +358,34 @@ pub fn glance(net: &bagholder_net::Net, now: bagholder_core::jiff::Timestamp, g:
         let base = g.symbol.trim().to_ascii_uppercase();
         let noted = if g.currency == Currency::USD { coinbase::ask_ticker(net, &format!("{base}-USD")) } else { coinbase::ask_spot(net, &base, g.currency) };
         return match noted.outcome {
-            Outcome::Answered(s) => Outcome::Answered(Glance { price: Money::new(s.price, g.currency), change: None, change_pct: None }),
+            Outcome::Answered(s) => {
+                // against the last completed UTC day's close, as a held coin's is
+                let price = Money::new(s.price, g.currency);
+                let (change, change_pct) = change_against(price, &glance_closes(net, now, &g.symbol, g.currency), rates);
+                Outcome::Answered(Glance { price, change, change_pct })
+            }
             other => other.failed().unwrap_or(Outcome::Unreachable("no reply".into())),
         };
     }
-    match venue::market_of(g.venue_mic.as_deref()) {
+    match venue::market_of_listing(g.venue_mic.as_deref(), g.currency) {
         Some(Market::Canada) => {
-            let Some(form) = g.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&g.symbol, mic)) else {
-                return not_carried(format!("{} names no venue TMX quotes", g.symbol));
-            };
-            let mut noted = tmx::ask_quote(net, &form);
-            same_currency_as(&mut noted.outcome, |q| q.currency, &g.symbol, g.currency);
-            match noted.outcome {
-                Outcome::Answered(q) => Outcome::Answered(Glance { price: Money::new(q.price, q.currency), change: q.change, change_pct: q.change_pct }),
-                other => other.failed().unwrap_or(Outcome::Unreachable("no reply".into())),
+            let mut last = not_carried(format!("{} names no venue TMX quotes", g.symbol));
+            for form in venue::tmx_forms(&g.symbol, g.venue_mic.as_deref(), g.currency) {
+                let mut noted = tmx::ask_quote(net, &form);
+                same_currency_as(&mut noted.outcome, |q| q.currency, &g.symbol, g.currency);
+                match noted.outcome {
+                    Outcome::Answered(q) => {
+                        return match q.price {
+                            Some(price) => Outcome::Answered(Glance { price: Money::new(price, q.currency), change: q.change, change_pct: q.change_pct }),
+                            // a halted listing: TMX has no price for it now
+                            None => not_carried(format!("TMX states no price for {form} now")),
+                        };
+                    }
+                    Outcome::NotCarried(why) => last = not_carried(why),
+                    other => return other.failed().unwrap_or(last),
+                }
             }
+            last
         }
         Some(Market::CboeCanada) => match cboe_ca::ask(net, &venue::root(&g.symbol)).outcome {
             Outcome::Answered(cboe_ca::CboeAnswer::Traded(q)) => Outcome::Answered(Glance { price: Money::new(q.price, g.currency), change: q.change, change_pct: q.change_pct }),
@@ -295,7 +393,7 @@ pub fn glance(net: &bagholder_net::Net, now: bagholder_core::jiff::Timestamp, g:
             Outcome::Answered(cboe_ca::CboeAnswer::NoTradeYet { prev_close }) => Outcome::Answered(Glance { price: Money::new(prev_close, g.currency), change: None, change_pct: None }),
             other => other.failed().unwrap_or(Outcome::Unreachable("no reply".into())),
         },
-        Some(Market::UnitedStates) => yahoo_first(g.venue_mic.as_deref().map(|mic| venue::yahoo_forms(&g.symbol, mic)).unwrap_or_default()),
+        Some(Market::UnitedStates) => yahoo_first(venue::yahoo_forms_of(&g.symbol, g.venue_mic.as_deref(), g.currency)),
         _ => not_carried(format!("{} names no venue a source quotes", g.symbol)),
     }
 }

@@ -7,12 +7,15 @@
 //! until it is stored or a read made after it settled covered it (the cache's
 //! `reads`): a closed day with a close stored is never read again, a day a read
 //! answered through with no close (a holiday) is not asked again, and a day after
-//! the last one a read held stays due, since a source can lag. A failed read
-//! waits out its source's rest.
+//! the last one a read held stays due, since a source can lag. A source's word
+//! that it does not carry the subject stands for the day it was said: the days
+//! are asked again on a later day. A failed read waits out its source's rest.
 //!
 //! The chains: a listing's closes from Yahoo, under the Yahoo form the book
-//! routes it by or its venue's; a coin's from the Exchange, its own pair's market
-//! first, else its USD market's (`SPEC.md` §2). Each benchmark's tracker from
+//! routes it by, else its venue's forms and then its market's others; a coin's
+//! from the Exchange, its own pair's market first, else its USD market's
+//! (`SPEC.md` §2), and where the Exchange carries neither (a coin Coinbase has
+//! delisted), Yahoo's pairs in the same order. Each benchmark's tracker from
 //! Yahoo, with its dividends and splits (`SPEC.md` §2, Index). Each reaches back
 //! when the oldest day needed moves earlier.
 
@@ -92,10 +95,17 @@ pub fn resting(reads: &[ReadRow], now: Timestamp, rest: Duration) -> bool {
 }
 
 /// Whether a read made after `d` settled covered it: its source answered through
-/// it, or said it does not carry the subject.
-pub(crate) fn settled_by_read(reads: &[ReadRow], market: Market, d: Date, bank: &TimeZone) -> bool {
+/// it, or said today that it does not carry the subject (a source can take a
+/// listing on later, so that answer stands for the day it was given).
+pub(crate) fn settled_by_read(reads: &[ReadRow], market: Market, d: Date, now: Timestamp, bank: &TimeZone) -> bool {
     let Some(settled) = settled_at(market, d, bank) else { return false };
-    reads.iter().any(|r| matches!(r.outcome, OutcomeKind::Answered | OutcomeKind::NotCarried) && r.first <= d && d <= r.last && r.at >= settled)
+    let today = now.to_zoned(bank.clone()).date();
+    let counts = |r: &ReadRow| match r.outcome {
+        OutcomeKind::Answered => true,
+        OutcomeKind::NotCarried => r.at.to_zoned(bank.clone()).date() == today,
+        _ => false,
+    };
+    reads.iter().any(|r| counts(r) && r.first <= d && d <= r.last && r.at >= settled)
 }
 
 /// The span of days due for `from`..=`to`: from the first to the last settled
@@ -111,7 +121,7 @@ pub fn due_span(market: Market, from: Date, to: Date, state: &CloseState, now: T
     let (mut first, mut last) = (None, None);
     let mut d = from;
     while d <= latest {
-        if can_trade(market, d) && !state.days.contains(&d) && !settled_by_read(&state.reads, market, d, bank) {
+        if can_trade(market, d) && !state.days.contains(&d) && !settled_by_read(&state.reads, market, d, now, bank) {
             first.get_or_insert(d);
             last = Some(d);
         }
@@ -145,11 +155,12 @@ fn rest_of(ctx: &Ctx, host: &str) -> Duration {
 }
 
 /// The Yahoo forms of a listing to ask, in order: the book's routing reference
-/// alone where it holds one, else its venue's forms.
+/// alone where it holds one, else its venue's forms and then its market's others
+/// (its currency's market where its venue is none known).
 pub fn yahoo_forms(l: &crate::contract::Listing) -> Vec<String> {
     match l.route(&RefScheme::Yahoo) {
         Some(r) => vec![r.to_string()],
-        None => l.venue_mic.as_deref().map(|mic| venue::yahoo_forms(&l.symbol, mic)).unwrap_or_default(),
+        None => venue::yahoo_forms_of(&l.symbol, l.venue_mic.as_deref(), l.currency),
     }
 }
 
@@ -173,6 +184,29 @@ pub(crate) fn store(ctx: &Ctx, id: InstrumentId, closes: &[(Date, Dec)], currenc
     Ok(())
 }
 
+/// Where a close is asked: a coin's Exchange market, or Yahoo's chart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Via {
+    Exchange,
+    Yahoo,
+}
+
+impl Via {
+    fn source(self) -> SourceName {
+        match self {
+            Via::Exchange => coinbase::exchange_source(),
+            Via::Yahoo => yahoo::source(),
+        }
+    }
+
+    fn host(self) -> &'static str {
+        match self {
+            Via::Exchange => coinbase::EXCHANGE_HOST,
+            Via::Yahoo => yahoo::HOST,
+        }
+    }
+}
+
 /// Read the closes due for every need. One read is kept per need and run: the
 /// chain's answer, or that no source in it carries the listing, or its failure.
 pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
@@ -184,52 +218,61 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
         }
         let id = need.listing.id;
         let subject = id.to_string();
-        let (source, host) = match market {
-            Market::Crypto => (coinbase::exchange_source(), coinbase::EXCHANGE_HOST),
-            _ => (yahoo::source(), yahoo::HOST),
+        let first = match market {
+            Market::Crypto => Via::Exchange,
+            _ => Via::Yahoo,
         };
         let state = CloseState { days: ctx.cache.close_days(id)?, reads: ctx.cache.reads(&subject, DataKind::DailyClose)? };
-        let Some((from, to)) = due_close(need, market, &state, ctx.now, ctx.bank, rest_of(ctx, host)) else { continue };
-        // the forms in order, the winner first
-        let mut forms = match market {
-            Market::Crypto => coin_pairs(&need.listing),
-            _ => yahoo_forms(&need.listing),
+        let Some((from, to)) = due_close(need, market, &state, ctx.now, ctx.bank, rest_of(ctx, first.host())) else { continue };
+        // the chain in order: a coin's Exchange pairs, then the same pairs on
+        // Yahoo; a listing's Yahoo forms; the winner first
+        let mut chain: Vec<(Via, String)> = match market {
+            Market::Crypto => {
+                let pairs = coin_pairs(&need.listing);
+                pairs.iter().map(|p| (Via::Exchange, p.clone())).chain(pairs.iter().map(|p| (Via::Yahoo, p.clone()))).collect()
+            }
+            _ => yahoo_forms(&need.listing).into_iter().map(|f| (Via::Yahoo, f)).collect(),
         };
-        if forms.is_empty() {
+        if chain.is_empty() {
             let noted: Noted<()> = Noted { outcome: Outcome::NotCarried(format!("{} names no venue Yahoo carries", need.listing.symbol)), shape_change: None };
-            ctx.record(&source, host, DataKind::DailyClose, Some(id), &noted)?;
-            keep_read(ctx, &subject, DataKind::DailyClose, &source, (from, to), OutcomeKind::NotCarried, None)?;
+            ctx.record(&first.source(), first.host(), DataKind::DailyClose, Some(id), &noted)?;
+            keep_read(ctx, &subject, DataKind::DailyClose, &first.source(), (from, to), OutcomeKind::NotCarried, None)?;
             continue;
         }
-        if let Some((_, won)) = ctx.cache.winner(id, DataKind::DailyClose)? {
-            forms.sort_by_key(|f| *f != won);
+        if let Some((by, won)) = ctx.cache.winner(id, DataKind::DailyClose)? {
+            chain.sort_by_key(|(via, f)| !(via.source() == by && *f == won));
         }
         let mut result = OutcomeKind::NotCarried;
         let mut held_last = None;
-        for form in forms {
-            let (kind, answered) = match market {
-                Market::Crypto => {
+        let mut last_source = first.source();
+        for (via, form) in chain {
+            let (source, host) = (via.source(), via.host());
+            // a pair's closes are in its quote currency, a listing's in its own
+            let quoted = match market {
+                Market::Crypto => form.rsplit('-').next().and_then(|c| Currency::parse(c).ok()).unwrap_or(need.listing.currency),
+                _ => need.listing.currency,
+            };
+            let (kind, answered) = match via {
+                Via::Exchange => {
                     let noted = coinbase::ask_candles(ctx.net, &form, from, to, ctx.now);
                     ctx.record_detail(&source, host, DataKind::DailyClose, Some(id), &noted, &form)?;
-                    let kind = noted.outcome.kind();
-                    let quote = form.rsplit('-').next().and_then(|c| Currency::parse(c).ok()).unwrap_or(need.listing.currency);
-                    (kind, match noted.outcome {
-                        Outcome::Answered(days) => Some((days, quote)),
+                    (noted.outcome.kind(), match noted.outcome {
+                        Outcome::Answered(days) => Some((days, quoted)),
                         _ => None,
                     })
                 }
-                _ => {
+                Via::Yahoo => {
                     let mut noted = yahoo::ask_span(ctx.net, &form, from, to, ctx.now);
-                    crate::quotes::same_currency(&mut noted.outcome, |c| c.currency, &need.listing);
+                    crate::quotes::same_currency_as(&mut noted.outcome, |c| c.currency, &form, quoted);
                     ctx.record_detail(&source, host, DataKind::DailyClose, Some(id), &noted, &form)?;
-                    let kind = noted.outcome.kind();
-                    (kind, match noted.outcome {
+                    (noted.outcome.kind(), match noted.outcome {
                         Outcome::Answered(c) => Some((c.closes.into_iter().filter(|(d, _)| *d >= from && *d <= to).collect::<Vec<_>>(), c.currency)),
                         _ => None,
                     })
                 }
             };
             result = kind;
+            last_source = source.clone();
             if let Some((closes, currency)) = answered {
                 held_last = closes.last().map(|c| c.0);
                 store(ctx, id, &closes, currency, &source, host)?;
@@ -239,7 +282,7 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
                 break;
             }
         }
-        keep_read(ctx, &subject, DataKind::DailyClose, &source, (from, to), result, held_last)?;
+        keep_read(ctx, &subject, DataKind::DailyClose, &last_source, (from, to), result, held_last)?;
     }
     Ok(())
 }
@@ -272,7 +315,7 @@ pub fn covered(market: Market, from: Date, to: Date, state: &CloseState, now: Ti
     }
     let mut d = from;
     while d <= latest {
-        if can_trade(market, d) && !state.days.contains(&d) && !settled_by_read(&state.reads, market, d, bank) {
+        if can_trade(market, d) && !state.days.contains(&d) && !settled_by_read(&state.reads, market, d, now, bank) {
             return false;
         }
         let Ok(next) = d.tomorrow() else { return false };
