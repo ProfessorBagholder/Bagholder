@@ -20,7 +20,11 @@
 //! carries is the day of the underlying's last trade, and it holds that
 //! session's final prices once Cboe made it after the session settled. A
 //! contract's price is the bid/ask midpoint where both are quoted, at the
-//! chain's time less Cboe's delay, else its last trade at that trade's time.
+//! chain's time less Cboe's delay, else its last trade at that trade's time,
+//! else its previous close, which stands at the chain's time less the delay
+//! (`SPEC.md` §2, Price); its day change is against that previous close. The
+//! previous close states no day, so it is a live price only, never a session's
+//! close.
 //!
 //! A contract is found in the chain by the OCC symbol the book states for it;
 //! else by its terms, which must match exactly one contract. Where the book
@@ -87,23 +91,34 @@ fn find<'a>(chain: &'a Chain, c: &ContractNeed, symbol: &str) -> std::result::Re
 }
 
 /// The price a chain gives a contract, and when it was current: the midpoint
-/// at the chain's time less Cboe's delay, else the last trade at its own time.
+/// at the chain's time less Cboe's delay, else the last trade at its own time,
+/// else the previous close at the chain's time less the delay.
 fn quote_of(bank: &TimeZone, k: &ChainContract, made_at: Timestamp) -> Option<(Dec, Timestamp)> {
+    let delayed = made_at - SignedDuration::try_from(LATE_BY).ok()?;
     if let Some(mid) = k.midpoint() {
-        return Some((mid, made_at - SignedDuration::try_from(LATE_BY).ok()?));
+        return Some((mid, delayed));
     }
-    let (price, at) = k.last?;
-    Some((price, at.to_zoned(bank.clone()).ok()?.timestamp()))
+    match k.last {
+        Some((price, at)) => Some((price, at.to_zoned(bank.clone()).ok()?.timestamp())),
+        None => k.prev_close.map(|p| (p, delayed)),
+    }
 }
 
 /// Read the chain of each shown contract's underlying where it is due, and keep
 /// each contract's price with its time.
 pub fn read(ctx: &Ctx, shown: &[ContractNeed]) -> Result<()> {
+    let source = cboe_options::source();
     let mut by: BTreeMap<&str, Vec<&ContractNeed>> = BTreeMap::new();
     for c in shown.iter().filter(|c| c.expiry >= ctx.today()) {
+        // Cboe's chains list US contracts, which trade in US dollars: a contract in
+        // another currency is none of theirs
+        if c.currency != bagholder_core::Currency::USD {
+            let why = format!("{} {} {} {} is in {}: Cboe's US chains do not list it", c.underlying, c.expiry, c.strike, c.right.as_str(), c.currency);
+            ctx.record(&source, HOST, DataKind::Quote, Some(c.id), &Noted::<()> { outcome: Outcome::NotCarried(why), shape_change: None })?;
+            continue;
+        }
         by.entry(c.underlying.as_str()).or_default().push(c);
     }
-    let source = cboe_options::source();
     let priced: BTreeSet<InstrumentId> = ctx.cache.quotes()?.into_iter().filter(|q| q.source == source).map(|q| q.instrument).collect();
     for (symbol, group) in by {
         let held = ctx.cache.option_chain(symbol)?;
@@ -142,7 +157,10 @@ pub fn read(ctx: &Ctx, shown: &[ContractNeed]) -> Result<()> {
                 }
             };
             if let Some((price, at)) = quote_of(ctx.bank, k, chain.made_at) {
-                ctx.cache.store_quote(&StoredQuote { instrument: c.id, source: source.clone(), price: Money::new(price, c.currency), change: None, change_pct: None, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: ctx.now })?;
+                // the day's change against the previous close the chain states
+                let change = k.prev_close.and_then(|p| price.checked_sub(p).ok());
+                let change_pct = k.prev_close.zip(change).and_then(|(p, ch)| crate::quotes::percent_of(ch, p));
+                ctx.cache.store_quote(&StoredQuote { instrument: c.id, source: source.clone(), price: Money::new(price, c.currency), change, change_pct, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: ctx.now })?;
             }
         }
     }

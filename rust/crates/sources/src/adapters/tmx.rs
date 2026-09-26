@@ -7,6 +7,11 @@
 //! symbol answered on another venue than the one asked is another listing, and is
 //! refused by the caller against the venue the book names.
 //!
+//! **Quotes.** A halted listing is answered with a null price: TMX states it has
+//! no price now, and the price read last stands. The schedule the quote states
+//! (`dividendFrequency`) is read for the payer's record alone: a word this reader
+//! does not know is that record's mismatch, and leaves the price standing.
+//!
 //! **Distributions.** TMX states each distribution's ex-date and amount per
 //! unit, and its record, pay and declaration dates where it has them. It does
 //! not say whether a distribution is paid in cash or in units: a year-end
@@ -56,7 +61,8 @@ pub struct TmxQuote {
     pub symbol: String,
     /// The venue the answer is for, as TMX names it.
     pub exchange_name: String,
-    pub price: Dec,
+    /// None where TMX states no price now (a halted listing).
+    pub price: Option<Dec>,
     pub change: Option<Dec>,
     pub change_pct: Option<Dec>,
     pub currency: Currency,
@@ -64,8 +70,9 @@ pub struct TmxQuote {
     /// request's time within seconds. It says the price is current then, never
     /// when the last trade was.
     pub datetime: Timestamp,
-    /// How often the listing pays, where TMX states it.
-    pub per_year: Option<u32>,
+    /// How often the listing pays, where TMX states it; a word this reader does
+    /// not know, the mismatch naming it.
+    pub per_year: Result<Option<u32>, Mismatch>,
 }
 
 /// A distribution as TMX lists it.
@@ -156,9 +163,10 @@ fn read_quote(root: &Node, form: &str) -> Result<Result<TmxQuote, String>, Misma
     if !symbol.eq_ignore_ascii_case(bare) && !symbol.eq_ignore_ascii_case(form) {
         return Ok(Err(format!("TMX answered {symbol} for {form}")));
     }
-    let price = q.dec("price")?;
-    if price <= Dec::ZERO {
-        return Ok(Err(format!("{form}'s price is {price}")));
+    // null: no price now (a halted listing)
+    let price = q.opt_dec("price")?;
+    if let Some(p) = price.filter(|p| *p <= Dec::ZERO) {
+        return Ok(Err(format!("{form}'s price is {p}")));
     }
     let currency = match Currency::parse(q.text("currency")?) {
         Ok(c) => c,
@@ -169,10 +177,10 @@ fn read_quote(root: &Node, form: &str) -> Result<Result<TmxQuote, String>, Misma
         return Ok(Err(format!("{form}'s time {datetime_text:?} is not an instant")));
     };
     let per_year = match q.opt_text("dividendFrequency")? {
-        None => None,
+        None => Ok(None),
         Some(w) => match self::per_year(w) {
-            Some(n) => Some(n),
-            None => return Err(q.field("dividendFrequency")?.mismatch(format!("{w:?} is not a schedule this reader knows"))),
+            Some(n) => Ok(Some(n)),
+            None => Err(q.field("dividendFrequency")?.mismatch(format!("{w:?} is not a schedule this reader knows"))),
         },
     };
     Ok(Ok(TmxQuote {

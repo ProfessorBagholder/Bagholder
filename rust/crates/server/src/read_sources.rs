@@ -62,7 +62,9 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
 
 /// An instrument as the sources ask for it: its kind and currency, its symbol and
 /// venue now (its records', else what the person picked it as), and the ways to
-/// ask for it the book holds.
+/// ask for it the book holds. The venue is its code where the sources know it,
+/// else the code its name spells (`TSX Venture Exchange`); where neither is known
+/// the sources follow its currency.
 pub fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String> {
     let i = book.instrument(id).map_err(err)?;
     let Some(now) = book.current_name(id).map_err(err)? else { return Ok(None) };
@@ -72,7 +74,8 @@ pub fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String>
             routes.entry(r.scheme).or_default().push(r.value);
         }
     }
-    Ok(Some(Listing { id, kind: i.kind, currency: i.currency, symbol: now.symbol.clone(), venue_mic: now.venue_mic.clone(), routes }))
+    let venue_mic = bagholder_sources::venue::known_mic(now.venue_mic.as_deref(), now.venue_name.as_deref()).map(str::to_string).or_else(|| now.venue_mic.clone());
+    Ok(Some(Listing { id, kind: i.kind, currency: i.currency, symbol: now.symbol.clone(), venue_mic, routes }))
 }
 
 /// An option contract as its chain is asked for it, first on the record on

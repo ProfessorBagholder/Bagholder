@@ -48,17 +48,32 @@ impl Payer for TmxRecord {
 
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
         let l = &need.listing;
-        let Some(form) = l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic)) else {
-            return Noted { outcome: Outcome::NotCarried(format!("{} names no venue TMX carries", l.symbol)), shape_change: None };
+        // the venue's own form first, then the market's others: the quote's reader
+        // refuses an answer for another venue than the form's, so the form that
+        // answers is the listing's
+        let mut not_carried = format!("{} names no venue TMX carries", l.symbol);
+        let mut found = None;
+        for form in venue::tmx_forms(&l.symbol, l.venue_mic.as_deref(), l.currency) {
+            let quote = tmx::ask_quote(net, &form);
+            match quote.outcome {
+                Outcome::Answered(q) => {
+                    found = Some((form, q.per_year, quote.shape_change));
+                    break;
+                }
+                Outcome::NotCarried(why) => not_carried = why,
+                other => return Noted { outcome: other.failed().expect("not answered"), shape_change: quote.shape_change },
+            }
+        }
+        let Some((form, per_year, quote_shape)) = found else {
+            return Noted { outcome: Outcome::NotCarried(not_carried), shape_change: None };
         };
-        let quote = tmx::ask_quote(net, &form);
-        let per_year = match quote.outcome {
-            // the quote's reader refuses an answer for another venue than the form's
-            Outcome::Answered(q) => q.per_year,
-            other => return Noted { outcome: other.failed().expect("not answered"), shape_change: quote.shape_change },
+        // the schedule is never assumed: a word the reader does not know is a mismatch
+        let per_year = match per_year {
+            Ok(n) => n,
+            Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: quote_shape },
         };
         let rows = tmx::ask_dividends(net, &form);
-        let shape_change = quote.shape_change.or(rows.shape_change);
+        let shape_change = quote_shape.or(rows.shape_change);
         // TMX states each distribution's amount per unit and not whether it is paid
         // in cash or in units: the form is found from the record
         let outcome = rows.outcome.map(|rows| Record {
@@ -98,7 +113,7 @@ impl Payer for YahooRecord {
 
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record> {
         let l = &need.listing;
-        let Some(form) = l.venue_mic.as_deref().and_then(|mic| venue::yahoo_forms(&l.symbol, mic).into_iter().next()) else {
+        let Some(form) = venue::yahoo_forms_of(&l.symbol, l.venue_mic.as_deref(), l.currency).into_iter().next() else {
             return Noted { outcome: Outcome::NotCarried(format!("{} names no venue Yahoo carries", l.symbol)), shape_change: None };
         };
         // every dividend event the chart holds, from before any fund's first trade

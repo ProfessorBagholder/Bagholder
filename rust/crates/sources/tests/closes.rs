@@ -72,8 +72,10 @@ fn a_listings_close_is_due_once_its_session_has_settled() {
     let late = CloseState { days: days(date(2026, 9, 15), date(2026, 9, 22)), reads: vec![read(date(2026, 9, 15), date(2026, 9, 22), OutcomeKind::Answered, "2026-09-22T21:00:00Z")] };
     assert_eq!(due(&late, "2026-09-23T20:00:00Z"), Some((date(2026, 9, 1), date(2026, 9, 14))));
     // a source that does not carry the listing is not asked again for those days
+    // that day, and is asked again on a later day: it can take the listing on
     let gone = CloseState { days: BTreeSet::new(), reads: vec![read(date(2026, 9, 1), date(2026, 9, 22), OutcomeKind::NotCarried, "2026-09-22T21:00:00Z")] };
-    assert_eq!(due(&gone, "2026-09-23T20:31:00Z"), Some((date(2026, 9, 23), date(2026, 9, 23))));
+    assert_eq!(due(&gone, "2026-09-22T23:59:00Z"), None);
+    assert_eq!(due(&gone, "2026-09-23T20:31:00Z"), Some((date(2026, 9, 1), date(2026, 9, 23))));
     // a failure waits out its source's rest, then the same days are due again
     let failed = CloseState { days: BTreeSet::new(), reads: vec![read(date(2026, 9, 1), date(2026, 9, 22), OutcomeKind::Unreachable, "2026-09-23T20:00:00Z")] };
     assert_eq!(due(&failed, "2026-09-23T20:05:00Z"), None);
@@ -102,6 +104,74 @@ fn a_coins_day_settles_at_the_end_of_the_utc_day_every_day() {
     assert_eq!(market::due_close(&n, Market::Crypto, &none, t("2026-09-22T00:00:00Z"), &eastern(), REST), Some((date(2026, 9, 19), date(2026, 9, 21))));
     // the pairs: its own market first, then its USD market
     assert_eq!(market::coin_pairs(&n.listing), vec!["BTC-CAD".to_string(), "BTC-USD".to_string()]);
+}
+
+#[test]
+fn a_listing_whose_venue_is_none_known_follows_its_currency_then_the_markets_other_forms() {
+    // a CAD listing with no venue, or one no table here knows: Canadian, `.TO` first
+    let none = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", None);
+    assert_eq!(none.market(), Some(Market::Canada));
+    assert_eq!(market::yahoo_forms(&none), ["ENB.TO", "ENB.V", "ENB.CN", "ENB.NE"]);
+    let otc = listing(2, InstrumentKind::Security, Currency::USD, "BRK.B", Some("OTCM"));
+    assert_eq!(otc.market(), Some(Market::UnitedStates));
+    assert_eq!(market::yahoo_forms(&otc), ["BRK-B"]);
+    // a venue named: its own form first, then its market's others
+    assert_eq!(market::yahoo_forms(&listing(3, InstrumentKind::Security, Currency::CAD, "QNC", Some("XTSX"))), ["QNC.V", "QNC.TO", "QNC.CN", "QNC.NE"]);
+    // a currency no market here trades in, with no venue: none
+    assert_eq!(listing(4, InstrumentKind::Security, Currency::parse("EUR").unwrap(), "X", None).market(), None);
+    // an option contract not in US dollars is none of the US chains'
+    assert_eq!(listing(5, InstrumentKind::OptionContract, Currency::CAD, "X", None).market(), None);
+    assert_eq!(listing(6, InstrumentKind::OptionContract, Currency::USD, "X", None).market(), Some(Market::UsOptions));
+}
+
+#[test]
+fn a_listing_yahoo_does_not_carry_is_asked_again_on_a_later_day() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(common::Recorded::new().with_prefix(&format!("{YAHOO}ZZZQX?"), 404, "yahoo", "ZZZQX-status-404.json"));
+    let zone = eastern();
+    let n = [need(listing(1, InstrumentKind::Security, Currency::USD, "ZZZQX", Some("XNAS")), date(2026, 9, 21), date(2026, 9, 23))];
+    let run = |now: &str| {
+        let net = common::net(&recorded, now);
+        let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(now), bank: &zone };
+        market::read_closes(&ctx, &n).unwrap();
+        recorded.asked.lock().unwrap().len()
+    };
+    // not carried: nothing stored, and the days settled for the rest of that day
+    assert_eq!(run("2026-09-24T04:00:00Z"), 1);
+    assert!(!cache.closes().unwrap().contains_key(&id(1)));
+    assert_eq!(run("2026-09-24T20:00:00Z"), 1);
+    // the next day the same days are asked again
+    assert_eq!(run("2026-09-25T14:00:00Z"), 2);
+}
+
+#[test]
+fn a_coin_the_exchange_does_not_carry_is_read_from_yahoo_s_pair() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-26T23:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    // neither of the Exchange's markets carries it (a coin Coinbase delisted)
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with_prefix("https://api.exchange.coinbase.com/products/BTC-CAD/candles", 404, "coinbase-exchange", "candles-BTC-CAD-status-404.json")
+            .with_prefix("https://api.exchange.coinbase.com/products/BTC-USD/candles", 404, "coinbase-exchange", "candles-BTC-CAD-status-404.json")
+            .with(&format!("{YAHOO}BTC-CAD?period1=1788566400&period2=1790467200&interval=1mo&events=split"), 200, "yahoo", "BTC-CAD-splits-2026-09-05-2026-09-26.json")
+            .with(&format!("{YAHOO}BTC-CAD?period1=1788220800&period2=1788566400&interval=1d&events=div%7Csplit"), 200, "yahoo", "BTC-CAD-2026-09-01-2026-09-04.json"),
+    );
+    let net = common::net(&recorded, "2026-09-26T23:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let btc = need(listing(2, InstrumentKind::Crypto, Currency::CAD, "BTC", None), date(2026, 9, 1), date(2026, 9, 4));
+    market::read_closes(&ctx, &[btc]).unwrap();
+    let closes = cache.closes().unwrap();
+    // Yahoo's CAD pair, in CAD, the days asked alone
+    assert_eq!(closes[&id(2)].len(), 4);
+    assert_eq!(closes[&id(2)][&date(2026, 9, 1)], Money::new(dec("107563.7109375"), Currency::CAD));
+    assert_eq!(closes[&id(2)][&date(2026, 9, 4)], Money::new(dec("110262.015625"), Currency::CAD));
+    assert_eq!(cache.winner(id(2), DataKind::DailyClose).unwrap(), Some((SourceName::named("yahoo"), "BTC-CAD".to_string())));
 }
 
 const YAHOO: &str = "https://query1.finance.yahoo.com/v8/finance/chart/";

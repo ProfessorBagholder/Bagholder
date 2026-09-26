@@ -10,7 +10,8 @@
 //!   (`2026-09-22T15:59:59`): the session the chain carries is that day;
 //! - per contract (`option`, its OCC symbol), the closing `bid` and `ask`, and
 //!   `last_trade_price` at `last_trade_time`, Eastern, null for a contract never
-//!   traded.
+//!   traded; and `prev_day_close`, its previous session's close, which states no
+//!   day (zero for a contract with none).
 //!
 //! Prices are written as binary float leftovers (`0.370000004768372`); each is
 //! kept as the decimal its digits spell.
@@ -53,6 +54,8 @@ pub struct ChainContract {
     pub ask: Dec,
     /// The last trade's price and its time, Eastern; none for a contract never traded.
     pub last: Option<(Dec, DateTime)>,
+    /// Its previous session's close, as stated; none where the chain states zero.
+    pub prev_close: Option<Dec>,
 }
 
 impl ChainContract {
@@ -143,10 +146,14 @@ pub fn parse(v: &Value, symbol: &str) -> Outcome<Chain> {
                 }
                 None => None,
             };
+            let prev_close = c.dec("prev_day_close")?;
+            if prev_close.is_negative() {
+                return Ok(Err(format!("{occ}'s previous close is {prev_close}")));
+            }
             if contracts.iter().any(|k: &ChainContract| k.occ == occ) {
                 return Ok(Err(format!("{occ} is listed twice in {symbol}'s chain")));
             }
-            contracts.push(ChainContract { occ: occ.to_string(), expiry, right, strike, bid, ask, last });
+            contracts.push(ChainContract { occ: occ.to_string(), expiry, right, strike, bid, ask, last, prev_close: Some(prev_close).filter(|p| p.is_positive()) });
         }
         Ok(Ok(Chain { made_at, session, contracts }))
     };

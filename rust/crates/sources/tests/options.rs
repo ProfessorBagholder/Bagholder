@@ -250,3 +250,33 @@ fn the_recorded_shape_is_the_answers_union() {
     common::shape_is_the_answers_union("cboe-options.paths", "cboe-options", "chain-", &[]);
 }
 
+
+/// A contract with no two-sided quote and no trade is priced at its previous
+/// close, and every live price carries its day change against that close; a
+/// contract not in US dollars is none of Cboe's US chains'.
+#[test]
+fn a_contract_with_no_quote_and_no_trade_is_at_its_previous_close_with_its_day_change() {
+    let w = world(&[1, 2, 3, 4]);
+    let recorded = Arc::new(common::Recorded::new().with(&url("BBAI"), 200, "cboe-options", "chain-BBAI.json"));
+    let mut cad = contract(4, "BBAI", date(2028, 1, 21), "10", OptionRight::Call);
+    cad.currency = Currency::CAD;
+    let shown = [
+        // BBAI260925P00000500: no bid, never traded, its previous close stated
+        contract(1, "BBAI", date(2026, 9, 25), "0.5", OptionRight::Put),
+        // the midpoint of 0.36 and 0.38, against 0.370000004768372
+        contract(2, "BBAI", date(2028, 1, 21), "10", OptionRight::Call),
+        // no bid: its last trade of 0.01, against 0.00499999988824129
+        contract(3, "BBAI", date(2026, 9, 25), "2", OptionRight::Put),
+        cad,
+    ];
+    run(&w, &recorded, "2026-09-23T03:00:00Z", &shown);
+    let got: BTreeMap<InstrumentId, _> = w.cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
+    // the previous close stands at the chain's time less Cboe's fifteen minutes
+    assert_eq!((got[&id(1)].price, got[&id(1)].quoted_at, got[&id(1)].change), (usd("0.00999999977648258"), t("2026-09-23T01:53:13Z"), Some(Dec::ZERO)));
+    assert_eq!(got[&id(2)].change, Some(dec("-0.000000004768372")));
+    assert_eq!((got[&id(3)].price, got[&id(3)].change, got[&id(3)].change_pct), (usd("0.01"), Some(dec("0.00500000011175871")), Some(dec("100.0000"))));
+    // the contract in CAD is not asked for, and says why
+    assert!(!got.contains_key(&id(4)));
+    assert_eq!(*recorded.asked.lock().unwrap(), vec![url("BBAI")]);
+    assert!(outcomes(&w).iter().any(|o| o.0 == Some(id(4)) && o.1 == OutcomeKind::NotCarried && o.2.contains("CAD")));
+}
