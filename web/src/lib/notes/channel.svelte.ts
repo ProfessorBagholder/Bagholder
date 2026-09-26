@@ -8,6 +8,7 @@ import { store } from '../state.svelte'
 import { ui } from '../ui.svelte'
 import { panel } from '../orders/orders.svelte'
 import { goSub } from '../router.svelte'
+import { rememberListing } from '../listing.svelte'
 import type { Note } from './notes.svelte'
 
 export type Channel = 'native' | 'granted' | 'denied' | 'default' | 'unavailable'
@@ -74,7 +75,12 @@ export async function notifyTest(): Promise<void> {
   void call('POST /api/notifications/test')
 }
 
-/** What a notification leads to when it is about an order or a listing the book holds. */
+/**
+ * What a banner leads to: an order's opens the Orders panel at its tab; a disclosure's
+ * or a release's opens the instrument's page, the listing's, which is the holding's
+ * where the book holds it (the server says which, by the listing, never a symbol
+ * matched across accounts here).
+ */
 export function openNoteTarget(n: Note): boolean {
   if (n.kind === 'fills' || n.kind === 'problems') {
     ui.menuOpen = false
@@ -85,11 +91,10 @@ export function openNoteTarget(n: Note): boolean {
   }
   const symbol = n.extra?.symbol
   if ((n.kind === 'disclosures' || n.kind === 'releases') && symbol) {
-    const held = store.model?.positions.find((p) => p.symbol === symbol)
-    if (held) {
-      goSub('portfolio', held.id)
-      return true
-    }
+    ui.menuOpen = false
+    ui.notesOpen = false
+    goSub('markets', rememberListing({ symbol: String(symbol), exchange: n.extra?.exchange }))
+    return true
   }
   return false
 }

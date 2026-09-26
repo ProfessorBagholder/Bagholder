@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { openWithStatus } from './helpers'
+import { modelDoc, openWithStatus, streamBody } from './helpers'
 
 // SPEC §3, Notifications: the server tells, the browser shows -- under its own permission.
 
@@ -68,6 +68,36 @@ test('a fill\'s card opens the Orders panel at Filled', async ({ page, request }
   await page.getByText('Order filled · QNC').click()
   await expect(page.getByRole('dialog', { name: 'Orders' })).toBeVisible()
   await expect(page.locator('#odWrap .on, [aria-label="Orders"] .on').filter({ hasText: /Filled/ })).toBeVisible()
+})
+
+test("a disclosure's or a release's banner opens the instrument's page: the holding's where the book holds it, the listing's where it does not", async ({ page, request }) => {
+  const model = await modelDoc(request)
+  // a holding whose symbol no other holding shares, so the page it opens is its own
+  type P = { id: string; symbol: string; exchange: string; kind: string }
+  const positions = model.positions as P[]
+  const held = positions.find((p) => p.kind === 'Shares' && positions.filter((q) => q.symbol === p.symbol).length === 1)!
+  const cases = [
+    { kind: 'disclosures', symbol: 'ZZQX', exchange: 'TSX', lands: (u: string) => u.endsWith('#markets/listing:ZZQX@TSX') },
+    { kind: 'releases', symbol: held.symbol, exchange: held.exchange, lands: (u: string) => u.endsWith('#portfolio/' + held.id) },
+  ]
+  await browserSays(page, 'granted')
+  let row: unknown = null
+  await page.route('**/api/events?*', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, { notifications: { rows: row ? [row] : [], unread: row ? 1 : 0 } }) }),
+  )
+  await page.route('**/api/notifications/seen', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
+  await page.goto('/#dashboard')
+  await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+  let id = 900
+  for (const c of cases) {
+    const before = await page.evaluate(() => (window as unknown as { __banners: unknown[] }).__banners.length)
+    row = { id: ++id, kind: c.kind, key: c.kind + ':' + id, title: c.symbol + ' filed', body: '', at: '2026-09-18T14:31:00Z', readAt: null, seenAt: null, extra: { symbol: c.symbol, exchange: c.exchange } }
+    // the stream reconnects every 200 ms here, and the row arrives with it
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __banners: unknown[] }).__banners.length)).toBe(before + 1)
+    await page.evaluate(() => (window as unknown as { __last: { onclick: () => void } }).__last.onclick())
+    await expect.poll(() => c.lands(decodeURIComponent(page.url())), c.kind).toBe(true)
+    await page.goto('/#dashboard')
+  }
 })
 
 test('the theme row opens on a tap, and choosing a theme closes its list', async ({ page }) => {
