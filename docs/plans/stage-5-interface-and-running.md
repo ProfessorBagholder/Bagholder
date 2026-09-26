@@ -107,7 +107,7 @@ Trading journals (TradeZella, Tradervue, TraderSync, Edgewonk) are hosted servic
 
 Every part:
 - [ ] `cargo test --workspace` green in `rust/`, a test for each behaviour change, `RUSTFLAGS="-D warnings"` clean; the applet test alone green.
-- [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/` (e2e in CI's browser job); screenshot baselines unchanged except where `SPEC.md` changed.
+- [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/`; screenshot baselines unchanged except where `SPEC.md` changed. (A1: green, 268 browser tests.)
 - [ ] Rendered on the Rust scratch server on a copy of the owner's book (`SPEC.md` §7, orders dry, offline): every figure traced to its field; no overflow at 1200 / 1340 / 1440 / 1680.
 
 **A1, data flow**
@@ -176,7 +176,7 @@ Commands and what they showed (2026-09-26):
 - `server/src/views.rs` tests: every kind of change (a quote, a declared distribution, a rate, a journal, the broker's cash, a record removed, the day turning) brings each of the eight screens to a fresh build, and a quote sends nothing to the book, the Dashboard or the trades; a screen kept at its version is answered `same`.
 - `cd web && npm run check`: 0 errors; `npx vitest run`: 133 passed (element tests for a quote, a watched listing's quote, a news item, a tile, a grade, a new trade, a correction, a distribution paid, a filter change).
 - Rendered on the Rust scratch server on a copy of the owner's book (offline, orders dry): every tab drawn from its own subscription; the Trades list 100 rows, 200 after scrolling to its end; a column header sorts on the server; a holding's and a closed trade's page open. A second open with nothing changed: four `same` acknowledgements, 218 bytes, where the Dashboard alone is 77 KB.
-- The browser suite (`web/e2e`, including `dataflow.spec.ts`): run by CI's browser job; Chromium cannot launch in this machine's sandbox.
+- `cd web && npx playwright test` (the whole browser suite, `dataflow.spec.ts` included): 268 passed. Its first run found that the page asked for its screens only after the stream's first word, a round trip in which a key did nothing; the stream is now opened naming them.
 - Widths, measured with JavaScript on every tab: at 1200 px the Trades, Holdings, Cashflow positions and Distribution history tables scroll inside their own boxes, as they did before; at 1340, 1440 and 1680 px nothing overflows, and the page never scrolls sideways. The figures are built by the same builders as before, moved per screen, and held to a fresh build by the test above.
 - The notifier applet test (`notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon`) could not run here: this machine's sandbox refuses `osacompile`. Part A1 changes nothing in the notifier.
 
