@@ -463,7 +463,7 @@ fn test_no_amount_on_the_figures_wire_is_a_number() {
         "leftOut", "realizedLeftOut", "count", "wins", "losses", "breakeven", "winRate", "profitFactor", "pct", "rate", "r", "spR", "n", "graded", "share", "positionCount", "navAccounts", "activityCount", "holdDays",
     ];
     const MORE: [&str; 8] = ["pnlPct", "unrealPct", "percentChange", "held", "avgHold", "unrealizedPct", "marginUsedPct", "cashPct"];
-    const MORE2: [&str; 4] = ["dayChangePct", "yield", "yoc", "currentYield"];
+    const MORE2: [&str; 5] = ["dayChangePct", "yield", "yoc", "currentYield", "vs"];
     // the declarations without their doc comments
     let text = regex::Regex::new(r"(?s)/\*\*.*?\*/").unwrap().replace_all(&figures_declarations(), "").to_string();
     let field = regex::Regex::new(r"(\w+)\??: ([^,;}]*)").unwrap();

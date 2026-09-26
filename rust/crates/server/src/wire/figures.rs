@@ -231,6 +231,9 @@ pub struct YearRow {
     pub year: String,
     pub r: f64,
     pub sp_r: Option<f64>,
+    /// How far the year's return was over (positive) or under (negative) the
+    /// benchmark's, in percentage points as a fraction: `r` less `sp_r`.
+    pub vs: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]

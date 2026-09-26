@@ -92,6 +92,11 @@ export function pct(v: number | null | undefined | Waits, dp?: number): string {
   dp = dp == null ? 1 : dp
   return (v < 0 ? '−' : '+') + Math.abs(v * 100).toFixed(dp) + '%'
 }
+/** A difference of two percentages, signed, in percentage points: `+4.2 pts`. */
+export function pts(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return '—'
+  return (v < 0 ? '−' : '+') + Math.abs(v * 100).toFixed(1) + ' pts'
+}
 export function pctPlain(v: number | null | undefined | Waits, dp?: number): string {
   if (v == null) return '—'
   if (waits(v)) return waiting(v)

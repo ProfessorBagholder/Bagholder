@@ -2,7 +2,7 @@
   import { spaceAxis } from './actions/spaceAxis'
   import { roll } from './actions/roll'
   import type { Model, EquityPoint } from './model'
-  import { money, money0, pct, pctPlain, cls, color, stamp, stampDay, hold, shortMoney, waiting } from './fmt'
+  import { money, money0, pct, pctPlain, pts, cls, color, stamp, stampDay, hold, shortMoney, waiting } from './fmt'
   import { abs, plot, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
@@ -120,6 +120,8 @@
     ),
   )
   const bench = $derived(model.benchmark?.label || 'S&P 500')
+  // the year under the pointer: its tip says how far it was over or under the index
+  let yearHover = $state<string | null>(null)
   const yearsNote = $derived.by(() => {
     const comparable = (model.years || []).filter((x) => x.spR != null)
     const beat = comparable.filter((x) => x.spR != null && x.r > (x.spR as number)).length
@@ -273,7 +275,10 @@
       <div class="scroll" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:14px;padding-right:2px">
         {#if years.length}
           {#each years as y (y.year)}
-            <div>
+            <div style="position:relative" role="presentation" onmouseenter={() => (yearHover = y.year)} onmouseleave={() => (yearHover = null)}>
+              {#if yearHover === y.year && y.vs != null}
+                <div class="tip" style="top:20px;right:0"><div class="tv" style="color:{color(y.vs)}">{pts(y.vs)}</div><div class="tl">vs {bench}</div></div>
+              {/if}
               <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
                 <span class="tab">{y.year}</span>
                 <span class="tab" style="color:{color(y.r)}">{pct(y.r)}<span class="muted">{' / '}{y.spR == null ? '—' : pct(y.spR)}</span></span>

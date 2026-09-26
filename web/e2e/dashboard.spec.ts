@@ -180,9 +180,9 @@ test('the P&L curve ends at the Realized P&L in scope, whatever the filters', as
 test('annualized returns lists the years newest first, each with two bars, and a footer counting years beaten', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.years = [
-      { year: '2024', r: 0.12, spR: 0.08 },
-      { year: '2025', r: -0.05, spR: 0.1 },
-      { year: '2026', r: 0.2, spR: 0.15 },
+      { year: '2024', r: 0.12, spR: 0.08, vs: 0.04 },
+      { year: '2025', r: -0.05, spR: 0.1, vs: -0.15 },
+      { year: '2026', r: 0.2, spR: 0.15, vs: 0.05 },
     ]
     m.benchmark = { key: 'SP500', label: 'S&P 500' }
   })
@@ -196,6 +196,33 @@ test('annualized returns lists the years newest first, each with two bars, and a
   await expect(rows.nth(2)).toHaveText('2024')
   // 2026 beats S&P 500 (20% vs 15%), 2025 does not (-5% vs 10%), 2024 does (12% vs 8%): 2 of 3
   await expect(card.locator('.rule-t')).toHaveText('Outperformed S&P 500 in 2 of 3 years.')
+})
+
+test('hovering a year of annualized returns says how far it was over or under the index, in the server\'s figure', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '', (m) => {
+    m.years = [
+      { year: '2025', r: -0.05, spR: 0.1, vs: -0.15 },
+      { year: '2026', r: 0.2, spR: 0.15, vs: 0.05 },
+      { year: '2024', r: 0.12, spR: null, vs: null },
+    ]
+    m.benchmark = { key: 'TSX', label: 'S&P/TSX' }
+  })
+  await ready(page)
+  const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Annualized returns' }) })
+  const row = (year: string) => card.locator('[role="presentation"]', { has: page.locator('.tab', { hasText: new RegExp('^' + year + '$') }) })
+  await expect(card.locator('.tip')).toHaveCount(0)
+  await row('2026').hover()
+  await expect(card.locator('.tip .tv')).toHaveText('+5.0 pts')
+  await expect(card.locator('.tip .tv')).toHaveAttribute('style', /var\(--pos\)/)
+  await expect(card.locator('.tip .tl')).toHaveText('vs S&P/TSX')
+  await row('2025').hover()
+  await expect(card.locator('.tip .tv')).toHaveText('−15.0 pts')
+  await expect(card.locator('.tip .tv')).toHaveAttribute('style', /var\(--neg\)/)
+  // a year with no index figure has nothing to compare, and no tip
+  await row('2024').hover()
+  await expect(card.locator('.tip')).toHaveCount(0)
+  await page.mouse.move(0, 0)
+  await expect(card.locator('.tip')).toHaveCount(0)
 })
 
 test('annualized returns says there are no complete years yet when there are none', async ({ page, request }) => {

@@ -138,7 +138,12 @@ skippedFilters: Array<string>,
  */
 pnl: PnlCurve, };
 
-export type YearRow = { year: string, r: number, spR: number | null, };
+export type YearRow = { year: string, r: number, spR: number | null, 
+/**
+ * How far the year's return was over (positive) or under (negative) the
+ * benchmark's, in percentage points as a fraction: `r` less `sp_r`.
+ */
+vs: number | null, };
 
 export type BenchmarkRef = { key: string, label: string, };
 

@@ -389,7 +389,7 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &super::co
             }
         },
     };
-    let years = e.years.iter().map(|y| YearRow { year: y.year.to_string(), r: y.r, sp_r: y.benchmark }).collect();
+    let years = e.years.iter().map(|y| YearRow { year: y.year.to_string(), r: y.r, sp_r: y.benchmark, vs: y.benchmark.map(|b| y.r - b) }).collect();
 
     let pf = &scoped.portfolio;
     let allocation = slices(
