@@ -65,7 +65,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 
 ## SPEC text to correct (the build is right)
 
-- [ ] The notification history arrives on the shared stream, not its own endpoints; the page is sent changes, it does not poll every 30 seconds (§2).
-- [ ] Quotes are read while a page shows them (§2 table contradicts §2 Position).
-- [ ] Payer records follow §1's schedule, not a 20-hour cycle; the Bank's rates are read when needed and at each publication (§2).
-- [ ] `SEDAR+ is unavailable.` (PR #275); the filter's search order (PR #276); the Notifications bell in the header; the watchlist's scroll height (§4).
+- [x] The notification history arrives on the shared stream, not its own endpoints; the page is sent changes, it does not poll every 30 seconds (§2).
+- [x] Quotes are read while a page shows them (§2 table contradicts §2 Position).
+- [x] Payer records follow §1's schedule, not a 20-hour cycle; the Bank's rates are read when needed and at each publication (§2).
+- [x] `SEDAR+ is unavailable.` (PR #275); the filter's search order (PR #276); the Notifications bell in the header; the watchlist's scroll height (§4; the build's 436 px, the News card's cap).
