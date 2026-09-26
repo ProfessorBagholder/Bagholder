@@ -29,7 +29,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 
 - [x] Sync status: `folder scanned` notice missing after Scan now or Watch folder. `ui.svelte.ts:343`. — fixed (22be8ddf, 80272e5b; the count is the server's).
 - [x] A failed figures pass's header error is never cleared by a later good pass (it has its own place now, cleared by the next good pass and by nothing else). `due.rs:45`.
-- [x] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`. — fixed: the executables are kept before a checkout's build, so the supervisor puts them and the checkout's commit back and starts that version; the failure is written for the restarted server, which says it in the header.
+- [x] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`. — fixed (d162919e): the executables are kept before a checkout's build, so the supervisor puts them and the checkout's commit back and starts that version; the failure is written for the restarted server, which says it in the header.
 - [ ] A disclosure or release banner opens the page only for a held symbol. `notes/channel.svelte.ts:88`.
 - [ ] Short interest is asked for an option's underlying and for a coin. `trade/shorts.svelte.ts:19`.
 - [ ] A failed bars request shows "No price history for this span." instead of the failure. `trade/chart.ts:91`.
@@ -49,7 +49,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] The page's 3-minute connect timer races the server's own message.
 - [ ] Win rate hides a zero breakeven count; Grade vs P&L and Review queue carry subtitles and empty states SPEC does not list. Old page same.
 - [ ] A holding row has no hover text naming its account. Old page same.
-- [x] Opening a page does not read cash and buying power when they are under five minutes old. — fixed: every page opening, a second beside an open one included, wakes the broker's loop and reads them.
+- [x] Opening a page does not read cash and buying power when they are under five minutes old. — fixed (6c391436): every page opening, a second beside an open one included, wakes the broker's loop and reads them.
 - [ ] Available margin's subtitle reads `Buying power` while its value waits.
 - [ ] Event entry makes its own required-field messages and flashes `Entered`.
 - [ ] Trade and holding pages pick Buy/Sell by symbol in any account, not by the holding's id.
@@ -60,12 +60,12 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] Watchlist match quotes never expire.
 - [ ] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged.
 - [ ] Disclosures `Opening…`; the data modal has no entrance motion; the skeleton's removal uses an animation callback.
-- [x] The store runs `synchronous = NORMAL`. — fixed: FULL, every commit flushed.
-- [x] A replaced database is not migrated until restart. — fixed: each borrow checks the file is the one kept connections hold and reads its stamped version; a replaced or rolled-back file is prepared on that borrow.
+- [x] The store runs `synchronous = NORMAL`. — fixed (b319efa3): FULL, every commit flushed.
+- [x] A replaced database is not migrated until restart. — fixed (f54d5c93): each borrow checks the file is the one kept connections hold and reads its stamped version; a replaced or rolled-back file is prepared on that borrow.
 
 ## SPEC text to correct (the build is right)
 
 - [x] The notification history arrives on the shared stream, not its own endpoints; the page is sent changes, it does not poll every 30 seconds (§2).
 - [x] Quotes are read while a page shows them (§2 table contradicts §2 Position).
 - [x] Payer records follow §1's schedule, not a 20-hour cycle; the Bank's rates are read when needed and at each publication (§2).
-- [x] `SEDAR+ is unavailable.` (PR #275); the filter's search order (PR #276); the Notifications bell in the header; the watchlist's scroll height (§4; the build's 436 px, the News card's cap).
+- [x] `SEDAR+ is unavailable.` (PR #275); the filter's search order (PR #276); the Notifications bell in the header; the watchlist's scroll height (§4; the build's 436 px, the News card's cap). SPEC corrected for all four lines (b78d6dd3).
