@@ -48,7 +48,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] Left and Right change tabs with the Notifications panel open. Old page same. — fixed (80eabab4), the order ticket too.
 - [x] The Update button stays while updating. — fixed (97dc817f).
 - [x] The page's 3-minute connect timer races the server's own message. — fixed (7574691f).
-- [ ] Win rate hides a zero breakeven count; Grade vs P&L and Review queue carry subtitles and empty states SPEC does not list. Old page same.
+- [x] Win rate hides a zero breakeven count; Grade vs P&L and Review queue carry subtitles and empty states SPEC does not list. Old page same. — fixed: the breakeven count always shows; Grade vs P&L is its four bars with no caption or message; the Review queue has no caption, and an empty one is an empty list.
 - [x] A holding row has no hover text naming its account. Old page same. — fixed (7aa8b8b5): the app's own tooltip; SPEC's "title text" corrected.
 - [x] Opening a page does not read cash and buying power when they are under five minutes old. — fixed (6c391436): every page opening, a second beside an open one included, wakes the broker's loop and reads them.
 - [x] Available margin's subtitle reads `Buying power` while its value waits. — fixed (9b215d20).

@@ -49,7 +49,7 @@ test('the six KPI tiles show label, value and subtitle against the model kpi blo
 
   await expect(tiles.nth(1).locator('.lbl')).toHaveText('Win rate')
   await expect(tiles.nth(1).locator('.v')).toHaveText(k.winRate == null ? '—' : pctPlain(k.winRate))
-  const beCount = k.breakeven ? ' · ' + k.breakeven + ' BE' : ''
+  const beCount = ' · ' + k.breakeven + ' BE' // wins, losses and breakevens, a zero included (SPEC §4 Dashboard)
   await expect(tiles.nth(1).locator('.s')).toHaveText(k.wins + ' W · ' + k.losses + ' L' + beCount)
 
   await expect(tiles.nth(2).locator('.lbl')).toHaveText('Profit factor')
@@ -484,11 +484,22 @@ test('the review queue lists closed trades missing a grade or a thesis, newest f
   await expect(page).toHaveURL(tradeUrl(id))
 })
 
-test('the review queue says nothing is left to review when every closed trade has a grade and a thesis', async ({ page, request }) => {
+test('an empty review queue is an empty list: no caption, no message', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.queue = []
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Review queue' }) })
-  await expect(card).toContainText('Nothing left to review')
+  await expect(card.locator('.queue-row')).toHaveCount(0)
+  await expect(card).toHaveText('Review queue')
+})
+
+test('Grade vs P&L shows its four bars even with nothing graded, and no caption', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '', (m) => {
+    m.grades = { buckets: ['A', 'B', 'C', 'F'].map((grade) => ({ grade, n: 0, pnl: '0', tradeIds: [] })), graded: 0 }
+  })
+  await ready(page)
+  const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Grade vs P&L' }) })
+  await expect(card.locator('.bar-col')).toHaveCount(4)
+  await expect(card).not.toContainText('graded')
 })

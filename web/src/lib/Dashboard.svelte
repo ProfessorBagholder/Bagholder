@@ -216,7 +216,7 @@
   <!-- KPI row -->
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
     <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v" use:roll={k.winRate == null ? '—' : pctPlain(k.winRate)}></div><div class="s">{k.wins} W · {k.losses} L{k.breakeven ? ' · ' + k.breakeven + ' BE' : ''}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v" use:roll={k.winRate == null ? '—' : pctPlain(k.winRate)}></div><div class="s">{k.wins} W · {k.losses} L · {k.breakeven} BE</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v" use:roll={pf}></div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Expectancy</div><div class="v" use:roll={k.expectancy == null ? '—' : money(k.expectancy)}></div><div class="s">Avg W {money0(k.avgWin)} · L {money0(k.avgLoss)}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}" use:roll={dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}></div><div class="s">{dd.pct == null ? 'No NAV history' : '−' + money0(dd.abs == null ? null : abs(dd.abs)) + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
@@ -335,15 +335,7 @@
 
     <!-- grade vs P&L -->
     <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column">
-      <h5>Grade vs P&amp;L</h5>
-      <div class="muted" style="font-size:11px;margin-bottom:14px">Realized P&amp;L by the grade you gave the trade</div>
-      {#if !grades.graded}
-        <div style="flex:1;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center">
-          <div style="font-size:13px">No trades graded yet</div>
-          <div class="dim" style="font-size:11px">{k.count} closed trades to review</div>
-          <button class="btn btn-secondary" style="font-size:12px;margin-top:2px" onclick={() => go('trades')}>Open Trades</button>
-        </div>
-      {:else}
+      <h5 style="margin-bottom:14px">Grade vs P&amp;L</h5>
         <div style="position:relative;flex:1;min-height:120px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end">
           {#each grades.buckets as b (b.grade)}
             <div class="bar-col" role="presentation" style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px;height:100%;border-radius:4px;cursor:pointer" onclick={() => gradeOpen(b.grade)}>
@@ -355,7 +347,6 @@
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px;font-size:10px;color:var(--ink55);text-align:center">
           {#each grades.buckets as b (b.grade)}<span>{b.grade} · {b.n}</span>{/each}
         </div>
-      {/if}
     </div>
   </div>
 
@@ -389,8 +380,7 @@
 
     <!-- review queue -->
     <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
-      <div style="display:flex;align-items:baseline"><h5>Review queue</h5></div>
-      <div class="muted" style="font-size:11px;margin-bottom:12px">Closed trades with no grade or thesis</div>
+      <div style="display:flex;align-items:baseline;margin-bottom:12px"><h5>Review queue</h5></div>
       <div class="scroll" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;padding-right:2px">
         {#if queue.length}
           {#each queue as r (r.id)}
@@ -399,12 +389,6 @@
               <span class="tab" style="margin-left:auto;font-size:12px;color:{color(r.pnl)}">{money(r.pnl)}</span>
             </div>
           {/each}
-        {:else}
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-align:center;padding:8px 0">
-            <svg width="20" height="20" viewBox="0 0 256 256" style="fill:var(--pos)"><path d="M232.5 82.5l-128 128a12 12 0 0 1-17 0l-56-56a12 12 0 0 1 17-17L96 185l119.5-119.5a12 12 0 0 1 17 17Z" /></svg>
-            <div style="font-size:13px">Nothing left to review</div>
-            <div class="dim" style="font-size:11px">Every closed trade has a grade and a thesis</div>
-          </div>
         {/if}
       </div>
     </div>
