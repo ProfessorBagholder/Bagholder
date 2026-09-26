@@ -561,6 +561,23 @@ impl MarketCache {
         Ok(out)
     }
 
+    /// How many of `source`'s newest outcomes for `kind` (and `instrument`, where
+    /// given) failed in a row, the newest first: what grows its rest.
+    pub fn failures_in_a_row(&self, source: &SourceName, kind: DataKind, instrument: Option<InstrumentId>) -> Result<u32> {
+        let mut n = 0;
+        for o in self.outcomes(source)? {
+            if o.kind != kind || (instrument.is_some() && o.instrument != instrument) || o.outcome == OutcomeKind::NotCarried {
+                continue;
+            }
+            if o.outcome.is_failure() || o.outcome == OutcomeKind::Refused {
+                n += 1;
+            } else {
+                break;
+            }
+        }
+        Ok(n)
+    }
+
     /// Every source with an outcome recorded.
     pub fn sources(&self) -> Result<BTreeSet<SourceName>> {
         let mut stmt = self.conn.prepare("SELECT DISTINCT source FROM outcomes")?;

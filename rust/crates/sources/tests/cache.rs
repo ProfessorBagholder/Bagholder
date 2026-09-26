@@ -256,3 +256,35 @@ fn a_commit_to_the_cache_is_heard() {
     c.record(&outcome("a", OutcomeKind::Unreachable, t("2026-09-24T12:00:00Z"))).unwrap();
     assert_eq!(heard.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[test]
+fn a_source_failing_in_a_row_is_counted_to_its_last_answer() {
+    let (_d, c) = open();
+    let at = |n: u64| t("2026-09-24T12:00:00Z") + Duration::from_secs(n);
+    let src = SourceName::named("a");
+    c.record(&outcome("a", OutcomeKind::Answered, at(0))).unwrap();
+    for n in 1..=3 {
+        c.record(&outcome("a", OutcomeKind::Meaning, at(n))).unwrap();
+    }
+    // a "not carried" answer says nothing of the source and does not end the run
+    c.record(&outcome("a", OutcomeKind::NotCarried, at(4))).unwrap();
+    c.record(&outcome("a", OutcomeKind::Unreachable, at(5))).unwrap();
+    assert_eq!(c.failures_in_a_row(&src, DataKind::Quote, None).unwrap(), 4);
+    // another instrument's outcomes are its own
+    assert_eq!(c.failures_in_a_row(&src, DataKind::Quote, Some(id(2))).unwrap(), 0);
+    // another kind of read is its own
+    assert_eq!(c.failures_in_a_row(&src, DataKind::Distributions, None).unwrap(), 0);
+    c.record(&outcome("a", OutcomeKind::Answered, at(6))).unwrap();
+    assert_eq!(c.failures_in_a_row(&src, DataKind::Quote, None).unwrap(), 0, "an answer ends the run");
+}
+
+#[test]
+fn a_failing_source_rests_twice_as_long_each_time_up_to_six_hours() {
+    use bagholder_sources::market::grown_rest;
+    let base = Duration::from_secs(60);
+    let rests: Vec<u64> = (0..=20).map(|n| grown_rest(base, n).as_secs()).collect();
+    assert_eq!(&rests[..5], &[60, 60, 120, 240, 480], "its own rest after the first, doubling after");
+    assert!(rests.windows(2).all(|w| w[0] <= w[1]), "never shorter after another failure");
+    assert_eq!(*rests.last().unwrap(), 6 * 3600, "six hours at most");
+    assert_eq!(grown_rest(Duration::from_secs(10 * 3600), 1).as_secs(), 6 * 3600, "a long own rest is capped too");
+}

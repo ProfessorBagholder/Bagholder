@@ -64,7 +64,11 @@ impl Ctx<'_> {
     /// rest: a failure is asked again on the source's own rest, never in a loop.
     pub fn resting(&self, subject: &str, kind: DataKind, host: &str) -> Result<bool> {
         let reads = self.cache.reads(subject, kind)?;
-        Ok(crate::market::resting(&reads, self.now, self.net.limiter().pace(host).rest))
+        let Some(newest) = reads.first() else { return Ok(false) };
+        // the rest grows with each failure in a row of this subject's source
+        let instrument = InstrumentId::parse(subject).ok();
+        let failed = self.cache.failures_in_a_row(&newest.source, kind, instrument)?;
+        Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed)))
     }
 
     /// Keep that `subject`'s `kind` was read today, and how it ended: what

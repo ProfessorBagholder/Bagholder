@@ -240,21 +240,33 @@ fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, open: bool, now: Timestam
 
 /// When each source whose last outcome failed may be asked again.
 fn rest_ends(ctx: &Ctx, now: Timestamp) -> Result<Vec<Timestamp>, String> {
-    let mut last: BTreeMap<String, (Timestamp, String)> = BTreeMap::new();
+    use bagholder_sources::outcome::OutcomeKind;
+    // each subject of each source (its host, what was read, for which instrument):
+    // its newest failure and how many failed in a row, which grows its rest
+    let mut streaks: BTreeMap<(String, String, String), (Timestamp, u32, bool)> = BTreeMap::new();
     for source in ctx.cache.sources().map_err(|e| e.to_string())? {
         for o in ctx.cache.outcomes(&source).map_err(|e| e.to_string())? {
-            if o.outcome.is_failure() || o.outcome == bagholder_sources::outcome::OutcomeKind::Refused {
-                let e = last.entry(o.host.clone()).or_insert((o.at, o.host.clone()));
-                if o.at > e.0 {
-                    e.0 = o.at;
+            if o.outcome == OutcomeKind::NotCarried {
+                continue;
+            }
+            let key = (o.host.clone(), o.kind.as_str().to_string(), o.instrument.map(|i| i.to_string()).unwrap_or_default());
+            let failed = o.outcome.is_failure() || o.outcome == OutcomeKind::Refused;
+            let e = streaks.entry(key).or_insert((o.at, 0, !failed));
+            // newest first: count failures until the first answer
+            if !e.2 {
+                if failed {
+                    e.1 += 1;
+                } else {
+                    e.2 = true;
                 }
             }
         }
     }
-    Ok(last
-        .into_values()
-        .filter_map(|(at, host)| {
-            let rest = SignedDuration::try_from(ctx.net.limiter().pace(&host).rest).ok()?;
+    Ok(streaks
+        .into_iter()
+        .filter(|(_, (_, n, _))| *n > 0)
+        .filter_map(|((host, _, _), (at, n, _))| {
+            let rest = SignedDuration::try_from(bagholder_sources::market::grown_rest(ctx.net.limiter().pace(&host).rest, n)).ok()?;
             Some(at + rest).filter(|end| *end > now)
         })
         .collect())

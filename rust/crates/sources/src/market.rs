@@ -73,6 +73,18 @@ pub struct CloseState {
     pub reads: Vec<ReadRow>,
 }
 
+/// The rest after `failed` failures in a row of one source: its own rest after
+/// the first, twice as long after each one after it, and six hours at most. A
+/// source that answers wrongly (a date ten years out) does not mend in a minute,
+/// and is not asked again every minute for as long as it is wrong.
+pub fn grown_rest(rest: Duration, failed: u32) -> Duration {
+    const MOST: Duration = Duration::from_secs(6 * 3600);
+    if failed <= 1 {
+        return rest.min(MOST);
+    }
+    rest.checked_mul(1u32 << (failed - 1).min(16)).unwrap_or(MOST).min(MOST)
+}
+
 /// Whether the newest read failed within its source's rest: a failure is asked
 /// again on the source's own rest, never in a loop.
 pub fn resting(reads: &[ReadRow], now: Timestamp, rest: Duration) -> bool {
