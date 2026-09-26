@@ -42,8 +42,11 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
         })
         .await;
     }
+    // the hello names the book, read off the runtime's own threads
+    let a = app.clone();
+    let book = blocking(move || events::book_id(&a)).await.unwrap_or_default();
     let feed = Feed::open(app.clone());
-    let hello = feed.hello();
+    let hello = feed.hello(&book);
     let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {
     let value = app.clone();
     async move {

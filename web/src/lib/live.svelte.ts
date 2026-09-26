@@ -15,6 +15,7 @@
 import { post } from './api'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
+import { bookIs, lastBook, load, save } from './kept'
 
 export type Step = string | { k: string; v: string }
 export type Op = ['set', Step[], unknown] | ['del', Step[]] | ['rows', Step[], string, string[], Record<string, unknown>]
@@ -170,6 +171,10 @@ export function numbering(gap: () => void): (id: string) => void {
 
 let source: EventSource | null = null
 let streamId = 0
+/** The book the page shows: the one it last showed until the server names it. */
+let book = lastBook()
+/** What is being drawn from what was kept: the page says what it shows once these are in. */
+const drawing = new Set<Promise<void>>()
 const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void }>()
 
 /** Which server answered: when it started, the version it runs and the protocol it speaks (from its status). */
@@ -215,7 +220,9 @@ let saying = false
 function sayWanted(): void {
   if (saying) return
   saying = true
-  queueMicrotask(() => {
+  queueMicrotask(async () => {
+    // a screen drawn from what was kept says the version it holds
+    while (drawing.size) await Promise.all([...drawing])
     saying = false
     if (!streamId) return
     const docs: Record<string, unknown> = {}
@@ -243,6 +250,18 @@ function sayWanted(): void {
  */
 export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, changed?: () => void): () => void {
   wanted.set(key, { params, holder: holder as Holder<unknown>, changed })
+  if (holder.data == null) {
+    // drawn at once from what was kept, before the server answers
+    const p = load(book, key, params).then((k) => {
+      if (k && holder.data == null && wanted.get(key)?.holder === holder) {
+        holder.data = k.data as T
+        holder.v = k.v
+        changed?.()
+      }
+    })
+    drawing.add(p)
+    p.finally(() => drawing.delete(p))
+  }
   sayWanted()
   return () => {
     if (wanted.get(key)?.holder === holder) {
@@ -284,10 +303,20 @@ export function connect(): void {
   })
   es.addEventListener('hello', (e) => {
     seen((e as MessageEvent).lastEventId)
-    streamId = (JSON.parse((e as MessageEvent).data) as { id: number }).id
+    const hello = JSON.parse((e as MessageEvent).data) as { id: number; book: string }
+    streamId = hello.id
     conn.open = true
     conn.error = ''
     saidFor = 0 // a new stream knows nothing of what this page shows
+    if (hello.book && hello.book !== book) {
+      // another book than the one drawn: nothing kept of that one stands
+      if (book) for (const w of wanted.values()) {
+        w.holder.data = null
+        w.holder.v = undefined
+      }
+      book = hello.book
+      void bookIs(book)
+    }
     sayWanted()
   })
   es.addEventListener('snapshot', (e) => {
@@ -336,6 +365,18 @@ export function resyncAll(): void {
   post('/api/events/resync', { id: streamId }).then((r) => {
     if (!r.ok) conn.error = 'Bagholder did not send this page its state again: ' + (r.error || 'no answer')
   })
+}
+
+/** Keep every document shown as it stands: when the page is hidden or left, the moment it may not come back. */
+export function keepShown(): void {
+  const docs = [...wanted.entries()].filter(([, w]) => w.holder.data != null && w.holder.v).map(([key, w]) => ({ key, params: w.params, data: $state.snapshot(w.holder.data), v: w.holder.v! }))
+  void save(book, docs)
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') keepShown()
+  })
+  window.addEventListener('pagehide', keepShown)
 }
 
 export function disconnect(): void {

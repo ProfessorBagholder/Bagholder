@@ -13,6 +13,7 @@ use crate::text::{self, at as at_text};
 use crate::{Book, BookError, Result};
 
 const ZONE: &str = "zone";
+const ID: &str = "book-id";
 /// Who states the zone: the page, from its browser.
 const BROWSER: &str = "browser";
 
@@ -25,6 +26,31 @@ pub struct StatedZone {
 }
 
 impl Book {
+    /// The book's own id: made once, the first time it is asked for, and made again
+    /// only when the book is cleared. What a page keeps of this book in its
+    /// browser is filed under it, so it never shows one book's figures for another's.
+    pub fn id(&self, at: jiff::Timestamp) -> Result<String> {
+        self.atomically(|| {
+            let held: Option<String> = self.conn().query_row("SELECT value FROM settings WHERE key = ?", [ID], |r| r.get(0)).optional()?;
+            if let Some(id) = held {
+                return Ok(id);
+            }
+            self.renew_id(at)
+        })
+    }
+
+    /// A new id for the book, in place of the one it had: what Clear data does, so
+    /// nothing a page kept of the book as it was is shown again.
+    pub fn renew_id(&self, at: jiff::Timestamp) -> Result<String> {
+        let id = crate::new_uuid(at).to_string();
+        self.conn().execute(
+            "INSERT INTO settings(key, value, source, set_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, source = excluded.source, set_at = excluded.set_at",
+            params![ID, id, "bagholder", at_text(at)],
+        )?;
+        Ok(id)
+    }
+
     /// The zone a page stated last, if any has.
     pub fn zone(&self) -> Result<Option<StatedZone>> {
         let row: Option<(String, String)> = self.conn().query_row("SELECT value, set_at FROM settings WHERE key = ?", [ZONE], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;

@@ -250,6 +250,19 @@ impl Drop for Registered {
     }
 }
 
+/// The book's own id: what a page files what it keeps under. Empty, and said,
+/// when it cannot be read.
+pub fn book_id(app: &Arc<App>) -> String {
+    match app.figures.get().map(|f| f.book().and_then(|b| b.id(bagholder_core::jiff::Timestamp::now()).map_err(|e| e.to_string()))) {
+        Some(Ok(id)) => id,
+        Some(Err(e)) => {
+            crate::app::log(&format!("bagholder: the book's id could not be read: {e}"));
+            String::new()
+        }
+        None => String::new(),
+    }
+}
+
 /// One page's stream: what each of its subscriptions was last sent, and so what
 /// to send it next.
 pub struct Feed {
@@ -316,8 +329,8 @@ impl Feed {
     }
 
     /// The first message: the id the page names in `POST /api/events/watch`.
-    pub fn hello(&self) -> Message {
-        ("hello", serde_json::json!({"id": self.id()}))
+    pub fn hello(&self, book: &str) -> Message {
+        ("hello", serde_json::json!({"id": self.id(), "book": book}))
     }
 
     /// A state first sent to the page: its version alone when the page holds it
