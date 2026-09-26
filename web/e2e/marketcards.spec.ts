@@ -58,6 +58,33 @@ test.describe('Market tiles', () => {
     await restore()
   })
 
+  test('the picker opens under the header at the right, where ⌘K opens, and stays put as a tile is added', async ({ page, request }) => {
+    const { restore } = await freeATileCell(request, 1)
+    await page.goto('/#markets')
+    await ready(page)
+    await page.keyboard.press('ControlOrMeta+k')
+    const palette = await page.locator('.pop').boundingBox()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.pop')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Add a tile' }).click()
+    const picker = page.locator('#mtRow .pop')
+    const at = await picker.boundingBox()
+    expect(palette && at).toBeTruthy()
+    expect(Math.abs(at!.y - palette!.y)).toBeLessThanOrEqual(1)
+    expect(Math.abs(at!.x + at!.width - (palette!.x + palette!.width))).toBeLessThanOrEqual(1)
+    // under the header, not inside the tile row
+    const rowTop = (await page.locator('#mtGrid').boundingBox())!.y
+    expect(at!.y).toBeLessThan(rowTop)
+    await page.getByLabel('Search instruments').fill('WTI')
+    await page.locator('.mt-row', { hasText: 'WTI' }).click()
+    await expect(page.locator('.mt-tile[data-sym="CL"]')).toBeVisible()
+    const still = await picker.boundingBox()
+    expect(Math.abs(still!.y - at!.y)).toBeLessThanOrEqual(1)
+    expect(Math.abs(still!.x - at!.x)).toBeLessThanOrEqual(1)
+    await page.keyboard.press('Escape')
+    await restore()
+  })
+
   test('a tile can be added, persists to the store, and its cross removes it at once', async ({ page, request }) => {
     const { freed, restore } = await freeATileCell(request)
     await page.goto('/#markets')

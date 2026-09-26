@@ -80,6 +80,26 @@
     tileQuery = ''
   }
 
+  // The picker opens under the app's header at the right, where ⌘K opens, so the box
+  // stays put as tiles are added: placed against the header's popover anchor, measured
+  // from this row (both scroll with the page), and again when the window is resized.
+  let row = $state<HTMLElement | null>(null)
+  let pickAt = $state<{ top: number; right: number } | null>(null)
+  $effect(() => {
+    if (!tileAdd || !row) return
+    const el = row
+    const place = () => {
+      const a = document.getElementById('popAnchor')
+      if (!a) return (pickAt = null)
+      const ab = a.getBoundingClientRect()
+      const rb = el.getBoundingClientRect()
+      pickAt = { top: ab.top - rb.top + 42, right: rb.right - ab.right }
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  })
+
   // --- the picker ---
   const on = $derived(new Set(tiles.map((t) => t.symbol)))
   const pickerRows = $derived.by(() => {
@@ -139,7 +159,7 @@
   }
 </script>
 
-<div id="mtRow" style={tileAdd ? 'position:relative;z-index:30' : 'position:relative'}>
+<div id="mtRow" bind:this={row} style={tileAdd ? 'position:relative;z-index:30' : 'position:relative'}>
   <div id="mtGrid" bind:this={grid} style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
     {#each shown as t (t.symbol)}
       <div class="mt-cell" data-sym={t.symbol}>
@@ -172,7 +192,7 @@
 
   {#if tileAdd}
     <div class="mt-scrim" onclick={() => (tileAdd = false)} role="presentation"></div>
-    <div class="pop elev-md">
+    <div class="pop elev-md" style={pickAt ? `top:${pickAt.top}px;right:${pickAt.right}px` : ''}>
       <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:8px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
         <Icon d={ICONS.search} />
         <input bind:value={tileQuery} placeholder="Index, future, commodity, rate or pair" aria-label="Search instruments" use:focusOnMount style="flex:1;min-width:0;border:0;background:transparent;color:var(--ink);font:400 12.5px var(--font);outline:none" />

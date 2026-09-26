@@ -311,7 +311,7 @@
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.bell} /></svg>
         {#if notesUnread}<span class="od-badge">{notesUnread}</span>{/if}
       </button>
-      <div style="position:relative;flex:none">
+      <div id="popAnchor" style="position:relative;flex:none">
         <button class="btn btn-icon btn-secondary" aria-label="Filters" onclick={() => (filterOpen = !filterOpen)}>
           <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
         </button>
