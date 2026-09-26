@@ -2,12 +2,11 @@
   // What a corporate event did to cost, entered by the person while the event waits
   // on it (SPEC.md §2, What you enter): for a spin-off, the share of the parent's
   // cost this holding takes; for a return of capital, the capital returned a unit.
-  import type { Model } from './model'
+  import type { Options, Waiting } from './model'
   import { call } from './api'
   import { symText } from './sym'
 
-  type Waiting = Model['waiting'][number]
-  let { event, model }: { event: Waiting; model: Model } = $props()
+  let { event, options }: { event: Waiting; options: Options } = $props()
 
   let kind = $state<'spin-off' | 'return-of-capital'>('spin-off')
   let parent = $state('')
@@ -18,11 +17,10 @@
 
   // the holdings of the same account it may have come out of
   const parents = $derived.by(() => {
-    const seen = new Map<string, string>()
-    for (const r of [...model.positions, ...model.trades]) {
-      if (r.accountId === event.account && r.instrument !== event.instrument && !seen.has(r.instrument)) seen.set(r.instrument, r.symbol)
-    }
-    return [...seen.entries()].map(([id, symbol]) => ({ id, symbol })).sort((a, b) => a.symbol.localeCompare(b.symbol))
+    return options.instruments
+      .filter((i) => i.accounts.includes(event.account) && i.id !== event.instrument)
+      .map((i) => ({ id: i.id, symbol: i.symbol }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol))
   })
 
   // What is typed goes to the server as it is; a refusal, a missing value's included,

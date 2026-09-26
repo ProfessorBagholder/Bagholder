@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { use, filtered, positions } from '../subs.svelte'
   import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty, refreshPreview, switchSide } from './ticket.svelte'
   import { neg, sign, ticketNumber, waits } from '../dec'
   import { plain, parseNum, amt as tkAmt, sAmt as tkSAmt } from './vals'
@@ -9,6 +10,8 @@
   const TK_TYPES: [string, string][] = [['MARKET', 'Market'], ['LIMIT', 'Limit'], ['STOP', 'Stop'], ['STOP_LIMIT', 'Stop limit']]
   const TK_TIFS: [string, string][] = [['DAY', 'Day'], ['UNTIL_CANCEL', 'Good till cancelled']]
 
+  // the holdings, for what a Sell starts from: shown while the ticket is
+  use('positions', positions, filtered)
   const t = $derived(ticketStore.t!)
   const v = $derived(vals()!)
   // the server's figures, asked again whenever what the ticket holds changes

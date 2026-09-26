@@ -7,12 +7,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-// a real document: the server's figures for a month of one account's recorded replies,
+// a real document: the server's holdings for a month of one account's recorded replies,
 // each holding quoted (rust/crates/server/src/wire/build.rs keeps it the server's shape)
 import pulled from './fixtures/figures_pulled_month.json'
 import Portfolio from './Portfolio.svelte'
-import { applyOps, type Op } from './live'
-import type { Model } from './model'
+import { applyOps, type Op } from './live.svelte'
+import type { PositionsDoc, ExposureDoc } from './model'
+type Model = PositionsDoc
+const exposure = pulled.exposure as unknown as ExposureDoc
 import { sign, type Dec } from './dec'
 
 // Every figure on the screen goes through a formatter, so counting their calls counts
@@ -38,7 +40,7 @@ function figuresOnlyOthersHave(model: Model, one: Model['positions'][number]): S
 }
 
 function book(): Model {
-  return structuredClone(pulled) as unknown as Model
+  return structuredClone(pulled.positions) as unknown as Model
 }
 
 // the holding whose price moves: one the document states a value for, in CAD
@@ -63,7 +65,7 @@ const rowOf = (n: Node | null): HTMLElement | null => {
 describe('one holding\'s price moves', () => {
   it('touches that holding\'s cells and the totals, and nothing else', () => {
     const model = $state(book())
-    const { container } = render(Portfolio, { props: { model } })
+    const { container } = render(Portfolio, { props: { model, exposure } })
     flushSync()
 
     const veqt = moving(model)
@@ -115,7 +117,7 @@ describe('one holding\'s price moves', () => {
 
   it('the old way, for contrast: replacing the list re-runs every holding for the same change', () => {
     const model = $state(book())
-    render(Portfolio, { props: { model } })
+    render(Portfolio, { props: { model, exposure } })
     flushSync()
     const veqt = moving(model)
     const otherFigures = figuresOnlyOthersHave(model, veqt)
@@ -129,7 +131,7 @@ describe('one holding\'s price moves', () => {
 
   it('a price that did not move touches nothing at all', () => {
     const model = $state(book())
-    const { container } = render(Portfolio, { props: { model } })
+    const { container } = render(Portfolio, { props: { model, exposure } })
     flushSync()
     const veqt = moving(model)
     const stop = watch(container)

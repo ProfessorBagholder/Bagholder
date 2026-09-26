@@ -1,14 +1,17 @@
 <script lang="ts">
-  import type { Trade } from './model'
+  import type { TradesDoc } from './model'
   import { money, pct, px, qty as fqty, hold, cls, color, waiting } from './fmt'
   import { waits } from './dec'
   import { symText } from './sym'
-  import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { sort, toggleSort } from './sort.svelte'
+  import { more } from './subs.svelte'
+  import { atEnd } from './actions/atEnd'
   import { goSub, keepScroll } from './router.svelte'
   import { resetFilters } from './filters.svelte'
   import { refilter } from './state.svelte'
 
-  let { trades }: { trades: Trade[] } = $props()
+  // the trades in scope, sorted by the server as the header says, as far down as scrolled
+  let { doc }: { doc: TradesDoc } = $props()
 
   const cols: { key: string; label: string; align?: string; width?: string; padLeft?: string }[] = [
     { key: 'entryDate', label: 'Open', width: '8%' },
@@ -26,18 +29,7 @@
     { key: 'tags', label: 'Tags' },
   ]
 
-  function tradeSortValue(t: Trade, key: string): unknown {
-    if (key === 'tags') return t.tags && t.tags.length ? t.tags.slice().sort()[0] : '￿'
-    if (key === 'grade') {
-      const i = ['F', 'C', 'B', 'A'].indexOf(t.grade)
-      return i < 0 ? null : i
-    }
-    if (key === 'pnl') return t.pnlCad
-    // newest activity first: an open trade by its latest fill, a closed one by its close
-    if (key === 'exitDate') return t.lastDate
-    return (t as unknown as Record<string, unknown>)[key]
-  }
-  const rows = $derived(sortRows(trades || [], sort.trades.key, sort.trades.dir, tradeSortValue))
+  const rows = $derived(doc.trades)
 
   function gradeClass(g: string): string {
     return g === 'A' || g === 'B' ? 'g-ab' : g === 'F' ? 'g-f' : g === 'C' ? 'g-c' : 'g-none'
@@ -98,6 +90,7 @@
           {/each}
         </tbody>
       </table>
+      {#if rows.length < doc.total}<div use:atEnd={() => more('trades', doc.total)} style="height:1px"></div>{/if}
       {#if !rows.length}
         <div class="muted" style="padding:26px 4px;font-size:12px">No trades match these filters. <a href="#" onclick={clearAll}>Reset all</a></div>
       {/if}

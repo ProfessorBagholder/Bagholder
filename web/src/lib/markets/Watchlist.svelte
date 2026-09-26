@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { positions } from '../subs.svelte'
   // The watchlist card (watchlistCardHtml): ranked rows with an add row (the plus
   // toggles a symbol-search input with suggestions) and a per-row trash.
   import type { WatchItem, SymbolMatch } from '../model'
@@ -7,7 +8,7 @@
   import { signedPct } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, toggleSort, sortRows } from '../sort.svelte'
-  import { store, addWatch, removeWatch } from '../state.svelte'
+  import { addWatch, removeWatch } from '../state.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import Icon from './Icon.svelte'
   import GridHead from './GridHead.svelte'
@@ -61,7 +62,7 @@
   const fromHoldings = $derived.by<SymbolMatch[]>(() => {
     const out: SymbolMatch[] = []
     const seen = new Set<string>()
-    ;(store.model?.positions || []).forEach((p) => {
+    ;(positions.data?.positions || []).forEach((p) => {
       if (p.kind === 'Options' || OPTION_RE.test(p.symbol)) return
       const k = bareSymbol(p.symbol) + '@' + String(p.exchange || '').toUpperCase()
       if (watchedKeys.has(k) || seen.has(k)) return
@@ -90,7 +91,7 @@
           if (OPTION_RE.test(m.symbol) || m.kind) return
           const k = bareSymbol(m.symbol) + '@' + String(m.exchange || '').toUpperCase()
           if (watchedKeys.has(k) || out.some((x) => bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase() === k)) return
-          const p = (store.model?.positions || []).find((x) => x.symbol === m.symbol)
+          const p = (positions.data?.positions || []).find((x) => x.symbol === m.symbol)
           out.push({ symbol: bareSymbol(m.symbol), exchange: m.exchange || '', name: m.name || '', currency: m.currency || (p ? p.currency : ''), last: p ? p.last : null, percentChange: p && p.percentChange != null ? p.percentChange * 100 : null })
         })
         matches = out.slice(0, 4)

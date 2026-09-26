@@ -1,6 +1,8 @@
 // Small shared UI state for the header menu, modals and the confirm dialog —
 // the pieces the legacy `state` object tracked (menuOpen, modal, confirmOpen).
-import { store } from './state.svelte'
+import { status } from './subs.svelte'
+import { applied } from './subs.svelte'
+import { sort } from './sort.svelte'
 import { request, call } from './api'
 import { localDay, waiting } from './fmt'
 import { waits } from './dec'
@@ -102,7 +104,7 @@ export function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
 // it is going. The rows a sync brings arrive the same way, as they are committed.
 export function syncNow(): void {
   ui.menuOpen = false
-  const s = store.model?.status
+  const s = status.data
   if (s) {
     s.error = ''
     s.syncing = true
@@ -110,7 +112,7 @@ export function syncNow(): void {
   }
   call('POST /api/sync').then((r) => {
     if (r && r.ok) return
-    const cur = store.model?.status
+    const cur = status.data
     if (cur) {
       cur.syncing = false
       cur.error = (r && (r.error as string)) || 'Sync failed.'
@@ -143,14 +145,14 @@ let sawCapturing = false
 function endConnect(error: string): void {
   ui.connecting = false
   closeLoginView()
-  const cur = store.model?.status
+  const cur = status.data
   if (cur && error) cur.error = error
 }
 export function connect(): void {
   ui.menuOpen = false
   ui.connecting = true
   sawCapturing = false
-  const s = store.model?.status
+  const s = status.data
   if (s) s.error = ''
   call('POST /api/login/start').then((res) => {
     if (!ui.connecting) return // cancelled meanwhile
@@ -158,7 +160,7 @@ export function connect(): void {
       endConnect((res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.')
       return
     }
-    if (store.model?.status?.loginView) ui.loginView = true
+    if (status.data?.loginView) ui.loginView = true
   })
 }
 /**
@@ -169,7 +171,7 @@ export function connect(): void {
 export function followConnect(): () => void {
   return $effect.root(() => {
   $effect(() => {
-    const st = store.model?.status
+    const st = status.data
     if (!ui.connecting || !st) return
     if (st.connected) {
       endConnect('')
@@ -188,7 +190,7 @@ function closeLoginView(): void {
 }
 export function cancelConnect(): void {
   endConnect('')
-  const cur = store.model?.status
+  const cur = status.data
   if (cur) cur.error = ''
   call('POST /api/login/cancel')
 }
@@ -377,10 +379,15 @@ export function stopWatch(): void {
 }
 
 // Export trades to CSV, client-side, matching the legacy exportCsv().
-export function exportCsv(): void {
+export async function exportCsv(): Promise<void> {
   ui.menuOpen = false
-  const m = store.model
-  if (!m) return
+  // every trade under the filters applied, in the list's order: the list on screen shows only as far as scrolled
+  const s = sort.trades
+  const m = await call('GET /api/figures/trades', { query: { filters: JSON.stringify(applied.filters), sort: s.key, dir: s.dir } })
+  if (!m.ok && m.error) {
+    flash('Could not export the trades: ' + m.error, 'err')
+    return
+  }
   const cols = ['Open', 'Close', 'Symbol', 'Name', 'Account', 'Kind', 'Side', 'Status', 'Qty', 'Entry', 'Exit', 'Currency', 'P&L', 'P&L CAD', 'Fees', 'Hold days', 'Grade', 'Tags', 'Thesis']
   // an amount is written as the exact decimal the server sent; one that waits, as the page shows it
   const cell = (v: unknown) => (waits(v as never) ? waiting(v as { gaps: string[] }) : v)

@@ -5,11 +5,11 @@ import {
   type OrderCard, type BracketCard, type Leg,
 } from './orders.svelte'
 import { filters } from '../filters.svelte'
-import { store } from '../state.svelte'
+import { book } from '../subs.svelte'
 import type { TicketDraft } from '../ticket/ticket.svelte'
 import type { OrdersDoc, Preview } from '../generated/orders'
 import type { Dec } from '../dec'
-import type { Model } from '../model'
+import type { BookDoc } from '../model'
 
 // SPEC.md §4, Orders: the card grammar written out from the cards the server builds.
 // The server states every amount, every leg's word, each card's tab and whether it
@@ -134,7 +134,7 @@ describe('what is typed into an editor', () => {
 
 describe('a tab\'s cards', () => {
   const doc = (orders: OrderCard[], brackets: BracketCard[]): OrdersDoc => ({ ok: true, live: true, refreshedAt: null, orders, brackets, error: null })
-  afterEach(() => { filters.lists.account = []; store.model = null })
+  afterEach(() => { filters.lists.account = []; book.data = null })
   it('are the orders and brackets the server put on it, newest first together', () => {
     const cards = tabCards(doc(
       [order({ id: 'o1', at: '2026-09-18T10:00:00Z' }), order({ id: 'o2', tab: 'filled' }), order({ id: 'o3', at: '2026-09-18T12:00:00Z' })],
@@ -143,7 +143,7 @@ describe('a tab\'s cards', () => {
     expect(cards.map((c) => (c.kind === 'order' ? c.o.id : c.b.id))).toEqual(['o3', 'b1', 'o1'])
   })
   it('leave out every card outside the accounts in scope', () => {
-    store.model = { accounts: [{ id: 'acct-1', brokerAccount: 'A1', name: 'TFSA' }, { id: 'acct-2', brokerAccount: 'A2', name: 'Margin' }] } as unknown as Model
+    book.data = { accounts: [{ id: 'acct-1', brokerAccount: 'A1', name: 'TFSA' }, { id: 'acct-2', brokerAccount: 'A2', name: 'Margin' }] } as unknown as BookDoc
     filters.lists.account = ['acct-2']
     const cards = tabCards(doc([order({ id: 'o1' }), order({ id: 'o2', account: 'A2' })], [bracket({ id: 'b1' }), bracket({ id: 'b2', account: 'A2' })]), 'pending')
     expect(cards.map((c) => (c.kind === 'order' ? c.o.id : c.b.id)).sort()).toEqual(['b2', 'o2'])

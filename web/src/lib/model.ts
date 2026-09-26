@@ -9,13 +9,13 @@
 
 import type * as figures from './generated/figures'
 import type * as wire from './generated/wire'
-import type { Status } from './generated/status'
 import type { Dec, Fig } from './dec'
 
 export type {
   Kpi, Annualized, Drawdown, YearRow, GradeBucket, Grades, BySymbolRow, QueueRow, MonthlyBar, Partial,
   CashflowTile, CashflowMonth, CashflowRow, CashflowHolding, Cashflow, Position, Portfolio, Slice,
   Fill, Detail, Account, Options, AccountOption, InstrumentOption, Point as EquityPoint, BenchmarkRef as Benchmark, Equity,
+  BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc, ExposureDoc, MarketsDoc, Waiting,
 } from './generated/figures'
 
 export type { Kind, MarketTile, MarketInstrument, WatchItem, NewsTag, NewsItem, Markets, ExposureSlice } from './generated/wire'
@@ -53,9 +53,6 @@ export type Trade = figures.Trade & {
   percentChange?: number | null
   held?: Fig<number>
 }
-
-/** The model as the stream delivers it: the figures, with the header's status beside them. */
-export type Model = figures.Figures & { status: Status }
 
 /**
  * A match from /api/symbols/search (watchlist add row, news/shorts lookup), with the

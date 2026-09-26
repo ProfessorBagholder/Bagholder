@@ -4,7 +4,7 @@
 // the background, for every followed listing. One listing's disclosures are the same
 // resource the instrument page shows, so they come from the same store.
 import type { FeedFiling, FilingsFeed } from '../model'
-import { watchDoc } from '../live'
+import { watchDoc } from '../live.svelte'
 export { discStore as discBySym, showDisclosures } from '../trade/discStore.svelte'
 
 export type DiscRow = FeedFiling

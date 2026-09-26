@@ -322,7 +322,7 @@ fn model_api_declarations() -> String {
         bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
         crate::http::model::TradeQuery, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer,
-        crate::http::stream::Resync,
+        crate::http::stream::Resync, crate::http::model::TradesQuery,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
         crate::csv_import::ImportRequest, crate::csv_import::RowNote, crate::csv_import::ImportReport,
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
@@ -366,8 +366,8 @@ fn generated_file_of(name: &str) -> &'static str {
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
-        "Figures" | "Detail" => "figures",
-        "FiguresQuery" | "Resync" => "model_api",
+        "TradesDoc" | "Detail" => "figures",
+        "TradesQuery" | "Resync" => "model_api",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }

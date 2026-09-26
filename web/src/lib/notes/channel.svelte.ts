@@ -3,8 +3,8 @@
 // is this browser asked to, under the browser's own permission, which it gives only on
 // a click. The kinds are the server's settings; the permission is this browser's.
 
+import { status } from '../subs.svelte'
 import { call } from '../api'
-import { store } from '../state.svelte'
 import { ui } from '../ui.svelte'
 import { panel } from '../orders/orders.svelte'
 import { goSub } from '../router.svelte'
@@ -16,7 +16,7 @@ export type Channel = 'native' | 'granted' | 'denied' | 'default' | 'unavailable
 // the browser's answer, re-read after asking (it does not announce a change)
 const asked = $state({ permission: typeof Notification === 'undefined' ? '' : Notification.permission })
 
-const settings = () => (store.model?.status?.notify ?? {}) as Record<string, unknown>
+const settings = () => (status.data?.notify ?? {}) as Record<string, unknown>
 
 export function channel(): Channel {
   if (settings().native) return 'native'
@@ -53,7 +53,7 @@ function ask(): Promise<boolean> {
 
 // shown at once; the server's own account of its settings follows on the stream
 function save(patch: Record<string, boolean>): void {
-  const cur = store.model?.status?.notify
+  const cur = status.data?.notify
   if (cur) Object.assign(cur, patch)
   void call('POST /api/notifications/settings', { body: patch })
 }

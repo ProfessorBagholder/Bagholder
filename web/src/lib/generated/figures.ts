@@ -260,7 +260,15 @@ units: Dec | null, };
 
 export type AccountOption = { id: string, name: string, };
 
-export type InstrumentOption = { id: string, symbol: string, name: string, exchange: string, kind: string, currency: string, };
+export type InstrumentOption = { id: string, symbol: string, name: string, exchange: string, kind: string, currency: string, 
+/**
+ * The broker's id for it, which an order names; empty where none is known.
+ */
+security: string, 
+/**
+ * The accounts that traded or hold it, by id.
+ */
+accounts: Array<string>, };
 
 export type Options = { accounts: Array<AccountOption>, instruments: Array<InstrumentOption>, tags: Array<string>, exchanges: Array<string>, kinds: Array<string>, grades: Array<string>, sides: Array<string>, results: Array<string>, years: Array<string>, };
 
@@ -298,7 +306,11 @@ export type CashflowDoc = { cashflow: Cashflow,
  */
 rowsTotal: number, };
 
-export type TradeDoc = { trade: Trade | null, position: Position | null, };
+export type TradeDoc = { 
+/**
+ * The id asked for: a document for it with neither is one the figures do not have.
+ */
+id: string, trade: Trade | null, position: Position | null, };
 
 export type ExposureDoc = { sectors: Array<ExposureSlice>, regions: Array<ExposureSlice>, };
 

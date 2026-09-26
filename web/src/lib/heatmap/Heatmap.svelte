@@ -10,7 +10,7 @@
   import Icon from '../markets/Icon.svelte'
   import HeatBox from './HeatBox.svelte'
   import type { UniverseDoc } from '../generated/markets'
-  import { watchDoc } from '../live'
+  import { watchDoc } from '../live.svelte'
   import { go, goHash, rewrite, route } from '../router.svelte'
   import { heat, show, remember, heatHash, applyAddress, nextScope, marketsOnShow, MARKET_U, EVERY_SCOPE } from './heat.svelte'
 

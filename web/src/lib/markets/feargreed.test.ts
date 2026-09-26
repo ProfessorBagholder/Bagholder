@@ -9,7 +9,7 @@ import type { FearDoc } from '../generated/markets'
 
 // the stream is stood in for: what the card watches is handed straight to it
 const watched = new Map<string, { data: FearDoc | null }>()
-vi.mock(import('../live'), async (original) => ({
+vi.mock(import('../live.svelte'), async (original) => ({
   ...(await original()),
   watchDoc: ((key: string, _params: unknown, holder: { data: FearDoc | null }) => {
     watched.set(key, holder)

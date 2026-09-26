@@ -1,7 +1,7 @@
 <script lang="ts">
   import { spaceAxis } from './actions/spaceAxis'
   import { roll } from './actions/roll'
-  import type { Model, EquityPoint } from './model'
+  import type { DashboardDoc, EquityPoint } from './model'
   import { money, money0, pct, pctPlain, pts, cls, color, stamp, stampDay, hold, shortMoney, waiting } from './fmt'
   import { abs, plot, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
@@ -10,7 +10,7 @@
   import { filters } from './filters.svelte'
   import { goSub, go } from './router.svelte'
 
-  let { model }: { model: Model } = $props()
+  let { model }: { model: DashboardDoc } = $props()
 
   const BENCHMARKS: [string, string][] = [
     ['SP500', 'S&P 500'],

@@ -225,7 +225,7 @@ fn one_trade(cx: &Cx, id: &str) -> TradeDoc {
     let links = build::links(cx.engine);
     let trade = figs.trades.iter().find(|t| build::trade_wire_id(t) == id).map(|t| build::trade_row(inputs, cx.names, &links, t));
     let position = figs.positions.iter().find(|p| build::position_id(p) == id).map(|p| build::position_row(inputs, cx.names, &links, p));
-    TradeDoc { trade, position }
+    TradeDoc { id: id.to_string(), trade, position }
 }
 
 // --- lists of rows -----------------------------------------------------------------
@@ -406,20 +406,27 @@ fn text(v: &SortValue) -> String {
     }
 }
 
-/// The ids of `rows` in the page's order for `sort`: a row with nothing in the
-/// column sinks, whichever the direction; a tie keeps the rows' own order.
+/// The ids of `rows` in the page's order for `sort` (`sortRows`): a row with
+/// nothing in the column sinks, whichever the direction; rows equal in it are
+/// ordered by the further values each carries, ascending; a tie in all of them
+/// keeps the rows' own order.
 fn sorted(rows: &[(String, SortValue)], dir: Dir) -> Vec<String> {
-    let mut v: Vec<&(String, SortValue)> = rows.iter().collect();
+    let rows: Vec<(String, Vec<SortValue>)> = rows.iter().map(|(k, v)| (k.clone(), vec![v.clone()])).collect();
+    sorted_then(&rows, dir)
+}
+
+fn sorted_then(rows: &[(String, Vec<SortValue>)], dir: Dir) -> Vec<String> {
+    let mut v: Vec<&(String, Vec<SortValue>)> = rows.iter().collect();
     v.sort_by(|(_, a), (_, b)| {
-        if matches!(a, SortValue::None) || matches!(b, SortValue::None) {
-            return cmp_values(a, b);
-        }
-        let c = cmp_values(a, b);
-        if dir == Dir::Desc {
-            c.reverse()
+        let (x, y) = (&a[0], &b[0]);
+        let c = if matches!(x, SortValue::None) || matches!(y, SortValue::None) {
+            cmp_values(x, y)
+        } else if dir == Dir::Desc {
+            cmp_values(x, y).reverse()
         } else {
-            c
-        }
+            cmp_values(x, y)
+        };
+        a.iter().zip(b.iter()).skip(1).fold(c, |c, (x, y)| c.then_with(|| cmp_values(x, y)))
     });
     v.into_iter().map(|(k, _)| k.clone()).collect()
 }
@@ -537,6 +544,13 @@ impl View for Trades {
     }
 }
 
+/// Every trade under `filters`, in `sort`'s order: what an export writes.
+pub fn all_trades(cx: &Cx, filters: bagholder_engine::scope::Filters, sort: Sort) -> Result<TradesDoc, String> {
+    let mut t = Trades::new(filters, sort, usize::MAX)?;
+    t.refresh(cx, None);
+    Ok(t.doc())
+}
+
 /// What the Cashflow tab's dividends table sorts a row by (`Cashflow.svelte`).
 fn cash_sort_value(r: &CashflowRow, key: &str) -> SortValue {
     SortValue::of(serde_json::to_value(r).ok().as_ref().and_then(|v| v.get(key)))
@@ -564,8 +578,9 @@ impl CashflowView {
     fn build(&self, cx: &Cx) -> CashflowDoc {
         let pf = cx.engine.portfolio(&self.filters);
         let mut c = build::cashflow_doc(cx.engine, &self.filters, &pf);
-        let keyed: Vec<(String, SortValue)> = c.rows.iter().map(|r| (r.id.clone(), cash_sort_value(r, &self.sort.key))).collect();
-        let order = sorted(&keyed, self.sort.dir);
+        // a day's payments by symbol, then account, whichever column is sorted
+        let keyed: Vec<(String, Vec<SortValue>)> = c.rows.iter().map(|r| (r.id.clone(), vec![cash_sort_value(r, &self.sort.key), cash_sort_value(r, "symbol"), cash_sort_value(r, "account")])).collect();
+        let order = sorted_then(&keyed, self.sort.dir);
         let total = c.rows.len();
         let mut by_id: HashMap<String, CashflowRow> = c.rows.drain(..).map(|r| (r.id.clone(), r)).collect();
         c.rows = order.iter().take(self.limit).filter_map(|id| by_id.remove(id)).collect();

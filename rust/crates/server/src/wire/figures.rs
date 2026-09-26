@@ -490,6 +490,10 @@ pub struct InstrumentOption {
     pub exchange: String,
     pub kind: String,
     pub currency: String,
+    /// The broker's id for it, which an order names; empty where none is known.
+    pub security: String,
+    /// The accounts that traded or hold it, by id.
+    pub accounts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
@@ -573,6 +577,8 @@ pub struct CashflowDoc {
 #[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeDoc {
+    /// The id asked for: a document for it with neither is one the figures do not have.
+    pub id: String,
     pub trade: Option<Trade>,
     pub position: Option<Position>,
 }

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
-import { store } from './state.svelte'
+import { status } from './subs.svelte'
 import { connect, followConnect, ui } from './ui.svelte'
-import type { Model } from './model'
+import type { Status } from './model'
 
 // SPEC §4, Connecting: the wait for a sign-in ends on the server's clock, in the server's
 // words. The page keeps no deadline of its own to race it.
@@ -11,7 +11,7 @@ let stop: () => void
 beforeEach(() => {
   vi.useFakeTimers()
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true }))))
-  store.model = { status: { connected: false, capturing: false, error: '' } } as unknown as Model
+  status.data = { connected: false, capturing: false, error: '' } as unknown as Status
   stop = followConnect()
 })
 afterEach(() => {
@@ -24,7 +24,7 @@ afterEach(() => {
 const started = async () => {
   connect()
   await vi.advanceTimersByTimeAsync(0) // the start is answered
-  const st = store.model!.status as unknown as Record<string, unknown>
+  const st = status.data as unknown as Record<string, unknown>
   st.capturing = true
   flushSync()
   return st

@@ -1,7 +1,7 @@
 <script lang="ts">
+  import { book } from './subs.svelte'
   // The three menu modals — Add trade, Import CSV report, Load folder — ported
   // from tradeModalHtml / importModalHtml / folderModalHtml + modalShell.
-  import { store } from './state.svelte'
   import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch } from './ui.svelte'
   import type { ImportReport as FileReport } from './generated/model_api'
   import { symText } from './sym'
@@ -9,9 +9,9 @@
 
   import { qty } from './fmt'
 
-  const accounts = $derived((store.model?.accounts ?? []).filter((a) => a.status !== 'closed'))
+  const accounts = $derived((book.data?.accounts ?? []).filter((a) => a.status !== 'closed'))
   // units that arrived without a cost: what an opening balance prices
-  const arrivals = $derived((store.model?.waiting ?? []).filter((w) => w.what === 'cost-of-arrival'))
+  const arrivals = $derived((book.data?.waiting ?? []).filter((w) => w.what === 'cost-of-arrival'))
   const arrival = $derived(arrivals.find((a) => a.transaction === ui.tradeForm.arrival) ?? null)
   const f = $derived(ui.tradeForm)
   const r = $derived(ui.importReport)

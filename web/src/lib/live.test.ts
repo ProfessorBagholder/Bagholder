@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { applyOps, isUpdate, numbering, reconcile, type Op } from './live'
+import { applyOps, isUpdate, numbering, reconcile, type Op } from './live.svelte'
 import { ROW_KEYS } from './generated/keys'
 
 // The page holds each entity as one object for as long as the entity lives, and a
 // change is written into it (docs/architecture.md, rule 0). These hold that: after
 // a change, everything that did not change is the very same object it was.
 
-// the model's own lists, keyed as the server's differ keys them
-const KEYS = ROW_KEYS.model
+// the lists of the documents these rows come from, keyed as the server's differ keys them
+const KEYS = { ...ROW_KEYS.positions, ...ROW_KEYS.markets }
 
 const book = () => ({
   kpi: { realized: 1200.5 },

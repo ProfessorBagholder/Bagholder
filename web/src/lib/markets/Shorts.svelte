@@ -7,7 +7,7 @@
   import { n2, shortDay } from './util'
   import { sort, sortRows } from '../sort.svelte'
   import { bareSymbol } from '../sym'
-  import { watchDoc } from '../live'
+  import { watchDoc } from '../live.svelte'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
   import { call } from '../api'

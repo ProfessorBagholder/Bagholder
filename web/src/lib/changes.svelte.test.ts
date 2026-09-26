@@ -12,9 +12,11 @@ import Watchlist from './markets/Watchlist.svelte'
 import News from './markets/News.svelte'
 import MarketTiles from './markets/MarketTiles.svelte'
 import Trades from './Trades.svelte'
-import { applyOps, type Op } from './live'
-import type { Model } from './model'
+import { applyOps, type Op } from './live.svelte'
+import type { Markets, Trade } from './model'
 
+// the old recorded model's parts, as the Markets tab's and the Trades list's documents carry them
+type Model = { markets: Markets; trades: Trade[] }
 const book = (from: { wire: unknown }): Model => structuredClone(from.wire) as unknown as Model
 
 function watch(root: Node) {
@@ -96,9 +98,9 @@ describe('a market tile\'s quote moves', () => {
 
 describe('a trade is graded', () => {
   it('writes in that trade\'s row and no other', () => {
-    const model = $state(book(journal))
+    const model = $state({ total: book(journal).trades.length, trades: book(journal).trades })
     expect(model.trades.length).toBeGreaterThan(1)
-    const { container } = render(Trades, { props: { trades: model.trades } })
+    const { container } = render(Trades, { props: { doc: model } })
     flushSync()
     const rows = [...container.querySelectorAll('tbody tr')] as HTMLElement[]
     const t = model.trades[0]

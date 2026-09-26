@@ -1,4 +1,5 @@
 import { cmp as decCmp, waits, type Dec, type Fig } from './dec'
+import { limits, FIRST_ROWS } from './subs.svelte'
 // Sort state per table and the shared row sorter, ported from ledger.html
 // (state.sort + sortRows + the 'sort' action). Reactive $state so a header click
 // re-sorts only the table that reads it.
@@ -44,6 +45,9 @@ export const sort = $state<Record<string, SortState>>(load())
 // A header click: flip direction on the active column, else make this the active
 // column, descending. Persisted so a reload keeps the choice.
 export function toggleSort(table: string, key: string): void {
+  // a list the server sorts starts again at its first rows in the new order
+  if (table === 'trades') limits.trades = FIRST_ROWS
+  if (table === 'cash') limits.cash = FIRST_ROWS
   const s = sort[table]
   if (s.key === key) s.dir = s.dir === 'desc' ? 'asc' : 'desc'
   else {

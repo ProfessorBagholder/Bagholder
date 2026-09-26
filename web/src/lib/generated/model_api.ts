@@ -45,6 +45,20 @@ export type Resync = {
  */
 id: number, };
 
+export type TradesQuery = { 
+/**
+ * The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
+ */
+filters: string | null, 
+/**
+ * The column the list is sorted by, as the page's header names it.
+ */
+sort: string | null, 
+/**
+ * `asc` or `desc`.
+ */
+dir: string | null, };
+
 export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
 
 export type ChildShare = { instrument: string, costShare: string, };

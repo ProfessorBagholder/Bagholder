@@ -8,7 +8,7 @@ import type { ShortsFeedRow } from '../model'
 
 type FeedDoc = { ok: boolean; rows: ShortsFeedRow[]; reading: boolean }
 let feedHolder: { data: FeedDoc | null } | null = null
-vi.mock(import('../live'), async (original) => ({
+vi.mock(import('../live.svelte'), async (original) => ({
   ...(await original()),
   watchDoc: ((_key: string, _params: unknown, holder: { data: FeedDoc | null }) => {
     feedHolder = holder

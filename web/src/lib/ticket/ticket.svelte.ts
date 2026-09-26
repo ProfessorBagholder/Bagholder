@@ -1,7 +1,7 @@
-import { store } from '../state.svelte'
+import { positions, book } from '../subs.svelte'
 import type { Position } from '../model'
 import { ui, flash } from '../ui.svelte'
-import { watchDoc } from '../live'
+import { watchDoc } from '../live.svelte'
 import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
 import { view, previewRequest, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
@@ -37,31 +37,32 @@ const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl',
 // what the book knows about the listing the broker names `securityId` (or, with none
 // given, the one symbol it holds by that text): its kind and the open position
 function tkLookup(symbol: string, securityId: string, holding = ''): { securityId: string; kind: string; position: Position | null } {
-  const m = store.model
   const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
   // held in more than one account: the margin account among them, else the first by name
-  const accounts = m?.accounts ?? []
+  const accounts = book.data?.accounts ?? []
+  const held = positions.data?.positions ?? []
   const rank = (accountId: string) => {
     const a = accounts.find((x) => x.id === accountId)
     return [a?.margin ? 0 : 1, a?.name ?? ''] as const
   }
   // opened from a holding's own page: that holding, whatever else holds the symbol
-  const own = holding ? (m?.positions ?? []).find((p) => p.id === holding) ?? null : null
+  const own = holding ? held.find((p) => p.id === holding) ?? null : null
   const pos =
     own ??
-    ((m?.positions ?? [])
+    (held
       .filter(is)
       .sort((a, b) => {
         const [x, y] = [rank(a.accountId), rank(b.accountId)]
         return x[0] - y[0] || x[1].localeCompare(y[1])
       })[0] || null)
-  const t = pos || (m?.trades ?? []).find(is) || null
+  // one the book has traded, by the broker's id or its symbol
+  const t = pos || (book.data?.options.instruments ?? []).find(is) || null
   return { securityId: t ? t.security : securityId, kind: t ? t.kind : '', position: pos }
 }
 
 // an account as an order names it: by the broker's own id for it
 function brokerAccount(id: string): string {
-  return (store.model?.accounts ?? []).find((a) => a.id === id)?.brokerAccount ?? ''
+  return (book.data?.accounts ?? []).find((a) => a.id === id)?.brokerAccount ?? ''
 }
 
 // The accounts a ticket can route to: the server's list once the quote has answered,
@@ -69,7 +70,7 @@ function brokerAccount(id: string): string {
 export function ticketAccounts(): TicketAccount[] {
   const t = ticketStore.t
   const out: TicketAccount[] = (t && t.data && t.data.accounts ? t.data.accounts : []).slice()
-  ;(store.model?.accounts ?? [])
+  ;(book.data?.accounts ?? [])
     .filter((a) => a.status !== 'closed' && a.tradable && a.brokerAccount != null)
     .forEach((a) => {
       const id = a.brokerAccount as string
@@ -79,7 +80,7 @@ export function ticketAccounts(): TicketAccount[] {
 }
 // the accounts' value, for the order's share of it
 function nav() {
-  const n = store.model?.navTotal
+  const n = book.data?.navTotal
   return n == null || typeof n !== 'string' ? null : n
 }
 export function ctx(): ValsCtx {
@@ -129,7 +130,7 @@ export function maxQty(): number | null {
 // the units of the listing the book holds in the broker account `accountId`
 function heldIn(symbol: string, securityId: string, accountId: string): number | null {
   const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
-  const pos = (store.model?.positions ?? []).find((p) => is(p) && brokerAccount(p.accountId) === accountId)
+  const pos = (positions.data?.positions ?? []).find((p) => is(p) && brokerAccount(p.accountId) === accountId)
   return pos ? ticketNumber(pos.qty) : null
 }
 

@@ -301,15 +301,33 @@ fn paid_label(l: &PaidLabel) -> String {
     }
 }
 
-fn options(inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig]) -> Options {
+fn options(inputs: &Inputs, names: &Names, trades: &[TradeFig], positions: &[PositionFig]) -> Options {
     let accounts: Vec<AccountOption> = inputs.ledger.accounts.keys().map(|a| AccountOption { id: a.to_string(), name: account_name(inputs, *a) }).collect();
     let used: BTreeSet<InstrumentId> = trades.iter().flat_map(|t| t.instruments.iter().copied()).chain(positions.iter().map(|p| p.instrument)).collect();
     // a contract's underlying too: the by-symbol rows and the symbol filter name a contract's trades by it
     let underlyings: BTreeSet<InstrumentId> = used.iter().filter_map(|i| inputs.ledger.instruments.get(i)?.terms.as_ref().map(|t| t.underlying)).filter(|u| !used.contains(u)).collect();
+    let mut accounts_of: BTreeMap<InstrumentId, BTreeSet<AccountId>> = BTreeMap::new();
+    for t in trades {
+        for i in &t.instruments {
+            accounts_of.entry(*i).or_default().insert(t.account);
+        }
+    }
+    for p in positions {
+        accounts_of.entry(p.instrument).or_default().insert(p.account);
+    }
     let option = |i: &InstrumentId| {
         let info = inputs.ledger.instruments.get(i)?;
         let s = shown(inputs, *i);
-        Some(InstrumentOption { id: i.to_string(), symbol: s.symbol, name: s.name, exchange: s.exchange, kind: kind_word(info.instrument.kind).into(), currency: info.instrument.currency.as_str().into() })
+        Some(InstrumentOption {
+            id: i.to_string(),
+            symbol: s.symbol,
+            name: s.name,
+            exchange: s.exchange,
+            kind: kind_word(info.instrument.kind).into(),
+            currency: info.instrument.currency.as_str().into(),
+            security: names.security.get(i).cloned().unwrap_or_default(),
+            accounts: accounts_of.get(i).map(|a| a.iter().map(|x| x.to_string()).collect()).unwrap_or_default(),
+        })
     };
     let traded: Vec<InstrumentOption> = used.iter().filter_map(option).collect();
     let sorted = |v: BTreeSet<String>| v.into_iter().collect::<Vec<_>>();
@@ -406,7 +424,7 @@ pub fn book_doc(engine: &Engine, names: &Names) -> BookDoc {
     BookDoc {
         today: inputs.clock.today.to_string(),
         activity_count: inputs.ledger.transactions.len(),
-        options: options(inputs, figs.trades, figs.positions),
+        options: options(inputs, names, figs.trades, figs.positions),
         accounts,
         nav_total,
         waiting: figs
