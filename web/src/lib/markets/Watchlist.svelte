@@ -98,16 +98,18 @@
     }, 300)
   })
 
-  const suggestions = $derived.by(() => {
-    const q = query.trim()
-    const base = q ? matches : fromHoldings
-    return base.map((w) => {
+  // the rows as the search gave them, and as shown with a remembered quote on them
+  const sugBase = $derived(query.trim() ? matches : fromHoldings)
+  const suggestions = $derived(
+    sugBase.map((w) => {
       const c = w.last == null ? sugQuotes[sugKey(w)] : null
       return c ? { ...w, ...c } : w
-    })
-  })
+    }),
+  )
   $effect(() => {
-    if (query.trim()) sugQuoteSchedule(suggestions)
+    // what is scheduled is the search's own rows: one showing a remembered quote
+    // still has none of its own, and is asked again once that minute is up
+    if (query.trim()) sugQuoteSchedule(sugBase)
   })
 
   // Escape closes the add row wherever the focus is

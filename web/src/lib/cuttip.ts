@@ -88,23 +88,35 @@ function hide(): void {
 
 /** Start showing cut text under the pointer. Returns what stops it. */
 export function startCutTip(): () => void {
-  const over = (e: MouseEvent) => {
-    const cut = cutElement(e.target)
-    const named = cut ? null : namedElement(e.target)
+  // where the pointer is: after a scroll, what is under it has moved, and the tip
+  // follows what is there now rather than waiting for the pointer to move again
+  let at: { x: number; y: number } | null = null
+  const showFor = (target: EventTarget | null) => {
+    const cut = cutElement(target)
+    const named = cut ? null : namedElement(target)
     if (cut) show(cut)
     else if (named) show(named, named.dataset.tip)
     else hide()
   }
+  const over = (e: MouseEvent) => {
+    at = { x: e.clientX, y: e.clientY }
+    showFor(e.target)
+  }
   const out = (e: MouseEvent) => {
+    if (!e.relatedTarget) at = null
     if (!e.relatedTarget || !(cutElement(e.relatedTarget) || namedElement(e.relatedTarget))) hide()
+  }
+  const scrolled = () => {
+    if (!at) return hide()
+    showFor(document.elementFromPoint(at.x, at.y))
   }
   document.addEventListener('mouseover', over)
   document.addEventListener('mouseout', out)
-  window.addEventListener('scroll', hide, true)
+  window.addEventListener('scroll', scrolled, true)
   return () => {
     document.removeEventListener('mouseover', over)
     document.removeEventListener('mouseout', out)
-    window.removeEventListener('scroll', hide, true)
+    window.removeEventListener('scroll', scrolled, true)
     hide()
   }
 }

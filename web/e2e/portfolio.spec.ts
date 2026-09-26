@@ -135,7 +135,7 @@ test("hovering a holding's row names its account in the app's own tip; the row n
   for (let i = 0; i < (await rows.count()); i++) {
     const row = rows.nth(i)
     await row.locator('td').nth(1).hover()
-    await expect(page.locator('#cutTip')).toBeVisible()
+    await expect(page.locator('#cutTip'), `row ${i}`).toBeVisible()
     const symbol = ((await row.locator('td').first().textContent()) ?? '').replace(/\s*SHORT$/, '').trim()
     named.push(symbol + ' · ' + ((await page.locator('#cutTip .tv').textContent()) ?? ''))
   }

@@ -71,7 +71,8 @@ test('an event waiting on a holding is entered beside its journal, as a return o
   await ready(page)
   const sent: Doc[] = []
   await page.route('**/api/entries', (route) => { sent.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }) })
-  await page.goto('/#portfolio/' + encodeURIComponent(p.id))
+  // the address as the page writes it: a holding's id with its colons readable
+  await page.goto('/#portfolio/' + p.id)
   await expect(page).toHaveURL(subUrl('portfolio', p.id))
   await expect(page.getByText('Corporate event · ' + w.day)).toBeVisible()
   // a return of capital, a unit, entered with Enter
