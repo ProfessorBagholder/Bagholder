@@ -9,9 +9,11 @@ pub mod pool;
 /// agrees on how it is kept. Write-ahead logging: a reader never waits on a
 /// writer and never sees a change half made, and a crash leaves the last
 /// committed state, not a journal to replay over a torn file. `synchronous =
-/// NORMAL` is the setting made for WAL: a commit is durable against the app
-/// dying, and against the machine dying up to the last checkpoint, without an
-/// fsync per statement. The mode is a property of the file, so a database an
+/// FULL`: every commit is flushed to the log before it returns, so a commit
+/// survives the machine losing power, not only the app dying (`SPEC.md` §6, The
+/// store: a thesis or a grade is the one thing in the file that cannot be
+/// fetched again). WAL's `NORMAL` would lose the commits since the last
+/// checkpoint to a power cut, for one fsync a commit saved. The mode is a property of the file, so a database an
 /// earlier build made in rollback mode is converted the first time it is opened.
 pub fn open_db(path: &std::path::Path) -> rusqlite::Result<rusqlite::Connection> {
     open_db_hooked(path, None)
@@ -33,7 +35,7 @@ pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn
     if !mode.eq_ignore_ascii_case("wal") {
         let _ = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0));
     }
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "synchronous", "FULL")?;
     // every connection is made here, so every commit in the process is heard: no
     // writer has to remember to say it wrote
     if let Some(heard) = hook {

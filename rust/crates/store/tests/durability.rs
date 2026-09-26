@@ -26,7 +26,18 @@ fn test_a_new_database_is_kept_in_wal() {
     relabel::ensure(&conn).unwrap();
     assert_eq!(journal_mode(&conn), "wal");
     let sync: i64 = conn.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap();
-    assert_eq!(sync, 1, "synchronous = NORMAL, the setting made for WAL");
+    assert_eq!(sync, 2, "synchronous = FULL: every commit is flushed before it returns");
+}
+
+/// The pool's connections and a hooked one flush each commit too.
+#[test]
+fn test_every_connection_flushes_each_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let sync = |c: &Connection| c.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0)).unwrap();
+    let pool = bagholder_store::pool::Pool::new(&dir.path().join("bagholder.db"));
+    assert_eq!(sync(&pool.get().unwrap()), 2);
+    let hooked = bagholder_store::open_db_hooked(&dir.path().join("hooked.db"), Some(std::sync::Arc::new(|| {}))).unwrap();
+    assert_eq!(sync(&hooked), 2);
 }
 
 #[test]

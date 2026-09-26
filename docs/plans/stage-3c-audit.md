@@ -59,7 +59,9 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [ ] Listing addresses are percent-encoded.
 - [ ] Watchlist match quotes never expire.
 - [ ] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged.
-- [ ] Disclosures `Opening…`; the data modal has no entrance motion; the skeleton's removal uses an animation callback; the store runs `synchronous = NORMAL`; a replaced database is not migrated until restart.
+- [ ] Disclosures `Opening…`; the data modal has no entrance motion; the skeleton's removal uses an animation callback.
+- [x] The store runs `synchronous = NORMAL`. — fixed: FULL, every commit flushed.
+- [ ] A replaced database is not migrated until restart.
 
 ## SPEC text to correct (the build is right)
 
