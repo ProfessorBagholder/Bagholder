@@ -42,6 +42,15 @@ fn instant(t: &str, what: &str, id: &str) -> Result<jiff::Timestamp, String> {
     t.parse().map_err(|e: jiff::Error| format!("{id}: {what} {t:?}: {e}"))
 }
 
+/// When a row last changed: its own time, or when it was written where it states none.
+fn changed(t: &str, created: jiff::Timestamp, id: &str) -> Result<jiff::Timestamp, String> {
+    if t.trim().is_empty() {
+        Ok(created)
+    } else {
+        instant(t, "updated_at", id)
+    }
+}
+
 fn old_state(o: &OldOrder) -> Result<OrderState, String> {
     let filled = o.filled_qty.is_some_and(|q| q > 0.0);
     Ok(match o.status {
@@ -71,7 +80,7 @@ fn old_kind(k: OrderType, id: &str) -> Result<OrderKind, String> {
 }
 
 /// An old order as the book writes it, and where it stood.
-fn order_of(o: &OldOrder, bracket: Option<(String, OrderRole)>) -> Result<(OrderRequest, OrderEvent, jiff::Timestamp), String> {
+fn order_of(o: &OldOrder, bracket: Option<(String, OrderRole)>) -> Result<(OrderRequest, OrderEvent, jiff::Timestamp, jiff::Timestamp), String> {
     let id = &o.id;
     let side = match o.side {
         bagholder_store::orders::Side::Buy => Side::Buy,
@@ -105,12 +114,13 @@ fn order_of(o: &OldOrder, bracket: Option<(String, OrderRole)>) -> Result<(Order
         bracket,
         request: o.request.clone(),
     };
-    Ok((request, first, instant(&o.created_at, "created_at", id)?))
+    let created = instant(&o.created_at, "created_at", id)?;
+    Ok((request, first, created, changed(&o.updated_at, created, id)?))
 }
 
 /// An old bracket as the book writes it: its legs, and where it stood, with the one
 /// exit of its own still at Wealthsimple as its current exit.
-fn bracket_of(b: &OldBracket, exits: &[&OldOrder]) -> Result<(BracketPlace, BracketEvent, jiff::Timestamp), String> {
+fn bracket_of(b: &OldBracket, exits: &[&OldOrder]) -> Result<(BracketPlace, BracketEvent, jiff::Timestamp, jiff::Timestamp), String> {
     let id = &b.id;
     let quantity = dec(b.quantity, "the quantity", id)?.filter(|q| q.is_positive()).ok_or_else(|| format!("{id}: no quantity"))?;
     let stop = match b.sl_kind {
@@ -174,7 +184,8 @@ fn bracket_of(b: &OldBracket, exits: &[&OldOrder]) -> Result<(BracketPlace, Brac
         seen_held: b.seen_held,
         row: serde_json::to_string(b).map_err(|e| format!("{id}: {e}"))?,
     };
-    Ok((place, first, instant(&b.created_at, "created_at", id)?))
+    let created = instant(&b.created_at, "created_at", id)?;
+    Ok((place, first, created, changed(&b.updated_at, created, id)?))
 }
 
 /// Carry the earlier store's orders and brackets into the book once, then drop its
@@ -225,7 +236,7 @@ pub fn carry_orders(home: &Path, conn: &Connection, book: &Book, at: jiff::Times
         };
         new_orders.push(order_of(o, bracket)?);
     }
-    book.import_orders(&new_brackets, &new_orders, at).map_err(|e| format!("the earlier orders could not be carried into the book: {e}; the old tables are kept"))?;
+    book.import_orders(&new_brackets, &new_orders).map_err(|e| format!("the earlier orders could not be carried into the book: {e}; the old tables are kept"))?;
     carried.brackets = new_brackets.len();
     carried.orders = new_orders.len();
     bagholder_store::schema::drop_order_tables(conn, &at.to_string()).map_err(e)?;

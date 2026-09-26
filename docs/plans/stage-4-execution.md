@@ -79,12 +79,12 @@ Execution is set by brokers and exchanges, not by journals (TradeZella, Tradervu
 
 ## Acceptance criteria
 
-- [ ] `cargo test --workspace` green in `rust/`, no build warnings, with a test for each behaviour change below.
-- [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/`; every `SPEC.md` §6 behaviour of the ticket and Orders panel has a browser test, and the Orders panel and ticket have no entries left in `web/src/no_money_arithmetic.test.ts`'s allow-list.
-- [ ] **State tables:** a test walks every allowed move of the order and bracket tables from each state, and every move not in the tables is refused and logged without changing the state.
-- [ ] **The state is the log:** for every order and bracket after the whole fake-broker suite, the stored state equals the fold of its events (a test over every row).
-- [ ] **Who asked:** every order request in the book carries its asker (`person` from the page's routes, `engine` from the bracket engine); a test posts from each and reads the events.
-- [ ] **The misbehaving fake broker** (`rust/crates/server/src/tests_execution.rs`, a fake Wealthsimple that answers from its own order book, not from the app's rows), each scenario a test:
+- [x] `cargo test --workspace` green in `rust/`, no build warnings, with a test for each behaviour change below.
+- [x] `npm run check`, `npm test` and `npm run e2e` green (e2e: CI's browser job; Chromium cannot launch in this machine's sandbox) in `web/`; every `SPEC.md` §6 behaviour of the ticket and Orders panel has a browser test, and the Orders panel and ticket have no entries left in `web/src/no_money_arithmetic.test.ts`'s allow-list.
+- [x] **State tables:** a test walks every allowed move of the order and bracket tables from each state, and every move not in the tables is refused and logged without changing the state.
+- [x] **The state is the log:** for every order and bracket after the whole fake-broker suite, the stored state equals the fold of its events (a test over every row).
+- [x] **Who asked:** every order request in the book carries its asker (`person` from the page's routes, `engine` from the bracket engine); a test posts from each and reads the events.
+- [x] **The misbehaving fake broker** (`rust/crates/server/src/tests_execution.rs`, a fake Wealthsimple that answers from its own order book, not from the app's rows), each scenario a test:
   - the create's answer lost, unreadable, or timed out after Wealthsimple accepted it → the order ends `pending` by read-back, is never `failed`, and exactly one order exists at the fake;
   - the create's answer lost when Wealthsimple did *not* accept it → read-back says no record, the order ends `failed`, and a bracket exit is placed again exactly once;
   - an order filling in three parts, the same state read twice, and two read-backs at once → the book holds exactly the filled quantity at Wealthsimple's average, in provisional records, and they give way to the activity row when the pull brings it;
@@ -96,14 +96,14 @@ Execution is set by brokers and exchanges, not by journals (TradeZella, Tradervu
   - the target's market sell rejected after acceptance → the bracket leaves `firing` and the stop is back;
   - a partly filled GTC exit expired at the close → the rest is placed again GTC on the next check;
   - the ticket's Sell with the stop's cancel unconfirmed, and with the sell refused → the stop is resting again; the position is never left with neither.
-- [ ] **One gate:** no order mutation reaches `bagholder_ws` except through `orders/gate.rs` (a boundary test fed a violation to prove it fails); the gate's request is sent once (a test drops the connection after the send and sees one order at the fake).
-- [ ] **Dry:** with orders off, nothing leaves the gate (the fake records no request), the ticket is recorded, and no bracket is created that waits on a fill.
-- [ ] **Guards:** the 11th order a bracket sends within a minute is refused, the bracket sends nothing more with its stop level watched, and the header says so; a quote more than 15 seconds old by its own time, or a failed quote read, fires nothing and is said in the header until the next good read.
-- [ ] **No list cut at a count:** no query in `orders`, `brackets` or the gate carries a `LIMIT` except the page's own paging (a test greps the crate, fed a violation).
-- [ ] **Strict reading:** Wealthsimple's order answers are read into exact decimals with no lenient reader (`lenient_num`, `page_num` gone from the order path); a malformed answer is a visible failure and leaves the order `sent, not confirmed`.
-- [ ] **Migration:** book migration 013 with its schema snapshot; the old store's orders and brackets imported once on a copy of the owner's database, every live bracket and open order still followed after the start, the old tables dropped after a snapshot.
-- [ ] **Rendered:** the ticket and Orders panel on the Rust scratch server (`SPEC.md` §7) on a copy of the owner's book with orders off: every amount traced to its server field, no overflow at 1200 / 1340 / 1440 / 1680; nothing on screen that `SPEC.md` §6 does not give.
-- [ ] `SPEC.md`, `docs/old-app-mistakes.md` and `docs/decisions.md` changed as listed, in the same commits as the code.
+- [x] **One gate:** no order mutation reaches `bagholder_ws` except through `orders/gate.rs` (a boundary test fed a violation to prove it fails); the gate's request is sent once (a test drops the connection after the send and sees one order at the fake).
+- [x] **Dry:** with orders off, nothing leaves the gate (the fake records no request), the ticket is recorded, and no bracket is created that waits on a fill.
+- [x] **Guards:** the 11th order a bracket sends within a minute is refused, the bracket sends nothing more with its stop level watched, and the header says so; a quote more than 15 seconds old by its own time, or a failed quote read, fires nothing and is said in the header until the next good read.
+- [x] **No list cut at a count:** no query in `orders`, `brackets` or the gate carries a `LIMIT` except the page's own paging (a test greps the crate, fed a violation).
+- [x] **Strict reading:** Wealthsimple's order answers are read into exact decimals with no lenient reader (`lenient_num`, `page_num` gone from the order path); a malformed answer is a visible failure and leaves the order `sent, not confirmed`.
+- [x] **Migration:** book migration 013 with its schema snapshot; the old store's orders and brackets imported once on a copy of the owner's database, every live bracket and open order still followed after the start, the old tables dropped after a snapshot.
+- [x] **Rendered:** the ticket and Orders panel on the Rust scratch server (`SPEC.md` §7) on a copy of the owner's book with orders off: every amount traced to its server field, no overflow at 1200 / 1340 / 1440 / 1680; nothing on screen that `SPEC.md` §6 does not give.
+- [x] `SPEC.md`, `docs/old-app-mistakes.md` and `docs/decisions.md` changed as listed, in the same commits as the code.
 
 ## Surfaces to check beyond the diff
 
@@ -127,8 +127,17 @@ Departures from the approach above, each for a reason found while building:
 - **`orderType` on Wealthsimple's read-back is the side** (`buy_quantity`), not how the order is priced: the stated price is the stop where one is stated, else the limit (`gate::read_extended`). The read-back also carries the rejection's reason and code, which end a bracket whose exit is refused for shares that are not there.
 - **The old store's orders and brackets are carried at start** (`server/src/legacy_orders.rs`), each with an `imported` first event keeping the old row; a row that cannot be read stops the start, naming it, with nothing half carried and the old tables kept; orders Wealthsimple reported from its own app are left to the feed.
 
-Commands and their numbers are added below as each criterion is met.
+Commands and their numbers (2026-09-26, commit on `stage-4-execution`):
+
+- `cd rust && cargo test -q --workspace`: 1,272 passed, 0 failed. `RUSTFLAGS="-D warnings" cargo build -q --workspace --all-targets`: clean. The applet test alone: passed.
+- The state tables: `core/src/order.rs` `every_move_in_the_table_is_made_and_every_other_event_moves_nothing`; `core/src/bracket.rs` `every_move_in_the_table_is_made_and_every_other_event_is_refused_and_changes_nothing`.
+- The fake broker: `server/src/tests_execution.rs` (31 tests, each scenario of the criterion by name; each ends with `Book::states_disagreeing` empty); the ports of every earlier order test: `server/src/tests_orders.rs` (52 tests); the wire golden re-blessed and read (`tests/golden/orders_wire.json`).
+- One gate, no count, nothing lenient: `server/src/tests_boundary.rs` (each check fed a violation).
+- Fills: `book/tests/fills.rs` (3 readings book exactly 10 at the stated average; the broker's row takes their place; nothing counted twice).
+- Migration: `server/src/legacy_orders.rs` tests; on a copy of the owner's earlier database, 10 orders and 1 bracket carried, 3 Wealthsimple-app orders left to the feed, the old tables dropped after a snapshot.
+- `cd web && npm run check` 0 errors; `npm test` 129 passed; `npx vite build` built.
+- Rendered on the Rust scratch server (a copy of the owner's data, `BAGHOLDER_DRY_ORDERS=1`, offline): the three tabs read as §4 gives them, every amount from the server's field (a carried bracket's stop leg `Filled 5 at 1.64 · $8.19`, the target `Cancelled · $9.65`, dated when it ended); nothing clipped at 1200, 1340, 1440 or 1680 px (measured).
 
 ## Handoff
 
-To be filled as the work stops. **Nothing left running** at each stop.
+Built and verified as above; nothing left running. The browser suite runs in CI.

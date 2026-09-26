@@ -354,9 +354,16 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
     out
 }
 
-/// When a bracket armed, from its log.
-fn armed_at(book: &Book, id: &str) -> Result<Option<jiff::Timestamp>, String> {
-    Ok(book.bracket_log(id).map_err(|e| e.to_string())?.iter().find(|l| l.refused.is_none() && matches!(l.event, BracketEvent::Armed { .. })).map(|l| l.at))
+/// When a bracket armed, from its log; one carried over from the earlier app already
+/// armed counts from when it was created.
+fn armed_at(book: &Book, sb: &StoredBracket) -> Result<Option<jiff::Timestamp>, String> {
+    let log = book.bracket_log(&sb.place.id).map_err(|e| e.to_string())?;
+    if let Some(BracketEvent::Imported { phase, .. }) = log.first().map(|l| &l.event) {
+        if *phase != Phase::Waiting {
+            return Ok(Some(sb.created_at));
+        }
+    }
+    Ok(log.iter().find(|l| l.refused.is_none() && matches!(l.event, BracketEvent::Armed { .. })).map(|l| l.at))
 }
 
 fn bracket_card(sb: &StoredBracket, orders: &[StoredOrder], armed: jiff::Timestamp, names: &mut Names) -> BracketCard {
@@ -496,7 +503,7 @@ fn build(app: &Arc<App>) -> Result<OrdersDoc, String> {
             if let Some(entry) = own.iter().find(|o| o.request.bracket.as_ref().is_some_and(|(_, r)| *r == OrderRole::Entry)) {
                 waiting.insert(entry.request.id.clone(), sb.place.id.clone());
             }
-        } else if let Some(armed) = armed_at(&book, &sb.place.id)? {
+        } else if let Some(armed) = armed_at(&book, sb)? {
             // a bracket that never armed was only legs on its entry's card
             bracket_cards.push(bracket_card(sb, &own, armed, &mut names));
         }

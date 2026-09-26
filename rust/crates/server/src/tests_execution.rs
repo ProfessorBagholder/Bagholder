@@ -854,3 +854,20 @@ fn an_exit_resting_with_no_live_bracket_holding_it_is_cancelled() {
     w.tick();
     assert_eq!(w.fake.0.lock().unwrap().cancels, vec!["stray".to_string()]);
 }
+
+#[test]
+fn a_bracket_carried_over_from_the_earlier_app_has_its_card() {
+    let _g = crate::tests_common::guard();
+    let w = World::new();
+    let place = bagholder_book::orders::BracketPlace { id: "b-old".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
+    let first = BracketEvent::Imported { phase: Phase::Ended, quantity: d("10"), stop: World::stop("95"), target: Some(d("110")), native: true, exit: None, attempts: 0, why: None, outcome: Some("target".into()), seen_held: true, row: "{}".into() };
+    let entry = bagholder_core::order::OrderEvent::Imported { state: OrderState::Filled, broker_id: Some("ws-1".into()), filled: d("10"), average: Some(d("100")), why: None, row: "{}".into() };
+    w.book.import_orders(&[(place, first, t0(), t0() + SignedDuration::from_hours(1))], &[(order("e-old", Some(("b-old", OrderRole::Entry))), entry, t0(), t0())]).unwrap();
+    // a size Wealthsimple's quote stated for it
+    w.app.orders.units.lock().unwrap().insert("sec".into(), Dec::ONE);
+    let doc = crate::orders::orders_doc(&w.app);
+    let card = doc.brackets.iter().find(|b| b.id == "b-old").expect("its card");
+    assert_eq!((card.tab.as_str(), card.live), ("filled", false));
+    assert_eq!(card.at, (t0() + SignedDuration::from_hours(1)).to_string(), "dated when it ended, not when it was carried over");
+    assert_eq!(card.value, crate::wire::Fig::Stated(crate::wire::Dec(d("1000"))), "what was paid: the entry's fill");
+}

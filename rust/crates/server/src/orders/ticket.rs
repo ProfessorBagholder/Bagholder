@@ -289,10 +289,13 @@ pub fn units_of(app: &Arc<App>, book: &Book, security: &str) -> Result<Option<De
     use bagholder_core::instrument::{RefScheme, Reference};
     let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), security);
     if let Some(i) = book.instrument_by_ref(&r).map_err(|e| e.to_string())? {
-        if let Some(f) = app.figures.get() {
-            if let Some(m) = f.read(|e| bagholder_engine::ledger::multiplier(e.inputs().ledger.instruments.get(&i), i).ok()) {
-                return Ok(m);
-            }
+        let held = book.instrument(i).map_err(|e| e.to_string())?;
+        if held.kind != bagholder_core::instrument::InstrumentKind::OptionContract {
+            return Ok(Some(Dec::ONE));
+        }
+        // a contract's size as the book's terms state it, else as a quote stated it
+        if let Some(m) = book.option_terms(i).map_err(|e| e.to_string())?.and_then(|t| t.multiplier) {
+            return Ok(Some(m));
         }
     }
     Ok(app.orders.units.lock().unwrap_or_else(|e| e.into_inner()).get(security).copied())

@@ -96,13 +96,15 @@ impl Book {
 
     /// Carry the earlier app's brackets and orders over in one transaction: all of
     /// them, or none. Each is (what it is, its `Imported` first event, when it was written).
-    pub fn import_orders(&self, brackets: &[(BracketPlace, BracketEvent, jiff::Timestamp)], orders: &[(OrderRequest, OrderEvent, jiff::Timestamp)], at: jiff::Timestamp) -> Result<()> {
+    /// Each is (what it is, its `Imported` first event, when it was written, when it last
+    /// changed), the last being when the event is kept as recorded.
+    pub fn import_orders(&self, brackets: &[(BracketPlace, BracketEvent, jiff::Timestamp, jiff::Timestamp)], orders: &[(OrderRequest, OrderEvent, jiff::Timestamp, jiff::Timestamp)]) -> Result<()> {
         self.atomically(|| {
-            for (place, first, created) in brackets {
-                self.import_bracket(place, first, *created, at)?;
+            for (place, first, created, changed) in brackets {
+                self.import_bracket(place, first, *created, *changed)?;
             }
-            for (o, first, created) in orders {
-                self.import_order(o, first, *created, at)?;
+            for (o, first, created, changed) in orders {
+                self.import_order(o, first, *created, *changed)?;
             }
             Ok(())
         })
