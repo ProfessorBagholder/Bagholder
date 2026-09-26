@@ -205,11 +205,11 @@
   }
 
   // A symbol row goes to its ticker's page: the holding's where the book holds the instrument, the listing's own otherwise.
-  function listingOpen(symbol: string, exchange: string, instrument = '') {
+  function listingOpen(symbol: string, exchange: string, instrument = '', kind = '') {
     onclose()
     const held = instrument ? store.model?.positions.find((p) => p.instrument === instrument) : undefined
     if (held) goSub('portfolio', held.id)
-    else goSub('markets', rememberListing({ symbol, exchange }))
+    else goSub('markets', rememberListing({ symbol, exchange, kind }))
   }
   function trade(symbol: string, side: 'BUY' | 'SELL', exchange: string, securityId: string) {
     openTicket(symbol, side, exchange, securityId)
@@ -230,7 +230,7 @@
       toggleList(m.key, m.value)
     } else {
       const r = extSyms[i - bookSyms.length - others.length]
-      listingOpen(r.book ? bareSymbol(r.sym) : r.sym, r.exchange, r.id)
+      listingOpen(r.book ? bareSymbol(r.sym) : r.sym, r.exchange, r.id, r.book ? '' : r.kind)
     }
   }
   // ---- keys the two search boxes share (SPEC §3, Filters) ----
@@ -242,7 +242,9 @@
   // between are driven by the arrows, so Tab does not walk them.
   function ring(e: KeyboardEvent, from: 'box' | 'done' | 'clear') {
     if (e.key !== 'Tab') return false
-    const order = { box: [doneEl, clearEl], done: [clearEl, boxEl], clear: [boxEl, doneEl] }[from]
+    // a list with no box of its own has the keyboard on its highlighted row instead
+    const box = boxEl ?? hiRow()
+    const order = { box: [doneEl, clearEl], done: [clearEl, box], clear: [box, doneEl] }[from]
     const to = e.shiftKey ? order[1] : order[0]
     if (to) { e.preventDefault(); to.focus() }
     return true
@@ -278,6 +280,16 @@
     void valueHi
     void picker
     queueMicrotask(() => popEl?.querySelector('.pop-row.hi, .tk-row.hi')?.scrollIntoView({ block: 'nearest' }))
+  })
+  // A list with no box of its own (every single list but Symbol and Tag) is driven by the
+  // same keys from its highlighted row, which takes the keyboard when the list opens and
+  // keeps it as the arrows move the highlight.
+  let valuesEl = $state<HTMLDivElement>()
+  const hiRow = (): HTMLElement | undefined => (valuesEl?.querySelector('.pop-row.hi') ?? valuesEl?.querySelector('.pop-row') ?? undefined) as HTMLElement | undefined
+  const rowDriven = $derived(!!active && active.kind === 'list' && !active.search)
+  $effect(() => {
+    void valueHi
+    if (rowDriven && valuesEl) queueMicrotask(() => hiRow()?.focus())
   })
 
   function onFieldsKey(e: KeyboardEvent) {
@@ -382,7 +394,7 @@
           <input value={valueQuery} oninput={(e) => { valueQuery = (e.target as HTMLInputElement).value; valueHi = 0 }} onkeydown={onValueKey} bind:this={boxEl} placeholder="Search" aria-label="Search values" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
         </div>
       {/if}
-      <div class="scroll" style="max-height:260px;display:flex;flex-direction:column;gap:1px">
+      <div class="scroll" bind:this={valuesEl} style="max-height:260px;display:flex;flex-direction:column;gap:1px">
         {#if !valueOpts.opts.length}
           <div class="muted" style="padding:6px 7px;font-size:12px">Nothing to choose from yet.</div>
         {:else if !valueOpts.shown.length}
@@ -396,7 +408,7 @@
               {@const contract = OPTION_RE.test(l.symbol)}
               {@render symbolRow(contract ? l.symbol : bareSymbol(l.symbol), l.name, l.exchange, l.id, l.symbol, cls, contract ? undefined : () => listingOpen(bareSymbol(l.symbol), l.exchange, l.id), contract ? () => toggleList('symbol', l.id) : undefined, true)}
             {:else}
-              <button class="pop-row{cls}" tabindex="-1" onclick={() => toggleList(active.key, c.v)}>{c.text}</button>
+              <button class="pop-row{cls}" tabindex="-1" onkeydown={rowDriven ? onValueKey : undefined} onclick={() => { valueHi = i; toggleList(active.key, c.v) }}>{c.text}</button>
             {/if}
           {/each}
         {/if}
@@ -461,23 +473,24 @@
   </div>
 {/snippet}
 
-<!-- An external listing (not in the book): funnel dimmed, Buy live, Sell dimmed;
-     an instrument/crypto (r.kind set) has both dimmed. ledger extRowHtml. -->
+<!-- A listing found outside the book: the same three icons in the same places as every
+     symbol row. The funnel is dimmed (the book has nothing to narrow by it) and so is Sell
+     (no position); Buy is live on a share or ETF, dimmed on a market instrument (an
+     index, a future, a rate, a pair: `r.kind` set). The row opens the listing's page. -->
 {#snippet extRow(r: MergedSym, cls: string)}
-  <div class="pop-row{cls}" role="button" tabindex="-1" onclick={() => (r.kind ? undefined : listingOpen(r.sym, r.exchange))} onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !r.kind) { e.preventDefault(); listingOpen(r.sym, r.exchange) } }}>
+  <div class="pop-row{cls}" role="button" tabindex="-1" onclick={() => listingOpen(r.sym, r.exchange, '', r.kind)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); listingOpen(r.sym, r.exchange, '', r.kind) } }}>
     <span style="flex:none">{r.sym}</span>
     {#if r.name}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink55)">{r.name}</span>{/if}
     <span style="margin-left:auto;font-size:11px;color:var(--ink55);white-space:nowrap">{r.exchange || ''}</span>
     <span style="flex:none;width:70px;display:inline-flex;justify-content:flex-end">
       <span class="tk-rowbtns">
+        <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.funnel)}</span>
         {#if r.kind}
           <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.plus)}</span>
-          <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>
         {:else}
-          <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.funnel)}</span>
           <button class="tk-rowbtn buy" aria-label="Buy {symText(r.sym)}" onclick={(e) => { e.stopPropagation(); trade(r.sym, 'BUY', r.exchange, '') }}>{@render iconSvg(ICONS.plus)}</button>
-          <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>
         {/if}
+        <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>
       </span>
     </span>
   </div>
