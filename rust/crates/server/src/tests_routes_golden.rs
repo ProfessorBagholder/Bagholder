@@ -59,7 +59,7 @@ fn isolated() -> Arc<App> {
     let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
     let f = crate::figures::Figures::open(&book, now).unwrap();
     f.state_zone("America/Toronto", now).unwrap();
-    let _ = app.figures.set(f);
+    app.set_figures(f);
     app
 }
 

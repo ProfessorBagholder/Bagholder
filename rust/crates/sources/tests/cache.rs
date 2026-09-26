@@ -209,3 +209,34 @@ fn a_thousand_quote_outcomes_do_not_evict_the_banks_last() {
     assert_eq!(health::state(&bank, t("2026-09-24T00:00:00Z")), State::Working);
     assert_eq!(c.sources().unwrap().len(), 2);
 }
+
+#[test]
+fn each_sources_newest_counted_outcome_is_the_one_that_says_how_it_is() {
+    let (_d, c) = open();
+    let at = |n: u64| t("2026-09-24T12:00:00Z") + Duration::from_secs(n);
+    // every outcome that says how a source is, followed by one that does not
+    for (n, kind) in OutcomeKind::ALL.into_iter().filter(|k| *k != OutcomeKind::NotCarried).enumerate() {
+        let n = n as u64 * 10;
+        c.record(&outcome("a", OutcomeKind::Answered, at(n))).unwrap();
+        c.record(&outcome("a", kind, at(n + 1))).unwrap();
+        c.record(&outcome("a", OutcomeKind::NotCarried, at(n + 2))).unwrap();
+        c.record(&outcome("b", OutcomeKind::Unreachable, at(n + 3))).unwrap();
+        let newest: Vec<_> = c.newest_counted().unwrap().into_iter().map(|o| (o.source.as_str().to_string(), o.outcome, o.at)).collect();
+        assert_eq!(newest, vec![("a".to_string(), kind, at(n + 1)), ("b".to_string(), OutcomeKind::Unreachable, at(n + 3))]);
+    }
+    // a source that has only said it does not carry something says nothing of itself
+    c.record(&outcome("c", OutcomeKind::NotCarried, at(1000))).unwrap();
+    assert!(c.newest_counted().unwrap().iter().all(|o| o.source.as_str() != "c"));
+}
+
+#[test]
+fn a_commit_to_the_cache_is_heard() {
+    let (_d, c) = open();
+    let heard = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let h = heard.clone();
+    c.on_commit(std::sync::Arc::new(move || {
+        h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    c.record(&outcome("a", OutcomeKind::Unreachable, t("2026-09-24T12:00:00Z"))).unwrap();
+    assert_eq!(heard.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

@@ -406,7 +406,7 @@ mod tests {
         let now = bagholder_core::jiff::Timestamp::now();
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
-        let _ = app.figures.set(f);
+        app.set_figures(f);
         let mut feed = Feed::open(app.clone(), None);
         let first = feed.step(&crate::status::status);
         assert!(first.iter().any(|(name, _)| *name == "snapshot"), "the first step sends the whole state");

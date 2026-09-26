@@ -17,7 +17,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 
 ## High
 
-- [ ] **Source failures never reach the header** (§1, §2 Distribution rate). A failed read of the Bank of Canada, TMX, Yahoo, a payer reader or a quote source is recorded in the cache and nothing more; the header shows only Wealthsimple's failures. `sources/src/rates.rs:185`, `server/src/status.rs:84`.
+- [x] **Source failures never reach the header** (the header's error is now built from each source's newest outcome in the cache, beside Wealthsimple's and the figures' own; a cache commit tells the page) (§1, §2 Distribution rate). A failed read of the Bank of Canada, TMX, Yahoo, a payer reader or a quote source is recorded in the cache and nothing more; the header shows only Wealthsimple's failures. `sources/src/rates.rs:185`, `server/src/status.rs:84`.
 - [ ] **The page never reloads after an update** (§2 Versions). A new server answering only drops the chart cache; the old page keeps running, and a protocol bump reads "Restart Bagholder to finish the update". `web/src/lib/live.ts:258`.
 - [ ] **Back loses the list's scroll** (§4 Trades). Only the window's scroll is kept; the Trades and Holdings tables scroll inside their cards. `router.svelte.ts:73`.
 - [ ] **A sync error is cut to 57 characters in the header** (§4 header). The Chrome-closed message reads "…Choo…". Old page same. `App.svelte:185,302`.
@@ -28,7 +28,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 ## Medium
 
 - [ ] Sync status: `folder scanned` notice missing after Scan now or Watch folder. `ui.svelte.ts:343`.
-- [ ] A failed figures pass's header error is never cleared by a later good pass. `due.rs:45`.
+- [x] A failed figures pass's header error is never cleared by a later good pass (it has its own place now, cleared by the next good pass and by nothing else). `due.rs:45`.
 - [ ] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`.
 - [ ] A disclosure or release banner opens the page only for a held symbol. `notes/channel.svelte.ts:88`.
 - [ ] Short interest is asked for an option's underlying and for a coin. `trade/shorts.svelte.ts:19`.

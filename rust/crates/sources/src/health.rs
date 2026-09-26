@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bagholder_core::jiff::{SignedDuration, Timestamp};
+use bagholder_core::SourceName;
 
 use crate::cache::OutcomeRow;
 use crate::outcome::OutcomeKind;
@@ -81,11 +82,70 @@ pub fn last_of_each(outcomes: &[OutcomeRow]) -> BTreeMap<OutcomeKind, &OutcomeRo
     out
 }
 
+/// Each source by the name a person knows it by, as the header says it.
+pub const LABELS: [(&str, &str); 26] = [
+    (crate::adapters::boc::DAILY, "The Bank of Canada"),
+    (crate::adapters::boc::NOON_SOURCE, "The Bank of Canada's noon archive"),
+    (crate::adapters::holidays::SOURCE, "The Bank of Canada's holiday page"),
+    (crate::adapters::statcan::SOURCE, "Statistics Canada"),
+    (crate::adapters::tmx::SOURCE, "TMX Money"),
+    (crate::adapters::yahoo::SOURCE, "Yahoo Finance"),
+    (crate::adapters::cboe_ca::SOURCE, "Cboe Canada"),
+    (crate::adapters::cboe_options::SOURCE, "Cboe's option chains"),
+    (crate::adapters::coinbase::SPOT_SOURCE, "Coinbase"),
+    (crate::adapters::coinbase::EXCHANGE_SOURCE, "Coinbase Exchange"),
+    (crate::payers::companies::SOURCE, "Newswire.ca"),
+    (crate::payers::bmo::SOURCE, "BMO ETFs"),
+    (crate::payers::evolve::SOURCE, "Evolve ETFs"),
+    (crate::payers::fidelity::SOURCE, "Fidelity Canada"),
+    (crate::payers::globalx::SOURCE, "Global X"),
+    (crate::payers::goldman::SOURCE, "Goldman Sachs Asset Management"),
+    (crate::payers::hamilton::SOURCE, "Hamilton ETFs"),
+    (crate::payers::harvest::SOURCE, "Harvest ETFs"),
+    (crate::payers::ishares_ca::SOURCE, "iShares Canada"),
+    (crate::payers::ishares_us::SOURCE, "iShares"),
+    (crate::payers::ninepoint::SOURCE, "Ninepoint"),
+    (crate::payers::purpose::SOURCE, "Purpose Investments"),
+    (crate::payers::vanguard_ca::SOURCE, "Vanguard Canada"),
+    (crate::payers::vanguard_us::SOURCE, "Vanguard"),
+    (crate::payers::us_pages::YIELDMAX, "YieldMax"),
+    (crate::payers::us_pages::DEFIANCE, "Defiance ETFs"),
+];
+
+/// A source by the name a person knows it by; its own name where none is
+/// listed (a test holds every source this crate asks to a listed one).
+pub fn label(source: &SourceName) -> &str {
+    LABELS.iter().find(|(s, _)| *s == source.as_str()).map_or(source.as_str(), |(_, l)| l)
+}
+
+/// Each source failing now, in plain words, one sentence each, in the order
+/// given: a source whose newest counted outcome (`MarketCache::newest_counted`)
+/// is a refusal or a failure. It stays failing until that source next answers.
+pub fn failures(newest: &[OutcomeRow]) -> Vec<String> {
+    newest.iter().filter_map(failure).collect()
+}
+
+/// A failed outcome as one sentence naming the source and what failed, in the
+/// words the trade chart uses for a failed read
+/// (`bagholder_market::http::describe_failure`): `TMX Money could not be
+/// reached.` None for an outcome that is not a failure of its source.
+pub fn failure(o: &OutcomeRow) -> Option<String> {
+    let what = match o.outcome {
+        // a refusal's status is written into its detail by `Outcome::detail`
+        OutcomeKind::Refused if o.detail.contains("status 429") => "refused the request (too many)",
+        OutcomeKind::Refused => "refused the request",
+        OutcomeKind::Unreachable => "could not be reached",
+        OutcomeKind::Mismatch => "answered in a form Bagholder cannot read",
+        OutcomeKind::Meaning => "answered with data that cannot be right",
+        OutcomeKind::Answered | OutcomeKind::NotCarried => return None,
+    };
+    Some(format!("{} {what}.", label(&o.source)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::contract::DataKind;
-    use bagholder_core::SourceName;
 
     fn at(s: &str) -> Timestamp {
         s.parse().unwrap()
@@ -146,5 +206,44 @@ mod tests {
         assert_eq!(window(&busy, now).len(), 30);
         let quiet: Vec<OutcomeRow> = (0..15).map(|d| row(Answered, &format!("2026-08-{:02}T11:00:00Z", 28 - d), false)).collect();
         assert_eq!(window(&quiet, now).len(), 10);
+    }
+
+    #[test]
+    fn every_source_asked_has_a_name_a_person_knows() {
+        use crate::adapters::*;
+        let mut asked = vec![boc::daily_source(), boc::noon_source(), holidays::source(), statcan::source(), tmx::source(), yahoo::source(), cboe_ca::source(), cboe_options::source(), coinbase::spot_source(), coinbase::exchange_source()];
+        asked.extend(crate::payers::all().iter().map(|p| p.source()));
+        for s in &asked {
+            assert!(LABELS.iter().any(|(n, _)| *n == s.as_str()), "{s} has no name in LABELS");
+        }
+        let names: std::collections::BTreeSet<&str> = LABELS.iter().map(|(n, _)| *n).collect();
+        let labels: std::collections::BTreeSet<&str> = LABELS.iter().map(|(_, l)| *l).collect();
+        assert_eq!((names.len(), labels.len()), (LABELS.len(), LABELS.len()), "each source and each name listed once");
+    }
+
+    fn outcome_row<A>(source: &'static str, o: &crate::outcome::Outcome<A>) -> OutcomeRow {
+        OutcomeRow { source: SourceName::named(source), outcome: o.kind(), detail: o.detail(), ..row(OutcomeKind::Answered, NOW, false) }
+    }
+
+    #[test]
+    fn a_failure_is_said_by_its_source_and_what_failed() {
+        use crate::outcome::Outcome;
+        use std::time::Duration;
+        for (name, _) in LABELS {
+            let refused = |status| outcome_row::<()>(name, &Outcome::Refused { status, retry_after: Some(Duration::from_secs(30)) });
+            let source = SourceName::named(name);
+            let label = label(&source);
+            assert_eq!(failure(&refused(Some(429))), Some(format!("{label} refused the request (too many).")));
+            assert_eq!(failure(&refused(Some(503))), Some(format!("{label} refused the request.")));
+            assert_eq!(failure(&outcome_row::<()>(name, &Outcome::Refused { status: None, retry_after: None })), Some(format!("{label} refused the request.")));
+            assert_eq!(failure(&outcome_row::<()>(name, &Outcome::Unreachable("timed out".into()))), Some(format!("{label} could not be reached.")));
+            assert_eq!(failure(&outcome_row::<()>(name, &Outcome::Meaning("a negative rate".into()))), Some(format!("{label} answered with data that cannot be right.")));
+            assert!(failure(&outcome_row(name, &Outcome::Answered(()))).is_none());
+            assert!(failure(&outcome_row::<()>(name, &Outcome::NotCarried("no such series".into()))).is_none());
+        }
+        // one sentence per failing source, in the order given; an answering one says nothing
+        let (a, b, c) = (LABELS[0].0, LABELS[1].0, LABELS[2].0);
+        let newest = [outcome_row(a, &Outcome::<()>::Unreachable("reset".into())), outcome_row(b, &Outcome::Answered(())), outcome_row::<()>(c, &Outcome::Refused { status: Some(429), retry_after: None })];
+        assert_eq!(failures(&newest), vec![format!("{} could not be reached.", LABELS[0].1), format!("{} refused the request (too many).", LABELS[2].1)]);
     }
 }

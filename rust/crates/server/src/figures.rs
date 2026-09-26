@@ -103,6 +103,12 @@ pub struct Figures {
     version: std::sync::atomic::AtomicU64,
     /// What the page calls each instrument by the broker, read once per record.
     names: RwLock<Option<crate::wire::build::Names>>,
+    /// Told of every commit to the cache on a connection `cache` hands out (the
+    /// app's bus, `App::set_figures`): a source's outcome recorded is a change
+    /// the header may show.
+    heard: std::sync::OnceLock<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    /// The connection the header's source failures are read on, opened once.
+    failures_conn: std::sync::Mutex<Option<MarketCache>>,
 }
 
 impl Figures {
@@ -117,7 +123,7 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), names: RwLock::new(None) };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), names: RwLock::new(None), heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
@@ -149,9 +155,33 @@ impl Figures {
         Book::open_in(&self.home, crate::app::APP_VERSION, Timestamp::now()).map(|(b, _)| b).map_err(err)
     }
 
-    /// A connection to the market cache, of this thread's own.
+    /// A connection to the market cache, of this thread's own; its commits are
+    /// heard (`hear`).
     pub fn cache(&self) -> Result<MarketCache, String> {
-        MarketCache::open(&self.home.join(CACHE_FILE), crate::app::APP_VERSION, Timestamp::now()).map(|(c, _)| c).map_err(err)
+        let (c, _) = MarketCache::open(&self.home.join(CACHE_FILE), crate::app::APP_VERSION, Timestamp::now()).map_err(err)?;
+        if let Some(heard) = self.heard.get() {
+            c.on_commit(heard.clone());
+        }
+        Ok(c)
+    }
+
+    /// Have `heard` told of every commit to the cache from now on. Once: the
+    /// app's bus.
+    pub fn hear(&self, heard: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.heard.set(heard);
+    }
+
+    /// Each market source failing now, one sentence each (`health::failures`):
+    /// read from what the cache recorded of each source, the one record of
+    /// them, so a failure shows exactly until that source next answers.
+    pub fn source_failures(&self) -> Result<Vec<String>, String> {
+        let mut conn = self.failures_conn.lock().unwrap_or_else(|e| e.into_inner());
+        if conn.is_none() {
+            // only read on: it has nothing of its own to be heard
+            *conn = Some(MarketCache::open(&self.home.join(CACHE_FILE), crate::app::APP_VERSION, Timestamp::now()).map_err(err)?.0);
+        }
+        let newest = conn.as_ref().expect("opened above").newest_counted().map_err(err)?;
+        Ok(bagholder_sources::health::failures(&newest))
     }
 
     /// Read the engine, once it is built.

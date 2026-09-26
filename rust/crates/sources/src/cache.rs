@@ -206,6 +206,16 @@ impl MarketCache {
         &self.conn
     }
 
+    /// Have `heard` run at each commit on this connection. It runs inside
+    /// SQLite's commit, on the writer's thread: it must only signal a waiter and
+    /// return, never touch the database.
+    pub fn on_commit(&self, heard: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.conn.commit_hook(Some(move || {
+            heard();
+            false // never veto the commit
+        }));
+    }
+
     // -- quotes ----------------------------------------------------------------
 
     /// Keep a quote as the latest from its source for its instrument.
@@ -477,9 +487,25 @@ impl MarketCache {
 
     /// A source's outcomes, newest first.
     pub fn outcomes(&self, of: &SourceName) -> Result<Vec<OutcomeRow>> {
+        self.outcome_rows("SELECT source, host, kind, instrument_id, outcome, detail, shape_change, at FROM outcomes WHERE source = ?1 ORDER BY id DESC", params![of.as_str()])
+    }
+
+    /// Each source's newest outcome that says how the source is, one per
+    /// source: a "not carried" answer says nothing of it and is passed over
+    /// (`health`). The record keeps the newest of each kind, so this is there
+    /// for every source that has answered or failed.
+    pub fn newest_counted(&self) -> Result<Vec<OutcomeRow>> {
+        self.outcome_rows(
+            "SELECT source, host, kind, instrument_id, outcome, detail, shape_change, at FROM outcomes
+              WHERE id IN (SELECT MAX(id) FROM outcomes WHERE outcome != ?1 GROUP BY source) ORDER BY source",
+            params![OutcomeKind::NotCarried.as_str()],
+        )
+    }
+
+    fn outcome_rows(&self, sql: &str, args: impl rusqlite::Params) -> Result<Vec<OutcomeRow>> {
         const T: &str = "outcomes";
-        let mut stmt = self.conn.prepare("SELECT source, host, kind, instrument_id, outcome, detail, shape_change, at FROM outcomes WHERE source = ?1 ORDER BY id DESC")?;
-        let rows = stmt.query_map(params![of.as_str()], |r| {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(args, |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, Option<String>>(6)?, r.get::<_, String>(7)?))
         })?;
         let mut out = Vec::new();

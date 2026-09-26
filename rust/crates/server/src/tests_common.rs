@@ -36,7 +36,7 @@ fn made() -> &'static Arc<App> {
         let now = bagholder_core::jiff::Timestamp::now();
         let f = crate::figures::Figures::open(&book, now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
-        let _ = app.figures.set(f);
+        app.set_figures(f);
         app
     })
 }

@@ -121,7 +121,7 @@ fn serve() -> i32 {
                 (Err(e), _) => log(&format!("bagholder: the store could not be opened: {e}")),
                 (_, Err(e)) => log(&format!("bagholder: {e}")),
             }
-            let _ = a.figures.set(f);
+            a.set_figures(f);
         }
         Err(e) => {
             log(&format!("bagholder: {e}"));

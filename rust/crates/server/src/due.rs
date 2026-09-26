@@ -42,15 +42,7 @@ pub fn run(app: Arc<App>) {
     while !app.stopping() {
         let now = Timestamp::now();
         let before = f.version();
-        let next = match pass(&app, f, now) {
-            Ok(next) => next,
-            Err(e) => {
-                // shown until a pass succeeds; looked at again on the next change
-                app.state.lock().unwrap().error = format!("The figures could not be brought up to date: {e}");
-                log(&format!("bagholder: the figures could not be brought up to date: {e}"));
-                None
-            }
-        };
+        let next = settle(&app, pass(&app, f, now));
         if f.version() != before {
             // a figure moved: every page's stream looks
             app.events.signal();
@@ -64,6 +56,34 @@ pub fn run(app: Arc<App>) {
             None => {
                 app.events.park_until(&app, || f.woken());
             }
+        }
+    }
+}
+
+/// What a pass came to, in the header: its failure is shown until a pass
+/// succeeds, and the pass that does clears it (and only it: Wealthsimple's
+/// errors and the sources' failures are each cleared by their own success). A
+/// failed pass is looked at again on the next change.
+pub fn settle(app: &App, passed: Result<Option<Timestamp>, String>) -> Option<Timestamp> {
+    match passed {
+        Ok(next) => {
+            // written (and so said to the page) only when it changes
+            let mut st = app.state.lock().unwrap();
+            if !st.figures_error.is_empty() {
+                st.figures_error.clear();
+            }
+            next
+        }
+        Err(e) => {
+            let said = format!("The figures could not be brought up to date: {e}");
+            {
+                let mut st = app.state.lock().unwrap();
+                if st.figures_error != said {
+                    st.figures_error = said;
+                }
+            }
+            log(&format!("bagholder: the figures could not be brought up to date: {e}"));
+            None
         }
     }
 }

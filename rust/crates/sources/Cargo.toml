@@ -17,7 +17,8 @@ bagholder-sqlite = { path = "../sqlite" }
 bagholder-net = { path = "../net" }
 # the facts the readers write, and the instruments they read for
 bagholder-book = { path = "../book" }
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# `hooks`: the running server hears each commit to the cache (`MarketCache::on_commit`)
+rusqlite = { version = "0.32", features = ["bundled", "backup", "hooks"] }
 
 [dev-dependencies]
 tempfile = "3"

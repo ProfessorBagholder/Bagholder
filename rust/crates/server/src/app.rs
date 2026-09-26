@@ -33,6 +33,8 @@ pub struct State {
     pub error: String,
     /// What the reading of balances and buying power between syncs could not read; cleared by the next read that could.
     pub portfolio_error: String,
+    /// Why the last pass of the figures failed; cleared by the next pass that succeeds.
+    pub figures_error: String,
     pub sync_fails: i64,
     pub sync_first_fail: String,
     pub login_attempt: i64,
@@ -182,6 +184,15 @@ impl App {
         // every connection passes here: a test never opens the live database
         bagholder_store::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
         self.store.get()
+    }
+
+    /// Hold the figure path, its cache's commits heard on this app's bus as the
+    /// store's are: a source's outcome recorded reaches the header the same way
+    /// any change does. Once; a second call leaves the first.
+    pub fn set_figures(&self, f: crate::figures::Figures) {
+        let events = self.events.clone();
+        f.hear(Arc::new(move || events.signal()));
+        let _ = self.figures.set(f);
     }
 
     pub fn ws_home(&self) -> bagholder_ws::session::Home {
