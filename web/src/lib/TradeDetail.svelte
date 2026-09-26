@@ -7,7 +7,7 @@
   // the short-interest cards and the disclosures list.
   import type { Trade, Fill } from './model'
   import { money, money0, pct, px, qty, hold, color, localWhen, waiting } from './fmt'
-  import { waits } from './dec'
+  import { sign, waits } from './dec'
   import { symText } from './sym'
   import { ICONS } from './icons'
   import { sort, toggleSort, sortRows } from './sort.svelte'
@@ -16,6 +16,7 @@
   import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
   import { watchDoc } from './live'
   import { tradeChart } from './actions/tradeChart'
+  import { fillsChart } from './actions/fillsChart'
   import EventEntry from './EventEntry.svelte'
   import ShortInterest from './trade/ShortInterest.svelte'
   import Disclosures from './trade/Disclosures.svelte'
@@ -87,6 +88,8 @@
 
   const candles = $derived(!!loaded && loaded.hist.bars.length > 0 && loaded.hist.bars.every((b: Bar) => b.open != null && b.high != null && b.low != null))
   const chartFills = $derived(fills || [])
+  // no history source covers the instrument: its priced executions stand on their own time axis
+  const pricedOnly = $derived(!!loaded && !candles && loaded.hist.uncovered && chartFills.some((f) => !waits(f.price) && sign(f.price) > 0))
   const pillsAvailable = $derived(loaded ? loaded.hist.available : [])
 
   function pickTf(tf: string) {
@@ -270,6 +273,8 @@
     </div>
     {#if loaded && candles}
       <div use:tradeChart={{ bars: loaded.hist.bars, fills: chartFills, tf: loaded.tf, colors, rangeKey: trade.id + '|' + loaded.tf, provisional: loaded.provisional, open: trade.exitDate == null }} style="position:relative;height:300px"></div>
+    {:else if pricedOnly}
+      <div use:fillsChart={{ fills: chartFills, colors }} style="position:relative;height:300px"></div>
     {:else}
       <div style="position:relative;height:300px">
         {#if loaded}<div class="muted empty" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:12px;text-align:center;padding:0 24px">{loaded.hist.reason || 'No price history for this span.'}</div>{/if}

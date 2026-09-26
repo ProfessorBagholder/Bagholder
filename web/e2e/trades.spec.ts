@@ -255,7 +255,7 @@ test.describe('Trade detail', () => {
     const model = await getModel(request)
     const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
     // what is offered is the server's word (it drops an intraday timeframe a recent read could not supply)
-    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1h', '4h', '1d', '1w', '1M'], reason: '', pending: false } }))
+    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, source: 'tmx', bars: [], available: ['1h', '4h', '1d', '1w', '1M'], reason: '', pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     const pills = page.locator('#page .pill')
@@ -267,7 +267,7 @@ test.describe('Trade detail', () => {
   test('only the timeframes the server offers are pills: without intraday bars, the daily ones alone', async ({ page, request }) => {
     const model = await getModel(request)
     const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
-    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1d', '1w', '1M'], reason: '', pending: false } }))
+    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, source: 'tmx', bars: [], available: ['1d', '1w', '1M'], reason: '', pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     await expect(page.locator('#page .pill')).toHaveText(['1D', '1W', '1M'])
@@ -305,7 +305,7 @@ test.describe('Trade detail', () => {
     const model = await getModel(request)
     const t = closed(model).find((x: any) => x.kind === 'Shares')
     const reason = 'TMX Money could not be reached; Yahoo Finance could not be reached.'
-    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1d', '1w', '1M'], reason, pending: false } }))
+    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, source: 'tmx', bars: [], available: ['1d', '1w', '1M'], reason, pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
     await expect(page.locator('#page .empty').first()).toHaveText(reason)

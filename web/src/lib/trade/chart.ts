@@ -5,7 +5,7 @@
 // them verbatim.
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
-import { abs, sign, waits, type Dec, type Fig } from '../dec'
+import { abs, plot, sign, waits, type Dec, type Fig } from '../dec'
 import { lookup, query } from '../api'
 import type { ChartHistory, DayBar, HistoryQuery, TimeBar } from '../generated/chart'
 
@@ -13,7 +13,8 @@ export type { DayBar, TimeBar } from '../generated/chart'
 // A daily (or weekly/monthly) bar has a `date`; an intraday one has a `time`
 // instead -- never both. `'date' in b` tells the two apart.
 export type Bar = DayBar | TimeBar
-export type History = Pick<ChartHistory, 'reason' | 'available' | 'chartSymbol' | 'pending'> & { bars: Bar[] }
+/** `uncovered`: the server answered that no history source covers the instrument (a failed request is not that). */
+export type History = Pick<ChartHistory, 'reason' | 'available' | 'chartSymbol' | 'pending'> & { bars: Bar[]; uncovered: boolean }
 export interface ChartColors {
   text: string
   grid: string
@@ -89,8 +90,8 @@ export function historyKey(t: Trade, tf: string): string {
 export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal): Promise<History> {
   const r = await histories.read({ query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal })
   // a request that failed is said in the chart's place, in the failure's own words, never as a span with no bars
-  if (!('bars' in r)) return { reason: r.error || 'The chart was not answered.', bars: [], available: [], chartSymbol: t.symbol, pending: false }
-  return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending }
+  if (!('bars' in r)) return { reason: r.error || 'The chart was not answered.', bars: [], available: [], chartSymbol: t.symbol, pending: false, uncovered: false }
+  return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending, uncovered: !r.source }
 }
 
 export function underlyingOf(t: Trade): string {
@@ -140,4 +141,34 @@ export function fillMarkers(fills: Fill[], bars: Bar[], c: ChartColors): FillMar
       qty(unsigned(f.qty)) +
       (!waits(f.price) && sign(f.price) > 0 ? ' @ ' + px(f.price) : f.flags.indexOf('reward') >= 0 ? ' reward' : ''),
   }))
+}
+
+export interface FillPoint {
+  time: number | string
+  price: number
+  position: 'atPriceBottom' | 'atPriceTop'
+  shape: 'arrowUp' | 'arrowDown'
+  color: string
+  text: string
+}
+/**
+ * With no history source, the priced executions themselves on a time axis: each at
+ * its own price and time (its day where any fill's time was not recorded), in time
+ * order, marked as on the bar chart. A fill with no price is not placed: it has no
+ * height. Nothing joins them.
+ */
+export function fillPoints(fills: Fill[], c: ChartColors): FillPoint[] {
+  const priced = fills.filter((f) => !waits(f.price) && sign(f.price) > 0)
+  const timed = priced.length > 0 && priced.every((f) => f.when != null && isFinite(Date.parse(f.when)))
+  const labels = fillMarkers(priced, [], c)
+  return priced
+    .map((f, i) => ({
+      time: timed ? localTime(Math.round(Date.parse(f.when as string) / 1000)) : f.date,
+      price: plot(f.price as Dec),
+      position: (f.side === 'BUY' ? 'atPriceBottom' : 'atPriceTop') as 'atPriceBottom' | 'atPriceTop',
+      shape: labels[i].shape,
+      color: labels[i].color,
+      text: labels[i].text,
+    }))
+    .sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
 }

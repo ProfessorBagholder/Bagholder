@@ -140,3 +140,20 @@ test("a chart request that fails says the failure in the chart's place, never th
   await expect(page.locator('#page').getByText(error, { exact: true })).toBeVisible()
   await expect(page.locator('#page').getByText('No price history for this span.')).toHaveCount(0)
 })
+
+test('with no history source for the instrument, its priced executions stand on a time axis; a covered span with no bars says why', async ({ page }) => {
+  const answer = (source: string) => JSON.stringify({ ok: true, symbol: 'X', chartSymbol: 'X', source, tf: '1d', available: source ? ['1d'] : [], bars: [], pending: false, reason: source ? 'No bars for this span from TMX Money.' : 'No price source covers this instrument.' })
+  let source = ''
+  await page.route('**/api/history?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: answer(source) }))
+  await openFirstTrade(page)
+  const executions = page.locator('#page [aria-label^="Executions chart"]')
+  await expect(executions).toBeVisible()
+  await expect(executions.locator('canvas').first()).toBeVisible()
+  await expect(page.locator('#page').getByText('No price source covers this instrument.')).toHaveCount(0)
+  // a new page asks again: bars once answered are kept for the page's life
+  source = 'tmx'
+  await page.goto('about:blank')
+  await openFirstTrade(page)
+  await expect(page.locator('#page').getByText('No bars for this span from TMX Money.')).toBeVisible()
+  await expect(executions).toHaveCount(0)
+})
