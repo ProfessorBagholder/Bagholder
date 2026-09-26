@@ -3,9 +3,13 @@
 
 /** Each document's lists of rows, by path (`*` for a list's rows or a map's values), and the field that tells the rows apart. */
 export const ROW_KEYS: Record<string, Record<string, string>> = {
-  'model': {
+  'book': {
     'options.accounts': 'id',
     'options.instruments': 'id',
+    'accounts': 'id',
+    'waiting': 'transaction',
+  },
+  'dashboard': {
     'equity.series': 'd',
     'equity.pnl.series': 'd',
     'years': 'year',
@@ -13,16 +17,28 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'bySymbol': 'id',
     'grades.buckets': 'grade',
     'queue': 'id',
-    'trades': 'id',
-    'positions': 'id',
+  },
+  'positions': {
     'portfolio.allocation': 'label',
+    'positions': 'id',
+  },
+  'trades': {
+    'trades': 'id',
+  },
+  'cashflow': {
     'cashflow.tiles': 'label',
     'cashflow.months': 'key',
     'cashflow.holdings': 'id',
     'cashflow.income': 'label',
     'cashflow.rows': 'id',
-    'accounts': 'id',
-    'waiting': 'transaction',
+  },
+  'trade': {
+  },
+  'exposure': {
+    'sectors': 'name',
+    'regions': 'name',
+  },
+  'markets': {
     'markets.holdings': 'id',
     'markets.watchlist': 'symbol',
     'markets.news': 'id',
@@ -30,8 +46,8 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'markets.universes.*': 'id',
     'markets.tiles': 'symbol',
     'markets.instruments': 'symbol',
-    'sectors': 'name',
-    'regions': 'name',
+  },
+  'status': {
   },
   'orders': {
     'orders': 'id',

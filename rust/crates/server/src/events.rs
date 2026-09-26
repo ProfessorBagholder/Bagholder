@@ -35,7 +35,15 @@ use std::time::Duration;
 
 use crate::app::App;
 
-type Wanted = std::collections::BTreeMap<String, Value>;
+/// What a page is showing: each subscription's key, its parameters, and the
+/// version of it the page already holds (opened again with what it kept).
+type Wanted = std::collections::BTreeMap<String, Want>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Want {
+    pub params: Value,
+    pub have: Option<String>,
+}
 
 /// Every page's live connection to this app: the bell that wakes a stream (and
 /// anything parked) when something changed, how many pages are looking now, and
@@ -144,7 +152,11 @@ impl Bus {
         let fresh: Vec<String> = {
             let mut w = wanted.lock().unwrap_or_else(|e| e.into_inner());
             let fresh = docs.keys().filter(|k| !w.contains_key(*k)).cloned().collect();
-            *w = docs;
+            // a subscription kept with the same parameters keeps what it was sent
+            *w = docs.into_iter().map(|(k, want)| match w.get(&k) {
+                Some(was) if was.params == want.params => (k, was.clone()),
+                _ => (k, want),
+            }).collect();
             fresh
         };
         // a document just opened is worth reading fresh: once, now, in the background
@@ -238,60 +250,49 @@ impl Drop for Registered {
     }
 }
 
-/// One page's stream: what it was last sent, and so what to send it next.
+/// One page's stream: what each of its subscriptions was last sent, and so what
+/// to send it next.
 pub struct Feed {
     app: Arc<App>,
     _watching: Watching,
     registered: Registered,
     wanted: Arc<Mutex<Wanted>>,
-    /// The page's filters in the engine's terms, or why they could not be read.
-    filters: Result<bagholder_engine::scope::Filters, String>,
-    /// The figures last sent, the change they were built at, and the status.
-    sent: Option<(Arc<crate::wire::figures::Figures>, crate::status::Status)>,
-    built: Option<(u64, usize)>,
-    refused: bool,
-    sent_docs: std::collections::BTreeMap<String, crate::docs::Doc>,
+    /// The figures' version the views were last brought forward to.
+    at: u64,
+    /// The market's context the views were last built on.
+    base: usize,
+    /// The views of the figures this page shows, by key, with their parameters.
+    views: std::collections::BTreeMap<String, (Value, Box<dyn crate::views::View>)>,
+    /// The other documents it shows, as last sent.
+    sent_docs: std::collections::BTreeMap<String, (Value, crate::docs::Doc)>,
+    /// The header's status as last sent, for the filters it was asked with.
+    status: Option<(Value, crate::status::Status)>,
+    /// Subscriptions refused, with the parameters they were refused for: said once.
+    refused: std::collections::BTreeMap<String, Value>,
 }
 
 /// One message on the stream: its event name and its data.
 pub type Message = (&'static str, Value);
 
+/// A version as the page keeps it: text, since a page's numbers stop being exact
+/// above 2^53.
+fn v_text(v: u64) -> String {
+    format!("{v:016x}")
+}
+
 impl Feed {
-    /// `filters` is the page's filters as the JSON it keeps them in, read once
-    /// here, strictly: a filter the engine does not know is said to the page.
-    pub fn open(app: Arc<App>, filters: Option<String>) -> Feed {
+    pub fn open(app: Arc<App>) -> Feed {
         let bus = app.events.clone();
         let (registered, wanted) = Registered::new(&bus);
-        let filters = match filters {
-            None => Ok(Default::default()),
-            Some(raw) => serde_json::from_str::<crate::wire::filters::Filters>(&raw).map_err(|e| format!("the filters: {e}")).and_then(|f| f.to_engine()),
-        };
-        Feed { app, _watching: Watching::new(&bus), registered, wanted, filters, sent: None, built: None, refused: false, sent_docs: Default::default() }
-    }
-
-    /// The figures document under this page's filters, when anything it is built
-    /// from moved since the last: the engine's figures, or the market's context.
-    fn figures(&mut self) -> Result<Option<Arc<crate::wire::figures::Figures>>, String> {
-        let filters = self.filters.clone()?;
-        let Some(f) = self.app.figures.get() else { return Err("the figures are not open".into()) };
-        // the market's context still comes from the earlier model's readers (stage 5)
-        let base = self.app.market_base().map_err(|e| format!("the market's context: {e}"))?;
-        let key = (f.version(), Arc::as_ptr(&base) as usize);
-        if self.built == Some(key) && self.sent.is_some() {
-            return Ok(None);
-        }
-        let names = f.names()?;
-        let Some(doc) = f.read(|e| crate::wire::build::build(e, &names, &filters, &base)) else { return Ok(None) };
-        self.built = Some(key);
-        Ok(Some(Arc::new(doc)))
+        Feed { app, _watching: Watching::new(&bus), registered, wanted, at: 0, base: 0, views: Default::default(), sent_docs: Default::default(), status: None, refused: Default::default() }
     }
 
     /// The header's status as this page shows it: its badge counts the Orders panel's
     /// Pending cards, and the panel follows the page's account filter (`SPEC.md` §4,
     /// Orders), so the count is of the accounts in this page's scope.
-    pub(crate) fn status_for(&self, status: &dyn Fn(&Arc<App>) -> crate::status::Status) -> crate::status::Status {
+    pub(crate) fn status_for(&self, status: &dyn Fn(&Arc<App>) -> crate::status::Status, params: &Value) -> crate::status::Status {
         let mut now = status(&self.app);
-        let Ok(filters) = &self.filters else { return now };
+        let filters = params.get("filters").cloned().map(serde_json::from_value::<crate::wire::filters::Filters>).and_then(Result::ok).and_then(|f| f.to_engine().ok()).unwrap_or_default();
         if filters.accounts.is_empty() {
             return now;
         }
@@ -319,74 +320,161 @@ impl Feed {
         ("hello", serde_json::json!({"id": self.id()}))
     }
 
+    /// A state first sent to the page: its version alone when the page holds it
+    /// already, the whole of it otherwise.
+    fn first(out: &mut Vec<Message>, key: &str, have: &Option<String>, v: u64, data: impl FnOnce() -> Value) {
+        let v = v_text(v);
+        if have.as_deref() == Some(v.as_str()) {
+            out.push(("same", serde_json::json!({"doc": key, "v": v})));
+        } else {
+            out.push(("snapshot", serde_json::json!({"doc": key, "data": data(), "v": v})));
+        }
+    }
+
     /// What differs now from what this page was last sent: nothing when nothing
-    /// does. Reads the store and may rebuild a layer of the model, so it runs off
-    /// the runtime's own threads.
+    /// does. Reads the store and the engine, so it runs off the runtime's own threads.
     pub fn step(&mut self, status: &dyn Fn(&Arc<App>) -> crate::status::Status) -> Vec<Message> {
         let mut out: Vec<Message> = Vec::new();
         if self.app.events.take_resync(self.id()) {
             // the page missed a message: everything it shows is sent whole again
-            self.sent = None;
-            self.built = None;
+            self.views.clear();
             self.sent_docs.clear();
+            self.status = None;
+            self.refused.clear();
+            let mut w = self.wanted.lock().unwrap_or_else(|e| e.into_inner());
+            for want in w.values_mut() {
+                want.have = None;
+            }
         }
-        match self.figures() {
-            Err(why) => {
-                // said once; the page shows it until its filters change
-                if !self.refused {
-                    self.refused = true;
-                    out.push(("refused", serde_json::json!({"doc": "model", "error": why})));
-                }
+        let want: Wanted = self.wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.views.retain(|k, (params, _)| want.get(k).is_some_and(|w| w.params == *params));
+        self.sent_docs.retain(|k, (params, _)| want.get(k).is_some_and(|w| w.params == *params));
+        self.refused.retain(|k, params| want.get(k).is_some_and(|w| w.params == *params));
+        self.figures(&want, &mut out);
+        for (key, w) in &want {
+            if self.refused.contains_key(key) {
+                continue;
             }
-            Ok(None) => {
-                // the figures stand: only the status can have moved
-                if let Some((doc, was_status)) = &self.sent {
-                    let now = self.status_for(status);
-                    let ops = bagholder_diff::typed_under(&["status"], was_status, &now);
-                    if !ops.is_empty() {
-                        out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
-                    }
-                    self.sent = Some((doc.clone(), now));
-                }
-            }
-            Ok(Some(doc)) => {
-                let now = self.status_for(status);
-                match &self.sent {
-                    None => {
-                        let mut whole = serde_json::to_value(&*doc).unwrap_or(Value::Null);
-                        whole["status"] = serde_json::to_value(&now).unwrap_or(Value::Null);
-                        out.push(("snapshot", serde_json::json!({"doc": "model", "data": whole})));
-                    }
-                    Some((was, was_status)) => {
-                        let mut ops = bagholder_diff::typed(&**was, &*doc);
-                        ops.extend(bagholder_diff::typed_under(&["status"], was_status, &now));
+            if key == "status" {
+                let now = self.status_for(status, &w.params);
+                match &self.status {
+                    Some((p, was)) if *p == w.params => {
+                        let ops = bagholder_diff::typed(was, &now);
                         if !ops.is_empty() {
-                            out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
+                            out.push(("patch", serde_json::json!({"doc": key, "ops": ops, "v": v_text(crate::views::version_of(&now))})));
                         }
                     }
+                    _ => Self::first(&mut out, key, &w.have, crate::views::version_of(&now), || serde_json::to_value(&now).unwrap_or(Value::Null)),
                 }
-                self.sent = Some((doc, now));
+                self.status = Some((w.params.clone(), now));
+                continue;
             }
-        }
-        // the documents this page is showing now
-        let want: Wanted = self.wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        self.sent_docs.retain(|k, _| want.contains_key(k));
-        for key in want.keys() {
+            if crate::views::open(key, &Value::Null).is_some() {
+                continue; // a view of the figures: above
+            }
             let app = &self.app;
             let key2 = key.clone();
             let Ok(Some(now)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::docs::read(app, &key2))) else { continue };
             match self.sent_docs.get(key) {
-                None => out.push(("snapshot", serde_json::json!({"doc": key, "data": now}))),
-                Some(was) => {
+                None => Self::first(&mut out, key, &w.have, crate::views::version_of(&now), || serde_json::to_value(&now).unwrap_or(Value::Null)),
+                Some((_, was)) => {
                     let ops = bagholder_diff::typed(was, &now);
                     if !ops.is_empty() {
-                        out.push(("patch", serde_json::json!({"doc": key, "ops": ops})));
+                        out.push(("patch", serde_json::json!({"doc": key, "ops": ops, "v": v_text(crate::views::version_of(&now))})));
                     }
                 }
             }
-            self.sent_docs.insert(key.clone(), now);
+            self.sent_docs.insert(key.clone(), (w.params.clone(), now));
         }
         out
+    }
+
+    /// The views of the figures this page shows: each opened is built whole, and
+    /// each already open is brought forward by what moved since it was last.
+    fn figures(&mut self, want: &Wanted, out: &mut Vec<Message>) {
+        // each subscription asked for anew is opened, its parameters read strictly:
+        // one they do not fit is said to the page once
+        let mut fresh: Vec<String> = Vec::new();
+        for (key, w) in want {
+            if self.views.contains_key(key) || self.refused.contains_key(key) {
+                continue;
+            }
+            match crate::views::open(key, &w.params) {
+                None => {}
+                Some(Err(why)) => {
+                    self.refused.insert(key.clone(), w.params.clone());
+                    out.push(("refused", serde_json::json!({"doc": key, "error": why})));
+                }
+                Some(Ok(view)) => {
+                    self.views.insert(key.clone(), (w.params.clone(), view));
+                    fresh.push(key.clone());
+                }
+            }
+        }
+        if self.views.is_empty() {
+            return;
+        }
+        let Some(f) = self.app.figures.get() else { return };
+        let names = match f.names() {
+            Ok(n) => n,
+            Err(e) => {
+                crate::app::log(&format!("bagholder: the broker's names could not be read: {e}"));
+                return;
+            }
+        };
+        // the market's context still comes from the earlier model's readers (moved in part A)
+        let base = match self.app.market_base() {
+            Ok(b) => b,
+            Err(e) => {
+                for key in self.views.keys() {
+                    out.push(("refused", serde_json::json!({"doc": key, "error": format!("the market's context: {e}")})));
+                }
+                self.views.clear();
+                return;
+            }
+        };
+        let base_ptr = Arc::as_ptr(&base) as usize;
+        let base_moved = self.base != base_ptr;
+        let at = self.at;
+        let views = &mut self.views;
+        let done = f.read(|engine| {
+            let since = f.moved_since(at);
+            let now_at = f.version();
+            let cx = crate::views::Cx { engine, names: &names, base: &base };
+            let none = bagholder_engine::engine::Moved::default();
+            for (key, (_, view)) in views.iter_mut() {
+                if fresh.contains(key) {
+                    let data = view.snapshot(&cx);
+                    Self::first(out, key, &want[key].have, view.version(), || data);
+                    continue;
+                }
+                let moved = match &since {
+                    crate::figures::Since::Everything => {
+                        let data = view.snapshot(&cx);
+                        out.push(("snapshot", serde_json::json!({"doc": key, "data": data, "v": v_text(view.version())})));
+                        continue;
+                    }
+                    crate::figures::Since::Moved(m) => m,
+                    crate::figures::Since::Nothing => &none,
+                };
+                if !view.reads(moved, base_moved) {
+                    continue;
+                }
+                let ops = view.update(&cx, moved, base_moved);
+                if !ops.is_empty() {
+                    out.push(("patch", serde_json::json!({"doc": key, "ops": ops, "v": v_text(view.version())})));
+                }
+            }
+            now_at
+        });
+        match done {
+            Some(now_at) => {
+                self.at = now_at;
+                self.base = base_ptr;
+            }
+            // nothing built yet (no page has stated a zone): opened again when it is
+            None => self.views.retain(|k, _| !fresh.contains(k)),
+        }
     }
 }
 
@@ -441,13 +529,15 @@ mod tests {
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
-        let mut feed = Feed::open(app.clone(), None);
+        let mut feed = Feed::open(app.clone());
+        let want = |params: Value| Want { params, have: None };
+        assert!(app.events.watch(&app, feed.id(), [("trades".to_string(), want(serde_json::json!({}))), ("status".to_string(), want(serde_json::json!({})))].into_iter().collect()));
         let first = feed.step(&crate::status::status);
-        assert!(first.iter().any(|(name, _)| *name == "snapshot"), "the first step sends the whole state");
+        assert!(first.iter().any(|(name, m)| *name == "snapshot" && m["doc"] == "trades"), "the first step sends the whole state: {first:?}");
         assert!(feed.step(&crate::status::status).is_empty(), "nothing moved, nothing sent");
         assert!(app.events.resync(feed.id()));
         let again = feed.step(&crate::status::status);
-        assert!(again.iter().any(|(name, m)| *name == "snapshot" && m["doc"] == "model" && m["data"]["trades"].is_array()), "{again:?}");
+        assert!(again.iter().any(|(name, m)| *name == "snapshot" && m["doc"] == "trades" && m["data"]["trades"].is_array()), "{again:?}");
         // a stream that is not open is not one to resync
         assert!(!app.events.resync(u64::MAX));
     }
@@ -456,7 +546,9 @@ mod tests {
     fn test_filters_the_engine_does_not_know_are_said_to_the_page() {
         let _g = crate::tests_common::guard();
         let app = crate::tests_common::app();
-        let mut feed = Feed::open(app.clone(), Some(r#"{"lists":{"account":["TFSA"]}}"#.into()));
+        let mut feed = Feed::open(app.clone());
+        let filters: Value = serde_json::from_str(r#"{"filters":{"lists":{"account":["TFSA"]}}}"#).unwrap();
+        assert!(app.events.watch(&app, feed.id(), [("dashboard".to_string(), Want { params: filters, have: None })].into_iter().collect()));
         let said = feed.step(&crate::status::status);
         assert!(said.iter().any(|(name, m)| *name == "refused" && m["error"].as_str().is_some_and(|e| e.contains("TFSA"))), "{said:?}");
         assert!(feed.step(&crate::status::status).is_empty(), "said once");

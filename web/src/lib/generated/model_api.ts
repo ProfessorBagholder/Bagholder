@@ -39,12 +39,6 @@ grade: string, tags: Array<string>, };
 
 export type JournalAnswer = { ok: true, };
 
-export type FiguresQuery = { 
-/**
- * The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
- */
-filters: string | null, };
-
 export type Resync = { 
 /**
  * the stream this page holds, from its `hello`

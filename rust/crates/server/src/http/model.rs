@@ -15,7 +15,6 @@ use crate::app::App;
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
         get "/api/status" => status;
-        get "/api/figures" => figures;
         get "/api/figures/detail" => figures_detail;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
@@ -37,34 +36,6 @@ pub fn routes() -> Routed {
 
 async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswer> {
     super::answer(move || crate::status::answer(&state.app)).await
-}
-
-#[derive(Deserialize, TS)]
-pub struct FiguresQuery {
-    /// The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
-    #[serde(default, deserialize_with = "trimmed")]
-    filters: Option<String>,
-}
-
-/// `GET /api/figures`: the figures document from the engine, for the page's
-/// filters. A filter the engine does not know is refused, naming it; before a
-/// page has stated its zone there is nothing to build.
-async fn figures(State(state): State<AppState>, Params(q): Params<FiguresQuery>) -> Api<crate::wire::figures::Figures> {
-    let app = state.app;
-    let built = blocking(move || -> Result<crate::wire::figures::Figures, ApiError> {
-        let filters: crate::wire::filters::Filters = match q.filters {
-            Some(raw) => serde_json::from_str(&raw).map_err(|e| ApiError::BadRequest(format!("the filters: {e}")))?,
-            None => Default::default(),
-        };
-        let filters = filters.to_engine().map_err(ApiError::BadRequest)?;
-        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
-        let book = f.book().map_err(ApiError::Failed)?;
-        let names = f.read(|e| crate::wire::build::Names::load(&book, e.inputs())).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?.map_err(ApiError::Failed)?;
-        let base = app.market_base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
-        f.read(|e| crate::wire::build::build(e, &names, &filters, &base)).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))
-    })
-    .await??;
-    Ok(Json(built))
 }
 
 /// `GET /api/figures/detail`: a trade's or a holding's fills, by its id.

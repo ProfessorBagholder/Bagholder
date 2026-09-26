@@ -31,6 +31,7 @@ mod session;
 mod status;
 mod update;
 mod versions;
+mod views;
 mod wire;
 
 use std::path::{Path, PathBuf};

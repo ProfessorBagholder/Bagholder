@@ -18,9 +18,6 @@ use crate::events::{self, Feed};
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
-    /// the page's filters, as the JSON it keeps them in
-    #[serde(default, deserialize_with = "trimmed")]
-    filters: Option<String>,
     /// the time zone of the page's browser (IANA): the person's days are in it
     #[serde(default, deserialize_with = "trimmed")]
     zone: Option<String>,
@@ -32,7 +29,6 @@ pub struct EventsQuery {
 /// dropped and the `Feed` with it, which is what tells the background work that
 /// nobody is looking any more.
 pub async fn events(axum::extract::State(state): axum::extract::State<AppState>, Params(q): Params<EventsQuery>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let filters = q.filters;
     let app = state.app;
     if let Some(zone) = q.zone {
         // the zone of the browser in use: kept, and "today" follows it
@@ -46,7 +42,7 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
         })
         .await;
     }
-    let feed = Feed::open(app.clone(), filters);
+    let feed = Feed::open(app.clone());
     let hello = feed.hello();
     let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {
     let value = app.clone();
@@ -88,9 +84,12 @@ pub struct Watch {
     /// the stream this page holds, from its `hello`
     #[serde(default)]
     id: u64,
-    /// what the page is showing now beyond the model: document key -> its parameters
+    /// what the page is showing now: each subscription's key -> its parameters
     #[serde(default)]
     docs: Map<String, Value>,
+    /// the version of a subscription the page already holds, kept from before
+    #[serde(default)]
+    have: Map<String, Value>,
 }
 
 /// The stream watch's own answer -- just whether the id was one still open.
@@ -115,7 +114,16 @@ pub async fn resync(axum::extract::State(state): axum::extract::State<AppState>,
 /// `POST /api/events/watch`
 pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api<WatchAck> {
     let app = state.app;
-    let ok = blocking(move || app.events.watch(&app, w.id, w.docs.into_iter().collect())).await?;
+    let have = w.have;
+    let docs = w
+        .docs
+        .into_iter()
+        .map(|(k, params)| {
+            let kept = have.get(&k).and_then(|v| v.as_str()).map(String::from);
+            (k, events::Want { params, have: kept })
+        })
+        .collect();
+    let ok = blocking(move || app.events.watch(&app, w.id, docs)).await?;
     Ok(Json(WatchAck { ok }))
 }
 

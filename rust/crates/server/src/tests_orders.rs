@@ -915,8 +915,8 @@ fn the_badge_counts_the_pending_cards_of_the_accounts_in_the_pages_scope() {
     let id = |broker: &str| w.book.account_by_ref(&bagholder_core::account::AccountRef::new(ws.clone(), broker)).unwrap().unwrap().to_string();
     let badge = |accounts: &[&str]| {
         let lists = if accounts.is_empty() { json!({}) } else { json!({"account": accounts.iter().map(|b| id(b)).collect::<Vec<_>>()}) };
-        let feed = crate::events::Feed::open(w.app.clone(), Some(json!({"lists": lists}).to_string()));
-        feed.status_for(&crate::status::status).open_orders
+        let feed = crate::events::Feed::open(w.app.clone());
+        feed.status_for(&crate::status::status, &json!({"filters": {"lists": lists}})).open_orders
     };
     assert_eq!(badge(&[]), 6, "no account named: every account's cards");
     assert_eq!(badge(&["acct-margin"]), 3, "the armed bracket, the entry, the waiting bracket's entry");

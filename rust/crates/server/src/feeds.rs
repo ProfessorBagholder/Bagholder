@@ -3535,8 +3535,8 @@ mod tests {
     }
 
     fn page_showing(a: &Arc<App>, keys: &[&str]) -> crate::events::Feed {
-        let feed = crate::events::Feed::open(a.clone(), None);
-        let docs = keys.iter().map(|k| (k.to_string(), json!({}))).collect();
+        let feed = crate::events::Feed::open(a.clone());
+        let docs = keys.iter().map(|k| (k.to_string(), crate::events::Want { params: json!({}), have: None })).collect();
         assert!(a.events.watch(a, feed.id(), docs));
         feed
     }

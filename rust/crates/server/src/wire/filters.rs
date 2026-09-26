@@ -14,7 +14,7 @@ use bagholder_engine::ledger::Direction;
 use bagholder_engine::scope::{self, Bound, Dates, Outcome, Preset};
 
 /// A range filter: kept above or below `v`, or not set.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, serde::Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Range {
     /// `>` or `<`.
@@ -25,7 +25,7 @@ pub struct Range {
 }
 
 /// The filters, as the page keeps them.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, serde::Serialize, TS)]
 #[serde(default, deny_unknown_fields)]
 pub struct Filters {
     /// `account` (account ids), `symbol` (instrument ids), `grade`, `tag`, `kind`,

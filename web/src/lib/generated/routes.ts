@@ -3,10 +3,10 @@
 
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
-import type { Detail, Figures } from './figures'
+import type { Detail } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
-import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, FiguresQuery, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, TradeQuery, WatchRequest, WatchStatus } from './model_api'
+import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, TradeQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
 import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
@@ -51,7 +51,6 @@ export interface Routes {
   'POST /api/watchlist/remove': { body: WatchlistBody; answer: WatchlistAnswer }
   'POST /api/tiles/set': { body: TilesSet; answer: TilesAnswer }
   'GET /api/status': { answer: StatusAnswer }
-  'GET /api/figures': { query: FiguresQuery; answer: Figures }
   'GET /api/figures/detail': { query: TradeQuery; answer: Detail }
   'POST /api/data/clear': { body: Clear; answer: ClearAnswer }
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
