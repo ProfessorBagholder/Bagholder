@@ -282,7 +282,7 @@
     "status": 200,
     "body": {
       "ok": false,
-      "error": "CNN could not be reached."
+      "error": "offline: BAGHOLDER_OFFLINE is set"
     }
   },
   "shorts_missing_symbol": {

@@ -303,7 +303,11 @@ pub fn read(index: &str) -> Result<Gauge, String> {
         _ => return Err(format!("There is no {which:?} Fear & Greed index.")),
     };
     let publisher = SOURCES.iter().find(|(k, _)| *k == which).map_or("The publisher", |(_, name)| name);
-    let text = text.map_err(|e| format!("{publisher} {}.", crate::http::describe_failure(&e)))?;
+    let text = text.map_err(|e| match e {
+        // nothing was asked of the publisher: the refusal's own words, which no header says
+        crate::http::FetchError::Transport(m) if bagholder_net::client::is_offline_refusal(&m) => m,
+        e => format!("{publisher} {}.", crate::http::describe_failure(&e)),
+    })?;
     let unreadable = || format!("{publisher} answered in a form Bagholder cannot read.");
     let data: Value = serde_json::from_str(&text).map_err(|_| unreadable())?;
     let gauge = if which == "stocks" { parse_stocks(&data) } else { parse_crypto(&data) };

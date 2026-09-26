@@ -59,7 +59,12 @@ pub struct FeedsState {
 }
 
 /// `feed` has failed: said in the header, in `why`'s words, until it next answers.
+/// A request refused by `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the
+/// feed's and is not said (as the market sources' cache does not record one).
 fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
+    if bagholder_net::client::is_offline_refusal(&why) {
+        return;
+    }
     let was = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).insert(feed.to_string(), why.clone());
     if was.as_deref() != Some(why.as_str()) {
         app.events.signal();
@@ -3515,6 +3520,8 @@ mod tests {
         assert_eq!(fear_stored(&a, "stocks").gauge.map(|g| g.gauge.score), Some(40.0), "the older reading stays drawn");
         read_fear_with(&a, "stocks", || Ok(gauge(55.0))).unwrap();
         assert!(feed_failures(&a).is_empty(), "gone once the index answers");
+        let _ = read_fear_with(&a, "crypto", || Err(bagholder_net::client::OFFLINE.into()));
+        assert!(feed_failures(&a).is_empty(), "a read refused by BAGHOLDER_OFFLINE asked nobody and is not said");
     }
 
     // --- News: read for a page showing the card, not for any open page
