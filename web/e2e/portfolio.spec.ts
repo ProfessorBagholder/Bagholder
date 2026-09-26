@@ -73,6 +73,16 @@ test('Available margin names the account Wealthsimple could not price', async ({
   await expect(tile.locator('.s')).toHaveText('Unavailable for Trading')
 })
 
+test('Available margin reads `Buying power` under a value only: a figure that waits has no subtitle', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '#portfolio', (m) => {
+    Object.assign(m.portfolio, { availableMargin: { gaps: ['buying-power-unread'] }, availableMarginUnavailable: [] })
+  })
+  await ready(page)
+  const tile = page.locator('#page .kpi', { hasText: 'Available margin' })
+  await expect(tile.locator('.v')).toHaveText('— unread')
+  await expect(tile.locator('.s')).not.toContainText('Buying power')
+})
+
 test("the day's change is signed and coloured on the tile and on a position's own Change columns", async ({ page, request }) => {
   const m0 = await figures(request)
   const vfv = (m0.positions as Position[]).find((p) => p.symbol === 'VFV')!

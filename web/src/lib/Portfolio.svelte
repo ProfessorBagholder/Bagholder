@@ -38,7 +38,8 @@
       out.push({
         label: 'Available margin',
         value: pf.availableMargin == null ? '—' : money0(pf.availableMargin),
-        sub: unavailable.length ? 'Unavailable for ' + unavailable.join(', ') : pf.availableMargin == null ? '—' : 'Buying power',
+        // `Buying power` names a value, so it stands only under one: not under a figure that waits
+        sub: unavailable.length ? 'Unavailable for ' + unavailable.join(', ') : pf.availableMargin == null ? '—' : waits(pf.availableMargin) ? '' : 'Buying power',
         vcls: '',
       })
     } else {
