@@ -197,7 +197,8 @@
     const held = (store.model?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
     const watched = (store.model?.markets?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
     if (held || watched) return
-    if (!sugQuotes[sugKey(only)]) sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
+    // asked again only once the one remembered is a minute old
+    sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
   })
 
   // --- on-demand chip lookup: a ticker typed that the card does not hold ---

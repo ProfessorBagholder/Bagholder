@@ -254,6 +254,36 @@ test.describe('Heatmap card', () => {
 })
 
 test.describe('Watchlist', () => {
+  test("a match's quote has a minute's memory: asked again when wanted after the minute, not before", async ({ page }) => {
+    await page.clock.install()
+    await page.route('**/api/symbols/search?*', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] }) }),
+    )
+    let asked = 0
+    await page.route('**/api/symbols/quote?*', (route) => {
+      asked++
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, price: 10 + asked, priceChange: 0.1, percentChange: 1 }) })
+    })
+    await page.goto('/#markets')
+    await ready(page)
+    await page.getByRole('button', { name: 'Add to the watchlist' }).click()
+    const box = page.getByLabel('Search symbol')
+    const look = async () => {
+      await box.fill('')
+      await box.fill('ZQWM')
+      await page.clock.runFor(400) // past the pause the search waits for
+    }
+    await look()
+    await expect.poll(() => asked).toBe(1)
+    await page.clock.runFor(30_000)
+    await look()
+    await page.clock.runFor(1_000)
+    expect(asked).toBe(1)
+    await page.clock.runFor(31_000)
+    await look()
+    await expect.poll(() => asked).toBe(2)
+  })
+
   test('a symbol typed with a Yahoo-style suffix is looked up and added under the bare ticker and the suffix\'s venue', async ({ page, request }) => {
     const model = await figures(request)
     const before = (model.markets.watchlist as { symbol: string }[]).map((w) => w.symbol)
