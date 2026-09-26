@@ -54,8 +54,22 @@ const initHash = typeof location !== 'undefined' ? location.hash : ''
 export const route = $state<{ tab: Tab; sub: string | null; heat: HeatAddress | null }>({ tab: tabFromHash(initHash), sub: subFromHash(initHash), heat: heatFromHash(initHash) })
 
 // Where the list was scrolled to when a row of it was opened: Back returns there,
-// and a page newly opened starts at its top.
-let listScrollY = 0
+// and a page newly opened starts at its top. A list that scrolls inside its own card
+// (the Trades table, the Holdings table) is drawn again when Back returns to it, so
+// where it stood is kept by its name beside the window's (`keepScroll`).
+interface Place { top: number; left: number }
+const lists = new Map<string, HTMLElement>()
+let opener: { tab: Tab; y: number; lists: Map<string, Place> } | null = null
+
+/** A list that scrolls inside its card, named: Back to it returns it to where it stood when a row was opened. */
+export function keepScroll(node: HTMLElement, name: string) {
+  lists.set(name, node)
+  return {
+    destroy() {
+      if (lists.get(name) === node) lists.delete(name)
+    },
+  }
+}
 
 // The route follows the address. It is read at once wherever the page itself changes
 // the address (`go`, `goSub`), since the browser only announces a change of hash some
@@ -68,13 +82,28 @@ function follow(): void {
   route.sub = subFromHash(location.hash)
   if (route.tab === was.tab && route.sub === was.sub) return
   const opened = !!route.sub && route.sub !== was.sub
-  const backToList = !route.sub && !!was.sub && route.tab === was.tab
+  const toList = !route.sub && !!was.sub
+  // back to the list the row was opened from (a trade row can open its holding, under Portfolio)
+  const back = toList && opener?.tab === route.tab ? opener : null
   // the page under the old address is still what the window shows
-  if (opened && !was.sub) listScrollY = window.scrollY
-  if (opened || backToList) {
-    const y = opened ? 0 : listScrollY
+  if (opened && !was.sub) {
+    const kept = new Map<string, Place>()
+    for (const [name, el] of lists) kept.set(name, { top: el.scrollTop, left: el.scrollLeft })
+    opener = { tab: was.tab, y: window.scrollY, lists: kept }
+  }
+  if (opened || back || (toList && route.tab === was.tab)) {
     // once the page under the new address has been drawn
-    requestAnimationFrame(() => window.scrollTo(0, y))
+    requestAnimationFrame(() => {
+      if (back)
+        for (const [name, el] of lists) {
+          const at = back.lists.get(name)
+          if (at) {
+            el.scrollTop = at.top
+            el.scrollLeft = at.left
+          }
+        }
+      window.scrollTo(0, back ? back.y : 0)
+    })
   }
 }
 

@@ -5,7 +5,7 @@
   import { waits } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
-  import { goSub } from './router.svelte'
+  import { goSub, keepScroll } from './router.svelte'
   import Donut, { type DonutItem } from './Donut.svelte'
 
   let { model }: { model: Model } = $props()
@@ -127,7 +127,7 @@
     <!-- Holdings card -->
     <div class="card elev-sm" style="padding:14px 16px 8px;display:flex;flex-direction:column;min-height:0">
       <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px"><h5>Holdings</h5></div>
-      <div class="scroll-xy" style="flex:1;min-height:0;max-height:362px">
+      <div class="scroll-xy" style="flex:1;min-height:0;max-height:362px" use:keepScroll={'positions'}>
         <table class="table" style="min-width:640px">
           <thead><tr>
             {#each cols as c (c.key)}

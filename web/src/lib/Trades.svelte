@@ -4,7 +4,7 @@
   import { waits } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
-  import { goSub } from './router.svelte'
+  import { goSub, keepScroll } from './router.svelte'
   import { resetFilters } from './filters.svelte'
   import { refilter } from './state.svelte'
 
@@ -52,7 +52,7 @@
 <div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">
   <div class="card elev-sm" style="min-width:0;padding:14px 16px 8px;display:flex;flex-direction:column;min-height:0;max-height:620px">
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px"><h5>Trades</h5></div>
-    <div class="scroll-xy" style="flex:1;min-height:0">
+    <div class="scroll-xy" style="flex:1;min-height:0" use:keepScroll={'trades'}>
       <table class="table" style="min-width:1150px;table-layout:fixed">
         <thead><tr>
           {#each cols as c (c.key)}
