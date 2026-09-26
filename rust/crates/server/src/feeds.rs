@@ -39,6 +39,8 @@ pub struct FeedsState {
     reading_now: Mutex<HashMap<String, Vec<String>>>,
     /// What the market universes' reads have come to.
     universes: Mutex<UniverseReads>,
+    /// The Fear & Greed indexes being read from their publishers this moment.
+    fear_reading: Mutex<HashSet<String>>,
     /// The sources a test's universe reads asked, and the failure it told them to
     /// answer with.
     #[cfg(test)]
@@ -1867,11 +1869,24 @@ pub const FEAR_VERSION: i64 = 1;
 
 /// One index read from its publisher and kept.
 pub fn read_fear(app: &Arc<App>, index: &str) -> Option<StoredGauge> {
-    let rec = StoredGauge { gauge: fear::read(index)?, fetched_at: now_iso(), read_version: FEAR_VERSION };
-    if let Some(c) = conn(app) {
-        let _ = sf::save_gauge(&c, index, &rec.gauge, &rec.fetched_at, FEAR_VERSION);
+    read_fear_with(app, index, || fear::read(index))
+}
+
+/// `read_fear` with the publisher given. While the read is in the air a page showing
+/// the meter is told so (`FearDoc::reading`), so a meter with nothing held yet reads
+/// as being read rather than as a publisher that did not answer.
+fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Option<sf::Gauge>) -> Option<StoredGauge> {
+    let which = index.trim().to_lowercase();
+    app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).insert(which.clone());
+    app.events.signal();
+    let got = read();
+    let rec = got.map(|gauge| StoredGauge { gauge, fetched_at: now_iso(), read_version: FEAR_VERSION });
+    if let (Some(rec), Some(c)) = (rec.as_ref(), conn(app)) {
+        let _ = sf::save_gauge(&c, &which, &rec.gauge, &rec.fetched_at, FEAR_VERSION);
     }
-    Some(rec)
+    app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).remove(&which);
+    app.events.signal();
+    rec
 }
 
 fn fear_stale(rec: &StoredGauge) -> bool {
@@ -1890,6 +1905,8 @@ pub struct FearDoc {
     #[ts(type = "true")]
     pub ok: bool,
     pub gauge: Option<StoredGauge>,
+    /// A read of the publisher is in the air.
+    pub reading: bool,
 }
 
 /// `GET /api/fear`.
@@ -1923,17 +1940,21 @@ pub fn fear_payload(app: &Arc<App>, index: &str) -> Result<FearDoc, String> {
                 read_fear(&a, &w);
             });
         }
-        return Ok(FearDoc { ok: true, gauge: Some(held) });
+        return Ok(FearDoc { ok: true, gauge: Some(held), reading: fear_in_flight(app, &which) });
     }
     let rec = read_fear(app, &which).ok_or_else(|| "the index did not answer".to_string())?;
-    Ok(FearDoc { ok: true, gauge: Some(rec) })
+    Ok(FearDoc { ok: true, gauge: Some(rec), reading: false })
 }
 
 /// The meter as it is held, never waiting on its publisher: what a page showing it is
 /// sent (`docs`).
 pub fn fear_stored(app: &Arc<App>, index: &str) -> FearDoc {
     let which = index.trim().to_lowercase();
-    FearDoc { ok: true, gauge: conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()) }
+    FearDoc { ok: true, gauge: conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()), reading: fear_in_flight(app, &which) }
+}
+
+fn fear_in_flight(app: &Arc<App>, which: &str) -> bool {
+    app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).contains(which)
 }
 
 /// A page has started showing the meter `index`: read it when it is missing or
@@ -3391,6 +3412,43 @@ mod tests {
         enrichment(&c, "QNC", "sec:1", "From EDGAR", "A sentence.", 9);
         replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
         assert_eq!(sf::filing(&c, "QNC", "sec:1").unwrap().unwrap().subject, "From EDGAR");
+    }
+
+    // --- Fear & Greed: what a page showing a meter is told while it is read
+
+    fn gauge(score: f64) -> sf::Gauge {
+        sf::Gauge { index: "fear-greed".into(), source: "cnn".into(), score, rating: "Greed".into(), as_of: "2026-09-15".into(), previous: vec![], parts: vec![], series: vec![] }
+    }
+
+    #[test]
+    fn test_a_meter_being_read_says_so_until_the_read_answers() {
+        let _g = crate::tests_common::guard();
+        let a = app();
+        for index in fear::INDEXES {
+            let mut during = None;
+            let got = read_fear_with(&a, index, || {
+                during = Some(fear_stored(&a, index).reading);
+                Some(gauge(62.0))
+            });
+            assert_eq!(during, Some(true), "while the read is in the air");
+            assert!(got.is_some());
+            let after = fear_stored(&a, index);
+            assert!(!after.reading, "once it has answered");
+            assert_eq!(after.gauge.map(|g| g.gauge.score), Some(62.0));
+        }
+    }
+
+    #[test]
+    fn test_a_read_that_fails_ends_the_reading_and_keeps_what_was_held() {
+        let _g = crate::tests_common::guard();
+        let a = app();
+        for index in fear::INDEXES {
+            read_fear_with(&a, index, || Some(gauge(40.0)));
+            assert!(read_fear_with(&a, index, || None).is_none());
+            let after = fear_stored(&a, index);
+            assert!(!after.reading, "a failed read is not still being read");
+            assert_eq!(after.gauge.map(|g| g.gauge.score), Some(40.0));
+        }
     }
 
     // --- the listing page

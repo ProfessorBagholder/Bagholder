@@ -27,21 +27,23 @@
   }
 
   let fearIndex = $state((() => { try { return localStorage.getItem('bh2.fear') || 'stocks' } catch { return 'stocks' } })())
-  // The meter is sent while this card shows it: what is held at once, and the fresh
-  // reading when the server has it -- it reads the publisher only while some page
-  // shows the meter.
-  const docs = $state<Record<string, { data: FearDoc | null }>>({})
+  // Both meters are sent while this card is shown, the one on show and the one a
+  // click away: what is held at once, and the fresh reading when the server has it.
+  // The server reads a publisher only while some page shows its meter, so watching
+  // both keeps both fresh, and turning to the other never draws an old reading first.
+  const docs = $state<Record<string, { data: FearDoc | null }>>(Object.fromEntries(INDEX_OPTS.map(([ix]) => [ix, { data: null }])))
   $effect(() => {
-    const ix = fearIndex
-    if (!docs[ix]) docs[ix] = { data: null }
-    return watchDoc('fear:' + ix, {}, docs[ix])
+    const stops = INDEX_OPTS.map(([ix]) => watchDoc('fear:' + ix, {}, docs[ix]))
+    return () => stops.forEach((stop) => stop())
   })
   function pickIndex(ix: string) {
     fearIndex = ix
     try { localStorage.setItem('bh2.fear', ix) } catch { /* ignore */ }
   }
 
-  const held = $derived({ loading: !docs[fearIndex]?.data, rec: docs[fearIndex]?.data?.gauge ?? null })
+  // nothing held yet: `Reading…` until the server has sent the meter and while its
+  // publisher is being read; only a read that has answered with nothing is said so
+  const held = $derived({ loading: !docs[fearIndex]?.data || !!docs[fearIndex]?.data?.reading, rec: docs[fearIndex]?.data?.gauge ?? null })
   const g = $derived(held.rec)
   const today = $derived(String((store.model as unknown as { today?: string } | null)?.today || ''))
   const when = $derived.by(() => {
@@ -131,7 +133,7 @@
         <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding:2px 4px 0"><span>Extreme fear</span><span>Extreme greed</span></div>
         <div style="text-align:center;margin-top:10px">
           <div class="tab" style="font-size:34px;font-weight:500;line-height:1;color:{fearInk(g.score)}">{g.score == null ? '—' : n2(g.score, 0)}</div>
-          <div style="font-size:12.5px;margin-top:5px;color:var(--ink75)">{g.rating || ''}</div>
+          <div style="font-size:12.5px;margin-top:5px;color:{fearInk(g.score)}">{g.rating || ''}</div>
         </div>
       </div>
 

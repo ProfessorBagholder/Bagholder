@@ -15,7 +15,11 @@ export type Gauge = { index: string, source: string, score: number, rating: stri
 
 export type StoredGauge = { fetchedAt: string, readVersion: number, index: string, source: string, score: number, rating: string, asOf: string, previous: Array<GaugeReading>, parts: Array<GaugePart>, series: Array<GaugePoint>, };
 
-export type FearDoc = { ok: true, gauge: StoredGauge | null, };
+export type FearDoc = { ok: true, gauge: StoredGauge | null, 
+/**
+ * A read of the publisher is in the air.
+ */
+reading: boolean, };
 
 export type UniverseDoc = { 
 /**

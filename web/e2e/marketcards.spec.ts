@@ -183,6 +183,44 @@ test.describe('Fear & Greed', () => {
     await ready(page)
     await expect(page.locator('.mseg-opt.on', { hasText: 'Crypto' })).toBeVisible() // remembered across a reload
   })
+
+  test('while the card shows, both meters are asked for, the one on show and the one a click away', async ({ page, request }) => {
+    const watched: string[][] = []
+    await page.route('**/api/events/watch', async (route) => {
+      watched.push(Object.keys((route.request().postDataJSON() as { docs: Record<string, unknown> }).docs))
+      await route.fulfill({ status: 200, json: { ok: true } })
+    })
+    await openWithStatus(page, request, {}, '#markets', () => {}, { 'fear:stocks': gauge('stocks', 62, []), 'fear:crypto': gauge('crypto', 30, []) })
+    await expect.poll(() => watched.some((docs) => docs.includes('fear:stocks') && docs.includes('fear:crypto'))).toBe(true)
+  })
+
+  test('with nothing held, the meter reads "Reading…" while its publisher is read, and says it did not answer only once the read is over', async ({ page, request }) => {
+    for (const index of ['stocks', 'crypto']) {
+      const other = index === 'stocks' ? 'crypto' : 'stocks'
+      await openWithStatus(page, request, {}, '#markets', () => {}, { ['fear:' + index]: { ok: true, gauge: null, reading: true }, ['fear:' + other]: gauge(other, 50, []) })
+      const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Fear & Greed' }) })
+      await card.locator('.mseg-opt', { hasText: index === 'stocks' ? 'Stocks' : 'Crypto' }).click()
+      await expect(card).toContainText('Reading…')
+      await expect(card).not.toContainText('did not answer')
+      await page.unrouteAll({ behavior: 'ignoreErrors' })
+      await openWithStatus(page, request, {}, '#markets', () => {}, { ['fear:' + index]: { ok: true, gauge: null, reading: false }, ['fear:' + other]: gauge(other, 50, []) })
+      await expect(card).toContainText('The index did not answer.')
+      await page.unrouteAll({ behavior: 'ignoreErrors' })
+    }
+  })
+
+  test('the score and its word under the dial are both in the band\'s colour', async ({ page, request }) => {
+    for (const score of [10, 30, 50, 65, 90]) {
+      await openWithStatus(page, request, {}, '#markets', () => {}, { 'fear:stocks': gauge('stocks', score, []), 'fear:crypto': gauge('crypto', score, []) })
+      const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Fear & Greed' }) })
+      const num = card.locator('.tab').first()
+      await expect(num).toHaveText(String(score))
+      const word = num.locator('xpath=following-sibling::div[1]')
+      const [a, b] = await Promise.all([num.evaluate((el) => getComputedStyle(el).color), word.evaluate((el) => getComputedStyle(el).color)])
+      expect(b).toBe(a)
+      await page.unrouteAll({ behavior: 'ignoreErrors' })
+    }
+  })
 })
 
 test.describe('Heatmap card', () => {

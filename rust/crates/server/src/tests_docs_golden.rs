@@ -228,6 +228,7 @@ fn fear_doc(score: f64) -> FearDoc {
             fetched_at: "2026-09-15T14:00:00Z".into(),
             read_version: 1,
         }),
+        reading: false,
     }
 }
 
