@@ -10,6 +10,8 @@
   import {
     DISC_ORDER,
     discStore,
+    discRereading,
+    discRereadError,
     discSymbol,
     showDisclosures,
     refreshDisclosures,
@@ -46,7 +48,9 @@
 
   const view = $derived.by(() => {
     // until the sources have been asked once there is nothing to say about this listing
-    if (!rec || rec.loading || (rec.payload && rec.payload.everRead === false)) return { state: 'loading' as const }
+    // and while a forced read is under way, until it answers
+    if (!rec || rec.loading || discRereading[sym] || (rec.payload && rec.payload.everRead === false)) return { state: 'loading' as const }
+    if (discRereadError[sym]) return { state: 'error' as const, error: discRereadError[sym] }
     if (rec.error) return { state: 'error' as const, error: rec.error }
     const p: FilingsDoc = rec.payload || {
       ok: true, symbol: sym, available: false, sources: {}, categories: [], fetchedAt: '', everRead: false, summaryStatus: '', reading: [], filings: [],
@@ -71,6 +75,7 @@
     const multiCat = catsAll.length > 1
     const multiSource = !discSource && new Set(all.map((f) => f.source)).size > 1
     const anySize = all.some((f) => f.size)
+    const anySummary = all.some((f) => f.summary)
     const oneSource = discSource || (new Set(all.map((f) => f.source)).size === 1 ? all[0].source : '')
 
     let rows = all.slice()
@@ -83,13 +88,14 @@
       { key: 'date', label: 'Date', w: '88px' },
       { key: 'document', label: 'Document', w: 'minmax(120px,0.6fr)' },
       { key: 'title', label: 'Title', w: 'minmax(0,1.3fr)', plain: true },
-      { key: 'summary', label: 'Summary', w: 'minmax(0,2fr)', plain: true },
     ]
+    // no row has a sentence yet: no Summary column, until the first one lands
+    if (anySummary) cols.push({ key: 'summary', label: 'Summary', w: 'minmax(0,2fr)', plain: true })
     if (multiSource) cols.push({ key: 'source', label: 'Source', w: '84px' })
     if (anySize) cols.push({ key: 'size', label: 'Size', w: '66px', align: 'right' })
     const tmpl = cols.map((c) => c.w).join(' ') + ' 22px'
     const rightText = [!multiSource && !discSource && oneSource ? oneSource : '', p.fetchedAt ? 'read ' + relTime(p.fetchedAt) : ''].filter(Boolean).join(' · ')
-    return { state: 'list' as const, all, rows, cols, tmpl, effCat, catsAll, multiCat, multiSource, anySize, rightText }
+    return { state: 'list' as const, all, rows, cols, tmpl, effCat, catsAll, multiCat, multiSource, anySize, anySummary, rightText }
   })
 
   function toggleExpand(id: string) {
@@ -109,7 +115,7 @@
     openTimer = setTimeout(() => (discOpening = null), 4000)
   }
   function reread() {
-    refreshDisclosures(sym, trade)
+    void refreshDisclosures(sym, trade)
   }
 
   const catOpts = $derived(view.state === 'list' ? ([['all', 'All']] as [string, string][]).concat(view.catsAll.map((c) => [c, c] as [string, string])) : [])
@@ -177,7 +183,7 @@
           <div class="dc-date">{discDate(f)}</div>
           <div class="dc-doc"><b>{f.type}</b></div>
           <div class="dc-title">{#if f.subject}{f.subject}{:else if enriching || titleComing(f, sym)}<span class="dc-skel" style="width:70%"></span>{/if}</div>
-          <div class="dc-sumcell">{#if f.summary}{f.summary}{:else if enriching || (preparing(sym) && !f.enrichFinal)}<span class="dc-skel" style="width:90%"></span>{/if}</div>
+          {#if view.anySummary}<div class="dc-sumcell">{#if f.summary}{f.summary}{:else if enriching || (preparing(sym) && !f.enrichFinal)}<span class="dc-skel" style="width:90%"></span>{/if}</div>{/if}
           {#if view.multiSource}<button class="dc-src" onclick={(e) => { e.stopPropagation(); pickSource(f.source) }}>{f.source}</button>{/if}
           {#if view.anySize}<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">{f.size || ''}</div>{/if}
           <button class="dc-open" class:lit={discOpening === f.id} onclick={(e) => { e.stopPropagation(); openDoc(f) }} aria-label="Open document">{discOpening === f.id ? 'Opening…' : '↗'}</button>

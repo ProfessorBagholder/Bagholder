@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { openWithStatus, ready, figures, bareSymbol, subUrl } from './helpers'
 
 // SPEC §3, Markets: the tile row, Fear & Greed, the Heatmap card, the Watchlist,
@@ -546,5 +546,58 @@ test.describe('Disclosures', () => {
     await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(positionId), () => {}, { [docKey]: payload })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
     await expect(card).toContainText('No regulatory filer for this listing.')
+  })
+
+  // AAPL's card, with the rows given, on its holding's page
+  const openAaplDisclosures = async (page: Page, request: APIRequestContext, rows: Record<string, unknown>[]) => {
+    const model = await figures(request)
+    const aapl = (model.positions as { symbol: string; id: string; name: string; exchange: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
+    const docKey = 'filings:symbol=AAPL&name=' + encodeURIComponent(aapl.name) + '&exchange=' + encodeURIComponent(aapl.exchange) + '&currency=' + encodeURIComponent(aapl.currency)
+    const payload = {
+      ok: true, everRead: true, reading: [], fetchedAt: '2026-09-19T00:00:00Z', summaryStatus: 'ready',
+      sources: { SEC: { available: true, filer: true, matched: true } }, filings: rows,
+    }
+    await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(aapl.id), () => {}, { [docKey]: payload })
+    return page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
+  }
+  const filed = (id: string, summary: string) => ({
+    id, source: 'SEC', category: 'Financials', type: '10-Q', title: '', subject: 'A filing about ' + id, summary, date: '2026-09-01', dateText: '2026-09-01', size: '', url: 'https://filer.example/' + id, enrichFinal: true,
+  })
+
+  test('the Summary column is there only when some row has a summary', async ({ page, request }) => {
+    const none = await openAaplDisclosures(page, request, [filed('f1', ''), filed('f2', '')])
+    await expect(none.locator('.dc-row')).toHaveCount(2)
+    await expect(none.locator('.dc-head')).not.toContainText('Summary')
+    await expect(none.locator('.dc-sumcell')).toHaveCount(0)
+    const one = await openAaplDisclosures(page, request, [filed('f1', ''), filed('f2', 'One sentence.')])
+    await expect(one.locator('.dc-head')).toContainText('Summary')
+    await expect(one.locator('.dc-sumcell')).toHaveCount(2)
+  })
+
+  test('the re-read button shows the Reading state until the forced read answers', async ({ page, request }) => {
+    const card = await openAaplDisclosures(page, request, [filed('f1', 'One sentence.')])
+    await expect(card.locator('.dc-row')).toHaveCount(1)
+    let answer: () => void = () => {}
+    const answered = new Promise<void>((r) => (answer = r))
+    await page.route('**/api/filings?*', async (route) => {
+      await answered
+      await route.fulfill({ status: 200, json: { ok: true, symbol: 'AAPL', available: true, sources: {}, categories: [], profileNo: '', fetchedAt: '', refreshed: false, sourceUnavailable: false, filings: [] } })
+    })
+    await card.getByLabel('Re-read disclosures').click()
+    await expect(card).toContainText('Reading disclosures…')
+    await expect(card.locator('.dc-row .dc-title', { hasText: 'A filing about f1' })).toHaveCount(0)
+    await page.waitForTimeout(300)
+    await expect(card).toContainText('Reading disclosures…')
+    answer()
+    await expect(card.locator('.dc-row', { hasText: 'A filing about f1' })).toHaveCount(1)
+    await expect(card).not.toContainText('Reading disclosures…')
+  })
+
+  test('a forced read that is refused says so', async ({ page, request }) => {
+    const card = await openAaplDisclosures(page, request, [filed('f1', 'One sentence.')])
+    await expect(card.locator('.dc-row')).toHaveCount(1)
+    await page.route('**/api/filings?*', (route) => route.fulfill({ status: 500, json: { ok: false, error: 'store unavailable' } }))
+    await card.getByLabel('Re-read disclosures').click()
+    await expect(card).toContainText('Could not read disclosures: store unavailable')
   })
 })

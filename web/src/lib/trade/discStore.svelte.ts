@@ -19,6 +19,14 @@ export interface DiscRec {
 
 export const discStore = $state<Record<string, DiscRec>>({})
 
+/**
+ * A forced read under way, per listing: the card shows its Reading state until the
+ * read answers. Kept apart from the list, which the stream replaces as it changes.
+ */
+export const discRereading = $state<Record<string, boolean>>({})
+/** A forced read that was refused, per listing, until the next one is asked for. */
+export const discRereadError = $state<Record<string, string>>({})
+
 export function discSymbol(t: { symbol: string; kind?: string; underlying?: string }): string {
   return String(listingTicker(t as Trade) || t.symbol || '').toUpperCase()
 }
@@ -61,9 +69,20 @@ export function showDisclosures(t: { symbol: string; kind?: string; underlying?:
   }
 }
 
-/** Read the sources again now, whatever their age; what they say reaches the rows as changes. */
-export function refreshDisclosures(sym: string, t: { name?: string; exchange?: string; currency?: string } | null): void {
-  void call('GET /api/filings', { query: { symbol: sym, name: t?.name ?? '', exchange: t?.exchange ?? '', currency: t?.currency ?? '', refresh: true } })
+/**
+ * Read the sources again now, whatever their age; what they say reaches the rows as
+ * changes. The card reads as Reading until the read answers; a refusal is said.
+ */
+export async function refreshDisclosures(sym: string, t: { name?: string; exchange?: string; currency?: string } | null): Promise<void> {
+  if (discRereading[sym]) return
+  discRereading[sym] = true
+  delete discRereadError[sym]
+  try {
+    const a = await call('GET /api/filings', { query: { symbol: sym, name: t?.name ?? '', exchange: t?.exchange ?? '', currency: t?.currency ?? '', refresh: true } })
+    if (!a.ok) discRereadError[sym] = 'Could not read disclosures' + (a.error ? ': ' + a.error : '.')
+  } finally {
+    delete discRereading[sym]
+  }
 }
 
 // ---- what a row wears while it waits: said by the server, which does the reading ----
