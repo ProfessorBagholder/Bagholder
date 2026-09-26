@@ -132,3 +132,11 @@ test('short interest is neither asked for nor drawn on any page but a share list
   await page.goto('/' + pages.find((p) => p.shares)!.hash)
   await expect.poll(() => asked).toBeGreaterThan(0)
 })
+
+test("a chart request that fails says the failure in the chart's place, never that the span has no bars", async ({ page }) => {
+  const error = 'history refused ' + Date.now()
+  await page.route('**/api/history?*', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ ok: false, error }) }))
+  await openFirstTrade(page)
+  await expect(page.locator('#page').getByText(error, { exact: true })).toBeVisible()
+  await expect(page.locator('#page').getByText('No price history for this span.')).toHaveCount(0)
+})

@@ -88,7 +88,8 @@ export function historyKey(t: Trade, tf: string): string {
 /** A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped. */
 export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal): Promise<History> {
   const r = await histories.read({ query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal })
-  if (!('bars' in r)) return { reason: '', bars: [], available: [], chartSymbol: t.symbol, pending: false }
+  // a request that failed is said in the chart's place, in the failure's own words, never as a span with no bars
+  if (!('bars' in r)) return { reason: r.error || 'The chart was not answered.', bars: [], available: [], chartSymbol: t.symbol, pending: false }
   return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending }
 }
 
