@@ -1,0 +1,15 @@
+.
+observations
+observations[]
+observations[].*
+observations[].*.v
+observations[].d
+seriesDetail
+seriesDetail.*
+seriesDetail.*.description
+seriesDetail.*.dimension
+seriesDetail.*.dimension.key
+seriesDetail.*.dimension.name
+seriesDetail.*.label
+terms
+terms.url

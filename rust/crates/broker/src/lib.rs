@@ -1,0 +1,199 @@
+//! The broker interface (`docs/architecture.md` §10,
+//! `docs/plans/stage-3b-wealthsimple.md`, "The interface"): what a broker adapter
+//! answers, in Bagholder's terms, and the pull that writes it into the book
+//! (`pull`). A second brokerage is a second adapter; nothing here changes for it.
+
+use std::collections::BTreeMap;
+
+use bagholder_book::mapping::{InstrumentDraft, Mapping};
+use bagholder_core::account::AccountType;
+use bagholder_core::instrument::Reference;
+use bagholder_core::json::Value;
+use bagholder_core::{Broker, Currency, Dec, Money};
+
+pub mod csv;
+pub mod pull;
+
+/// Why a read did not answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// The broker refused the request (its own error, a status it gave).
+    Refused(String),
+    /// The broker could not be reached.
+    Unreachable(String),
+    /// The reply is not of the shape the adapter reads, or does not mean what
+    /// it must: named with the field.
+    Mismatch(String),
+    /// The session is no longer valid: a sign-in is needed, and nothing is
+    /// asked again with it.
+    Lapsed(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Refused(w) => write!(f, "refused: {w}"),
+            Failure::Unreachable(w) => write!(f, "unreachable: {w}"),
+            Failure::Mismatch(w) => write!(f, "a reply of another shape: {w}"),
+            Failure::Lapsed(w) => write!(f, "the session lapsed: {w}"),
+        }
+    }
+}
+
+pub type Answer<T> = Result<T, Failure>;
+
+/// An account, as the broker states it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountStated {
+    /// The broker's own id for it.
+    pub key: String,
+    pub account_type: AccountType,
+    pub open: bool,
+    pub nickname: Option<String>,
+    /// The account the broker states it is linked to.
+    pub linked_to: Option<String>,
+    /// The margin account this one backs as collateral, by the broker's id for it.
+    pub backs: Option<String>,
+}
+
+/// One activity row, as the broker sent it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    /// The broker's own id for the row.
+    pub key: String,
+    /// The broker's account id.
+    pub account: String,
+    /// The day the broker files it under; None where the row states none
+    /// that reads (it is then `unread`).
+    pub day: Option<jiff::civil::Date>,
+    /// Whether the row's status is final: a row not yet final is read again.
+    pub settled: bool,
+    /// Whether what the row moved is read from positions, net of the book's
+    /// own moves: it is recorded after the rows that move by themselves.
+    pub reads_positions: bool,
+    /// Why the adapter could not read the row, where it could not: it is
+    /// kept as a record with that problem and read again.
+    pub unread: Option<String>,
+    pub value: Value,
+}
+
+/// An account's activity as read: its rows, and each row that states no id
+/// of its own to keep it by (the read is then incomplete).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Activity {
+    pub rows: Vec<Row>,
+    pub unkeyed: Vec<String>,
+}
+
+/// A position as the broker states it on a day.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Units {
+    /// The broker's own reference for the instrument.
+    pub instrument: Reference,
+    pub quantity: Dec,
+    /// The broker's book value, kept as its statement, never a cost.
+    pub book_value: Option<Money>,
+}
+
+/// An account's value and net deposits on a day.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DayValue {
+    pub day: jiff::civil::Date,
+    pub net_value: Money,
+    pub net_deposits: Money,
+}
+
+/// What the book's own transactions moved in one account on one day: of an
+/// instrument, by the broker's reference, or of cash.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Moved {
+    pub account: String,
+    pub day: jiff::civil::Date,
+    pub what: MovedWhat,
+    pub quantity: Dec,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MovedWhat {
+    Instrument(Reference),
+    Cash(Currency),
+}
+
+/// Where a pull is, as it goes, for whoever shows it. An account is named as
+/// every screen names it (`AccountStated::name`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The accounts and the links between them.
+    Accounts,
+    /// One account's activity, `n` of `of`.
+    Activity { account: String, n: usize, of: usize },
+    /// The rows read, being recorded: `done` of `of`.
+    Recording { done: usize, of: usize },
+    /// Cash and what margin can borrow.
+    Balances,
+    /// One account's holdings, `n` of `of`.
+    Holdings { account: String, n: usize, of: usize },
+    /// One account's value by day, `n` of `of`.
+    History { account: String, n: usize, of: usize },
+}
+
+impl AccountStated {
+    /// Its name as every screen shows an account: the person's for it, else what it is.
+    pub fn name(&self) -> String {
+        bagholder_core::account::account_name(self.nickname.as_deref(), &self.account_type)
+    }
+}
+
+/// The book's own moves, for a record read against positions.
+pub trait BookMoves {
+    fn moves(&mut self, accounts: &[String], days: &[jiff::civil::Date]) -> Vec<Moved>;
+}
+
+/// One broker, behind the interface. Every method is a read; each answer says
+/// what failed where it did not answer.
+pub trait BrokerAdapter {
+    fn broker(&self) -> Broker;
+    fn mapping(&self) -> &dyn Mapping;
+    /// The scheme the broker's own record ids are known by in the book
+    /// (`broker-record:wealthsimple`): what an imported record it replaces carries.
+    fn record_scheme(&self) -> String {
+        format!("broker-record:{}", self.broker())
+    }
+    fn accounts(&mut self) -> Answer<Vec<AccountStated>>;
+    /// An account's activity, from `from` (the whole of it when `None`).
+    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Activity>;
+    /// The rows about to be recorded, so an adapter can read what they share
+    /// in as few requests as its broker takes (their securities, in batches).
+    fn prepare(&mut self, _rows: &[&Row]) {}
+    /// A row's record: the row and every reply read once for it, as the book
+    /// stores it.
+    fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value>;
+    /// Whether a stored record holds this row as it is now: nothing about it
+    /// changed, and it is not put together again.
+    fn holds(&self, payload: &Value, row: &Row) -> bool;
+    /// Whether a stored record's row is read against positions (its moves are
+    /// not the book's own).
+    fn reads_positions(&self, payload: &Value) -> bool;
+    /// A stored record whose row is not final yet (pending, a placeholder, one
+    /// the adapter could not read): its account and day, so the next pull
+    /// reads it again (the whole account where its day is not known).
+    fn unsettled(&self, payload: &Value) -> Option<(String, Option<jiff::civil::Date>)>;
+    /// A stored record's account and day: whether a read of that account
+    /// from a day covers it.
+    fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
+    /// The day the broker files an instant under.
+    fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
+    /// Each account's cash per currency now: an account left out is one the
+    /// broker did not state, and nothing is stored for it.
+    fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>>;
+    /// An account's positions as of a day.
+    /// What each margin account can borrow now, in CAD, or why the broker cannot say.
+    fn buying_power(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>>;
+    fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
+    /// The broker's description of each instrument it states a holding in that
+    /// no row names (seen on `day`), read together: each one's, or why not.
+    fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)>;
+    /// An account's value and net deposits per day, from `from` (the whole of
+    /// its history when `None`).
+    fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>>;
+}

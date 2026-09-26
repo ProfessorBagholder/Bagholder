@@ -1,0 +1,15 @@
+date,transaction,description,amount
+2024-06-01,DIV,Dividend payment,10.00
+2024-06-02,CONT,Contribution,100.00
+2024-06-03,WD,Withdrawal,-50.00
+2024-06-04,INTEREST,Interest paid,0.50
+2024-06-05,TRFIN,Transfer in,200.00
+2024-06-06,FX,FX conversion,0.00
+2024-06-07,FEE,Monthly fee,-2.50
+2024-06-08,BUY,AAA: 1 shares at $10.00 per share,-10.00
+2024-06-09,SELL,AAA: 1 shares at $10.00 per share,10.00
+2024-06-10,EXPIR,Option expired,0.00
+2024-06-11,ROC,Return of capital,1.00
+2024-06-12,STKDIS,Stock dividend AAA,0.00
+2024-06-13,LOAN,Securities loan,0.00
+2024-06-14,ZZZZUNKNOWN,Some unknown code,1.00

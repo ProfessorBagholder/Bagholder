@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 
+use crate::activity::{mark, Direction, Flag};
 use crate::fifo::{stable_trade_id, Lot, Slice};
 use crate::symbols::{is_option_symbol, option_multiplier, underlying_symbol};
 
@@ -29,7 +30,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
 
     // Ordered once, before anything is mutated.
     let mut covers: Vec<usize> = (0..closed.len())
-        .filter(|i| closed[*i].open_direction == "SHORT" && is_option_symbol(&closed[*i].symbol))
+        .filter(|i| closed[*i].open_direction == Direction::Short && is_option_symbol(&closed[*i].symbol))
         .collect();
     covers.sort_by(|i, j| {
         let (a, b) = (&closed[*i], &closed[*j]);
@@ -58,7 +59,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
                 let t = &closed[*i];
                 *i != ci
                     && !dropped.contains(i)
-                    && t.open_direction == "SHORT"
+                    && t.open_direction == Direction::Short
                     && is_option_symbol(&t.symbol)
                     && t.symbol != cover.symbol
                     && roll_book_slice(t) == ck
@@ -68,7 +69,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
         let mut open_cands: Vec<usize> = (0..open_lots.len())
             .filter(|i| {
                 let l = &open_lots[*i];
-                l.direction == "SHORT"
+                l.direction == Direction::Short
                     && is_option_symbol(&l.symbol)
                     && l.symbol != cover.symbol
                     && format!("{}::{}::{}", l.account_type, l.currency, underlying_symbol(&l.symbol)) == ck
@@ -98,7 +99,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
             let adj = cover.pnl / (qty * mult);
             let row = &mut closed[idx];
             row.entry_price += adj;
-            let raw = if row.open_direction == "SHORT" {
+            let raw = if row.open_direction == Direction::Short {
                 row.entry_price - row.exit_price
             } else {
                 row.exit_price - row.entry_price
@@ -107,9 +108,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
             row.pnl = raw - row.commission;
             row.pnl_cad = row.pnl;
             row.id = stable_trade_id(row);
-            if !row.flags.iter().any(|f| f == "rolled") {
-                row.flags.push("rolled".into());
-            }
+            mark(&mut row.flags, Flag::Rolled);
         } else {
             open_cands.sort_by(|i, j| {
                 let (a, b) = (&open_lots[*i], &open_lots[*j]);
@@ -125,9 +124,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
             let adj = cover.pnl / (qty * option_multiplier(&open_lots[idx].symbol));
             let row = &mut open_lots[idx];
             row.price += adj;
-            if !row.flags.iter().any(|f| f == "rolled") {
-                row.flags.push("rolled".into());
-            }
+            mark(&mut row.flags, Flag::Rolled);
         }
         dropped.insert(ci);
     }

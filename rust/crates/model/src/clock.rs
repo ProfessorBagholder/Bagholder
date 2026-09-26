@@ -1,31 +1,81 @@
 //! The app's clock. Activities are pulled and read in America/Edmonton, so an
 //! instant becomes a date and a time there, not in UTC.
 //!
-//! The zone comes from the system's own tzdata, rather than from a snapshot compiled into this binary.
-//! The rules move: Alberta's switch to permanent Central Standard Time during
-//! 2026 is in the system database already, and a bundled copy a version behind
-//! puts every winter fill an hour out.
+//! Every zone is read here and nowhere else. The rules are the IANA database the
+//! system keeps current, with jiff's built-in copy where the system has none
+//! (Windows, a slim container): the convention Python's zoneinfo and Go's time
+//! follow. Tests pin
+//! the built-in copy (`pinned-tzdb`), so a machine's database never changes an
+//! expected figure.
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
-use std::sync::OnceLock;
 
 /// `ACTIVITY_PULL_TZ`.
 pub const TZ_NAME: &str = "America/Edmonton";
 
-fn zone() -> &'static Option<tz::TimeZone> {
-    static ZONE: OnceLock<Option<tz::TimeZone>> = OnceLock::new();
-    ZONE.get_or_init(|| tz::TimeZone::from_posix_tz(TZ_NAME).ok())
+#[cfg(feature = "pinned-tzdb")]
+fn db() -> &'static jiff::tz::TimeZoneDatabase {
+    static DB: std::sync::OnceLock<jiff::tz::TimeZoneDatabase> = std::sync::OnceLock::new();
+    DB.get_or_init(jiff::tz::TimeZoneDatabase::bundled)
+}
+
+#[cfg(not(feature = "pinned-tzdb"))]
+fn db() -> &'static jiff::tz::TimeZoneDatabase {
+    jiff::tz::db()
+}
+
+/// The UTC offset, in seconds, a named zone has at an instant, or nothing when
+/// the zone is not one the database knows.
+pub fn offset_at(zone: &str, unix: i64) -> Option<i64> {
+    if zone.is_empty() {
+        return None;
+    }
+    let tz = db().get(zone).ok()?;
+    let at = jiff::Timestamp::from_second(unix).ok()?;
+    Some(tz.to_offset(at).seconds() as i64)
+}
+
+/// The UTC offset, in seconds, of a wall-clock time in a named zone (seconds
+/// since the epoch as if the wall clock were UTC). A time a change skips reads
+/// with the offset after it, a time a change repeats with the one before it,
+/// as `mktime` settles them.
+pub fn offset_for_wall(zone: &str, wall: i64) -> Option<i64> {
+    let first = offset_at(zone, wall)?;
+    Some(offset_at(zone, wall - first).unwrap_or(first))
 }
 
 /// The local civil date and time for an instant, as seconds since the epoch.
 fn local_parts(unix: i64) -> Option<(i64, u32, u32, u32, u32)> {
-    let tz = zone().as_ref()?;
-    let t = tz.find_local_time_type(unix).ok()?;
-    let local = unix + t.ut_offset() as i64;
+    let local = unix + offset_at(TZ_NAME, unix)?;
     let days = local.div_euclid(86400);
     let secs = local.rem_euclid(86400);
     let (y, m, d) = crate::dates::from_days(days);
     Some((y, m, d, (secs / 3600) as u32, ((secs % 3600) / 60) as u32))
+}
+
+/// The civil day and minute an instant falls on in a named zone: `(days since
+/// 1970-01-01, minute of the day)`.
+pub fn civil_in(zone_name: &str, unix: i64) -> Option<(i64, u32)> {
+    let local = unix + offset_at(zone_name, unix)?;
+    Some((local.div_euclid(86400), (local.rem_euclid(86400) / 60) as u32))
+}
+
+/// `(day, minute of day, offset in seconds)` for an instant in a named zone.
+/// Yahoo names the exchange's zone on every chart, and each bar needs its own
+/// standard or daylight offset -- the `gmtoffset` the feed states is today's,
+/// not the bar's.
+pub fn local_at(zone: &str, unix: i64) -> Option<(String, i64, i64)> {
+    let off = offset_at(zone, unix)?;
+    let local = unix + off;
+    let (y, m, d) = crate::dates::from_days(local.div_euclid(86400));
+    Some((crate::dates::fmt(y, m, d), local.rem_euclid(86400) / 60, off))
+}
+
+/// Seconds from now until the local day turns.
+pub fn seconds_until_local_midnight() -> u64 {
+    let now = Utc::now().timestamp();
+    let offset = offset_at(TZ_NAME, now).unwrap_or(0);
+    (86400 - (now + offset).rem_euclid(86400)) as u64
 }
 
 /// `when_parts`: an ISO instant becomes `(YYYY-MM-DD, HH:MM)` locally.

@@ -1,0 +1,4 @@
+transaction_date,activity_type,activity_sub_type,symbol,quantity,unit_price,net_cash_amount,currency
+2024-01-15,Trade,BUY,AAA,10,25.50,-255.00,CAD
+2024-01-16,Dividend,DIV,AAA,,,12.34,CAD
+As of 2024-01-31

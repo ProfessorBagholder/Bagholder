@@ -68,6 +68,7 @@ pub fn reset_state() {
     st.proc = None;
     st.endpoint.clear();
     st.model.clear();
+    st.rest = None;
 }
 
 fn env(name: &str, default: &str) -> String {
@@ -123,11 +124,22 @@ struct State {
     proc: Option<Child>,
     endpoint: String,
     model: String,
+    /// After a failure, how long the next attempt waits, and from when.
+    rest: Option<(std::time::Instant, Duration)>,
+}
+
+/// The first rest after a failed provisioning, doubled on each failure after it, up to the most.
+pub const REST_FIRST: Duration = Duration::from_secs(30);
+pub const REST_MOST: Duration = Duration::from_secs(30 * 60);
+
+/// The rest after a failure, from the one before it.
+pub fn next_rest(before: Option<Duration>) -> Duration {
+    before.map_or(REST_FIRST, |d| (d * 2).min(REST_MOST))
 }
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { folder: None, phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new() }))
+    S.get_or_init(|| Mutex::new(State { folder: None, phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new(), rest: None }))
 }
 
 /// Turn the model on for the app whose data folder is `home`: the model file is
@@ -150,7 +162,7 @@ fn llamafile_path(folder: &std::path::Path) -> PathBuf {
 }
 
 fn get_ok(url: &str, timeout: Duration) -> bool {
-    crate::client::request("GET", url, &[("User-Agent", "Bagholder")], None, timeout).is_ok()
+    bagholder_net::client::request("GET", url, &[("User-Agent", "Bagholder")], None, timeout).is_ok()
 }
 
 /// A user-run endpoint, if one answers now.
@@ -185,6 +197,15 @@ pub fn available() -> bool {
     !endpoint().is_empty()
 }
 
+/// Whether a model is up now, as already known: asks nothing and starts nothing,
+/// so it can be consulted as often as anyone likes.
+pub fn is_ready() -> bool {
+    if let Some(r) = hooks::AVAILABLE.with(|h| h.borrow().as_ref().map(|f| f())) {
+        return r;
+    }
+    !state().lock().unwrap().endpoint.is_empty()
+}
+
 /// Wait at most `seconds` for a model that is coming
 /// up right now. A download is never waited for.
 pub fn wait_ready(seconds: f64) -> bool {
@@ -215,8 +236,10 @@ pub fn endpoint() -> String {
         if !st.endpoint.is_empty() {
             return st.endpoint.clone();
         }
-        // off until an app has said where it keeps its data: nothing is asked
-        if st.folder.is_none() {
+        // off until an app has said where it keeps its data; while an attempt is under
+        // way or resting, nothing is asked: a caller checking many times a second never
+        // probes a server once per check
+        if st.folder.is_none() || !may_try(&st) {
             return String::new();
         }
     }
@@ -225,10 +248,23 @@ pub fn endpoint() -> String {
         st.endpoint = url.clone();
         st.model = model;
         st.phase = "ready";
+        st.rest = None;
+        drop(st);
+        changed();
         return url;
     }
     ensure();
     String::new()
+}
+
+/// Whether a new attempt may start now: none is under way, and a failed one
+/// has had its rest (a download that cannot reach its host is not asked for
+/// twice a second).
+fn may_try(st: &State) -> bool {
+    if ["detecting", "downloading", "starting"].contains(&st.phase) {
+        return false;
+    }
+    st.rest.map_or(true, |(since, rest)| since.elapsed() >= rest)
 }
 
 /// Start provisioning if it is not already under way.
@@ -238,7 +274,7 @@ pub fn ensure() {
     }
     {
         let mut st = state().lock().unwrap();
-        if st.folder.is_none() || ["detecting", "downloading", "starting"].contains(&st.phase) || !st.endpoint.is_empty() {
+        if st.folder.is_none() || !st.endpoint.is_empty() || !may_try(&st) {
             return;
         }
         st.phase = "detecting";
@@ -246,10 +282,32 @@ pub fn ensure() {
     let _ = std::thread::Builder::new().name("bagholder-localmodel".into()).spawn(provision);
 }
 
+static ON_CHANGE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// Called whenever the model's phase changes (coming up, ready, failed): how whoever
+/// waits for a model learns of it without asking again and again. Set once, at start.
+pub fn on_change(f: impl Fn() + Send + Sync + 'static) {
+    let _ = ON_CHANGE.set(Box::new(f));
+}
+
+fn changed() {
+    if let Some(f) = ON_CHANGE.get() {
+        f();
+    }
+}
+
 fn set(phase: &'static str, detail: &str) {
-    let mut st = state().lock().unwrap();
-    st.phase = phase;
-    st.detail = detail.to_string();
+    {
+        let mut st = state().lock().unwrap();
+        st.phase = phase;
+        st.detail = detail.to_string();
+        match phase {
+            "failed" => st.rest = Some((std::time::Instant::now(), next_rest(st.rest.map(|(_, d)| d)))),
+            "ready" => st.rest = None,
+            _ => {}
+        }
+    }
+    changed();
 }
 
 fn provision() {
@@ -258,6 +316,9 @@ fn provision() {
         st.endpoint = url;
         st.model = model;
         st.phase = "ready";
+        st.rest = None;
+        drop(st);
+        changed();
         return;
     }
     let Some(folder) = folder() else {
@@ -283,6 +344,9 @@ fn provision() {
         st.endpoint = format!("http://{}:{}", MANAGED_HOST, managed_port());
         st.model = "local".into();
         st.phase = "ready";
+        st.rest = None;
+        drop(st);
+        changed();
     } else {
         set("failed", "server did not start");
     }
@@ -314,7 +378,7 @@ pub fn download(path: &PathBuf) -> bool {
         return false;
     }
     let tmp = path.with_extension("part");
-    let got = crate::client::request("GET", &url, &[("User-Agent", "Bagholder")], None, DOWNLOAD_TIMEOUT)
+    let got = bagholder_net::client::request("GET", &url, &[("User-Agent", "Bagholder")], None, DOWNLOAD_TIMEOUT)
         .map_err(|e| e.to_string())
         .and_then(|r| std::fs::write(&tmp, &r.body).map_err(|e| e.to_string()))
         .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
@@ -421,7 +485,7 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
     let url = format!("{}/v1/chat/completions", base);
     let got = match hooks::POST.with(|h| h.borrow().as_ref().map(|f| f(&url, &text))) {
         Some(r) => r,
-        None => crate::client::request("POST", &url, &[("Content-Type", "application/json")], Some(text.as_bytes()), chat_timeout())
+        None => bagholder_net::client::request("POST", &url, &[("Content-Type", "application/json")], Some(text.as_bytes()), chat_timeout())
             .map(|r| r.text())
             .map_err(|e| e.to_string()),
     };
@@ -440,5 +504,58 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
         Some(Value::String(s)) => bagholder_model::textrules::trim_space(s).to_string(),
         Some(Value::Null) | None => String::new(),
         Some(other) => bagholder_model::textrules::trim_space(&bagholder_model::value::s(Some(other))).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod rest_tests {
+    use super::*;
+
+    /// The model's state is process-wide; these tests take turns with it.
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn a_failed_attempt_rests_thirty_seconds_then_twice_as_long_each_time_up_to_half_an_hour() {
+        assert_eq!(next_rest(None), Duration::from_secs(30));
+        assert_eq!(next_rest(Some(Duration::from_secs(30))), Duration::from_secs(60));
+        assert_eq!(next_rest(Some(Duration::from_secs(20 * 60))), REST_MOST);
+        assert_eq!(next_rest(Some(REST_MOST)), REST_MOST);
+    }
+
+    #[test]
+    fn a_failure_is_not_tried_again_while_it_rests() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_state();
+        set("failed", "download failed");
+        ensure();
+        assert_eq!(status(), "failed", "resting: nothing started");
+        let st = state().lock().unwrap();
+        assert_eq!(st.rest.map(|(_, d)| d), Some(REST_FIRST));
+        drop(st);
+        reset_state();
+    }
+
+    #[test]
+    fn nothing_is_probed_while_an_attempt_is_under_way_or_resting() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let probes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let p = probes.clone();
+        hooks::DETECT.with(|h| *h.borrow_mut() = Some(Box::new(move || { p.set(p.get() + 1); None })));
+        hooks::ENSURE.with(|h| *h.borrow_mut() = Some(Box::new(|| {})));
+        for phase in ["detecting", "downloading", "starting", "failed"] {
+            reset_state();
+            set(phase, "");
+            for _ in 0..100 {
+                assert_eq!(endpoint(), "");
+            }
+        }
+        assert_eq!(probes.get(), 0, "a check during an attempt or its rest asks no server");
+        reset_state();
+        // on, as a running server turns it on (nothing is written there: the probe answers none)
+        state().lock().unwrap().folder = Some(std::env::temp_dir().join("bagholder-localmodel-test"));
+        assert_eq!(endpoint(), "");
+        assert_eq!(probes.get(), 1, "with nothing under way, one check probes once");
+        hooks::clear();
+        reset_state();
     }
 }

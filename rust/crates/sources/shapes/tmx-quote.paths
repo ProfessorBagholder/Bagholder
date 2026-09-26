@@ -1,0 +1,24 @@
+.
+data
+data.getQuoteBySymbol
+data.getQuoteBySymbol.currency
+data.getQuoteBySymbol.datetime
+data.getQuoteBySymbol.dividendFrequency
+data.getQuoteBySymbol.exchangeCode
+data.getQuoteBySymbol.exchangeName
+data.getQuoteBySymbol.name
+data.getQuoteBySymbol.percentChange
+data.getQuoteBySymbol.prevClose
+data.getQuoteBySymbol.price
+data.getQuoteBySymbol.priceChange
+data.getQuoteBySymbol.symbol
+errors ?
+errors[]
+errors[].code
+errors[].locations
+errors[].locations[]
+errors[].locations[].column
+errors[].locations[].line
+errors[].message
+errors[].path
+errors[].path[]

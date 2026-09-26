@@ -1,26 +1,21 @@
 //! The public market sources: what each one sends, how it is read, and the
 //! top-ups that keep the stored series current.
 
-pub mod client;
 pub mod http;
 pub mod parse;
 pub mod refresh;
 pub mod search;
 pub mod sedar;
 pub mod shorts;
-pub mod browser;
-pub mod clockzone;
 pub mod disclosures;
 pub mod edgar;
 pub mod enrich;
 pub mod exposure;
-pub mod htmltables;
 pub mod formnames;
 pub mod forms;
 pub mod localmodel;
 pub mod pdftext;
 pub mod fear;
-pub mod entities;
 pub mod news;
 pub mod history;
 pub mod quotes;
@@ -30,7 +25,7 @@ pub mod xls;
 
 /// When each quote was stored, re-exported so the quote loop can ask when each
 /// symbol was last priced.
-pub fn market_fetched(conn: &rusqlite::Connection) -> rusqlite::Result<serde_json::Map<String, serde_json::Value>> {
+pub fn market_fetched(conn: &rusqlite::Connection) -> rusqlite::Result<bagholder_store::market::Stamps> {
     bagholder_store::market::quote_fetched_at(conn)
 }
 

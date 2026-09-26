@@ -1,0 +1,33 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchAccountHistoricalFinancials($id: ID!, $currency: Currency!, $startDate: Date, $resolution: DateResolution!, $endDate: Date, $first: Int, $cursor: String) {
+  account(id: $id) {
+    id
+    financials {
+      historicalDaily(currency: $currency, startDate: $startDate, resolution: $resolution, endDate: $endDate, first: $first, after: $cursor) {
+        edges {
+          node {
+            ...AccountHistoricalFinancials
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}
+fragment AccountHistoricalFinancials on AccountHistoricalDailyFinancials {
+  date
+  netLiquidationValueV2 {
+    ...Money
+  }
+  netDepositsV2 {
+    ...Money
+  }
+}
+fragment Money on Money {
+  amount
+  cents
+  currency
+}

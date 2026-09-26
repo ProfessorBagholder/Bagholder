@@ -4,19 +4,57 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the diff `#[derive(Diff)]` implements
+bagholder-diff = { path = "../diff" }
+# the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
+# model's are: the two sides of the wire cannot drift
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 bagholder-model = { path = "../model" }
+bagholder-diff-derive = { path = "../diff-derive" }
 bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }
+bagholder-net = { path = "../net" }
 bagholder-ws = { path = "../ws" }
+# the book the app moves onto at the switch (docs/design-review.md, stage 3); for
+# now only `bagholder import-book` writes it, from the database kept today, and
+# `bagholder compare-figures` reads it
+bagholder-book = { path = "../book" }
+# the broker interface and Wealthsimple's adapter, for `pull-broker`
+bagholder-broker = { path = "../broker" }
+bagholder-wealthsimple = { path = "../wealthsimple" }
+bagholder-core = { path = "../core" }
+# the engine the app moves onto at the switch; for now `compare-figures` runs it
+# beside the old model (docs/plans/stage-2-engine.md)
+bagholder-engine = { path = "../engine" }
+# the readers of market data and facts: `read-sources` and `source-health`
+# (docs/plans/stage-3a-sources.md)
+bagholder-sources = { path = "../sources" }
+jiff = "0.2.37"
 regex = "1"
 openssl = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-# The standard library has no HTTP server. tiny_http is the smallest thing that
-# is a real one: threads and sockets, no async runtime behind it.
-tiny_http = "0.12"
+# The HTTP server (docs/architecture.md, "Process and HTTP"). axum on tokio and
+# hyper: typed extractors and responses per route, tower middleware for the gate,
+# the limits and the panic catcher, streamed bodies for the event stream, and a
+# graceful stop. It replaced tiny_http and a thread per request with hand-rolled
+# routing, query parsing and chunked writes.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["catch-panic", "limit", "set-header", "timeout"] }
+# streams for response bodies (the event stream, the sign-in frames)
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "bagholder"
 path = "src/main.rs"
+
+[dev-dependencies]
+# tests read the time zone rules built into jiff, never the machine's
+bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
+# the stand-in Wealthsimple server, for the sync's own tests
+bagholder-ws = { path = "../ws", features = ["standin"] }
+# a database of its own for the model cache tests, as the store's tests have
+tempfile = "3"

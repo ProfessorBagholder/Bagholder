@@ -12,15 +12,15 @@
 //! view key, and answers with HTML fragments.
 
 use regex::Regex;
-use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::browser::Session;
-use crate::disclosures::{self as d, Fetched, SourceError};
-use crate::news::unescape;
+use bagholder_net::browser::Session;
+use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
+use bagholder_sources::html::unescape;
 use bagholder_model::textrules::{parse_int, trim_space};
+use bagholder_store::feeds::{FiledDocument, Regulator};
 
 pub const SOURCE: &str = "SEDAR+";
 pub const BASE: &str = "https://www.sedarplus.ca";
@@ -69,7 +69,6 @@ fn fwd_chars(s: &str, at: usize, n: usize) -> usize {
 
 struct State {
     session: Option<Session>,
-    last: Option<Instant>,
     scope: ScopeCache,
 }
 
@@ -111,18 +110,12 @@ impl ScopeCache {
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { session: None, last: None, scope: ScopeCache::default() }))
+    S.get_or_init(|| Mutex::new(State { session: None, scope: ScopeCache::default() }))
 }
 
-fn pace(st: &mut State) {
-    if let Some(t) = st.last {
-        let next = t + PACE;
-        let now = Instant::now();
-        if next > now {
-            std::thread::sleep(next - now);
-        }
-    }
-    st.last = Some(Instant::now());
+/// SEDAR+'s turn on the one limiter every host goes through.
+fn pace(_st: &mut State) {
+    bagholder_net::machine::turn("www.sedarplus.ca", PACE);
 }
 
 fn session(st: &mut State) -> Fetched<&mut Session> {
@@ -416,9 +409,23 @@ re!(re_doc_link, r#"(?s)<a class="appDocumentView appResourceLink appDocumentLin
 re!(re_submitted, r#"<span aria-hidden="true">\s*(\d{1,2} \w{3} \d{4}[^<]*?)\s*</span>"#);
 re!(re_size, r"(?i)(\d[\d.,]* ?(?:KB|MB|bytes))");
 
+/// One row of a SEDAR+ document search, as the page gives it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SedarRow {
+    pub id: String,
+    pub issuer: String,
+    pub profile_no: String,
+    pub file: String,
+    pub submitted: String,
+    pub submitted_at: String,
+    pub size: String,
+    pub url: String,
+}
+
 /// Document search rows into filings, as the page gives
 /// them.
-pub fn parse_filings(html: &str) -> Vec<Value> {
+pub fn parse_filings(html: &str) -> Vec<SedarRow> {
     let mut out = Vec::new();
     for m in re_doc_link().captures_iter(html) {
         let whole = m.get(0).unwrap();
@@ -432,16 +439,16 @@ pub fn parse_filings(html: &str) -> Vec<Value> {
         let profile_no = issuer.as_ref().map(|c| c[2].to_string()).unwrap_or_default();
         let file = text(&m[2]);
         let submitted = sub.map(|c| trim_space(&c[1]).to_string()).unwrap_or_default();
-        out.push(json!({
-            "id": filing_id(&url, &profile_no, &file, &submitted),
-            "issuer": issuer.as_ref().map(|c| text(&c[1])).unwrap_or_default(),
-            "profileNo": profile_no,
-            "file": file,
-            "submitted": submitted,
-            "submittedAt": iso(&submitted),
-            "size": size.map(|c| c[1].to_string()).unwrap_or_default(),
-            "url": url,
-        }));
+        out.push(SedarRow {
+            id: filing_id(&url, &profile_no, &file, &submitted),
+            issuer: issuer.as_ref().map(|c| text(&c[1])).unwrap_or_default(),
+            profile_no,
+            file,
+            submitted_at: iso(&submitted),
+            submitted,
+            size: size.map(|c| c[1].to_string()).unwrap_or_default(),
+            url,
+        });
     }
     out
 }
@@ -463,21 +470,34 @@ re!(re_ri_row, r"(?s)<tr[^>]*appTblRow[^>]*>(.*?)</tr>");
 re!(re_td, r"(?s)<td[^>]*>(.*?)</td>");
 re!(re_nine, r"^\d{9}$");
 
+/// A reporting issuer's profile, as the search results (or a profile known
+/// only by its number) give it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportingIssuer {
+    pub name: String,
+    pub profile_no: String,
+    pub provinces: String,
+    pub jurisdiction: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
 /// Reporting-issuer rows, every field indexed
 /// off the profile-number cell.
-pub fn parse_reporting_issuers(html: &str) -> Vec<Value> {
+pub fn parse_reporting_issuers(html: &str) -> Vec<ReportingIssuer> {
     let mut out = Vec::new();
     for row in re_ri_row().captures_iter(html) {
         let cells: Vec<String> = re_td().captures_iter(&row[1]).map(|c| text(&c[1])).collect();
         let idx = match cells.iter().position(|c| re_nine().is_match(c)) { Some(i) => i as i64, None => continue };
         let cell = |i: i64| if i >= 0 && (i as usize) < cells.len() { cells[i as usize].clone() } else { String::new() };
-        out.push(json!({
-            "name": cell(idx - 1),
-            "profileNo": cells[idx as usize],
-            "provinces": cell(idx + 3),
-            "jurisdiction": cell(idx + 4),
-            "type": cell(idx + 5),
-        }));
+        out.push(ReportingIssuer {
+            name: cell(idx - 1),
+            profile_no: cells[idx as usize].clone(),
+            provinces: cell(idx + 3),
+            jurisdiction: cell(idx + 4),
+            kind: cell(idx + 5),
+        });
     }
     out
 }
@@ -486,7 +506,7 @@ pub fn parse_reporting_issuers(html: &str) -> Vec<Value> {
 
 /// A lookup's outcome; `NotFound` is no profile matching.
 pub enum Lookup {
-    Found(Vec<Value>),
+    Found(Vec<ReportingIssuer>),
     NotFound,
 }
 
@@ -512,45 +532,55 @@ pub fn resolve_profile(query: &str) -> Fetched<Lookup> {
 }
 
 /// The best-first order `resolve_profile` sorts matches into.
-pub fn rank(rows: &mut [Value], q: &str) -> Vec<Value> {
+pub fn rank(rows: &mut [ReportingIssuer], q: &str) -> Vec<ReportingIssuer> {
     let ql = q.to_lowercase();
-    let key = |r: &Value| {
-        let name = r["name"].as_str().unwrap_or("").to_lowercase();
-        (r["profileNo"].as_str().unwrap_or("") != q, !name.contains(&ql), !name.starts_with(&ql))
+    let key = |r: &ReportingIssuer| {
+        let name = r.name.to_lowercase();
+        (r.profile_no != q, !name.contains(&ql), !name.starts_with(&ql))
     };
     rows.sort_by_key(key);
     rows.to_vec()
 }
 
+/// What `list_filings` found for one issuer: its profile (when one is
+/// known), whether the issuer's own document page was walked directly, and
+/// the filings themselves.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Listed {
+    pub profile: Option<ReportingIssuer>,
+    pub scoped: Option<bool>,
+    pub filings: Vec<SedarRow>,
+}
+
 /// Filings for one issuer, resolving the issuer from the
 /// query when no profile number is given.
-pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize) -> Fetched<Option<Value>> {
-    let mut profile: Option<Value> = None;
+pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize) -> Fetched<Option<Listed>> {
+    let mut profile: Option<ReportingIssuer> = None;
     let mut profile_no = profile_no.filter(|p| !p.is_empty()).map(|p| p.to_string());
     if profile_no.is_none() {
         if let Some(q) = query.filter(|q| !q.is_empty()) {
             match resolve_profile(q)? {
                 Lookup::NotFound => return Ok(None),
                 Lookup::Found(matches) => {
-                    profile_no = Some(matches[0]["profileNo"].as_str().unwrap_or("").to_string());
+                    profile_no = Some(matches[0].profile_no.clone());
                     profile = Some(matches[0].clone());
                 }
             }
         }
     }
-    let mut scoped = Value::Null;
+    let mut scoped: Option<bool> = None;
     let html = {
         let mut st = state().lock().unwrap();
         match &profile_no {
             Some(p) => {
-                let name = profile.as_ref().and_then(|x| x["name"].as_str()).map(|s| s.to_string()).or_else(|| query.map(|s| s.to_string()));
+                let name = profile.as_ref().map(|x| x.name.clone()).or_else(|| query.map(|s| s.to_string()));
                 match scoped_documents(&mut st, p, name.as_deref()) {
                     Some(h) => {
-                        scoped = json!(true);
+                        scoped = Some(true);
                         h
                     }
                     None => {
-                        scoped = json!(false);
+                        scoped = Some(false);
                         View::open(&mut st, "searchDocuments")?.page
                     }
                 }
@@ -560,18 +590,15 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
     };
     let mut filings = parse_filings(&html);
     if let Some(p) = &profile_no {
-        filings.retain(|f| {
-            let no = f["profileNo"].as_str().unwrap_or("");
-            no.is_empty() || no == p
-        });
+        filings.retain(|f| f.profile_no.is_empty() || &f.profile_no == p);
     }
     filings.truncate(limit.max(1));
     let profile_out = match (profile, &profile_no) {
-        (Some(pr), _) => pr,
-        (None, Some(p)) => json!({"profileNo": p}),
-        (None, None) => Value::Null,
+        (Some(pr), _) => Some(pr),
+        (None, Some(p)) => Some(ReportingIssuer { profile_no: p.clone(), ..Default::default() }),
+        (None, None) => None,
     };
-    Ok(Some(json!({"profile": profile_out, "scoped": scoped, "filings": filings})))
+    Ok(Some(Listed { profile: profile_out, scoped, filings }))
 }
 
 /// The issuer's document page, reused for a short
@@ -610,7 +637,7 @@ fn scoped_documents_uncached(st: &mut State, profile_no: &str, name: Option<&str
 }
 
 /// The newest filings across SEDAR+.
-pub fn newest(limit: usize) -> Fetched<Vec<Value>> {
+pub fn newest(limit: usize) -> Fetched<Vec<SedarRow>> {
     let html = {
         let mut st = state().lock().unwrap();
         View::open(&mut st, "searchDocuments")?.page
@@ -621,7 +648,7 @@ pub fn newest(limit: usize) -> Fetched<Vec<Value>> {
 }
 
 /// A real document, not the site's HTML error page.
-fn is_document(a: &crate::browser::Answer) -> bool {
+fn is_document(a: &bagholder_net::browser::Answer) -> bool {
     let ct = a.header("content-type").unwrap_or("").to_lowercase();
     if a.status != 200 || a.body.is_empty() {
         return false;
@@ -642,9 +669,9 @@ pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fet
         let mut st = state().lock().unwrap();
         let html = scoped_documents(&mut st, profile_no, name)
             .ok_or_else(|| unavailable("could not open the profile's documents to download from"))?;
-        let row = parse_filings(&html).into_iter().find(|f| !key.is_empty() && f["url"].as_str().unwrap_or("").contains(&key));
+        let row = parse_filings(&html).into_iter().find(|f| !key.is_empty() && f.url.contains(&key));
         let row = match row { Some(r) => r, None => return Ok(None) };
-        let url = unescape(row["url"].as_str().unwrap_or(""));
+        let url = unescape(&row.url);
         let referer = format!("{}/csa-party/viewInstance/view.html", BASE);
         session(&mut st)?
             .request("GET", &url, &[("Referer", &referer)], None, DOC_TIMEOUT, true)
@@ -675,13 +702,13 @@ fn worth_reading(typ: &str) -> bool {
 
 /// `enrichment`: a filing that is a named document is titled by that name,
 /// read for good, so it is never downloaded for a title it already has.
-pub fn enrichment(row: &Value) -> Option<Value> {
-    let typ = text(&crate::disclosures::clean(row.get("type").and_then(|v| v.as_str()).unwrap_or("")));
+pub fn enrichment(row: &FiledDocument) -> Option<Enrichment> {
+    let typ = text(&crate::disclosures::clean(&row.form));
     if typ.is_empty() || worth_reading(&typ) {
         return None;
     }
     let title: String = typ.chars().take(90).collect();
-    Some(json!({"subject": title, "summary": "", "final": true}))
+    Some(Enrichment { subject: title, summary: String::new(), final_: true })
 }
 
 pub fn covers(_symbol: &str, exchange: &str, currency: &str) -> bool {
@@ -718,8 +745,8 @@ pub fn category(file: &str) -> &'static str {
     d::OTHER
 }
 
-pub fn categorize(row: &Value) -> String {
-    category(row.get("type").and_then(|v| v.as_str()).unwrap_or("")).to_string()
+pub fn categorize(row: &FiledDocument) -> String {
+    category(&row.form).to_string()
 }
 
 /// A document file name into a type and the
@@ -747,42 +774,40 @@ pub fn split_type_title(file: &str) -> (String, String) {
     (name, String::new())
 }
 
-pub fn to_item(raw: &Value, profile_no: &str) -> Value {
-    let g = |k: &str| raw.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let (typ, title) = split_type_title(&g("file"));
-    let pno = { let p = g("profileNo"); if p.is_empty() { profile_no.to_string() } else { p } };
-    json!({
-        "id": format!("sedar:{}", g("id")),
-        "source": SOURCE,
-        "category": category(&g("file")),
-        "date": g("submittedAt"),
-        "dateText": g("submitted"),
-        "type": typ,
-        "title": title,
-        "size": g("size"),
-        "url": g("url"),
-        "issuer": g("issuer"),
-        "profileNo": pno,
-    })
+pub fn to_item(raw: &SedarRow, profile_no: &str) -> FiledDocument {
+    let (typ, title) = split_type_title(&raw.file);
+    let pno = if raw.profile_no.is_empty() { profile_no.to_string() } else { raw.profile_no.clone() };
+    FiledDocument {
+        id: format!("sedar:{}", raw.id),
+        source: Regulator::Sedar,
+        category: category(&raw.file).to_string(),
+        date: raw.submitted_at.clone(),
+        date_text: raw.submitted.clone(),
+        form: typ,
+        title,
+        size: raw.size.clone(),
+        url: raw.url.clone(),
+        issuer: raw.issuer.clone(),
+        profile_no: pno,
+    }
 }
 
 /// One Canadian issuer's filings as disclosure items.
-pub fn fetch(symbol: &str, name: &str, _exchange: &str, _currency: &str, limit: usize, profile_no: &str) -> Fetched<Vec<Value>> {
+pub fn fetch(symbol: &str, name: &str, _exchange: &str, _currency: &str, limit: usize, profile_no: &str) -> Fetched<Vec<FiledDocument>> {
     let query = if name.is_empty() { symbol } else { name };
     let result = match list_filings(Some(query), Some(profile_no), limit)? {
         Some(r) => r,
         None => return Ok(vec![]),
     };
-    let pno = result["profile"].get("profileNo").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    Ok(result["filings"].as_array().cloned().unwrap_or_default().iter().map(|r| to_item(r, &pno)).collect())
+    let pno = result.profile.as_ref().map(|p| p.profile_no.clone()).unwrap_or_default();
+    Ok(result.filings.iter().map(|r| to_item(r, &pno)).collect())
 }
 
 /// One stored row's document. (bytes, content type).
-pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
-    let g = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let issuer = g("issuer");
-    match download_bytes(&g("profileNo"), &g("id"), if issuer.is_empty() { None } else { Some(&issuer) })? {
+pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
+    let issuer = row.issuer.clone();
+    match download_bytes(&row.profile_no, &row.id, if issuer.is_empty() { None } else { Some(&issuer) })? {
         Some(x) => Ok(x),
-        None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&g("id")), g("profileNo")))),
+        None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&row.id), row.profile_no))),
     }
 }

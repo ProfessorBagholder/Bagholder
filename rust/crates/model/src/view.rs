@@ -4,37 +4,28 @@
 //! Per-instrument figures stay in the instrument's own currency; everything
 //! that adds instruments together is CAD.
 
-use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use crate::activity::{Flag, Kind};
 use crate::base::Base;
 use crate::dates::shift_date;
 use crate::exposure::exposure_slices;
-use crate::filters::{
-    clean_filters, date_bounds, in_date_scope, position_matches, trade_matches, Filters, BENCHMARK_LABELS,
-};
+use crate::filters::{date_bounds, in_date_scope, position_matches, trade_matches, Filters, BENCHMARK_LABELS};
 use crate::fx::to_cad;
-use crate::nav::{annualized, drawdown, series_json, yearly_returns};
-use crate::normalize::KINDS;
+use crate::nav::{annualized, drawdown, yearly_returns, Point};
 use crate::stats::{by_symbol, grade_buckets, metrics, month_label, monthly, payments_per_year, review_queue, GRADES};
-use crate::trades::quote_fits;
-use crate::value::{FSum, field_s, get, num};
+use crate::value::FSum;
+use crate::wire::{
+    Allocation, BenchmarkRef, Cashflow, CashflowHolding, CashflowMonth, CashflowRow, CashflowTile, EquityBlock, ListingInfo, MarketDates, Options, Ordered, Payment, Portfolio, Position, PositionsSummary, Priced,
+    RateSource, Trade, TradeDetail, View,
+};
 
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
-    }
+/// A position's market value as it counts toward the book: a short owes it.
+fn signed_mv(p: &Position) -> f64 {
+    if p.short { -p.mv } else { p.mv }
 }
 
-fn b(v: &Value, k: &str) -> f64 { num(get(v, k), 0.0) }
-fn flag(v: &Value, k: &str) -> bool { v.get(k).and_then(|x| x.as_bool()).unwrap_or(false) }
-
-/// `portfolio_view`: the Portfolio tiles, CAD aggregates over the
-/// accounts in scope.
+/// The Portfolio tiles, CAD aggregates over the accounts in scope.
 ///
 /// Market value, cost basis and unrealized P&L come from the open positions in
 /// scope at today's rate. Net asset value is the sum of Wealthsimple's net
@@ -42,146 +33,92 @@ fn flag(v: &Value, k: &str) -> bool { v.get(k).and_then(|x| x.as_bool()).unwrap_
 /// currency, available margin the buying power of the margin accounts only --
 /// every self-directed account answers that query with its cash to buy with,
 /// which is not margin.
-pub fn portfolio_view(base: &Base, f: &Filters, positions: &[Value]) -> Value {
-    let today = base.today.clone();
-    let cad = |amount: f64, currency: &str| to_cad(&base.fx, amount, currency, &today);
+pub fn portfolio_view(base: &Base, f: &Filters, positions: &[&Position]) -> Portfolio {
+    let cad = |amount: f64, currency: &str| to_cad(&base.fx, amount, currency, &base.today);
 
-    let names = f.list("account");
+    let names = &f.lists.account;
     // closed accounts hold nothing and count for nothing here
-    let accounts: Vec<&Value> = base
-        .accounts
-        .iter()
-        .filter(|a| field_s(a, "status").to_lowercase() != "closed")
-        .filter(|a| names.is_empty() || names.contains(&field_s(a, "name")))
-        .collect();
-    let ids: BTreeSet<String> = accounts.iter().map(|a| field_s(a, "id")).collect();
-    let name_of: HashMap<String, String> =
-        accounts.iter().map(|a| (field_s(a, "id"), field_s(a, "name"))).collect();
+    let accounts: Vec<&crate::wire::Account> = base.accounts.iter().filter(|a| a.status.to_lowercase() != "closed").filter(|a| names.is_empty() || names.contains(&a.name)).collect();
+    let ids: BTreeSet<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
 
-    let mv: f64 = positions
-        .iter()
-        .map(|p| cad(if flag(p, "short") { -b(p, "mv") } else { b(p, "mv") }, &field_s(p, "currency")))
-        .fsum();
-    let cost: f64 = positions.iter().map(|p| cad(b(p, "cost").abs(), &field_s(p, "currency"))).fsum();
-    let unreal: f64 = positions.iter().map(|p| cad(b(p, "unreal"), &field_s(p, "currency"))).fsum();
-
-    let navs: Vec<f64> = accounts
-        .iter()
-        .filter_map(|a| opt_num(get(a, "nav")).map(|n| cad(n, &field_s(a, "currency"))))
-        .collect();
+    let mv: f64 = positions.iter().map(|p| cad(signed_mv(p), &p.currency)).fsum();
+    let cost: f64 = positions.iter().map(|p| cad(p.cost.abs(), &p.currency)).fsum();
+    let unreal: f64 = positions.iter().map(|p| cad(p.unreal, &p.currency)).fsum();
+    let navs: Vec<f64> = accounts.iter().filter_map(|a| a.nav.map(|n| cad(n, &a.currency))).collect();
 
     // the negative cash balances are the margin drawn; the positive ones the cash
     let mut used: BTreeMap<String, f64> = BTreeMap::new();
     let mut cash_by: BTreeMap<String, f64> = BTreeMap::new();
-    for bal in &base.balances {
-        let aid = field_s(bal, "accountId");
-        let ccy = base.cash_currencies.get(&field_s(bal, "securityId")).cloned();
-        let q = num(get(bal, "quantity"), 0.0);
-        if let Some(ccy) = ccy {
-            if ids.contains(&aid) && !ccy.is_empty() {
-                if q < 0.0 {
-                    *used.entry(ccy).or_insert(0.0) += -q;
-                } else if q > 0.0 {
-                    *cash_by.entry(ccy).or_insert(0.0) += q;
-                }
-            }
+    for b in base.balances.iter().filter(|b| ids.contains(b.account_id.as_str())) {
+        let Some(currency) = base.cash_currencies.get(&b.security_id).filter(|c| !c.is_empty()) else { continue };
+        if b.quantity < 0.0 {
+            *used.entry(currency.clone()).or_insert(0.0) += -b.quantity;
+        } else if b.quantity > 0.0 {
+            *cash_by.entry(currency.clone()).or_insert(0.0) += b.quantity;
         }
     }
     let margin_used: f64 = used.iter().map(|(c, v)| cad(*v, c)).fsum();
     let cash: f64 = cash_by.iter().map(|(c, v)| cad(*v, c)).fsum();
 
     // the day's change: each quoted position's, over what those were worth at the previous close
-    let quoted: Vec<&Value> = positions.iter().filter(|p| opt_num(get(p, "dayChange")).is_some()).collect();
-    let day_change: Option<f64> = if quoted.is_empty() {
-        None
-    } else {
-        Some(quoted.iter().map(|p| cad(b(p, "dayChange"), &field_s(p, "currency"))).fsum())
-    };
-    let prev_value = match day_change {
-        Some(dc) => {
-            quoted
-                .iter()
-                .map(|p| cad(if flag(p, "short") { -b(p, "mv") } else { b(p, "mv") }, &field_s(p, "currency")))
-                .fsum()
-                - dc
-        }
-        None => 0.0,
-    };
+    let quoted: Vec<(&Position, f64)> = positions.iter().filter_map(|p| p.day_change.map(|dc| (*p, dc))).collect();
+    let day_change: Option<f64> = (!quoted.is_empty()).then(|| quoted.iter().map(|(p, dc)| cad(*dc, &p.currency)).fsum());
+    let day_change_pct = day_change.and_then(|dc| {
+        let before: f64 = quoted.iter().map(|(p, _)| cad(signed_mv(p), &p.currency)).fsum() - dc;
+        (before != 0.0).then(|| dc / before)
+    });
 
     // only a margin account's buying power is margin available
-    let margin_ids: BTreeSet<String> = accounts
-        .iter()
-        .filter(|a| field_s(a, "type").to_uppercase().contains("MARGIN"))
-        .map(|a| field_s(a, "id"))
-        .collect();
-    let mut avail: Vec<f64> = Vec::new();
+    let margin_accounts: Vec<&&crate::wire::Account> = accounts.iter().filter(|a| a.kind.to_uppercase().contains("MARGIN")).collect();
+    let mut available: Vec<f64> = Vec::new();
     let mut unavailable: Vec<String> = Vec::new();
-    for m in &base.margin {
-        let aid = field_s(m, "accountId");
-        if !margin_ids.contains(&aid) {
-            continue;
-        }
-        match opt_num(get(m, "buyingPower")) {
-            None => unavailable.push(name_of.get(&aid).cloned().unwrap_or(aid)),
-            Some(bp) => {
-                let ccy = { let c = field_s(m, "currency"); if c.is_empty() { "CAD".into() } else { c } };
-                avail.push(cad(bp, &ccy));
-            }
+    for m in base.margin.iter() {
+        let Some(account) = margin_accounts.iter().find(|a| a.id == m.account_id) else { continue };
+        match m.buying_power {
+            None => unavailable.push(account.name.clone()),
+            Some(power) => available.push(cad(power, if m.currency.is_empty() { "CAD" } else { &m.currency })),
         }
     }
     unavailable.sort();
 
-    let mut alloc: Vec<Value> = positions
+    let mut allocation: Vec<Allocation> = positions
         .iter()
-        .filter_map(|p| {
-            let v = cad(b(p, "mv"), &field_s(p, "currency"));
-            if v > 0.0 {
-                Some(json!({"id": field_s(p, "id"), "symbol": field_s(p, "symbol"), "account": field_s(p, "account"), "value": v}))
-            } else {
-                None
-            }
-        })
+        .map(|p| (p, cad(p.mv, &p.currency)))
+        .filter(|(_, value)| *value > 0.0)
+        .map(|(p, value)| Allocation { id: p.id.clone(), symbol: p.symbol.clone(), account: p.account.clone(), value, share: 0.0 })
         .collect();
-    alloc.sort_by(|x, y| b(y, "value").partial_cmp(&b(x, "value")).unwrap_or(std::cmp::Ordering::Equal));
-    let alloc_total: f64 = alloc.iter().map(|x| b(x, "value")).fsum();
-    for x in alloc.iter_mut() {
-        let share = if alloc_total != 0.0 { b(x, "value") / alloc_total } else { 0.0 };
-        if let Value::Object(m) = x {
-            m.insert("share".into(), json!(share));
-        }
+    allocation.sort_by(|x, y| y.value.partial_cmp(&x.value).unwrap_or(std::cmp::Ordering::Equal));
+    let allocated: f64 = allocation.iter().map(|x| x.value).fsum();
+    for x in allocation.iter_mut() {
+        x.share = if allocated != 0.0 { x.value / allocated } else { 0.0 };
     }
 
     let (sectors, regions) = exposure_slices(positions, &base.exposures, &cad);
     let nav_sum: f64 = navs.iter().fsum();
-    let account_count: BTreeSet<String> = positions.iter().map(|p| field_s(p, "account")).collect();
-
-    json!({
-        "allocation": alloc,
-        "sectors": sectors,
-        "regions": regions,
-        "marketValue": crate::value::sum_of(positions.is_empty(), mv),
-        "costBasis": crate::value::sum_of(positions.is_empty(), cost),
-        "unrealized": crate::value::sum_of(positions.is_empty(), unreal),
-        "unrealizedPct": if cost != 0.0 { json!(unreal / cost) } else { Value::Null },
-        "positionCount": positions.len(),
-        "accountCount": account_count.len(),
-        "nav": if navs.is_empty() { Value::Null } else { json!(nav_sum) },
-        "navAccounts": navs.len(),
-        "marginUsed": crate::value::sum_of(used.is_empty(), margin_used),
-        "marginUsedBy": used.iter().map(|(c, v)| (c.clone(), json!(round2(*v)))).collect::<Map<String, Value>>(),
-        "marginUsedPct": if mv != 0.0 { json!(margin_used / mv) } else { Value::Null },
-        "availableMargin": if avail.is_empty() { Value::Null } else { json!(avail.iter().fsum()) },
-        "availableMarginUnavailable": unavailable,
+    Portfolio {
+        allocation,
+        sectors,
+        regions,
+        market_value: mv + 0.0,
+        cost_basis: cost + 0.0,
+        unrealized: unreal + 0.0,
+        unrealized_pct: (cost != 0.0).then(|| unreal / cost),
+        position_count: positions.len(),
+        account_count: positions.iter().map(|p| p.account.as_str()).collect::<BTreeSet<_>>().len(),
+        nav: (!navs.is_empty()).then_some(nav_sum),
+        nav_accounts: navs.len(),
+        margin_used: margin_used + 0.0,
+        margin_used_by: used.iter().map(|(c, v)| (c.clone(), round2(*v))).collect(),
+        margin_used_pct: (mv != 0.0).then(|| margin_used / mv),
+        available_margin: (!available.is_empty()).then(|| available.iter().fsum()),
+        available_margin_unavailable: unavailable,
         // the tiles a book without a margin account shows in the margin tiles' places
-        "hasMargin": !margin_ids.is_empty(),
-        "cash": crate::value::sum_of(cash_by.is_empty(), cash),
-        "cashPct": if !navs.is_empty() && nav_sum != 0.0 { json!(cash / nav_sum) } else { Value::Null },
-        "dayChange": day_change,
-        "dayChangePct": match day_change {
-            Some(dc) if !quoted.is_empty() && prev_value != 0.0 => json!(dc / prev_value),
-            _ => Value::Null,
-        },
-    })
+        has_margin: !margin_accounts.is_empty(),
+        cash: cash + 0.0,
+        cash_pct: (!navs.is_empty() && nav_sum != 0.0).then(|| cash / nav_sum),
+        day_change,
+        day_change_pct,
+    }
 }
 
 /// Rounds to two places, half to even.
@@ -192,68 +129,47 @@ fn round2(v: f64) -> f64 {
     r / 100.0
 }
 
+/// What a payer pays: per payment, how often, and where that was read.
 struct Rate {
     per: f64,
     freq: i64,
     annual: f64,
     verified: bool,
-    source: &'static str,
+    source: RateSource,
 }
 
-/// `cashflow_view`.
-pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_used: f64, has_margin: bool) -> Value {
-    let today = base.today.clone();
-    let accts = f.list("account");
+fn month_of(day: &str) -> String {
+    day.chars().take(7).collect()
+}
+
+pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Position], margin_used: f64, has_margin: bool) -> Cashflow {
+    let today = base.today.as_str();
+    let accounts = &f.lists.account;
     let search = f.search.to_uppercase();
-    let sym_list = f.list("symbol");
+    let in_account = |account: &str| accounts.is_empty() || accounts.iter().any(|a| a == account);
+    let searched = |symbol: &str| search.is_empty() || symbol.to_uppercase().contains(&search);
+    let in_scope = |r: &CashflowRow| in_account(&r.account) && searched(&r.symbol) && (f.lists.symbol.is_empty() || f.lists.symbol.contains(&r.symbol)) && in_date_scope(f, today, &r.date);
 
-    let in_scope = |r: &Value| -> bool {
-        if !accts.is_empty() && !accts.contains(&field_s(r, "account")) {
-            return false;
-        }
-        if !search.is_empty() && !field_s(r, "symbol").to_uppercase().contains(&search) {
-            return false;
-        }
-        if !sym_list.is_empty() && !sym_list.contains(&field_s(r, "symbol")) {
-            return false;
-        }
-        in_date_scope(f, &today, &field_s(r, "date"))
-    };
-
-    let everything: Vec<&Value> = base.cashflow.iter().filter(|r| in_scope(r)).collect();
-    let recs: Vec<&Value> = everything.iter().copied().filter(|r| field_s(r, "kind") == "Dividend").collect();
-
-    let mut skipped: Vec<String> = ["grade", "tag", "kind", "exchange", "side", "result"]
-        .iter()
-        .filter(|k| !f.list(k).is_empty())
-        .map(|k| k.to_string())
-        .collect();
-    // the ranges, in their declared order
-    for k in crate::filters::RANGE_KEYS {
-        if f.ranges[k].v.is_some() {
-            skipped.push(k.to_string());
-        }
-    }
+    let everything: Vec<&CashflowRow> = base.cashflow.iter().filter(|r| in_scope(r)).collect();
+    let recs: Vec<&CashflowRow> = everything.iter().copied().filter(|r| r.kind == Payment::Dividend).collect();
 
     // The chart runs to the current month (or the end of the date filter), with
     // an empty bar for a month that has not paid yet.
     let mut keys: Vec<String> = Vec::new();
     let mut bucket: HashMap<String, (f64, usize)> = HashMap::new();
     if !recs.is_empty() {
-        let mut months_seen: Vec<String> = recs.iter().map(|r| field_s(r, "date").chars().take(7).collect()).collect();
-        months_seen.sort();
-        let first = months_seen[0].clone();
-        let mut last = months_seen[months_seen.len() - 1].clone();
-        let mut end_day = today.clone();
-        if let Some((_, hi)) = date_bounds(f, &today) {
-            end_day = if hi < today { hi } else { today.clone() };
-        } else if !f.years.is_empty() {
-            let y_end = format!("{}-12-31", f.years.iter().max().unwrap());
-            end_day = if y_end < today { y_end } else { today.clone() };
-        }
-        let end_month: String = end_day.chars().take(7).collect();
-        if end_month > last {
-            last = end_month;
+        let first = recs.iter().map(|r| month_of(&r.date)).min().unwrap();
+        let mut last = recs.iter().map(|r| month_of(&r.date)).max().unwrap();
+        let end_day = match date_bounds(f, today) {
+            Some((_, hi)) => if hi.as_str() < today { hi } else { today.to_string() },
+            None if !f.years.is_empty() => {
+                let year_end = format!("{}-12-31", f.years.iter().max().unwrap());
+                if year_end.as_str() < today { year_end } else { today.to_string() }
+            }
+            None => today.to_string(),
+        };
+        if month_of(&end_day) > last {
+            last = month_of(&end_day);
         }
         let mut y: i64 = first[..4].parse().unwrap_or(0);
         let mut m: u32 = first[5..7].parse().unwrap_or(1);
@@ -262,8 +178,8 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
             if k > last {
                 break;
             }
-            keys.push(k.clone());
-            bucket.insert(k, (0.0, 0));
+            bucket.insert(k.clone(), (0.0, 0));
+            keys.push(k);
             m += 1;
             if m > 12 {
                 m = 1;
@@ -272,242 +188,158 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
         }
     }
     for r in &recs {
-        let k: String = field_s(r, "date").chars().take(7).collect();
-        if let Some(e) = bucket.get_mut(&k) {
-            e.0 += b(r, "amountCad");
+        if let Some(e) = bucket.get_mut(&month_of(&r.date)) {
+            e.0 += r.amount_cad;
             e.1 += 1;
         }
     }
-    let months: Vec<Value> = keys
-        .iter()
-        .map(|k| {
-            let (sum, n) = bucket[k];
-            json!({"key": k, "label": month_label(k), "value": sum, "count": n})
-        })
-        .collect();
+    let months: Vec<CashflowMonth> = keys.iter().map(|k| CashflowMonth { key: k.clone(), label: month_label(k), value: bucket[k].0, count: bucket[k].1 }).collect();
 
-    let payers: BTreeSet<String> = base
-        .cashflow
-        .iter()
-        .filter(|r| field_s(r, "kind") == "Dividend")
-        .map(|r| field_s(r, "symbol"))
-        .collect();
-    let held: Vec<&Value> = positions_all
-        .iter()
-        .filter(|p| payers.contains(&field_s(p, "symbol")) && !flag(p, "short"))
-        .filter(|p| accts.is_empty() || accts.contains(&field_s(p, "account")))
-        .filter(|p| search.is_empty() || field_s(p, "symbol").to_uppercase().contains(&search))
-        .collect();
-    let for_yoc: Vec<&Value> = base
-        .cashflow
-        .iter()
-        .filter(|r| field_s(r, "kind") == "Dividend")
-        .filter(|r| accts.is_empty() || accts.contains(&field_s(r, "account")))
-        .filter(|r| search.is_empty() || field_s(r, "symbol").to_uppercase().contains(&search))
-        .collect();
+    let dividends = || base.cashflow.iter().filter(|r| r.kind == Payment::Dividend);
+    let payers: BTreeSet<&str> = dividends().map(|r| r.symbol.as_str()).collect();
+    let held: Vec<&Position> = positions_all.iter().filter(|p| payers.contains(p.symbol.as_str()) && !p.short && in_account(&p.account) && searched(&p.symbol)).collect();
+    let for_yoc: Vec<&CashflowRow> = dividends().filter(|r| in_account(&r.account) && searched(&r.symbol)).collect();
 
-    let last_rec = recs.first().map(|r| field_s(r, "date")).unwrap_or_else(|| today.clone());
-    let cut = trailing_year_month(&last_rec);
+    let last_paid = recs.first().map(|r| r.date.as_str()).unwrap_or(today);
+    let cut = trailing_year_month(last_paid);
     let this_year: String = today.chars().take(4).collect();
-
-    let sum_for = |sym: &str, pred: &dyn Fn(&Value) -> bool| -> Value {
-        let v: Vec<f64> = for_yoc.iter().filter(|r| field_s(r, "symbol") == sym && pred(r)).map(|r| b(r, "amountCad")).collect();
-        crate::value::sum_of(v.is_empty(), v.iter().fsum())
-    };
+    let paid_for = |sym: &str, keep: &dyn Fn(&CashflowRow) -> bool| -> f64 { for_yoc.iter().filter(|r| r.symbol == sym && keep(r)).map(|r| r.amount_cad).fsum() + 0.0 };
 
     // The fund's own declared record first: the latest distribution that has
     // gone ex, and payments per year from the gaps between its ex-dates, so a
     // schedule change shows at once. Never assumed from the instrument.
     let rate_for = |sym: &str| -> Option<Rate> {
-        let public: Vec<&Value> = base
-            .distributions
-            .get(sym)
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().collect())
-            .unwrap_or_default();
-        let mut declared: Vec<&&Value> = public.iter().filter(|d| field_s(d, "exDate") <= today).collect();
-        if !declared.is_empty() {
-            declared.sort_by(|a, b2| field_s(b2, "exDate").cmp(&field_s(a, "exDate")));
-            let per = b(declared[0], "amount");
-            let freq = payments_per_year(&public.iter().map(|d| field_s(d, "exDate")).collect::<Vec<_>>());
-            if per != 0.0 {
-                if let Some(freq) = freq {
-                    return Some(Rate { per, freq, annual: per * freq as f64, verified: true, source: "declared" });
-                }
+        let declared = base.distributions.get(sym).map(|d| d.as_slice()).unwrap_or(&[]);
+        // the latest that has gone ex; the first of those on one day
+        let latest = declared.iter().filter(|d| d.ex_date.as_str() <= today).fold(None, |best: Option<&crate::input::Distribution>, d| match best {
+            Some(b) if b.ex_date >= d.ex_date => Some(b),
+            _ => Some(d),
+        });
+        if let Some(d) = latest {
+            let freq = payments_per_year(&declared.iter().map(|d| d.ex_date.clone()).collect::<Vec<_>>());
+            if let (true, Some(freq)) = (d.amount != 0.0, freq) {
+                return Some(Rate { per: d.amount, freq, annual: d.amount * freq as f64, verified: true, source: RateSource::Declared });
             }
         }
-        let mut rs: Vec<&&Value> = for_yoc
-            .iter()
-            .filter(|r| field_s(r, "symbol") == sym && opt_num(get(r, "per")).map_or(false, |p| p != 0.0))
-            .collect();
-        if rs.is_empty() {
-            return None;
-        }
-        rs.sort_by(|a, b2| field_s(b2, "date").cmp(&field_s(a, "date")));
-        let per = b(rs[0], "per");
-        if per == 0.0 {
-            return None;
-        }
-        let dates: Vec<String> = for_yoc.iter().filter(|r| field_s(r, "symbol") == sym).map(|r| field_s(r, "date")).collect();
-        let freq = payments_per_year(&dates);
-        let verified = freq.is_some();
-        let freq = freq.unwrap_or(12);
-        Some(Rate { per, freq, annual: per * freq as f64, verified, source: "payments" })
+        let paid: Vec<&&CashflowRow> = for_yoc.iter().filter(|r| r.symbol == sym).collect();
+        let per = paid.iter().filter(|r| r.per.map_or(false, |p| p != 0.0)).fold(None, |best: Option<&&&CashflowRow>, r| match best {
+            Some(b) if b.date >= r.date => Some(b),
+            _ => Some(r),
+        })?.per?;
+        let freq = payments_per_year(&paid.iter().map(|r| r.date.clone()).collect::<Vec<_>>());
+        let per_year = freq.unwrap_or(12);
+        Some(Rate { per, freq: per_year, annual: per * per_year as f64, verified: freq.is_some(), source: RateSource::Payments })
     };
 
     // The next distribution still to be paid, whether or not it has gone ex,
     // else the last known one.
-    let distribution_dates = |sym: &str| -> (String, String, bool, bool) {
-        let mut recs_: Vec<&Value> = base
-            .distributions
-            .get(sym)
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().collect())
-            .unwrap_or_default();
-        let key = |d: &Value| -> (String, String) {
-            let pay: String = field_s(d, "payDate").chars().take(10).collect();
-            let ex = field_s(d, "exDate");
-            (if pay.is_empty() { ex.clone() } else { pay }, ex)
+    let distribution_dates = |sym: &str| -> (String, String) {
+        let pay_day = |d: &crate::input::Distribution| -> String { d.pay_date.chars().take(10).collect() };
+        let due = |d: &crate::input::Distribution| -> (String, String) {
+            let pay = pay_day(d);
+            (if pay.is_empty() { d.ex_date.clone() } else { pay }, d.ex_date.clone())
         };
-        recs_.sort_by(|a, b2| key(a).cmp(&key(b2)));
-        let unpaid: Vec<&&Value> = recs_.iter().filter(|d| key(d).0 >= today).collect();
-        let pick: Option<&Value> = unpaid.first().map(|d| **d).or_else(|| recs_.last().copied());
-        let (ex, pay) = match pick {
-            Some(p) => (field_s(p, "exDate"), field_s(p, "payDate").chars().take(10).collect::<String>()),
+        let mut declared: Vec<&crate::input::Distribution> = base.distributions.get(sym).map(|d| d.iter().collect()).unwrap_or_default();
+        declared.sort_by_cached_key(|d| due(d));
+        match declared.iter().find(|d| due(d).0.as_str() >= today).or(declared.last()) {
+            Some(d) => (d.ex_date.clone(), pay_day(d)),
             None => {
-                let q = base.quotes.get(sym).cloned().unwrap_or(Value::Null);
-                let ex: String = field_s(&q, "exDividendDate").chars().take(10).collect();
-                let mut paid: Vec<String> =
-                    for_yoc.iter().filter(|r| field_s(r, "symbol") == sym).map(|r| field_s(r, "date")).collect();
-                paid.sort();
-                (ex, paid.last().cloned().unwrap_or_default())
-            }
-        };
-        let ex_past = !ex.is_empty() && ex < today;
-        let pay_past = !pay.is_empty() && pay < today;
-        (ex, pay, ex_past, pay_past)
-    };
-
-    let last_price = |p: &Value| -> (f64, &'static str) {
-        let sym = field_s(p, "symbol");
-        let q = base.quotes.get(&sym);
-        let q = match q { Some(q) if quote_fits(Some(q), &field_s(p, "kind")) => Some(q), _ => None };
-        if let Some(q) = q {
-            if let Some(px) = opt_num(get(q, "price")) {
-                if px > 0.0 {
-                    return (px, "close");
-                }
+                let ex: String = base.quotes.get(sym).map(|q| q.ex_dividend_date.chars().take(10).collect()).unwrap_or_default();
+                (ex, for_yoc.iter().filter(|r| r.symbol == sym).map(|r| r.date.clone()).max().unwrap_or_default())
             }
         }
-        (b(p, "last"), "fill")
     };
 
-    let mut holdings: Vec<Value> = Vec::new();
-    for p in &held {
-        let sym = field_s(p, "symbol");
-        let r = rate_for(&sym);
-        let basis = b(p, "cost");
-        let avg = b(p, "avg");
-        let (last_px, price_source) = last_price(p);
-        let (ex, pay, ex_past, pay_past) = distribution_dates(&sym);
-        let qty = b(p, "qty");
-        holdings.push(json!({
-            "id": field_s(p, "id"),
-            "symbol": sym,
-            "account": field_s(p, "account"),
-            "qty": qty,
-            "per": r.as_ref().map(|x| x.per),
-            "freq": r.as_ref().map(|x| x.freq),
-            "freqVerified": r.as_ref().map_or(false, |x| x.verified),
-            "rateSource": r.as_ref().map_or("", |x| x.source),
-            "cost": basis,
-            "avg": avg,
-            "last": last_px,
-            "priceSource": price_source,
-            "ytd": sum_for(&sym, &|x| field_s(x, "date").starts_with(&this_year)),
-            "ttm": sum_for(&sym, &|x| field_s(x, "date").chars().take(7).collect::<String>() >= cut),
-            "all": sum_for(&sym, &|_| true),
-            "nextExDate": ex,
-            "nextPayDate": pay,
-            "exPast": ex_past,
-            "payPast": pay_past,
-            "yob": r.as_ref().map(|x| x.per * qty),
-            "annual": r.as_ref().map(|x| x.annual * qty),
-            "yoc": r.as_ref().and_then(|x| if avg != 0.0 { Some(x.annual / avg) } else { None }),
-            "currentYield": r.as_ref().and_then(|x| if last_px != 0.0 { Some(x.annual / last_px) } else { None }),
-        }));
-    }
+    let holdings: Vec<CashflowHolding> = held
+        .iter()
+        .map(|p| {
+            let rate = rate_for(&p.symbol);
+            let close = base.quotes.get(&p.symbol).filter(|q| q.fits(p.kind)).and_then(|q| q.price).filter(|px| *px > 0.0);
+            let last = close.unwrap_or(p.last);
+            let (ex, pay) = distribution_dates(&p.symbol);
+            CashflowHolding {
+                id: p.id.clone(),
+                symbol: p.symbol.clone(),
+                account: p.account.clone(),
+                qty: p.qty,
+                per: rate.as_ref().map(|r| r.per),
+                freq: rate.as_ref().map(|r| r.freq),
+                freq_verified: rate.as_ref().map_or(false, |r| r.verified),
+                rate_source: rate.as_ref().map_or(RateSource::Unknown, |r| r.source),
+                cost: p.cost,
+                avg: p.avg,
+                last,
+                price_source: if close.is_some() { Priced::Close } else { Priced::Fill },
+                ytd: paid_for(&p.symbol, &|r| r.date.starts_with(&this_year)),
+                ttm: paid_for(&p.symbol, &|r| month_of(&r.date) >= cut),
+                all: paid_for(&p.symbol, &|_| true),
+                ex_past: !ex.is_empty() && ex.as_str() < today,
+                pay_past: !pay.is_empty() && pay.as_str() < today,
+                next_ex_date: ex,
+                next_pay_date: pay,
+                yob: rate.as_ref().map(|r| r.per * p.qty),
+                annual: rate.as_ref().map(|r| r.annual * p.qty),
+                yoc: rate.as_ref().filter(|_| p.avg != 0.0).map(|r| r.annual / p.avg),
+                current_yield: rate.as_ref().filter(|_| last != 0.0).map(|r| r.annual / last),
+            }
+        })
+        .collect();
 
-    let verified: Vec<&Value> = holdings.iter().filter(|h| !h["annual"].is_null()).collect();
-    let basis_all: f64 = verified.iter().map(|h| b(h, "cost")).fsum();
-    let earned_all: f64 = verified.iter().map(|h| b(h, "ttm")).fsum();
-    let annual_all: f64 = verified.iter().map(|h| b(h, "annual")).fsum();
-    let total: f64 = recs.iter().map(|r| b(r, "amountCad")).fsum();
+    let rated: Vec<(&CashflowHolding, f64)> = holdings.iter().filter_map(|h| h.annual.map(|a| (h, a))).collect();
+    let basis_all: f64 = rated.iter().map(|(h, _)| h.cost).fsum();
+    let earned_all: f64 = rated.iter().map(|(h, _)| h.ttm).fsum();
+    let annual_all: f64 = rated.iter().map(|(_, annual)| *annual).fsum();
+    let total: f64 = recs.iter().map(|r| r.amount_cad).fsum();
 
+    let paid_over = |label: String, rows: &[&CashflowRow], months_paid: usize| {
+        let sum: f64 = rows.iter().map(|r| r.amount_cad).fsum();
+        CashflowTile::Paid { label, total: sum + 0.0, per_month: sum / months_paid.max(1) as f64, count: rows.len() }
+    };
     let this_yr: i64 = this_year.parse().unwrap_or(0);
-    let mut tiles: Vec<Value> = Vec::new();
+    let mut tiles: Vec<CashflowTile> = Vec::new();
     for y in [this_yr - 2, this_yr - 1, this_yr] {
         let ys = y.to_string();
-        let rs: Vec<&&Value> = recs.iter().filter(|r| field_s(r, "date").starts_with(&ys)).collect();
-        let sm: f64 = rs.iter().map(|r| b(r, "amountCad")).fsum();
-        let paid = keys.iter().filter(|k| k.starts_with(&ys) && bucket[*k].1 > 0).count().max(1);
-        tiles.push(json!({
-            "label": if y == this_yr { format!("{} YTD", y) } else { ys.clone() },
-            "total": crate::value::sum_of(rs.is_empty(), sm),
-            "perMonth": sm / paid as f64,
-            "count": rs.len(),
-        }));
+        let rows: Vec<&CashflowRow> = recs.iter().copied().filter(|r| r.date.starts_with(&ys)).collect();
+        let months_paid = keys.iter().filter(|k| k.starts_with(&ys) && bucket[*k].1 > 0).count();
+        tiles.push(paid_over(if y == this_yr { format!("{} YTD", y) } else { ys }, &rows, months_paid));
     }
-    let months_in_scope = keys.iter().filter(|k| bucket[*k].1 > 0).count().max(1);
-    tiles.push(json!({"label": "All time", "total": crate::value::sum_of(recs.is_empty(), total), "perMonth": total / months_in_scope as f64, "count": recs.len()}));
+    tiles.push(paid_over("All time".into(), &recs, keys.iter().filter(|k| bucket[*k].1 > 0).count()));
 
     if has_margin {
         // margin used is the Portfolio tab's figure; under it the average
         // margin interest per charged month
-        let charges: Vec<&&Value> = everything.iter().filter(|r| field_s(r, "kind") == "Interest charge").collect();
-        let charge_months: BTreeSet<String> =
-            charges.iter().map(|r| field_s(r, "date").chars().take(7).collect()).collect();
-        let charged: f64 = charges.iter().map(|r| -b(r, "amountCad")).fsum();
-        tiles.push(json!({
-            "label": "Margin used",
-            "marginUsed": margin_used,
-            "interestPerMonth": if charge_months.is_empty() { 0.0 } else { charged / charge_months.len() as f64 },
-            "interestMonths": charge_months.len(),
-        }));
+        let charges: Vec<&&CashflowRow> = everything.iter().filter(|r| r.kind == Payment::InterestCharge).collect();
+        let charged_months: BTreeSet<String> = charges.iter().map(|r| month_of(&r.date)).collect();
+        let charged: f64 = charges.iter().map(|r| -r.amount_cad).fsum();
+        tiles.push(CashflowTile::Margin {
+            label: "Margin used",
+            margin_used,
+            interest_per_month: if charged_months.is_empty() { 0.0 } else { charged / charged_months.len() as f64 },
+            interest_months: charged_months.len(),
+        });
     } else {
         // without a margin account: the trailing twelve months, averaged over
         // the months that paid
-        let since = shift_date(&today, -365);
-        let window: Vec<&&Value> = recs
-            .iter()
-            .filter(|r| { let d = field_s(r, "date"); d > since && d <= today })
-            .collect();
-        let sm: f64 = window.iter().map(|r| b(r, "amountCad")).fsum();
-        let paid: BTreeSet<String> = window.iter().map(|r| field_s(r, "date").chars().take(7).collect()).collect();
-        let paid = paid.len().max(1);
-        tiles.push(json!({"label": "Last 12 months", "total": crate::value::sum_of(window.is_empty(), sm), "perMonth": sm / paid as f64, "count": window.len()}));
+        let since = shift_date(today, -365);
+        let window: Vec<&CashflowRow> = recs.iter().copied().filter(|r| r.date > since && r.date.as_str() <= today).collect();
+        let months_paid = window.iter().map(|r| month_of(&r.date)).collect::<BTreeSet<_>>().len();
+        tiles.push(paid_over("Last 12 months".into(), &window, months_paid));
     }
-    tiles.push(json!({
-        "label": "Yield on cost",
-        "yield": if basis_all != 0.0 { json!(annual_all / basis_all) } else { Value::Null },
-        "projected": annual_all / 12.0,
-        "earned": crate::value::sum_of(verified.is_empty(), earned_all),
-        "book": crate::value::sum_of(verified.is_empty(), basis_all),
-    }));
+    tiles.push(CashflowTile::Yield { label: "Yield on cost", r#yield: (basis_all != 0.0).then(|| annual_all / basis_all), projected: annual_all / 12.0, earned: earned_all + 0.0, book: basis_all + 0.0 });
 
-    let other: Vec<&&Value> = everything.iter().filter(|r| field_s(r, "kind") != "Dividend").collect();
-    json!({
-        "tiles": tiles,
-        "months": months,
-        "holdings": holdings,
-        "rows": recs,
-        "other": other,
-        "total": crate::value::sum_of(recs.is_empty(), total),
-        "count": recs.len(),
-        "skippedFilters": skipped,
-        "interest": other.iter().filter(|r| field_s(r, "kind") == "Interest").map(|r| b(r, "amountCad")).fsum(),
-        "withholding": other.iter().filter(|r| field_s(r, "kind") == "Withholding tax").map(|r| b(r, "amountCad")).fsum(),
-    })
+    let other: Vec<&CashflowRow> = everything.iter().copied().filter(|r| r.kind != Payment::Dividend).collect();
+    Cashflow {
+        tiles,
+        months,
+        holdings,
+        total: total + 0.0,
+        count: recs.len(),
+        skipped_filters: f.unread_by_cashflow(),
+        interest: other.iter().filter(|r| r.kind == Payment::Interest).map(|r| r.amount_cad).fsum(),
+        withholding: other.iter().filter(|r| r.kind == Payment::WithholdingTax).map(|r| r.amount_cad).fsum(),
+        rows: recs.into_iter().cloned().collect(),
+        other: other.into_iter().cloned().collect(),
+    }
 }
 
 /// Eleven months back from a date, as `YYYY-MM`.
@@ -523,256 +355,164 @@ fn trailing_year_month(day: &str) -> String {
     format!("{:04}-{:02}", cy, cm)
 }
 
-/// `build_view`.
-pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
-    let f = clean_filters(filters);
-    let today = base.today.clone();
+/// Whose legs and fills a view carries. They are most of the payload, so the
+/// page is sent them for the one trade or holding it has open.
+#[derive(Clone, Copy, Debug)]
+pub enum Detail<'a> {
+    /// Every row's: the view as the model builds it, for the cases and the tests.
+    All,
+    /// No row's, or only the row with this id.
+    Only(Option<&'a str>),
+}
 
-    let trades: Vec<Value> = base.trades.iter().filter(|t| trade_matches(t, &f, &today)).cloned().collect();
+impl Detail<'_> {
+    fn keeps(&self, id: &str) -> bool {
+        match self {
+            Detail::All => true,
+            Detail::Only(open) => *open == Some(id),
+        }
+    }
+}
+
+/// The view with every row's detail.
+pub fn build_view(base: &Base, filters: Option<&Filters>) -> View {
+    view_of(base, filters, Detail::All)
+}
+
+/// The view as the page is sent it. `filters` is already cleaned -- the one
+/// place that reads a page's raw filters JSON is `clean_filters` itself,
+/// called once at the edge (the HTTP route, the event stream).
+pub fn view_of(base: &Base, filters: Option<&Filters>, detail: Detail) -> View {
+    let f = filters.cloned().unwrap_or_default();
+    let today = base.today.as_str();
+
+    let trades: Vec<&Trade> = base.trades.iter().filter(|t| trade_matches(t, &f, today)).collect();
     // performance stats score only trades with a known entry basis: a deposited
     // (transferred-in) coin has no buy made here and cannot be scored
-    let scored: Vec<Value> = trades
-        .iter()
-        .filter(|t| !t.get("flags").and_then(|v| v.as_array()).map(|a| a.iter().any(|f| f == "basis-unknown")).unwrap_or(false))
-        .cloned()
-        .collect();
-    let positions: Vec<Value> = base.positions.iter().filter(|p| position_matches(p, &f)).cloned().collect();
+    let scored: Vec<&Trade> = trades.iter().copied().filter(|t| !t.flags.contains(&Flag::BasisUnknown)).collect();
+    let positions: Vec<&Position> = base.positions.iter().filter(|p| position_matches(p, &f)).collect();
 
-    let accts = f.list("account");
-    let (series, series_label) = if accts.len() == 1 && base.equity_by_account.contains_key(&accts[0]) {
-        (base.equity_by_account[&accts[0]].clone(), accts[0].clone())
-    } else {
-        (base.equity.clone(), "All accounts".to_string())
+    let one_account = match f.lists.account.as_slice() {
+        [name] => base.equity_by_account.get(name).map(|series| (series, name.clone())),
+        _ => None,
     };
+    let (series, series_label) = one_account.unwrap_or((&base.equity, "All accounts".to_string()));
 
-    let bench_key = f.benchmark.clone();
-    let empty = BTreeMap::new();
-    let bench = base.benchmarks.get(&bench_key).unwrap_or(&empty);
-    let years = yearly_returns(&series, bench, &today);
-    let ann = annualized(&years);
-    let dd = drawdown(&series);
-    let bounds = date_bounds(&f, &today);
+    let no_benchmark = BTreeMap::new();
+    let years = yearly_returns(series, base.benchmarks.get(&f.benchmark).unwrap_or(&no_benchmark), today);
     let portfolio = portfolio_view(base, &f, &positions);
 
-    let mut shown: Vec<&crate::nav::Point> = match &bounds {
-        Some((lo, hi)) => series.iter().filter(|p| *lo <= p.d && p.d <= *hi).collect(),
-        None if !f.years.is_empty() => series
-            .iter()
-            .filter(|p| f.years.contains(&p.d.chars().take(4).collect::<String>()))
-            .collect(),
+    let mut shown: Vec<&Point> = match date_bounds(&f, today) {
+        Some((lo, hi)) => series.iter().filter(|p| lo <= p.d && p.d <= hi).collect(),
+        None if !f.years.is_empty() => series.iter().filter(|p| f.years.contains(&p.d.chars().take(4).collect::<String>())).collect(),
         None => series.iter().collect(),
     };
     if !shown.is_empty() {
         // the pre-history a chart should not start from
         let peak = shown.iter().map(|p| p.v).fold(f64::NEG_INFINITY, f64::max);
-        let first_idx = shown.iter().position(|p| p.v > peak * 0.01).unwrap_or(0);
-        shown = shown.split_off(first_idx);
+        let first = shown.iter().position(|p| p.v > peak * 0.01).unwrap_or(0);
+        shown = shown.split_off(first);
     }
-    let shown_owned: Vec<crate::nav::Point> = shown.into_iter().cloned().collect();
 
-    let mut tags: Vec<String> = base
-        .trades
-        .iter()
-        .flat_map(|t| t.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default())
-        .map(|x| crate::value::s(Some(&x)))
-        .collect();
-    tags.sort();
-    tags.dedup();
-
-    let mut symbols: Vec<String> = base
-        .trades
-        .iter()
-        .chain(base.positions.iter())
-        .map(|r| field_s(r, "symbol"))
-        .collect();
-    symbols.sort();
-    symbols.dedup();
-
+    let sorted = |mut values: Vec<String>| {
+        values.sort();
+        values.dedup();
+        values
+    };
     // what the ⌘K list shows beside each symbol: its name, exchange and kind,
     // from the rows that carry it (a name that is only the symbol counts as none)
-    let mut listings: Map<String, Value> = Map::new();
-    let mut listing_order: Vec<String> = Vec::new();
-    for r in base.trades.iter().chain(base.positions.iter()) {
-        let sym = field_s(r, "symbol");
-        if !listings.contains_key(&sym) {
-            listing_order.push(sym.clone());
-            listings.insert(
-                sym.clone(),
-                json!({"name": "", "exchange": "", "kind": field_s(r, "kind"), "currency": field_s(r, "currency")}),
-            );
+    let mut listings: Ordered<ListingInfo> = Ordered::default();
+    let rows_of_the_book = base.trades.iter().map(|t| (&t.symbol, &t.name, &t.exchange, t.kind, &t.currency)).chain(base.positions.iter().map(|p| (&p.symbol, &p.name, &p.exchange, p.kind, &p.currency)));
+    for (symbol, name, exchange, kind, currency) in rows_of_the_book {
+        let known = listings.entry(symbol, || ListingInfo { name: String::new(), exchange: String::new(), kind, currency: currency.clone() });
+        if known.name.is_empty() && !name.is_empty() && name != symbol {
+            known.name = name.clone();
         }
-        let cur = listings.get_mut(&sym).unwrap();
-        let name = field_s(r, "name");
-        if field_s(cur, "name").is_empty() && !name.is_empty() && name != sym {
-            cur["name"] = json!(name);
-        }
-        let exch = field_s(r, "exchange");
-        if field_s(cur, "exchange").is_empty() && !exch.is_empty() {
-            cur["exchange"] = json!(exch);
+        if known.exchange.is_empty() && !exchange.is_empty() {
+            known.exchange = exchange.clone();
         }
     }
-
-    let mut accounts: Vec<String> = base
-        .trades
-        .iter()
-        .chain(base.positions.iter())
-        .chain(base.cashflow.iter())
-        .map(|r| field_s(r, "account"))
-        .collect();
-    accounts.sort();
-    accounts.dedup();
-
-    let mut exchanges: Vec<String> = base
-        .trades
-        .iter()
-        .chain(base.positions.iter())
-        .map(|r| field_s(r, "exchange"))
-        .filter(|e| !e.is_empty())
-        .collect();
-    exchanges.sort();
-    exchanges.dedup();
-
-    let kinds: Vec<&str> = KINDS
-        .iter()
-        .copied()
-        .filter(|k| {
-            base.trades.iter().any(|t| field_s(t, "kind") == *k) || base.positions.iter().any(|p| field_s(p, "kind") == *k)
-        })
-        .collect();
-
-    let mut year_options: Vec<String> = base
-        .trades
-        .iter()
-        .map(|t| field_s(t, "exitDate"))
-        .filter(|d| !d.is_empty())
-        .map(|d| d.chars().take(4).collect())
-        .collect();
-    year_options.sort();
-    year_options.dedup();
+    let mut year_options = sorted(base.trades.iter().filter(|t| !t.exit_date.is_empty()).map(|t| t.exit_date.chars().take(4).collect()).collect());
     year_options.reverse();
+    let options = Options {
+        accounts: sorted(base.trades.iter().map(|t| t.account.clone()).chain(base.positions.iter().map(|p| p.account.clone())).chain(base.cashflow.iter().map(|r| r.account.clone())).collect()),
+        symbols: sorted(base.trades.iter().map(|t| t.symbol.clone()).chain(base.positions.iter().map(|p| p.symbol.clone())).collect()),
+        listings,
+        tags: sorted(base.trades.iter().flat_map(|t| t.tags.iter().cloned()).collect()),
+        exchanges: sorted(base.trades.iter().map(|t| t.exchange.clone()).chain(base.positions.iter().map(|p| p.exchange.clone())).filter(|e| !e.is_empty()).collect()),
+        kinds: Kind::ALL.into_iter().filter(|k| base.trades.iter().any(|t| t.kind == *k) || base.positions.iter().any(|p| p.kind == *k)).collect(),
+        grades: GRADES.iter().copied().chain(["Ungraded"]).collect(),
+        sides: ["SELL", "COVER"],
+        results: ["Winners", "Losers", "Breakeven"],
+        years: year_options,
+    };
 
-    let book: f64 = positions.iter().map(|p| b(p, "cost").abs()).fsum();
-    let mv: f64 = positions.iter().map(|p| if flag(p, "short") { -b(p, "mv") } else { b(p, "mv") }).fsum();
-    let unreal: f64 = positions.iter().map(|p| b(p, "unreal")).fsum();
-
-    let margin_used = b(&portfolio, "marginUsed");
-    let has_margin = flag(&portfolio, "hasMargin");
-    let mut cashflow = cashflow_view(base, &f, &base.positions, margin_used, has_margin);
-    if let Some(tiles) = cashflow.get_mut("tiles").and_then(|t| t.as_array_mut()) {
-        for t in tiles.iter_mut().filter(|t| t.get("marginUsed").is_some()) {
-            t["marginUsed"] = portfolio["marginUsed"].clone();
+    let cashflow = cashflow_view(base, &f, &base.positions, portfolio.margin_used, portfolio.has_margin);
+    let without_detail = |legs: &mut Option<_>, fills: &mut Option<_>, id: &str| {
+        if !detail.keeps(id) {
+            *legs = None;
+            *fills = None;
         }
-    }
-
-    let mut grades: Vec<String> = GRADES.iter().map(|g| g.to_string()).collect();
-    grades.push("Ungraded".into());
-
-    json!({
-        "ok": true,
-        "generated": crate::clock::now_utc_stamp(),
-        "today": today,
-        "syncedAt": base.synced_at,
-        "currency": "CAD",
-        "market": {"fxLast": base.fx_last, "benchmarkLast": base.benchmark_last},
-        "filters": f.to_json(),
-        "options": {
-            "accounts": accounts,
-            "symbols": symbols,
-            "listings": listings,
-            "tags": tags,
-            "exchanges": exchanges,
-            "kinds": kinds,
-            "grades": grades,
-            "sides": ["SELL", "COVER"],
-            "results": ["Winners", "Losers", "Breakeven"],
-            "years": year_options,
+    };
+    View {
+        ok: true,
+        today: base.today.clone(),
+        synced_at: base.synced_at.clone(),
+        currency: "CAD",
+        market: MarketDates { fx_last: base.fx_last.clone(), benchmark_last: base.benchmark_last.clone() },
+        options,
+        kpi: metrics(&scored),
+        equity: EquityBlock { label: series_label, series: shown.into_iter().cloned().collect(), drawdown: drawdown(series), annualized: annualized(&years) },
+        years,
+        benchmark: BenchmarkRef { label: BENCHMARK_LABELS.iter().find(|(k, _)| *k == f.benchmark).map(|(_, v)| *v).unwrap_or(""), key: f.benchmark.clone() },
+        monthly: monthly(&scored),
+        by_symbol: by_symbol(&scored),
+        grades: grade_buckets(&trades),
+        queue: review_queue(&trades),
+        trade_count: trades.len(),
+        trade_total: base.trades.len(),
+        positions_summary: PositionsSummary {
+            count: positions.len(),
+            book: positions.iter().map(|p| p.cost.abs()).fsum() + 0.0,
+            mv: positions.iter().map(|p| signed_mv(p)).fsum() + 0.0,
+            unreal: positions.iter().map(|p| p.unreal).fsum() + 0.0,
         },
-        "kpi": metrics(&scored),
-        "equity": {
-            "label": series_label,
-            "series": series_json(&shown_owned),
-            "drawdown": dd,
-            "annualized": ann,
+        markets: {
+            // the context reads values in CAD: each holding at the base's own rates
+            let cad: Vec<Position> = positions.iter().map(|p| Position { mv: crate::fx::to_cad(&base.fx, p.mv, &p.currency, &base.today), ..(*p).clone() }).collect();
+            crate::markets::markets_view(&crate::context::MarketBase::of_base(base), &cad.iter().collect::<Vec<_>>())
         },
-        "years": years,
-        "benchmark": {
-            "key": bench_key.clone(),
-            "label": BENCHMARK_LABELS.iter().find(|(k, _)| *k == bench_key).map(|(_, v)| *v).unwrap_or(""),
-        },
-        "monthly": monthly(&scored),
-        "bySymbol": by_symbol(&scored),
-        "grades": grade_buckets(&trades),
-        "queue": review_queue(&trades),
-        "trades": trades,
-        "tradeCount": trades.len(),
-        "tradeTotal": base.trades.len(),
-        "positions": positions,
-        "positionsSummary": {"count": positions.len(), "book": crate::value::sum_of(positions.is_empty(), book), "mv": crate::value::sum_of(positions.is_empty(), mv), "unreal": crate::value::sum_of(positions.is_empty(), unreal)},
-        "portfolio": portfolio,
-        "markets": crate::markets::markets_view(base, &positions),
-        "cashflow": cashflow,
-        "unmatched": base.book.fifo.unmatched,
-        "accounts": base.accounts,
-        "activityCount": base.activity_count,
-    })
-}
-
-/// `DETAIL_KEYS`: what a row carries only when the page has opened it.
-pub const DETAIL_KEYS: [&str; 2] = ["legs", "fills"];
-
-/// `slim`: the view as the page receives it -- the legs and fills of one
-/// trade or holding only, because sending every leg of every trade on every
-/// poll is most of the payload.
-pub fn slim(view: &Value, detail: Option<&str>) -> Value {
-    let mut out = view.clone();
-    for key in ["trades", "positions"] {
-        let rows: Vec<Value> = view
-            .get(key)
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .map(|r| {
-                        let keep = detail.map(|d| field_s(r, "id") == d).unwrap_or(false);
-                        if keep {
-                            r.clone()
-                        } else {
-                            // rebuilt rather than removed from: serde_json's
-                            // `Map::remove` under `preserve_order` swaps the
-                            // last entry into the hole, and the row would
-                            // reach the page with its keys shuffled
-                            let mut kept = Map::new();
-                            if let Some(m) = r.as_object() {
-                                for (k, v) in m {
-                                    if !DETAIL_KEYS.contains(&k.as_str()) {
-                                        kept.insert(k.clone(), v.clone());
-                                    }
-                                }
-                            }
-                            Value::Object(kept)
-                        }
-                    })
-                    .collect()
+        trades: trades
+            .into_iter()
+            .map(|t| {
+                let mut t = t.clone();
+                without_detail(&mut t.legs, &mut t.fills, &t.id.clone());
+                t
             })
-            .unwrap_or_default();
-        if let Value::Object(m) = &mut out {
-            m.insert(key.into(), Value::Array(rows));
-        }
+            .collect(),
+        positions: positions
+            .into_iter()
+            .map(|p| {
+                let mut p = p.clone();
+                if !detail.keeps(&p.id) {
+                    p.fills = None;
+                }
+                p
+            })
+            .collect(),
+        portfolio,
+        cashflow,
+        unmatched: base.book.fifo.unmatched.clone(),
+        accounts: (*base.accounts).clone(),
+        activity_count: base.activity_count,
+        filters: f,
     }
-    out
 }
 
-/// `trade_detail`: the legs and fills of one trade or holding, by id.
-pub fn trade_detail(base: &Base, trade_id: &str) -> Option<Value> {
-    for rows in [&base.trades, &base.positions] {
-        for r in rows {
-            if field_s(r, "id") == trade_id {
-                return Some(json!({
-                    "id": trade_id,
-                    "legs": r.get("legs").cloned().unwrap_or_else(|| json!([])),
-                    "fills": r.get("fills").cloned().unwrap_or_else(|| json!([])),
-                }));
-            }
-        }
-    }
-    None
+/// The legs and fills of one trade or holding, by id.
+pub fn trade_detail(base: &Base, id: &str) -> Option<TradeDetail> {
+    let of_trade = base.trades.iter().find(|t| t.id == id).map(|t| (t.legs.clone(), t.fills.clone()));
+    let of_holding = || base.positions.iter().find(|p| p.id == id).map(|p| (None, p.fills.clone()));
+    let (legs, fills) = of_trade.or_else(of_holding)?;
+    Some(TradeDetail { id: id.to_string(), legs: legs.unwrap_or_default(), fills: fills.unwrap_or_default() })
 }

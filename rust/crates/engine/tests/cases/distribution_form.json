@@ -1,0 +1,307 @@
+[
+  {
+    "name": "a distribution listed without its form counts as cash once the account's dividend for it has posted",
+    "spec": "SPEC.md §2 Distribution rate, 1",
+    "working": [
+      "Latest distribution gone ex by today (2026-04-24) is ex 2026-04-15 / pay 2026-04-22 / 0.11.",
+      "A dividend posted on the payer (d2, 2026-04-22, cash 11) falls between that ex-date and the next, and 11 / 100 units = 0.11 matches the declared amount, so this distribution is cash.",
+      "per-unit amount is the cash per unit of that latest gone-ex distribution: 0.11.",
+      "frequencies states 12 payments a year.",
+      "No distribution after 2026-04-15 is declared, and it has already been paid (2026-04-22, before today), so nothing is left to pay: next_ex is the ex-date of that last known distribution, 2026-04-15."
+    ],
+    "today": "2026-04-24",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "F",
+        "symbol": "FUND"
+      }
+    ],
+    "frequencies": {
+      "F": 12
+    },
+    "declared": {
+      "F": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-20",
+          "amount": "0.10",
+          "form": "unstated"
+        },
+        {
+          "ex": "2026-04-15",
+          "pay": "2026-04-22",
+          "amount": "0.11",
+          "form": "unstated"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "F",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T11:00:00Z",
+        "kind": "dividend",
+        "instrument": "F",
+        "cash": "10",
+        "cash_currency": "CAD"
+      },
+      {
+        "id": "d2",
+        "account": "A",
+        "day": "2026-04-22",
+        "at": "2026-04-22T11:00:00Z",
+        "kind": "dividend",
+        "instrument": "F",
+        "cash": "11",
+        "cash_currency": "CAD"
+      }
+    ],
+    "expect": {
+      "payers": [
+        {
+          "instrument": "F",
+          "per": "0.11",
+          "per_year": 12,
+          "next_ex": "2026-04-15"
+        }
+      ]
+    }
+  },
+  {
+    "name": "the latest distribution listed without its form, its payment not yet posted: the rate waits",
+    "spec": "SPEC.md §2 Distribution rate, 1",
+    "working": [
+      "Latest distribution gone ex by today (2026-04-20) is ex 2026-04-15 / pay 2026-04-22 / 0.11; its pay date (2026-04-22) is still in the future.",
+      "Cash test: no dividend has posted between 2026-04-15 and any later ex-date (none declared, and pay day 2026-04-22 has not happened yet), so cash is not confirmed.",
+      "Units test: it requires two business days to have passed after the pay date with no dividend posted; the pay date itself (2026-04-22) has not even arrived, so this test cannot yet apply either.",
+      "Neither test has resolved, so the distribution's form is unknown and the rate waits: {\"gaps\": [\"form-unstated\"]}.",
+      "frequencies states 12 payments a year regardless of the rate gap.",
+      "That 2026-04-15 distribution (pay 2026-04-22) is still to be paid as of today, so next_ex is its ex-date, 2026-04-15."
+    ],
+    "today": "2026-04-20",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "F",
+        "symbol": "FUND"
+      }
+    ],
+    "frequencies": {
+      "F": 12
+    },
+    "declared": {
+      "F": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-20",
+          "amount": "0.10",
+          "form": "unstated"
+        },
+        {
+          "ex": "2026-04-15",
+          "pay": "2026-04-22",
+          "amount": "0.11",
+          "form": "unstated"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "F",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T11:00:00Z",
+        "kind": "dividend",
+        "instrument": "F",
+        "cash": "10",
+        "cash_currency": "CAD"
+      }
+    ],
+    "expect": {
+      "payers": [
+        {
+          "instrument": "F",
+          "per": {
+            "gaps": ["form-unstated"]
+          },
+          "per_year": 12,
+          "next_ex": "2026-04-15"
+        }
+      ]
+    }
+  },
+  {
+    "name": "no dividend two business days after the pay date, held the day before its ex-date: paid in units, and passed over",
+    "spec": "SPEC.md §2 Distribution rate, 1",
+    "working": [
+      "Latest distribution gone ex by today (2026-04-27) is ex 2026-04-15 / pay 2026-04-22 / 0.35. Two business days after the pay date (Wed 2026-04-22) is Fri 2026-04-24 (Thu 04-23, Fri 04-24); today (2026-04-27) is past that.",
+      "The account bought F on 2026-01-02, so it held the payer the day before the 2026-04-15 ex-date (2026-04-14).",
+      "No dividend has posted for this distribution by two business days after its pay date, and the account held it the day before ex-date, so it was paid wholly in units: this distribution is passed over.",
+      "The next-latest gone-ex distribution is ex 2026-03-13 / pay 2026-03-20 / 0.10. Dividend d1 posted on 2026-03-20 with cash 10, which is 10/100 = 0.10 per unit, matching the declared amount, so it is cash.",
+      "per-unit amount is that confirmed cash distribution: 0.10.",
+      "frequencies states 12 payments a year.",
+      "The 2026-04-15 distribution (units-paid) is the last known distribution and has already been paid; nothing is left to pay, so next_ex is its ex-date, 2026-04-15, the last known one regardless of the form it was paid in."
+    ],
+    "today": "2026-04-27",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "F",
+        "symbol": "FUND"
+      }
+    ],
+    "frequencies": {
+      "F": 12
+    },
+    "declared": {
+      "F": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-20",
+          "amount": "0.10",
+          "form": "unstated"
+        },
+        {
+          "ex": "2026-04-15",
+          "pay": "2026-04-22",
+          "amount": "0.35",
+          "form": "unstated"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "F",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T11:00:00Z",
+        "kind": "dividend",
+        "instrument": "F",
+        "cash": "10",
+        "cash_currency": "CAD"
+      }
+    ],
+    "expect": {
+      "payers": [
+        {
+          "instrument": "F",
+          "per": "0.10",
+          "per_year": 12,
+          "next_ex": "2026-04-15"
+        }
+      ]
+    }
+  },
+  {
+    "name": "bought after the latest ex-date: no payment is owed to show its form, and the rate waits",
+    "spec": "SPEC.md §2 Distribution rate, 1",
+    "working": [
+      "Latest distribution gone ex by today (2026-04-27) is ex 2026-04-15 / pay 2026-04-22 / 0.11.",
+      "The account's only transaction is a buy on 2026-04-16, after the 2026-04-15 ex-date, so the account did not hold the payer the day before that ex-date and was never owed this distribution.",
+      "Cash test: no dividend has posted for it at all, so cash is not confirmed.",
+      "Units test: it requires the account to have held the payer the day before its ex-date; the account did not, so this test cannot apply either.",
+      "Neither test resolves the form, so it is unknown and the rate waits: {\"gaps\": [\"form-unstated\"]}.",
+      "frequencies states 12 payments a year regardless of the rate gap.",
+      "No later distribution is declared and the 2026-04-15 one has already passed its pay date, so nothing is left to pay: next_ex is that last known distribution's ex-date, 2026-04-15."
+    ],
+    "today": "2026-04-27",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "F",
+        "symbol": "FUND"
+      }
+    ],
+    "frequencies": {
+      "F": 12
+    },
+    "declared": {
+      "F": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-20",
+          "amount": "0.10",
+          "form": "unstated"
+        },
+        {
+          "ex": "2026-04-15",
+          "pay": "2026-04-22",
+          "amount": "0.11",
+          "form": "unstated"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-04-16",
+        "at": "2026-04-16T15:00:00Z",
+        "kind": "buy",
+        "instrument": "F",
+        "qty": "100",
+        "cash": "-1000"
+      }
+    ],
+    "expect": {
+      "payers": [
+        {
+          "instrument": "F",
+          "per": {
+            "gaps": ["form-unstated"]
+          },
+          "per_year": 12,
+          "next_ex": "2026-04-15"
+        }
+      ]
+    }
+  }
+]

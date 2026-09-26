@@ -1,0 +1,24 @@
+[package]
+name = "bagholder-sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The sources the figures' facts and market data come from
+# (`docs/architecture.md` §9, `docs/plans/stage-3a-sources.md`): the adapter
+# contract, the strict reader every reply goes through, the market cache, and the
+# adapters. It reads no clock (every time is handed in) and holds no float;
+# `crates/core/tests/boundaries.rs` holds it to its column.
+[dependencies]
+bagholder-core = { path = "../core" }
+# the market cache's file: numbered migrations, snapshots, transactions
+bagholder-sqlite = { path = "../sqlite" }
+# every request goes through the one limiter, on the clock it is handed
+bagholder-net = { path = "../net" }
+# the facts the readers write, and the instruments they read for
+bagholder-book = { path = "../book" }
+# `hooks`: the running server hears each commit to the cache (`MarketCache::on_commit`)
+rusqlite = { version = "0.32", features = ["bundled", "backup", "hooks"] }
+
+[dev-dependencies]
+tempfile = "3"

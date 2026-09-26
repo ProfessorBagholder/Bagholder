@@ -1,0 +1,174 @@
+[
+  {
+    "name": "an assignment the broker dates after the expiry day closes the contract; nothing stands in for it first",
+    "spec": "docs/plans/stage-2-engine.md, expiry: a contract closes by its terms only with nothing on the record",
+    "working": [
+      "1 C1 (call, strike 10) sold for 150; U closes 12 on the 2026-06-19 expiry, in the money",
+      "the assignment row is dated 2026-06-22: it closes the contract, so the option P&L is 150, stated; 100 U delivered for 1,000 against 900 bought → 100"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-06-30"]]},
+    "closes": {"U": {"2026-06-19": "12"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-900"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "C1", "qty": "-1", "cash": "150"},
+      {"id": "t3", "account": "A", "day": "2026-06-22", "at": "2026-06-22T12:00:00Z", "kind": "option-assignment", "instrument": "C1", "qty": "1", "cash": "1000"}
+    ],
+    "expect": {"position_count": 0, "beyond": [], "trades": [{"opened_by": "t2", "pnl": "150.00"}, {"opened_by": "t1", "instrument": "U", "pnl": "100.00"}]}
+  },
+  {
+    "name": "an expiry row the broker dates after the expiry day closes the contract, out of the money or not",
+    "spec": "docs/plans/stage-2-engine.md, expiry",
+    "working": ["1 C1 bought for 80; U closes 9 on expiry; the expiry row is dated 2026-06-22: P&L −80, nothing beyond what was held"],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-06-30"]]},
+    "closes": {"U": {"2026-06-19": "9"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "C1", "qty": "1", "cash": "-80"},
+      {"id": "t2", "account": "A", "day": "2026-06-22", "at": "2026-06-22T12:00:00Z", "kind": "option-expiry", "instrument": "C1", "qty": "-1"}
+    ],
+    "expect": {"position_count": 0, "beyond": [], "trades": [{"opened_by": "t1", "pnl": "-80.00", "closed": "2026-06-22"}]}
+  },
+  {
+    "name": "a part moved into an account already holding the instrument is a round trip of its own there",
+    "spec": "docs/plans/stage-2-engine.md, transfers and trade identity: a part moved is a new round trip",
+    "working": [
+      "B bought 10 X for 200 (Jan 8); A bought 10 X for 100 (Jan 5) and moved 4 to B (linked, Jan 10): B holds two round trips, first in first out by the day bought",
+      "B sells 4 for 80: they close the moved lot (bought Jan 5, cost 40) → the moved round trip, opened by the receiving transfer, P&L 40",
+      "B sells 10 for 250: its own lot, cost 200 → P&L 50"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "b1", "account": "B", "day": "2026-01-08", "at": "2026-01-08T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-200"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-4"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "4"},
+      {"id": "b2", "account": "B", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-4", "cash": "80"},
+      {"id": "b3", "account": "B", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "250"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {"trades": [{"opened_by": "t3", "pnl": "40.00"}, {"opened_by": "b1", "pnl": "50.00"}]}
+  },
+  {
+    "name": "a trade anchored on a transaction that no longer opens a round trip is named for the book to orphan",
+    "spec": "docs/architecture.md §5: a note whose trade no longer exists after a correction is shown as orphaned, never dropped",
+    "working": ["T1 was anchored on the sale t2 (an earlier reading made it an opening); now it closes the purchase's round trip: T1 opens nothing, the purchase's round trip asks for a trade of its own"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "120"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t2", "instrument": "X"}],
+    "expect": {"unclaimed": ["T1"], "needs_trade": 1}
+  },
+  {
+    "name": "a consolidation with cash in lieu of the fraction: only the fraction is paid out",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: cash in lieu",
+    "working": [
+      "100 X bought for 1,000; one-for-eight: 12.5 units, cost 1,000",
+      "cash in lieu of the half unit at 40 (the leg's 0.04 of the 12.5 held): closes 0.5 at 20 against a cost of 1,000 × 0.5/12.5 = 40 → −20",
+      "12 sold for 1,200 against the 960 left → 240; the round trip: 220"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-12", "cash": "1200"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.125"}, {"from": "X", "cash_per_unit": "40", "units_per_unit": "0.04"}]}],
+    "expect": {"position_count": 0, "trade_count": 1, "trades": [{"opened_by": "t1", "pnl": "220.00"}]}
+  },
+  {
+    "name": "a merger for shares and cash: the cash comes off the cost, the holding continues as the new shares",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a merger for shares and cash",
+    "working": ["100 X cost 1,000; each X becomes 0.5 Y and 2 in cash: cost 1,000 − 200 = 800 on 50 Y; 50 Y sold for 1,000 → 200, one round trip named after Y"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}, {"id": "Y"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "-100"},
+      {"id": "t3", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:01Z", "kind": "corporate-event", "instrument": "Y", "qty": "50"},
+      {"id": "t4", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "Y", "qty": "-50", "cash": "1000"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "Y", "units_per_unit": "0.5", "cash_per_unit": "2"}]}],
+    "expect": {"position_count": 0, "trade_count": 1, "trades": [{"opened_by": "t1", "named_after": "Y", "pnl": "200.00"}]}
+  },
+  {
+    "name": "a return of capital lowers the cost",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a return of capital",
+    "working": ["100 X cost 1,000; 1.50 a unit returned: cost 850; sold for 1,000 → 150"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-100", "cash": "1000"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "cash_per_unit": "1.50"}]}],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "150.00"}]}
+  },
+  {
+    "name": "a holding's income is what was paid into its own account",
+    "spec": "SPEC.md §4 Cashflow Positions: one row per open long position per account; YTD and All time received from it",
+    "working": ["X held in A and in B; 100 paid into each: each holding's all-time income is 100, not 200"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "a1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "b1", "account": "B", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "a2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "qty": "10", "cash": "100"},
+      {"id": "b2", "account": "B", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "qty": "10", "cash": "100"}
+    ],
+    "expect": {"income": [{"account": "A", "instrument": "X", "all_time": "100.00", "trailing_year": "100.00"}, {"account": "B", "instrument": "X", "all_time": "100.00"}]}
+  },
+  {
+    "name": "a read taken before a day's 16:30 does not show that day unpublished",
+    "spec": "docs/plans/stage-2-engine.md, rates: a read that could not yet see a day's rate says nothing of that day",
+    "working": [
+      "a read at 10:00 Eastern on Tue 2026-01-06 covering through that day found no rate for it: the rate was not due yet",
+      "at 15:00 Eastern the day's rate is pending, not Monday's; at 17:00 with no later read it is missing, and a live mark is a failure too"
+    ],
+    "today": "2026-01-06",
+    "now": "2026-01-06T22:00:00Z",
+    "rates": {"USD": {"2026-01-05": "1.41"}},
+    "covered": {"USD": [["2026-01-01", "2026-01-06", "2026-01-06T15:00:00Z"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "expect": {"rates": [
+      {"currency": "USD", "day": "2026-01-06", "value": {"gaps": ["rate-missing"]}},
+      {"currency": "USD", "day": "2026-01-06", "live": true, "value": {"gaps": ["rate-missing"]}},
+      {"currency": "USD", "day": "2026-01-02", "value": {"gaps": ["rate-missing"]}}
+    ]}
+  },
+  {
+    "name": "a read taken after a day's 16:30 that found no rate shows the day unpublished",
+    "spec": "docs/plans/stage-2-engine.md, rates",
+    "working": ["a read at 18:00 Eastern on 2026-01-06 covering that day found no rate: not a business day → Monday's 1.41"],
+    "today": "2026-01-07",
+    "now": "2026-01-07T15:00:00Z",
+    "rates": {"USD": {"2026-01-05": "1.41"}},
+    "covered": {"USD": [["2026-01-05", "2026-01-06", "2026-01-06T23:00:00Z"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "expect": {"rates": [{"currency": "USD", "day": "2026-01-06", "value": "1.41"}]}
+  }
+]

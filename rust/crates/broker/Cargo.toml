@@ -1,0 +1,18 @@
+[package]
+name = "bagholder-broker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The broker interface (`docs/architecture.md` §10,
+# `docs/plans/stage-3b-wealthsimple.md`): what an adapter answers, and the pull
+# that writes it into the book. No broker's reply types; no clock read (every
+# time is handed in); no float.
+[dependencies]
+bagholder-core = { path = "../core" }
+# the records, statements and links the pull writes
+bagholder-book = { path = "../book" }
+jiff = "0.2"
+# a file's row is kept as JSON, as the book keeps every record
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

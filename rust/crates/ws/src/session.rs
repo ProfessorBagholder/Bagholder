@@ -5,13 +5,15 @@
 //! message the page can see. Only the short OAuth `error` field is reported,
 //! and only when it looks like one.
 
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-
+use bagholder_model::lenient;
 use bagholder_model::value::{field_s, get};
 
 pub const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
@@ -37,14 +39,125 @@ pub fn oauth_url() -> String {
 
 pub const REFUSED_LOGIN_MESSAGE: &str = "Saved login refused. Connect Wealthsimple again.";
 
-const IDENTITY_KEYS: [&str; 6] = [
-    "identity_canonical_id",
-    "identityCanonicalId",
-    "canonical_id",
-    "identity_id",
-    "resource_owner_id",
-    "sub",
-];
+/// The identity keys a session, a token/info answer, or a captured login may
+/// carry, under either spelling `identity_canonical_id` is seen written.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(default)]
+pub struct IdentityKeys {
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub identity_canonical_id: String,
+    #[serde(rename = "identityCanonicalId", deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub identity_canonical_id_camel: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub canonical_id: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub identity_id: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub resource_owner_id: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub sub: String,
+}
+
+impl IdentityKeys {
+    /// The first of these that is not empty, in `IDENTITY_KEYS` order.
+    pub fn identity(&self) -> String {
+        for v in [
+            &self.identity_canonical_id,
+            &self.identity_canonical_id_camel,
+            &self.canonical_id,
+            &self.identity_id,
+            &self.resource_owner_id,
+            &self.sub,
+        ] {
+            if !v.is_empty() {
+                return v.clone();
+            }
+        }
+        String::new()
+    }
+}
+
+/// The expiry kept exactly as it was read: an ISO instant most of the time,
+/// but a bare unix timestamp on an older session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum Expiry {
+    Unix(f64),
+    Text(String),
+}
+
+/// The saved login, `session.json`. The keys Bagholder reads are typed; any
+/// other key the file holds is kept as it was.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Session {
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub access_token: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub refresh_token: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub client_id: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub email: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub wssdi: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
+    pub user_agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<Expiry>,
+    #[serde(flatten)]
+    pub ids: IdentityKeys,
+    #[serde(flatten)]
+    pub other: Map<String, Value>,
+}
+
+impl Session {
+    pub fn identity(&self) -> String {
+        self.ids.identity()
+    }
+
+    /// Every field the disk copy carries that is not empty (and every key
+    /// under `other`, whatever it holds) replaces ours -- the disk copy is
+    /// newer, because another caller rotated it while this one was refusing
+    /// to guess.
+    pub fn adopt(&mut self, disk: Session) {
+        macro_rules! take {
+            ($f:ident) => {
+                if !disk.$f.is_empty() {
+                    self.$f = disk.$f.clone();
+                }
+            };
+        }
+        take!(access_token);
+        take!(refresh_token);
+        take!(client_id);
+        take!(email);
+        take!(wssdi);
+        take!(session_id);
+        take!(user_agent);
+        if disk.expires_at.is_some() {
+            self.expires_at = disk.expires_at.clone();
+        }
+        macro_rules! take_id {
+            ($f:ident) => {
+                if !disk.ids.$f.is_empty() {
+                    self.ids.$f = disk.ids.$f.clone();
+                }
+            };
+        }
+        take_id!(identity_canonical_id);
+        take_id!(identity_canonical_id_camel);
+        take_id!(canonical_id);
+        take_id!(identity_id);
+        take_id!(resource_owner_id);
+        take_id!(sub);
+        for (k, v) in disk.other {
+            self.other.insert(k, v);
+        }
+    }
+}
 
 /// Refreshes run one at a time. Wealthsimple rotates the refresh token on
 /// every grant, so two callers posting the same one would leave the loser with
@@ -64,15 +177,21 @@ impl Home {
     pub fn client_id_path(&self) -> PathBuf { self.dir.join("client_id") }
     pub fn user_agent_path(&self) -> PathBuf { self.dir.join("user_agent") }
 
-    pub fn load_session(&self) -> Option<Value> {
+    /// A file that does not parse, or does not hold a JSON object, is no
+    /// session at all.
+    pub fn load_session(&self) -> Option<Session> {
         let text = std::fs::read_to_string(self.session_path()).ok()?;
-        serde_json::from_str(&text).ok()
+        let v: Value = serde_json::from_str(&text).ok()?;
+        if !v.is_object() {
+            return None;
+        }
+        Session::deserialize(v).ok()
     }
 
     /// The session written atomically: a
     /// private temporary file renamed over the old one, so a crash cannot
     /// leave half a session behind.
-    pub fn save_session(&self, sess: &Value) -> std::io::Result<()> {
+    pub fn save_session(&self, sess: &Session) -> std::io::Result<()> {
         let body = serde_json::to_string_pretty(sess).unwrap_or_default();
         atomic_write(&self.session_path(), body.as_bytes(), 0o600)
     }
@@ -95,9 +214,8 @@ impl Home {
     /// The session's own, else the file.
     pub fn cached_user_agent(&self) -> String {
         if let Some(s) = self.load_session() {
-            let v = field_s(&s, "user_agent").trim().to_string();
-            if !v.is_empty() {
-                return v;
+            if !s.user_agent.trim().is_empty() {
+                return s.user_agent.trim().to_string();
             }
         }
         std::fs::read_to_string(self.user_agent_path()).unwrap_or_default().trim().to_string()
@@ -138,10 +256,79 @@ fn atomic_write(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The OAuth `/token` grant's reply, and the `/token/info` reply. Only the
+/// keys Bagholder reads are named; the rest of the body is never kept.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct TokenReply {
+    #[serde(deserialize_with = "lenient::text")]
+    pub access_token: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub refresh_token: String,
+    pub expires_at: Option<Value>,
+    pub expires_in: Option<Value>,
+    pub error: Option<Value>,
+    #[serde(rename = "_http_status")]
+    pub http_status: Option<i64>,
+}
+
+/// One id, under `application.uid`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ApplicationId {
+    #[serde(deserialize_with = "lenient::text")]
+    pub uid: String,
+}
+
+/// `/token/info`'s answer.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct TokenInfo {
+    #[serde(flatten)]
+    pub ids: IdentityKeys,
+    #[serde(deserialize_with = "lenient::text")]
+    pub email: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub username: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub application_uid: String,
+    pub application: Option<ApplicationId>,
+    pub error: Option<Value>,
+    #[serde(rename = "_http_status")]
+    pub http_status: Option<i64>,
+    /// The reply was an empty object (a 401/403, or nothing at all).
+    #[serde(skip)]
+    pub empty: bool,
+}
+
+impl TokenInfo {
+    pub fn identity(&self) -> String {
+        self.ids.identity()
+    }
+}
+
+fn truthy(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+    }
+}
+
+impl TokenInfo {
+    /// Non-empty, with no `error` and no HTTP status recorded against it.
+    pub fn is_ok(&self) -> bool {
+        !self.empty && !truthy(self.error.as_ref()) && self.http_status.is_none()
+    }
+}
+
 /// The short OAuth `error` field and nothing
 /// else -- never a token, a client id, or a raw body.
-pub fn oauth_error_code(data: &Value) -> String {
-    let err = match get(data, "error") { Some(Value::String(s)) => s.trim().to_string(), _ => return String::new() };
+pub fn oauth_error_code(data: &TokenReply) -> String {
+    let err = match &data.error { Some(Value::String(s)) => s.trim().to_string(), _ => return String::new() };
     if err.is_empty() {
         return String::new();
     }
@@ -155,8 +342,8 @@ pub fn oauth_error_code(data: &Value) -> String {
     err
 }
 
-pub fn refresh_failure_message(data: &Value) -> String {
-    let status = get(data, "_http_status").and_then(|v| v.as_i64());
+pub fn refresh_failure_message(data: &TokenReply) -> String {
+    let status = data.http_status;
     let oauth_err = oauth_error_code(data);
     if oauth_err == "invalid_grant" {
         return REFUSED_LOGIN_MESSAGE.to_string();
@@ -173,8 +360,8 @@ pub fn refresh_failure_message(data: &Value) -> String {
 
 /// The expiry kept in the same shape the
 /// cookie uses.
-pub fn expires_at_as_timestamp(data: &Value, now_unix: f64) -> Option<String> {
-    match get(data, "expires_at") {
+pub fn expires_at_as_timestamp(data: &TokenReply, now_unix: f64) -> Option<String> {
+    match &data.expires_at {
         Some(Value::String(s)) if s.contains('T') => return Some(s.trim().to_string()),
         Some(Value::Number(n)) => {
             let unix = n.as_f64()?;
@@ -183,7 +370,7 @@ pub fn expires_at_as_timestamp(data: &Value, now_unix: f64) -> Option<String> {
         _ => {}
     }
     // A number or its string form, truncated toward zero.
-    let raw = get(data, "expires_in")?;
+    let raw = data.expires_in.as_ref()?;
     let expires_in = bagholder_model::value::num(Some(raw), f64::NAN);
     if expires_in.is_nan() {
         return None;
@@ -199,44 +386,27 @@ fn stamp(unix: f64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-pub fn identity_from(obj: &Value) -> String {
-    for k in IDENTITY_KEYS {
-        if let Some(v) = get(obj, k) {
-            let s = bagholder_model::value::s(Some(v));
-            if !s.is_empty() {
-                return s;
-            }
-        }
-    }
-    String::new()
-}
-
 /// The OAuth application uid that
 /// issued these tokens.
-pub fn client_id_from_token_info(info: &Value) -> String {
-    let uid = field_s(info, "application_uid");
-    if !uid.trim().is_empty() {
-        return uid.trim().to_string();
+pub fn client_id_from_token_info(info: &TokenInfo) -> String {
+    let uid = info.application_uid.trim();
+    if !uid.is_empty() {
+        return uid.to_string();
     }
-    info.get("application")
-        .filter(|a| a.is_object())
-        .map(|a| field_s(a, "uid").trim().to_string())
-        .unwrap_or_default()
+    info.application.as_ref().map(|a| a.uid.trim().to_string()).unwrap_or_default()
 }
 
-fn headers_for(sess: &Value, extra: &[(&str, String)], ua: &str) -> Vec<(String, String)> {
+fn headers_for(sess: &Session, extra: &[(&str, String)], ua: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![("Accept".into(), "application/json".into())];
     if !ua.is_empty() {
         out.push(("User-Agent".into(), ua.to_string()));
     }
     // the device and session headers
-    let wssdi = field_s(sess, "wssdi");
-    if !wssdi.is_empty() {
-        out.push(("x-ws-device-id".into(), wssdi));
+    if !sess.wssdi.is_empty() {
+        out.push(("x-ws-device-id".into(), sess.wssdi.clone()));
     }
-    let sid = field_s(sess, "session_id");
-    if !sid.is_empty() {
-        out.push(("x-ws-session-id".into(), sid));
+    if !sess.session_id.is_empty() {
+        out.push(("x-ws-session-id".into(), sess.session_id.clone()));
     }
     for (k, v) in extra {
         out.push(((*k).to_string(), v.clone()));
@@ -260,7 +430,7 @@ pub fn http_json_timeout(method: &str, url: &str, body: Option<&Value>, headers:
         hdrs.retain(|(k, _)| !k.eq_ignore_ascii_case("Content-Type"));
         hdrs.push(("Content-Type", "application/json"));
     }
-    match bagholder_market::client::request_any(method, url, &hdrs, payload.as_deref(), Duration::from_secs(timeout_sec)) {
+    match bagholder_net::client::request_any(method, url, &hdrs, payload.as_deref(), Duration::from_secs(timeout_sec)) {
         Ok(resp) => {
             let text = resp.text();
             if resp.status >= 400 {
@@ -312,8 +482,8 @@ impl std::fmt::Display for CallError {
 
 impl<'a> Client<'a> {
     /// The session's own, else the cached one.
-    pub fn client_id_for(&self, sess: &Value) -> String {
-        let cid = field_s(sess, "client_id").trim().to_string();
+    pub fn client_id_for(&self, sess: &Session) -> String {
+        let cid = sess.client_id.trim().to_string();
         if !cid.is_empty() {
             self.home.save_client_id(&cid);
             return cid;
@@ -328,21 +498,17 @@ impl<'a> Client<'a> {
     /// caller has rotated it meanwhile that session is adopted and nothing is
     /// posted. A caller holding a login newer than the file passes `adopt`
     /// false.
-    pub fn refresh_session(&self, sess: &mut Value, adopt: bool) -> Result<(), String> {
-        let rt = field_s(sess, "refresh_token");
+    pub fn refresh_session(&self, sess: &mut Session, adopt: bool) -> Result<(), String> {
+        let rt = sess.refresh_token.clone();
         if rt.is_empty() {
             return Err("missing refresh token".into());
         }
         let _guard = REFRESH_LOCK.lock().unwrap();
         if adopt {
             if let Some(current) = self.home.load_session() {
-                let has = !field_s(&current, "access_token").is_empty() && !field_s(&current, "refresh_token").is_empty();
-                if has && field_s(&current, "refresh_token") != rt {
-                    if let (Value::Object(dst), Value::Object(src)) = (&mut *sess, &current) {
-                        for (k, v) in src {
-                            dst.insert(k.clone(), v.clone());
-                        }
-                    }
+                let has = !current.access_token.is_empty() && !current.refresh_token.is_empty();
+                if has && current.refresh_token != rt {
+                    sess.adopt(current);
                     return Ok(());
                 }
             }
@@ -365,35 +531,33 @@ impl<'a> Client<'a> {
             &self.home.cached_user_agent(),
         );
         let data = http_json("POST", &format!("{}/token", oauth_url()), Some(&body), &headers);
-        let access = field_s(&data, "access_token");
-        if access.is_empty() {
-            if oauth_error_code(&data) == "invalid_grant" {
+        let reply: TokenReply = serde_json::from_value(data).unwrap_or_default();
+        if reply.access_token.is_empty() {
+            if oauth_error_code(&reply) == "invalid_grant" {
                 *REFUSED.lock().unwrap() = Some(rt);
             }
-            return Err(refresh_failure_message(&data));
-        }
-        let m = sess.as_object_mut().ok_or("session is not an object")?;
-        m.insert("access_token".into(), json!(access));
-        let new_rt = field_s(&data, "refresh_token");
-        if !new_rt.is_empty() {
-            m.insert("refresh_token".into(), json!(new_rt));
+            return Err(refresh_failure_message(&reply));
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
-        if let Some(stamped) = expires_at_as_timestamp(&data, now) {
-            m.insert("expires_at".into(), json!(stamped));
+        let stamped_expiry = expires_at_as_timestamp(&reply, now);
+        sess.access_token = reply.access_token;
+        if !reply.refresh_token.is_empty() {
+            sess.refresh_token = reply.refresh_token;
         }
-        m.insert("client_id".into(), json!(cid));
-        let _ = self.home.save_session(sess);
-        Ok(())
+        if let Some(stamped) = stamped_expiry {
+            sess.expires_at = Some(Expiry::Text(stamped));
+        }
+        sess.client_id = cid;
+        self.home.save_session(sess).map_err(|e| format!("Could not save the Wealthsimple login: {}", e))
     }
 
-    pub fn token_info(&self, sess: &Value) -> Value {
-        let token = field_s(sess, "access_token");
+    pub fn token_info(&self, sess: &Session) -> TokenInfo {
+        let token = sess.access_token.clone();
         if token.is_empty() {
-            return json!({});
+            return TokenInfo { empty: true, ..Default::default() };
         }
         let headers = headers_for(
             sess,
@@ -405,13 +569,18 @@ impl<'a> Client<'a> {
         );
         let data = http_json("GET", &format!("{}/token/info", oauth_url()), None, &headers);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
-            Some(401) | Some(403) => json!({}),
-            _ => data,
+            Some(401) | Some(403) => TokenInfo { empty: true, ..Default::default() },
+            _ => {
+                let empty = data.as_object().map(|m| m.is_empty()).unwrap_or(true);
+                let mut info: TokenInfo = serde_json::from_value(data).unwrap_or_default();
+                info.empty = empty;
+                info
+            }
         }
     }
 
-    pub fn graphql(&self, sess: &Value, operation: &str, variables: &Value, query: Option<&str>) -> Result<Value, CallError> {
-        let token = field_s(sess, "access_token");
+    pub fn graphql<T: DeserializeOwned>(&self, sess: &Session, operation: &str, variables: &impl Serialize, query: Option<&str>) -> Result<T, CallError> {
+        let token = sess.access_token.clone();
         let mut extra: Vec<(&str, String)> = vec![
             ("Authorization", format!("Bearer {}", token)),
             ("x-wealthsimple-client", WS_CLIENT.to_string()),
@@ -433,7 +602,8 @@ impl<'a> Client<'a> {
                 .to_string(),
         };
         // a variable that is absent is not sent at all
-        let vars: Map<String, Value> = variables
+        let raw_vars = serde_json::to_value(variables).unwrap_or(Value::Null);
+        let vars: Map<String, Value> = raw_vars
             .as_object()
             .map(|m| m.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
@@ -461,8 +631,67 @@ impl<'a> Client<'a> {
             }
         }
         match data.get("data") {
-            Some(d) if !d.is_null() => Ok(d.clone()),
+            Some(d) if !d.is_null() => T::deserialize(d.clone()).map_err(|e| CallError::Failed(format!("{}: unreadable answer: {}", operation, e))),
             _ => Err(CallError::Failed(format!("graphql failed: {}", operation))),
         }
+    }
+}
+
+// -- when the token is refreshed ------------------------------------------------
+
+/// How long before the token's expiry it is refreshed.
+pub const TOKEN_REFRESH_MARGIN_SEC: f64 = 300.0;
+
+pub fn expires_at_unix(sess: &Session) -> Option<f64> {
+    match sess.expires_at.as_ref()? {
+        Expiry::Unix(f) => Some(*f),
+        Expiry::Text(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            if let Ok(f) = s.parse::<f64>() {
+                return Some(f);
+            }
+            parse_instant(s)
+        }
+    }
+}
+
+/// Seconds since the epoch for an ISO instant, with a `Z` or an offset.
+fn parse_instant(s: &str) -> Option<f64> {
+    let s = if s.ends_with('Z') { format!("{}+00:00", &s[..s.len() - 1]) } else { s.to_string() };
+    let (d, t) = s.split_once('T')?;
+    let (y, m, day) = bagholder_model::dates::parse_iso(d)?;
+    let mut rest = t;
+    let mut offset = 0.0_f64;
+    if let Some(pos) = t.rfind(['+', '-']) {
+        if pos > 0 {
+            let sign = if t.as_bytes()[pos] == b'-' { -1.0 } else { 1.0 };
+            let off = &t[pos + 1..];
+            let (oh, om) = off.split_once(':').unwrap_or((off, "0"));
+            offset = sign * (oh.parse::<f64>().unwrap_or(0.0) * 3600.0 + om.parse::<f64>().unwrap_or(0.0) * 60.0);
+            rest = &t[..pos];
+        }
+    }
+    let parts: Vec<&str> = rest.split(':').collect();
+    let hh: f64 = parts.first()?.parse().ok()?;
+    let mm: f64 = parts.get(1).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+    let ss: f64 = parts.get(2).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+    Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss - offset)
+}
+
+/// Seconds from `now` until the token should be refreshed; zero when it already should.
+pub fn seconds_until_token_refresh(sess: &Session, now: f64) -> f64 {
+    match expires_at_unix(sess) {
+        None => 0.0,
+        Some(exp) => (exp - TOKEN_REFRESH_MARGIN_SEC - now).max(0.0),
+    }
+}
+
+pub fn token_refresh_needed(sess: &Session, now: f64) -> bool {
+    match expires_at_unix(sess) {
+        None => true,
+        Some(exp) => now >= exp - TOKEN_REFRESH_MARGIN_SEC,
     }
 }

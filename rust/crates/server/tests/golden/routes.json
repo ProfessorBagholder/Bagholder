@@ -1,0 +1,359 @@
+{
+  "status": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "connected": false,
+      "email": "",
+      "lastSync": "",
+      "activityCount": 53,
+      "accountCount": 1,
+      "capturing": false,
+      "syncing": false,
+      "listingsFilling": false,
+      "syncStep": "",
+      "error": "",
+      "summaryReady": false,
+      "protocol": "2026-09-19.1",
+      "startedAt": "<startedAt>",
+      "version": "1.46.3",
+      "latestVersion": "",
+      "updateAvailable": false,
+      "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
+      "canUpdate": false,
+      "updateBy": "app",
+      "loginView": false,
+      "ordersLive": false,
+      "openOrders": 0,
+      "updating": "",
+      "updateError": "",
+      "notify": {
+        "fills": false,
+        "problems": false,
+        "connection": false,
+        "updates": false,
+        "releasesHeld": false,
+        "releasesWatched": false,
+        "releasesAll": false,
+        "disclosuresHeld": false,
+        "disclosuresWatched": false,
+        "disclosuresAll": false,
+        "native": "",
+        "unread": 0
+      },
+      "dataVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|quotes:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|<today>",
+      "coreVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|<today>"
+    }
+  },
+  "journal": {
+    "status": 404,
+    "body": {
+      "ok": false,
+      "error": "no trade golden-journal"
+    }
+  },
+  "watch_status": {
+    "status": 200,
+    "body": {
+      "path": "<db-path>",
+      "watching": false,
+      "account": "",
+      "lastScan": "",
+      "scanError": "",
+      "lastScanAdded": 0,
+      "files": []
+    }
+  },
+  "watch_set_no_path": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "a folder is required"
+    }
+  },
+  "watch_scan_no_folder": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "no folder is watched"
+    }
+  },
+  "watch_clear": {
+    "status": 200,
+    "body": {
+      "path": "<db-path>",
+      "watching": false,
+      "account": "",
+      "lastScan": "",
+      "scanError": "",
+      "lastScanAdded": 0,
+      "files": []
+    }
+  },
+  "import_no_text": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "the file is empty"
+    }
+  },
+  "notifications_list": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "settings": {
+        "fills": false,
+        "problems": false,
+        "connection": false,
+        "updates": false,
+        "releasesHeld": false,
+        "releasesWatched": false,
+        "releasesAll": false,
+        "disclosuresHeld": false,
+        "disclosuresWatched": false,
+        "disclosuresAll": false,
+        "native": "",
+        "unread": 0
+      },
+      "kinds": [
+        "fills",
+        "problems",
+        "connection",
+        "updates",
+        "releases",
+        "disclosures"
+      ],
+      "rows": [],
+      "unread": 0
+    }
+  },
+  "notifications_settings": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "settings": {
+        "fills": true,
+        "problems": false,
+        "connection": false,
+        "updates": false,
+        "releasesHeld": false,
+        "releasesWatched": false,
+        "releasesAll": false,
+        "disclosuresHeld": false,
+        "disclosuresWatched": false,
+        "disclosuresAll": false,
+        "native": "",
+        "unread": 0
+      }
+    }
+  },
+  "notifications_test": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "id": 1
+    }
+  },
+  "notifications_read": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "read": 0
+    }
+  },
+  "notifications_seen": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "seen": 0
+    }
+  },
+  "symbols_search_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "matches": []
+    }
+  },
+  "symbols_quote_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "price": null,
+      "priceChange": null,
+      "percentChange": null
+    }
+  },
+  "listing_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "news_symbol_missing": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "watchlist_add_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "watchlist_remove_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "tiles_set_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "tiles": []
+    }
+  },
+  "filings_missing_symbol": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "filings_no_documents": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "symbol": "GOLDEN",
+      "available": true,
+      "sources": {
+        "SEC": {
+          "available": true,
+          "matched": false,
+          "filer": false,
+          "error": ""
+        },
+        "SEDAR+": {
+          "available": false,
+          "matched": false,
+          "filer": false,
+          "error": ""
+        }
+      },
+      "categories": [
+        "Financials",
+        "Material events",
+        "Governance",
+        "Offerings",
+        "Insider & ownership",
+        "News releases",
+        "Other"
+      ],
+      "profileNo": "",
+      "fetchedAt": "<fetchedAt>",
+      "refreshed": false,
+      "sourceUnavailable": false,
+      "filings": []
+    }
+  },
+  "filings_feed_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "scope": "all",
+      "filings": [],
+      "reading": false
+    }
+  },
+  "filings_enrich_no_such_doc": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "no such document"
+    }
+  },
+  "fear_empty": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "offline: BAGHOLDER_OFFLINE is set"
+    }
+  },
+  "shorts_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "shorts_feed_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "rows": [],
+      "reading": false
+    }
+  },
+  "history_missing_params": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol, from, to and a known tf are required"
+    }
+  },
+  "login_cancel": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "cancelled": false
+    }
+  },
+  "login_input_no_window": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "No login window."
+    }
+  },
+  "disconnect": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "update_offline": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "No update to install."
+    }
+  },
+  "refresh_no_session": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "not connected",
+      "connected": false
+    }
+  },
+  "sync_no_session": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "not connected"
+    }
+  },
+  "capture_offline": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "Wealthsimple did not say whose login this is: transport"
+    }
+  }
+}

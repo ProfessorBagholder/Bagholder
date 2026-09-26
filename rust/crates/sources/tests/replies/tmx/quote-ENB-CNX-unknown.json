@@ -1,0 +1,1 @@
+{"errors":[{"message":"Sorry, we couldn't find any results for \"ENB:CNX\". Please try again.","code":"404","locations":[{"line":1,"column":60}],"path":["getQuoteBySymbol"]}],"data":{"getQuoteBySymbol":null}}

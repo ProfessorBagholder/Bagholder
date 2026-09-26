@@ -7,10 +7,11 @@
 //! of a document survives a refresh of the list it came from.
 
 use rusqlite::{Connection, Result, Row};
-use std::collections::HashSet;
-use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
+use serde::Serialize;
+use serde_json::Value;
 
-use bagholder_model::value::{field_s, get, num};
+use bagholder_model::value::FSum;
 
 /// `NOTIFICATIONS_KEPT`.
 pub const NOTIFICATIONS_KEPT: i64 = 200;
@@ -19,54 +20,131 @@ fn text(r: &Row, name: &str) -> Result<String> {
     Ok(r.get::<_, Option<String>>(name)?.unwrap_or_default())
 }
 
-fn real(r: &Row, name: &str) -> Result<Value> {
-    Ok(match r.get::<_, Option<f64>>(name)? { Some(v) => json!(v), None => Value::Null })
-}
-
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) if s.is_empty() => None,
-        Some(x) => { let n = num(Some(x), f64::NAN); if n.is_nan() { None } else { Some(n) } }
-    }
-}
-
 fn up(s: &str) -> String { s.trim().to_uppercase() }
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
 
 // --------------------------------------------------------------------------
 // exposure
 // --------------------------------------------------------------------------
 
+/// Names and their weights, in the order the source gave them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Weights(pub Vec<(String, f64)>);
+
+impl Weights {
+    /// Adds to an existing name's weight, else appends.
+    pub fn add(&mut self, name: &str, w: f64) {
+        match self.0.iter_mut().find(|(n, _)| n == name) {
+            Some(e) => e.1 += w,
+            None => self.0.push((name.to_string(), w)),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, (String, f64)> {
+        self.0.iter()
+    }
+
+    pub fn first_name(&self) -> Option<&str> {
+        self.0.first().map(|(n, _)| n.as_str())
+    }
+
+    pub fn total(&self) -> f64 {
+        self.0.iter().map(|(_, w)| *w).fsum()
+    }
+
+    /// Each weight divided by `by`.
+    pub fn scaled(self, by: f64) -> Weights {
+        Weights(self.0.into_iter().map(|(n, w)| (n, w / by)).collect())
+    }
+}
+
+impl serde::Serialize for Weights {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(Some(self.0.len()))?;
+        for (n, w) in &self.0 {
+            m.serialize_entry(n, w)?;
+        }
+        m.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Weights {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Weights, D::Error> {
+        let v = Value::deserialize(d)?;
+        Ok(match v {
+            Value::Object(m) => Weights(m.into_iter().map(|(k, v)| (k, bagholder_model::value::num(Some(&v), 0.0))).collect()),
+            _ => Weights::default(),
+        })
+    }
+}
+
+/// One security's or listing's exposure: sector and country weights as
+/// fractions, the share of the holding they cover, and where they came from.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureRecord {
+    pub sectors: Weights,
+    pub countries: Weights,
+    pub coverage: f64,
+    pub source: String,
+    pub as_of: String,
+    pub industry: String,
+    pub error: String,
+}
+
+/// An exposure record as stored: when it was read.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredExposure {
+    #[serde(flatten)]
+    pub record: ExposureRecord,
+    pub fetched_at: String,
+}
+
+/// One row of the `exposures` table into a `StoredExposure`, for
+/// `exposure_record` and `snapshot::exposures_part`.
+pub fn stored_exposure(r: &Row) -> Result<StoredExposure> {
+    let weights = |raw: Option<String>| -> Weights {
+        match raw {
+            Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Weights::default(),
+        }
+    };
+    Ok(StoredExposure {
+        record: ExposureRecord {
+            sectors: weights(r.get("sectors")?),
+            countries: weights(r.get("countries")?),
+            coverage: r.get::<_, Option<f64>>("coverage")?.unwrap_or(0.0),
+            source: text(r, "source")?,
+            as_of: text(r, "as_of")?,
+            industry: text(r, "industry")?,
+            error: text(r, "error")?,
+        },
+        fetched_at: text(r, "fetched_at")?,
+    })
+}
+
 /// `replace_exposure`: one record -- the sectors and countries as
 /// `{name: fraction}`, the share of the holding they cover, and where it came
 /// from.
-pub fn replace_exposure(conn: &Connection, key: &str, rec: &Value, now: &str) -> Result<()> {
-    let sectors = rec.get("sectors").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
-    let countries = rec.get("countries").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
+pub fn replace_exposure(conn: &Connection, key: &str, rec: &ExposureRecord, now: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO exposures (key, sectors, countries, coverage, source, as_of, industry, error, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(key) DO UPDATE SET sectors = excluded.sectors, countries = excluded.countries, coverage = excluded.coverage, source = excluded.source, \
          as_of = excluded.as_of, industry = excluded.industry, error = excluded.error, fetched_at = excluded.fetched_at",
         rusqlite::params![
             key,
-            crate::tables::json_text(&sectors),
-            crate::tables::json_text(&countries),
-            num(get(rec, "coverage"), 0.0),
-            field_s(rec, "source"),
-            field_s(rec, "asOf"),
-            field_s(rec, "industry"),
-            field_s(rec, "error"),
+            serde_json::to_string(&rec.sectors).unwrap_or_default(),
+            serde_json::to_string(&rec.countries).unwrap_or_default(),
+            rec.coverage,
+            rec.source,
+            rec.as_of,
+            rec.industry,
+            rec.error,
             now,
         ],
     )?;
@@ -77,18 +155,34 @@ pub fn replace_exposure(conn: &Connection, key: &str, rec: &Value, now: &str) ->
 // watchlist
 // --------------------------------------------------------------------------
 
-fn watch_from_row(r: &Row) -> Result<Value> {
-    Ok(json!({
-        "symbol": text(r, "symbol")?,
-        "exchange": text(r, "exchange")?,
-        "name": text(r, "name")?,
-        "currency": text(r, "currency")?,
-        "securityId": text(r, "security_id")?,
-        "addedAt": text(r, "added_at")?,
-    }))
+/// One row of the watchlist, as the page shows it. Not the model's own
+/// `WatchRow` (a stripped-down view the derived model carries for pricing):
+/// this is the stored row itself, with the id and the timestamp it was
+/// followed at.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, ts_rs::TS)]
+pub struct WatchedListing {
+    pub symbol: String,
+    pub exchange: String,
+    pub name: String,
+    pub currency: String,
+    #[serde(rename = "securityId")]
+    pub security_id: String,
+    #[serde(rename = "addedAt")]
+    pub added_at: String,
 }
 
-pub fn list_watchlist(conn: &Connection) -> Result<Vec<Value>> {
+fn watch_from_row(r: &Row) -> Result<WatchedListing> {
+    Ok(WatchedListing {
+        symbol: text(r, "symbol")?,
+        exchange: text(r, "exchange")?,
+        name: text(r, "name")?,
+        currency: text(r, "currency")?,
+        security_id: text(r, "security_id")?,
+        added_at: text(r, "added_at")?,
+    })
+}
+
+pub fn list_watchlist(conn: &Connection) -> Result<Vec<WatchedListing>> {
     let mut stmt = conn.prepare("SELECT * FROM watchlist ORDER BY added_at, symbol")?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
@@ -108,7 +202,7 @@ pub fn add_watch(
     currency: &str,
     security_id: &str,
     now: &str,
-) -> Result<Option<Value>> {
+) -> Result<Option<WatchedListing>> {
     let sym = up(symbol);
     let ex = up(exchange);
     if sym.is_empty() {
@@ -141,43 +235,201 @@ pub fn remove_watch(conn: &Connection, symbol: &str, exchange: &str) -> Result<b
 // news
 // --------------------------------------------------------------------------
 
+/// The feed a news item was read from. Declared in the order a wire's feeds
+/// stand in for each other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Feed {
+    Tmx,
+    TmxMedia,
+    Nasdaq,
+    NasdaqPress,
+    Yahoo,
+    Sa,
+    Gnews,
+}
+
+impl Feed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Feed::Tmx => "tmx",
+            Feed::TmxMedia => "tmx-media",
+            Feed::Nasdaq => "nasdaq",
+            Feed::NasdaqPress => "nasdaq-press",
+            Feed::Yahoo => "yahoo",
+            Feed::Sa => "sa",
+            Feed::Gnews => "gnews",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Feed> {
+        match s {
+            "tmx" => Some(Feed::Tmx),
+            "tmx-media" => Some(Feed::TmxMedia),
+            "nasdaq" => Some(Feed::Nasdaq),
+            "nasdaq-press" => Some(Feed::NasdaqPress),
+            "yahoo" => Some(Feed::Yahoo),
+            "sa" => Some(Feed::Sa),
+            "gnews" => Some(Feed::Gnews),
+            _ => None,
+        }
+    }
+
+    /// The source an item's id names by its prefix (`tmx:`, `nasdaq:`,
+    /// `yahoo:`, `sa:`, `gnews:`).
+    pub fn of_id(id: &str) -> Option<Feed> {
+        match id.split_once(':').map(|(p, _)| p) {
+            Some("tmx") => Some(Feed::Tmx),
+            Some("nasdaq") => Some(Feed::Nasdaq),
+            Some("yahoo") => Some(Feed::Yahoo),
+            Some("sa") => Some(Feed::Sa),
+            Some("gnews") => Some(Feed::Gnews),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NewsKind {
+    #[default]
+    Story,
+    Release,
+}
+
+impl NewsKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NewsKind::Story => "story",
+            NewsKind::Release => "release",
+        }
+    }
+
+    pub fn parse(s: &str) -> NewsKind {
+        if s == "release" {
+            NewsKind::Release
+        } else {
+            NewsKind::Story
+        }
+    }
+}
+
+/// An item as a source answers it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsItem {
+    pub id: String,
+    pub headline: String,
+    /// The publisher or wire that carried it.
+    pub source: String,
+    pub url: String,
+    pub published_at: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    pub kind: NewsKind,
+    pub via: Feed,
+}
+
+/// A stored item, as read back for a listing.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredNews {
+    pub id: String,
+    pub symbol: String,
+    pub exchange: String,
+    /// The feed it was read from; `None` for a stored value that names none.
+    #[serde(rename = "source")]
+    pub feed: Option<Feed>,
+    pub headline: String,
+    /// The publisher or wire that carried it.
+    pub wire: String,
+    pub url: String,
+    pub published_at: String,
+    pub fetched_at: String,
+    pub kind: NewsKind,
+    pub summary: String,
+}
+
+impl StoredNews {
+    /// The item again, as its feed answered it; `None` when no feed is named.
+    pub fn item(&self) -> Option<NewsItem> {
+        Some(NewsItem {
+            id: self.id.clone(),
+            headline: self.headline.clone(),
+            source: self.wire.clone(),
+            url: self.url.clone(),
+            published_at: self.published_at.clone(),
+            summary: self.summary.clone(),
+            kind: self.kind,
+            via: self.feed?,
+        })
+    }
+}
+
 /// `news_key`.
 pub fn news_key(symbol: &str, exchange: &str) -> String {
     format!("{}@{}", up(symbol), up(exchange))
 }
 
 /// `replace_news`: a listing's latest items, in place of what it had. Each
-/// row is stored under the source it was read from (`via`: tmx, nasdaq,
-/// yahoo, sa, gnews), `source` when it names none.
-pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &str, rows: &[Value], now: &str) -> Result<()> {
-    let sym = up(symbol);
-    let ex = up(exchange);
-    conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
-    for r in rows {
-        let id = field_s(r, "id");
-        if id.is_empty() {
-            continue;
+/// row is stored under the feed it was read from (`via`).
+pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], now: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        let sym = up(symbol);
+        let ex = up(exchange);
+        let changed = crate::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex], || {
+        conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
+        for r in rows {
+            if r.id.is_empty() {
+                continue;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    r.id, sym, ex, r.via.as_str(), r.headline, r.source,
+                    r.url, r.published_at, now, r.kind.as_str(), r.summary,
+                ],
+            )?;
         }
-        let kind = { let k = field_s(r, "kind"); if k.is_empty() { "story".to_string() } else { k } };
+        Ok(())
+        })?;
+        if !changed {
+            conn.execute("UPDATE news SET fetched_at = ? WHERE symbol = ? AND exchange = ?", rusqlite::params![now, sym, ex])?;
+        }
         conn.execute(
-            "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                id, sym, ex, { let v = field_s(r, "via"); if v.is_empty() { source.to_string() } else { v } }, field_s(r, "headline"), field_s(r, "source"),
-                field_s(r, "url"), field_s(r, "publishedAt"), now, kind, field_s(r, "summary"),
-            ],
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            rusqlite::params![format!("news_fetched:{}", news_key(&sym, &ex)), now],
         )?;
-    }
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-        rusqlite::params![format!("news_fetched:{}", news_key(&sym, &ex)), now],
-    )?;
-    Ok(())
+        Ok(())
+    })
+}
+
+/// `_news_from_row`: an item with no kind is a story, which is what a
+/// row stored before releases were told apart is.
+fn news_from_row(r: &Row) -> Result<StoredNews> {
+    let kind = NewsKind::parse(&text(r, "kind")?);
+    let id = text(r, "id")?;
+    let source = text(r, "source")?;
+    let feed = Feed::parse(&source).or_else(|| Feed::of_id(&id));
+    Ok(StoredNews {
+        id,
+        symbol: text(r, "symbol")?,
+        exchange: text(r, "exchange")?,
+        feed,
+        headline: text(r, "headline")?,
+        wire: text(r, "wire")?,
+        url: text(r, "url")?,
+        published_at: text(r, "published_at")?,
+        fetched_at: text(r, "fetched_at")?,
+        kind,
+        summary: text(r, "summary")?,
+    })
 }
 
 /// `news_for`: a listing's stored items, newest first.
-pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<Value>> {
+pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<StoredNews>> {
     let mut stmt = conn.prepare("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id")?;
-    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], crate::snapshot::news_from_row)?;
+    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], news_from_row)?;
     rows.collect()
 }
 
@@ -204,25 +456,27 @@ pub fn has_wire_release(conn: &Connection, symbol: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-pub fn news_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn news_fetched_at(conn: &Connection) -> Result<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'news_fetched:%'")?;
     let mut rows = stmt.query([])?;
-    let mut out = Map::new();
+    let mut out = HashMap::new();
     while let Some(r) = rows.next()? {
         let key: String = r.get(0)?;
-        out.insert(key["news_fetched:".len()..].to_string(), json!(r.get::<_, Option<String>>(1)?.unwrap_or_default()));
+        out.insert(key["news_fetched:".len()..].to_string(), r.get::<_, Option<String>>(1)?.unwrap_or_default());
     }
     Ok(out)
 }
 
 pub fn forget_news(conn: &Connection, symbol: &str, exchange: &str) -> Result<()> {
-    conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![up(symbol), up(exchange)])?;
-    let tail = format!(":{}", news_key(symbol, exchange));
-    conn.execute(
-        "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
-        rusqlite::params![format!("news_fetched:{}", news_key(symbol, exchange)), tail, tail],
-    )?;
-    Ok(())
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![up(symbol), up(exchange)])?;
+        let tail = format!(":{}", news_key(symbol, exchange));
+        conn.execute(
+            "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
+            rusqlite::params![format!("news_fetched:{}", news_key(symbol, exchange)), tail, tail],
+        )?;
+        Ok(())
+    })
 }
 
 /// `trim_news`: keep the newest `keep` items over every symbol.
@@ -240,6 +494,77 @@ pub fn trim_news(conn: &Connection, keep: i64) -> Result<()> {
 
 pub fn filing_key(symbol: &str) -> String { up(symbol) }
 
+/// The regulator a document was filed with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+pub enum Regulator {
+    #[serde(rename = "SEDAR+")]
+    Sedar,
+    #[serde(rename = "SEC")]
+    Sec,
+}
+
+impl Regulator {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Regulator::Sedar => "SEDAR+",
+            Regulator::Sec => "SEC",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Regulator> {
+        match s {
+            "SEDAR+" => Some(Regulator::Sedar),
+            "SEC" => Some(Regulator::Sec),
+            _ => None,
+        }
+    }
+}
+
+/// A document a regulator lists for an issuer.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+#[diff(key = id)]
+pub struct FiledDocument {
+    pub id: String,
+    pub source: Regulator,
+    pub category: String,
+    pub profile_no: String,
+    pub issuer: String,
+    /// The form or document type.
+    #[serde(rename = "type")]
+    pub form: String,
+    pub title: String,
+    pub date: String,
+    pub date_text: String,
+    pub size: String,
+    pub url: String,
+}
+
+/// A filed document as stored, with what a reading made of it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+#[diff(key = id)]
+pub struct Filing {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub doc: FiledDocument,
+    pub subject: String,
+    pub summary: String,
+    pub enriched_at: String,
+    /// The version of the logic that read it; `None` when never read.
+    pub enrich_version: Option<i64>,
+    /// Read for good: a form read from its own boxes is not read again.
+    pub enrich_final: bool,
+    /// How many reads under the current logic could have answered: made while a
+    /// model was up to write the sentence, and reaching the document. Two of them
+    /// settle a row with whichever half it has. The server's own bookkeeping, never
+    /// on the wire.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub enrich_reads: i64,
+    pub fetched_at: String,
+}
+
 /// A column that may not exist on this table at all, so it reads as empty
 /// when absent: the legacy filings columns are
 /// gone from a table created under the current schema.
@@ -252,62 +577,78 @@ fn maybe(r: &Row, name: &str) -> String {
 
 /// `_filing_from_row`: the old single-source columns stand in when the
 /// new ones are empty, so a row written before the schema changed still reads.
-fn filing_from_row(r: &Row) -> Result<Value> {
-    let or = |a: &str, b: &str| -> Result<String> {
+/// A row whose source names no known regulator is skipped: only SEDAR+ and
+/// SEC exist.
+fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
+    let or = |a: &str, b: &str| -> String {
         let x = maybe(r, a);
-        Ok(if x.is_empty() { maybe(r, b) } else { x })
+        if x.is_empty() { maybe(r, b) } else { x }
     };
-    Ok(json!({
-        "id": maybe(r, "id"),
-        "source": maybe(r, "source"),
-        "category": maybe(r, "category"),
-        "profileNo": maybe(r, "profile_no"),
-        "issuer": maybe(r, "issuer"),
-        "type": or("type", "file")?,
-        "title": maybe(r, "title"),
-        "date": or("date", "submitted_at")?,
-        "dateText": or("date_text", "submitted")?,
-        "size": maybe(r, "size"),
-        "url": maybe(r, "url"),
-        "subject": maybe(r, "subject"),
-        "summary": maybe(r, "summary"),
-        "enrichedAt": maybe(r, "enriched_at"),
-        // a missing value reads as "", this one included
-        "enrichVersion": match r.get::<_, Option<i64>>("enrich_version")? { Some(v) => json!(v), None => json!("") },
+    let source = match Regulator::parse(&maybe(r, "source")) {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let doc = FiledDocument {
+        id: maybe(r, "id"),
+        source,
+        category: maybe(r, "category"),
+        profile_no: maybe(r, "profile_no"),
+        issuer: maybe(r, "issuer"),
+        form: or("type", "file"),
+        title: maybe(r, "title"),
+        date: or("date", "submitted_at"),
+        date_text: or("date_text", "submitted"),
+        size: maybe(r, "size"),
+        url: maybe(r, "url"),
+    };
+    Ok(Some(Filing {
+        doc,
+        subject: maybe(r, "subject"),
+        summary: maybe(r, "summary"),
+        enriched_at: maybe(r, "enriched_at"),
+        enrich_version: r.get::<_, Option<i64>>("enrich_version")?,
         // read for good: a regulator's form, read from its own boxes
-        "enrichFinal": match r.as_ref().column_index("enrich_final") {
+        enrich_final: match r.as_ref().column_index("enrich_final") {
             Ok(_) => r.get::<_, Option<i64>>("enrich_final")?.map(|v| v != 0).unwrap_or(false),
             Err(_) => false,
         },
-        "fetchedAt": maybe(r, "fetched_at"),
+        enrich_reads: match r.as_ref().column_index("enrich_reads") {
+            Ok(_) => r.get::<_, Option<i64>>("enrich_reads")?.unwrap_or(0),
+            Err(_) => 0,
+        },
+        fetched_at: maybe(r, "fetched_at"),
     }))
 }
 
-pub fn filings_for(conn: &Connection, symbol: &str) -> Result<Vec<Value>> {
+pub fn filings_for(conn: &Connection, symbol: &str) -> Result<Vec<Filing>> {
     let mut stmt = conn.prepare("SELECT * FROM filings WHERE symbol = ? ORDER BY date DESC, id")?;
     let mut rows = stmt.query([filing_key(symbol)])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        out.push(filing_from_row(r)?);
+        if let Some(fl) = filing_from_row(r)? {
+            out.push(fl);
+        }
     }
     Ok(out)
 }
 
-pub fn filings_all(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn filings_all(conn: &Connection) -> Result<std::collections::BTreeMap<String, Vec<Filing>>> {
     let mut stmt = conn.prepare("SELECT * FROM filings ORDER BY symbol, date DESC, id")?;
     let mut rows = stmt.query([])?;
-    let mut out: Map<String, Value> = Map::new();
+    let mut out: std::collections::BTreeMap<String, Vec<Filing>> = std::collections::BTreeMap::new();
     while let Some(r) = rows.next()? {
         let sym: String = r.get("symbol")?;
-        out.entry(sym).or_insert_with(|| Value::Array(vec![])).as_array_mut().unwrap().push(filing_from_row(r)?);
+        if let Some(fl) = filing_from_row(r)? {
+            out.entry(sym).or_default().push(fl);
+        }
     }
     Ok(out)
 }
 
-pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Value>> {
+pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Filing>> {
     let mut stmt = conn.prepare("SELECT * FROM filings WHERE symbol = ? AND id = ?")?;
     let mut rows = stmt.query(rusqlite::params![filing_key(symbol), doc_id])?;
-    match rows.next()? { Some(r) => Ok(Some(filing_from_row(r)?)), None => Ok(None) }
+    match rows.next()? { Some(r) => filing_from_row(r), None => Ok(None) }
 }
 
 /// `set_filing_enrichment`: what was read out of a document, stamped
@@ -351,6 +692,16 @@ pub fn set_filing_enrichment(
     Ok(())
 }
 
+/// How many reads that could have answered a document has had under the current
+/// logic (`Filing::enrich_reads`).
+pub fn set_filing_reads(conn: &Connection, symbol: &str, doc_id: &str, reads: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE filings SET enrich_reads = ? WHERE symbol = ? AND id = ?",
+        rusqlite::params![reads, filing_key(symbol), doc_id],
+    )?;
+    Ok(())
+}
+
 /// `replace_filings`: one source's disclosures for a symbol, in place of
 /// what that source had.
 ///
@@ -359,196 +710,385 @@ pub fn set_filing_enrichment(
 /// list is refreshed far more often than a filed document changes, and
 /// throwing the reading away with it meant every document was read again from
 /// nothing on each refresh.
-pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[Value], now: &str) -> Result<usize> {
-    let sym = filing_key(symbol);
-    struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64> }
-    let mut kept: Vec<(String, Kept)> = Vec::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![sym, source])?;
-        while let Some(r) = rows.next()? {
-            kept.push((
-                r.get::<_, String>(0)?,
-                Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)? },
-            ));
+pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items: &[FiledDocument], now: &str) -> Result<usize> {
+    crate::atomically(conn, || {
+        let sym = filing_key(symbol);
+        struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64>, reads: Option<i64> }
+        let mut kept: Vec<(String, Kept)> = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads FROM filings WHERE symbol = ? AND source = ?",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![sym, source.as_str()])?;
+            while let Some(r) = rows.next()? {
+                kept.push((
+                    r.get::<_, String>(0)?,
+                    Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)?, reads: r.get(6)? },
+                ));
+            }
         }
-    }
-    conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source])?;
+        conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source.as_str()])?;
 
-    let mut n = 0usize;
-    for r in items {
-        let rid = field_s(r, "id");
-        if rid.is_empty() {
-            continue;
+        let mut n = 0usize;
+        for it in items {
+            if it.id.is_empty() {
+                continue;
+            }
+            let read = kept.iter().find(|(k, _)| *k == it.id).map(|(_, v)| v);
+            conn.execute(
+                "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
+                 subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    sym, it.id, source.as_str(), it.category, it.profile_no, it.issuer,
+                    it.form, it.title, it.date, it.date_text,
+                    it.size, it.url, now,
+                    read.map(|k| k.subject.clone().unwrap_or_default()).unwrap_or_default(),
+                    read.map(|k| k.summary.clone().unwrap_or_default()).unwrap_or_default(),
+                    read.and_then(|k| k.enriched_at.clone()),
+                    read.and_then(|k| k.version),
+                    read.and_then(|k| k.final_),
+                    read.and_then(|k| k.reads),
+                ],
+            )?;
+            n += 1;
         }
-        let src = if source.is_empty() { field_s(r, "source") } else { source.to_string() };
-        let read = kept.iter().find(|(k, _)| *k == rid).map(|(_, v)| v);
-        conn.execute(
-            "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
-             subject, summary, enriched_at, enrich_version, enrich_final) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                sym, rid, src, field_s(r, "category"), field_s(r, "profileNo"), field_s(r, "issuer"),
-                field_s(r, "type"), field_s(r, "title"), field_s(r, "date"), field_s(r, "dateText"),
-                field_s(r, "size"), field_s(r, "url"), now,
-                read.map(|k| k.subject.clone().unwrap_or_default()).unwrap_or_default(),
-                read.map(|k| k.summary.clone().unwrap_or_default()).unwrap_or_default(),
-                read.and_then(|k| k.enriched_at.clone()),
-                read.and_then(|k| k.version),
-                read.and_then(|k| k.final_),
-            ],
-        )?;
-        n += 1;
-    }
-    Ok(n)
+        Ok(n)
+    })
 }
 
 // --------------------------------------------------------------------------
 // short selling
 // --------------------------------------------------------------------------
 
-/// `SHORT_FIELDS` and `_SHORT_COLUMNS`, paired.
-pub const SHORT_FIELDS: [(&str, &str); 16] = [
-    ("market", "market"), ("asOf", "as_of"), ("shares", "shares"), ("previous", "previous"),
-    ("previousOf", "previous_of"), ("change", "change"), ("float", "float_shares"), ("ofFloat", "of_float"),
-    ("averageVolume", "average_volume"), ("daysToCover", "days_to_cover"), ("volumeOf", "volume_of"),
-    ("volumeSpan", "volume_span"), ("shortVolume", "short_volume"), ("totalVolume", "total_volume"),
-    ("volumePct", "volume_pct"), ("name", "name"),
-];
+/// "us" or "ca": the regulator's own market for a listing's short selling.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "lowercase")]
+pub enum ShortMarket {
+    #[default]
+    Us,
+    Ca,
+}
 
-/// `_short_row`.
-pub fn short_row(r: &Row) -> Result<Value> {
-    let mut out = Map::new();
-    out.insert("symbol".into(), json!(text(r, "symbol")?));
-    out.insert("exchange".into(), json!(text(r, "exchange")?));
-    out.insert("fetchedAt".into(), json!(text(r, "fetched_at")?));
-    out.insert("readVersion".into(), json!(r.get::<_, Option<i64>>("read_version")?.unwrap_or(0)));
-    for (name, column) in SHORT_FIELDS {
-        let v = match r.get_ref(r.as_ref().column_index(column)?)? {
-            rusqlite::types::ValueRef::Null => Value::Null,
-            rusqlite::types::ValueRef::Integer(n) => json!(n),
-            rusqlite::types::ValueRef::Real(f) => json!(f),
-            rusqlite::types::ValueRef::Text(t) => json!(String::from_utf8_lossy(t).to_string()),
-            rusqlite::types::ValueRef::Blob(_) => Value::Null,
-        };
-        out.insert(name.into(), v);
+impl ShortMarket {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ShortMarket::Us => "us",
+            ShortMarket::Ca => "ca",
+        }
     }
+}
+
+/// Whether a short volume report covers one trading day (the US) or a
+/// half-month period (Canada).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "lowercase")]
+pub enum VolumeSpan {
+    Day,
+    Period,
+}
+
+impl VolumeSpan {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VolumeSpan::Day => "day",
+            VolumeSpan::Period => "period",
+        }
+    }
+}
+
+/// One reporting date's short position, as the run behind a listing's current
+/// figure.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = date)]
+pub struct ShortPoint {
+    pub date: String,
+    pub shares: f64,
+}
+
+/// One listing's short selling as its regulator publishes it: the position
+/// still sold short and the short part of its recent trading. Neither
+/// measure is estimated -- every figure here is the regulator's own, or
+/// `daysToCover`, the one number the app derives from them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+#[diff(key = symbol)]
+pub struct Shorts {
+    pub symbol: String,
+    pub exchange: String,
+    pub market: ShortMarket,
+    pub name: String,
+    pub as_of: String,
+    pub shares: Option<f64>,
+    pub previous: Option<f64>,
+    pub previous_of: String,
+    pub change: Option<f64>,
+    pub float: Option<f64>,
+    pub of_float: Option<f64>,
+    pub average_volume: Option<f64>,
+    pub days_to_cover: Option<f64>,
+    pub volume_of: String,
+    pub volume_span: Option<VolumeSpan>,
+    pub short_volume: Option<f64>,
+    pub total_volume: Option<f64>,
+    pub volume_pct: Option<f64>,
+    /// The reports behind the position, oldest first; `None` where they were
+    /// not read.
+    pub series: Option<Vec<ShortPoint>>,
+}
+
+impl Default for Shorts {
+    fn default() -> Self {
+        Shorts {
+            symbol: String::new(),
+            exchange: String::new(),
+            market: ShortMarket::default(),
+            name: String::new(),
+            as_of: String::new(),
+            shares: None,
+            previous: None,
+            previous_of: String::new(),
+            change: None,
+            float: None,
+            of_float: None,
+            average_volume: None,
+            days_to_cover: None,
+            volume_of: String::new(),
+            volume_span: None,
+            short_volume: None,
+            total_volume: None,
+            volume_pct: None,
+            series: None,
+        }
+    }
+}
+
+/// A listing's short selling as stored: when it was read, and by which
+/// version of the reading.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+#[diff(key = symbol)]
+pub struct StoredShorts {
+    #[serde(flatten)]
+    pub shorts: Shorts,
+    pub fetched_at: String,
+    pub read_version: i64,
+}
+
+/// `short_row`: `None` where the stored row's market is neither `us` nor
+/// `ca` -- an older row from before the market was typed.
+fn short_row(r: &Row) -> Result<Option<StoredShorts>> {
+    let market = match r.get::<_, Option<String>>("market")?.as_deref() {
+        Some("us") => ShortMarket::Us,
+        Some("ca") => ShortMarket::Ca,
+        _ => return Ok(None),
+    };
+    let volume_span = match r.get::<_, Option<String>>("volume_span")?.as_deref() {
+        Some("day") => Some(VolumeSpan::Day),
+        Some("period") => Some(VolumeSpan::Period),
+        _ => None,
+    };
     let series: Option<String> = r.get("series")?;
-    out.insert(
-        "series".into(),
-        match series {
-            Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_else(|_| json!([])),
-            _ => json!([]),
+    let series: Vec<ShortPoint> = match series {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_default(),
+        _ => vec![],
+    };
+    Ok(Some(StoredShorts {
+        shorts: Shorts {
+            symbol: text(r, "symbol")?,
+            exchange: text(r, "exchange")?,
+            market,
+            name: text(r, "name")?,
+            as_of: text(r, "as_of")?,
+            shares: r.get("shares")?,
+            previous: r.get("previous")?,
+            previous_of: text(r, "previous_of")?,
+            change: r.get("change")?,
+            float: r.get("float_shares")?,
+            of_float: r.get("of_float")?,
+            average_volume: r.get("average_volume")?,
+            days_to_cover: r.get("days_to_cover")?,
+            volume_of: text(r, "volume_of")?,
+            volume_span,
+            short_volume: r.get("short_volume")?,
+            total_volume: r.get("total_volume")?,
+            volume_pct: r.get("volume_pct")?,
+            // a stored run always reads back, empty where none was kept
+            series: Some(series),
         },
-    );
-    Ok(Value::Object(out))
+        fetched_at: text(r, "fetched_at")?,
+        read_version: r.get::<_, Option<i64>>("read_version")?.unwrap_or(0),
+    }))
 }
 
 /// `save_shorts`: one listing's short selling.
 ///
 /// A run of reports already stored is not dropped by a later read that did not
 /// ask for one.
-pub fn save_shorts(conn: &Connection, symbol: &str, exchange: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
-    let sym = up(symbol);
-    let ex = up(exchange);
-    let series = match rec.get("series") {
-        Some(s) if !s.is_null() => s.clone(),
-        _ => {
-            let held: Option<String> = conn
-                .query_row(
-                    "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
-                    rusqlite::params![sym, ex],
-                    |r| r.get(0),
-                )
-                .unwrap_or(None);
-            match held {
-                Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_else(|_| json!([])),
-                _ => json!([]),
+pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> Result<()> {
+    crate::atomically(conn, || {
+        let sym = up(&rec.symbol);
+        let ex = up(&rec.exchange);
+        let series: Vec<ShortPoint> = match &rec.series {
+            Some(s) => s.clone(),
+            None => {
+                let held: Option<String> = conn
+                    .query_row(
+                        "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
+                        rusqlite::params![sym, ex],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(None);
+                match held {
+                    Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_default(),
+                    _ => vec![],
+                }
             }
-        }
-    };
-    let cols: Vec<&str> = SHORT_FIELDS.iter().map(|(_, c)| *c).collect();
-    let marks = vec!["?"; cols.len() + 5].join(", ");
-    let sql = format!(
-        "INSERT OR REPLACE INTO shorts (symbol, exchange, {}, series, read_version, fetched_at) VALUES ({})",
-        cols.join(", "),
-        marks
-    );
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(sym.clone()), Box::new(ex.clone())];
-    for (field, _) in SHORT_FIELDS {
-        args.push(crate::activities::to_sql(rec.get(field).unwrap_or(&Value::Null)));
-    }
-    args.push(Box::new(crate::tables::json_text(&series)));
-    args.push(Box::new(version));
-    args.push(Box::new(now.to_string()));
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, refs.as_slice())?;
-    Ok(())
+        };
+        conn.execute(
+            "INSERT OR REPLACE INTO shorts (symbol, exchange, market, as_of, shares, previous, previous_of, change, \
+             float_shares, of_float, average_volume, days_to_cover, volume_of, volume_span, short_volume, \
+             total_volume, volume_pct, name, series, read_version, fetched_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                sym,
+                ex,
+                rec.market.as_str(),
+                rec.as_of,
+                rec.shares,
+                rec.previous,
+                rec.previous_of,
+                rec.change,
+                rec.float,
+                rec.of_float,
+                rec.average_volume,
+                rec.days_to_cover,
+                rec.volume_of,
+                rec.volume_span.as_ref().map(|v| v.as_str()),
+                rec.short_volume,
+                rec.total_volume,
+                rec.volume_pct,
+                rec.name,
+                serde_json::to_string(&series).unwrap_or_default(),
+                version,
+                now,
+            ],
+        )?;
+        Ok(())
+    })
 }
 
-pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Option<Value>> {
+/// One listing's stored short selling; `None` where none is stored, or where
+/// the row stored is from before the market was typed.
+pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Option<StoredShorts>> {
     let mut stmt = conn.prepare("SELECT * FROM shorts WHERE symbol = ? AND exchange = ?")?;
     let mut rows = stmt.query(rusqlite::params![up(symbol), up(exchange)])?;
-    match rows.next()? { Some(r) => Ok(Some(short_row(r)?)), None => Ok(None) }
+    match rows.next()? { Some(r) => short_row(r), None => Ok(None) }
 }
 
 // --------------------------------------------------------------------------
 // gauges
 // --------------------------------------------------------------------------
 
-/// `save_gauge`: one published index's reading. What the publisher gives
-/// beyond the score travels in the payload.
-pub fn save_gauge(conn: &Connection, name: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
-    let key = name.trim().to_lowercase();
-    let mut rest = Map::new();
-    if let Some(m) = rec.as_object() {
-        for (k, v) in m {
-            if !["index", "source", "score", "rating", "asOf"].contains(&k.as_str()) {
-                rest.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    conn.execute(
-        "INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![
-            key,
-            field_s(rec, "source"),
-            opt_num(get(rec, "score")),
-            field_s(rec, "rating"),
-            field_s(rec, "asOf"),
-            crate::tables::json_text(&Value::Object(rest)),
-            version,
-            now,
-        ],
-    )?;
-    Ok(())
+/// One published index's reading as its publisher gives it: the score now on
+/// the publisher's own scale, the readings it compares itself against, its
+/// indicators where it publishes them, and its daily history, oldest first.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Gauge {
+    pub index: String,
+    pub source: String,
+    pub score: f64,
+    pub rating: String,
+    pub as_of: String,
+    pub previous: Vec<GaugeReading>,
+    pub parts: Vec<GaugePart>,
+    pub series: Vec<GaugePoint>,
 }
 
-pub fn gauge(conn: &Connection, name: &str) -> Result<Option<Value>> {
+/// An earlier reading the publisher compares the one now against.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = label)]
+pub struct GaugeReading {
+    pub label: String,
+    pub score: f64,
+    pub rating: String,
+}
+
+/// One of the indicators the publisher builds its score from.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = name)]
+pub struct GaugePart {
+    pub name: String,
+    pub score: f64,
+    pub rating: String,
+}
+
+/// One day's reading.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = date)]
+pub struct GaugePoint {
+    pub date: String,
+    pub score: f64,
+}
+
+/// A reading as stored: when it was read, and by which version of the reading.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredGauge {
+    #[serde(flatten)]
+    pub gauge: Gauge,
+    pub fetched_at: String,
+    pub read_version: i64,
+}
+
+/// What a gauge's row keeps beyond its columns.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct GaugeRest {
+    previous: Vec<GaugeReading>,
+    parts: Vec<GaugePart>,
+    series: Vec<GaugePoint>,
+}
+
+/// `save_gauge`: one published index's reading. What the publisher gives
+/// beyond the score travels in the payload.
+pub fn save_gauge(conn: &Connection, name: &str, rec: &Gauge, now: &str, version: i64) -> Result<()> {
+    crate::atomically(conn, || {
+        let key = name.trim().to_lowercase();
+        let rest = GaugeRest { previous: rec.previous.clone(), parts: rec.parts.clone(), series: rec.series.clone() };
+        conn.execute(
+            "INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![key, rec.source, rec.score, rec.rating, rec.as_of, serde_json::to_string(&rest).unwrap_or_default(), version, now],
+        )?;
+        Ok(())
+    })
+}
+
+/// One index's stored reading; nothing where none is stored, or where the one
+/// stored has no score.
+pub fn gauge(conn: &Connection, name: &str) -> Result<Option<StoredGauge>> {
     let key = name.trim().to_lowercase();
     let mut stmt = conn.prepare("SELECT * FROM gauges WHERE name = ?")?;
     let mut rows = stmt.query([key])?;
     let r = match rows.next()? { Some(r) => r, None => return Ok(None) };
+    let score: Option<f64> = r.get("score")?;
+    let score = match score { Some(s) => s, None => return Ok(None) };
     let payload: Option<String> = r.get("payload")?;
-    let rest: Value = match payload {
-        Some(p) if !p.is_empty() => serde_json::from_str(&p).unwrap_or_else(|_| json!({})),
-        _ => json!({}),
-    };
-    let mut out = Map::new();
-    out.insert("index".into(), json!(text(r, "name")?));
-    out.insert("source".into(), json!(text(r, "source")?));
-    out.insert("score".into(), real(r, "score")?);
-    out.insert("rating".into(), json!(text(r, "rating")?));
-    out.insert("asOf".into(), json!(text(r, "as_of")?));
-    out.insert("fetchedAt".into(), json!(text(r, "fetched_at")?));
-    out.insert("readVersion".into(), json!(r.get::<_, Option<i64>>("read_version")?.unwrap_or(0)));
-    if let Some(m) = rest.as_object() {
-        for (k, v) in m {
-            out.insert(k.clone(), v.clone());
-        }
-    }
-    Ok(Some(Value::Object(out)))
+    let rest: GaugeRest = payload.as_deref().and_then(|p| serde_json::from_str(p).ok()).unwrap_or_default();
+    Ok(Some(StoredGauge {
+        gauge: Gauge {
+            index: text(r, "name")?,
+            source: text(r, "source")?,
+            score,
+            rating: text(r, "rating")?,
+            as_of: text(r, "as_of")?,
+            previous: rest.previous,
+            parts: rest.parts,
+            series: rest.series,
+        },
+        fetched_at: text(r, "fetched_at")?,
+        read_version: r.get::<_, Option<i64>>("read_version")?.unwrap_or(0),
+    }))
 }
 
 // --------------------------------------------------------------------------
@@ -590,39 +1130,84 @@ pub fn events_told(conn: &Connection, scope: &str, events: &[String]) -> Result<
 /// `mark_told`: record that the stream has met these, whether or not they
 /// were worth telling about.
 pub fn mark_told(conn: &Connection, scope: &str, events: &[String], now: &str) -> Result<usize> {
-    let rows: Vec<&String> = events.iter().filter(|e| !e.is_empty()).collect();
-    if rows.is_empty() {
-        return Ok(0);
-    }
-    for e in &rows {
-        conn.execute("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rusqlite::params![scope, e, now])?;
-    }
-    let cutoff = bagholder_model::clock::stamp_days_ago(TOLD_KEPT_DAYS);
-    conn.execute("DELETE FROM told WHERE at < ?", [cutoff])?;
-    Ok(rows.len())
+    crate::atomically(conn, || {
+        let rows: Vec<&String> = events.iter().filter(|e| !e.is_empty()).collect();
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        for e in &rows {
+            conn.execute("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rusqlite::params![scope, e, now])?;
+        }
+        let cutoff = bagholder_model::clock::stamp_days_ago(TOLD_KEPT_DAYS);
+        conn.execute("DELETE FROM told WHERE at < ?", [cutoff])?;
+        Ok(rows.len())
+    })
 }
 
 // --------------------------------------------------------------------------
 // notifications
 // --------------------------------------------------------------------------
 
-fn notification(r: &Row) -> Result<Value> {
+/// A notification's extra: the symbol it is about, the venue when it names
+/// one, the moment the thing itself happened, and where to open it. Every
+/// field absent, as every caller that has none leaves it, is stored and
+/// shown as `{}`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotificationExtra {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub symbol: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub exchange: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub doc: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+/// One notification, as the bell and the notification stream carry it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase", default)]
+#[diff(key = id)]
+pub struct Notification {
+    pub id: i64,
+    pub at: String,
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub body: String,
+    pub extra: NotificationExtra,
+    pub seen_at: String,
+    pub read_at: String,
+}
+
+impl Default for Notification {
+    fn default() -> Notification {
+        Notification { id: 0, at: String::new(), kind: String::new(), key: String::new(), title: String::new(), body: String::new(), extra: NotificationExtra::default(), seen_at: String::new(), read_at: String::new() }
+    }
+}
+
+fn notification(r: &Row) -> Result<Notification> {
     let extra: Option<String> = r.get("extra")?;
-    let extra: Value = match extra {
-        Some(e) if !e.is_empty() => serde_json::from_str(&e).unwrap_or_else(|_| json!({})),
-        _ => json!({}),
+    let extra: NotificationExtra = match extra {
+        Some(e) if !e.is_empty() => serde_json::from_str(&e).unwrap_or_default(),
+        _ => NotificationExtra::default(),
     };
-    Ok(json!({
-        "id": r.get::<_, i64>("id")?,
-        "at": text(r, "at")?,
-        "kind": text(r, "kind")?,
-        "key": text(r, "key")?,
-        "title": text(r, "title")?,
-        "body": text(r, "body")?,
-        "extra": extra,
-        "seenAt": text(r, "seen_at")?,
-        "readAt": text(r, "read_at")?,
-    }))
+    Ok(Notification {
+        id: r.get::<_, i64>("id")?,
+        at: text(r, "at")?,
+        kind: text(r, "kind")?,
+        key: text(r, "key")?,
+        title: text(r, "title")?,
+        body: text(r, "body")?,
+        extra,
+        seen_at: text(r, "seen_at")?,
+        read_at: text(r, "read_at")?,
+    })
 }
 
 /// `add_notification`: one row, keyed so the same event is never stored
@@ -636,14 +1221,14 @@ pub fn add_notification(
     key: &str,
     title: &str,
     body: &str,
-    extra: Option<&Value>,
+    extra: Option<&NotificationExtra>,
     seen: bool,
     now: &str,
-) -> Result<Option<Value>> {
-    let extra = extra.cloned().unwrap_or_else(|| json!({}));
+) -> Result<Option<Notification>> {
+    let extra = extra.cloned().unwrap_or_default();
     let n = conn.execute(
         "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![now, kind, key, title, body, crate::tables::json_text(&extra), if seen { Some(now) } else { None }],
+        rusqlite::params![now, kind, key, title, body, crate::tables::json_text(&serde_json::to_value(&extra).unwrap()), if seen { Some(now) } else { None }],
     )?;
     if n == 0 {
         return Ok(None);
@@ -667,7 +1252,7 @@ pub fn list_notifications(
     unseen: bool,
     limit: i64,
     newest: bool,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Notification>> {
     let mut sql = String::from("SELECT * FROM notifications WHERE id > ?");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(after_id)];
     if !since.is_empty() {
@@ -692,17 +1277,19 @@ pub fn list_notifications(
 /// `mark_notifications_seen`: a page has shown these, so no page shows
 /// them again.
 pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Result<usize> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL AND id IN ({})", marks);
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
-    for i in ids {
-        args.push(Box::new(*i));
-    }
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, refs.as_slice())
+    crate::atomically(conn, || {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL AND id IN ({})", marks);
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
+        for i in ids {
+            args.push(Box::new(*i));
+        }
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, refs.as_slice())
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -710,65 +1297,44 @@ pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Res
 // --------------------------------------------------------------------------
 
 /// `replace_universe`.
-pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str) -> Result<()> {
-    conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
-    for r in rows {
-        // the row is kept when its symbol is present and non-empty
-        if !r.get("symbol").map(truthy).unwrap_or(false) {
-            continue;
+pub fn replace_universe(conn: &Connection, key: &str, rows: &[bagholder_model::input::UniverseRow], now: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        let changed = crate::gens::replace_if_changed(conn, "SELECT symbol, name, value, percent_change, sector, country FROM universes WHERE key = ?", rusqlite::params![key], || {
+        conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
+        for r in rows.iter().filter(|r| !r.symbol.is_empty()) {
+            conn.execute(
+                "INSERT OR REPLACE INTO universes (key, symbol, name, value, percent_change, sector, country, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![key, r.symbol, r.name, r.value, r.percent_change, r.sector, r.country, now],
+            )?;
         }
-        // the value and the change are stored as they came, not coerced
-        let value = crate::activities::to_sql(r.get("value").unwrap_or(&Value::Null));
-        let change = crate::activities::to_sql(r.get("percentChange").unwrap_or(&Value::Null));
-        conn.execute(
-            "INSERT OR REPLACE INTO universes (key, symbol, name, value, percent_change, sector, country, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                key, field_s(r, "symbol"), field_s(r, "name"), value.as_ref(), change.as_ref(),
-                field_s(r, "sector"), field_s(r, "country"), now,
-            ],
-        )?;
-    }
-    Ok(())
+        Ok(())
+        })?;
+        if !changed {
+            conn.execute("UPDATE universes SET fetched_at = ? WHERE key = ?", rusqlite::params![now, key])?;
+        }
+        Ok(())
+    })
+}
+
+/// When the universe `key` was last read, or `None` when it has no rows.
+pub fn universe_read_at(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn.query_row("SELECT MAX(fetched_at) FROM universes WHERE key = ?", [key], |r| r.get::<_, Option<String>>(0))?)
 }
 
 // --------------------------------------------------------------------------
 // the remaining readers
 // --------------------------------------------------------------------------
 
-/// `dividend_symbols`: the symbols that have paid, with the listing
-/// exchange when the securities table knows it.
-pub fn dividend_symbols(conn: &Connection) -> Result<Vec<Value>> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT a.symbol AS symbol, a.currency AS currency, s.primary_exchange AS exchange \
-         FROM activities a LEFT JOIN securities s ON s.id = a.security_id \
-         WHERE a.category = 'dividend' AND IFNULL(a.symbol, '') != ''",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    while let Some(r) = rows.next()? {
-        let sym = up(&text(r, "symbol")?);
-        if sym.is_empty() || seen.contains(&sym) {
-            continue;
-        }
-        seen.push(sym.clone());
-        out.push(json!({
-            "symbol": sym,
-            "currency": text(r, "currency")?,
-            "exchange": text(r, "exchange")?.trim().to_string(),
-        }));
-    }
-    Ok(out)
-}
-
 /// `all_shorts`: every listing's stored short selling, for the ranked
-/// list.
-pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
+/// list. A row from before the market was typed is left out.
+pub fn all_shorts(conn: &Connection) -> Result<Vec<StoredShorts>> {
     let mut stmt = conn.prepare("SELECT * FROM shorts")?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        out.push(short_row(r)?);
+        if let Some(row) = short_row(r)? {
+            out.push(row);
+        }
     }
     Ok(out)
 }
@@ -776,36 +1342,24 @@ pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
 /// `mark_filings_fetched`: when a symbol's disclosures were last
 /// refreshed, and its SEDAR+ profile number when one was found.
 pub fn mark_filings_fetched(conn: &Connection, symbol: &str, profile_no: &str, now: &str) -> Result<()> {
-    let sym = filing_key(symbol);
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-        rusqlite::params![format!("filings_fetched:{}", sym), now],
-    )?;
-    if !profile_no.is_empty() {
+    crate::atomically(conn, || {
+        let sym = filing_key(symbol);
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            rusqlite::params![format!("sedar_profile:{}", sym), profile_no],
+            rusqlite::params![format!("filings_fetched:{}", sym), now],
         )?;
-    }
-    Ok(())
+        if !profile_no.is_empty() {
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                rusqlite::params![format!("sedar_profile:{}", sym), profile_no],
+            )?;
+        }
+        Ok(())
+    })
 }
 
 pub fn filings_fetched_for(conn: &Connection, symbol: &str) -> Result<String> {
     Ok(crate::tables::get_meta(conn, &format!("filings_fetched:{}", filing_key(symbol)), "")?)
-}
-
-pub fn filings_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
-    let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'filings_fetched:%'")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Map::new();
-    while let Some(r) = rows.next()? {
-        let key: String = r.get(0)?;
-        out.insert(
-            key["filings_fetched:".len()..].to_string(),
-            json!(r.get::<_, Option<String>>(1)?.unwrap_or_default()),
-        );
-    }
-    Ok(out)
 }
 
 /// `sedar_profile`.
@@ -814,13 +1368,15 @@ pub fn sedar_profile(conn: &Connection, symbol: &str) -> Result<String> {
 }
 
 pub fn forget_filings(conn: &Connection, symbol: &str) -> Result<()> {
-    let sym = filing_key(symbol);
-    conn.execute("DELETE FROM filings WHERE symbol = ?", [&sym])?;
-    conn.execute(
-        "DELETE FROM meta WHERE key IN (?, ?)",
-        rusqlite::params![format!("filings_fetched:{}", sym), format!("sedar_profile:{}", sym)],
-    )?;
-    Ok(())
+    crate::atomically(conn, || {
+        let sym = filing_key(symbol);
+        conn.execute("DELETE FROM filings WHERE symbol = ?", [&sym])?;
+        conn.execute(
+            "DELETE FROM meta WHERE key IN (?, ?)",
+            rusqlite::params![format!("filings_fetched:{}", sym), format!("sedar_profile:{}", sym)],
+        )?;
+        Ok(())
+    })
 }
 
 /// `sold_since`: the shares sold in an account since a moment, from the
@@ -868,20 +1424,22 @@ pub fn unread_notifications(conn: &Connection) -> Result<i64> {
 
 /// `mark_notifications_read`: every unread one when no ids are given.
 pub fn mark_notifications_read(conn: &Connection, ids: Option<&[i64]>, now: &str) -> Result<usize> {
-    match ids {
-        None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
-        Some(ids) if ids.is_empty() => Ok(0),
-        Some(ids) => {
-            let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let sql = format!("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND id IN ({})", marks);
-            let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
-            for i in ids {
-                args.push(Box::new(*i));
+    crate::atomically(conn, || {
+        match ids {
+            None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
+            Some(ids) if ids.is_empty() => Ok(0),
+            Some(ids) => {
+                let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND id IN ({})", marks);
+                let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
+                for i in ids {
+                    args.push(Box::new(*i));
+                }
+                let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+                conn.execute(&sql, refs.as_slice())
             }
-            let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-            conn.execute(&sql, refs.as_slice())
         }
-    }
+    })
 }
 
 /// `clear_notifications`: the history emptied, and the keys with it --
@@ -891,7 +1449,56 @@ pub fn clear_notifications(conn: &Connection) -> Result<usize> {
 }
 
 /// `exposure_record`: one record by its key, or nothing.
-pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<Value>> {
-    let all = crate::admin::exposures_map(conn)?;
-    Ok(all.get(key).cloned())
+pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<StoredExposure>> {
+    let mut stmt = conn.prepare("SELECT * FROM exposures WHERE key = ?")?;
+    let mut rows = stmt.query(rusqlite::params![key])?;
+    match rows.next()? { Some(r) => Ok(Some(stored_exposure(r)?)), None => Ok(None) }
+}
+
+/// Every exposure row, keyed as it is stored: for a caller that wants the
+/// row as read, coverage and source included, not the model's weights alone
+/// (`rows::exposures`).
+pub fn all_exposures(conn: &Connection) -> Result<HashMap<String, StoredExposure>> {
+    let mut out = HashMap::new();
+    let mut stmt = conn.prepare("SELECT * FROM exposures")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        out.insert(text(r, "key")?, stored_exposure(r)?);
+    }
+    Ok(out)
+}
+
+/// One universe constituent as stored, with the moment its record was fetched
+/// -- what a caller wanting more than the model's own `UniverseRow` reads.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredUniverseRow {
+    pub symbol: String,
+    pub name: String,
+    pub value: f64,
+    pub percent_change: Option<f64>,
+    pub sector: String,
+    pub country: String,
+    pub fetched_at: String,
+}
+
+/// Every universe's constituents, in key order, each with when it was fetched.
+pub fn stored_universes(conn: &Connection) -> Result<bagholder_model::wire::Ordered<Vec<StoredUniverseRow>>> {
+    let mut stmt = conn.prepare("SELECT * FROM universes ORDER BY key, value DESC, symbol")?;
+    let mut rows = stmt.query([])?;
+    let mut out = bagholder_model::wire::Ordered::default();
+    while let Some(r) = rows.next()? {
+        let key = text(r, "key")?;
+        let row = StoredUniverseRow {
+            symbol: text(r, "symbol")?,
+            name: text(r, "name")?,
+            value: r.get::<_, Option<f64>>("value")?.unwrap_or(0.0),
+            percent_change: r.get::<_, Option<f64>>("percent_change")?,
+            sector: text(r, "sector")?,
+            country: text(r, "country")?,
+            fetched_at: text(r, "fetched_at")?,
+        };
+        out.entry(&key, Vec::new).push(row);
+    }
+    Ok(out)
 }

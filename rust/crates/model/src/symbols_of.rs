@@ -6,76 +6,41 @@
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::base::Base;
+use crate::activity::Kind;
+use crate::context::MarketBase as Base;
 use crate::fifo::Slice;
+use crate::input::Listing;
 use crate::trades::{group_id_for_keys, slice_member_key};
 use crate::value::field_s;
 
-/// `held_symbols`: every held instrument, with what a quote source needs.
-pub fn held_symbols(base: &Base) -> Vec<Value> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for p in &base.positions {
-        let sym = field_s(p, "symbol");
-        if !seen.insert(sym.clone()) {
-            continue;
-        }
-        out.push(json!({"symbol": sym, "exchange": p.get("exchange").cloned().unwrap_or(Value::Null),
-                        "currency": p.get("currency").cloned().unwrap_or(Value::Null), "kind": p.get("kind").cloned().unwrap_or(Value::Null)}));
-    }
-    out
+fn listing(symbol: &str, exchange: &str, currency: &str, kind: &str) -> Listing {
+    Listing { symbol: symbol.into(), exchange: exchange.into(), currency: currency.into(), kind: kind.into(), quote_key: None, yahoo: None, start: None }
 }
 
-/// `payer_symbols`: held positions that have paid a distribution.
-pub fn payer_symbols(base: &Base) -> Vec<Value> {
-    let payers: HashSet<String> = base.cashflow.iter().filter(|r| field_s(r, "kind") == "Dividend").map(|r| field_s(r, "symbol")).collect();
+/// Every held instrument, with what a quote source needs.
+pub fn held_symbols(base: &Base) -> Vec<Listing> {
     let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for p in &base.positions {
-        let sym = field_s(p, "symbol");
-        let short = p.get("short").and_then(|v| v.as_bool()).unwrap_or(false);
-        if payers.contains(&sym) && !seen.contains(&sym) && !short {
-            seen.insert(sym.clone());
-            let ex = field_s(p, "exchange");
-            out.push(json!({"symbol": sym, "exchange": if ex != "Crypto" { ex } else { String::new() }, "currency": p.get("currency").cloned().unwrap_or(Value::Null)}));
-        }
-    }
-    out
+    base.positions.iter().filter(|p| seen.insert(p.symbol.as_str())).map(|p| listing(&p.symbol, &p.exchange, &p.currency, p.kind.as_str())).collect()
 }
 
-/// `intraday_archive_symbols`: every symbol traded or held in the past
-/// year, with the earliest date its bars are wanted from.
-pub fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
+/// Every symbol traded or held in the past year, with the earliest date its bars
+/// are wanted from. A contract is charted as what it is written on.
+pub fn intraday_archive_symbols(base: &Base) -> Vec<Listing> {
     let since = crate::dates::shift_date(&base.today, -365);
-    let mut out: BTreeMap<String, Value> = BTreeMap::new();
-    let charted = |rec: Value| -> Value {
-        if field_s(&rec, "kind") == "Options" {
-            let under = crate::symbols::underlying_symbol(&field_s(&rec, "symbol"));
-            if !under.is_empty() && under != "—" {
-                return json!({"symbol": under, "exchange": rec["exchange"], "currency": rec["currency"], "kind": "Shares"});
-            }
-        }
-        rec
-    };
-    let mut want = |rec: Value, start: String| {
-        let key = field_s(&rec, "symbol");
-        let replace = match out.get(&key) { None => true, Some(cur) => start < field_s(cur, "start") };
-        if replace {
-            let mut m = rec.as_object().cloned().unwrap_or_default();
-            m.insert("start".into(), json!(start));
-            out.insert(key, Value::Object(m));
+    let mut out: BTreeMap<String, Listing> = BTreeMap::new();
+    let mut want = |symbol: &str, exchange: &str, currency: &str, kind: Kind, start: &str| {
+        let under = crate::symbols::underlying_symbol(symbol);
+        let charted = if kind == Kind::Options && !under.is_empty() && under != "—" { listing(&under, exchange, currency, "Shares") } else { listing(symbol, exchange, currency, kind.as_str()) };
+        let start = if start > since.as_str() { start } else { since.as_str() };
+        if out.get(&charted.symbol).map_or(true, |known| start < known.start.as_deref().unwrap_or("")) {
+            out.insert(charted.symbol.clone(), Listing { start: Some(start.to_string()), ..charted });
         }
     };
-    let pick = |v: &Value| json!({"symbol": v["symbol"], "exchange": v["exchange"], "currency": v["currency"], "kind": v["kind"]});
-    for t in &base.trades {
-        if field_s(t, "exitDate") >= since {
-            let entry = field_s(t, "entryDate");
-            want(charted(pick(t)), if entry > since { entry } else { since.clone() });
-        }
+    for t in base.traded.iter().filter(|t| t.exit_date.is_empty() || t.exit_date >= since) {
+        want(&t.symbol, &t.exchange, &t.currency, t.kind, &t.entry_date);
     }
-    for p in &base.positions {
-        let opened = { let o = field_s(p, "opened"); if o.is_empty() { since.clone() } else { o } };
-        want(charted(pick(p)), if opened > since { opened } else { since.clone() });
+    for p in base.positions.iter() {
+        want(&p.symbol, &p.exchange, &p.currency, p.kind, if p.opened.is_empty() { &since } else { &p.opened });
     }
     out.into_values().collect()
 }
@@ -154,13 +119,13 @@ pub fn migrate_legacy_notes(closed: &[Slice], saved_groups: &[Value], notes: &Ma
             }
         };
         let mut cur: Vec<&Slice> = Vec::new();
-        let mut direction: Option<String> = None;
+        let mut direction: Option<crate::activity::Direction> = None;
         for s in members {
-            if direction.as_deref().map(|d| d != s.open_direction).unwrap_or(false) {
+            if direction.map(|d| d != s.open_direction).unwrap_or(false) {
                 flush(&cur, &mut out);
                 cur.clear();
             }
-            direction = Some(s.open_direction.clone());
+            direction = Some(s.open_direction);
             cur.push(s);
         }
         flush(&cur, &mut out);

@@ -1,0 +1,136 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchAllAccounts($identityId: ID!, $filter: AccountsFilter = {}, $pageSize: Int = 25, $cursor: String) {
+  identity(id: $identityId) {
+    id
+    ...AllAccounts
+  }
+}
+fragment AllAccounts on Identity {
+  accounts(filter: $filter, first: $pageSize, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        ...AccountWithLink
+      }
+    }
+  }
+}
+fragment AccountWithLink on Account {
+  ...Account
+  linkedAccount {
+    ...Account
+  }
+}
+fragment Account on Account {
+  ...AccountCore
+  canHaveAuthorizedTraders
+  authorizedTraderStatus
+  custodianAccounts {
+    ...CustodianAccount
+  }
+}
+fragment AccountCore on Account {
+  id
+  archivedAt
+  branch
+  closedAt
+  createdAt
+  cacheExpiredAt
+  currency
+  requiredIdentityVerification
+  unifiedAccountType
+  compatibleAosdkVersions(consumerOptInActivationImplemented: true, flowAwareActivationImplemented: true)
+  supportedCurrencies
+  compatibleCurrencies
+  isOpen
+  nickname
+  status
+  applicationFamilyId
+  accountOwnerConfiguration
+  accountFeatures {
+    ...AccountFeature
+  }
+  accountOwners {
+    ...AccountOwner
+  }
+  accountEntityRelationships {
+    ...AccountEntityRelationship
+  }
+  accountUpgradeProcesses {
+    ...AccountUpgradeProcess
+  }
+  activeRestrictions {
+    ...AccountRestriction
+  }
+  type
+}
+fragment AccountEntityRelationship on AccountEntityRelationship {
+  accountCanonicalId
+  entityCanonicalId
+  entityOwnershipType
+  entityType
+}
+fragment AccountFeature on AccountFeature {
+  name
+  enabled
+  functional
+  firstEnabledOn
+  metadata {
+    __typename
+    ... on MarginBoostFeatureMetadata {
+      targetMarginAccountId
+      __typename
+    }
+  }
+}
+fragment AccountOwner on AccountOwner {
+  accountId
+  identityId
+  accountNickname
+  clientCanonicalId
+  accountOpeningAgreementsSigned
+  name
+  legalName
+  email
+  ownershipType
+  activeInvitation {
+    ...AccountOwnerInvitation
+  }
+  sentInvitations {
+    ...AccountOwnerInvitation
+  }
+}
+fragment AccountOwnerInvitation on AccountOwnerInvitation {
+  id
+  createdAt
+  inviteeName
+  inviteeEmail
+  inviterName
+  inviterEmail
+  updatedAt
+  sentAt
+  status
+}
+fragment AccountRestriction on Restriction {
+  canonicalId
+  feature
+  active
+  resourceCanonicalId
+  resourceType
+}
+fragment AccountUpgradeProcess on AccountUpgradeProcess {
+  canonicalId
+  status
+  targetAccountType
+}
+fragment CustodianAccount on CustodianAccount {
+  id
+  branch
+  custodian
+  status
+  updatedAt
+}

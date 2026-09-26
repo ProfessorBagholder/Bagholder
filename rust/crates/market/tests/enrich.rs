@@ -79,7 +79,7 @@ fn test_an_unreadable_title_falls_back_to_the_model() {
     enrich::hooks::DOCUMENT_TEXT.with(|h| *h.borrow_mut() = Some(Box::new(|_, _| "A report of exempt distribution.".to_string())));
     let data = pdf_with_title(b"\x8a\xf0,0\x91\x9f\xbfO\xf9\xff\xaf\xe2U\xc0<w\xb0");
     let out = enrich::enrich_document("sedar", &data, "application/pdf");
-    assert_eq!(out["subject"], "Report of exempt distribution in Canada");
+    assert_eq!(out.subject, "Report of exempt distribution in Canada");
 }
 
 #[test]
@@ -156,8 +156,8 @@ fn test_no_model_means_no_title() {
 fn test_enrich_document_titles_from_the_model_when_there_is_no_pdf_subject() {
     set_chat(|prompt, _| if prompt.contains("Title:") { "Q2 2026 MD&A and interim financial statements".into() } else { "It reports Q2 2026 results.".into() });
     let info = enrich::enrich_document("SEC", b"<html><body>Management discussion...</body></html>", "text/html");
-    assert_eq!(info["subject"], "Q2 2026 MD&A and interim financial statements");
-    assert_eq!(info["summary"], "It reports Q2 2026 results.");
+    assert_eq!(info.subject, "Q2 2026 MD&A and interim financial statements");
+    assert_eq!(info.summary, "It reports Q2 2026 results.");
 }
 
 #[test]
@@ -165,8 +165,8 @@ fn test_enrich_document_gives_subject_without_a_model() {
     no_pdf();
     set_chat(|_, _| String::new());
     let info = enrich::enrich_document("SEDAR+", &pdf_with_title(b"Microsoft Word - Acme Announces Buyback EN"), "application/pdf");
-    assert_eq!(info["subject"], "Acme Announces Buyback");
-    assert_eq!(info["summary"], "");
+    assert_eq!(info.subject, "Acme Announces Buyback");
+    assert_eq!(info.summary, "");
 }
 
 // --- SentenceTest

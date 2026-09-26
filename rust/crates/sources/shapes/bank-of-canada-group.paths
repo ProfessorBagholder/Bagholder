@@ -1,0 +1,11 @@
+.
+groupDetails
+groupDetails.description
+groupDetails.groupSeries
+groupDetails.groupSeries.*
+groupDetails.groupSeries.*.label
+groupDetails.groupSeries.*.link
+groupDetails.label
+groupDetails.name
+terms
+terms.url

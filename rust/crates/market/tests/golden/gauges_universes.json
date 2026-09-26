@@ -1,0 +1,796 @@
+{
+  "stocks": {
+    "index": "stocks",
+    "source": "CNN",
+    "score": 28.7,
+    "rating": "Fear",
+    "asOf": "2026-09-15T23:59:51Z",
+    "previous": [
+      {
+        "label": "Previous close",
+        "score": 31.1,
+        "rating": "Fear"
+      },
+      {
+        "label": "A week ago",
+        "score": 39.1,
+        "rating": "Fear"
+      },
+      {
+        "label": "A year ago",
+        "score": 64.5,
+        "rating": "Greed"
+      }
+    ],
+    "parts": [
+      {
+        "name": "Market momentum",
+        "score": 22.8,
+        "rating": "Extreme fear"
+      },
+      {
+        "name": "Stock price strength",
+        "score": 1.0,
+        "rating": "Extreme fear"
+      },
+      {
+        "name": "Put and call options",
+        "score": 32.2,
+        "rating": "Fear"
+      },
+      {
+        "name": "Market volatility",
+        "score": 50.0,
+        "rating": "Neutral"
+      },
+      {
+        "name": "Junk bond demand",
+        "score": 58.6,
+        "rating": "Greed"
+      },
+      {
+        "name": "Safe haven demand",
+        "score": 31.0,
+        "rating": "Fear"
+      }
+    ],
+    "series": [
+      {
+        "date": "2025-09-16",
+        "score": 64.4
+      },
+      {
+        "date": "2026-09-15",
+        "score": 28.7
+      }
+    ]
+  },
+  "crypto": {
+    "index": "crypto",
+    "source": "Alternative.me",
+    "score": 20.0,
+    "rating": "Extreme fear",
+    "asOf": "2026-09-16T00:00:00Z",
+    "previous": [
+      {
+        "label": "Yesterday",
+        "score": 21.0,
+        "rating": "Fear"
+      },
+      {
+        "label": "A week ago",
+        "score": 27.0,
+        "rating": "Fear"
+      },
+      {
+        "label": "A month ago",
+        "score": 50.0,
+        "rating": "Neutral"
+      }
+    ],
+    "parts": [],
+    "series": [
+      {
+        "date": "2026-08-08",
+        "score": 59.0
+      },
+      {
+        "date": "2026-08-09",
+        "score": 58.0
+      },
+      {
+        "date": "2026-08-10",
+        "score": 57.0
+      },
+      {
+        "date": "2026-08-11",
+        "score": 56.0
+      },
+      {
+        "date": "2026-08-12",
+        "score": 55.0
+      },
+      {
+        "date": "2026-08-13",
+        "score": 54.0
+      },
+      {
+        "date": "2026-08-14",
+        "score": 53.0
+      },
+      {
+        "date": "2026-08-15",
+        "score": 52.0
+      },
+      {
+        "date": "2026-08-16",
+        "score": 51.0
+      },
+      {
+        "date": "2026-08-17",
+        "score": 50.0
+      },
+      {
+        "date": "2026-08-18",
+        "score": 49.0
+      },
+      {
+        "date": "2026-08-19",
+        "score": 48.0
+      },
+      {
+        "date": "2026-08-20",
+        "score": 47.0
+      },
+      {
+        "date": "2026-08-21",
+        "score": 46.0
+      },
+      {
+        "date": "2026-08-22",
+        "score": 45.0
+      },
+      {
+        "date": "2026-08-23",
+        "score": 44.0
+      },
+      {
+        "date": "2026-08-24",
+        "score": 43.0
+      },
+      {
+        "date": "2026-08-25",
+        "score": 42.0
+      },
+      {
+        "date": "2026-08-26",
+        "score": 41.0
+      },
+      {
+        "date": "2026-08-27",
+        "score": 40.0
+      },
+      {
+        "date": "2026-08-28",
+        "score": 39.0
+      },
+      {
+        "date": "2026-08-29",
+        "score": 38.0
+      },
+      {
+        "date": "2026-08-30",
+        "score": 37.0
+      },
+      {
+        "date": "2026-08-31",
+        "score": 36.0
+      },
+      {
+        "date": "2026-09-01",
+        "score": 35.0
+      },
+      {
+        "date": "2026-09-02",
+        "score": 34.0
+      },
+      {
+        "date": "2026-09-03",
+        "score": 33.0
+      },
+      {
+        "date": "2026-09-04",
+        "score": 32.0
+      },
+      {
+        "date": "2026-09-05",
+        "score": 31.0
+      },
+      {
+        "date": "2026-09-06",
+        "score": 30.0
+      },
+      {
+        "date": "2026-09-07",
+        "score": 29.0
+      },
+      {
+        "date": "2026-09-08",
+        "score": 28.0
+      },
+      {
+        "date": "2026-09-09",
+        "score": 27.0
+      },
+      {
+        "date": "2026-09-10",
+        "score": 26.0
+      },
+      {
+        "date": "2026-09-11",
+        "score": 25.0
+      },
+      {
+        "date": "2026-09-12",
+        "score": 24.0
+      },
+      {
+        "date": "2026-09-13",
+        "score": 23.0
+      },
+      {
+        "date": "2026-09-14",
+        "score": 22.0
+      },
+      {
+        "date": "2026-09-15",
+        "score": 21.0
+      },
+      {
+        "date": "2026-09-16",
+        "score": 20.0
+      }
+    ]
+  },
+  "stocks_no_score": null,
+  "crypto_empty": null,
+  "stored_stocks": {
+    "index": "stocks",
+    "source": "CNN",
+    "score": 28.7,
+    "rating": "Fear",
+    "asOf": "2026-09-15T23:59:51Z",
+    "previous": [
+      {
+        "label": "Previous close",
+        "score": 31.1,
+        "rating": "Fear"
+      },
+      {
+        "label": "A week ago",
+        "score": 39.1,
+        "rating": "Fear"
+      },
+      {
+        "label": "A year ago",
+        "score": 64.5,
+        "rating": "Greed"
+      }
+    ],
+    "parts": [
+      {
+        "name": "Market momentum",
+        "score": 22.8,
+        "rating": "Extreme fear"
+      },
+      {
+        "name": "Stock price strength",
+        "score": 1.0,
+        "rating": "Extreme fear"
+      },
+      {
+        "name": "Put and call options",
+        "score": 32.2,
+        "rating": "Fear"
+      },
+      {
+        "name": "Market volatility",
+        "score": 50.0,
+        "rating": "Neutral"
+      },
+      {
+        "name": "Junk bond demand",
+        "score": 58.6,
+        "rating": "Greed"
+      },
+      {
+        "name": "Safe haven demand",
+        "score": 31.0,
+        "rating": "Fear"
+      }
+    ],
+    "series": [
+      {
+        "date": "2025-09-16",
+        "score": 64.4
+      },
+      {
+        "date": "2026-09-15",
+        "score": 28.7
+      }
+    ],
+    "fetchedAt": "2026-09-22T15:00:00Z",
+    "readVersion": 1.0
+  },
+  "stored_crypto": {
+    "index": "crypto",
+    "source": "Alternative.me",
+    "score": 20.0,
+    "rating": "Extreme fear",
+    "asOf": "2026-09-16T00:00:00Z",
+    "previous": [
+      {
+        "label": "Yesterday",
+        "score": 21.0,
+        "rating": "Fear"
+      },
+      {
+        "label": "A week ago",
+        "score": 27.0,
+        "rating": "Fear"
+      },
+      {
+        "label": "A month ago",
+        "score": 50.0,
+        "rating": "Neutral"
+      }
+    ],
+    "parts": [],
+    "series": [
+      {
+        "date": "2026-08-08",
+        "score": 59.0
+      },
+      {
+        "date": "2026-08-09",
+        "score": 58.0
+      },
+      {
+        "date": "2026-08-10",
+        "score": 57.0
+      },
+      {
+        "date": "2026-08-11",
+        "score": 56.0
+      },
+      {
+        "date": "2026-08-12",
+        "score": 55.0
+      },
+      {
+        "date": "2026-08-13",
+        "score": 54.0
+      },
+      {
+        "date": "2026-08-14",
+        "score": 53.0
+      },
+      {
+        "date": "2026-08-15",
+        "score": 52.0
+      },
+      {
+        "date": "2026-08-16",
+        "score": 51.0
+      },
+      {
+        "date": "2026-08-17",
+        "score": 50.0
+      },
+      {
+        "date": "2026-08-18",
+        "score": 49.0
+      },
+      {
+        "date": "2026-08-19",
+        "score": 48.0
+      },
+      {
+        "date": "2026-08-20",
+        "score": 47.0
+      },
+      {
+        "date": "2026-08-21",
+        "score": 46.0
+      },
+      {
+        "date": "2026-08-22",
+        "score": 45.0
+      },
+      {
+        "date": "2026-08-23",
+        "score": 44.0
+      },
+      {
+        "date": "2026-08-24",
+        "score": 43.0
+      },
+      {
+        "date": "2026-08-25",
+        "score": 42.0
+      },
+      {
+        "date": "2026-08-26",
+        "score": 41.0
+      },
+      {
+        "date": "2026-08-27",
+        "score": 40.0
+      },
+      {
+        "date": "2026-08-28",
+        "score": 39.0
+      },
+      {
+        "date": "2026-08-29",
+        "score": 38.0
+      },
+      {
+        "date": "2026-08-30",
+        "score": 37.0
+      },
+      {
+        "date": "2026-08-31",
+        "score": 36.0
+      },
+      {
+        "date": "2026-09-01",
+        "score": 35.0
+      },
+      {
+        "date": "2026-09-02",
+        "score": 34.0
+      },
+      {
+        "date": "2026-09-03",
+        "score": 33.0
+      },
+      {
+        "date": "2026-09-04",
+        "score": 32.0
+      },
+      {
+        "date": "2026-09-05",
+        "score": 31.0
+      },
+      {
+        "date": "2026-09-06",
+        "score": 30.0
+      },
+      {
+        "date": "2026-09-07",
+        "score": 29.0
+      },
+      {
+        "date": "2026-09-08",
+        "score": 28.0
+      },
+      {
+        "date": "2026-09-09",
+        "score": 27.0
+      },
+      {
+        "date": "2026-09-10",
+        "score": 26.0
+      },
+      {
+        "date": "2026-09-11",
+        "score": 25.0
+      },
+      {
+        "date": "2026-09-12",
+        "score": 24.0
+      },
+      {
+        "date": "2026-09-13",
+        "score": 23.0
+      },
+      {
+        "date": "2026-09-14",
+        "score": 22.0
+      },
+      {
+        "date": "2026-09-15",
+        "score": 21.0
+      },
+      {
+        "date": "2026-09-16",
+        "score": 20.0
+      }
+    ],
+    "fetchedAt": "2026-09-22T15:00:00Z",
+    "readVersion": 1.0
+  },
+  "stored_missing": null,
+  "screener": [
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corporation Common Stock",
+      "last": 219.41,
+      "percentChange": 0.808,
+      "cap": 5350000000000.0,
+      "sector": "Information Technology",
+      "country": "United States"
+    },
+    {
+      "symbol": "JPM",
+      "name": "JP Morgan",
+      "last": 210.0,
+      "percentChange": -0.5,
+      "cap": 600000000000.0,
+      "sector": "Financials",
+      "country": "United States"
+    },
+    {
+      "symbol": "TSM",
+      "name": "Taiwan Semiconductor",
+      "last": 250.0,
+      "percentChange": 1.2,
+      "cap": 1300000000000.0,
+      "sector": "Information Technology",
+      "country": "Taiwan"
+    },
+    {
+      "symbol": "SHOP",
+      "name": "Shopify",
+      "last": 130.0,
+      "percentChange": 3.3,
+      "cap": 170000000000.0,
+      "sector": "Information Technology",
+      "country": "Canada"
+    },
+    {
+      "symbol": "XYZ",
+      "name": "No cap",
+      "last": null,
+      "percentChange": null,
+      "cap": 0.0,
+      "sector": "Not classified",
+      "country": "United States"
+    },
+    {
+      "symbol": "ABC",
+      "name": "No country",
+      "last": 2.0,
+      "percentChange": -0.0,
+      "cap": 100.0,
+      "sector": "Communication Services",
+      "country": ""
+    },
+    {
+      "symbol": "EQL",
+      "name": "Equal cap",
+      "last": 1.0,
+      "percentChange": 1.0,
+      "cap": 600000000000.0,
+      "sector": "Financials",
+      "country": "United States"
+    }
+  ],
+  "us": [
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corporation Common Stock",
+      "value": 5350000000000.0,
+      "percentChange": 0.808,
+      "sector": "Information Technology",
+      "country": "United States"
+    },
+    {
+      "symbol": "JPM",
+      "name": "JP Morgan",
+      "value": 600000000000.0,
+      "percentChange": -0.5,
+      "sector": "Financials",
+      "country": "United States"
+    },
+    {
+      "symbol": "EQL",
+      "name": "Equal cap",
+      "value": 600000000000.0,
+      "percentChange": 1.0,
+      "sector": "Financials",
+      "country": "United States"
+    }
+  ],
+  "intl": [
+    {
+      "symbol": "TSM",
+      "name": "Taiwan Semiconductor",
+      "value": 1300000000000.0,
+      "percentChange": 1.2,
+      "sector": "Information Technology",
+      "country": "Taiwan"
+    }
+  ],
+  "constituents": [
+    {
+      "symbol": "RY",
+      "name": "Royal Bank of Canada",
+      "weight": 9.823,
+      "cap": 398317400940.0,
+      "exchange": "TSX"
+    },
+    {
+      "symbol": "TD",
+      "name": "TD Bank",
+      "weight": 0.0,
+      "cap": 150000000000.0,
+      "exchange": "TSX"
+    }
+  ],
+  "tile_quote": {
+    "percentChange": 0.42,
+    "sector": "Financials",
+    "name": "Royal Bank"
+  },
+  "tile_quote_blank": {
+    "percentChange": null,
+    "sector": "Not classified",
+    "name": "X"
+  },
+  "tile_quote_none": null,
+  "canada_tiles": [
+    {
+      "symbol": "RY",
+      "name": "Royal Bank of Canada",
+      "value": 9.823,
+      "percentChange": 0.42,
+      "sector": "Financials",
+      "country": "Canada"
+    },
+    {
+      "symbol": "TD",
+      "name": "TD Bank",
+      "value": 150000000000.0,
+      "percentChange": null,
+      "sector": "Not classified",
+      "country": "Canada"
+    },
+    {
+      "symbol": "",
+      "name": "dropped",
+      "value": 1.0,
+      "percentChange": null,
+      "sector": "",
+      "country": ""
+    }
+  ],
+  "stored_universes": [
+    [
+      "ca",
+      [
+        {
+          "symbol": "TD",
+          "name": "TD Bank",
+          "value": 150000000000.0,
+          "percentChange": null,
+          "sector": "Not classified",
+          "country": "Canada"
+        },
+        {
+          "symbol": "RY",
+          "name": "Royal Bank of Canada",
+          "value": 9.823,
+          "percentChange": 0.42,
+          "sector": "Financials",
+          "country": "Canada"
+        }
+      ]
+    ],
+    [
+      "intl",
+      [
+        {
+          "symbol": "TSM",
+          "name": "Taiwan Semiconductor",
+          "value": 1300000000000.0,
+          "percentChange": 1.2,
+          "sector": "Information Technology",
+          "country": "Taiwan"
+        }
+      ]
+    ],
+    [
+      "us",
+      [
+        {
+          "symbol": "NVDA",
+          "name": "NVIDIA Corporation Common Stock",
+          "value": 5350000000000.0,
+          "percentChange": 0.808,
+          "sector": "Information Technology",
+          "country": "United States"
+        },
+        {
+          "symbol": "EQL",
+          "name": "Equal cap",
+          "value": 600000000000.0,
+          "percentChange": 1.0,
+          "sector": "Financials",
+          "country": "United States"
+        },
+        {
+          "symbol": "JPM",
+          "name": "JP Morgan",
+          "value": 600000000000.0,
+          "percentChange": -0.5,
+          "sector": "Financials",
+          "country": "United States"
+        }
+      ]
+    ]
+  ],
+  "snapshot_universes": {
+    "ca": [
+      {
+        "symbol": "TD",
+        "name": "TD Bank",
+        "value": 150000000000.0,
+        "percentChange": null,
+        "sector": "Not classified",
+        "country": "Canada",
+        "fetchedAt": "2026-09-22T15:00:00Z"
+      },
+      {
+        "symbol": "RY",
+        "name": "Royal Bank of Canada",
+        "value": 9.823,
+        "percentChange": 0.42,
+        "sector": "Financials",
+        "country": "Canada",
+        "fetchedAt": "2026-09-22T15:00:00Z"
+      }
+    ],
+    "intl": [
+      {
+        "symbol": "TSM",
+        "name": "Taiwan Semiconductor",
+        "value": 1300000000000.0,
+        "percentChange": 1.2,
+        "sector": "Information Technology",
+        "country": "Taiwan",
+        "fetchedAt": "2026-09-22T15:00:00Z"
+      }
+    ],
+    "us": [
+      {
+        "symbol": "NVDA",
+        "name": "NVIDIA Corporation Common Stock",
+        "value": 5350000000000.0,
+        "percentChange": 0.808,
+        "sector": "Information Technology",
+        "country": "United States",
+        "fetchedAt": "2026-09-22T15:00:00Z"
+      },
+      {
+        "symbol": "EQL",
+        "name": "Equal cap",
+        "value": 600000000000.0,
+        "percentChange": 1.0,
+        "sector": "Financials",
+        "country": "United States",
+        "fetchedAt": "2026-09-22T15:00:00Z"
+      },
+      {
+        "symbol": "JPM",
+        "name": "JP Morgan",
+        "value": 600000000000.0,
+        "percentChange": -0.5,
+        "sector": "Financials",
+        "country": "United States",
+        "fetchedAt": "2026-09-22T15:00:00Z"
+      }
+    ]
+  }
+}

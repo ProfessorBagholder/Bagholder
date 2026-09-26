@@ -3,9 +3,11 @@
 //! performs.
 
 use rusqlite::{Connection, Result};
-use serde_json::{json, Map, Value};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
-use bagholder_model::value::{field_s, get};
+use bagholder_model::input::{Journal, JournalEntry, TileRef};
+use bagholder_model::securities::Security;
 
 /// `SYNC_META_KEYS`: the bookmarks a wipe clears so the next sync starts
 /// from zero.
@@ -16,68 +18,40 @@ pub const SYNC_META_KEYS: [&str; 3] = ["synced_at", "last_activity_pull", "secur
 pub const ACTIVITY_PULL_HOUR: u32 = 14;
 pub const ACTIVITY_PULL_MINUTE: u32 = 0;
 
-fn either(row: &Value, camel: &str, snake: &str) -> String {
-    let v = field_s(row, camel);
-    if v.is_empty() { field_s(row, snake) } else { v }
+/// `upsert_securities`. Nothing passes a per-row `fetchedAt` today (the
+/// caller stamps them all at once), but a row that carries one keeps it.
+pub fn upsert_securities(conn: &Connection, rows: &[bagholder_model::securities::Security], now: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        for sec in rows {
+            let sid = sec.id.trim().to_string();
+            if sid.is_empty() {
+                continue;
+            }
+            let under = sec.underlying_id.trim().to_string();
+            conn.execute(
+                "INSERT INTO securities (id, symbol, name, primary_exchange, primary_mic, currency, underlying_id, fetched_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET symbol = excluded.symbol, name = excluded.name, \
+                 primary_exchange = excluded.primary_exchange, primary_mic = excluded.primary_mic, \
+                 currency = excluded.currency, underlying_id = excluded.underlying_id, fetched_at = excluded.fetched_at",
+                rusqlite::params![
+                    sid,
+                    sec.symbol,
+                    sec.name,
+                    sec.primary_exchange,
+                    sec.primary_mic,
+                    sec.currency,
+                    if under.is_empty() { None } else { Some(under) },
+                    now,
+                ],
+            )?;
+        }
+        Ok(())
+    })
 }
 
-/// `upsert_securities`.
-pub fn upsert_securities(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
-    for raw in rows {
-        if !raw.is_object() {
-            continue;
-        }
-        let sid = field_s(raw, "id").trim().to_string();
-        if sid.is_empty() {
-            continue;
-        }
-        // the camelCase key wins only when it is present at all, even
-        // when empty
-        let under = match get(raw, "underlyingId") {
-            Some(v) => bagholder_model::value::s(Some(v)),
-            None => field_s(raw, "underlying_id"),
-        }
-        .trim()
-        .to_string();
-        let fetched = { let f = either(raw, "fetchedAt", "fetched_at"); if f.is_empty() { now.to_string() } else { f } };
-        conn.execute(
-            "INSERT INTO securities (id, symbol, name, primary_exchange, primary_mic, currency, underlying_id, fetched_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET symbol = excluded.symbol, name = excluded.name, \
-             primary_exchange = excluded.primary_exchange, primary_mic = excluded.primary_mic, \
-             currency = excluded.currency, underlying_id = excluded.underlying_id, fetched_at = excluded.fetched_at",
-            rusqlite::params![
-                sid,
-                field_s(raw, "symbol"),
-                field_s(raw, "name"),
-                either(raw, "primaryExchange", "primary_exchange"),
-                either(raw, "primaryMic", "primary_mic"),
-                field_s(raw, "currency"),
-                if under.is_empty() { None } else { Some(under) },
-                fetched,
-            ],
-        )?;
-    }
-    Ok(())
-}
-
-pub fn list_securities(conn: &Connection) -> Result<Vec<Value>> {
-    let mut stmt = conn.prepare("SELECT * FROM securities ORDER BY id")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        let uid: Option<String> = r.get("underlying_id")?;
-        out.push(json!({
-            "id": r.get::<_, String>("id")?,
-            "symbol": r.get::<_, Option<String>>("symbol")?.unwrap_or_default(),
-            "name": r.get::<_, Option<String>>("name")?.unwrap_or_default(),
-            "primaryExchange": r.get::<_, Option<String>>("primary_exchange")?.unwrap_or_default(),
-            "primaryMic": r.get::<_, Option<String>>("primary_mic")?.unwrap_or_default(),
-            "currency": r.get::<_, Option<String>>("currency")?.unwrap_or_default(),
-            "underlyingId": match uid { Some(u) if !u.is_empty() => json!(u), _ => Value::Null },
-        }));
-    }
-    Ok(out)
+pub fn list_securities(conn: &Connection) -> Result<Vec<Security>> {
+    crate::rows::securities(conn)
 }
 
 /// `missing_security_ids`: the ids the table does not hold, in the order
@@ -119,57 +93,127 @@ pub fn needs_security_id_backfill(conn: &Connection) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// `exposures_map`: every record keyed by what it is for -- a security
-/// id, or a share or fund key.
-pub fn exposures_map(conn: &Connection) -> Result<Map<String, Value>> {
-    let snapshot = crate::snapshot::snapshot(conn, false)?;
-    Ok(snapshot.get("exposures").and_then(|v| v.as_object()).cloned().unwrap_or_default())
+/// A raw entry validated: a grade outside A/B/C/F is no grade, and an entry
+/// left with no thesis, grade or tags is no entry at all.
+fn clean_journal_entry(e: &JournalEntry) -> Option<JournalEntry> {
+    let mut grade = e.grade.trim().to_uppercase();
+    if !matches!(grade.as_str(), "A" | "B" | "C" | "F") {
+        grade = String::new();
+    }
+    let mut tags: Vec<String> = Vec::new();
+    for t in &e.tags {
+        let s = t.trim().to_string();
+        if !s.is_empty() && !tags.contains(&s) {
+            tags.push(s);
+        }
+    }
+    if e.thesis.is_empty() && grade.is_empty() && tags.is_empty() {
+        return None;
+    }
+    Some(JournalEntry { thesis: e.thesis.clone(), tags, grade })
+}
+
+/// A raw journal, validated: a blank-trimmed key holds nothing, as does an
+/// invalid entry.
+fn clean_journal(raw: &BTreeMap<String, JournalEntry>) -> Journal {
+    let mut out = Journal::new();
+    for (key, val) in raw {
+        let kid = key.trim().to_string();
+        if kid.is_empty() {
+            continue;
+        }
+        if let Some(clean) = clean_journal_entry(val) {
+            out.insert(kid, clean);
+        }
+    }
+    out
+}
+
+/// The journal as the stored text holds it, read leniently and validated.
+pub fn journal(conn: &Connection) -> Result<Journal> {
+    let raw = crate::tables::get_meta(conn, crate::tables::JOURNAL_META, "")?;
+    if raw.is_empty() {
+        return Ok(Journal::new());
+    }
+    let parsed: BTreeMap<String, JournalEntry> = match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => bagholder_model::lenient::objmap(&v),
+        Err(_) => BTreeMap::new(),
+    };
+    Ok(clean_journal(&parsed))
+}
+
+/// Sorted, so the stored text is the same byte for byte whichever order the
+/// entries arrived in.
+fn write_journal(conn: &Connection, j: &Journal) -> Result<()> {
+    let sorted: BTreeMap<&String, &JournalEntry> = j.iter().collect();
+    let text = crate::tables::json_text(&serde_json::to_value(&sorted).unwrap_or(Value::Null));
+    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &text)
 }
 
 /// `save_journal`.
-pub fn save_journal(conn: &Connection, entries: Option<&Value>) -> Result<Map<String, Value>> {
-    let clean = crate::snapshot::clean_journal(entries.filter(|v| v.is_object()));
-    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(clean.clone())))?;
+pub fn save_journal(conn: &Connection, entries: &Journal) -> Result<Journal> {
+    let mut clean = Journal::new();
+    for (key, val) in entries {
+        let kid = key.trim().to_string();
+        if kid.is_empty() {
+            continue;
+        }
+        if let Some(c) = clean_journal_entry(val) {
+            clean.insert(kid, c);
+        }
+    }
+    write_journal(conn, &clean)?;
     Ok(clean)
 }
 
 /// `save_journal_entry`: merge one entry. An entry with no thesis, grade
 /// or tags deletes the key.
-pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&Value>) -> Result<Map<String, Value>> {
+pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&JournalEntry>) -> Result<Journal> {
     let kid = key.trim().to_string();
-    let mut current = crate::snapshot::journal(conn)?;
+    let mut current = journal(conn)?;
     if kid.is_empty() {
         return Ok(current);
     }
-    let one = entry.map(|e| crate::snapshot::clean_journal(Some(&json!({ kid.clone(): e }))));
-    match one.and_then(|m| m.get(&kid).cloned()) {
+    match entry.and_then(clean_journal_entry) {
         Some(clean) => { current.insert(kid, clean); }
-        None => {
-            // `Map::remove` under `preserve_order` is a swap-remove: it moves
-            // the last entry into the hole and the stored journal comes back
-            // in a different order every time a key is deleted. The map is
-            // rebuilt instead.
-            let mut kept = Map::new();
-            for (k, v) in current.iter() {
-                if *k != kid {
-                    kept.insert(k.clone(), v.clone());
-                }
-            }
-            current = kept;
-        }
+        None => { current.remove(&kid); }
     }
-    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(current.clone())))?;
+    write_journal(conn, &current)?;
     Ok(current)
 }
 
 /// `save_tiles`: the Markets tile row, in order. Saving it is what the
 /// tab's plus, cross and drag do.
-pub fn save_tiles(conn: &Connection, rows: &[Value]) -> Result<Value> {
-    let raw = crate::tables::json_text(&Value::Array(rows.to_vec()));
-    let clean = crate::snapshot::tiles_from(&raw);
-    let clean = if clean.is_null() { Value::Array(vec![]) } else { clean };
-    crate::tables::set_meta(conn, crate::snapshot::TILES_META, &crate::tables::json_text(&clean))?;
+pub fn save_tiles(conn: &Connection, rows: &[TileRef]) -> Result<Vec<TileRef>> {
+    let mut clean: Vec<TileRef> = Vec::new();
+    for r in rows {
+        let sym = r.symbol.trim().to_uppercase();
+        if sym.is_empty() {
+            continue;
+        }
+        clean.push(TileRef { symbol: sym, exchange: r.exchange.trim().to_uppercase() });
+    }
+    let text = crate::tables::json_text(&serde_json::to_value(&clean).unwrap_or(Value::Array(vec![])));
+    crate::tables::set_meta(conn, crate::rows::TILES_META, &text)?;
     Ok(clean)
+}
+
+/// Seconds from `now_unix` until the next pull window opens (the next weekday's
+/// pull time, local). What the sync loop sleeps until, instead of asking every half
+/// minute whether it is time yet. Zero when the zone is unknown.
+pub fn seconds_until_pull_window(now_unix: i64) -> i64 {
+    let (y, m, d, hh, mm) = match local_parts(now_unix) { Some(p) => p, None => return 0 };
+    let minute_now = (hh * 60 + mm) as i64;
+    let window = (ACTIVITY_PULL_HOUR * 60 + ACTIVITY_PULL_MINUTE) as i64;
+    let today = weekday_of(y, m, d) as i64; // 0 = Monday
+    for ahead in 0..8 {
+        let weekday = (today + ahead) % 7;
+        let minutes = ahead * 1440 + window - minute_now;
+        if weekday <= 4 && minutes > 0 {
+            return minutes * 60 - now_unix.rem_euclid(60);
+        }
+    }
+    0
 }
 
 /// `activity_pull_due`: due at 2:00 PM Mountain, Monday to Friday, after
@@ -237,29 +281,31 @@ fn weekday_of(y: i64, m: u32, d: u32) -> u32 {
 /// The journal and the downloaded market data are kept unless told otherwise.
 /// The Wealthsimple login is not this function's business.
 pub fn clear_synced_data(conn: &Connection, keep_journal: bool, keep_market: bool) -> Result<()> {
-    for table in ["activities", "accounts", "balances", "margin", "nav_history", "securities", "grouped_trades"] {
-        conn.execute(&format!("DELETE FROM {}", table), [])?;
-    }
-    let mut keys: Vec<String> = SYNC_META_KEYS.iter().map(|k| k.to_string()).collect();
-    keys.push("trade_groups".into());
-    keys.push("trade_notes".into());
-    if !keep_journal {
-        keys.push(crate::tables::JOURNAL_META.into());
-    }
-    for k in keys {
-        conn.execute("DELETE FROM meta WHERE key = ?", [k])?;
-    }
-    if !keep_market {
-        for table in [
-            "fx_rates", "benchmark_prices", "distributions", "distribution_fetches", "quotes",
-            "price_history", "history_fetches", "price_bars", "bar_fetches",
-        ] {
+    crate::atomically(conn, || {
+        for table in ["activities", "accounts", "balances", "margin", "nav_history", "securities", "grouped_trades"] {
             conn.execute(&format!("DELETE FROM {}", table), [])?;
         }
-        conn.execute("DELETE FROM meta WHERE key IN ('spy_by_date', 'market_attempt_at')", [])?;
-        for prefix in ["bars_miss:", "bars_source:", "coinbase_product:", "coingecko_id:", "tmx_form:", "yahoo_miss:"] {
-            conn.execute("DELETE FROM meta WHERE key LIKE ?", [format!("{}%", prefix)])?;
+        let mut keys: Vec<String> = SYNC_META_KEYS.iter().map(|k| k.to_string()).collect();
+        keys.push("trade_groups".into());
+        keys.push("trade_notes".into());
+        if !keep_journal {
+            keys.push(crate::tables::JOURNAL_META.into());
         }
-    }
-    Ok(())
+        for k in keys {
+            conn.execute("DELETE FROM meta WHERE key = ?", [k])?;
+        }
+        if !keep_market {
+            for table in [
+                "fx_rates", "benchmark_prices", "distributions", "distribution_fetches", "quotes",
+                "price_history", "history_fetches", "price_bars", "bar_fetches",
+            ] {
+                conn.execute(&format!("DELETE FROM {}", table), [])?;
+            }
+            conn.execute("DELETE FROM meta WHERE key IN ('spy_by_date', 'market_attempt_at')", [])?;
+            for prefix in ["bars_miss:", "bars_source:", "coinbase_product:", "coingecko_id:", "tmx_form:", "yahoo_miss:"] {
+                conn.execute("DELETE FROM meta WHERE key LIKE ?", [format!("{}%", prefix)])?;
+            }
+        }
+        Ok(())
+    })
 }

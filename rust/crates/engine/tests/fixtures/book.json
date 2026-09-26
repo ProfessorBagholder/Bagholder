@@ -1,0 +1,33 @@
+{
+  "name": "a book with something of every kind, for applying changes to",
+  "today": "2026-04-20",
+  "now": "2026-04-20T22:00:00Z",
+  "accounts": [{"id": "A", "kind": "margin"}, {"id": "B"}, {"id": "C", "kind": "crypto"}],
+  "instruments": [
+    {"id": "X", "symbol": "XXX"},
+    {"id": "U", "currency": "USD", "symbol": "UUU"},
+    {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+    {"id": "F", "symbol": "FUND"},
+    {"id": "BTC", "kind": "crypto"}
+  ],
+  "rates": {"USD": {"2026-01-02": "1.35", "2026-02-02": "1.36", "2026-03-02": "1.37", "2026-04-01": "1.38"}},
+  "covered": {"USD": [["2026-01-01", "2026-04-20"]]},
+  "published": ["USD"],
+  "declared": {"F": [{"ex": "2026-02-13", "amount": "0.10"}, {"ex": "2026-03-13", "amount": "0.10"}, {"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.11"}]},
+  "quotes": {"X": {"price": "12", "change": "0.5"}, "U": {"price": "11", "change": "-0.2"}, "BTC": {"price": "70000", "source": "crypto"}},
+  "closes": {"X": {"2026-04-17": "11.5"}, "F": {"2026-04-17": "10.2"}, "U": {"2026-04-17": "11.1"}},
+  "benchmarks": {"SP500": {"2025-12-31": "5000", "2026-04-17": "5200"}},
+  "brokers": {"A": {"cash": {"CAD": "1000"}, "held": {"X": "100"}, "net_value": {"2026-04-17": "3000"}, "net_deposits": {"2026-04-17": "2000"}, "now": "3050", "as_of": "2026-04-20T15:00:00Z"}},
+  "transactions": [
+    {"id": "d1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T14:00:00Z", "kind": "deposit", "cash": "5000"},
+    {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "150", "cash": "-1500"},
+    {"id": "t2", "account": "A", "day": "2026-02-05", "at": "2026-02-05T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-50", "cash": "600"},
+    {"id": "t3", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-900"},
+    {"id": "t4", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "C1", "qty": "-1", "cash": "150"},
+    {"id": "t5", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+    {"id": "v1", "account": "B", "day": "2026-02-20", "at": "2026-02-20T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "10"},
+    {"id": "v2", "account": "B", "day": "2026-03-20", "at": "2026-03-20T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "10"},
+    {"id": "k1", "account": "C", "day": "2026-01-15", "at": "2026-01-15T15:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "0.5"},
+    {"id": "k2", "account": "C", "day": "2026-02-15", "at": "2026-02-15T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "0.5", "cash": "-30000"}
+  ]
+}

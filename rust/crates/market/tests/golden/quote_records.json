@@ -1,0 +1,293 @@
+{
+  "tmx_full": {
+    "source": "tmx",
+    "stored": {
+      "price": 4.87,
+      "priceChange": -0.03,
+      "percentChange": -0.612,
+      "prevClose": 4.9,
+      "dividendAmount": 0.15,
+      "dividendFrequency": "Monthly",
+      "exDividendDate": "2026-09-30"
+    },
+    "beside": {
+      "name": "Reddy Fund",
+      "exchange": "Toronto Stock Exchange",
+      "currency": "CAD"
+    }
+  },
+  "tmx_text": {
+    "source": "tmx",
+    "stored": {
+      "price": 1.25,
+      "priceChange": null,
+      "percentChange": null,
+      "prevClose": 1.2,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "exchange": "TSX Venture Exchange"
+    }
+  },
+  "tmx_no_price": {
+    "source": "tmx",
+    "stored": {
+      "price": null,
+      "priceChange": null,
+      "percentChange": null,
+      "prevClose": null,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "name": "Halted",
+      "exchange": "CSE"
+    }
+  },
+  "tmx_empty": null,
+  "tmx_null": null,
+  "tmx_nothing": null,
+  "cboe_ca_live": {
+    "source": "cboe_ca",
+    "stored": {
+      "price": 12.5,
+      "priceChange": 0.5,
+      "percentChange": 4.1667,
+      "prevClose": 12.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "name": "Apple CDR",
+      "currency": "CAD"
+    }
+  },
+  "cboe_ca_closed": {
+    "source": "cboe_ca",
+    "stored": {
+      "price": 12.0,
+      "priceChange": 0.0,
+      "percentChange": null,
+      "prevClose": 12.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "CAD"
+    }
+  },
+  "cboe_ca_text": {
+    "source": "cboe_ca",
+    "stored": {
+      "price": 3.1,
+      "priceChange": 0.1,
+      "percentChange": 3.33,
+      "prevClose": null,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "CAD"
+    }
+  },
+  "cboe_ca_none": null,
+  "cboe_ca_bad": null,
+  "cboe_ca_empty": null,
+  "options_chain_codes": [
+    "AAPL260918C00200000",
+    "AAPL260918C00300000",
+    "AAPL260918P00050000",
+    "AAPL260918P00100000",
+    "AAPL260918P00150000"
+  ],
+  "option_AAPL260918C00200000": {
+    "source": "cboe_options",
+    "stored": {
+      "price": 5.2,
+      "priceChange": 0.40000000000000036,
+      "percentChange": 8.333333333333348,
+      "prevClose": 4.8,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "USD"
+    }
+  },
+  "option_AAPL260918P00150000": {
+    "source": "cboe_options",
+    "stored": {
+      "price": 0.15,
+      "priceChange": 0.04999999999999999,
+      "percentChange": 49.99999999999998,
+      "prevClose": 0.1,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "USD"
+    }
+  },
+  "option_AAPL260918P00100000": {
+    "source": "cboe_options",
+    "stored": {
+      "price": 0.05,
+      "priceChange": 0.0,
+      "percentChange": 0.0,
+      "prevClose": 0.05,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "USD"
+    }
+  },
+  "option_AAPL260918P00050000": null,
+  "option_AAPL260918C00300000": {
+    "source": "cboe_options",
+    "stored": {
+      "price": 1.1,
+      "priceChange": 1.1,
+      "percentChange": null,
+      "prevClose": 0.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "USD"
+    }
+  },
+  "option_MISSING": null,
+  "coinbase_ccy": {
+    "source": "coinbase",
+    "stored": {
+      "price": 64250.12,
+      "priceChange": null,
+      "percentChange": null,
+      "prevClose": null,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "CAD"
+    }
+  },
+  "coinbase_pair": {
+    "source": "coinbase",
+    "stored": {
+      "price": 3100.5,
+      "priceChange": null,
+      "percentChange": null,
+      "prevClose": null,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "USD"
+    }
+  },
+  "coinbase_zero": null,
+  "coinbase_none": null,
+  "coinbase_bad": null,
+  "coinbase_with_prev": {
+    "source": "coinbase",
+    "stored": {
+      "price": 110.0,
+      "priceChange": 10.0,
+      "percentChange": 10.0,
+      "prevClose": 100.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "currency": "CAD"
+    }
+  },
+  "yahoo_full": {
+    "source": "yahoo_quote",
+    "stored": {
+      "price": 190.5,
+      "priceChange": 2.5,
+      "percentChange": 1.3297872340425532,
+      "prevClose": 188.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "name": "Apple Inc.",
+      "exchange": "NMS",
+      "currency": "USD"
+    }
+  },
+  "yahoo_prev_only": {
+    "source": "yahoo_quote",
+    "stored": {
+      "price": 10.0,
+      "priceChange": 2.0,
+      "percentChange": 25.0,
+      "prevClose": 8.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {
+      "name": "Long Only"
+    }
+  },
+  "yahoo_prev_zero": {
+    "source": "yahoo_quote",
+    "stored": {
+      "price": 10.0,
+      "priceChange": null,
+      "percentChange": null,
+      "prevClose": 0.0,
+      "dividendAmount": null,
+      "dividendFrequency": "",
+      "exDividendDate": ""
+    },
+    "beside": {}
+  },
+  "yahoo_no_price": null,
+  "yahoo_not_object": null,
+  "yahoo_empty": null,
+  "kept_dividend": {
+    "source": "yahoo_quote",
+    "stored": {
+      "price": 5.0,
+      "priceChange": 0.1299999999999999,
+      "percentChange": 2.6694045174537964,
+      "prevClose": 4.87,
+      "dividendAmount": 0.15,
+      "dividendFrequency": "Monthly",
+      "exDividendDate": "2026-09-30"
+    },
+    "beside": {}
+  },
+  "replaced_dividend": {
+    "source": "tmx",
+    "stored": {
+      "price": 5.0,
+      "priceChange": null,
+      "percentChange": null,
+      "prevClose": null,
+      "dividendAmount": 0.2,
+      "dividendFrequency": "Quarterly",
+      "exDividendDate": "2026-12-30"
+    },
+    "beside": {}
+  }
+}

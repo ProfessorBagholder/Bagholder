@@ -1,0 +1,1 @@
+{"data":{"internalTransfer":{"amount":null,"annotation":null,"currency":"CAD","fxAdjustedAmount":null,"fxFeeRate":null,"fxRate":null,"id":"anon-internal-412","isCancellable":false,"reason":null,"reportedFxAdjustedAmount":null,"source_account":{"id":"anon-personal-24","unifiedAccountType":"MANAGED_GROUP_RRSP"},"status":"completed","tax_detail":null,"transferType":"full_in_kind"}}}

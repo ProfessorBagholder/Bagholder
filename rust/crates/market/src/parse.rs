@@ -4,10 +4,30 @@
 //! with something unreadable yields nothing rather than raising, because one
 //! bad response must not empty a stored series.
 
+use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
+use bagholder_core::Dec;
+use bagholder_model::lenient;
 use bagholder_model::value::{get, num};
+use bagholder_store::bars::{DayBar, Ohlcv, TimeBar};
+use bagholder_store::market::QuoteRecord;
+
+use crate::quotes::SourceQuote;
+
+/// A number that is absent rather than zero, a numeric string read as
+/// leniently as a number.
+fn opt_num(v: Option<&Value>) -> Option<f64> {
+    match v {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) if s.is_empty() => None,
+        Some(Value::String(s)) => bagholder_model::textrules::parse_float(s),
+        Some(Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+}
 
 pub type Series = BTreeMap<String, f64>;
 
@@ -86,29 +106,29 @@ pub fn parse_stooq_csv(text: &str) -> Series {
     out
 }
 
-fn bars_from(rows: &[Value], date_key: &str) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
+/// Rows into daily bars, oldest first. A row without a positive close was
+/// never a bar -- it could never be stored -- and is dropped here rather
+/// than carried further.
+fn bars_from(rows: &[Value], date_key: &str) -> Vec<DayBar> {
+    let mut out: Vec<DayBar> = Vec::new();
     for r in rows {
         if !r.is_object() {
             continue;
         }
         let d: String = bagholder_model::value::field_s(r, date_key).chars().take(10).collect();
+        let close = match opt_num(r.get("close")) { Some(c) if c > 0.0 => c, _ => continue };
         if d.chars().count() == 10 {
-            out.push(json!({
-                "date": d,
-                "open": r.get("open").cloned().unwrap_or(Value::Null),
-                "high": r.get("high").cloned().unwrap_or(Value::Null),
-                "low": r.get("low").cloned().unwrap_or(Value::Null),
-                "close": r.get("close").cloned().unwrap_or(Value::Null),
-                "volume": r.get("volume").cloned().unwrap_or(Value::Null),
-            }));
+            out.push(DayBar {
+                date: d,
+                px: Ohlcv { open: opt_num(r.get("open")), high: opt_num(r.get("high")), low: opt_num(r.get("low")), close, volume: opt_num(r.get("volume")) },
+            });
         }
     }
-    out.sort_by(|a, b| bagholder_model::value::field_s(a, "date").cmp(&bagholder_model::value::field_s(b, "date")));
+    out.sort_by(|a, b| a.date.cmp(&b.date));
     out
 }
 
-pub fn parse_tmx_history(data: &Value) -> Vec<Value> {
+pub fn parse_tmx_history(data: &Value) -> Vec<DayBar> {
     let rows = data
         .get("data")
         .and_then(|d| d.get("getTimeSeriesData"))
@@ -118,7 +138,7 @@ pub fn parse_tmx_history(data: &Value) -> Vec<Value> {
     bars_from(&rows, "dateTime")
 }
 
-pub fn parse_cboe_ca_history(text: &str) -> Vec<Value> {
+pub fn parse_cboe_ca_history(text: &str) -> Vec<DayBar> {
     let data: Value = serde_json::from_str(text).unwrap_or_else(|_| json!({}));
     let rows = data.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     bars_from(&rows, "date")
@@ -208,20 +228,34 @@ pub fn parse_coinbase(text: &str) -> Option<f64> {
     if v > 0.0 { Some(v) } else { None }
 }
 
+/// A source's answer under `data`, the envelope Coinbase and Cboe share.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Envelope<T: Default> {
+    data: T,
+}
+
+/// Read `text` as `T`; an empty body reads as an empty object.
+fn read<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct CoinbaseSpot {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    amount: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    currency: String,
+}
+
 /// A Coinbase spot price, with the currency the pair names when the feed
 /// does not say.
-pub fn parse_coinbase_rec(text: &str, pair: &str) -> Option<Value> {
-    let data: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
-    let d = data.get("data").cloned().unwrap_or(json!({}));
-    let px = opt(get(&d, "amount"))?;
-    if px <= 0.0 {
-        return None;
-    }
-    let ccy = {
-        let c = bagholder_model::value::field_s(&d, "currency");
-        if c.is_empty() { pair.rsplit('-').next().unwrap_or("").to_string() } else { c }
-    };
-    Some(json!({"price": px, "currency": ccy}))
+pub fn parse_coinbase_rec(text: &str, pair: &str) -> Option<SourceQuote> {
+    let d = read::<Envelope<CoinbaseSpot>>(text)?.data;
+    let px = d.amount.filter(|p| *p > 0.0)?;
+    let currency = if d.currency.is_empty() { pair.rsplit('-').next().unwrap_or("").to_string() } else { d.currency };
+    Some(SourceQuote { quote: QuoteRecord { price: Some(px), ..QuoteRecord::default() }, currency, ..SourceQuote::default() })
 }
 
 /// A number that is absent rather than zero.
@@ -236,83 +270,116 @@ pub fn opt(v: Option<&Value>) -> Option<f64> {
     }
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct CboeCaQuote {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    last: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    prev_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    change: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    change_pct: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    company_name: String,
+}
+
 /// Outside a session `last` is 0, so the
 /// previous close stands in.
-pub fn parse_cboe_ca_quote(text: &str) -> Option<Value> {
-    let data: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
-    let d = data.get("data").cloned().unwrap_or(json!({}));
-    let last = opt(get(&d, "last"));
-    let prev = opt(get(&d, "prev_close"));
-    let px = match last { Some(l) if l > 0.0 => Some(l), _ => prev };
-    let px = px?;
-    if px <= 0.0 {
-        return None;
-    }
-    Some(json!({
-        "price": px,
-        "priceChange": opt(get(&d, "change")),
-        "percentChange": opt(get(&d, "change_pct")),
-        "prevClose": prev,
-        "currency": "CAD",
-        "name": bagholder_model::value::field_s(&d, "company_name"),
-    }))
+pub fn parse_cboe_ca_quote(text: &str) -> Option<SourceQuote> {
+    let d = read::<Envelope<CboeCaQuote>>(text)?.data;
+    let px = match d.last { Some(l) if l > 0.0 => Some(l), _ => d.prev_close };
+    let px = px.filter(|p| *p > 0.0)?;
+    Some(SourceQuote {
+        quote: QuoteRecord {
+            price: Some(px),
+            price_change: d.change,
+            percent_change: d.change_pct,
+            prev_close: d.prev_close,
+            ..QuoteRecord::default()
+        },
+        currency: "CAD".into(),
+        name: d.company_name,
+        exchange: String::new(),
+    })
+}
+
+/// One contract's row in Cboe's delayed chain.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct OptionRow {
+    #[serde(deserialize_with = "lenient::text")]
+    pub option: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub bid: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub ask: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub last_trade_price: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub prev_day_close: Option<f64>,
+}
+
+/// One underlying's delayed chain, by OCC code.
+pub type OptionChain = HashMap<String, OptionRow>;
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct CboeChain {
+    options: Value,
 }
 
 /// OCC code -> the row for one underlying's
 /// delayed chain.
-pub fn parse_cboe_options(text: &str) -> serde_json::Map<String, Value> {
-    let mut out = serde_json::Map::new();
-    let data: Value = match serde_json::from_str(if text.is_empty() { "{}" } else { text }) {
-        Ok(v) => v,
-        Err(_) => return out,
-    };
-    let d = data.get("data").cloned().unwrap_or(json!({}));
-    if let Some(options) = d.get("options").and_then(|v| v.as_array()) {
-        for o in options {
-            if o.is_object() {
-                out.insert(bagholder_model::value::field_s(o, "option"), o.clone());
-            }
-        }
-    }
-    out
+pub fn parse_cboe_options(text: &str) -> OptionChain {
+    let Some(d) = read::<Envelope<CboeChain>>(text) else { return OptionChain::new() };
+    lenient::rows::<OptionRow>(&d.data.options).into_iter().map(|r| (r.option.clone(), r)).collect()
 }
 
 /// One contract's price per share -- the bid/ask
 /// midpoint while both are quoted, else the last trade, else the previous
 /// close.
-pub fn option_mark(row: &Value) -> Option<Value> {
-    if !row.is_object() {
-        return None;
-    }
-    let bid = num(get(row, "bid"), 0.0);
-    let ask = num(get(row, "ask"), 0.0);
-    let prev = opt(get(row, "prev_day_close"));
-    let px = if bid > 0.0 && ask > 0.0 {
-        (bid + ask) / 2.0
-    } else {
+pub fn option_mark(row: &OptionRow) -> Option<SourceQuote> {
+    let prev = row.prev_day_close;
+    // the midpoint rule is the sources' (`bagholder_sources::adapters::
+    // cboe_options::midpoint`), exact in decimal; this reader keeps its prices
+    // in floats until stage 5, so each side crosses as the decimal its shortest
+    // form spells, and the midpoint comes back the same way
+    let side = |v: Option<f64>| v.filter(|x| x.is_finite()).and_then(|x| Dec::parse(&format!("{x}")).ok());
+    let mid = side(row.bid)
+        .zip(side(row.ask))
+        .and_then(|(bid, ask)| bagholder_sources::adapters::cboe_options::midpoint(bid, ask))
+        .and_then(|m| m.to_text().parse::<f64>().ok());
+    let px = match mid {
+        Some(m) => m,
         // a zero last trade falls through as a missing one does
-        match opt(get(row, "last_trade_price")) {
+        None => match row.last_trade_price {
             Some(v) if v != 0.0 => v,
             _ => prev.unwrap_or(0.0),
-        }
+        },
     };
     if px <= 0.0 {
         return None;
     }
-    Some(json!({
-        "price": px,
-        "prevClose": prev,
-        "priceChange": prev.map(|p| px - p),
-        "percentChange": prev.filter(|p| *p != 0.0).map(|p| (px / p - 1.0) * 100.0),
-        "currency": "USD",
-    }))
+    Some(SourceQuote {
+        quote: QuoteRecord {
+            price: Some(px),
+            prev_close: prev,
+            price_change: prev.map(|p| px - p),
+            percent_change: prev.filter(|p| *p != 0.0).map(|p| (px / p - 1.0) * 100.0),
+            ..QuoteRecord::default()
+        },
+        currency: "USD".into(),
+        ..SourceQuote::default()
+    })
 }
 
 /// `[time, low, high, open, close, volume]`
 /// rows, oldest first.
-pub fn parse_coinbase_candles(text: &str) -> Vec<Value> {
+pub fn parse_coinbase_candles(text: &str) -> Vec<TimeBar> {
     let rows: Vec<Value> = serde_json::from_str(if text.is_empty() { "[]" } else { text }).unwrap_or_default();
-    let mut out: BTreeMap<i64, Value> = BTreeMap::new();
+    let mut out: BTreeMap<i64, TimeBar> = BTreeMap::new();
     for r in rows {
         let a = match r.as_array() { Some(a) if a.len() >= 6 => a.clone(), _ => continue };
         let t = match a[0].as_f64() { Some(t) => t as i64, None => continue };
@@ -320,7 +387,7 @@ pub fn parse_coinbase_candles(text: &str) -> Vec<Value> {
         let v = match vals { Some(v) => v, None => continue };
         let (lo, hi, op, cl, vol) = (v[0], v[1], v[2], v[3], v[4]);
         if cl > 0.0 {
-            out.insert(t, json!({"time": t, "open": op, "high": hi, "low": lo, "close": cl, "volume": vol}));
+            out.insert(t, TimeBar { time: t, px: Ohlcv { open: Some(op), high: Some(hi), low: Some(lo), close: cl, volume: Some(vol) } });
         }
     }
     out.into_values().collect()

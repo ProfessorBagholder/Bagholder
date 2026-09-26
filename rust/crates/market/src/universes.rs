@@ -6,11 +6,13 @@
 //! companies and the hundred largest foreign companies listed in the US are
 //! taken.
 
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
-use crate::http::{get_text, post_json};
+use crate::http::{describe_failure, get_text, post_json};
 use crate::news::{nasdaq_headers, pace, tmx_headers};
-use bagholder_model::value::{field_s, get};
+use bagholder_model::input::UniverseRow;
+use bagholder_model::lenient;
 
 pub const CANADA_INDEX: &str = "^TX60";
 pub const TOP: usize = 100;
@@ -24,13 +26,13 @@ pub const KEYS: [&str; 3] = ["ca", "us", "intl"];
 
 /// A screener field is written for a page -- `$1.23`,
 /// `-0.45%`, `1,234` -- and `N/A` where there is no figure.
-fn n(v: Option<&Value>) -> Option<f64> {
+fn figure(v: &Value) -> Option<f64> {
     let raw = match v {
-        None | Some(Value::Null) => return None,
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(x)) => return x.as_f64(),
-        Some(Value::Bool(b)) => (if *b { "True" } else { "False" }).to_string(),
-        Some(other) => other.to_string(),
+        Value::Null => return None,
+        Value::String(s) => s.clone(),
+        Value::Number(x) => return x.as_f64(),
+        Value::Bool(b) => (if *b { "True" } else { "False" }).to_string(),
+        other => other.to_string(),
     };
     let s: String = raw.replace('$', "").replace('%', "").replace(',', "").trim().to_string();
     if s.is_empty() || s == "N/A" || s == "NA" || s == "None" {
@@ -39,23 +41,100 @@ fn n(v: Option<&Value>) -> Option<f64> {
     s.parse::<f64>().ok()
 }
 
-fn n_or(v: Option<&Value>, default: f64) -> f64 {
-    n(v).unwrap_or(default)
+fn maybe_figure<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    Ok(figure(&Value::deserialize(d)?))
 }
 
-/// No figure and a zero figure are the same thing here,
-/// and a negative zero is a zero.
+/// No figure and a zero figure are the same thing here, and a negative zero is
+/// a zero.
+fn figure_or_zero<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    Ok(or_zero(figure(&Value::deserialize(d)?).unwrap_or(0.0)))
+}
+
 fn or_zero(v: f64) -> f64 {
     if v == 0.0 { 0.0 } else { v }
 }
 
-/// A number written back into JSON: absent where there is
-/// none.
-fn maybe(v: Option<f64>) -> Value {
-    match v {
-        Some(x) => json!(x),
-        None => Value::Null,
-    }
+/// One of Nasdaq's screener rows as it answers.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ScreenerSource {
+    #[serde(deserialize_with = "lenient::text")]
+    symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    name: String,
+    #[serde(deserialize_with = "maybe_figure")]
+    lastsale: Option<f64>,
+    #[serde(deserialize_with = "maybe_figure")]
+    pctchange: Option<f64>,
+    #[serde(rename = "marketCap", deserialize_with = "figure_or_zero")]
+    market_cap: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    sector: String,
+    #[serde(deserialize_with = "lenient::text")]
+    country: String,
+}
+
+/// A US listing as the screener gives it, its sector folded into the app's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenerRow {
+    pub symbol: String,
+    pub name: String,
+    pub last: Option<f64>,
+    pub percent_change: Option<f64>,
+    pub cap: f64,
+    pub sector: String,
+    pub country: String,
+}
+
+/// One of an index's constituents as TMX answers.
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ConstituentSource {
+    #[serde(deserialize_with = "lenient::text")]
+    symbol: String,
+    #[serde(deserialize_with = "figure_or_zero")]
+    quoted_market_value: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    long_name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    short_name: String,
+    #[serde(deserialize_with = "figure_or_zero")]
+    weight: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    exchange: String,
+}
+
+/// One of the index's constituents: its weight in the index and its quoted
+/// market value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Constituent {
+    pub symbol: String,
+    pub name: String,
+    pub weight: f64,
+    pub cap: f64,
+    pub exchange: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct TileQuoteSource {
+    #[serde(deserialize_with = "lenient::text")]
+    name: String,
+    #[serde(deserialize_with = "maybe_figure")]
+    percent_change: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    sector: String,
+}
+
+/// What a constituent's own quote adds to its tile.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TileQuote {
+    pub percent_change: Option<f64>,
+    pub sector: String,
+    pub name: String,
 }
 
 pub fn sector_of(name: &str) -> String {
@@ -63,176 +142,183 @@ pub fn sector_of(name: &str) -> String {
     if s.is_empty() { "Not classified".into() } else { s }
 }
 
-/// Nasdaq's screener rows into
-/// {symbol, name, last, percentChange, cap, sector, country}.
-pub fn parse_screener(data: &Value) -> Vec<Value> {
-    let rows = data
-        .get("data")
-        .and_then(|d| d.get("rows"))
-        .and_then(|r| r.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut out = Vec::new();
-    for r in rows {
-        let symbol = field_s(&r, "symbol");
-        if !r.is_object() || symbol.is_empty() {
-            continue;
-        }
-        // `cap or 0.0`: a blank market cap and a zero one are the same thing here
-        let cap = or_zero(n_or(get(&r, "marketCap"), 0.0));
-        out.push(json!({
-            "symbol": symbol.trim(),
-            "name": field_s(&r, "name").trim(),
-            "last": maybe(n(get(&r, "lastsale"))),
-            "percentChange": maybe(n(get(&r, "pctchange"))),
-            "cap": cap,
-            "sector": sector_of(&field_s(&r, "sector")),
-            "country": field_s(&r, "country").trim(),
-        }));
-    }
-    out
-}
-
-fn tile(r: &Value) -> Value {
-    json!({
-        "symbol": field_s(r, "symbol"),
-        "name": field_s(r, "name"),
-        "value": get(r, "cap").cloned().unwrap_or(Value::Null),
-        "percentChange": get(r, "percentChange").cloned().unwrap_or(Value::Null),
-        "sector": field_s(r, "sector"),
-        "country": field_s(r, "country"),
-    })
+/// Nasdaq's screener rows, each with a symbol.
+pub fn parse_screener(data: &Value) -> Vec<ScreenerRow> {
+    let rows = data.get("data").and_then(|d| d.get("rows")).unwrap_or(&Value::Null);
+    lenient::rows::<ScreenerSource>(rows)
+        .into_iter()
+        .filter(|r| !r.symbol.is_empty())
+        .map(|r| ScreenerRow {
+            symbol: r.symbol.trim().to_string(),
+            name: r.name.trim().to_string(),
+            last: r.lastsale,
+            percent_change: r.pctchange,
+            cap: r.market_cap,
+            sector: sector_of(&r.sector),
+            country: r.country.trim().to_string(),
+        })
+        .collect()
 }
 
 /// The largest by market cap, tiles sized by market cap. The sort is
 /// stable, so equal caps keep the screener's own order.
-fn largest(rows: &[Value], take: usize, keep: impl Fn(&str) -> bool) -> Vec<Value> {
-    let mut picked: Vec<&Value> = rows
-        .iter()
-        .filter(|r| keep(&field_s(r, "country")) && n_or(get(r, "cap"), 0.0) > 0.0)
-        .collect();
-    picked.sort_by(|a, b| {
-        n_or(get(b, "cap"), 0.0).partial_cmp(&n_or(get(a, "cap"), 0.0)).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    picked.into_iter().take(take).map(tile).collect()
+fn largest(rows: &[ScreenerRow], take: usize, keep: impl Fn(&str) -> bool) -> Vec<UniverseRow> {
+    let mut picked: Vec<&ScreenerRow> = rows.iter().filter(|r| keep(&r.country) && r.cap > 0.0).collect();
+    picked.sort_by(|a, b| b.cap.partial_cmp(&a.cap).unwrap_or(std::cmp::Ordering::Equal));
+    picked
+        .into_iter()
+        .take(take)
+        .map(|r| UniverseRow {
+            symbol: r.symbol.clone(),
+            name: r.name.clone(),
+            value: r.cap,
+            percent_change: r.percent_change,
+            sector: r.sector.clone(),
+            country: r.country.clone(),
+        })
+        .collect()
 }
 
-pub fn us_rows(rows: &[Value], take: usize) -> Vec<Value> {
+pub fn us_rows(rows: &[ScreenerRow], take: usize) -> Vec<UniverseRow> {
     largest(rows, take, |c| c == "United States")
 }
 
 /// The largest companies listed in the US from outside
 /// the US and Canada.
-pub fn intl_rows(rows: &[Value], take: usize) -> Vec<Value> {
+pub fn intl_rows(rows: &[ScreenerRow], take: usize) -> Vec<UniverseRow> {
     largest(rows, take, |c| c != "United States" && c != "Canada" && !c.is_empty())
 }
 
-pub fn parse_constituents(data: &Value) -> Vec<Value> {
-    let rows = data
-        .get("data")
-        .and_then(|d| d.get("constituents"))
-        .and_then(|r| r.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut out = Vec::new();
-    for c in rows {
-        let symbol = field_s(&c, "symbol");
-        if !c.is_object() || symbol.is_empty() {
-            continue;
-        }
-        let long = field_s(&c, "longName");
-        let name = if long.is_empty() { field_s(&c, "shortName") } else { long };
-        out.push(json!({
-            "symbol": symbol.trim(),
-            "name": name.trim(),
-            "weight": or_zero(n_or(get(&c, "weight"), 0.0)),
-            "cap": or_zero(n_or(get(&c, "quotedMarketValue"), 0.0)),
-            "exchange": field_s(&c, "exchange").trim(),
-        }));
-    }
-    out
+pub fn parse_constituents(data: &Value) -> Vec<Constituent> {
+    let rows = data.get("data").and_then(|d| d.get("constituents")).unwrap_or(&Value::Null);
+    lenient::rows::<ConstituentSource>(rows)
+        .into_iter()
+        .filter(|c| !c.symbol.is_empty())
+        .map(|c| Constituent {
+            symbol: c.symbol.trim().to_string(),
+            name: if c.long_name.is_empty() { c.short_name } else { c.long_name }.trim().to_string(),
+            weight: c.weight,
+            cap: c.quoted_market_value,
+            exchange: c.exchange.trim().to_string(),
+        })
+        .collect()
 }
 
-pub fn parse_tile_quote(data: &Value) -> Option<Value> {
+pub fn parse_tile_quote(data: &Value) -> Option<TileQuote> {
     let q = data.get("data")?.get("getQuoteBySymbol")?;
-    if !q.is_object() || q.as_object()?.is_empty() {
+    if q.as_object()?.is_empty() {
         return None;
     }
-    Some(json!({
-        "percentChange": maybe(n(get(q, "percentChange"))),
-        "sector": sector_of(&field_s(q, "sector")),
-        "name": field_s(q, "name").trim(),
-    }))
+    let q = TileQuoteSource::deserialize(q).ok()?;
+    Some(TileQuote { percent_change: q.percent_change, sector: sector_of(&q.sector), name: q.name.trim().to_string() })
 }
 
-pub fn fetch_screener() -> Option<Vec<Value>> {
+/// A constituent's tile: sized by its index weight, or by its quoted market
+/// value where the index publishes no weight for it; its day's change and
+/// sector from its own quote where that answered.
+pub fn canada_tile(c: &Constituent, q: Option<&TileQuote>) -> UniverseRow {
+    UniverseRow {
+        symbol: c.symbol.clone(),
+        name: c.name.clone(),
+        value: or_zero(if c.weight == 0.0 { c.cap } else { c.weight }),
+        percent_change: q.and_then(|q| q.percent_change),
+        sector: q.map(|q| q.sector.clone()).unwrap_or_else(|| "Not classified".into()),
+        country: "Canada".into(),
+    }
+}
+
+/// Where the universes come from: Nasdaq's screener carries the US and
+/// International in one answer, TMX Money the S&P/TSX 60. Each is read on its
+/// own, when a universe it carries is wanted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Source {
+    Screener,
+    Tmx,
+}
+
+impl Source {
+    /// The source that carries the universe `key`; `None` for a key that is not a
+    /// market universe.
+    pub fn of(key: &str) -> Option<Source> {
+        match key {
+            "us" | "intl" => Some(Source::Screener),
+            "ca" => Some(Source::Tmx),
+            _ => None,
+        }
+    }
+
+    /// The universes one read of this source replaces.
+    pub fn keys(self) -> &'static [&'static str] {
+        match self {
+            Source::Screener => &["us", "intl"],
+            Source::Tmx => &["ca"],
+        }
+    }
+
+    /// The source's name, as a failure names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Screener => "Nasdaq's screener",
+            Source::Tmx => "TMX Money",
+        }
+    }
+}
+
+/// Every US listing from the screener, or what failed: an answer with no
+/// listings in it is a failure, never an empty market.
+pub fn fetch_screener() -> Result<Vec<ScreenerRow>, String> {
+    let label = Source::Screener.label();
     pace("api.nasdaq.com", 0.6);
-    let text = get_text(SCREENER_URL, &nasdaq_headers()).ok()?;
-    let data: Value = serde_json::from_str(&text).ok()?;
-    Some(parse_screener(&data))
+    let text = get_text(SCREENER_URL, &nasdaq_headers()).map_err(|e| format!("{label} {}.", describe_failure(&e)))?;
+    let data: Value = serde_json::from_str(&text).map_err(|_| format!("{label} answered with something other than its listings."))?;
+    let rows = parse_screener(&data);
+    if rows.is_empty() {
+        return Err(format!("{label} answered with no listings."));
+    }
+    Ok(rows)
 }
 
 /// The S&P/TSX 60, its constituents by index weight,
-/// each quoted for the day's change and its sector.
-pub fn fetch_canada() -> Option<Vec<Value>> {
+/// each quoted for the day's change and its sector, or what failed.
+pub fn fetch_canada() -> Result<Vec<UniverseRow>, String> {
+    let label = Source::Tmx.label();
     pace("app-money.tmx.com", 0.6);
     let payload = json!({
         "operationName": "getIndexConstituents",
         "variables": {"symbol": CANADA_INDEX},
         "query": TMX_CONSTITUENTS_QUERY,
     });
-    let data = post_json(crate::tmx::TMX_URL, &payload, &tmx_headers()).ok()?;
-    let cons = parse_constituents(&data);
+    let data = post_json(crate::tmx::TMX_URL, &payload, &tmx_headers()).map_err(|e| format!("{label} {}.", describe_failure(&e)))?;
+    let constituents = parse_constituents(&data);
+    if constituents.is_empty() {
+        return Err(format!("{label} answered with no constituents of the S&P/TSX 60."));
+    }
     let mut out = Vec::new();
-    for c in cons {
-        let symbol = field_s(&c, "symbol");
+    for c in constituents {
         pace("app-money.tmx.com", 0.6);
         let q = post_json(
             crate::tmx::TMX_URL,
             &json!({
                 "operationName": "getQuoteBySymbol",
-                "variables": {"symbol": symbol, "locale": "en"},
+                "variables": {"symbol": c.symbol, "locale": "en"},
                 "query": TMX_TILE_QUERY,
             }),
             &tmx_headers(),
         )
         .ok()
         .and_then(|d| parse_tile_quote(&d));
-        // the index weight sizes the tile; its quoted market value where the
-        // index publishes no weight for it
-        let weight = n_or(get(&c, "weight"), 0.0);
-        let value = if weight == 0.0 { n_or(get(&c, "cap"), 0.0) } else { weight };
-        let value = or_zero(value);
-        out.push(json!({
-            "symbol": symbol,
-            "name": field_s(&c, "name"),
-            "value": value,
-            "percentChange": q.as_ref().map(|q| get(q, "percentChange").cloned().unwrap_or(Value::Null)).unwrap_or(Value::Null),
-            "sector": q.as_ref().map(|q| field_s(q, "sector")).unwrap_or_else(|| "Not classified".into()),
-            "country": "Canada",
-        }));
+        out.push(canada_tile(&c, q.as_ref()));
     }
-    Some(out)
+    Ok(out)
 }
 
-/// Read every universe; each answer replaces its rows.
-/// Returns the keys that answered.
-pub fn refresh(conn: &rusqlite::Connection, now: &str) -> Vec<String> {
-    let mut done: Vec<String> = Vec::new();
-    if let Some(rows) = fetch_screener() {
-        let us = us_rows(&rows, TOP);
-        let intl = intl_rows(&rows, TOP);
-        if bagholder_store::feeds::replace_universe(conn, "us", &us, now).is_ok()
-            && bagholder_store::feeds::replace_universe(conn, "intl", &intl, now).is_ok()
-        {
-            done.push("us".into());
-            done.push("intl".into());
+/// Read one source: the rows of each universe it carries, by key, or what failed.
+pub fn read(source: Source) -> Result<Vec<(&'static str, Vec<UniverseRow>)>, String> {
+    match source {
+        Source::Screener => {
+            let rows = fetch_screener()?;
+            Ok(vec![("us", us_rows(&rows, TOP)), ("intl", intl_rows(&rows, TOP))])
         }
+        Source::Tmx => Ok(vec![("ca", fetch_canada()?)]),
     }
-    if let Some(ca) = fetch_canada() {
-        if !ca.is_empty() && bagholder_store::feeds::replace_universe(conn, "ca", &ca, now).is_ok() {
-            done.push("ca".into());
-        }
-    }
-    done
 }

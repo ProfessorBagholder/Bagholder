@@ -15,9 +15,13 @@
 
 use bagholder_model::cases::round_half_even;
 use bagholder_model::dates::{fmt, from_days, parse_iso, to_days};
+use bagholder_model::input::JournalEntry;
+use bagholder_model::securities::Security;
+use bagholder_store::activities::ActivityRow;
+use bagholder_store::broker::{Account, Balance, Margin, NavPoint};
 use rusqlite::Connection;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -71,7 +75,6 @@ impl N {
     fn mul(self, o: N) -> N { match (self, o) { (N::I(a), N::I(b)) => N::I(a * b), _ => N::F(self.f() * o.f()) } }
     fn neg(self) -> N { match self { N::I(i) => N::I(-i), N::F(f) => N::F(-f) } }
     fn round2(self) -> N { match self { N::I(i) => N::I(i), N::F(f) => N::F(round_half_even(f, 2)) } }
-    fn json(self) -> Value { match self { N::I(i) => json!(i), N::F(f) => json!(f) } }
 }
 fn i(v: i64) -> N { N::I(v) }
 fn f(v: f64) -> N { N::F(v) }
@@ -158,9 +161,9 @@ fn account(nick: &str) -> (&'static str, &'static str, &'static str, &'static st
 #[derive(Default)]
 struct Book {
     n: usize,
-    acts: Vec<Value>,
+    acts: Vec<ActivityRow>,
     option_ids: Vec<(String, String)>,
-    journal: Vec<(String, Value)>,
+    journal: Vec<(String, JournalEntry)>,
 }
 
 impl Book {
@@ -168,17 +171,6 @@ impl Book {
         self.n += 1;
         let id = format!("demo-{:04}", self.n);
         let (_, aid, _, _) = account(acct);
-        let mut base = json!({
-            "id": id, "canonicalId": id,
-            "occurredAt": format!("{}T15:30:00.000000-04:00", day),
-            "transactionDate": day, "accountId": aid, "fifoId": aid, "accountType": acct,
-            "description": "", "direction": "", "symbol": symbol,
-            "name": symbol.split(' ').next().unwrap_or(""),
-            "currency": "CAD", "aftType": "", "counterSymbol": "",
-            "securityId": if symbol.is_empty() { String::new() } else { sec_id(symbol) },
-            "quantity": qty.json(), "unitPrice": px.json(), "commission": 0.0,
-            "netCashAmount": cash.round2().json(),
-        });
         let (category, at, sub, raw, dir) = match kind {
             "buy" => ("trade", "Trade", "BUY", "DIY_BUY", "debit"),
             "sell" => ("trade", "Trade", "SELL", "DIY_SELL", "credit"),
@@ -194,13 +186,6 @@ impl Book {
             "charge" => ("other", "INTEREST_CHARGE", "MARGIN_INTEREST", "INTEREST_CHARGE", "debit"),
             _ => unreachable!(),
         };
-        let o = base.as_object_mut().unwrap();
-        o.insert("category".into(), json!(category));
-        o.insert("activityType".into(), json!(at));
-        o.insert("activitySubType".into(), json!(sub));
-        o.insert("rawType".into(), json!(raw));
-        o.insert("direction".into(), json!(dir));
-        if kind == "dep" { o.insert("aftType".into(), json!("misc_payments")); }
         let description = match kind {
             "div" => format!("Dividend: {}", symbol),
             "dep" => "Deposit".to_string(),
@@ -209,9 +194,30 @@ impl Book {
             "reward" => format!("CRYPTO_STAKING_REWARD: {}", symbol),
             _ => format!("{}: {}", at, symbol),
         };
-        o.insert("description".into(), json!(description));
-        o.insert("currency".into(), json!(currency));
-        self.acts.push(base);
+        self.acts.push(ActivityRow {
+            id: id.clone(),
+            canonical_id: Some(id.clone()),
+            occurred_at: format!("{}T15:30:00.000000-04:00", day),
+            transaction_date: day.to_string(),
+            account_id: aid.to_string(),
+            fifo_id: aid.to_string(),
+            account_type: acct.to_string(),
+            direction: dir.to_string(),
+            symbol: symbol.to_string(),
+            name: symbol.split(' ').next().unwrap_or("").to_string(),
+            currency: currency.to_string(),
+            security_id: if symbol.is_empty() { None } else { Some(sec_id(symbol)) },
+            quantity: qty.f(),
+            unit_price: px.f(),
+            net_cash_amount: cash.round2().f(),
+            category: category.to_string(),
+            raw_type: raw.to_string(),
+            aft_type: if kind == "dep" { "misc_payments".to_string() } else { String::new() },
+            description,
+            activity_type: at.to_string(),
+            activity_sub_type: sub.to_string(),
+            ..ActivityRow::default()
+        });
         id
     }
     fn buy(&mut self, a: &str, day: &str, sym: &str, qty: i64, px: f64, cur: &str) -> String {
@@ -238,7 +244,7 @@ impl Book {
         self.row(kind, "Crypto", day, sym, qty, px, qty.mul(px), "CAD")
     }
     fn note(&mut self, id: &str, grade: &str, tags: &[&str], thesis: &str) {
-        self.journal.push((format!("rt:{}", id), json!({"grade": grade, "tags": tags, "thesis": thesis})));
+        self.journal.push((format!("rt:{}", id), JournalEntry { grade: grade.to_string(), tags: tags.iter().map(|t| t.to_string()).collect(), thesis: thesis.to_string() }));
     }
 }
 
@@ -341,52 +347,50 @@ fn build() -> Book {
         let day = fmt(2026, 2 + k as u32, 1);
         if day.as_str() <= TODAY { b.row("charge", "Trading", &day, "", i(0), i(0), f(amount).neg(), "USD"); }
     }
-    b.acts.sort_by(|x, y| {
-        (x["transactionDate"].as_str(), x["id"].as_str()).cmp(&(y["transactionDate"].as_str(), y["id"].as_str()))
-    });
+    b.acts.sort_by(|x, y| (x.transaction_date.as_str(), x.id.as_str()).cmp(&(y.transaction_date.as_str(), y.id.as_str())));
     b
 }
 
-fn cash_securities() -> Vec<Value> {
+fn cash_securities() -> Vec<Security> {
     vec![
-        json!({"id": "sec-c-cad", "symbol": "CAD", "name": "Canadian dollar", "primaryExchange": "", "primaryMic": "", "currency": "CAD", "underlyingId": ""}),
-        json!({"id": "sec-c-usd", "symbol": "USD", "name": "US dollar", "primaryExchange": "", "primaryMic": "", "currency": "USD", "underlyingId": ""}),
+        Security { id: "sec-c-cad".into(), symbol: "CAD".into(), name: "Canadian dollar".into(), currency: "CAD".into(), ..Security::default() },
+        Security { id: "sec-c-usd".into(), symbol: "USD".into(), name: "US dollar".into(), currency: "USD".into(), ..Security::default() },
     ]
 }
 
-fn balances() -> Vec<Value> {
+fn balances() -> Vec<Balance> {
     vec![
-        json!({"accountId": "acct-tfsa", "securityId": "sec-c-cad", "quantity": 4210.35}),
-        json!({"accountId": "acct-rrsp", "securityId": "sec-c-cad", "quantity": 1875.00}),
-        json!({"accountId": "acct-trading", "securityId": "sec-c-usd", "quantity": -18240.60}),
-        json!({"accountId": "acct-crypto", "securityId": "sec-c-cad", "quantity": 312.40}),
+        Balance { account_id: "acct-tfsa".into(), security_id: "sec-c-cad".into(), quantity: Some(4210.35), ..Balance::default() },
+        Balance { account_id: "acct-rrsp".into(), security_id: "sec-c-cad".into(), quantity: Some(1875.00), ..Balance::default() },
+        Balance { account_id: "acct-trading".into(), security_id: "sec-c-usd".into(), quantity: Some(-18240.60), ..Balance::default() },
+        Balance { account_id: "acct-crypto".into(), security_id: "sec-c-cad".into(), quantity: Some(312.40), ..Balance::default() },
     ]
 }
 
-fn margin() -> Vec<Value> {
-    vec![json!({"accountId": "acct-trading", "buyingPower": 12680.45, "currency": "CAD", "unavailable": ""})]
+fn margin() -> Vec<Margin> {
+    vec![Margin { account_id: "acct-trading".into(), buying_power: Some(12680.45), currency: "CAD".into(), ..Margin::default() }]
 }
 
-fn accounts() -> Vec<Value> {
+fn accounts() -> Vec<Account> {
     ACCOUNTS.iter().map(|(nick, aid, cur, typ)| {
         let nav = NAV_BY_ACCOUNT.iter().find(|n| n.0 == *nick).unwrap().1;
-        json!({"id": aid, "nickname": nick, "unifiedAccountType": typ, "currency": cur, "status": "open", "type": "self_directed", "netLiquidationValue": nav})
+        Account { id: aid.to_string(), nickname: nick.to_string(), unified_account_type: typ.to_string(), currency: cur.to_string(), status: "open".into(), kind: "self_directed".into(), net_liquidation_value: Some(nav), ..Account::default() }
     }).collect()
 }
 
-fn listings(b: &Book) -> Vec<Value> {
-    let mut out: Vec<Value> = LISTINGS.iter().map(|(sym, name, ex, mic, cur)| {
-        json!({"id": sec_id(sym), "symbol": sym, "name": name, "primaryExchange": ex, "primaryMic": mic, "currency": cur, "underlyingId": ""})
+fn listings(b: &Book) -> Vec<Security> {
+    let mut out: Vec<Security> = LISTINGS.iter().map(|(sym, name, ex, mic, cur)| {
+        Security { id: sec_id(sym), symbol: sym.to_string(), name: name.to_string(), primary_exchange: ex.to_string(), primary_mic: mic.to_string(), currency: cur.to_string(), ..Security::default() }
     }).collect();
     for (osym, under) in &b.option_ids {
-        out.push(json!({"id": sec_id(osym), "symbol": osym, "name": osym, "primaryExchange": "OPRA", "primaryMic": "OPRA", "currency": "USD", "underlyingId": sec_id(under)}));
+        out.push(Security { id: sec_id(osym), symbol: osym.clone(), name: osym.clone(), primary_exchange: "OPRA".into(), primary_mic: "OPRA".into(), currency: "USD".into(), underlying_id: sec_id(under) });
     }
     out
 }
 
 /// Business days from 2024-01-02: deposits as a step, equity as deposits times
 /// a drifting, noisy path.
-fn nav_series() -> Vec<Value> {
+fn nav_series() -> Vec<NavPoint> {
     let mut rng = Mt::new(9);
     let steps = [("2024-01-03", 60000i64), ("2024-02-01", 80000), ("2024-02-20", 95000), ("2024-07-02", 115000), ("2025-01-06", 135000), ("2025-09-02", 150000)];
     let mut out = Vec::new();
@@ -401,18 +405,16 @@ fn nav_series() -> Vec<Value> {
         growth *= 1.0 + rng.gauss(0.00055, 0.009);
         if ["2024-08-05", "2025-04-03", "2025-04-04"].contains(&iso.as_str()) { growth *= 0.955; }
         let equity = if deposits != 0 { round_half_even(deposits as f64 * growth, 2) } else { 0.0 };
-        out.push(json!({"date": iso, "equity": equity, "netDeposits": deposits as f64, "currency": "CAD"}));
+        out.push(NavPoint { account_id: String::new(), date: iso, equity: Some(equity), currency: "CAD".into(), net_deposits: Some(deposits as f64) });
     }
     out
 }
 
-fn kept_journal(b: &Book) -> BTreeMap<String, Value> {
-    b.journal.iter().filter(|(_, v)| {
-        v["grade"] != "" || !v["tags"].as_array().unwrap().is_empty() || v["thesis"] != ""
-    }).cloned().collect()
+fn kept_journal(b: &Book) -> BTreeMap<String, JournalEntry> {
+    b.journal.iter().filter(|(_, v)| !v.grade.is_empty() || !v.tags.is_empty() || !v.thesis.is_empty()).cloned().collect()
 }
 
-fn write_pull(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> std::io::Result<()> {
+fn write_pull(dir: &Path, b: &Book, lst: &[Security], nav: &[NavPoint]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     // the iOS decoder wants every field of the pull, the derived ones included; the apps compute them from the rows
     let metrics = json!({"realizedPnlCad": 0.0, "tradeCount": 0, "winCount": 0, "lossCount": 0, "evenCount": 0, "grossProfit": 0.0, "grossLoss": 0.0, "winRate": 0.0,
@@ -431,7 +433,7 @@ fn write_pull(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> std::io::Re
     Ok(())
 }
 
-fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::Result<()> {
+fn write_home(dir: &Path, b: &Book, lst: &[Security], nav: &[NavPoint]) -> rusqlite::Result<()> {
     std::fs::create_dir_all(dir).expect("create the data directory");
     let path = dir.join("bagholder.db");
     let conn = Connection::open(&path)?;
@@ -446,24 +448,89 @@ fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::R
     bagholder_store::tables::replace_margin(&conn, &margin(), SYNCED)?;
     bagholder_store::tables::replace_nav(&conn, nav)?;
     bagholder_store::tables::set_meta(&conn, "synced_at", SYNCED)?;
-    for (k, v) in kept_journal(b) {
-        bagholder_store::admin::save_journal_entry(&conn, &k, Some(&v))?;
+    for (k, entry) in kept_journal(b) {
+        bagholder_store::admin::save_journal_entry(&conn, &k, Some(&entry))?;
     }
     let count = bagholder_store::activities::activity_count(&conn)?;
     println!("desktop: {} activities in {}", count, path.display());
     Ok(())
 }
 
+/// Daily bars for every listing the book traded, so a chart has something to draw with
+/// no source to ask (the browser tests run offline): each listing's closes pass through
+/// the prices it was traded at on the days it was traded, with a small fixed ripple
+/// between them, and are marked as read from the first day they cover.
+fn write_bars(dir: &Path, b: &Book) -> rusqlite::Result<()> {
+    let conn = Connection::open(dir.join("bagholder.db"))?;
+    let (ty, tm, td) = parse_iso(TODAY).unwrap();
+    let end = to_days(ty, tm, td);
+    let mut written = 0usize;
+    for (sym, ..) in LISTINGS.iter() {
+        let mut anchors: Vec<(i64, f64)> = b.acts.iter()
+            // a coin's buys and sells are traded too, though Wealthsimple files them under "other"
+            .filter(|a| (a.category == "trade" || matches!(a.raw_type.as_str(), "CRYPTO_BUY" | "CRYPTO_SELL")) && a.symbol == *sym)
+            .filter_map(|a| {
+                let (y, m, d) = parse_iso(&a.transaction_date)?;
+                Some((to_days(y, m, d), a.unit_price))
+            })
+            .collect();
+        anchors.sort_by(|x, y| x.0.cmp(&y.0));
+        anchors.dedup_by_key(|x| x.0);
+        let Some(&(first, _)) = anchors.first() else { continue };
+        let start = first - 30;
+        let at = |day: i64| -> f64 {
+            let next = anchors.iter().position(|x| x.0 >= day);
+            match next {
+                Some(0) => anchors[0].1,
+                None => anchors[anchors.len() - 1].1,
+                Some(k) => {
+                    let (d0, p0) = anchors[k - 1];
+                    let (d1, p1) = anchors[k];
+                    p0 + (p1 - p0) * (day - d0) as f64 / (d1 - d0) as f64
+                }
+            }
+        };
+        let traded = |day: i64| anchors.iter().any(|x| x.0 == day);
+        let mut bars = Vec::new();
+        let mut prev = at(start);
+        for day in start..=end {
+            if (day + 3).rem_euclid(7) >= 5 { continue; }
+            let ripple = if traded(day) { 0.0 } else { 0.012 * ((day as f64) * 0.9).sin() + 0.007 * ((day as f64) * 0.23).cos() };
+            let close = round_half_even(at(day) * (1.0 + ripple), 2);
+            let (open, hi, lo) = (prev, prev.max(close) * 1.004, prev.min(close) * 0.996);
+            let (y, m, d) = from_days(day);
+            bars.push(bagholder_store::bars::DayBar {
+                date: fmt(y, m, d),
+                px: bagholder_store::bars::Ohlcv {
+                    open: Some(open),
+                    high: Some(round_half_even(hi, 2)),
+                    low: Some(round_half_even(lo, 2)),
+                    close,
+                    volume: Some(100000.0 + ((day % 17) as f64) * 5000.0),
+                },
+            });
+            prev = close;
+        }
+        let (y, m, d) = from_days(start);
+        written += bagholder_store::market::upsert_price_history(&conn, sym, &bars, "demo")?;
+        bagholder_store::market::mark_history_fetched(&conn, sym, &fmt(y, m, d), SYNCED)?;
+    }
+    println!("desktop: {} daily bars", written);
+    Ok(())
+}
+
 fn main() {
     let mut home = None;
     let mut pull = None;
+    let mut bars = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--home" => home = args.next(),
             "--pull" => pull = args.next(),
+            "--bars" => bars = true,
             _ => {
-                eprintln!("usage: demo-book [--home DIR] [--pull DIR]\n  --home DIR  write a desktop data directory (bagholder.db) here\n  --pull DIR  write last-pull.json and journal.json for the phone apps here");
+                eprintln!("usage: demo-book [--home DIR [--bars]] [--pull DIR]\n  --home DIR  write a desktop data directory (bagholder.db) here\n  --bars      with --home: daily bars for the listings traded, for a chart with no source to ask\n  --pull DIR  write last-pull.json and journal.json for the phone apps here");
                 std::process::exit(2);
             }
         }
@@ -476,5 +543,8 @@ fn main() {
     }
     if let Some(dir) = home {
         write_home(Path::new(&dir), &book, &lst, &nav).expect("write the desktop data directory");
+        if bars {
+            write_bars(Path::new(&dir), &book).expect("write the daily bars");
+        }
     }
 }

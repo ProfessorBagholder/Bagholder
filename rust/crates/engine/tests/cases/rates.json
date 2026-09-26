@@ -1,0 +1,160 @@
+[
+  {
+    "name": "a weekend takes Friday's rate; a weekday the Bank did not publish takes the day before's; today's is pending before 16:30",
+    "spec": "docs/architecture.md §7: a business day's own rate, else the previous business day's; pending only before 16:30 Eastern",
+    "working": [
+      "rates stored 2025-12-31 1.37, 2026-01-02 1.40, 2026-01-05 1.41, from a read covering 2025-12-29 to 2026-01-05",
+      "Sat 2026-01-03 → Fri 2026-01-02: 1.40",
+      "Thu 2026-01-01: inside the read with no rate, so not published → 2025-12-31: 1.37",
+      "Tue 2026-01-06 at 15:00 Eastern (20:00Z): pending",
+      "a live mark at that moment: the latest published, 1.41 (2026-01-05's 16:30 has passed and it is stored)"
+    ],
+    "today": "2026-01-06",
+    "now": "2026-01-06T20:00:00Z",
+    "rates": {"USD": {"2025-12-31": "1.37", "2026-01-02": "1.40", "2026-01-05": "1.41"}},
+    "covered": {"USD": [["2025-12-29", "2026-01-05"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "expect": {
+      "rates": [
+        {"currency": "USD", "day": "2026-01-03", "value": "1.40"},
+        {"currency": "USD", "day": "2026-01-01", "value": "1.37"},
+        {"currency": "USD", "day": "2026-01-06", "value": {"gaps": ["rate-pending"]}},
+        {"currency": "USD", "day": "2026-01-06", "live": true, "value": "1.41"},
+        {"currency": "CAD", "day": "2026-01-06", "value": "1"}
+      ]
+    }
+  },
+  {
+    "name": "after 16:30 a rate not stored is a failure of the Bank source, for a transaction and for a live mark",
+    "spec": "docs/architecture.md §7: failing to reach the Bank is a failure of that source, never covered by a number of the app's own",
+    "working": ["the same book at 17:00 Eastern (22:00Z): 2026-01-06's rate is due and not stored → missing, for the day and for a live mark"],
+    "today": "2026-01-06",
+    "now": "2026-01-06T22:00:00Z",
+    "rates": {"USD": {"2025-12-31": "1.37", "2026-01-02": "1.40", "2026-01-05": "1.41"}},
+    "covered": {"USD": [["2025-12-29", "2026-01-05"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "expect": {
+      "rates": [
+        {"currency": "USD", "day": "2026-01-06", "value": {"gaps": ["rate-missing"]}},
+        {"currency": "USD", "day": "2026-01-06", "live": true, "value": {"gaps": ["rate-missing"]}}
+      ]
+    }
+  },
+  {
+    "name": "a weekday no completed read covered is a rate not read, never a holiday",
+    "spec": "docs/plans/stage-2-engine.md, rates: a read that failed can never pass for a holiday",
+    "working": ["a read covered 2025-12-29 to 2026-01-02; Mon 2026-01-05 is covered by none and has no rate: missing, not the Friday's"],
+    "today": "2026-01-07",
+    "now": "2026-01-07T22:00:00Z",
+    "rates": {"USD": {"2025-12-31": "1.37", "2026-01-02": "1.40"}},
+    "covered": {"USD": [["2025-12-29", "2026-01-02"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "expect": {"rates": [{"currency": "USD", "day": "2026-01-05", "value": {"gaps": ["rate-missing"]}}]}
+  },
+  {
+    "name": "a holiday from the Bank's own schedule takes the previous business day's rate, for a transaction and a live mark",
+    "spec": "docs/architecture.md §7: a weekend or holiday uses the previous business day's rate",
+    "working": ["2026-02-16 is in the Bank's schedule; the last rate is Fri 2026-02-13, 1.36: both the day's rate and a live mark after 16:30 are 1.36"],
+    "today": "2026-02-16",
+    "now": "2026-02-16T22:00:00Z",
+    "rates": {"USD": {"2026-02-13": "1.36"}},
+    "covered": {"USD": [["2026-02-09", "2026-02-13"]]},
+    "holidays": ["2026-02-16"],
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "expect": {
+      "rates": [
+        {"currency": "USD", "day": "2026-02-16", "value": "1.36"},
+        {"currency": "USD", "day": "2026-02-16", "live": true, "value": "1.36"}
+      ]
+    }
+  },
+  {
+    "name": "any currency the Bank publishes converts; one it does not is never taken to be CAD",
+    "spec": "docs/architecture.md §6: every non-USD currency converted; SPEC.md §1, currency",
+    "working": ["a 10 EUR dividend on a day EUR is 1.60 → 16.00 CAD; a currency the Bank's list does not name: rate-unpublished"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "E", "currency": "EUR"}],
+    "rates": {"EUR": {"2026-03-02": "1.60"}},
+    "covered": {"EUR": [["2026-03-02", "2026-03-10"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]], "EUR": [["2017-01-03", "2026-12-31"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "dividend", "instrument": "E", "cash": "10", "cash_currency": "EUR"}
+    ],
+    "expect": {
+      "cash": [{"tx": "t1", "amount_cad": "16.00"}],
+      "rates": [{"currency": "XAU", "day": "2026-03-02", "value": {"gaps": ["rate-unpublished"]}}]
+    }
+  },
+  {
+    "name": "a trade's P&L in CAD converts each leg on its own day",
+    "spec": "SPEC.md §2 Trade: P&L (CAD) with each leg's notional converted on its own fill date",
+    "working": [
+      "a USD share bought for 1,000 when USD was 1.30 (CAD 1,300) and sold for 1,100 when it was 1.40 (CAD 1,540)",
+      "P&L 100 USD; in CAD 1,540 − 1,300 = 240"
+    ],
+    "today": "2026-04-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X", "currency": "USD"}],
+    "rates": {"USD": {"2026-02-02": "1.30", "2026-03-02": "1.40"}},
+    "covered": {"USD": [["2026-02-02", "2026-03-31"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "1100"}
+    ],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "100.00", "pnl_cad": "240.00"}]}
+  },
+  {
+    "name": "the Bank's rate in eras: the noon series before the daily one; a day before a currency's oldest series is one no source holds",
+    "spec": "docs/plans/stage-3a-sources.md, three eras per currency; rate-not-held is not rate-missing",
+    "working": [
+      "USD: noon series 2007-05-01..2017-01-02, daily from 2017-01-03; SGD: noon series only from 2007-05-01",
+      "USD 2016-12-30 (noon series): 1.3427 stored → 1.3427",
+      "SGD 2007-04-30: before its oldest series → rate-not-held, never rate-missing",
+      "SGD 2007-05-01: its first noon day, stored 0.7474 → 0.7474"
+    ],
+    "today": "2026-01-06",
+    "now": "2026-01-06T20:00:00Z",
+    "rates": {"USD": {"2016-12-30": "1.3427"}, "SGD": {"2007-05-01": "0.7474"}},
+    "covered": {"USD": [["2016-12-28", "2016-12-30"]], "SGD": [["2007-05-01", "2007-05-01"]]},
+    "series": {"USD": [["2007-05-01", "2017-01-02"], ["2017-01-03", "2026-12-31"]], "SGD": [["2007-05-01", "2017-01-02"]]},
+    "expect": {
+      "rates": [
+        {"currency": "USD", "day": "2016-12-30", "value": "1.3427"},
+        {"currency": "SGD", "day": "2007-04-30", "value": {"gaps": ["rate-not-held"]}},
+        {"currency": "SGD", "day": "2007-05-01", "value": "0.7474"}
+      ]
+    }
+  },
+  {
+    "name": "a day no series holds, between two or after one ended, is one no source holds a rate for",
+    "spec": "docs/plans/stage-3a-sources.md, three eras per currency: a series can end, and one can begin long after another ended",
+    "working": [
+      "written by an agent that had not read the engine, from the plan and the design (2026-09-24)",
+      "PLN: noon series 2007-05-01..2017-04-28, ended; daily series from 2026-05-01, still published",
+      "PLN 2017-04-28: the noon series' last day, stored 0.3471",
+      "PLN 2017-05-01 and 2020-06-15: between the two series, held by neither: rate-not-held",
+      "PLN 2026-05-01: the daily series' first day, stored 0.3712; Sat 2026-05-02 takes Friday's 0.3712",
+      "RUB: daily series 2017-01-03..2026-04-30, ended (the Bank's historical series); 2026-04-30 stored 0.01819",
+      "RUB 2026-05-01 and Sat 2026-05-02: after its last series ended: rate-not-held, never the old rate and never rate-missing"
+    ],
+    "today": "2026-09-24",
+    "now": "2026-09-24T21:00:00Z",
+    "rates": {"PLN": {"2017-04-28": "0.3471", "2026-05-01": "0.3712"}, "RUB": {"2026-04-30": "0.01819"}},
+    "covered": {"PLN": [["2017-04-28", "2017-04-28"], ["2026-05-01", "2026-05-01"]], "RUB": [["2026-04-30", "2026-04-30"]]},
+    "series": {"PLN": [["2007-05-01", "2017-04-28", "ended"], ["2026-05-01", "2026-09-23"]], "RUB": [["2007-05-01", "2017-01-02", "ended"], ["2017-01-03", "2026-04-30", "ended"]]},
+    "expect": {
+      "rates": [
+        {"currency": "PLN", "day": "2017-04-28", "value": "0.3471"},
+        {"currency": "PLN", "day": "2017-05-01", "value": {"gaps": ["rate-not-held"]}},
+        {"currency": "PLN", "day": "2020-06-15", "value": {"gaps": ["rate-not-held"]}},
+        {"currency": "PLN", "day": "2026-05-01", "value": "0.3712"},
+        {"currency": "PLN", "day": "2026-05-02", "value": "0.3712"},
+        {"currency": "RUB", "day": "2026-04-30", "value": "0.01819"},
+        {"currency": "RUB", "day": "2026-05-01", "value": {"gaps": ["rate-not-held"]}},
+        {"currency": "RUB", "day": "2026-05-02", "value": {"gaps": ["rate-not-held"]}}
+      ]
+    }
+  }
+]

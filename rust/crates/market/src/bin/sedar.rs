@@ -38,13 +38,15 @@ fn run(argv: &[String]) -> Result<i32, SourceError> {
         "filings" => {
             let limit = match count(2, sedar::SEARCH_LIMIT) { Ok(n) => n, Err(c) => return Ok(c) };
             match sedar::list_filings(Some(&arg(1)), None, limit)? {
-                Some(Value::Object(m)) => {
+                Some(listed) => {
                     let mut out = serde_json::Map::new();
                     out.insert("ok".into(), json!(true));
-                    out.extend(m);
+                    if let Value::Object(m) = serde_json::to_value(listed).unwrap() {
+                        out.extend(m);
+                    }
                     println!("{}", serde_json::to_string_pretty(&Value::Object(out)).unwrap());
                 }
-                _ => return Ok(fail(format!("no SEDAR+ profile matched {}", repr_quoted(arg(1).trim())))),
+                None => return Ok(fail(format!("no SEDAR+ profile matched {}", repr_quoted(arg(1).trim())))),
             }
         }
         "newest" => {

@@ -1,0 +1,312 @@
+[
+  {
+    "name": "a position priced by its own quote",
+    "spec": "SPEC.md §2 Position: Market = qty × price × multiplier; P&L = Market − Book; Avg = Book ÷ (qty × multiplier)",
+    "working": ["100 X bought for 1,000; quote 12: book 1,000, avg 10, market 1,200, unrealized 200"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "12", "change": "0.5"}},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"}],
+    "expect": {"positions": [{"account": "A", "instrument": "X", "qty": "100", "book": "1000.00", "avg": "10", "market": "1200.00", "unrealized": "200.00", "market_cad": "1200.00"}]}
+  },
+  {
+    "name": "a quote from another kind's source prices nothing; the last close stands; with neither there is no price",
+    "spec": "SPEC.md §2 Position, Price: taken only when its source is the position's kind's; docs/plans/stage-2-engine.md: the person's own fill price is never a market price",
+    "working": [
+      "X (a share) has a quote from a coin's source: not its own; its last close, 11 on 2026-03-05, prices it: market 1,100",
+      "Y has no quote and no close: its market value waits (price-unknown)"
+    ],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}, {"id": "Y"}],
+    "quotes": {"X": {"price": "50000", "source": "crypto"}},
+    "closes": {"X": {"2026-03-05": "11"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:01:00Z", "kind": "buy", "instrument": "Y", "qty": "10", "cash": "-100"}
+    ],
+    "expect": {
+      "positions": [
+        {"account": "A", "instrument": "X", "market": "1100.00"},
+        {"account": "A", "instrument": "Y", "market": {"gaps": ["price-unknown"]}, "book": "100.00"}
+      ],
+      "kpi": {"market_value": "1100.00", "market_value_left_out": 1}
+    }
+  },
+  {
+    "name": "a short position: unrealized is book less market",
+    "spec": "SPEC.md §2 Position: Book − Market for shorts",
+    "working": ["100 X sold short for 1,000; quote 9: market 900, unrealized 100"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A", "kind": "margin"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "9"}},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "X", "qty": "-100", "cash": "1000"}],
+    "expect": {"positions": [{"account": "A", "instrument": "X", "direction": "short", "market": "900.00", "unrealized": "100.00"}]}
+  },
+  {
+    "name": "held days are weighted by quantity",
+    "spec": "SPEC.md §2 Position, Hold: quantity-weighted days since each lot was opened",
+    "working": ["100 bought on Jan 1 (30 days before Jan 31), 300 on Jan 21 (10 days): (100 × 30 + 300 × 10) ÷ 400 = 15"],
+    "today": "2026-01-31",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-01", "at": "2026-01-01T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-01-21", "at": "2026-01-21T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "300", "cash": "-3000"}
+    ],
+    "expect": {"positions": [{"account": "A", "instrument": "X", "qty": "400", "held_days": 15}]}
+  },
+  {
+    "name": "a dividend of no cash is a notice, not a payment; one paid in another currency than its instrument's is its own amount",
+    "spec": "SPEC.md §2 Distribution: each row keeps its native amount and a CAD amount converted on its date",
+    "working": ["a zero-cash dividend row: no cashflow row", "a USD share's dividend paid as 10 CAD: 10.00 CAD", "a CAD dividend of 12.34: 12.34"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}, {"id": "U", "currency": "USD"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "cash": "0"},
+      {"id": "t2", "account": "A", "day": "2026-03-03", "at": "2026-03-03T11:00:00Z", "kind": "dividend", "instrument": "U", "cash": "10", "cash_currency": "CAD"},
+      {"id": "t3", "account": "A", "day": "2026-03-04", "at": "2026-03-04T11:00:00Z", "kind": "dividend", "instrument": "X", "cash": "12.34"}
+    ],
+    "expect": {"cash": [{"tx": "t1", "absent": true}, {"tx": "t2", "amount_cad": "10.00"}, {"tx": "t3", "amount_cad": "12.34"}], "kpi": {"dividends": "22.34"}}
+  },
+  {
+    "name": "a payer's rate from its own record: the cash per unit of the latest distribution gone ex, every row counting; the schedule it states",
+    "spec": "SPEC.md §2 Distribution rate: the payer's own record; docs/plans/stage-3a-sources.md, what the figures use",
+    "working": [
+      "0.10 ex Jan 15, Feb 13, Mar 13; 0.50 ex Mar 20; 0.11 ex Apr 15 paid Apr 22; the payer states 12 a year",
+      "today Apr 20: the latest gone ex is Apr 15 → 0.11 (the Mar 20 row counts as every row does; it is simply not the latest)",
+      "the next still to be paid is the Apr 15 distribution (paid Apr 22): ex 2026-04-15"
+    ],
+    "today": "2026-04-20",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "F", "symbol": "FUND"}],
+    "frequencies": {"F": 12},
+    "declared": {"F": [
+      {"ex": "2026-01-15", "pay": "2026-01-22", "amount": "0.10"},
+      {"ex": "2026-02-13", "pay": "2026-02-20", "amount": "0.10"},
+      {"ex": "2026-03-13", "pay": "2026-03-20", "amount": "0.10"},
+      {"ex": "2026-03-20", "pay": "2026-03-27", "amount": "0.50"},
+      {"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.11"}
+    ]},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
+    "expect": {"payers": [{"instrument": "F", "per": "0.11", "per_year": 12, "next_ex": "2026-04-15"}]}
+  },
+  {
+    "name": "a distribution reinvested whole pays no cash and is passed over; one with a cash part counts its cash",
+    "spec": "docs/plans/stage-3a-sources.md, what the figures use: income paid; a reinvested part pays nothing",
+    "working": [
+      "Z (BMO-like): 0.15 cash ex Sep 26; Dec 29: 0.15 cash and 0.12 reinvested → today Jan 10: latest gone ex is Dec 29 → its cash, 0.15",
+      "B (FBTC-like): its record's only row is 0.84031 reinvested ex Dec 29, no cash → no cash distribution gone ex yet"
+    ],
+    "today": "2027-01-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "Z"}, {"id": "B"}],
+    "frequencies": {"Z": 4, "B": 1},
+    "declared": {
+      "Z": [
+        {"ex": "2026-09-26", "amount": "0.15"},
+        {"ex": "2026-12-29", "amount": "0.15", "reinvested": "0.12"}
+      ],
+      "B": [{"ex": "2026-12-29", "amount": "0", "reinvested": "0.84031"}]
+    },
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "Z", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:01:00Z", "kind": "buy", "instrument": "B", "qty": "10", "cash": "-500"}
+    ],
+    "expect": {
+      "payers": [
+        {"instrument": "Z", "per": "0.15", "per_year": 4},
+        {"instrument": "B", "per": {"gaps": ["no-distribution-yet"]}, "per_year": 1}
+      ]
+    }
+  },
+  {
+    "name": "without the payer's own record nothing is worked out from the payments: the rate and the schedule wait on the payer",
+    "spec": "docs/architecture.md §18: never assumed; docs/plans/stage-3a-sources.md: never filled from another source",
+    "working": [
+      "G: 5.00, 5.00, 5.25 paid on 100 units, and no record of its payer read → the rate and the schedule wait on the payer",
+      "H: its payer's record read and its schedule stated, before its first distribution goes ex → the rate waits for it; the schedule stands"
+    ],
+    "today": "2026-04-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "G"}, {"id": "H"}],
+    "frequencies": {"H": 12},
+    "declared": {"H": [{"ex": "2026-04-29", "pay": "2026-05-07", "amount": "0.16"}]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-31", "at": "2026-01-31T11:00:00Z", "kind": "dividend", "instrument": "G", "qty": "100", "cash": "5.00"},
+      {"id": "t2", "account": "A", "day": "2026-02-28", "at": "2026-02-28T11:00:00Z", "kind": "dividend", "instrument": "G", "qty": "100", "cash": "5.00"},
+      {"id": "t3", "account": "A", "day": "2026-03-31", "at": "2026-03-31T11:00:00Z", "kind": "dividend", "instrument": "G", "qty": "100", "cash": "5.25"},
+      {"id": "t4", "account": "A", "day": "2026-03-31", "at": "2026-03-31T11:00:00Z", "kind": "buy", "instrument": "H", "qty": "100", "cash": "-1000"}
+    ],
+    "expect": {
+      "payers": [
+        {"instrument": "G", "per": {"gaps": ["payer-not-read"]}, "per_year": {"gaps": ["payer-not-read"]}},
+        {"instrument": "H", "per": {"gaps": ["no-distribution-yet"]}, "per_year": 12, "next_ex": "2026-04-29"}
+      ]
+    }
+  },
+  {
+    "name": "a payer read from the exchange-side record, whose schedule no source states: the rate stands, the schedule waits on a source that states it",
+    "spec": "docs/decisions.md 2026-09-24 (the exchange-side record where a fund company's publication cannot be read; the schedule only where a source states it); docs/plans/stage-3a-sources.md, Distributions and schedules",
+    "working": [
+      "derived by an agent that had not read the engine, from the definitions (2026-09-24)",
+      "W: its record read, its latest distribution gone ex 0.50 → per 0.50; no source states its schedule → per_year waits: schedule-unstated, not payer-not-read",
+      "Q: its record read, latest gone ex 1.04983, its schedule stated as 4 → both stand"
+    ],
+    "today": "2026-04-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "W", "currency": "USD"}, {"id": "Q"}],
+    "frequencies": {"Q": 4},
+    "declared": {
+      "W": [{"ex": "2026-03-10", "amount": "0.50"}],
+      "Q": [{"ex": "2026-03-23", "pay": "2026-03-30", "amount": "1.04983"}]
+    },
+    "expect": {
+      "payers": [
+        {"instrument": "Q", "per": "1.04983", "per_year": 4, "next_ex": "2026-03-23"},
+        {"instrument": "W", "per": "0.50", "per_year": {"gaps": ["schedule-unstated"]}}
+      ]
+    }
+  },
+  {
+    "name": "Mackenzie's and WisdomTree's funds read from the exchange-side record with no schedule stated: the annual income waits on schedule-unstated, never a schedule worked out from dates",
+    "spec": "docs/plans/stage-3a-sources.md, Payers (the exchange-side record for Mackenzie and WisdomTree; the schedule only where a source states it, otherwise the fund's annual income a gap naming its unreadable company site); SPEC.md §2 Income: yield on cost and current yield",
+    "working": [
+      "M (Mackenzie, CAD): 100 bought for 1,000 CAD, quote 12; the exchange-side record read: 0.30 gone ex 2025-12-19, 2026-03-20 → per 0.30 (the latest gone ex); no source states its schedule and none is worked out from the two dates three months apart → per_year waits: schedule-unstated",
+      "M's annual income per unit is per × per_year, so it waits on the same gap: yield on cost and current yield have no figure",
+      "W (WisdomTree, USD): its exchange-side record read, nothing paid yet → per waits: no-distribution-yet; no schedule stated → per_year waits: schedule-unstated, not payer-not-read"
+    ],
+    "today": "2026-04-01",
+    "now": "2026-04-01T15:00:00Z",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "M"}, {"id": "W", "currency": "USD"}],
+    "quotes": {"M": {"price": "12"}},
+    "declared": {
+      "M": [{"ex": "2025-12-19", "amount": "0.30"}, {"ex": "2026-03-20", "amount": "0.30"}],
+      "W": []
+    },
+    "transactions": [{"id": "t1", "account": "A", "day": "2025-11-03", "at": "2025-11-03T15:00:00Z", "kind": "buy", "instrument": "M", "qty": "100", "cash": "-1000"}],
+    "expect": {
+      "payers": [
+        {"instrument": "M", "per": "0.30", "per_year": {"gaps": ["schedule-unstated"]}, "next_ex": "2026-03-20"},
+        {"instrument": "W", "per": {"gaps": ["no-distribution-yet"]}, "per_year": {"gaps": ["schedule-unstated"]}}
+      ],
+      "income": [{"account": "A", "instrument": "M", "yield_on_cost": {"gaps": ["schedule-unstated"]}, "current_yield": {"gaps": ["schedule-unstated"]}}]
+    }
+  },
+  {
+    "name": "the tiles sum the stated members and count those left out",
+    "spec": "docs/plans/stage-2-engine.md, unknown and waiting: a tile is the sum of those stated, and says how many it left out",
+    "working": ["a win of 100, a loss of 40, and a deposited coin's sale: realized 60 over 2, 1 left out; win rate 0.5; profit factor 100 ÷ 40 = 2.5"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}, {"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "X"}, {"id": "Y"}, {"id": "BTC", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "200"},
+      {"id": "t3", "account": "A", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "Y", "qty": "10", "cash": "-100"},
+      {"id": "t4", "account": "A", "day": "2026-01-06", "at": "2026-01-06T16:00:00Z", "kind": "sell", "instrument": "Y", "qty": "-10", "cash": "60"},
+      {"id": "t5", "account": "C", "day": "2026-01-05", "at": "2026-01-05T17:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "1"},
+      {"id": "t6", "account": "C", "day": "2026-01-06", "at": "2026-01-06T17:00:00Z", "kind": "sell", "instrument": "BTC", "qty": "-1", "cash": "90000"}
+    ],
+    "expect": {"kpi": {"realized": "60.00", "count": 2, "left_out": 1, "wins": 1, "losses": 1, "win_rate": 0.5, "profit_factor": 2.5}}
+  },
+  {
+    "name": "a fund held in CAD that pays in USD: its yields take the payout at the latest rate",
+    "spec": "SPEC.md §2 Income: yield on cost and current yield; docs/plans/stage-2-engine.md, rates: a live figure uses the latest rate the Bank has published",
+    "working": [
+      "100 F bought for 1,000 CAD: avg 10; quote 12",
+      "0.10 USD a month, 12 a year: 1.20 USD per unit a year; the latest rate, 1.25 on 2026-03-09 → 1.50 CAD",
+      "yield on cost 1.50 ÷ 10 = 0.15; current yield 1.50 ÷ 12 = 0.125"
+    ],
+    "today": "2026-03-10",
+    "now": "2026-03-10T15:00:00Z",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "F"}],
+    "rates": {"USD": {"2026-03-09": "1.25"}},
+    "covered": {"USD": [["2026-03-01", "2026-03-09"]]},
+    "quotes": {"F": {"price": "12"}},
+    "frequencies": {"F": 12},
+    "declared": {"F": [
+      {"ex": "2026-01-15", "amount": "0.10", "currency": "USD"},
+      {"ex": "2026-02-13", "amount": "0.10", "currency": "USD"}
+    ]},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
+    "expect": {"income": [{"account": "A", "instrument": "F", "yield_on_cost": 0.15, "current_yield": 0.125}]}
+  },
+  {
+    "name": "a coin whose pair has no market of its own is priced by its USD market's close at that day's rate",
+    "spec": "SPEC.md §2 Coinbase: a coin's close is its pair's Coinbase Exchange close for the UTC day, the USD market converted at the day's Bank of Canada rate when the pair has none",
+    "working": [
+      "written by an agent that had not read the engine, from SPEC.md and the design (2026-09-24)",
+      "BTC: no quote; its last close is 2026-03-05's USD market close, 70000 USD, at that day's rate 1.40: 98000 CAD; market 0.5 × 98000 = 49000.00; book 50000; unrealized -1000.00",
+      "ETH: its last close is 2026-03-06's, 2000 USD; no read covered 2026-03-06 and its 16:30 has passed: rate-missing, and the fill price is never a market price"
+    ],
+    "today": "2026-03-09",
+    "now": "2026-03-09T15:00:00Z",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "BTC", "kind": "crypto", "currency": "CAD"}, {"id": "ETH", "kind": "crypto", "currency": "CAD"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "0.5", "cash": "-50000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:05:00Z", "kind": "buy", "instrument": "ETH", "qty": "2", "cash": "-5000"}
+    ],
+    "closes": {"BTC": {"2026-03-05": {"amount": "70000", "currency": "USD"}}, "ETH": {"2026-03-06": {"amount": "2000", "currency": "USD"}}},
+    "rates": {"USD": {"2026-03-05": "1.40"}},
+    "covered": {"USD": [["2026-03-02", "2026-03-05", "2026-03-05T22:00:00Z"]]},
+    "series": {"USD": [["2017-01-03", "2026-03-05"]]},
+    "expect": {
+      "positions": [
+        {"account": "A", "instrument": "BTC", "market": "49000.00", "unrealized": "-1000.00"},
+        {"account": "A", "instrument": "ETH", "market": {"gaps": ["rate-missing"]}}
+      ]
+    }
+  },
+  {
+    "name": "a dust coin beside a large holding, and a quantity of many digits at a price of many places: the total holds them all",
+    "spec": "SPEC.md §2 Position: Market = qty × price × multiplier; docs/plans/stage-2-engine.md: CAD amounts are exact products, a total exact where it fits and rounded once to fit where its exact value needs more digits than a decimal holds",
+    "working": [
+      "X: 1 at 632,070.326688, market 632,070.326688",
+      "D: 0.000001 at 0.264188636702736309916, market 0.000000264188636702736309916 (27 places)",
+      "P: 74,505,439.293609 at 0.00001234567890123456789, exactly 919.82022991432155913233395361501, which needs 32 digits: held to 25 places, 919.8202299143215591323339536",
+      "the total, 632,990.146918178510195..., needs more digits than a decimal holds: rounded to fit, 632,990.15 to the cent, none left out"
+    ],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}, {"id": "D", "kind": "crypto"}, {"id": "P"}],
+    "quotes": {"X": {"price": "632070.326688"}, "D": {"price": "0.264188636702736309916", "source": "crypto"}, "P": {"price": "0.00001234567890123456789"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "1", "cash": "-600000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:01:00Z", "kind": "buy", "instrument": "D", "qty": "0.000001", "cash": "-0.01"},
+      {"id": "t3", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:02:00Z", "kind": "buy", "instrument": "P", "qty": "74505439.293609", "cash": "-900"}
+    ],
+    "expect": {
+      "positions": [
+        {"account": "A", "instrument": "X", "market": "632070.326688"},
+        {"account": "A", "instrument": "D", "market": "0.000000264188636702736309916"},
+        {"account": "A", "instrument": "P", "market": "919.8202299143215591323339536"}
+      ],
+      "kpi": {"market_value": "632990.15", "market_value_left_out": 0}
+    }
+  },
+  {
+    "name": "a distribution shows the units it states it was paid on, and moves none",
+    "spec": "SPEC.md §4 Cashflow, Distribution history: Qty and Distribution are the units the payer's row states it was paid on and the amount a unit",
+    "working": ["100 X held; a distribution of 25 stating 100 units: 0.25 a unit, the position still 100; one that states no units shows none"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "12", "change": "0"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "d1", "account": "A", "day": "2026-03-05", "at": "2026-03-05T15:00:00Z", "kind": "dividend", "instrument": "X", "cash": "25", "paid_on": "100"},
+      {"id": "d2", "account": "A", "day": "2026-03-06", "at": "2026-03-06T15:00:00Z", "kind": "dividend", "instrument": "X", "cash": "5"}
+    ],
+    "expect": {
+      "positions": [{"account": "A", "instrument": "X", "qty": "100"}],
+      "cash": [{"tx": "d1", "qty": "100", "per": "0.25"}, {"tx": "d2", "qty": null, "per": null}]
+    }
+  }
+]

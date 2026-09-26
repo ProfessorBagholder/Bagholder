@@ -1,0 +1,24 @@
+[package]
+name = "bagholder-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The network, and nothing about what is asked of it: the HTTP client, the
+# session that presents a browser's TLS handshake, and the one limiter that paces
+# every host (`docs/plans/stage-3a-sources.md`). It reads the time only through
+# the clock it is handed (`clock.rs` holds the one that reads the machine's), and
+# knows no reply's meaning.
+[dependencies]
+# The standard library has no HTTPS. The client is built on OpenSSL: some hosts
+# gate on the TLS handshake and answer only an OpenSSL client, not rustls or the
+# platform stack. flate2 inflates gzip bodies.
+openssl = "0.10"
+flate2 = "1"
+# the browser helper's line protocol
+serde_json = "1"
+# instants, and the HTTP date a Retry-After may carry
+jiff = "0.2.37"
+
+[dev-dependencies]
+jiff = "0.2.37"

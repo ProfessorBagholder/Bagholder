@@ -1,0 +1,21 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchCorporateActionChildActivities($activityCanonicalId: String!) {
+  corporateActionChildActivities(condition: {activityCanonicalId: $activityCanonicalId}) {
+    nodes {
+      ...CorporateActionChildActivity
+    }
+  }
+}
+fragment CorporateActionChildActivity on CorporateActionChildActivity {
+  canonicalId
+  activityCanonicalId
+  assetName
+  assetSymbol
+  assetType
+  entitlementType
+  quantity
+  currency
+  price
+  recordDate
+  expiryDate
+}

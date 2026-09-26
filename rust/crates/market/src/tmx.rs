@@ -11,24 +11,28 @@
 use serde_json::{json, Value};
 
 use crate::http::{post_json, TMX_HEADERS};
-use crate::parse::opt;
-use bagholder_model::value::{field_s, get};
+use crate::quotes::SourceQuote;
+use bagholder_model::lenient;
+use bagholder_model::value::field_s;
+use bagholder_store::market::{DistributionRecord, QuoteRecord};
+use serde::Deserialize;
 
 pub const TMX_URL: &str = "https://app-money.tmx.com/graphql";
 
 pub const TMX_QUOTE_QUERY: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName price priceChange percentChange prevClose currency dividendFrequency dividendYield dividendAmount exDividendDate } }";
 
-const FORMS_CAD: [&str; 3] = ["", ":CNX", ":AQL"];
-const FORMS_USD: [&str; 1] = [":US"];
-
-/// The venue a quote must name for that form to be
-/// the right one.
-const VENUE_OF_FORM: [(&str, &[&str]); 4] = [
-    ("", &["TORONTO STOCK EXCHANGE", "TSX VENTURE"]),
-    (":CNX", &["CANADIAN SECURITIES EXCHANGE"]),
-    (":AQL", &["CBOE", "NEO"]),
-    (":US", &["NYSE", "NASDAQ", "NEW YORK"]),
-];
+/// TMX's forms of every venue of a market, the likelier first
+/// (`bagholder_sources::venue::tmx_suffix` of each).
+fn market_forms(us: bool) -> Vec<&'static str> {
+    let venues: &[&str] = if us { &crate::quotes::US_VENUES } else { &crate::quotes::CANADIAN_VENUES };
+    let mut out: Vec<&'static str> = Vec::new();
+    for form in venues.iter().filter_map(|mic| bagholder_sources::venue::tmx_suffix(mic)) {
+        if !out.contains(&form) {
+            out.push(form);
+        }
+    }
+    out
+}
 
 pub const RESOLVE_RETRY_DAYS: i64 = 1;
 
@@ -60,25 +64,53 @@ pub fn tmx_bare(key: &str) -> String {
     key.split(':').next().unwrap_or("").to_string()
 }
 
-pub fn parse_tmx_quote(data: &Value) -> Option<Value> {
+/// `getQuoteBySymbol`'s answer, as far as a quote reads it.
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct TmxQuote {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    price: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    price_change: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    percent_change: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    prev_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    currency: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    dividend_amount: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    dividend_frequency: String,
+    #[serde(deserialize_with = "lenient::text")]
+    ex_dividend_date: String,
+    #[serde(deserialize_with = "lenient::text")]
+    name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    exchange_name: String,
+}
+
+/// TMX's quote. An empty answer is no answer; a halted listing answers with no price.
+pub fn parse_tmx_quote(data: &Value) -> Option<SourceQuote> {
     let q = data.get("data")?.get("getQuoteBySymbol")?;
-    let m = q.as_object()?;
-    if m.is_empty() {
+    if q.as_object()?.is_empty() {
         return None;
     }
-    let ex: String = field_s(q, "exDividendDate").chars().take(10).collect();
-    Some(json!({
-        "price": q.get("price").cloned().unwrap_or(Value::Null),
-        "priceChange": q.get("priceChange").cloned().unwrap_or(Value::Null),
-        "percentChange": q.get("percentChange").cloned().unwrap_or(Value::Null),
-        "prevClose": q.get("prevClose").cloned().unwrap_or(Value::Null),
-        "currency": field_s(q, "currency"),
-        "dividendAmount": q.get("dividendAmount").cloned().unwrap_or(Value::Null),
-        "dividendFrequency": field_s(q, "dividendFrequency"),
-        "exDividendDate": ex,
-        "name": field_s(q, "name"),
-        "exchange": field_s(q, "exchangeName"),
-    }))
+    let q = TmxQuote::deserialize(q).ok()?;
+    Some(SourceQuote {
+        quote: QuoteRecord {
+            price: q.price,
+            price_change: q.price_change,
+            percent_change: q.percent_change,
+            prev_close: q.prev_close,
+            dividend_amount: q.dividend_amount,
+            dividend_frequency: q.dividend_frequency,
+            ex_dividend_date: q.ex_dividend_date.chars().take(10).collect(),
+        },
+        currency: q.currency,
+        name: q.name,
+        exchange: q.exchange_name,
+    })
 }
 
 fn ask(symbol: &str) -> Value {
@@ -112,7 +144,7 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
     }
     let bare = tmx_bare(key);
     let suffix = &key[bare.len()..];
-    let base: Vec<&str> = if suffix == ":US" { FORMS_USD.to_vec() } else { FORMS_CAD.to_vec() };
+    let base: Vec<&str> = market_forms(suffix == ":US");
     // the record's own form first, when TMX has one for it
     let forms: Vec<&str> = if base.contains(&suffix) {
         let mut f = vec![suffix];
@@ -140,10 +172,10 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
         let venue = q
             .get("data")
             .and_then(|d| d.get("getQuoteBySymbol"))
-            .map(|g| field_s(g, "exchangeName").to_uppercase())
+            .map(|g| field_s(g, "exchangeName"))
             .unwrap_or_default();
-        let wanted = VENUE_OF_FORM.iter().find(|(f, _)| *f == form).map(|(_, v)| *v).unwrap_or(&[]);
-        if !venue.is_empty() && wanted.iter().any(|w| venue.contains(w)) {
+        // the venue the quote names must be the one the form asks for
+        if bagholder_sources::venue::tmx_venue_matches(form, &venue) {
             let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("@{}", form));
             return cand;
         }
@@ -154,9 +186,9 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
 
 /// The remembered or given form first; when it answers
 /// nothing, the form TMX resolves for the symbol instead.
-pub fn tmx_lookup<F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> (Option<Value>, String)
+pub fn tmx_lookup<T, F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> (Option<T>, String)
 where
-    F: Fn(&str) -> Option<Value>,
+    F: Fn(&str) -> Option<T>,
 {
     let first = tmx_remembered(conn, key);
     let r = f(&first);
@@ -173,9 +205,9 @@ where
 /// The TMX lookup for a lookup that can fail: a failure is passed straight
 /// back, so it stops there -- nothing is resolved and nothing
 /// is remembered on the strength of a request that did not get an answer.
-pub fn tmx_lookup_try<F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<Value>, String), E>
+pub fn tmx_lookup_try<T, F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<T>, String), E>
 where
-    F: Fn(&str) -> Result<Option<Value>, E>,
+    F: Fn(&str) -> Result<Option<T>, E>,
 {
     let first = tmx_remembered(conn, key);
     let r = f(&first)?;
@@ -189,7 +221,7 @@ where
     Ok((r, first))
 }
 
-pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) -> Option<Value> {
+pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) -> Option<SourceQuote> {
     tmx_lookup(conn, tmx_sym, today, |k| parse_tmx_quote(&ask(k))).0
 }
 
@@ -197,7 +229,7 @@ pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) 
 ///
 /// The public directories cover the TSX and Nasdaq registries alone, so this
 /// is how a CSE or Cboe Canada listing is found by name.
-pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Option<Value> {
+pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Option<bagholder_model::wire::SymbolMatch> {
     let bare = tmx_bare(&bagholder_model::venues::tmx_symbol(symbol));
     if bare.is_empty() || bare.contains(' ') {
         return None;
@@ -207,16 +239,19 @@ pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Op
         return None;
     }
     let q = parse_tmx_quote(&ask(&form))?;
-    let venue = tmx_venue(&field_s(&q, "exchange"));
+    let venue = tmx_venue(&q.exchange);
     if venue.is_empty() {
         return None;
     }
-    let name = { let n = field_s(&q, "name"); if n.is_empty() { bare.clone() } else { n } };
-    let currency = {
-        let c = field_s(&q, "currency");
-        if !c.is_empty() { c } else if venue == "NYSE" || venue == "NASDAQ" { "USD".into() } else { "CAD".into() }
+    let name = if q.name.is_empty() { bare.clone() } else { q.name };
+    let currency = if !q.currency.is_empty() {
+        q.currency
+    } else if venue == "NYSE" || venue == "NASDAQ" {
+        "USD".into()
+    } else {
+        "CAD".into()
     };
-    Some(json!({"symbol": bare, "name": name, "exchange": venue, "currency": currency}))
+    Some(bagholder_model::wire::SymbolMatch { symbol: bare, name, exchange: venue.to_string(), currency, ..Default::default() })
 }
 
 /// The symbol a Canadian listing's declared
@@ -238,28 +273,32 @@ pub fn is_canadian_listing(exchange: &str, currency: &str) -> bool {
     currency.trim().to_uppercase() == "CAD"
 }
 
-/// The dividend rows TMX files against a symbol.
-pub fn parse_tmx_dividends(data: &Value) -> Vec<Value> {
-    let block = match data.get("data").and_then(|d| d.get("dividends")) { Some(b) => b, None => return vec![] };
-    let rows = match block.get("dividends").and_then(|v| v.as_array()) { Some(r) => r, None => return vec![] };
-    let mut out = Vec::new();
-    for r in rows {
-        if !r.is_object() {
-            continue;
-        }
-        let ex: String = field_s(r, "exDate").chars().take(10).collect();
-        let amount = opt(get(r, "amount"));
-        match amount {
-            Some(a) if ex.len() == 10 && a > 0.0 => out.push(json!({
-                "exDate": ex,
-                "payDate": field_s(r, "payableDate").chars().take(10).collect::<String>(),
-                "amount": a,
-                "currency": field_s(r, "currency"),
-            })),
-            _ => continue,
-        }
-    }
-    out
+/// One row of `getDividendsForSymbol`.
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct TmxDividend {
+    #[serde(deserialize_with = "lenient::text")]
+    ex_date: String,
+    #[serde(deserialize_with = "lenient::text")]
+    payable_date: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    amount: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    currency: String,
+}
+
+/// The dividend rows TMX files against a symbol: a row with no ex-date or no
+/// positive amount is not a distribution.
+pub fn parse_tmx_dividends(data: &Value) -> Vec<DistributionRecord> {
+    let rows = data.get("data").and_then(|d| d.get("dividends")).and_then(|b| b.get("dividends")).unwrap_or(&Value::Null);
+    lenient::rows::<TmxDividend>(rows)
+        .into_iter()
+        .filter_map(|r| {
+            let ex: String = r.ex_date.chars().take(10).collect();
+            let a = r.amount.filter(|a| ex.len() == 10 && *a > 0.0)?;
+            Some(DistributionRecord { ex_date: ex, pay_date: r.payable_date.chars().take(10).collect(), amount: Some(a), currency: r.currency })
+        })
+        .collect()
 }
 
 pub const TMX_DIVIDENDS_QUERY: &str = "query getDividendsForSymbol($symbol: String!, $page: Int, $batch: Int) { dividends: getDividendsForSymbol(symbol: $symbol, page: $page, batch: $batch) { dividends { exDate payableDate amount currency } } }";
@@ -268,7 +307,7 @@ pub const TMX_BATCH: i64 = 24;
 
 /// The quote and the declared distribution history for one
 /// Canadian listing. The exchange picks the form of the symbol.
-pub fn fetch_tmx(conn: &rusqlite::Connection, symbol: &str, exchange: &str, today: &str) -> (Option<Value>, Vec<Value>) {
+pub fn fetch_tmx(conn: &rusqlite::Connection, symbol: &str, exchange: &str, today: &str) -> (Option<SourceQuote>, Vec<DistributionRecord>) {
     let sym = match tmx_record_symbol(symbol, exchange) { Some(s) => s, None => return (None, vec![]) };
     let (quote, form) = tmx_lookup(conn, &sym, today, |k| parse_tmx_quote(&ask(k)));
     let payload = json!({

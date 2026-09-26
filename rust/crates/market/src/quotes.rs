@@ -6,14 +6,40 @@
 //! whose quote is stamped to the second. A coin is Coinbase's, in the
 //! position's own currency. A US-listed option is Cboe's delayed chain.
 
-use serde_json::{json, Map, Value};
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::http::{get_text, UA};
-use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_rec, parse_cboe_options, opt};
+use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_rec, parse_cboe_options, OptionChain};
 use crate::tmx;
+use bagholder_model::input::Listing;
+use bagholder_model::lenient;
 use bagholder_model::value::{field_s, get, num};
+use bagholder_store::bars::{Ohlcv, SourceBar};
+use bagholder_store::market::QuoteRecord;
+
+/// A source's answer for one listing: the price the store keeps, and what the
+/// source says of the listing beside it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceQuote {
+    #[serde(flatten)]
+    pub quote: QuoteRecord,
+    pub currency: String,
+    pub name: String,
+    pub exchange: String,
+}
+
+/// A listing's price and day change, for a glance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Glance {
+    pub price: Option<f64>,
+    pub price_change: Option<f64>,
+    pub percent_change: Option<f64>,
+}
 
 pub const QUOTE_REFRESH_MINUTES: f64 = 1.0;
 
@@ -25,80 +51,35 @@ pub const YAHOO_CHART_URL: &str = "https://query1.finance.yahoo.com/v8/finance/c
 const YAHOO_HEADERS: [(&str, &str); 2] = [("User-Agent", "Mozilla/5.0"), ("Accept", "application/json")];
 
 /// Yahoo rate-limits bursts: one request at a time, well spaced, and after a
-/// 429 nothing is asked of it for ten minutes.
-pub const YAHOO_MIN_INTERVAL: Duration = Duration::from_millis(2000);
-pub const YAHOO_BACKOFF: Duration = Duration::from_secs(600);
+/// 429 nothing is asked of it for ten minutes. That is its pace on the one
+/// limiter every host goes through.
+pub const YAHOO_HOST: &str = "query1.finance.yahoo.com";
+pub const YAHOO_PACE: bagholder_net::Pace = bagholder_net::Pace { gap: Duration::from_millis(2000), rest: Duration::from_secs(600) };
 
-struct YahooGate {
-    next_at: Option<Instant>,
-    backoff_until: Option<Instant>,
+/// Yahoo's pace, set on the one limiter.
+fn yahoo_paced() {
+    bagholder_net::machine::global().configure(YAHOO_HOST, YAHOO_PACE);
 }
 
-static YAHOO: Mutex<YahooGate> = Mutex::new(YahooGate { next_at: None, backoff_until: None });
+/// A turn at Yahoo for a request not made through `crate::http` (the float's
+/// browser session), which takes its own.
+fn yahoo_turn() -> Result<(), crate::http::FetchError> {
+    yahoo_paced();
+    bagholder_net::machine::global()
+        .turn(YAHOO_HOST, &bagholder_net::SystemClock)
+        .map_err(|r| crate::http::FetchError::Transport(format!("yahoo: refused a request; not asked again before {}", r.until)))
+}
 
 fn yahoo_get(url: &str) -> Option<String> {
-    {
-        let mut gate = YAHOO.lock().unwrap();
-        let now = Instant::now();
-        if let Some(until) = gate.backoff_until {
-            if now < until {
-                crate::http::note_source("yahoo", false, Some(&crate::http::FetchError::Transport("yahoo: backing off after 429".into())));
-                return None;
-            }
-        }
-        if let Some(next) = gate.next_at {
-            if next > now {
-                let wait = next - now;
-                drop(gate);
-                std::thread::sleep(wait);
-                gate = YAHOO.lock().unwrap();
-            }
-        }
-        gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
-    }
-    match get_text(url, &YAHOO_HEADERS) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            if e.code() == Some(429) {
-                YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
-            }
-            None
-        }
-    }
+    yahoo_get_result(url).ok()
 }
 
-/// A Yahoo request for the chart path: the body, or the failure -- a backoff in force reads as one, and a 404 keeps its
+/// A Yahoo request for the chart path: the body, or the failure -- a rest in force reads as one, and a 404 keeps its
 /// code so the symbol can be remembered as one Yahoo does not carry.
 pub fn yahoo_get_result(url: &str) -> Result<String, crate::http::FetchError> {
-    {
-        let mut gate = YAHOO.lock().unwrap();
-        let now = Instant::now();
-        if let Some(until) = gate.backoff_until {
-            if now < until {
-                let e = crate::http::FetchError::Transport("yahoo: backing off after 429".into());
-                crate::http::note_source("yahoo", false, Some(&e));
-                return Err(e);
-            }
-        }
-        if let Some(next) = gate.next_at {
-            if next > now {
-                let wait = next - now;
-                drop(gate);
-                std::thread::sleep(wait);
-                gate = YAHOO.lock().unwrap();
-            }
-        }
-        gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
-    }
-    match get_text(url, &YAHOO_HEADERS) {
-        Ok(t) => Ok(t),
-        Err(e) => {
-            if e.code() == Some(429) {
-                YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
-            }
-            Err(e)
-        }
-    }
+    // the request takes its turn, and a 429 rests the host, in `crate::http`
+    yahoo_paced();
+    get_text(url, &YAHOO_HEADERS)
 }
 
 /// The same, answering only the HTTP code.
@@ -117,7 +98,7 @@ pub fn instant_secs_public(s: &str) -> Option<f64> {
 /// Yahoo's `gmtoffset` is the offset today, not the bar's, so where the
 /// exchange names its zone each bar is given its own standard or daylight
 /// offset instead.
-pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
+pub fn parse_yahoo_chart(text: &str) -> Vec<SourceBar> {
     let d: Value = match serde_json::from_str(if text.is_empty() { "{}" } else { text }) { Ok(v) => v, Err(_) => return vec![] };
     let results = match d.get("chart").and_then(|c| c.get("result")).and_then(|r| r.as_array()) {
         Some(r) if !r.is_empty() => r,
@@ -140,11 +121,11 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
         q.get(k).and_then(|v| v.as_array()).and_then(|a| a.get(i)).and_then(|x| x.as_f64())
     };
 
-    let mut out: Vec<Value> = Vec::new();
+    let mut out: Vec<SourceBar> = Vec::new();
     for (i, t) in ts.iter().enumerate() {
         let t = match t.as_i64() { Some(t) => t, None => continue };
         let close = match col("close", i) { Some(c) if c > 0.0 => c, _ => continue };
-        let (day, minute, off) = match crate::clockzone::local_at(&zone, t) {
+        let (day, minute, off) = match bagholder_model::clock::local_at(&zone, t) {
             Some((d, mi, o)) => (d, mi, o),
             None => {
                 let local = t + fixed;
@@ -154,43 +135,65 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
                 (bagholder_model::dates::fmt(y, m, dd), (rem / 60) as i64, fixed)
             }
         };
-        out.push(json!({
-            "time": t, "day": day, "minute": minute, "offset": off,
-            "open": col("open", i), "high": col("high", i), "low": col("low", i),
-            "close": close, "volume": col("volume", i),
-        }));
+        out.push(SourceBar {
+            time: t,
+            day,
+            minute,
+            offset: off,
+            px: Ohlcv { open: col("open", i), high: col("high", i), low: col("low", i), close, volume: col("volume", i) },
+        });
     }
-    out.sort_by_key(|b| b.get("time").and_then(|v| v.as_i64()).unwrap_or(0));
+    out.sort_by_key(|b| b.time);
     out
 }
 
+/// A chart's `meta`, as far as a quote reads it.
+#[derive(serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct YahooMeta {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    regular_market_price: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    chart_previous_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    previous_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    currency: String,
+    #[serde(deserialize_with = "lenient::text")]
+    short_name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    long_name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    exchange_name: String,
+}
+
 /// The chart's meta read as a quote.
-pub fn parse_yahoo_quote(text: &str) -> Option<Value> {
+pub fn parse_yahoo_quote(text: &str) -> Option<SourceQuote> {
     let d: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
     let results = d.get("chart")?.get("result")?.as_array()?;
     let meta = results.first()?.get("meta")?;
     if !meta.is_object() || get(meta, "regularMarketPrice").is_none() {
         return None;
     }
-    let last = opt(get(meta, "regularMarketPrice"));
-    let prev = opt(get(meta, "chartPreviousClose")).or_else(|| opt(get(meta, "previousClose")));
+    let m = YahooMeta::deserialize(meta).ok()?;
+    let last = m.regular_market_price;
+    let prev = m.chart_previous_close.or(m.previous_close);
     let change = match (last, prev) {
         (Some(l), Some(p)) if p != 0.0 => Some(l - p),
         _ => None,
     };
-    let name = {
-        let s = field_s(meta, "shortName");
-        if s.is_empty() { field_s(meta, "longName") } else { s }
-    };
-    Some(json!({
-        "price": last,
-        "priceChange": change,
-        "percentChange": match (change, prev) { (Some(c), Some(p)) if p != 0.0 => Some(c / p * 100.0), _ => None },
-        "prevClose": prev,
-        "currency": field_s(meta, "currency"),
-        "name": name,
-        "exchange": field_s(meta, "exchangeName"),
-    }))
+    Some(SourceQuote {
+        quote: QuoteRecord {
+            price: last,
+            price_change: change,
+            percent_change: match (change, prev) { (Some(c), Some(p)) if p != 0.0 => Some(c / p * 100.0), _ => None },
+            prev_close: prev,
+            ..QuoteRecord::default()
+        },
+        currency: m.currency,
+        name: if m.short_name.is_empty() { m.long_name } else { m.short_name },
+        exchange: m.exchange_name,
+    })
 }
 
 pub fn percent_encode(s: &str) -> String {
@@ -207,55 +210,64 @@ pub fn percent_encode(s: &str) -> String {
 
 /// A one-day chart, whose stated previous close is
 /// yesterday's -- a longer range states the close before the range.
-pub fn fetch_yahoo_quote(code: &str) -> Option<Value> {
+pub fn fetch_yahoo_quote(code: &str) -> Option<SourceQuote> {
     let url = format!("{}{}?range=1d&interval=1d", YAHOO_CHART_URL, percent_encode(code));
     parse_yahoo_quote(&yahoo_get(&url)?)
 }
 
-pub fn yahoo_root(symbol: &str) -> String {
-    bagholder_model::venues::tmx_symbol(symbol).replace('.', "-")
+/// The market identifier code of a venue as this reader's records name it
+/// (`TSX`, `TSX-V`, `NASDAQ`), for the venue rules moved to
+/// `bagholder_sources::venue`, which read venues by their code. A venue named
+/// here by no code is one those rules do not cover.
+pub fn venue_mic(exchange: &str) -> Option<&'static str> {
+    match exchange.trim().to_uppercase().as_str() {
+        "TSX" => Some("XTSE"),
+        "TSX-V" | "TSXV" => Some("XTSX"),
+        "CSE" => Some("XCNQ"),
+        "CBOE CANADA" | "NEO" => Some("NEOE"),
+        "NASDAQ" => Some("XNAS"),
+        "NYSE" => Some("XNYS"),
+        "NYSE ARCA" | "ARCA" => Some("ARCX"),
+        "NYSE AMERICAN" | "AMEX" => Some("XASE"),
+        "BATS" | "CBOE" => Some("BATS"),
+        _ => None,
+    }
 }
 
-const YAHOO_SUFFIX: [(&str, &str); 6] = [
-    ("TSX", ".TO"), ("TSX-V", ".V"), ("TSXV", ".V"), ("CSE", ".CN"), ("CBOE CANADA", ".NE"), ("NEO", ".NE"),
-];
-const YAHOO_FORMS_CAD: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
-const YAHOO_FORMS_USD: [&str; 1] = [""];
+/// The venues of each market, the likelier first: the forms a lookup tries,
+/// after the listing's own venue's, when its venue is wrong or missing.
+pub const CANADIAN_VENUES: [&str; 4] = ["XTSE", "XTSX", "XCNQ", "NEOE"];
+pub const US_VENUES: [&str; 1] = ["XNAS"];
 
-/// The venue's own suffix first, then the other venues of its market, so a
+/// The venue's own forms first, then the other venues of its market, so a
 /// wrong or missing venue still finds it. The venue names the market before
 /// the currency does: a watched listing keeps no currency, and read by
 /// currency alone a Nasdaq listing was asked for as a Toronto one, which is
 /// another security (`PLTR.TO` is Palantir's Canadian depositary receipt, not
 /// the stock) or nothing at all; a TSX listing that trades in US dollars is
 /// still a Toronto one. Only a venue the app does not name leaves the currency
-/// to decide.
-pub fn yahoo_forms(rec: &Value) -> Vec<String> {
-    let root = yahoo_root(&field_s(rec, "symbol"));
-    let ccy = match bagholder_model::venues::tmx_form(&field_s(rec, "exchange"), "") {
-        Some(":US") => "USD".to_string(),
-        Some(_) => "CAD".to_string(),
-        None => { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } }
+/// to decide. Each venue's forms are `bagholder_sources::venue::yahoo_forms`.
+pub fn yahoo_forms(rec: &Listing) -> Vec<String> {
+    let us = match bagholder_model::venues::tmx_form(&rec.exchange, "") {
+        Some(form) => form == ":US",
+        None => match rec.currency.trim().to_uppercase().as_str() {
+            "" | "CAD" => false,
+            "USD" => true,
+            _ => return vec![],
+        },
     };
-    if root.is_empty() || root.contains(' ') {
-        return vec![];
-    }
-    let base: Vec<&str> = match ccy.as_str() {
-        "CAD" => YAHOO_FORMS_CAD.to_vec(),
-        "USD" => YAHOO_FORMS_USD.to_vec(),
-        _ => return vec![],
-    };
-    let venue = field_s(rec, "exchange").trim().to_uppercase();
-    let first = YAHOO_SUFFIX.iter().find(|(k, _)| *k == venue).map(|(_, v)| *v);
-    let forms: Vec<&str> = match first {
-        Some(f) if base.contains(&f) => {
-            let mut out = vec![f];
-            out.extend(base.iter().filter(|x| **x != f));
-            out
+    let market: &[&str] = if us { &US_VENUES } else { &CANADIAN_VENUES };
+    // every venue `venue_mic` names is one `tmx_form` places in a market, so
+    // the listing's own venue is always of the market chosen
+    let mut out: Vec<String> = Vec::new();
+    for mic in venue_mic(&rec.exchange).into_iter().chain(market.iter().copied()) {
+        for form in bagholder_sources::venue::yahoo_forms(&rec.symbol, mic) {
+            if !out.contains(&form) {
+                out.push(form);
+            }
         }
-        _ => base,
-    };
-    forms.into_iter().map(|f| format!("{}{}", root, f)).collect()
+    }
+    out
 }
 
 /// The form a listing's quote is filed under, or
@@ -270,45 +282,95 @@ pub fn tmx_quote_symbol(symbol: &str, exchange: &str, currency: &str) -> Option<
 
 /// Which public source covers this instrument, and the
 /// key it is filed under there.
-pub fn quote_source(rec: &Value) -> Option<(String, String)> {
-    let kind = { let k = field_s(rec, "kind"); if k.is_empty() { "Shares".to_string() } else { k } };
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
-    let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
+pub fn quote_source(rec: &Listing) -> Option<(String, String)> {
+    let kind = { let k = rec.kind.clone(); if k.is_empty() { "Shares".to_string() } else { k } };
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let ccy = { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
     if sym.is_empty() {
         return None;
     }
     if kind == "Instrument" {
-        let y = field_s(rec, "yahoo");
+        let y = rec.yahoo.clone().unwrap_or_default();
         return if y.is_empty() { None } else { Some(("yahoo_quote".into(), y)) };
     }
     if kind == "Crypto" {
         return Some(("coinbase".into(), format!("{}-{}", sym, ccy)));
     }
     if kind == "Options" {
-        let code = occ_code(&field_s(rec, "symbol"));
+        let code = occ_code(&rec.symbol);
         return if !code.is_empty() && ccy == "USD" { Some(("cboe_options".into(), code)) } else { None };
     }
     if kind != "Shares" {
         return None;
     }
-    let venue = field_s(rec, "exchange").trim().to_uppercase();
+    let venue = rec.exchange.clone().trim().to_uppercase();
     if venue == "CBOE CANADA" || venue == "NEO" {
         return Some(("cboe_ca".into(), sym));
     }
     // a US listing is Yahoo's: TMX stamps one fifteen minutes behind
-    if bagholder_model::venues::tmx_form(&field_s(rec, "exchange"), &field_s(rec, "currency")) == Some(":US") {
+    if bagholder_model::venues::tmx_form(&rec.exchange, &rec.currency) == Some(":US") {
         let forms = yahoo_forms(rec);
         return forms.first().map(|f| ("yahoo_quote".to_string(), f.clone()));
     }
-    tmx_quote_symbol(&field_s(rec, "symbol"), &field_s(rec, "exchange"), &field_s(rec, "currency"))
+    tmx_quote_symbol(&rec.symbol, &rec.exchange, &rec.currency)
         .map(|q| ("tmx".to_string(), q))
 }
 
 /// The held instruments whose quote is
 /// older than the refresh interval, each with its source and key.
+// --- when a price can have moved -----------------------------------------------
+//
+// The exchanges offer no push, so prices are asked for. But a share's price moves
+// only while its market trades: a quote read after the close is still the quote at
+// midnight, on Saturday, and until the next open, and asking again every minute
+// through the night fetches the same number some nine hundred times. So a listing
+// is asked again only while its market is open, or when what is held was read
+// before the last close (so the close itself is never missed). A coin trades always.
+// Both countries' exchanges keep New York hours. A market holiday is not known
+// here and is treated as a trading day: a wasted day's reads, never a stale price.
+
+const MARKET_ZONE: &str = "America/New_York";
+const OPEN_MINUTE: u32 = 9 * 60 + 30;
+/// Twenty minutes past the bell, for the closing print to be published.
+const SETTLED_MINUTE: u32 = 16 * 60 + 20;
+
+fn weekday(days_since_epoch: i64) -> i64 {
+    (days_since_epoch + 3).rem_euclid(7) // 0 = Monday; 1970-01-01 was a Thursday
+}
+
+/// Whether the share markets are trading at `now_unix` (or the close is still settling).
+pub fn markets_open(now_unix: f64) -> bool {
+    match bagholder_model::clock::civil_in(MARKET_ZONE, now_unix as i64) {
+        Some((day, minute)) => weekday(day) < 5 && (OPEN_MINUTE..SETTLED_MINUTE).contains(&minute),
+        None => true, // no zone data: ask, rather than show a stale price
+    }
+}
+
+/// The moment the last session's closing print was settled, before `now_unix`.
+fn last_settled(now_unix: f64) -> Option<f64> {
+    let (day, minute) = bagholder_model::clock::civil_in(MARKET_ZONE, now_unix as i64)?;
+    let mut back = if weekday(day) < 5 && minute >= SETTLED_MINUTE { 0 } else { 1 };
+    while weekday(day - back) >= 5 {
+        back += 1;
+    }
+    let local_midnight = now_unix - (minute as f64) * 60.0 - (now_unix % 60.0);
+    Some(local_midnight - (back as f64) * 86400.0 + (SETTLED_MINUTE as f64) * 60.0)
+}
+
+/// Whether a quote from `source`, last read at `last`, can be different now.
+pub fn can_have_moved(source: &str, last: Option<f64>, now_unix: f64) -> bool {
+    if source == "coinbase" || markets_open(now_unix) {
+        return true;
+    }
+    match (last, last_settled(now_unix)) {
+        (Some(read), Some(settled)) => read < settled,
+        _ => true,
+    }
+}
+
 pub fn quote_symbols_needing_refresh(
     conn: &rusqlite::Connection,
-    symbols: &[Value],
+    symbols: &[Listing],
     now_unix: f64,
     max_age_minutes: f64,
 ) -> rusqlite::Result<Vec<(String, String, String)>> {
@@ -318,8 +380,8 @@ pub fn quote_symbols_needing_refresh(
     for rec in symbols {
         // a watched listing is keyed by symbol and venue
         let sym = {
-            let k = field_s(rec, "quoteKey");
-            if k.is_empty() { bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol")) } else { k }
+            let k = rec.quote_key.clone().unwrap_or_default();
+            if k.is_empty() { bagholder_model::venues::tmx_symbol(&rec.symbol) } else { k }
         };
         let src = quote_source(rec);
         let (source, key) = match src { Some(s) => s, None => continue };
@@ -327,12 +389,10 @@ pub fn quote_symbols_needing_refresh(
             continue;
         }
         seen.push(sym.clone());
-        let last = fetched.get(&sym).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let age_ok = match instant_secs(&last) {
-            Some(then) => (now_unix - then) <= max_age_minutes * 60.0,
-            None => false,
-        };
-        if !age_ok {
+        let last = fetched.get(&sym).map_or("", String::as_str);
+        let read = instant_secs(last);
+        let age_ok = read.map_or(false, |then| (now_unix - then) <= max_age_minutes * 60.0);
+        if !age_ok && can_have_moved(&source, read, now_unix) {
             out.push((sym, source, key));
         }
     }
@@ -354,16 +414,16 @@ fn instant_secs(s: &str) -> Option<f64> {
     Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss)
 }
 
-pub fn fetch_cboe_ca_quote(sym: &str) -> Option<Value> {
+pub fn fetch_cboe_ca_quote(sym: &str) -> Option<SourceQuote> {
     let url = CBOE_CA_URL.replace("{}", &percent_encode(sym));
     parse_cboe_ca_quote(&get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]).ok()?)
 }
 
-pub fn fetch_cboe_option_chain(root: &str) -> Map<String, Value> {
+pub fn fetch_cboe_option_chain(root: &str) -> OptionChain {
     let url = CBOE_OPTIONS_URL.replace("{}", &percent_encode(root));
     match get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]) {
         Ok(t) => parse_cboe_options(&t),
-        Err(_) => Map::new(),
+        Err(_) => OptionChain::new(),
     }
 }
 
@@ -389,16 +449,15 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
         let bars = crate::history::fetch_coinbase_candles(&product, 86400, now - 4 * 86400, now);
         let quoted = product.rsplit('-').next().unwrap_or("").to_string();
         let bars = crate::history::in_position_currency(conn, &bars, &quoted, &ccy);
-        let done: Vec<&Value> = bars
+        let done: Vec<&bagholder_store::bars::TimeBar> = bars
             .iter()
             .filter(|b| {
-                let ts = b["time"].as_i64().unwrap_or(0);
-                let (y, m, d) = bagholder_model::dates::from_days(ts.div_euclid(86400));
+                let (y, m, d) = bagholder_model::dates::from_days(b.time.div_euclid(86400));
                 bagholder_model::dates::fmt(y, m, d).as_str() < today
             })
             .collect();
         if let Some(last) = done.last() {
-            prev = last["close"].as_f64();
+            prev = Some(last.px.close);
             break;
         }
     }
@@ -432,16 +491,22 @@ pub fn float_repr(x: f64) -> String {
 
 /// The spot price, with the day's change against
 /// the previous UTC day's close when Coinbase has a market to take it from.
-pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<Value> {
+pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<SourceQuote> {
     let url = COINBASE_URL.replace("{}", pair);
-    let mut rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
-    if let Some(prev) = coinbase_prev_close(conn, pair, today, now_unix) {
-        let price = rec["price"].as_f64().unwrap_or(0.0);
-        rec["prevClose"] = json!(prev);
-        rec["priceChange"] = json!(price - prev);
-        rec["percentChange"] = json!((price - prev) / prev * 100.0);
-    }
-    Some(rec)
+    let rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
+    Some(match coinbase_prev_close(conn, pair, today, now_unix) {
+        Some(prev) => with_prev_close(rec, prev),
+        None => rec,
+    })
+}
+
+/// A spot price with its day's change against the previous close.
+pub fn with_prev_close(mut rec: SourceQuote, prev: f64) -> SourceQuote {
+    let price = rec.quote.price.unwrap_or(0.0);
+    rec.quote.prev_close = Some(prev);
+    rec.quote.price_change = Some(price - prev);
+    rec.quote.percent_change = Some((price - prev) / prev * 100.0);
+    rec
 }
 
 /// The root of an OCC code, "" when it is not one.
@@ -460,8 +525,8 @@ pub fn fetch_for(
     source: &str,
     key: &str,
     today: &str,
-    chains: &mut Map<String, Value>,
-) -> Option<Value> {
+    chains: &mut std::collections::HashMap<String, OptionChain>,
+) -> Option<SourceQuote> {
     match source {
         "tmx" => tmx::fetch_tmx_quote(conn, key, today),
         "cboe_ca" => fetch_cboe_ca_quote(key),
@@ -472,11 +537,8 @@ pub fn fetch_for(
         "yahoo_quote" => fetch_yahoo_quote(key),
         "cboe_options" => {
             let root = occ_root(key);
-            if !chains.contains_key(&root) {
-                chains.insert(root.clone(), Value::Object(fetch_cboe_option_chain(&root)));
-            }
-            let row = chains.get(&root)?.get(key)?.clone();
-            option_mark(&row)
+            let chain = chains.entry(root.clone()).or_insert_with(|| fetch_cboe_option_chain(&root));
+            option_mark(chain.get(key)?)
         }
         _ => None,
     }
@@ -484,19 +546,17 @@ pub fn fetch_for(
 
 pub fn refresh_quotes(
     conn: &rusqlite::Connection,
-    symbols: &[Value],
+    symbols: &[Listing],
     today: &str,
     now_unix: f64,
     now_stamp: &str,
 ) -> rusqlite::Result<usize> {
     let mut done = 0usize;
-    let mut chains = Map::new();
+    let mut chains = std::collections::HashMap::new();
     for (sym, source, key) in quote_symbols_needing_refresh(conn, symbols, now_unix, QUOTE_REFRESH_MINUTES)? {
         if let Some(rec) = fetch_for(conn, &source, &key, today, &mut chains) {
-            if get(&rec, "price").is_some() {
-                let mut with_source = rec.as_object().cloned().unwrap_or_default();
-                with_source.insert("source".into(), json!(source));
-                crate::market::upsert_quote(conn, &sym, &Value::Object(with_source), &source, now_stamp)?;
+            if rec.quote.price.is_some() {
+                crate::market::upsert_quote(conn, &sym, &rec.quote, &source, now_stamp)?;
                 done += 1;
             }
         }
@@ -512,19 +572,19 @@ pub fn refresh_quotes(
 /// distribution history look fresh.
 pub fn stale_symbols(
     conn: &rusqlite::Connection,
-    symbols: &[Value],
+    symbols: &[Listing],
     now_unix: f64,
     stale_hours: f64,
 ) -> rusqlite::Result<Vec<String>> {
     let fetched = crate::market::distributions_fetched_at(conn)?;
     let mut out = Vec::new();
     for rec in symbols {
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
-        if sym.is_empty() || !tmx::is_canadian_listing(&field_s(rec, "exchange"), &field_s(rec, "currency")) {
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+        if sym.is_empty() || !tmx::is_canadian_listing(&rec.exchange, &rec.currency) {
             continue;
         }
-        let last = fetched.get(&sym).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let fresh = match instant_secs(&last) {
+        let last = fetched.get(&sym).map_or("", String::as_str);
+        let fresh = match instant_secs(last) {
             Some(then) => (now_unix - then) <= stale_hours * 3600.0,
             None => false,
         };
@@ -540,58 +600,35 @@ pub fn n(v: Option<&Value>) -> f64 {
     num(v, 0.0)
 }
 
-/// Yahoo's pace, for a caller that makes its own request: false while a
-/// backoff after a 429 stands; otherwise waits its turn and takes it.
-pub fn yahoo_turn() -> bool {
-    let mut gate = YAHOO.lock().unwrap();
-    let now = Instant::now();
-    if let Some(until) = gate.backoff_until {
-        if now < until {
-            return false;
-        }
-    }
-    if let Some(next) = gate.next_at {
-        if next > now {
-            let wait = next - now;
-            drop(gate);
-            std::thread::sleep(wait);
-            gate = YAHOO.lock().unwrap();
-        }
-    }
-    gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
-    true
+/// Yahoo's pace, for a caller that makes its own request: false while its rest
+/// after a 429 stands; otherwise waits its turn and takes it.
+pub fn yahoo_may_ask() -> bool {
+    yahoo_turn().is_ok()
 }
 
-/// Yahoo turned a request away with a 429: nothing is asked of it for the
-/// backoff.
+/// Yahoo turned a request away with a 429: nothing is asked of it for its rest.
 pub fn yahoo_back_off() {
-    YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
+    bagholder_net::machine::refused_now(YAHOO_HOST, None);
 }
 
 pub const PEEK_SECONDS: u64 = 60;
 
 /// A listing's price and day change for a glance, from
 /// the source a watched listing uses, not stored, remembered for a minute.
-pub fn peek_quote(conn: &rusqlite::Connection, rec: &Value, today: &str) -> Option<Value> {
-    static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Value)>>> = std::sync::OnceLock::new();
+pub fn peek_quote(conn: &rusqlite::Connection, rec: &Listing, today: &str) -> Option<Glance> {
+    static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Glance)>>> = std::sync::OnceLock::new();
     let (source, key) = quote_source(rec)?;
-    let k = format!("{}@{}", field_s(rec, "symbol").trim().to_uppercase(), field_s(rec, "exchange").trim().to_uppercase());
+    let k = format!("{}@{}", rec.symbol.clone().trim().to_uppercase(), rec.exchange.clone().trim().to_uppercase());
     let cache = PEEK.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     if let Some((at, q)) = cache.lock().unwrap().get(&k) {
         if at.elapsed() < Duration::from_secs(PEEK_SECONDS) {
-            return Some(q.clone());
+            return Some(*q);
         }
     }
-    let mut chains = Map::new();
-    let q = fetch_for(conn, &source, &key, today, &mut chains)?;
-    if get(&q, "price").is_none() {
-        return None;
-    }
-    let out = json!({
-        "price": q.get("price").cloned().unwrap_or(Value::Null),
-        "priceChange": q.get("priceChange").cloned().unwrap_or(Value::Null),
-        "percentChange": q.get("percentChange").cloned().unwrap_or(Value::Null),
-    });
-    cache.lock().unwrap().insert(k, (Instant::now(), out.clone()));
+    let mut chains = std::collections::HashMap::new();
+    let q = fetch_for(conn, &source, &key, today, &mut chains)?.quote;
+    q.price?;
+    let out = Glance { price: q.price, price_change: q.price_change, percent_change: q.percent_change };
+    cache.lock().unwrap().insert(k, (Instant::now(), out));
     Some(out)
 }

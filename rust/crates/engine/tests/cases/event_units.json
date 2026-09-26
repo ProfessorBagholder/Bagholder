@@ -1,0 +1,58 @@
+[
+  {
+    "name": "a split whose units the broker states differently from its ratio: the broker's units stand, and the event is listed",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: the broker's own units are the statement of what moved",
+    "working": [
+      "100 X bought for 1,000; a two-for-one split, and the broker states 150 new units: 250 held, not the ratio's 200",
+      "the difference is listed; 250 sold for 1,500 → P&L 500"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "150"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-250", "cash": "1500"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]}],
+    "expect": {"position_count": 0, "beyond": [], "unit_disagreements": ["t2"], "trades": [{"opened_by": "t1", "pnl": "500.00"}]}
+  },
+  {
+    "name": "a split stated as units in and out on the same instrument agrees with its ratio",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split stated as units in and out",
+    "working": [
+      "100 X bought for 1,000; a two-for-one split the broker states as 100 out and 200 in: 200 held, as the ratio says, nothing listed",
+      "200 sold for 1,200 → P&L 200, entry 5"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "-100"},
+      {"id": "t3", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "200"},
+      {"id": "t4", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-200", "cash": "1200"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]}],
+    "expect": {"position_count": 0, "beyond": [], "unit_disagreements": [], "trades": [{"opened_by": "t1", "qty": "200", "entry": "5", "pnl": "200.00", "flags": ["split"]}]}
+  },
+  {
+    "name": "a consolidation the broker states in whole units, with cash in lieu of the fraction: the fraction is paid out, nothing listed",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: cash in lieu",
+    "working": [
+      "100 X bought for 1,000; one-for-eight: the ratio gives 12.5; the broker states 88 out, leaving 12, and pays the half unit in cash",
+      "the holding goes to the ratio's 12.5 (cost 1,000), and the cash leg closes the 0.5 the broker's units fell short by, at 40 per unit: 20 against 40 → −20",
+      "12 left, as the broker states; sold for 1,200 against 960 → 240; the round trip: 220"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "-88"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-12", "cash": "1200"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.125"}, {"from": "X", "cash_per_unit": "40"}]}],
+    "expect": {"position_count": 0, "beyond": [], "unit_disagreements": [], "trade_count": 1, "trades": [{"opened_by": "t1", "pnl": "220.00"}]}
+  }
+]

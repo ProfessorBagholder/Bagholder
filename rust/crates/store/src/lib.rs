@@ -1,16 +1,24 @@
 //! The SQLite store: the database file every desktop copy reads and writes.
 
+// the database plumbing lives in `bagholder-sqlite`, shared with the book; these
+// names stay here so every caller reads them where it always has
+pub use bagholder_sqlite::{atomically, open_db, open_db_hooked, pool};
+
+pub mod bars;
+pub mod broker;
 pub mod schema;
 pub mod relabel;
 pub mod activities;
 pub mod tables;
 pub mod merge;
 pub mod csvimport;
-pub mod snapshot;
+pub mod book;
+pub mod rows;
 pub mod market;
 pub mod orders;
 pub mod feeds;
 pub mod admin;
+pub mod gens;
 
 /// Whether the program running is a test run: a test harness, which cargo
 /// builds into a `deps` folder, never the app it ships.
@@ -42,7 +50,5 @@ pub fn guard_home(path: &std::path::Path) -> Result<std::path::PathBuf, String> 
 /// opening the live database.
 pub fn connect(home: &std::path::Path) -> rusqlite::Result<rusqlite::Connection> {
     guard_home(home).map_err(|_| rusqlite::Error::InvalidPath(home.to_path_buf()))?;
-    let conn = rusqlite::Connection::open(home.join("bagholder.db"))?;
-    conn.busy_timeout(std::time::Duration::from_secs(30))?;
-    Ok(conn)
+    open_db(&home.join("bagholder.db"))
 }

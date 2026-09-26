@@ -1,0 +1,12 @@
+# A selection of the fields Wealthsimple's own Security fragment asks (web app release 0.3.668812):
+# its type, currency, listing and an option's terms, for any number of ids at once.
+query Securities($ids: [ID!]!) {
+  securities(ids: $ids) {
+    id
+    currency
+    securityType
+    status
+    stock { symbol name primaryExchange primaryMic }
+    optionDetails { multiplier osiSymbol expiryDate strikePrice optionType underlyingSecurity { id } }
+  }
+}

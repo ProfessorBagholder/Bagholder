@@ -296,6 +296,7 @@ CREATE TABLE IF NOT EXISTS filings (
     enriched_at TEXT,
     enrich_version INTEGER,
     enrich_final INTEGER,
+    enrich_reads INTEGER,
     fetched_at TEXT,
     PRIMARY KEY (symbol, id)
 );

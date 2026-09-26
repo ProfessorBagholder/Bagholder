@@ -1,0 +1,2450 @@
+{
+  "view": {
+    "ok": true,
+    "today": "2026-03-02",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2026-03-02",
+      "benchmarkLast": ""
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "Crypto",
+        "Margin"
+      ],
+      "symbols": [
+        "ASTS",
+        "ASTS 15JAN27 40.00 CALL",
+        "BTC",
+        "ENB"
+      ],
+      "listings": {
+        "BTC": {
+          "name": "LUNR",
+          "exchange": "Crypto",
+          "kind": "Crypto",
+          "currency": "CAD"
+        },
+        "ENB": {
+          "name": "Enbridge Inc.",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "ASTS": {
+          "name": "AST SpaceMobile, Inc.",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "USD"
+        },
+        "ASTS 15JAN27 40.00 CALL": {
+          "name": "AST SpaceMobile, Inc.",
+          "exchange": "NASDAQ",
+          "kind": "Options",
+          "currency": "USD"
+        }
+      },
+      "tags": [],
+      "exchanges": [
+        "Crypto",
+        "NASDAQ",
+        "TSX"
+      ],
+      "kinds": [
+        "Shares",
+        "Options",
+        "Crypto"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": []
+    },
+    "kpi": {
+      "realized": 0,
+      "count": 0,
+      "wins": 0,
+      "losses": 0,
+      "breakeven": 0,
+      "winRate": null,
+      "grossWin": 0,
+      "grossLoss": 0,
+      "profitFactor": 0.0,
+      "profitFactorInfinite": false,
+      "expectancy": null,
+      "avgWin": 0.0,
+      "avgLoss": 0.0,
+      "fees": 0,
+      "avgHold": null,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [],
+      "drawdown": {
+        "pct": null,
+        "abs": null,
+        "at": "",
+        "peakAt": ""
+      },
+      "annualized": {
+        "rate": null,
+        "years": 0.0,
+        "count": 0,
+        "first": "",
+        "last": ""
+      }
+    },
+    "years": [],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [],
+    "bySymbol": [],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        }
+      ],
+      "ungraded": 0,
+      "graded": 0
+    },
+    "queue": [],
+    "trades": [],
+    "tradeCount": 0,
+    "tradeTotal": 0,
+    "positions": [
+      {
+        "id": "rt:c1",
+        "symbol": "BTC",
+        "underlying": "BTC",
+        "name": "LUNR",
+        "exchange": "Crypto",
+        "kind": "Crypto",
+        "account": "Crypto",
+        "accountId": "acct-c",
+        "currency": "CAD",
+        "securityId": "",
+        "short": false,
+        "qty": 0.1,
+        "mult": 1,
+        "avg": 100000.0,
+        "cost": 10000.0,
+        "fees": 0.0,
+        "last": 120000.0,
+        "priceSource": "quote",
+        "priceChange": null,
+        "percentChange": null,
+        "dayChange": null,
+        "mv": 12000.0,
+        "unreal": 2000.0,
+        "unrealPct": 0.2,
+        "held": 56,
+        "opened": "2026-01-05",
+        "wsQty": null,
+        "rt": "rt:c1",
+        "lots": [
+          {
+            "opened": "2026-01-05",
+            "qty": 0.1,
+            "price": 100000.0,
+            "basis": 10000.0,
+            "held": 56,
+            "flags": [],
+            "activityId": "c1"
+          }
+        ],
+        "fills": [
+          {
+            "id": "c1",
+            "when": "2026-01-05T15:00:00+00:00",
+            "date": "2026-01-05",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 0.1,
+            "price": 100000.0,
+            "amount": -10000.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          }
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": [],
+        "alloc": 0.6451612903225806
+      },
+      {
+        "id": "rt:b1",
+        "symbol": "ENB",
+        "underlying": "ENB",
+        "name": "Enbridge Inc.",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "account": "Margin",
+        "accountId": "acct-m",
+        "currency": "CAD",
+        "securityId": "sec-enb",
+        "short": false,
+        "qty": 100.0,
+        "mult": 1,
+        "avg": 50.0,
+        "cost": 5000.0,
+        "fees": 0.0,
+        "last": 55.5,
+        "priceSource": "quote",
+        "priceChange": -0.25,
+        "percentChange": -0.448,
+        "dayChange": -25.0,
+        "mv": 5550.0,
+        "unreal": 550.0,
+        "unrealPct": 0.11,
+        "held": 56,
+        "opened": "2026-01-05",
+        "wsQty": 100.0,
+        "rt": "rt:b1",
+        "lots": [
+          {
+            "opened": "2026-01-05",
+            "qty": 100.0,
+            "price": 50.0,
+            "basis": 5000.0,
+            "held": 56,
+            "flags": [],
+            "activityId": "b1"
+          }
+        ],
+        "fills": [
+          {
+            "id": "b1",
+            "when": "2026-01-05T15:00:00+00:00",
+            "date": "2026-01-05",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 100.0,
+            "price": 50.0,
+            "amount": -5000.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          }
+        ],
+        "grade": "A",
+        "thesis": "pipes",
+        "tags": [
+          "income",
+          "core"
+        ],
+        "alloc": 0.3225806451612903
+      },
+      {
+        "id": "rt:b2",
+        "symbol": "ASTS",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile, Inc.",
+        "exchange": "NASDAQ",
+        "kind": "Shares",
+        "account": "Margin",
+        "accountId": "acct-m",
+        "currency": "USD",
+        "securityId": "sec-asts",
+        "short": false,
+        "qty": 10.0,
+        "mult": 1,
+        "avg": 30.0,
+        "cost": 300.0,
+        "fees": 0.0,
+        "last": 30.0,
+        "priceSource": "fill",
+        "priceChange": null,
+        "percentChange": null,
+        "dayChange": null,
+        "mv": 300.0,
+        "unreal": 0.0,
+        "unrealPct": 0.0,
+        "held": 55,
+        "opened": "2026-01-06",
+        "wsQty": null,
+        "rt": "rt:b2",
+        "lots": [
+          {
+            "opened": "2026-01-06",
+            "qty": 10.0,
+            "price": 30.0,
+            "basis": 300.0,
+            "held": 55,
+            "flags": [],
+            "activityId": "b2"
+          }
+        ],
+        "fills": [
+          {
+            "id": "b2",
+            "when": "2026-01-06T15:00:00+00:00",
+            "date": "2026-01-06",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 10.0,
+            "price": 30.0,
+            "amount": -300.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          }
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": [],
+        "alloc": 0.01935483870967742
+      },
+      {
+        "id": "rt:o1",
+        "symbol": "ASTS 15JAN27 40.00 CALL",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile, Inc.",
+        "exchange": "NASDAQ",
+        "kind": "Options",
+        "account": "Margin",
+        "accountId": "acct-m",
+        "currency": "USD",
+        "securityId": "sec-o-asts",
+        "short": false,
+        "qty": 1.0,
+        "mult": 100,
+        "avg": 2.0,
+        "cost": 200.0,
+        "fees": 0.0,
+        "last": 2.0,
+        "priceSource": "fill",
+        "priceChange": null,
+        "percentChange": null,
+        "dayChange": null,
+        "mv": 200.0,
+        "unreal": 0.0,
+        "unrealPct": 0.0,
+        "held": 25,
+        "opened": "2026-02-05",
+        "wsQty": null,
+        "rt": "rt:o1",
+        "lots": [
+          {
+            "opened": "2026-02-05",
+            "qty": 1.0,
+            "price": 2.0,
+            "basis": 200.0,
+            "held": 25,
+            "flags": [],
+            "activityId": "o1"
+          }
+        ],
+        "fills": [
+          {
+            "id": "o1",
+            "when": "2026-02-05T15:00:00+00:00",
+            "date": "2026-02-05",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "",
+            "qty": 1.0,
+            "price": 2.0,
+            "amount": -200.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          }
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": [],
+        "alloc": 0.012903225806451613
+      }
+    ],
+    "positionsSummary": {
+      "count": 4,
+      "book": 15500.0,
+      "mv": 18050.0,
+      "unreal": 2550.0
+    },
+    "portfolio": {
+      "allocation": [
+        {
+          "id": "rt:c1",
+          "symbol": "BTC",
+          "account": "Crypto",
+          "value": 12000.0,
+          "share": 0.657354149548069
+        },
+        {
+          "id": "rt:b1",
+          "symbol": "ENB",
+          "account": "Margin",
+          "value": 5550.0,
+          "share": 0.3040262941659819
+        },
+        {
+          "id": "rt:b2",
+          "symbol": "ASTS",
+          "account": "Margin",
+          "value": 423.0,
+          "share": 0.023171733771569433
+        },
+        {
+          "id": "rt:o1",
+          "symbol": "ASTS 15JAN27 40.00 CALL",
+          "account": "Margin",
+          "value": 282.0,
+          "share": 0.015447822514379622
+        }
+      ],
+      "sectors": [
+        {
+          "name": "Digital assets",
+          "value": 12000.0,
+          "share": 0.657354149548069
+        },
+        {
+          "name": "Energy",
+          "value": 4995.0,
+          "share": 0.2736236647493837
+        },
+        {
+          "name": "Utilities",
+          "value": 555.0,
+          "share": 0.030402629416598194
+        },
+        {
+          "name": "Communication Services",
+          "value": 282.0,
+          "share": 0.015447822514379622
+        },
+        {
+          "name": "Not classified",
+          "value": 423.0,
+          "share": 0.023171733771569433
+        }
+      ],
+      "regions": [
+        {
+          "name": "Canada",
+          "value": 5550.0,
+          "share": 0.3040262941659819
+        },
+        {
+          "name": "United States",
+          "value": 282.0,
+          "share": 0.015447822514379622
+        },
+        {
+          "name": "Not classified",
+          "value": 12423.0,
+          "share": 0.6805258833196385
+        }
+      ],
+      "marketValue": 18255.0,
+      "costBasis": 15705.0,
+      "unrealized": 2550.0,
+      "unrealizedPct": 0.1623686723973257,
+      "positionCount": 4,
+      "accountCount": 2,
+      "nav": 19500.5,
+      "navAccounts": 2,
+      "marginUsed": 2500.255,
+      "marginUsedBy": {
+        "CAD": 2500.26
+      },
+      "marginUsedPct": 0.13696274993152563,
+      "availableMargin": 4200.75,
+      "availableMarginUnavailable": [
+        "Margin US"
+      ],
+      "hasMargin": true,
+      "cash": 209.905,
+      "cashPct": 0.01076408297223148,
+      "dayChange": -25.0,
+      "dayChangePct": -0.004484304932735426
+    },
+    "markets": {
+      "holdings": [
+        {
+          "id": "rt:c1",
+          "symbol": "BTC",
+          "exchange": "Crypto",
+          "value": 12000.0,
+          "percentChange": null,
+          "sector": "Digital assets"
+        },
+        {
+          "id": "rt:b1",
+          "symbol": "ENB",
+          "exchange": "TSX",
+          "value": 5550.0,
+          "percentChange": -0.448,
+          "sector": "Energy"
+        },
+        {
+          "id": "rt:b2",
+          "symbol": "ASTS",
+          "exchange": "NASDAQ",
+          "value": 423.0,
+          "percentChange": null,
+          "sector": "Not classified"
+        },
+        {
+          "id": "rt:o1",
+          "symbol": "ASTS 15JAN27 40.00 CALL",
+          "exchange": "NASDAQ",
+          "value": 282.0,
+          "percentChange": null,
+          "sector": "Communication Services"
+        }
+      ],
+      "watchlist": [
+        {
+          "symbol": "ENB",
+          "exchange": "TSX",
+          "name": "Enbridge Inc.",
+          "currency": "CAD",
+          "last": 55.5,
+          "priceChange": -0.25,
+          "percentChange": -0.448,
+          "sector": "Not classified",
+          "kind": "Shares",
+          "positionId": "rt:b1"
+        },
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "name": "S&P 500",
+          "currency": "USD",
+          "last": 7712.5,
+          "priceChange": 5.25,
+          "percentChange": 0.068,
+          "sector": "Indices",
+          "kind": "Index",
+          "positionId": null
+        },
+        {
+          "symbol": "ETH",
+          "exchange": "Crypto",
+          "name": "Ethereum",
+          "currency": "USD",
+          "last": null,
+          "priceChange": null,
+          "percentChange": null,
+          "sector": "Digital assets",
+          "kind": "Crypto",
+          "positionId": null
+        },
+        {
+          "symbol": "QNC",
+          "exchange": "TSX-V",
+          "name": "Quantum eMotion",
+          "currency": "CAD",
+          "last": 1.75,
+          "priceChange": null,
+          "percentChange": null,
+          "sector": "Information Technology",
+          "kind": "Shares",
+          "positionId": null
+        }
+      ],
+      "news": [
+        {
+          "id": "m1",
+          "headline": "Stocks close higher",
+          "source": "Nasdaq",
+          "url": "https://example.test/m1",
+          "publishedAt": "2026-03-01T21:00:00Z",
+          "market": true,
+          "tags": [],
+          "kind": "story"
+        },
+        {
+          "id": "n3",
+          "headline": "Enbridge annonce ses résultats du trimestre",
+          "source": "CNW",
+          "url": "https://example.test/n3",
+          "publishedAt": "2026-03-01T14:00:00Z",
+          "market": false,
+          "tags": [
+            {
+              "symbol": "ENB",
+              "exchange": "TSX",
+              "held": true,
+              "watched": true,
+              "percentChange": -0.448,
+              "positionId": "rt:b1"
+            }
+          ],
+          "kind": "story"
+        },
+        {
+          "id": "n2",
+          "headline": "Enbridge announces quarterly results!",
+          "source": "Newswire",
+          "url": "https://example.test/n2",
+          "publishedAt": "2026-03-01T13:05:00Z",
+          "market": false,
+          "tags": [
+            {
+              "symbol": "ENB",
+              "exchange": "TSX",
+              "held": true,
+              "watched": true,
+              "percentChange": -0.448,
+              "positionId": "rt:b1"
+            },
+            {
+              "symbol": "QNC",
+              "exchange": "TSX-V",
+              "held": false,
+              "watched": true,
+              "percentChange": null,
+              "positionId": null
+            }
+          ],
+          "kind": "release"
+        },
+        {
+          "id": "n4",
+          "headline": "A listing nobody follows any more",
+          "source": "Yahoo",
+          "url": "",
+          "publishedAt": "2026-02-27T10:00:00Z",
+          "market": false,
+          "tags": [
+            {
+              "symbol": "ZZZ",
+              "exchange": "NYSE",
+              "held": false,
+              "watched": false,
+              "percentChange": null,
+              "positionId": null
+            }
+          ],
+          "kind": "story"
+        }
+      ],
+      "universes": {
+        "ca": [
+          {
+            "id": null,
+            "symbol": "RY",
+            "name": "Royal Bank of Canada",
+            "value": 250000000000.0,
+            "percentChange": 0.42,
+            "sector": "Financial Services",
+            "country": "Canada"
+          },
+          {
+            "id": null,
+            "symbol": "SHOP",
+            "name": "Shopify",
+            "value": 0.0,
+            "percentChange": null,
+            "sector": "Not classified",
+            "country": "Canada"
+          }
+        ],
+        "us": []
+      },
+      "tiles": [
+        {
+          "symbol": "ZQ",
+          "exchange": "CBOT",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "kind": "Rate",
+          "last": 96.3725,
+          "change": -0.0125,
+          "percentChange": -0.013,
+          "decimals": 3,
+          "rate": 3.6275,
+          "rateChange": 0.0125
+        },
+        {
+          "symbol": "SR3",
+          "exchange": "CME",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "kind": "Rate",
+          "last": 96.5,
+          "change": null,
+          "percentChange": null,
+          "decimals": 3,
+          "rate": 3.5,
+          "rateChange": null
+        },
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": 7712.5,
+          "change": 5.25,
+          "percentChange": 0.068,
+          "decimals": 2
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Margin used",
+          "marginUsed": 2500.255,
+          "interestPerMonth": 0.0,
+          "interestMonths": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [
+      {
+        "symbol": "GONE",
+        "currency": "CAD",
+        "side": "SELL",
+        "quantity": 25.0,
+        "price": 4.0,
+        "date": "2026-02-10",
+        "description": "Sold before the history starts",
+        "accountId": "acct-m",
+        "account": "Margin",
+        "activityId": "x1"
+      }
+    ],
+    "accounts": [
+      {
+        "id": "acct-m",
+        "name": "Margin",
+        "type": "SELF_DIRECTED_NON_REGISTERED_MARGIN",
+        "currency": "CAD",
+        "status": "open",
+        "nav": 9000.5
+      },
+      {
+        "id": "acct-m2",
+        "name": "Margin US",
+        "type": "SELF_DIRECTED_NON_REGISTERED_MARGIN",
+        "currency": "USD",
+        "status": "open",
+        "nav": null
+      },
+      {
+        "id": "acct-c",
+        "name": "Crypto",
+        "type": "SELF_DIRECTED_CRYPTO",
+        "currency": "CAD",
+        "status": "open",
+        "nav": 10500.0
+      },
+      {
+        "id": "acct-x",
+        "name": "Old",
+        "type": "SELF_DIRECTED_TFSA",
+        "currency": "CAD",
+        "status": "CLOSED",
+        "nav": 0.0
+      }
+    ],
+    "activityCount": 5
+  },
+  "wire": {
+    "ok": true,
+    "today": "2026-03-02",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2026-03-02",
+      "benchmarkLast": ""
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "Crypto",
+        "Margin"
+      ],
+      "symbols": [
+        "ASTS",
+        "ASTS 15JAN27 40.00 CALL",
+        "BTC",
+        "ENB"
+      ],
+      "listings": {
+        "BTC": {
+          "name": "LUNR",
+          "exchange": "Crypto",
+          "kind": "Crypto",
+          "currency": "CAD"
+        },
+        "ENB": {
+          "name": "Enbridge Inc.",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "ASTS": {
+          "name": "AST SpaceMobile, Inc.",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "USD"
+        },
+        "ASTS 15JAN27 40.00 CALL": {
+          "name": "AST SpaceMobile, Inc.",
+          "exchange": "NASDAQ",
+          "kind": "Options",
+          "currency": "USD"
+        }
+      },
+      "tags": [],
+      "exchanges": [
+        "Crypto",
+        "NASDAQ",
+        "TSX"
+      ],
+      "kinds": [
+        "Shares",
+        "Options",
+        "Crypto"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": []
+    },
+    "kpi": {
+      "realized": 0,
+      "count": 0,
+      "wins": 0,
+      "losses": 0,
+      "breakeven": 0,
+      "winRate": null,
+      "grossWin": 0,
+      "grossLoss": 0,
+      "profitFactor": 0.0,
+      "profitFactorInfinite": false,
+      "expectancy": null,
+      "avgWin": 0.0,
+      "avgLoss": 0.0,
+      "fees": 0,
+      "avgHold": null,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [],
+      "drawdown": {
+        "pct": null,
+        "abs": null,
+        "at": "",
+        "peakAt": ""
+      },
+      "annualized": {
+        "rate": null,
+        "years": 0.0,
+        "count": 0,
+        "first": "",
+        "last": ""
+      }
+    },
+    "years": [],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [],
+    "bySymbol": [],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        }
+      ],
+      "ungraded": 0,
+      "graded": 0
+    },
+    "queue": [],
+    "trades": [],
+    "tradeCount": 0,
+    "tradeTotal": 0,
+    "positions": [
+      {
+        "id": "rt:c1",
+        "symbol": "BTC",
+        "underlying": "BTC",
+        "name": "LUNR",
+        "exchange": "Crypto",
+        "kind": "Crypto",
+        "account": "Crypto",
+        "accountId": "acct-c",
+        "currency": "CAD",
+        "securityId": "",
+        "short": false,
+        "qty": 0.1,
+        "mult": 1,
+        "avg": 100000.0,
+        "cost": 10000.0,
+        "fees": 0.0,
+        "last": 120000.0,
+        "priceSource": "quote",
+        "priceChange": null,
+        "percentChange": null,
+        "dayChange": null,
+        "mv": 12000.0,
+        "unreal": 2000.0,
+        "unrealPct": 0.2,
+        "held": 56,
+        "opened": "2026-01-05",
+        "wsQty": null,
+        "rt": "rt:c1",
+        "lots": [
+          {
+            "opened": "2026-01-05",
+            "qty": 0.1,
+            "price": 100000.0,
+            "basis": 10000.0,
+            "held": 56,
+            "flags": [],
+            "activityId": "c1"
+          }
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": [],
+        "alloc": 0.6451612903225806
+      },
+      {
+        "id": "rt:b1",
+        "symbol": "ENB",
+        "underlying": "ENB",
+        "name": "Enbridge Inc.",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "account": "Margin",
+        "accountId": "acct-m",
+        "currency": "CAD",
+        "securityId": "sec-enb",
+        "short": false,
+        "qty": 100.0,
+        "mult": 1,
+        "avg": 50.0,
+        "cost": 5000.0,
+        "fees": 0.0,
+        "last": 55.5,
+        "priceSource": "quote",
+        "priceChange": -0.25,
+        "percentChange": -0.448,
+        "dayChange": -25.0,
+        "mv": 5550.0,
+        "unreal": 550.0,
+        "unrealPct": 0.11,
+        "held": 56,
+        "opened": "2026-01-05",
+        "wsQty": 100.0,
+        "rt": "rt:b1",
+        "lots": [
+          {
+            "opened": "2026-01-05",
+            "qty": 100.0,
+            "price": 50.0,
+            "basis": 5000.0,
+            "held": 56,
+            "flags": [],
+            "activityId": "b1"
+          }
+        ],
+        "grade": "A",
+        "thesis": "pipes",
+        "tags": [
+          "income",
+          "core"
+        ],
+        "alloc": 0.3225806451612903
+      },
+      {
+        "id": "rt:b2",
+        "symbol": "ASTS",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile, Inc.",
+        "exchange": "NASDAQ",
+        "kind": "Shares",
+        "account": "Margin",
+        "accountId": "acct-m",
+        "currency": "USD",
+        "securityId": "sec-asts",
+        "short": false,
+        "qty": 10.0,
+        "mult": 1,
+        "avg": 30.0,
+        "cost": 300.0,
+        "fees": 0.0,
+        "last": 30.0,
+        "priceSource": "fill",
+        "priceChange": null,
+        "percentChange": null,
+        "dayChange": null,
+        "mv": 300.0,
+        "unreal": 0.0,
+        "unrealPct": 0.0,
+        "held": 55,
+        "opened": "2026-01-06",
+        "wsQty": null,
+        "rt": "rt:b2",
+        "lots": [
+          {
+            "opened": "2026-01-06",
+            "qty": 10.0,
+            "price": 30.0,
+            "basis": 300.0,
+            "held": 55,
+            "flags": [],
+            "activityId": "b2"
+          }
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": [],
+        "alloc": 0.01935483870967742
+      },
+      {
+        "id": "rt:o1",
+        "symbol": "ASTS 15JAN27 40.00 CALL",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile, Inc.",
+        "exchange": "NASDAQ",
+        "kind": "Options",
+        "account": "Margin",
+        "accountId": "acct-m",
+        "currency": "USD",
+        "securityId": "sec-o-asts",
+        "short": false,
+        "qty": 1.0,
+        "mult": 100,
+        "avg": 2.0,
+        "cost": 200.0,
+        "fees": 0.0,
+        "last": 2.0,
+        "priceSource": "fill",
+        "priceChange": null,
+        "percentChange": null,
+        "dayChange": null,
+        "mv": 200.0,
+        "unreal": 0.0,
+        "unrealPct": 0.0,
+        "held": 25,
+        "opened": "2026-02-05",
+        "wsQty": null,
+        "rt": "rt:o1",
+        "lots": [
+          {
+            "opened": "2026-02-05",
+            "qty": 1.0,
+            "price": 2.0,
+            "basis": 200.0,
+            "held": 25,
+            "flags": [],
+            "activityId": "o1"
+          }
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": [],
+        "alloc": 0.012903225806451613
+      }
+    ],
+    "positionsSummary": {
+      "count": 4,
+      "book": 15500.0,
+      "mv": 18050.0,
+      "unreal": 2550.0
+    },
+    "portfolio": {
+      "allocation": [
+        {
+          "id": "rt:c1",
+          "symbol": "BTC",
+          "account": "Crypto",
+          "value": 12000.0,
+          "share": 0.657354149548069
+        },
+        {
+          "id": "rt:b1",
+          "symbol": "ENB",
+          "account": "Margin",
+          "value": 5550.0,
+          "share": 0.3040262941659819
+        },
+        {
+          "id": "rt:b2",
+          "symbol": "ASTS",
+          "account": "Margin",
+          "value": 423.0,
+          "share": 0.023171733771569433
+        },
+        {
+          "id": "rt:o1",
+          "symbol": "ASTS 15JAN27 40.00 CALL",
+          "account": "Margin",
+          "value": 282.0,
+          "share": 0.015447822514379622
+        }
+      ],
+      "sectors": [
+        {
+          "name": "Digital assets",
+          "value": 12000.0,
+          "share": 0.657354149548069
+        },
+        {
+          "name": "Energy",
+          "value": 4995.0,
+          "share": 0.2736236647493837
+        },
+        {
+          "name": "Utilities",
+          "value": 555.0,
+          "share": 0.030402629416598194
+        },
+        {
+          "name": "Communication Services",
+          "value": 282.0,
+          "share": 0.015447822514379622
+        },
+        {
+          "name": "Not classified",
+          "value": 423.0,
+          "share": 0.023171733771569433
+        }
+      ],
+      "regions": [
+        {
+          "name": "Canada",
+          "value": 5550.0,
+          "share": 0.3040262941659819
+        },
+        {
+          "name": "United States",
+          "value": 282.0,
+          "share": 0.015447822514379622
+        },
+        {
+          "name": "Not classified",
+          "value": 12423.0,
+          "share": 0.6805258833196385
+        }
+      ],
+      "marketValue": 18255.0,
+      "costBasis": 15705.0,
+      "unrealized": 2550.0,
+      "unrealizedPct": 0.1623686723973257,
+      "positionCount": 4,
+      "accountCount": 2,
+      "nav": 19500.5,
+      "navAccounts": 2,
+      "marginUsed": 2500.255,
+      "marginUsedBy": {
+        "CAD": 2500.26
+      },
+      "marginUsedPct": 0.13696274993152563,
+      "availableMargin": 4200.75,
+      "availableMarginUnavailable": [
+        "Margin US"
+      ],
+      "hasMargin": true,
+      "cash": 209.905,
+      "cashPct": 0.01076408297223148,
+      "dayChange": -25.0,
+      "dayChangePct": -0.004484304932735426
+    },
+    "markets": {
+      "holdings": [
+        {
+          "id": "rt:c1",
+          "symbol": "BTC",
+          "exchange": "Crypto",
+          "value": 12000.0,
+          "percentChange": null,
+          "sector": "Digital assets"
+        },
+        {
+          "id": "rt:b1",
+          "symbol": "ENB",
+          "exchange": "TSX",
+          "value": 5550.0,
+          "percentChange": -0.448,
+          "sector": "Energy"
+        },
+        {
+          "id": "rt:b2",
+          "symbol": "ASTS",
+          "exchange": "NASDAQ",
+          "value": 423.0,
+          "percentChange": null,
+          "sector": "Not classified"
+        },
+        {
+          "id": "rt:o1",
+          "symbol": "ASTS 15JAN27 40.00 CALL",
+          "exchange": "NASDAQ",
+          "value": 282.0,
+          "percentChange": null,
+          "sector": "Communication Services"
+        }
+      ],
+      "watchlist": [
+        {
+          "symbol": "ENB",
+          "exchange": "TSX",
+          "name": "Enbridge Inc.",
+          "currency": "CAD",
+          "last": 55.5,
+          "priceChange": -0.25,
+          "percentChange": -0.448,
+          "sector": "Not classified",
+          "kind": "Shares",
+          "positionId": "rt:b1"
+        },
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "name": "S&P 500",
+          "currency": "USD",
+          "last": 7712.5,
+          "priceChange": 5.25,
+          "percentChange": 0.068,
+          "sector": "Indices",
+          "kind": "Index",
+          "positionId": null
+        },
+        {
+          "symbol": "ETH",
+          "exchange": "Crypto",
+          "name": "Ethereum",
+          "currency": "USD",
+          "last": null,
+          "priceChange": null,
+          "percentChange": null,
+          "sector": "Digital assets",
+          "kind": "Crypto",
+          "positionId": null
+        },
+        {
+          "symbol": "QNC",
+          "exchange": "TSX-V",
+          "name": "Quantum eMotion",
+          "currency": "CAD",
+          "last": 1.75,
+          "priceChange": null,
+          "percentChange": null,
+          "sector": "Information Technology",
+          "kind": "Shares",
+          "positionId": null
+        }
+      ],
+      "news": [
+        {
+          "id": "m1",
+          "headline": "Stocks close higher",
+          "source": "Nasdaq",
+          "url": "https://example.test/m1",
+          "publishedAt": "2026-03-01T21:00:00Z",
+          "market": true,
+          "tags": [],
+          "kind": "story"
+        },
+        {
+          "id": "n3",
+          "headline": "Enbridge annonce ses résultats du trimestre",
+          "source": "CNW",
+          "url": "https://example.test/n3",
+          "publishedAt": "2026-03-01T14:00:00Z",
+          "market": false,
+          "tags": [
+            {
+              "symbol": "ENB",
+              "exchange": "TSX",
+              "held": true,
+              "watched": true,
+              "percentChange": -0.448,
+              "positionId": "rt:b1"
+            }
+          ],
+          "kind": "story"
+        },
+        {
+          "id": "n2",
+          "headline": "Enbridge announces quarterly results!",
+          "source": "Newswire",
+          "url": "https://example.test/n2",
+          "publishedAt": "2026-03-01T13:05:00Z",
+          "market": false,
+          "tags": [
+            {
+              "symbol": "ENB",
+              "exchange": "TSX",
+              "held": true,
+              "watched": true,
+              "percentChange": -0.448,
+              "positionId": "rt:b1"
+            },
+            {
+              "symbol": "QNC",
+              "exchange": "TSX-V",
+              "held": false,
+              "watched": true,
+              "percentChange": null,
+              "positionId": null
+            }
+          ],
+          "kind": "release"
+        },
+        {
+          "id": "n4",
+          "headline": "A listing nobody follows any more",
+          "source": "Yahoo",
+          "url": "",
+          "publishedAt": "2026-02-27T10:00:00Z",
+          "market": false,
+          "tags": [
+            {
+              "symbol": "ZZZ",
+              "exchange": "NYSE",
+              "held": false,
+              "watched": false,
+              "percentChange": null,
+              "positionId": null
+            }
+          ],
+          "kind": "story"
+        }
+      ],
+      "universes": {
+        "ca": [
+          {
+            "id": null,
+            "symbol": "RY",
+            "name": "Royal Bank of Canada",
+            "value": 250000000000.0,
+            "percentChange": 0.42,
+            "sector": "Financial Services",
+            "country": "Canada"
+          },
+          {
+            "id": null,
+            "symbol": "SHOP",
+            "name": "Shopify",
+            "value": 0.0,
+            "percentChange": null,
+            "sector": "Not classified",
+            "country": "Canada"
+          }
+        ],
+        "us": []
+      },
+      "tiles": [
+        {
+          "symbol": "ZQ",
+          "exchange": "CBOT",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "kind": "Rate",
+          "last": 96.3725,
+          "change": -0.0125,
+          "percentChange": -0.013,
+          "decimals": 3,
+          "rate": 3.6275,
+          "rateChange": 0.0125
+        },
+        {
+          "symbol": "SR3",
+          "exchange": "CME",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "kind": "Rate",
+          "last": 96.5,
+          "change": null,
+          "percentChange": null,
+          "decimals": 3,
+          "rate": 3.5,
+          "rateChange": null
+        },
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": 7712.5,
+          "change": 5.25,
+          "percentChange": 0.068,
+          "decimals": 2
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Margin used",
+          "marginUsed": 2500.255,
+          "interestPerMonth": 0.0,
+          "interestMonths": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [
+      {
+        "symbol": "GONE",
+        "currency": "CAD",
+        "side": "SELL",
+        "quantity": 25.0,
+        "price": 4.0,
+        "date": "2026-02-10",
+        "description": "Sold before the history starts",
+        "accountId": "acct-m",
+        "account": "Margin",
+        "activityId": "x1"
+      }
+    ],
+    "accounts": [
+      {
+        "id": "acct-m",
+        "name": "Margin",
+        "type": "SELF_DIRECTED_NON_REGISTERED_MARGIN",
+        "currency": "CAD",
+        "status": "open",
+        "nav": 9000.5
+      },
+      {
+        "id": "acct-m2",
+        "name": "Margin US",
+        "type": "SELF_DIRECTED_NON_REGISTERED_MARGIN",
+        "currency": "USD",
+        "status": "open",
+        "nav": null
+      },
+      {
+        "id": "acct-c",
+        "name": "Crypto",
+        "type": "SELF_DIRECTED_CRYPTO",
+        "currency": "CAD",
+        "status": "open",
+        "nav": 10500.0
+      },
+      {
+        "id": "acct-x",
+        "name": "Old",
+        "type": "SELF_DIRECTED_TFSA",
+        "currency": "CAD",
+        "status": "CLOSED",
+        "nav": 0.0
+      }
+    ],
+    "activityCount": 5
+  },
+  "wireWithDetail": null,
+  "tradeDetail": null
+}

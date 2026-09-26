@@ -1,0 +1,226 @@
+//! Yahoo's chart and TMX, read from recorded real replies: closes stored as
+//! traded, distributions exactly as stated, and every wrong copy refused.
+
+mod common;
+
+use bagholder_core::jiff::civil::{date, Date};
+use bagholder_core::jiff::Timestamp;
+use bagholder_core::{Currency, Dec};
+use bagholder_sources::adapters::{tmx, yahoo};
+use bagholder_sources::outcome::{Outcome, OutcomeKind};
+
+fn dec(s: &str) -> Dec {
+    Dec::parse(s).unwrap()
+}
+
+fn t(s: &str) -> Timestamp {
+    s.parse().unwrap()
+}
+
+const Y: &str = "yahoo";
+const TMX: &str = "tmx";
+
+#[test]
+fn the_recorded_shapes_are_the_answers_union() {
+    common::shape_is_the_answers_union("yahoo-chart.paths", Y, "", yahoo::KEYED);
+    common::shape_is_the_answers_union("tmx-quote.paths", TMX, "quote-", &[]);
+    common::shape_is_the_answers_union("tmx-dividends.paths", TMX, "dividends-", &[]);
+}
+
+fn chart(name: &str, symbol: &str, now: &str) -> yahoo::Chart {
+    match yahoo::parse(&common::json(Y, name), symbol, t(now)) {
+        Outcome::Answered(c) => c,
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+fn close(c: &yahoo::Chart, d: Date) -> Option<Dec> {
+    c.closes.iter().find(|(day, _)| *day == d).map(|(_, v)| *v)
+}
+
+#[test]
+fn a_span_with_no_session_is_an_answer_with_no_closes() {
+    // a weekend, and a session Yahoo holds no bar for (HBIX.NE on 2026-09-23): the
+    // chart carries no timestamp list and empty quote series
+    for (name, symbol) in [("SPY-2026-09-19-2026-09-20.json", "SPY"), ("HBIX.NE-2026-09-23-2026-09-23.json", "HBIX.NE")] {
+        let c = chart(name, symbol, "2026-09-24T15:30:00Z");
+        assert!(c.closes.is_empty() && c.splits.is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn closes_are_stored_as_traded_with_the_replys_own_splits_undone() {
+    let nvda = chart("NVDA-2024-05-28-2024-06-14.json", "NVDA", "2026-09-24T04:00:00Z");
+    assert_eq!(nvda.currency, Currency::USD);
+    assert_eq!(nvda.splits, vec![yahoo::Split { day: date(2024, 6, 10), numerator: dec("10"), denominator: dec("1") }]);
+    // before the 10:1 split of 2024-06-10 the adjusted close is multiplied back, exactly
+    assert_eq!(close(&nvda, date(2024, 5, 28)), Some(dec("1139.010009765625")));
+    // on and after the split day the close is as written
+    let on = close(&nvda, date(2024, 6, 10)).unwrap();
+    assert!(on < dec("200"), "{on}");
+    // the dividend after the split is as declared
+    assert_eq!(nvda.dividends, vec![(date(2024, 6, 11), dec("0.01"))]);
+    assert!(nvda.closes.windows(2).all(|w| w[0].0 < w[1].0));
+    // a split with no dividend in the span: its events carry splits alone
+    let smci = chart("SMCI-2024-09-23-2024-10-04.json", "SMCI", "2026-09-24T04:00:00Z");
+    assert_eq!(smci.splits, vec![yahoo::Split { day: date(2024, 10, 1), numerator: dec("10"), denominator: dec("1") }]);
+    assert!(smci.dividends.is_empty());
+    assert_eq!(close(&smci, date(2024, 9, 23)), Some(dec("465.9400177001953")));
+    assert_eq!(close(&smci, date(2024, 10, 1)), Some(dec("40.54999923706055")));
+}
+
+#[test]
+fn a_canadian_listing_and_a_fund_that_has_paid_nothing() {
+    let enb = chart("ENB.TO-2026-08-03-2026-09-24.json", "ENB.TO", "2026-09-24T04:00:00Z");
+    assert_eq!(enb.currency, Currency::CAD);
+    assert_eq!(enb.dividends, vec![(date(2026, 8, 14), dec("0.97"))]);
+    assert_eq!(close(&enb, date(2026, 8, 4)), Some(dec("75.08999633789062")));
+    let wqtm = chart("WQTM-2025-10-01-2026-09-24.json", "WQTM", "2026-09-24T04:00:00Z");
+    assert!(wqtm.dividends.is_empty());
+    assert!(!wqtm.closes.is_empty());
+    // a benchmark's tracker: a year of closes and its four dividends
+    let spy = chart("SPY-2025-09-22-2026-09-23.json", "SPY", "2026-09-24T04:00:00Z");
+    assert_eq!(spy.closes.first(), Some(&(date(2025, 9, 22), dec("666.8400268554688"))));
+    assert_eq!(spy.dividends.len(), 4);
+}
+
+#[test]
+fn the_quote_is_the_regular_price_at_its_own_time_and_a_session_counts_once_closed() {
+    let spy = chart("SPY-range-1d.json", "SPY", "2026-09-24T04:00:00Z");
+    assert_eq!(spy.quote.price, dec("767.81"));
+    assert_eq!(spy.quote.at, t("2026-09-23T20:00:00Z"));
+    assert_eq!(spy.quote.change_pct, Some(dec("-0.72")));
+    assert_eq!(spy.closes, vec![(date(2026, 9, 23), dec("767.8099975585938"))]);
+}
+
+#[test]
+fn a_wrong_chart_writes_nothing_and_an_unknown_symbol_is_not_carried() {
+    let read = |name: &str, symbol: &str| yahoo::parse(&common::json(Y, name), symbol, t("2026-09-24T04:00:00Z"));
+    assert!(matches!(read("wrong-shape-NVDA-close-as-text.json", "NVDA"), Outcome::Mismatch(m) if m.path == "chart.result[0].indicators.quote[0].close[0]"));
+    assert!(matches!(read("wrong-meaning-NVDA-another-symbol.json", "NVDA"), Outcome::Meaning(w) if w.contains("AMD")));
+    assert!(matches!(read("wrong-meaning-NVDA-split-of-zero.json", "NVDA"), Outcome::Meaning(w) if w.contains("split")));
+    let reply = bagholder_net::Reply { status: 404, url: "u".into(), headers: vec![], body: common::read(Y, "ZZZQX-status-404.json").into_bytes(), received_at: t("2026-09-24T00:00:00Z") };
+    assert_eq!(bagholder_sources::ask::status(reply, &[404]).kind(), OutcomeKind::NotCarried);
+}
+
+fn quote(name: &str, form: &str) -> Outcome<tmx::TmxQuote> {
+    tmx::parse_quote(&common::json(TMX, name), form)
+}
+
+#[test]
+fn a_tmx_quote_states_its_venue_and_schedule() {
+    let Outcome::Answered(q) = quote("quote-QCN.json", "QCN") else { panic!() };
+    assert_eq!((q.price, q.change, q.currency, q.per_year), (dec("218.31"), Some(dec("-3.48")), Currency::CAD, Some(4)));
+    assert_eq!(q.exchange_name, "Toronto Stock Exchange");
+    assert!(bagholder_sources::venue::tmx_venue_matches("", &q.exchange_name));
+    assert_eq!(quote("quote-ZZZQX-unknown.json", "ZZZQX").kind(), OutcomeKind::NotCarried);
+    assert_eq!(quote("quote-ENB-CNX-unknown.json", "ENB:CNX").kind(), OutcomeKind::NotCarried);
+    // TMX's answer for the TSX listing, read for a CSE form: another listing, not carried
+    assert!(matches!(quote("quote-ENB.json", "ENB:CNX"), Outcome::NotCarried(w) if w.contains("Toronto Stock Exchange")));
+    assert_eq!(quote("quote-ENB.json", "ENB").kind(), OutcomeKind::Answered);
+    assert!(matches!(quote("wrong-shape-quote-ENB-price-null.json", "ENB"), Outcome::Mismatch(m) if m.path == "data.getQuoteBySymbol.price"));
+    assert!(matches!(quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB"), Outcome::Mismatch(m) if m.why.contains("Fortnightly")));
+    assert!(matches!(quote("wrong-meaning-quote-ENB-another-symbol.json", "ENB"), Outcome::Meaning(w) if w.contains("TRP")));
+}
+
+#[test]
+fn tmx_distributions_are_kept_as_listed_whatever_their_dates() {
+    // TMX states an amount per unit and not whether it is paid in cash or in
+    // units: every row is kept as listed, dated or not
+    let Outcome::Answered(rows) = tmx::parse_dividends(&common::json(TMX, "dividends-QCN.json"), "QCN") else { panic!() };
+    assert_eq!(rows.len(), 40);
+    let on = |d: Date| rows.iter().find(|r| r.ex_date == d).copied().unwrap();
+    let latest = on(date(2026, 9, 21));
+    assert_eq!((latest.amount, latest.pay_date, latest.record_date), (dec("1.13892"), Some(date(2026, 9, 28)), Some(date(2026, 9, 21))));
+    let undated = on(date(2023, 12, 28));
+    assert_eq!((undated.amount, undated.pay_date), (dec("0.35705"), None));
+    assert_eq!(on(date(2025, 12, 31)).amount, Dec::ZERO);
+    // a declared amount with no pay date is listed as the others
+    let Outcome::Answered(declared) = tmx::parse_dividends(&common::json(TMX, "edited-dividends-QCN-declared-without-pay-date.json"), "QCN") else { panic!() };
+    assert!(declared.iter().any(|r| r.pay_date.is_none() && r.amount > Dec::ZERO));
+    // an unknown symbol lists nothing: whether it is one is the quote's to say
+    assert!(matches!(tmx::parse_dividends(&common::json(TMX, "dividends-ZZZQX-unknown.json"), "ZZZQX"), Outcome::Answered(r) if r.is_empty()));
+    assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-shape-dividends-QCN-amount-as-text.json"), "QCN"), Outcome::Mismatch(m) if m.path == "data.dividends.dividends[0].amount"));
+    assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-meaning-dividends-QCN-paid-before-ex.json"), "QCN"), Outcome::Meaning(w) if w.contains("before")));
+}
+
+#[test]
+fn a_source_that_wants_one_is_asked_with_a_user_agent_naming_a_contact() {
+    let recorded = std::sync::Arc::new(common::Recorded::new().with("https://cdn.cboe.com/api/global/delayed_quotes/options/BBAI.json", 200, "cboe-options", "chain-BBAI.json"));
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    assert!(matches!(bagholder_sources::adapters::cboe_options::ask(&net, "BBAI", None).outcome, Outcome::Answered(_)));
+    let headers = recorded.headers.lock().unwrap();
+    let ua = headers[0].iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.as_str());
+    assert!(ua.is_some_and(|v| v.starts_with("Bagholder/") && v.contains("(+https://")), "{ua:?}");
+}
+
+use bagholder_sources::adapters::{cboe_ca, coinbase};
+
+const CB: &str = "coinbase";
+const CBX: &str = "coinbase-exchange";
+const CBOE: &str = "cboe-canada";
+
+#[test]
+fn the_coin_quotes_and_the_cboe_canada_quote_have_shapes_recorded() {
+    common::shape_is_the_answers_union("coinbase-spot.paths", CB, "spot-", &[]);
+    common::shape_is_the_answers_union("coinbase-exchange-ticker.paths", CBX, "ticker-", &[]);
+    common::shape_is_the_answers_union("cboe-canada.paths", CBOE, "quote-", &[]);
+}
+
+#[test]
+fn a_spot_price_is_stamped_with_its_replys_date_less_what_its_cache_allows() {
+    let headers = common::read(CB, "spot-BTC-CAD.json.headers");
+    let header = |name: &str| headers.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_string()));
+    let (date, cache) = (header("date"), header("cache-control"));
+    let Outcome::Answered(s) = coinbase::parse_spot(&common::json(CB, "spot-BTC-CAD.json"), "BTC", Currency::CAD, date.as_deref(), cache.as_deref()) else { panic!() };
+    assert_eq!((s.price, s.at, s.allowance), (dec("118318.2"), t("2026-09-24T04:33:41Z"), std::time::Duration::ZERO));
+    // a cache that allows sixty seconds: the price may be that old
+    let Outcome::Answered(s) = coinbase::parse_spot(&common::json(CB, "spot-BTC-CAD.json"), "BTC", Currency::CAD, date.as_deref(), Some("public, max-age=60")) else { panic!() };
+    assert_eq!((s.at, s.allowance), (t("2026-09-24T04:32:41Z"), std::time::Duration::from_secs(60)));
+    // with no date, the price has no time and is refused
+    assert!(matches!(coinbase::parse_spot(&common::json(CB, "spot-BTC-CAD.json"), "BTC", Currency::CAD, None, None), Outcome::Meaning(w) if w.contains("no time")));
+    let Outcome::Answered(f) = coinbase::parse_spot(&common::json(CB, "spot-FARTCOIN-CAD.json"), "FARTCOIN", Currency::CAD, date.as_deref(), None) else { panic!() };
+    assert_eq!(f.price, dec("0.2606720647230226346175"));
+    assert!(matches!(coinbase::parse_spot(&common::json(CB, "wrong-shape-spot-amount-as-number.json"), "BTC", Currency::CAD, date.as_deref(), None), Outcome::Mismatch(m) if m.path == "data.amount"));
+    assert!(matches!(coinbase::parse_spot(&common::json(CB, "wrong-meaning-spot-another-pair.json"), "BTC", Currency::CAD, date.as_deref(), None), Outcome::Meaning(w) if w.contains("ETH")));
+}
+
+#[test]
+fn a_coins_close_is_each_ended_utc_days_close() {
+    let v = common::json(CBX, "candles-BTC-USD-2026-09-01-2026-09-05.json");
+    let Outcome::Answered(days) = coinbase::parse_candles(&v, "BTC-USD", t("2026-09-24T00:00:00Z")) else { panic!() };
+    assert_eq!(days.first(), Some(&(date(2026, 9, 1), dec("77398.69"))));
+    assert_eq!(days.len(), 5);
+    // at noon on the 5th, the 5th has not ended
+    let Outcome::Answered(early) = coinbase::parse_candles(&v, "BTC-USD", t("2026-09-05T12:00:00Z")) else { panic!() };
+    assert_eq!(early.last().map(|d| d.0), Some(date(2026, 9, 4)));
+    assert!(matches!(coinbase::parse_candles(&common::json(CBX, "wrong-shape-candles-five-values.json"), "BTC-USD", t("2026-09-24T00:00:00Z")), Outcome::Mismatch(_)));
+    assert!(matches!(coinbase::parse_candles(&common::json(CBX, "wrong-meaning-candles-oldest-first.json"), "BTC-USD", t("2026-09-24T00:00:00Z")), Outcome::Meaning(_)));
+    let Outcome::Answered(tick) = coinbase::parse_ticker(&common::json(CBX, "ticker-BTC-USD.json"), "BTC-USD") else { panic!() };
+    assert!(tick.price > Dec::ZERO && tick.at > t("2026-09-24T00:00:00Z"));
+}
+
+#[test]
+fn a_cboe_canada_quote_is_its_last_price_at_its_trade_time() {
+    let Outcome::Answered(q) = cboe_ca::parse(&common::json(CBOE, "quote-MAXQ.json"), "MAXQ") else { panic!() };
+    assert_eq!((q.price, q.at, q.change), (dec("0.4400"), t("2026-09-23T20:00:00Z"), Some(dec("-0.0150"))));
+    assert!(matches!(cboe_ca::parse(&common::json(CBOE, "wrong-shape-quote-MAXQ-last-null.json"), "MAXQ"), Outcome::Mismatch(m) if m.path == "data.last"));
+    assert!(matches!(cboe_ca::parse(&common::json(CBOE, "wrong-meaning-quote-MAXQ-another-symbol.json"), "MAXQ"), Outcome::Meaning(w) if w.contains("HBIX")));
+}
+
+#[test]
+fn a_distributions_page_that_repeats_the_one_before_ends_the_read_as_a_failure() {
+    // a full page (edited: a hundred rows), answered for every page asked
+    let recorded = std::sync::Arc::new(common::Recorded::new().with_body("https://app-money.tmx.com/graphql", "getDividendsForSymbol", 200, TMX, "wrong-meaning-dividends-QCN-page-repeated.json"));
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    assert!(matches!(tmx::ask_dividends(&net, "QCN").outcome, Outcome::Meaning(w) if w.contains("page 2")));
+    assert_eq!(recorded.asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn an_ambiguous_schedule_word_is_not_read() {
+    assert_eq!(tmx::per_year("Quarterly"), Some(4));
+    assert_eq!(tmx::per_year("Semi-Monthly"), Some(24));
+    // every two months, or twice a month: not read until a reply settles it
+    assert_eq!(tmx::per_year("Bi-Monthly"), None);
+}

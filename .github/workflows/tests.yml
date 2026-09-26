@@ -53,11 +53,106 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      # a warning fails the build: the workspace is kept warning-free
+      - name: The Rust suite
+        env:
+          CI: "true"
+          RUSTFLAGS: "-D warnings"
+        run: cargo test --workspace
+        working-directory: rust
+
+  # The same suite on a Mac, and the test a sandboxed local run cannot hold: the notification
+  # applet, built with osacompile, which needs Apple Events (#[ignore]d with that reason, so it
+  # runs here by name on every push, whoever ran what locally).
+  rust-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
       - name: The Rust suite
         env:
           CI: "true"
         run: cargo test --workspace
         working-directory: rust
+      # the one test kept out of the suite for the machine it needs: the notification
+      # applet, built with osacompile (the capture tests read the owner's own data,
+      # kept outside the repository, and are run by hand)
+      - name: The notification applet, on macOS
+        env:
+          CI: "true"
+        run: cargo test -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
+        working-directory: rust
+
+  # Windows has no system time zone database, so the model reads the copy built into
+  # jiff there: the model's tests (the zones and every shared case) run where that holds.
+  rust-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: The model's suite
+        env:
+          CI: "true"
+        run: cargo test -p bagholder-model
+        working-directory: rust
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # the types and the components, then the tests, then the bundle the server carries:
+      # the bundle is built here and at release, never committed
+      - name: Types and components
+        run: npm run check
+      - name: The page's tests
+        run: npm test
+      - name: The bundle builds
+        run: npm run build
+
+  # The page driven in a real browser against the real server, on a made-up book
+  # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          shared-key: browser
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: The browser the tests drive
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: The server and the made-up book
+        run: cargo build --bin bagholder --bin demo-book
+        working-directory: rust
+      - name: The browser tests
+        run: npm run e2e
+        working-directory: web
 
   go:
     runs-on: ubuntu-latest

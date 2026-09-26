@@ -1,0 +1,997 @@
+//! What one filter set produces (`SPEC.md` §4 and §5): the tiles, tables and
+//! cards over the trades, positions, payments and accounts in scope. Every sum
+//! is exact and in CAD; a member whose figure is not stated is left out of the
+//! sum and counted, so each tile says how many it left out.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use bagholder_core::account::{AccountKind, AccountStatus, AccountType};
+use bagholder_core::instrument::InstrumentKind;
+use bagholder_core::jiff::civil::Date;
+use bagholder_core::jiff::ToSpan;
+use bagholder_core::journal::Grade;
+use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money};
+
+use crate::cashflow::{CashRow, PayerRate, Payment};
+use crate::equity::AccountEquity;
+use crate::fx::{live_rate, live_to_cad};
+use crate::gap::{Fig, Gap, Gaps};
+use crate::input::Inputs;
+use crate::ledger::Direction;
+use crate::positions::PositionFig;
+use crate::stat::returns::{self, Annualized, Day, Drawdown, YearReturn};
+use crate::stat::{count_ratio, money_ratio, Ratio};
+use crate::trades::{TradeFig, TradeKey};
+
+/// Which side of its bound a range keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bound {
+    Above(Dec),
+    Below(Dec),
+}
+
+impl Bound {
+    fn keeps(self, v: Dec) -> bool {
+        match self {
+            Bound::Above(b) => v > b,
+            Bound::Below(b) => v < b,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preset {
+    Day,
+    Week,
+    Month,
+    Quarter,
+    HalfYear,
+    YearToDate,
+    Year,
+    FiveYears,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Dates {
+    #[default]
+    All,
+    Preset(Preset),
+    Years(BTreeSet<i16>),
+    Range { from: Option<Date>, to: Option<Date> },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Outcome {
+    Win,
+    Loss,
+    Breakeven,
+}
+
+/// The filters (`SPEC.md` §5), naming Bagholder's own ids; an empty set keeps
+/// everything.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filters {
+    pub dates: Dates,
+    pub accounts: BTreeSet<AccountId>,
+    /// A trade matches when any instrument it held, or that instrument's
+    /// underlying, is chosen.
+    pub instruments: BTreeSet<InstrumentId>,
+    /// Matches any name an instrument has had, or its underlying's.
+    pub search: String,
+    /// `None` inside the set keeps the ungraded.
+    pub grades: BTreeSet<Option<Grade>>,
+    /// The empty tag inside the set keeps the untagged.
+    pub tags: BTreeSet<String>,
+    pub kinds: BTreeSet<InstrumentKind>,
+    /// Venue names, `Crypto` for a coin.
+    pub venues: BTreeSet<String>,
+    pub sides: BTreeSet<Direction>,
+    pub outcomes: BTreeSet<Outcome>,
+    pub price: Option<Bound>,
+    pub hold: Option<Bound>,
+    pub pnl: Option<Bound>,
+    pub qty: Option<Bound>,
+    /// The index the years are measured against.
+    pub benchmark: String,
+}
+
+impl Filters {
+    /// The span a date filter keeps, `None` when the years list or nothing does.
+    pub fn bounds(&self, today: Date) -> Option<(Date, Date)> {
+        match &self.dates {
+            Dates::Range { from, to } => Some((from.unwrap_or(Date::MIN), to.unwrap_or(Date::MAX))),
+            Dates::Preset(p) => {
+                let days = match p {
+                    Preset::Day => 1,
+                    Preset::Week => 7,
+                    Preset::Month => 30,
+                    Preset::Quarter => 90,
+                    Preset::HalfYear => 180,
+                    Preset::Year => 365,
+                    Preset::FiveYears => 1826,
+                    Preset::YearToDate => return Date::new(today.year(), 1, 1).ok().map(|d| (d, today)),
+                };
+                Some((today.checked_sub(days.days()).unwrap_or(Date::MIN), today))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether any day from `from` to `to` is in the dates chosen.
+    pub fn overlaps(&self, today: Date, from: Date, to: Date) -> bool {
+        if let Some((lo, hi)) = self.bounds(today) {
+            return from <= hi && lo <= to;
+        }
+        match &self.dates {
+            Dates::Years(ys) if !ys.is_empty() => ys.iter().any(|y| from.year() <= *y && *y <= to.year()),
+            _ => true,
+        }
+    }
+
+    pub fn in_dates(&self, today: Date, day: Date) -> bool {
+        if let Some((lo, hi)) = self.bounds(today) {
+            return lo <= day && day <= hi;
+        }
+        match &self.dates {
+            Dates::Years(ys) if !ys.is_empty() => ys.contains(&day.year()),
+            _ => true,
+        }
+    }
+
+    /// The filters in force the Cashflow tab does not read.
+    /// The filters set that an account's value does not read: all but the account.
+    pub fn unread_by_value(&self) -> Vec<&'static str> {
+        let dates = match &self.dates {
+            Dates::All => false,
+            Dates::Years(ys) => !ys.is_empty(),
+            _ => true,
+        };
+        let mut out = vec![];
+        if dates {
+            out.push("date");
+        }
+        if !self.instruments.is_empty() || !self.search.trim().is_empty() {
+            out.push("symbol");
+        }
+        out.extend(self.unread_by_cashflow());
+        out
+    }
+
+    pub fn unread_by_cashflow(&self) -> Vec<&'static str> {
+        [
+            ("grade", !self.grades.is_empty()),
+            ("tag", !self.tags.is_empty()),
+            ("kind", !self.kinds.is_empty()),
+            ("exchange", !self.venues.is_empty()),
+            ("side", !self.sides.is_empty()),
+            ("result", !self.outcomes.is_empty()),
+            ("price", self.price.is_some()),
+            ("hold", self.hold.is_some()),
+            ("pnl", self.pnl.is_some()),
+            ("qty", self.qty.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(n, _)| n)
+        .collect()
+    }
+}
+
+/// An instrument's underlying where it has one, else itself.
+pub fn underlying_of(inputs: &Inputs, i: InstrumentId) -> InstrumentId {
+    inputs.ledger.instruments.get(&i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying).unwrap_or(i)
+}
+
+fn venue_of(inputs: &Inputs, i: InstrumentId) -> Option<String> {
+    let info = inputs.ledger.instruments.get(&i)?;
+    if info.instrument.kind == InstrumentKind::Crypto {
+        return Some("Crypto".into());
+    }
+    info.current_name().and_then(|n| n.venue_name.clone())
+}
+
+fn searched(inputs: &Inputs, instruments: &[InstrumentId], needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle = needle.to_uppercase();
+    instruments.iter().flat_map(|i| [*i, underlying_of(inputs, *i)]).any(|i| {
+        inputs.ledger.instruments.get(&i).is_some_and(|info| {
+            info.names.iter().any(|n| n.symbol.to_uppercase().contains(&needle) || n.name.as_deref().is_some_and(|x| x.to_uppercase().contains(&needle)))
+        })
+    })
+}
+
+fn chosen(f: &Filters, inputs: &Inputs, instruments: &[InstrumentId]) -> bool {
+    f.instruments.is_empty() || instruments.iter().any(|i| f.instruments.contains(i) || f.instruments.contains(&underlying_of(inputs, *i)))
+}
+
+fn outcome(t: &TradeFig) -> Option<Outcome> {
+    let p = t.pnl_cad.as_ref().ok()?;
+    Some(if p.amount.is_positive() {
+        Outcome::Win
+    } else if p.amount.is_negative() {
+        Outcome::Loss
+    } else {
+        Outcome::Breakeven
+    })
+}
+
+pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
+    let today = inputs.clock.today;
+    if !f.accounts.is_empty() && !f.accounts.contains(&t.account) {
+        return false;
+    }
+    if !chosen(f, inputs, &t.instruments) || !searched(inputs, &t.instruments, &f.search) {
+        return false;
+    }
+    if !f.grades.is_empty() && !f.grades.contains(&t.journal.grade) {
+        return false;
+    }
+    if !f.tags.is_empty() {
+        let tagged = if t.journal.tags.is_empty() { f.tags.contains("") } else { t.journal.tags.iter().any(|x| f.tags.contains(x)) };
+        if !tagged {
+            return false;
+        }
+    }
+    if !f.kinds.is_empty() && !f.kinds.contains(&t.kind) {
+        return false;
+    }
+    if !f.venues.is_empty() && !venue_of(inputs, t.instrument).is_some_and(|v| f.venues.contains(&v)) {
+        return false;
+    }
+    if !f.sides.is_empty() && !f.sides.contains(&t.direction) {
+        return false;
+    }
+    if !f.outcomes.is_empty() && !outcome(t).is_some_and(|o| f.outcomes.contains(&o)) {
+        return false;
+    }
+    let bound = |b: Option<Bound>, v: Option<Dec>| match (b, v) {
+        (None, _) => true,
+        (Some(b), Some(v)) => b.keeps(v),
+        (Some(_), None) => false,
+    };
+    if !bound(f.price, t.entry.as_ref().ok().copied())
+        || !bound(f.hold, Some(Dec::from_int(t.hold_days)))
+        || !bound(f.pnl, t.pnl_cad.as_ref().ok().map(|m| m.amount))
+        || !bound(f.qty, t.qty.as_ref().ok().copied())
+    {
+        return false;
+    }
+    // in scope when it was open at any time in the dates chosen
+    f.overlaps(today, t.opened_on, t.closed_on.unwrap_or(today))
+}
+
+/// A closed trade whose close falls in the dates chosen: what the closed-trade
+/// statistics count.
+fn closed_in(f: &Filters, today: Date, t: &TradeFig) -> bool {
+    t.closed_on.is_some_and(|d| f.in_dates(today, d))
+}
+
+pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
+    (f.accounts.is_empty() || f.accounts.contains(&p.account))
+        && chosen(f, inputs, &[p.instrument])
+        && searched(inputs, &[p.instrument], &f.search)
+        && (f.kinds.is_empty() || f.kinds.contains(&p.kind))
+        && (f.venues.is_empty() || venue_of(inputs, p.instrument).is_some_and(|v| f.venues.contains(&v)))
+}
+
+/// A sum of the stated members, and how many were left out. The sum is the
+/// failure when the stated members cannot be added.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Partial {
+    pub total: Fig<Money>,
+    pub left_out: usize,
+}
+
+impl Partial {
+    fn of<'a>(items: impl IntoIterator<Item = &'a Fig<Money>>) -> Partial {
+        let mut stated = Vec::new();
+        let mut left_out = 0;
+        for i in items {
+            match i {
+                Ok(m) => stated.push(*m),
+                Err(_) => left_out += 1,
+            }
+        }
+        Partial { total: money_sum(stated), left_out }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Kpi {
+    /// Every sale's P&L in the dates chosen, open trades' included, whose CAD
+    /// P&L is stated.
+    pub realized: Fig<Money>,
+    /// Sales in the dates chosen whose CAD P&L is not stated.
+    pub realized_left_out: usize,
+    /// Closed trades whose CAD P&L is stated.
+    pub count: usize,
+    /// Closed trades in scope whose CAD P&L is not stated (a deposited coin, a
+    /// rate waiting, a contract size not stated…).
+    pub left_out: usize,
+    pub wins: usize,
+    pub losses: usize,
+    pub breakeven: usize,
+    pub win_rate: Option<Ratio>,
+    pub gross_win: Fig<Money>,
+    pub gross_loss: Fig<Money>,
+    /// None with no losses and some wins: infinite.
+    pub profit_factor: Fig<Option<Ratio>>,
+    pub profit_factor_infinite: bool,
+    pub expectancy: Fig<Option<Money>>,
+    pub avg_win: Fig<Option<Money>>,
+    pub avg_loss: Fig<Option<Money>>,
+    pub fees: Fig<Money>,
+    pub avg_hold: Option<Ratio>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MonthBar {
+    pub year: i16,
+    pub month: i8,
+    pub value: Fig<Money>,
+    pub count: usize,
+    pub trades: Vec<TradeKey>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnderlyingRow {
+    pub underlying: InstrumentId,
+    pub pnl: Fig<Money>,
+    pub count: usize,
+    pub legs: usize,
+    pub win_rate: Option<Ratio>,
+    pub avg_hold: Option<Ratio>,
+    pub trades: Vec<TradeKey>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradeBucket {
+    pub grade: Grade,
+    pub count: usize,
+    pub pnl: Fig<Money>,
+    pub trades: Vec<TradeKey>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Missing {
+    GradeAndThesis,
+    Grade,
+    Thesis,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Allocation {
+    pub position: usize,
+    pub value: Money,
+    pub share: Fig<Ratio>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Portfolio {
+    pub positions: Vec<usize>,
+    pub market_value: Partial,
+    pub cost_basis: Partial,
+    pub unrealized: Partial,
+    pub unrealized_pct: Fig<Option<Ratio>>,
+    pub account_count: usize,
+    /// Σ the broker's stated net value of the open accounts in scope.
+    pub net_value: Option<Fig<Money>>,
+    pub net_value_accounts: usize,
+    /// The negative cash balances the broker states, per currency, shown positive.
+    pub margin_used_by: BTreeMap<Currency, Fig<Dec>>,
+    pub margin_used: Fig<Money>,
+    pub margin_used_pct: Fig<Option<Ratio>>,
+    pub available_margin: Option<Fig<Money>>,
+    /// Margin accounts whose buying power the broker could not state, and why.
+    pub margin_unavailable: Vec<(AccountId, String)>,
+    pub has_margin: bool,
+    pub cash: Fig<Money>,
+    pub cash_pct: Fig<Option<Ratio>>,
+    pub day_change: Option<Partial>,
+    pub day_change_pct: Fig<Option<Ratio>>,
+    pub allocation: Vec<Allocation>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CashTile {
+    Paid { label: PaidLabel, total: Partial, count: usize, per_paying_month: Fig<Option<Money>> },
+    Margin { margin_used: Fig<Money>, interest_per_month: Fig<Option<Money>>, interest_months: usize },
+    Yield { yield_on_cost: Fig<Option<Ratio>>, projected_per_month: Fig<Money>, earned: Fig<Money>, book: Fig<Money>, left_out: usize },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaidLabel {
+    Year(i16),
+    YearToDate(i16),
+    AllTime,
+    LastTwelveMonths,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CashMonth {
+    pub year: i16,
+    pub month: i8,
+    pub distributions: Partial,
+    pub count: usize,
+    /// The month's interest charges, shown positive.
+    pub interest: Partial,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IncomeHolding {
+    pub position: usize,
+    pub rate: PayerRate,
+    pub ytd: Partial,
+    pub trailing_year: Partial,
+    pub all_time: Partial,
+    /// Per unit × payments per year × units, in the currency paid.
+    pub annual: Fig<Money>,
+    /// That, a month, in CAD at the live rate.
+    pub projected_per_month_cad: Fig<Money>,
+    pub yield_on_cost: Fig<Ratio>,
+    pub current_yield: Fig<Ratio>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cashflow {
+    pub tiles: Vec<CashTile>,
+    pub months: Vec<CashMonth>,
+    pub holdings: Vec<IncomeHolding>,
+    /// Dividends in scope, newest first (indexes into the cashflow rows).
+    pub rows: Vec<usize>,
+    /// Interest, withholding tax and interest charges in scope.
+    pub other: Vec<usize>,
+    pub total: Partial,
+    pub interest: Partial,
+    pub withholding: Partial,
+    pub unread_filters: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EquityBlock {
+    pub series: Vec<Day>,
+    /// What the accounts' series in scope wait on.
+    pub gaps: Gaps,
+    pub years: Vec<YearReturn>,
+    pub annualized: Annualized,
+    pub drawdown: Drawdown,
+    /// The filters set that the value series does not read: it follows the accounts alone.
+    pub unread_filters: Vec<&'static str>,
+}
+
+/// The realized P&L in scope, as a running total by the day each part was
+/// realized, in CAD: each sale in the dates of a trade the filters keep.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PnlCurve {
+    /// Each day a part was realized, and the total to the end of it.
+    pub days: Vec<(Date, Fig<Money>)>,
+    /// Parts whose P&L waits on something, left out of every total.
+    pub left_out: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scoped {
+    pub trades: Vec<TradeKey>,
+    pub kpi: Kpi,
+    pub monthly: Vec<MonthBar>,
+    pub by_underlying: Vec<UnderlyingRow>,
+    pub grades: Vec<GradeBucket>,
+    pub ungraded: usize,
+    pub queue: Vec<(TradeKey, Missing)>,
+    pub portfolio: Portfolio,
+    pub cashflow: Cashflow,
+    pub equity: EquityBlock,
+    pub pnl_curve: PnlCurve,
+}
+
+/// Σ amounts in CAD: the failure when they cannot be added (a total too large
+/// to hold), never a total that leaves a term out.
+fn money_sum(items: impl IntoIterator<Item = Money>) -> Fig<Money> {
+    Ok(items.into_iter().try_fold(Money::zero(Currency::CAD), Money::add_to_fit)?)
+}
+
+/// The mean of `n` amounts totalling `total`; none of none.
+fn avg_money(total: &Fig<Money>, n: usize) -> Fig<Option<Money>> {
+    let total = total.clone()?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let v = total.amount.div_rounded(Dec::from_int(n as i64), crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven)?;
+    Ok(Some(Money::new(v, total.currency)))
+}
+
+/// `part ÷ whole` where both are stated; none where the whole is zero.
+fn ratio_of(part: &Fig<Money>, whole: &Fig<Money>) -> Fig<Option<Ratio>> {
+    crate::gap::both(part.clone(), whole.clone(), |p, w| Ok(money_ratio(p, w)))
+}
+
+/// The closed-trade statistics over `closed`, and the realized P&L over `parts`.
+fn kpi(closed: &[&TradeFig], parts: &[&Fig<Money>]) -> Kpi {
+    let trades = closed;
+    let stated: Vec<(&TradeFig, Money)> = trades.iter().filter_map(|t| t.pnl_cad.as_ref().ok().map(|p| (*t, *p))).collect();
+    let wins: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_positive()).collect();
+    let losses: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_negative()).collect();
+    let gross_win = money_sum(wins.iter().copied());
+    let gross_loss = money_sum(losses.iter().copied()).map(Money::neg);
+    let closed_total = money_sum(stated.iter().map(|(_, p)| *p));
+    let realized = money_sum(parts.iter().filter_map(|p| p.as_ref().ok().copied()));
+    let realized_left_out = parts.iter().filter(|p| p.is_err()).count();
+    let n = stated.len();
+    let fees = money_sum(stated.iter().filter_map(|(t, _)| t.fees_cad.as_ref().ok().copied()));
+    let profit_factor = crate::gap::both(gross_win.clone(), gross_loss.clone(), |w, l| {
+        Ok(if !l.amount.is_zero() {
+            money_ratio(w, l)
+        } else if w.amount.is_positive() {
+            None
+        } else {
+            Some(0.0)
+        })
+    });
+    Kpi {
+        count: n,
+        left_out: trades.len() - n,
+        wins: wins.len(),
+        losses: losses.len(),
+        breakeven: n - wins.len() - losses.len(),
+        win_rate: count_ratio(wins.len(), n),
+        profit_factor_infinite: matches!((&gross_win, &gross_loss), (Ok(w), Ok(l)) if l.amount.is_zero() && w.amount.is_positive()),
+        profit_factor,
+        expectancy: avg_money(&closed_total, n),
+        avg_win: avg_money(&gross_win, wins.len()),
+        avg_loss: avg_money(&gross_loss.clone().map(Money::neg), losses.len()),
+        realized,
+        realized_left_out,
+        gross_win,
+        gross_loss,
+        fees,
+        avg_hold: count_ratio(stated.iter().map(|(t, _)| t.hold_days.max(0) as usize).sum(), n),
+    }
+}
+
+/// Everything one filter set produces.
+#[allow(clippy::too_many_arguments)]
+pub fn scope(
+    f: &Filters,
+    inputs: &Inputs,
+    trades: &[TradeFig],
+    positions: &[PositionFig],
+    cash_rows: &[CashRow],
+    rates: &BTreeMap<InstrumentId, PayerRate>,
+    equity: &BTreeMap<AccountId, AccountEquity>,
+    benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>,
+) -> Scoped {
+    let today = inputs.clock.today;
+    let in_scope: Vec<&TradeFig> = trades.iter().filter(|t| trade_matches(f, inputs, t)).collect();
+    // closed trades whose close is in the dates: what the statistics count
+    let closed: Vec<&TradeFig> = in_scope.iter().copied().filter(|t| closed_in(f, today, t)).collect();
+    let stated: Vec<&&TradeFig> = closed.iter().filter(|t| t.pnl_cad.is_ok()).collect();
+    // each sale in the dates, of an open or a closed trade, on its own day
+    let parts: Vec<(&TradeFig, &crate::trades::Realized)> = in_scope.iter().flat_map(|t| t.realized.iter().filter(|r| f.in_dates(today, r.day)).map(move |r| (*t, r))).collect();
+
+    // monthly P&L by the month each sale was realized
+    let mut months: BTreeMap<(i16, i8), (Vec<Money>, Vec<TradeKey>)> = BTreeMap::new();
+    for (t, r) in &parts {
+        let Ok(p) = &r.pnl_cad else { continue };
+        let bar = months.entry((r.day.year(), r.day.month())).or_default();
+        bar.0.push(*p);
+        if !bar.1.contains(&t.key) {
+            bar.1.push(t.key.clone());
+        }
+    }
+    let monthly: Vec<MonthBar> = months.into_iter().map(|((year, month), (pnls, trades))| MonthBar { year, month, count: trades.len(), value: money_sum(pnls), trades }).collect();
+
+    // by underlying, largest gain first: the P&L realized, the closed trades' counts
+    let mut by: BTreeMap<InstrumentId, (Vec<Money>, usize, i64, usize, Vec<TradeKey>, usize)> = BTreeMap::new();
+    for (t, r) in &parts {
+        if let Ok(p) = &r.pnl_cad {
+            by.entry(underlying_of(inputs, t.instrument)).or_default().0.push(*p);
+        }
+    }
+    for t in &stated {
+        let p = *t.pnl_cad.as_ref().expect("stated");
+        let e = by.entry(underlying_of(inputs, t.instrument)).or_default();
+        e.1 += usize::from(p.amount.is_positive());
+        e.2 += t.hold_days;
+        e.3 += t.slices.len();
+        e.4.push(t.key.clone());
+        e.5 += 1;
+    }
+    let mut by_underlying: Vec<UnderlyingRow> = by
+        .into_iter()
+        .map(|(u, (pnls, wins, hold, legs, keys, n))| UnderlyingRow { underlying: u, pnl: money_sum(pnls), count: n, legs, win_rate: count_ratio(wins, n), avg_hold: count_ratio(hold.max(0) as usize, n), trades: keys })
+        .collect();
+    // largest gain first; one whose total cannot be stated last
+    by_underlying.sort_by(|a, b| match (&a.pnl, &b.pnl) {
+        (Ok(x), Ok(y)) => y.amount.cmp(&x.amount),
+        (a, b) => a.is_err().cmp(&b.is_err()),
+    });
+
+    let grades = [Grade::A, Grade::B, Grade::C, Grade::F]
+        .into_iter()
+        .map(|g| {
+            let rows: Vec<&&&TradeFig> = stated.iter().filter(|t| t.journal.grade == Some(g)).collect();
+            GradeBucket { grade: g, count: rows.len(), pnl: money_sum(rows.iter().map(|t| *t.pnl_cad.as_ref().expect("stated"))), trades: rows.iter().map(|t| t.key.clone()).collect() }
+        })
+        .collect();
+    let ungraded = closed.iter().filter(|t| t.journal.grade.is_none()).count();
+    let mut queue: Vec<(&TradeFig, Missing)> = closed
+        .iter()
+        .filter_map(|t| {
+            let m = match (t.journal.grade.is_none(), t.journal.thesis.trim().is_empty()) {
+                (true, true) => Missing::GradeAndThesis,
+                (true, false) => Missing::Grade,
+                (false, true) => Missing::Thesis,
+                (false, false) => return None,
+            };
+            Some((*t, m))
+        })
+        .collect();
+    queue.sort_by(|a, b| b.0.closed_on.cmp(&a.0.closed_on));
+
+    let portfolio = portfolio(f, inputs, positions);
+    let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
+    let equity = equity_block(f, equity, benchmarks, today);
+    let pnl_curve = pnl_curve(&parts.iter().map(|(_, r)| *r).collect::<Vec<_>>());
+    Scoped {
+        pnl_curve,
+        kpi: kpi(&closed, &parts.iter().map(|(_, r)| &r.pnl_cad).collect::<Vec<_>>()),
+        trades: in_scope.iter().map(|t| t.key.clone()).collect(),
+        monthly,
+        by_underlying,
+        grades,
+        ungraded,
+        queue: queue.into_iter().map(|(t, m)| (t.key.clone(), m)).collect(),
+        portfolio,
+        cashflow,
+        equity,
+    }
+}
+
+fn open_accounts_in_scope<'a>(f: &Filters, inputs: &'a Inputs) -> Vec<&'a crate::input::AccountInfo> {
+    inputs.ledger.accounts.values().filter(|a| a.account.status == AccountStatus::Open).filter(|a| f.accounts.is_empty() || f.accounts.contains(&a.account.id)).collect()
+}
+
+fn is_margin(a: &crate::input::AccountInfo) -> bool {
+    matches!(a.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. })
+}
+
+fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfolio {
+    let rates = &inputs.facts.rates;
+    let clock = &inputs.clock;
+    let idx: Vec<usize> = positions.iter().enumerate().filter(|(_, p)| position_matches(f, inputs, p)).map(|(i, _)| i).collect();
+    let signed_market = |p: &PositionFig| -> Fig<Money> { p.market_cad.clone().map(|m| if p.direction == Direction::Short { m.neg() } else { m }) };
+    let market: Vec<Fig<Money>> = idx.iter().map(|i| signed_market(&positions[*i])).collect();
+    let cost: Vec<Fig<Money>> = idx.iter().map(|i| positions[*i].book_cad.clone().map(|m| m.abs())).collect();
+    let unreal: Vec<Fig<Money>> = idx.iter().map(|i| positions[*i].unrealized_cad.clone()).collect();
+    let market_value = Partial::of(&market);
+    let cost_basis = Partial::of(&cost);
+    let unrealized = Partial::of(&unreal);
+
+    let accounts = open_accounts_in_scope(f, inputs);
+    let mut navs = Vec::new();
+    let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
+    let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
+    let mut available = Vec::new();
+    let mut unavailable = Vec::new();
+    let mut unread = Vec::new();
+    for a in &accounts {
+        let Some(b) = inputs.market.brokers.get(&a.account.id) else { continue };
+        if let Some(n) = b.net_value_now {
+            navs.push(Money::new(n, Currency::CAD));
+        }
+        for (c, v) in &b.cash {
+            let slot = if v.is_negative() { used.entry(*c).or_insert(Ok(Dec::ZERO)) } else { cash_by.entry(*c).or_insert(Ok(Dec::ZERO)) };
+            if let Ok(total) = slot {
+                *slot = total.checked_add(v.abs()).map_err(Gaps::from);
+            }
+        }
+        if is_margin(a) {
+            match &b.buying_power {
+                Some(Ok(p)) => available.push(Money::new(*p, Currency::CAD)),
+                Some(Err(why)) => unavailable.push((a.account.id, why.clone())),
+                None => unread.push(a.account.id),
+            }
+        }
+    }
+    // a margin account in scope makes the figure one to state: it waits on any
+    // whose buying power is not read yet
+    for a in &accounts {
+        if is_margin(a) && !inputs.market.brokers.contains_key(&a.account.id) {
+            unread.push(a.account.id);
+        }
+    }
+    let to_cad_sum = |by: &BTreeMap<Currency, Fig<Dec>>| -> Fig<Money> {
+        let mut total = Money::zero(Currency::CAD);
+        for (c, v) in by {
+            total = total.add_to_fit(live_to_cad(rates, clock, Money::new(v.clone()?, *c))?)?;
+        }
+        Ok(total)
+    };
+    let margin_used = to_cad_sum(&used);
+    let cash = to_cad_sum(&cash_by);
+    let net_value = (!navs.is_empty()).then(|| money_sum(navs.iter().copied()));
+    let quoted: Vec<(usize, Money)> = idx.iter().filter_map(|i| positions[*i].day_change_cad.as_ref().ok().and_then(|d| d.map(|m| (*i, m)))).collect();
+    let day_change = (!quoted.is_empty()).then(|| Partial { total: money_sum(quoted.iter().map(|(_, m)| *m)), left_out: idx.len() - quoted.len() });
+    let day_change_pct: Fig<Option<Ratio>> = match &day_change {
+        None => Ok(None),
+        Some(dc) => {
+            let now = money_sum(quoted.iter().filter_map(|(i, _)| signed_market(&positions[*i]).ok()));
+            let before = crate::gap::both(now, dc.total.clone(), |n, d| Ok(n.checked_sub(d)?));
+            ratio_of(&dc.total, &before)
+        }
+    };
+    let mut allocation: Vec<Allocation> = idx
+        .iter()
+        .filter_map(|i| positions[*i].market_cad.as_ref().ok().filter(|m| m.amount.is_positive()).map(|m| Allocation { position: *i, value: *m, share: Ok(0.0) }))
+        .collect();
+    allocation.sort_by(|a, b| b.value.amount.cmp(&a.value.amount));
+    let allocated = money_sum(allocation.iter().map(|a| a.value));
+    for a in allocation.iter_mut() {
+        // every value is positive, so their sum is never zero
+        a.share = allocated.clone().map(|t| money_ratio(a.value, t).unwrap_or(0.0));
+    }
+    let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
+    Portfolio {
+        unrealized_pct: ratio_of(&unrealized.total, &cost_basis.total),
+        margin_used_pct: ratio_of(&margin_used, &market_value.total),
+        cash_pct: match &net_value {
+            Some(n) => ratio_of(&cash, n),
+            None => Ok(None),
+        },
+        positions: idx,
+        market_value,
+        cost_basis,
+        unrealized,
+        account_count,
+        net_value_accounts: navs.len(),
+        net_value,
+        margin_used_by: used,
+        margin_used,
+        available_margin: match (unread.first(), available.is_empty()) {
+            (Some(a), _) => Some(Err(Gaps::of(Gap::BuyingPowerUnread(*a)))),
+            (None, false) => Some(money_sum(available.iter().copied())),
+            (None, true) => None,
+        },
+        margin_unavailable: unavailable,
+        has_margin: accounts.iter().any(|a| is_margin(a)),
+        cash,
+        day_change,
+        day_change_pct,
+        allocation,
+    }
+}
+
+fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[CashRow], rates: &BTreeMap<InstrumentId, PayerRate>, portfolio: &Portfolio) -> Cashflow {
+    let today = inputs.clock.today;
+    let live = |m: Money| live_to_cad(&inputs.facts.rates, &inputs.clock, m);
+    let in_accounts = |a: &AccountId| f.accounts.is_empty() || f.accounts.contains(a);
+    let in_instruments = |i: Option<InstrumentId>| match i {
+        Some(i) => chosen(f, inputs, &[i]) && searched(inputs, &[i], &f.search),
+        None => f.instruments.is_empty() && f.search.is_empty(),
+    };
+    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| in_accounts(&r.account) && in_instruments(r.instrument) && f.in_dates(today, r.day)).map(|(i, _)| i).collect();
+    let dividends: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind == Payment::Dividend).collect();
+    let other: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind != Payment::Dividend).collect();
+    let partial = |ix: &mut dyn Iterator<Item = usize>| -> Partial {
+        let figs: Vec<Fig<Money>> = ix.map(|i| rows[i].amount_cad.clone()).collect();
+        Partial::of(&figs)
+    };
+
+    // the chart: every month from the first payment to the current month (or the date filter's end)
+    let mut months: Vec<CashMonth> = Vec::new();
+    if let Some(first) = dividends.iter().map(|i| rows[*i].day).min() {
+        let end = match f.bounds(today) {
+            Some((_, hi)) => hi.min(today),
+            None => match &f.dates {
+                Dates::Years(ys) if !ys.is_empty() => Date::new(*ys.iter().max().expect("nonempty"), 12, 31).map(|d| d.min(today)).unwrap_or(today),
+                _ => today,
+            },
+        };
+        let last = dividends.iter().map(|i| rows[*i].day).max().unwrap_or(first).max(end);
+        let (mut y, mut m) = (first.year(), first.month());
+        while (y, m) <= (last.year(), last.month()) {
+            let in_month = |i: &usize| rows[*i].day.year() == y && rows[*i].day.month() == m;
+            let paid: Vec<usize> = dividends.iter().copied().filter(in_month).collect();
+            let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge && in_month(i)).collect();
+            let mut interest = partial(&mut charges.iter().copied());
+            interest.total = interest.total.map(Money::neg);
+            months.push(CashMonth { year: y, month: m, count: paid.len(), distributions: partial(&mut paid.iter().copied()), interest });
+            if m == 12 {
+                y += 1;
+                m = 1;
+            } else {
+                m += 1;
+            }
+        }
+    }
+
+    let paying_months = |keep: &dyn Fn(&CashMonth) -> bool| months.iter().filter(|m| keep(m) && m.count > 0).count();
+    let paid_tile = |label: PaidLabel, ix: Vec<usize>, months_paid: usize| {
+        let total = partial(&mut ix.iter().copied());
+        CashTile::Paid { per_paying_month: avg_money(&total.total, months_paid), total, count: ix.len(), label }
+    };
+    let this_year = today.year();
+    let mut tiles = Vec::new();
+    for y in [this_year - 2, this_year - 1, this_year] {
+        let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day.year() == y).collect();
+        let label = if y == this_year { PaidLabel::YearToDate(y) } else { PaidLabel::Year(y) };
+        tiles.push(paid_tile(label, ix, paying_months(&|m| m.year == y)));
+    }
+    tiles.push(paid_tile(PaidLabel::AllTime, dividends.clone(), paying_months(&|_| true)));
+    if portfolio.has_margin {
+        let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge).collect();
+        let charged: BTreeSet<(i16, i8)> = charges.iter().map(|i| (rows[*i].day.year(), rows[*i].day.month())).collect();
+        let total = partial(&mut charges.iter().copied()).total.map(Money::neg);
+        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone(), interest_per_month: avg_money(&total, charged.len()), interest_months: charged.len() });
+    } else {
+        let since = today.checked_sub(365.days()).unwrap_or(Date::MIN);
+        let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day > since && rows[*i].day <= today).collect();
+        let n = ix.iter().map(|i| (rows[*i].day.year(), rows[*i].day.month())).collect::<BTreeSet<_>>().len();
+        tiles.push(paid_tile(PaidLabel::LastTwelveMonths, ix, n));
+    }
+
+    // the income holdings: each open long position in a paying instrument
+    let for_yoc: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| r.kind == Payment::Dividend && in_accounts(&r.account)).map(|(i, _)| i).collect();
+    let trailing_from = today.checked_sub(365.days()).unwrap_or(Date::MIN);
+    let holdings: Vec<IncomeHolding> = positions
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.direction == Direction::Long && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
+        .filter_map(|(pi, p)| rates.get(&p.instrument).map(|r| (pi, p, r.clone())))
+        .map(|(pi, p, rate)| {
+            // what this holding paid: its instrument, into its own account
+            let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && rows[*i].account == p.account && keep(&rows[*i])));
+            let annual: Fig<Money> = crate::gap::both(rate.annual_per_unit(), p.qty.clone(), |a, q| Ok(a.times(q)?));
+            // a payout in another currency than the holding's is taken at the
+            // latest rate, as any live figure is
+            let per_unit_annual = rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, p.currency));
+            let over = |a: Money, of: Dec, what: &str| money_ratio(a, Money::new(of, p.currency)).ok_or_else(|| Gaps::of(Gap::Arithmetic(format!("{} has no {what} to be a yield of", p.instrument))));
+            let yoc = crate::gap::both(per_unit_annual.clone(), p.avg.clone(), |a, avg| over(a, avg, "cost"));
+            let cy = crate::gap::both(per_unit_annual, p.mark.clone(), |a, m| over(a, m.price, "price"));
+            IncomeHolding {
+                position: pi,
+                ytd: paid(&|r| r.day.year() == this_year),
+                trailing_year: paid(&|r| r.day > trailing_from),
+                all_time: paid(&|_| true),
+                projected_per_month_cad: annual.clone().and_then(live).and_then(|m| Ok(Money::new(m.amount.div_rounded(Dec::from_int(12), crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven)?, Currency::CAD))),
+                annual,
+                yield_on_cost: yoc,
+                current_yield: cy,
+                rate,
+            }
+        })
+        .collect();
+    let rated: Vec<&IncomeHolding> = holdings.iter().filter(|h| h.projected_per_month_cad.is_ok()).collect();
+    let book = money_sum(rated.iter().filter_map(|h| positions[h.position].book_cad.as_ref().ok().copied()));
+    let per_month = money_sum(rated.iter().filter_map(|h| h.projected_per_month_cad.as_ref().ok().copied()));
+    let earned: Fig<Money> = rated.iter().try_fold(Money::zero(Currency::CAD), |a, h| Ok(a.add_to_fit(h.trailing_year.total.clone()?)?));
+    let annual_total: Fig<Money> = per_month.clone().and_then(|m| Ok(m.times(Dec::from_int(12))?));
+    tiles.push(CashTile::Yield { yield_on_cost: ratio_of(&annual_total, &book), projected_per_month: per_month, earned, book, left_out: holdings.len() - rated.len() });
+
+    Cashflow {
+        total: partial(&mut dividends.iter().copied()),
+        interest: partial(&mut other.iter().copied().filter(|i| rows[*i].kind == Payment::Interest)),
+        withholding: partial(&mut other.iter().copied().filter(|i| rows[*i].kind == Payment::WithholdingTax)),
+        tiles,
+        months,
+        holdings,
+        rows: dividends,
+        other,
+        unread_filters: f.unread_by_cashflow(),
+    }
+}
+
+/// `amount` in `currency` at the latest rates the Bank has published.
+fn in_currency_live(inputs: &Inputs, amount: Money, currency: Currency) -> Fig<Money> {
+    if amount.currency == currency {
+        return Ok(amount);
+    }
+    let cad = live_to_cad(&inputs.facts.rates, &inputs.clock, amount)?;
+    let (per_unit, _) = live_rate(&inputs.facts.rates, &inputs.clock, currency)?;
+    Ok(Money::new(cad.amount.div_rounded(per_unit, crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven)?, currency))
+}
+
+/// The equity series of the accounts in scope, and what it says. A day is in
+/// the series when every account in scope that has begun has a value that day;
+/// its return is the value-weighted return of the accounts that formed one.
+fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>, today: Date) -> EquityBlock {
+    let accounts: Vec<&AccountEquity> = equity.values().filter(|e| f.accounts.is_empty() || f.accounts.contains(&e.account)).collect();
+    // each day's accounts' values and flows, summed in the statistics' own arithmetic
+    let mut values: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = BTreeMap::new();
+    for e in &accounts {
+        for p in &e.points {
+            values.entry(p.day).or_default().push((p.value, p.flow));
+        }
+    }
+    let begun = |d: Date| accounts.iter().filter(|e| e.points.first().is_some_and(|p| p.day <= d)).count();
+    let complete: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = values.into_iter().filter(|(d, v)| v.len() == begun(*d)).collect();
+    let per_account: Vec<&[(Date, Ratio, Dec)]> = accounts.iter().map(|e| e.returns.as_slice()).collect();
+    let series = returns::combine(&complete, &per_account);
+    let benchmark = benchmarks.get(&f.benchmark);
+    let years = returns::yearly_returns(&series, today, benchmark);
+    let mut gaps = Gaps::none();
+    for e in &accounts {
+        gaps.merge(&e.gaps);
+    }
+    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series, gaps, unread_filters: f.unread_by_value() }
+}
+
+/// The running total of the realized parts by their days.
+fn pnl_curve(parts: &[&crate::trades::Realized]) -> PnlCurve {
+    let mut by_day: BTreeMap<Date, Vec<Money>> = BTreeMap::new();
+    let mut left_out = 0;
+    for r in parts {
+        match &r.pnl_cad {
+            Ok(p) => by_day.entry(r.day).or_default().push(*p),
+            Err(_) => left_out += 1,
+        }
+    }
+    let mut running: Fig<Money> = Ok(Money::zero(Currency::CAD));
+    let days = by_day
+        .into_iter()
+        .map(|(day, pnls)| {
+            running = running.clone().and_then(|r| money_sum(std::iter::once(r).chain(pnls)));
+            (day, running.clone())
+        })
+        .collect();
+    PnlCurve { days, left_out }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cad(s: &str) -> Money {
+        Money::new(Dec::parse(s).unwrap(), Currency::CAD)
+    }
+
+    const HUGE: &str = "70000000000000000000000000000";
+
+    #[test]
+    fn the_pnl_curve_runs_each_realized_part_on_its_own_day_and_leaves_out_what_waits() {
+        let d = |s: &str| -> Date { s.parse().unwrap() };
+        let part = |day: &str, p: Fig<Money>| crate::trades::Realized { day: d(day), pnl_cad: p };
+        let waits = || Err(Gaps::of(crate::gap::Gap::Arithmetic("waits".into())));
+        let parts = [part("2025-01-03", Ok(cad("10"))), part("2025-01-02", Ok(cad("-4"))), part("2025-01-03", Ok(cad("1.5"))), part("2025-01-05", waits())];
+        let c = pnl_curve(&parts.iter().collect::<Vec<_>>());
+        assert_eq!(c.days, vec![(d("2025-01-02"), Ok(cad("-4"))), (d("2025-01-03"), Ok(cad("7.5")))]);
+        assert_eq!(c.left_out, 1);
+        // a running total too large to hold is a gap from that day on, never a total missing a term
+        let parts = [part("2025-01-02", Ok(cad(HUGE))), part("2025-01-03", Ok(cad(HUGE))), part("2025-01-04", Ok(cad("1")))];
+        let c = pnl_curve(&parts.iter().collect::<Vec<_>>());
+        assert!(c.days[0].1.is_ok() && c.days[1].1.is_err() && c.days[2].1.is_err(), "{:?}", c.days);
+    }
+
+    #[test]
+    fn the_value_series_names_every_filter_set_but_the_account() {
+        let mut f = Filters::default();
+        assert!(f.unread_by_value().is_empty());
+        f.accounts.insert(AccountId::parse("01900000-0000-7000-8000-000000000001").unwrap());
+        assert!(f.unread_by_value().is_empty(), "the account is read");
+        f.dates = Dates::Years([2024].into());
+        f.search = "abc".into();
+        f.tags.insert("x".into());
+        assert_eq!(f.unread_by_value(), vec!["date", "symbol", "tag"]);
+        f.dates = Dates::Years(BTreeSet::new());
+        assert_eq!(f.unread_by_value(), vec!["symbol", "tag"], "no year chosen is no date filter");
+    }
+
+    #[test]
+    fn a_total_too_large_to_hold_is_a_gap_never_a_total_missing_a_term() {
+        assert_eq!(money_sum([cad("1.25"), cad("2.5")]), Ok(cad("3.75")));
+        let over = money_sum([cad(HUGE), cad(HUGE), cad("1")]);
+        assert!(over.as_ref().is_err_and(|g| g.has_word("arithmetic")), "{over:?}");
+
+        let p = Partial::of(&[Ok(cad(HUGE)), Err(Gaps::of(Gap::Arithmetic("a price".into()))), Ok(cad(HUGE))]);
+        assert_eq!(p.left_out, 1);
+        assert!(p.total.as_ref().is_err_and(|g| g.has_word("arithmetic")), "{p:?}");
+
+        // what is worked out from such a total carries its gap too
+        assert!(avg_money(&p.total, 2).is_err());
+        assert!(ratio_of(&Ok(cad("1")), &p.total).is_err());
+        assert_eq!(avg_money(&Ok(cad("3")), 0), Ok(None));
+        assert_eq!(ratio_of(&Ok(cad("1")), &Ok(cad("4"))), Ok(Some(0.25)));
+    }
+}

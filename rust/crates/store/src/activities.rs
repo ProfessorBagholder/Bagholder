@@ -5,9 +5,10 @@
 //! fabricated for it.
 
 use rusqlite::{Connection, Result, Row};
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
-use bagholder_model::value::{field_s, get, num, s as vs};
+use bagholder_model::lenient;
 
 pub const INVENTED_ACCOUNTS: [&str; 7] = ["", "manual", "legacy", "statement", "canonical", "cad", "usd"];
 
@@ -27,6 +28,107 @@ const INSERT_SQL: &str = "INSERT INTO activities (
         source, raw_type, aft_type, counter_symbol, security_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+pub(crate) const SELECT_ALL: &str = "SELECT id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id FROM activities";
+
+/// A text field that is `None` rather than empty when absent, null, or blank
+/// -- `canonicalId` and `securityId` are never `Some("")`.
+fn opt_text<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    let v = Value::deserialize(d)?;
+    let s = bagholder_model::value::s(Some(&v));
+    Ok(if s.is_empty() { None } else { Some(s) })
+}
+
+/// One row of `activities`: what every source hands in and what a read gives back.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ActivityRow {
+    #[serde(deserialize_with = "lenient::text")]
+    pub id: String,
+    #[serde(deserialize_with = "opt_text", alias = "canonical_id")]
+    pub canonical_id: Option<String>,
+    #[serde(deserialize_with = "lenient::text", alias = "occurred_at")]
+    pub occurred_at: String,
+    #[serde(deserialize_with = "lenient::text", alias = "transaction_date")]
+    pub transaction_date: String,
+    #[serde(deserialize_with = "lenient::text", alias = "settlement_date")]
+    pub settlement_date: String,
+    #[serde(deserialize_with = "lenient::text", alias = "account_id")]
+    pub account_id: String,
+    #[serde(deserialize_with = "lenient::text", alias = "book_id")]
+    pub book_id: String,
+    #[serde(deserialize_with = "lenient::text", alias = "fifo_id")]
+    pub fifo_id: String,
+    #[serde(deserialize_with = "lenient::text", alias = "account_type")]
+    pub account_type: String,
+    #[serde(deserialize_with = "lenient::text", alias = "activity_type")]
+    pub activity_type: String,
+    #[serde(deserialize_with = "lenient::text", alias = "activity_sub_type")]
+    pub activity_sub_type: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub description: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub direction: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub currency: String,
+    #[serde(deserialize_with = "lenient::number")]
+    pub quantity: f64,
+    #[serde(deserialize_with = "lenient::number", alias = "unit_price")]
+    pub unit_price: f64,
+    #[serde(deserialize_with = "lenient::number")]
+    pub commission: f64,
+    #[serde(deserialize_with = "lenient::number", alias = "net_cash_amount")]
+    pub net_cash_amount: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    pub category: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub balance: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    pub source: String,
+    #[serde(deserialize_with = "lenient::text", alias = "raw_type")]
+    pub raw_type: String,
+    #[serde(deserialize_with = "lenient::text", alias = "aft_type")]
+    pub aft_type: String,
+    #[serde(deserialize_with = "lenient::text", alias = "counter_symbol")]
+    pub counter_symbol: String,
+    #[serde(deserialize_with = "opt_text", alias = "security_id")]
+    pub security_id: Option<String>,
+}
+
+impl ActivityRow {
+    /// What `_insert_params` computed today: a date read out of the
+    /// occurred timestamp when no transaction date is given, a date-only
+    /// occurred timestamp kept date-only, a settlement date defaulted to the
+    /// transaction date, a book/fifo id defaulted to the account id, and a
+    /// security id trimmed to `None` when blank.
+    pub fn normalized(&self) -> ActivityRow {
+        let mut r = self.clone();
+        let mut occurred = r.occurred_at.trim().to_string();
+        let mut date = r.transaction_date.trim().to_string();
+        if date.is_empty() && !occurred.is_empty() {
+            date = occurred.split('T').next().unwrap_or("").chars().take(10).collect();
+        }
+        if !occurred.is_empty() && !occurred.contains('T') {
+            // a date-only source (typed in, or a CSV) stays date-only
+            occurred = occurred.chars().take(10).collect();
+        }
+        let settle = { let s = r.settlement_date.trim().to_string(); if s.is_empty() { date.clone() } else { s } };
+        let book_id = if r.book_id.is_empty() { r.account_id.clone() } else { r.book_id.clone() };
+        let fifo_id = if r.fifo_id.is_empty() { r.account_id.clone() } else { r.fifo_id.clone() };
+        let sid = r.security_id.clone().unwrap_or_default().trim().to_string();
+        r.occurred_at = occurred;
+        r.transaction_date = date;
+        r.settlement_date = settle;
+        r.book_id = book_id;
+        r.fifo_id = fifo_id;
+        r.security_id = if sid.is_empty() { None } else { Some(sid) };
+        r
+    }
+}
+
 /// `looks_like_homemade_id`: an id Bagholder made, not the broker.
 pub fn looks_like_homemade_id(aid: &str) -> bool {
     let s = aid.trim();
@@ -45,93 +147,67 @@ pub fn is_real_account(account_id: &str) -> bool {
 
 /// `_round_qty`: eight decimals, which is what a crypto quantity needs
 /// and what the match keys compare on.
-pub fn round_qty(v: Option<&Value>) -> f64 {
-    let n = num(v, 0.0);
-    (n * 1e8).round() / 1e8
-}
-
-/// Either spelling of a field, camelCase first.
-fn either(act: &Value, camel: &str, snake: &str) -> String {
-    let v = field_s(act, camel);
-    if v.is_empty() { field_s(act, snake) } else { v }
-}
-
-fn either_val<'a>(act: &'a Value, camel: &str, snake: &str) -> Option<&'a Value> {
-    get(act, camel).or_else(|| get(act, snake))
+pub fn round_qty(v: f64) -> f64 {
+    (v * 1e8).round() / 1e8
 }
 
 /// `trade_side`.
-pub fn trade_side(act: &Value) -> String {
-    bagholder_model::fifo::trade_side(act)
+pub fn trade_side(act: &ActivityRow) -> String {
+    let side = bagholder_model::fifo::side_of(&act.activity_sub_type, &act.activity_type, act.quantity);
+    side.map_or("", |s| s.as_str()).to_string()
 }
 
-fn key_date(act: &Value) -> String {
-    let d: String = either(act, "transactionDate", "transaction_date").chars().take(10).collect();
+fn key_date(act: &ActivityRow) -> String {
+    let d: String = act.transaction_date.chars().take(10).collect();
     if !d.is_empty() {
         return d;
     }
-    let occurred = either(act, "occurredAt", "occurred_at");
-    occurred.split('T').next().unwrap_or("").chars().take(10).collect()
+    act.occurred_at.split('T').next().unwrap_or("").chars().take(10).collect()
 }
 
-fn key_account(act: &Value, include_account: bool) -> String {
+fn key_account(act: &ActivityRow, include_account: bool) -> String {
     if !include_account {
         return String::new();
     }
-    let aid = either(act, "accountId", "account_id");
-    if is_real_account(&aid) { aid } else { String::new() }
-}
-
-/// The price and cash as the match keys read them: under the camelCase name
-/// only.
-///
-/// `field_match_key` spells this
-/// `act.get("unitPrice") if "unitPrice" in act or "unit_price" in act else act.get("unit_price")`,
-/// and both branches of that read `unitPrice`, so a row in the snake_case
-/// spelling matches on 0.0 rather than on its price. `_insert_params` tests
-/// only `"unitPrice" in act` and does fall back, so a stored row is unaffected.
-/// Reproduced rather than corrected: changing it would change which rows the
-/// sync considers the same fill.
-fn key_price(act: &Value, camel: &str) -> f64 {
-    round_qty(get(act, camel))
+    if is_real_account(&act.account_id) { act.account_id.clone() } else { String::new() }
 }
 
 /// `field_match_key`: what makes two rows the same fill when neither
 /// carries the broker's id.
-pub fn field_match_key(act: &Value, include_account: bool) -> (String, String, String, f64, f64, f64) {
+pub fn field_match_key(act: &ActivityRow, include_account: bool) -> (String, String, String, f64, f64, f64) {
     (
         key_date(act),
         key_account(act, include_account),
-        field_s(act, "symbol").trim().to_uppercase(),
-        round_qty(get(act, "quantity")),
-        key_price(act, "unitPrice"),
-        key_price(act, "netCashAmount"),
+        act.symbol.trim().to_uppercase(),
+        round_qty(act.quantity),
+        round_qty(act.unit_price),
+        round_qty(act.net_cash_amount),
     )
 }
 
 /// `link_match_key`: the same, ordered for linking an imported row to a
 /// broker one.
-pub fn link_match_key(act: &Value, include_account: bool) -> (String, String, f64, f64, String, String) {
+pub fn link_match_key(act: &ActivityRow, include_account: bool) -> (String, String, f64, f64, String, String) {
     (
-        field_s(act, "symbol").trim().to_uppercase(),
+        act.symbol.trim().to_uppercase(),
         trade_side(act),
-        round_qty(get(act, "quantity")),
-        key_price(act, "unitPrice"),
+        round_qty(act.quantity),
+        round_qty(act.unit_price),
         key_date(act),
         key_account(act, include_account),
     )
 }
 
 /// `_canonical_from_row`: the broker's id, never one Bagholder made.
-pub fn canonical_from_row(act: &Value, source: &str) -> Option<String> {
+pub fn canonical_from_row(act: &ActivityRow, source: &str) -> Option<String> {
     if source != "wealthsimple" {
         return None;
     }
-    let cid = either(act, "canonicalId", "canonical_id").trim().to_string();
+    let cid = act.canonical_id.clone().unwrap_or_default().trim().to_string();
     if !cid.is_empty() && !looks_like_homemade_id(&cid) {
         return Some(cid);
     }
-    let old_id = field_s(act, "id").trim().to_string();
+    let old_id = act.id.trim().to_string();
     if !old_id.is_empty() && !looks_like_homemade_id(&old_id) {
         return Some(old_id);
     }
@@ -142,16 +218,13 @@ fn text(row: &Row, idx: usize) -> rusqlite::Result<String> {
     Ok(row.get::<_, Option<String>>(idx)?.unwrap_or_default())
 }
 
-fn real(row: &Row, idx: usize) -> rusqlite::Result<Value> {
-    Ok(match row.get::<_, Option<f64>>(idx)? {
-        Some(v) => json!(v),
-        None => Value::Null,
-    })
+fn real(row: &Row, idx: usize) -> rusqlite::Result<f64> {
+    Ok(row.get::<_, Option<f64>>(idx)?.filter(|x| !x.is_nan()).unwrap_or(0.0))
 }
 
 /// The row as the model wants it, with these fallbacks -- a missing settlement date is the transaction
 /// date, a missing book or fifo id the account's.
-pub fn row_to_activity(row: &Row) -> rusqlite::Result<Value> {
+pub fn from_row(row: &Row) -> rusqlite::Result<ActivityRow> {
     let canonical = row.get::<_, Option<String>>(1)?.filter(|s| !s.is_empty());
     let transaction_date = text(row, 3)?;
     let account_id = text(row, 5)?;
@@ -160,184 +233,180 @@ pub fn row_to_activity(row: &Row) -> rusqlite::Result<Value> {
     let fifo_id = { let s = text(row, 7)?; if s.is_empty() { account_id.clone() } else { s } };
     let security_id = row.get::<_, Option<String>>(26)?.filter(|s| !s.is_empty());
 
-    Ok(json!({
-        "id": text(row, 0)?,
-        "canonicalId": canonical,
-        "occurredAt": text(row, 2)?,
-        "transactionDate": transaction_date,
-        "settlementDate": settlement,
-        "accountId": account_id,
-        "bookId": book_id,
-        "fifoId": fifo_id,
-        "accountType": text(row, 8)?,
-        "activityType": text(row, 9)?,
-        "activitySubType": text(row, 10)?,
-        "description": text(row, 11)?,
-        "direction": text(row, 12)?,
-        "symbol": text(row, 13)?,
-        "name": text(row, 14)?,
-        "currency": text(row, 15)?,
-        "quantity": real(row, 16)?,
-        "unitPrice": real(row, 17)?,
-        "commission": real(row, 18)?,
-        "netCashAmount": real(row, 19)?,
-        "category": text(row, 20)?,
-        "balance": real(row, 21)?,
-        "source": text(row, 22)?,
-        "rawType": text(row, 23)?,
-        "aftType": text(row, 24)?,
-        "counterSymbol": text(row, 25)?,
-        "securityId": security_id,
-    }))
+    Ok(ActivityRow {
+        id: text(row, 0)?,
+        canonical_id: canonical,
+        occurred_at: text(row, 2)?,
+        transaction_date,
+        settlement_date: settlement,
+        account_id,
+        book_id,
+        fifo_id,
+        account_type: text(row, 8)?,
+        activity_type: text(row, 9)?,
+        activity_sub_type: text(row, 10)?,
+        description: text(row, 11)?,
+        direction: text(row, 12)?,
+        symbol: text(row, 13)?,
+        name: text(row, 14)?,
+        currency: text(row, 15)?,
+        quantity: real(row, 16)?,
+        unit_price: real(row, 17)?,
+        commission: real(row, 18)?,
+        net_cash_amount: real(row, 19)?,
+        category: text(row, 20)?,
+        balance: row.get::<_, Option<f64>>(21)?,
+        source: text(row, 22)?,
+        raw_type: text(row, 23)?,
+        aft_type: text(row, 24)?,
+        counter_symbol: text(row, 25)?,
+        security_id,
+    })
 }
 
-const SELECT_ALL: &str = "SELECT id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id FROM activities";
-
 /// `_all_activities`: every row, oldest first.
-pub fn all_activities(conn: &Connection) -> Result<Vec<Value>> {
+pub fn all_activities(conn: &Connection) -> Result<Vec<ActivityRow>> {
     let sql = format!("{SELECT_ALL} ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC");
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], row_to_activity)?;
+    let rows = stmt.query_map([], from_row)?;
     rows.collect()
 }
 
-pub fn activity_by_id(conn: &Connection, id: &str) -> Result<Option<Value>> {
+/// Rows not yet linked to a broker canonical id -- what an imported row is
+/// checked against for a link.
+pub fn unlinked(conn: &Connection) -> Result<Vec<ActivityRow>> {
+    let sql = format!("{SELECT_ALL} WHERE canonical_id IS NULL OR canonical_id = ''");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], from_row)?;
+    rows.collect()
+}
+
+/// A stored row as the model reads one: the same columns `from_row` gives, with
+/// no JSON between the row and the struct. A number that is not there is zero and a text
+/// that is not there is empty, as the model's lenient reading of the JSON row has it.
+fn row_to_raw(row: &Row) -> rusqlite::Result<bagholder_model::activity::RawActivity> {
+    let number = |idx: usize| -> rusqlite::Result<f64> { Ok(row.get::<_, Option<f64>>(idx)?.filter(|x| !x.is_nan()).unwrap_or(0.0)) };
+    let account_id = text(row, 5)?;
+    let or_account = |t: String| if t.is_empty() { account_id.clone() } else { t };
+    Ok(bagholder_model::activity::RawActivity {
+        id: text(row, 0)?,
+        occurred_at: text(row, 2)?,
+        transaction_date: text(row, 3)?,
+        book_id: or_account(text(row, 6)?),
+        fifo_id: or_account(text(row, 7)?),
+        account_type: text(row, 8)?,
+        activity_type: text(row, 9)?,
+        activity_sub_type: text(row, 10)?,
+        description: text(row, 11)?,
+        direction: text(row, 12)?,
+        symbol: text(row, 13)?,
+        name: text(row, 14)?,
+        currency: text(row, 15)?,
+        quantity: number(16)?,
+        unit_price: number(17)?,
+        commission: number(18)?,
+        net_cash_amount: number(19)?,
+        category: text(row, 20)?,
+        raw_type: text(row, 23)?,
+        aft_type: text(row, 24)?,
+        security_id: text(row, 26)?,
+        kind: String::new(), // a stored row never says what it is
+        account_id,
+    })
+}
+
+/// Every row, oldest first, as the model reads them.
+pub fn all_raw_activities(conn: &Connection) -> Result<Vec<bagholder_model::activity::RawActivity>> {
+    let sql = format!("{SELECT_ALL} ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_raw)?;
+    rows.collect()
+}
+
+pub fn activity_by_id(conn: &Connection, id: &str) -> Result<Option<ActivityRow>> {
     let sql = format!("{SELECT_ALL} WHERE id = ?");
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([id])?;
     match rows.next()? {
-        Some(r) => Ok(Some(row_to_activity(r)?)),
+        Some(r) => Ok(Some(from_row(r)?)),
         None => Ok(None),
     }
 }
 
-/// A number stored as NULL rather than zero.
-fn opt_real(act: &Value, camel: &str, snake: &str) -> Value {
-    match either_val(act, camel, snake) {
-        None | Some(Value::Null) => Value::Null,
-        Some(Value::String(s)) if s.is_empty() => Value::Null,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { Value::Null } else { json!(n) }
+/// The stored row with this canonical id, if any -- what a revision compares
+/// the incoming row against.
+pub fn by_canonical_id(conn: &Connection, cid: &str) -> Result<Option<ActivityRow>> {
+    let sql = format!("{SELECT_ALL} WHERE canonical_id = ?");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([cid])?;
+    match rows.next()? {
+        Some(r) => Ok(Some(from_row(r)?)),
+        None => Ok(None),
+    }
+}
+
+/// The 18 columns Wealthsimple may revise on a row of its own, plus the
+/// security id a later pull may add. Compared field by field: the four
+/// numbers within a billionth, the rest as text.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Revisable {
+    pub occurred_at: String,
+    pub transaction_date: String,
+    pub settlement_date: String,
+    pub activity_type: String,
+    pub activity_sub_type: String,
+    pub description: String,
+    pub direction: String,
+    pub symbol: String,
+    pub name: String,
+    pub currency: String,
+    pub quantity: f64,
+    pub unit_price: f64,
+    pub commission: f64,
+    pub net_cash_amount: f64,
+    pub category: String,
+    pub raw_type: String,
+    pub aft_type: String,
+    pub counter_symbol: String,
+    pub security_id: Option<String>,
+}
+
+impl Revisable {
+    pub fn of(row: &ActivityRow) -> Revisable {
+        Revisable {
+            occurred_at: row.occurred_at.clone(),
+            transaction_date: row.transaction_date.clone(),
+            settlement_date: row.settlement_date.clone(),
+            activity_type: row.activity_type.clone(),
+            activity_sub_type: row.activity_sub_type.clone(),
+            description: row.description.clone(),
+            direction: row.direction.clone(),
+            symbol: row.symbol.clone(),
+            name: row.name.clone(),
+            currency: row.currency.clone(),
+            quantity: row.quantity,
+            unit_price: row.unit_price,
+            commission: row.commission,
+            net_cash_amount: row.net_cash_amount,
+            category: row.category.clone(),
+            raw_type: row.raw_type.clone(),
+            aft_type: row.aft_type.clone(),
+            counter_symbol: row.counter_symbol.clone(),
+            security_id: row.security_id.clone(),
         }
     }
-}
-
-fn real_or_zero(act: &Value, camel: &str, snake: &str) -> f64 {
-    match either_val(act, camel, snake) {
-        None | Some(Value::Null) => 0.0,
-        Some(Value::String(s)) if s.is_empty() => 0.0,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { 0.0 } else { n }
-        }
-    }
-}
-
-/// `_insert_params`.
-fn insert_params(act: &Value, assigned_id: &str, canonical_id: Option<&str>) -> Vec<Value> {
-    let mut occurred = either(act, "occurredAt", "occurred_at").trim().to_string();
-    let mut date = either(act, "transactionDate", "transaction_date").trim().to_string();
-    if date.is_empty() && !occurred.is_empty() {
-        date = occurred.split('T').next().unwrap_or("").chars().take(10).collect();
-    }
-    if !occurred.is_empty() && !occurred.contains('T') {
-        // a date-only source (typed in, or a CSV) stays date-only
-        occurred = occurred.chars().take(10).collect();
-    }
-    let settle = {
-        let s = either(act, "settlementDate", "settlement_date").trim().to_string();
-        if s.is_empty() { date.clone() } else { s }
-    };
-    let account_id = either(act, "accountId", "account_id");
-    let or_account = |camel: &str, snake: &str| {
-        let v = either(act, camel, snake);
-        if v.is_empty() { account_id.clone() } else { v }
-    };
-    let security_id = either(act, "securityId", "security_id").trim().to_string();
-
-    vec![
-        json!(assigned_id),
-        canonical_id.map(|c| json!(c)).unwrap_or(Value::Null),
-        json!(occurred),
-        json!(date),
-        json!(settle),
-        json!(account_id),
-        json!(or_account("bookId", "book_id")),
-        json!(or_account("fifoId", "fifo_id")),
-        json!(either(act, "accountType", "account_type")),
-        json!(either(act, "activityType", "activity_type")),
-        json!(either(act, "activitySubType", "activity_sub_type")),
-        json!(field_s(act, "description")),
-        json!(field_s(act, "direction")),
-        json!(field_s(act, "symbol")),
-        json!(field_s(act, "name")),
-        json!(field_s(act, "currency")),
-        json!(real_or_zero(act, "quantity", "quantity")),
-        json!(real_or_zero(act, "unitPrice", "unit_price")),
-        json!(real_or_zero(act, "commission", "commission")),
-        json!(real_or_zero(act, "netCashAmount", "net_cash_amount")),
-        json!(field_s(act, "category")),
-        opt_real(act, "balance", "balance"),
-        json!(field_s(act, "source")),
-        json!(either(act, "rawType", "raw_type")),
-        json!(either(act, "aftType", "aft_type")),
-        json!(either(act, "counterSymbol", "counter_symbol")),
-        if security_id.is_empty() { Value::Null } else { json!(security_id) },
-    ]
-}
-
-/// The insert parameters keyed by column name, which is what the revision
-/// check compares against the stored row.
-pub fn insert_columns(act: &Value, assigned_id: &str, canonical_id: Option<&str>) -> Map<String, Value> {
-    let params = insert_params(act, assigned_id, canonical_id);
-    let mut out = Map::new();
-    for (c, v) in COLUMNS.iter().zip(params) {
-        out.insert((*c).to_string(), v);
-    }
-    out
-}
-
-/// One JSON value as a bound parameter.
-pub fn to_sql(v: &Value) -> Box<dyn rusqlite::ToSql> {
-    match v {
-        Value::Null => Box::new(None::<String>),
-        Value::String(s) => Box::new(s.clone()),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() { Box::new(i) } else { Box::new(n.as_f64().unwrap_or(0.0)) }
-        }
-        Value::Bool(b) => Box::new(*b as i64),
-        other => Box::new(other.to_string()),
-    }
-}
-
-fn bind(params: &[Value]) -> Vec<Box<dyn rusqlite::ToSql>> {
-    params
-        .iter()
-        .map(|v| -> Box<dyn rusqlite::ToSql> {
-            match v {
-                Value::Null => Box::new(None::<String>),
-                Value::String(s) => Box::new(s.clone()),
-                Value::Number(n) => {
-                    if let Some(i) = n.as_i64() { Box::new(i) } else { Box::new(n.as_f64().unwrap_or(0.0)) }
-                }
-                Value::Bool(b) => Box::new(*b as i64),
-                other => Box::new(other.to_string()),
-            }
-        })
-        .collect()
 }
 
 /// `insert_activity`: one row. The caller decides the canonical id, and
 /// none is ever fabricated.
 pub fn insert_activity(
     conn: &Connection,
-    act: &Value,
+    act: &ActivityRow,
     canonical_id: Option<&str>,
     assigned_id: Option<&str>,
     new_id: &dyn Fn() -> String,
-) -> Result<Value> {
-    let source = { let s = field_s(act, "source"); if s.is_empty() { "wealthsimple".to_string() } else { s } };
+) -> Result<ActivityRow> {
+    let source = if act.source.is_empty() { "wealthsimple".to_string() } else { act.source.clone() };
     let mut canonical: Option<String> = canonical_id.map(|c| c.to_string());
     if canonical.is_none() && source == "wealthsimple" {
         canonical = canonical_from_row(act, &source);
@@ -348,33 +417,57 @@ pub fn insert_activity(
     if canonical.as_deref() == Some("") {
         canonical = None;
     }
-    let mut aid = assigned_id.map(|s| s.to_string()).unwrap_or_else(|| field_s(act, "id").trim().to_string());
+    let mut aid = assigned_id.map(|s| s.to_string()).unwrap_or_else(|| act.id.trim().to_string());
     if aid.is_empty() || looks_like_homemade_id(&aid) {
         aid = new_id();
     }
-    let params = insert_params(act, &aid, canonical.as_deref());
-    let boxed = bind(&params);
-    let refs: Vec<&dyn rusqlite::ToSql> = boxed.iter().map(|b| b.as_ref()).collect();
-    conn.execute(INSERT_SQL, refs.as_slice())?;
-    Ok(activity_by_id(conn, &aid)?.unwrap_or(Value::Null))
+    let n = act.normalized();
+    conn.execute(
+        INSERT_SQL,
+        rusqlite::params![
+            aid,
+            canonical,
+            n.occurred_at,
+            n.transaction_date,
+            n.settlement_date,
+            n.account_id,
+            n.book_id,
+            n.fifo_id,
+            n.account_type,
+            n.activity_type,
+            n.activity_sub_type,
+            n.description,
+            n.direction,
+            n.symbol,
+            n.name,
+            n.currency,
+            n.quantity,
+            n.unit_price,
+            n.commission,
+            n.net_cash_amount,
+            n.category,
+            n.balance,
+            act.source.clone().to_string(),
+            n.raw_type,
+            n.aft_type,
+            n.counter_symbol,
+            n.security_id,
+        ],
+    )?;
+    Ok(activity_by_id(conn, &aid)?.unwrap_or_default())
 }
 
 /// `insert_local`: a typed-in or imported row. It gets a Bagholder id
 /// and never a fabricated canonical id.
-pub fn insert_local(conn: &Connection, act: &Value, new_id: &dyn Fn() -> String) -> Result<Value> {
-    let mut payload: Map<String, Value> = match act {
-        Value::Object(m) => m.clone(),
-        _ => Map::new(),
-    };
-    let mut source = vs(payload.get("source"));
+pub fn insert_local(conn: &Connection, act: &ActivityRow, new_id: &dyn Fn() -> String) -> Result<ActivityRow> {
+    let mut row = act.clone();
+    let mut source = row.source.clone();
     if source.is_empty() || source == "wealthsimple" {
         source = "manual".into();
     }
-    payload.insert("source".into(), json!(source));
-    // rebuilt rather than removed from, so the row keeps its key order:
-    // serde_json's `Map::remove` under `preserve_order` is a swap-remove
-    payload = payload.into_iter().filter(|(k, _)| k != "canonicalId" && k != "canonical_id").collect();
-    insert_activity(conn, &Value::Object(payload), None, None, new_id)
+    row.source = source;
+    row.canonical_id = None;
+    insert_activity(conn, &row, None, None, new_id)
 }
 
 /// `activity_count`.

@@ -1,0 +1,117 @@
+[
+  {
+    "name": "an account's series is the value its broker states each day; a day's flow is the change in the net deposits it states; the return is net of it",
+    "spec": "SPEC.md §2 Equity and returns: Equity series; Yearly return (daily returns net of deposits and withdrawals)",
+    "working": [
+      "the series is the stated value each day: 1000, 1030, 1545, 1500",
+      "flow = change in stated net deposits since the stated day before: 01-05 is the first stated day, none (null); 01-06 0; 01-07 1500 − 1000 = 500; 01-08 0",
+      "01-06: 1030 ÷ 1000 − 1 = 0.03, no flow",
+      "01-07: the 500 counts at the end of the day: (1545 − 500) ÷ 1030 − 1 = 15/1030 = 0.0145631…",
+      "01-08: 1500 ÷ 1545 − 1 = −45/1545 = −0.029126213592233…, no flow"
+    ],
+    "today": "2026-01-08",
+    "accounts": [{"id": "A"}],
+    "brokers": {"A": {
+      "net_value": {"2026-01-05": "1000", "2026-01-06": "1030", "2026-01-07": "1545", "2026-01-08": "1500"},
+      "net_deposits": {"2026-01-05": "1000", "2026-01-06": "1000", "2026-01-07": "1500", "2026-01-08": "1500"}
+    }},
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-05", "value": "1000.00", "flow": null},
+      {"account": "A", "day": "2026-01-06", "value": "1030.00", "flow": "0.00", "return": 0.03},
+      {"account": "A", "day": "2026-01-07", "value": "1545.00", "flow": "500.00", "return": 0.014563106796116505},
+      {"account": "A", "day": "2026-01-08", "value": "1500.00", "flow": "0.00", "return": -0.02912621359223301}
+    ]}
+  },
+  {
+    "name": "holdings and trades on the record do not change the stated series, and no close is needed for it",
+    "spec": "SPEC.md §2 Equity and returns: Equity series (Wealthsimple's stated value)",
+    "working": [
+      "the series is the broker's stated value, not a valuation of the record: 1000, 1100, 1045",
+      "net deposits stay 1000: 01-05 is the first stated day, flow none (null); 0 on 01-06 and 01-07",
+      "01-06: 1100 ÷ 1000 − 1 = 0.1; 01-07: 1045 ÷ 1100 − 1 = −0.05"
+    ],
+    "today": "2026-01-07",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-900"}
+    ],
+    "brokers": {"A": {
+      "net_value": {"2026-01-05": "1000", "2026-01-06": "1100", "2026-01-07": "1045"},
+      "net_deposits": {"2026-01-05": "1000", "2026-01-06": "1000", "2026-01-07": "1000"}
+    }},
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-05", "value": "1000.00", "flow": null},
+      {"account": "A", "day": "2026-01-06", "value": "1100.00", "flow": "0.00", "return": 0.1},
+      {"account": "A", "day": "2026-01-07", "value": "1045.00", "flow": "0.00", "return": -0.05}
+    ]}
+  },
+  {
+    "name": "a day the broker states a value but no net deposits has no flow, and no return is formed into it or out of it",
+    "spec": "SPEC.md §2 Equity and returns: Equity series; Yearly return",
+    "working": [
+      "the series is the stated value each day: 1000, 1100, 1210, 1331",
+      "01-05: the first stated day, flow none (null)",
+      "01-06: net deposits 1000 → 1000, flow 0, return 1100 ÷ 1000 − 1 = 0.1",
+      "01-07: no stated net deposits, so no flow is known (null) and no return is formed",
+      "01-08: the stated day before (01-07) states no net deposits, so no flow is known (null) and no return is formed"
+    ],
+    "today": "2026-01-08",
+    "accounts": [{"id": "A"}],
+    "brokers": {"A": {
+      "net_value": {"2026-01-05": "1000", "2026-01-06": "1100", "2026-01-07": "1210", "2026-01-08": "1331"},
+      "net_deposits": {"2026-01-05": "1000", "2026-01-06": "1000", "2026-01-08": "1000"}
+    }},
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-05", "value": "1000.00", "flow": null},
+      {"account": "A", "day": "2026-01-06", "value": "1100.00", "flow": "0.00", "return": 0.1},
+      {"account": "A", "day": "2026-01-07", "value": "1210.00", "flow": null},
+      {"account": "A", "day": "2026-01-08", "value": "1331.00", "flow": null}
+    ]}
+  },
+  {
+    "name": "a day the broker states nothing is not in the series; the next day's return is over the last stated day, net of the deposits between",
+    "spec": "SPEC.md §2 Equity and returns: Equity series; Yearly return",
+    "working": [
+      "the series is the stated days only: 01-05 1000, 01-06 1000, 01-09 1650; 01-07 and 01-08 are not in it",
+      "01-05: the first stated day, flow none (null)",
+      "01-06: flow 0, return 1000 ÷ 1000 − 1 = 0",
+      "01-09: flow = 1500 − 1000 (net deposits at the stated day before, 01-06) = 500",
+      "01-09's return is over 01-06's 1000, the 500 counting at the end of the day: (1650 − 500) ÷ 1000 − 1 = 0.15"
+    ],
+    "today": "2026-01-09",
+    "accounts": [{"id": "A"}],
+    "brokers": {"A": {
+      "net_value": {"2026-01-05": "1000", "2026-01-06": "1000", "2026-01-09": "1650"},
+      "net_deposits": {"2026-01-05": "1000", "2026-01-06": "1000", "2026-01-09": "1500"}
+    }},
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-05", "value": "1000.00", "flow": null},
+      {"account": "A", "day": "2026-01-06", "value": "1000.00", "flow": "0.00", "return": 0},
+      {"account": "A", "day": "2026-01-07", "value": null},
+      {"account": "A", "day": "2026-01-08", "value": null},
+      {"account": "A", "day": "2026-01-09", "value": "1650.00", "flow": "500.00", "return": 0.15}
+    ]}
+  },
+  {
+    "name": "an account whose broker states no value has no series",
+    "spec": "SPEC.md §2 Equity and returns: Equity series",
+    "working": [
+      "A: stated 500, 550; flow none on 01-05, the first stated day (null), 0 on 01-06; return 550 ÷ 500 − 1 = 0.1; nothing stated for 01-07",
+      "B: its broker states nothing, so it has no series on any day, whatever its deposit on the record"
+    ],
+    "today": "2026-01-07",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "transactions": [{"id": "t1", "account": "B", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"}],
+    "brokers": {"A": {"net_value": {"2026-01-05": "500", "2026-01-06": "550"}, "net_deposits": {"2026-01-05": "500", "2026-01-06": "500"}}},
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-05", "value": "500.00", "flow": null},
+      {"account": "A", "day": "2026-01-06", "value": "550.00", "flow": "0.00", "return": 0.1},
+      {"account": "A", "day": "2026-01-07", "value": null},
+      {"account": "B", "day": "2026-01-05", "value": null},
+      {"account": "B", "day": "2026-01-06", "value": null},
+      {"account": "B", "day": "2026-01-07", "value": null}
+    ]}
+  }
+]

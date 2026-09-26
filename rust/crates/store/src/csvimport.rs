@@ -13,16 +13,108 @@
 //! folder is scanned by the server itself: top-level .csv files, re-read only
 //! when their size or modification time changes.
 
+use indexmap::IndexMap;
 use regex::Regex;
 use rusqlite::{Connection, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::sync::OnceLock;
 
+use bagholder_model::lenient;
 use bagholder_model::textrules::{csv_rows, parse_float, parse_int, trim_space, splitlines, uuid4};
+
+use crate::activities::ActivityRow;
 
 pub const WATCH_META: &str = "watch_folder";
 pub const WATCH_FILES_META: &str = "watch_files";
 pub const WATCH_LAST_META: &str = "watch_last";
+
+/// One row skipped by `parse_csv`, and why.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+pub struct Skipped {
+    pub row: usize,
+    pub message: String,
+    pub raw: String,
+}
+
+/// The count of parsed rows by activity type (or, absent one, by category),
+/// in the order each type was first seen.
+pub type CountsByType = IndexMap<String, i64>;
+
+/// What `parse_csv` makes of one file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CsvReport {
+    pub format: String,
+    pub activities: Vec<ActivityRow>,
+    pub skipped: Vec<Skipped>,
+    pub footer_stripped: bool,
+    pub counts_by_type: CountsByType,
+    pub row_count: usize,
+}
+
+/// What `import_text` answers: `parse_csv`'s report, merged into the store.
+#[derive(Debug, Clone, Default, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub ok: bool,
+    pub file: String,
+    pub format: String,
+    pub rows: usize,
+    pub added: usize,
+    pub duplicates: usize,
+    pub skipped: Vec<Skipped>,
+    pub skipped_count: usize,
+    pub footer_stripped: bool,
+    pub counts_by_type: CountsByType,
+}
+
+/// One row of a CSV file: its cells, keyed by normalized header, in header
+/// order -- a later column of the same normalized name overwrites the
+/// earlier one's value in place, as the old map-shaped row did.
+#[derive(Debug, Clone, Default)]
+pub struct CsvRow(Vec<(String, String)>);
+
+impl CsvRow {
+    fn from_cells(norms: &[String], cells: &[String]) -> CsvRow {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (j, n) in norms.iter().enumerate() {
+            let v = cells.get(j).cloned().unwrap_or_default();
+            match out.iter_mut().find(|(k, _)| k == n) {
+                Some(entry) => entry.1 = v,
+                None => out.push((n.clone(), v)),
+            }
+        }
+        CsvRow(out)
+    }
+
+    /// The first non-empty cell among `keys`, trimmed.
+    pub fn pick(&self, keys: &[&str]) -> String {
+        for k in keys {
+            if let Some((_, v)) = self.0.iter().find(|(kk, _)| kk == k) {
+                let t = trim_space(v);
+                if !t.is_empty() {
+                    return t.to_string();
+                }
+            }
+        }
+        String::new()
+    }
+
+    fn values(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|(_, v)| v.as_str())
+    }
+
+    /// The row reproduced exactly as the old map-shaped row's `json_text` was
+    /// -- what a skipped row's message quotes.
+    pub fn raw(&self) -> String {
+        let mut m = Map::new();
+        for (k, v) in &self.0 {
+            m.insert(k.clone(), json!(v));
+        }
+        crate::tables::json_text(&Value::Object(m))
+    }
+}
 
 const MONTHS: [(&str, &str); 12] = [
     ("jan", "01"), ("feb", "02"), ("mar", "03"), ("apr", "04"), ("may", "05"), ("jun", "06"),
@@ -250,6 +342,8 @@ pub fn extract_instrument(description: &str) -> (String, String) {
     (String::new(), String::new())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Parsed {
     pub symbol: String,
     pub name: String,
@@ -286,15 +380,6 @@ pub fn parse_statement_description(description: &str) -> Parsed {
     p
 }
 
-impl Parsed {
-    pub fn to_json(&self) -> Value {
-        json!({
-            "symbol": self.symbol, "name": self.name, "quantity": self.quantity, "unitPrice": self.unit_price,
-            "executedAt": self.executed_at, "fillParsed": self.fill_parsed,
-            "contractSigned": self.contract_signed, "sharesSigned": self.shares_signed,
-        })
-    }
-}
 
 /// `map_statement_type`: (activity type, sub-type, category) for a
 /// statement's transaction code and description.
@@ -387,43 +472,29 @@ pub fn book_id_from_file_name(name: &str) -> String {
         .unwrap_or_else(|| n.to_string())
 }
 
-type Row = Map<String, Value>;
-
-fn pick(row: &Row, keys: &[&str]) -> String {
-    for k in keys {
-        if let Some(Value::String(v)) = row.get(*k) {
-            let t = trim_space(v);
-            if !t.is_empty() {
-                return t.to_string();
-            }
-        }
-    }
-    String::new()
-}
-
 fn or_default(v: String, d: &str) -> String {
     if v.is_empty() { d.to_string() } else { v }
 }
 
 /// `map_statement`: (activity, issue).
-pub fn map_statement(row: &Row, book_id: &str) -> (Option<Value>, Option<String>) {
-    let settlement = parse_date(&pick(row, &["date", "settlement_date", "transaction_date"]));
+pub fn map_statement(row: &CsvRow, book_id: &str) -> (Option<ActivityRow>, Option<String>) {
+    let settlement = parse_date(&row.pick(&["date", "settlement_date", "transaction_date"]));
     if settlement.is_empty() {
         return (None, None);
     }
-    let code = pick(row, &["transaction", "activity_type", "type", "action"]);
-    let description = pick(row, &["description", "memo", "details"]);
+    let code = row.pick(&["transaction", "activity_type", "type", "action"]);
+    let description = row.pick(&["description", "memo", "details"]);
     let parsed = parse_statement_description(&description);
     let (mut activity_type, mut sub, mut category) = map_statement_type(&code, &description);
-    let mut currency = or_default(pick(row, &["currency", "ccy"]), "CAD").to_uppercase();
+    let mut currency = or_default(row.pick(&["currency", "ccy"]), "CAD").to_uppercase();
     if let Some(m) = re_key_ccy().captures(&parsed.symbol) {
         if currency != "CAD" && currency != "USD" {
             currency = m[1].to_uppercase();
         }
     }
-    let bal_raw = pick(row, &["balance"]);
-    let balance = if bal_raw.is_empty() { Value::Null } else { json!(parse_number(&bal_raw)) };
-    let net_cash = parse_number(&pick(row, &["amount", "net_cash_amount", "net_amount"]));
+    let bal_raw = row.pick(&["balance"]);
+    let balance = if bal_raw.is_empty() { None } else { Some(parse_number(&bal_raw)) };
+    let net_cash = parse_number(&row.pick(&["amount", "net_cash_amount", "net_amount"]));
     let compact_code = re_compact().replace_all(&code.to_uppercase(), "").into_owned();
     let stk = ["STKDIS", "STKDIV", "SPIN", "SPINOFF"].contains(&compact_code.as_str());
     if stk {
@@ -466,70 +537,68 @@ pub fn map_statement(row: &Row, book_id: &str) -> (Option<Value>, Option<String>
         None
     };
     let transaction_date = if parsed.executed_at.is_empty() { settlement.clone() } else { parsed.executed_at.clone() };
-    (Some(json!({
-        "id": uuid4(),
-        "occurredAt": transaction_date,
-        "transactionDate": transaction_date,
-        "settlementDate": settlement,
-        "accountId": "",
-        "bookId": trim_space(book_id),
-        "accountType": "",
-        "activityType": activity_type,
-        "activitySubType": sub,
-        "description": description,
-        "direction": "",
-        "symbol": parsed.symbol,
-        "name": parsed.name,
-        "currency": currency,
-        "quantity": quantity,
-        "unitPrice": unit_price,
-        "commission": 0.0,
-        "netCashAmount": net_cash,
-        "category": category,
-        "balance": balance,
-        "source": "statement",
-    })), issue)
+    (Some(ActivityRow {
+        id: uuid4(),
+        occurred_at: transaction_date.clone(),
+        transaction_date: transaction_date.clone(),
+        settlement_date: settlement,
+        book_id: trim_space(book_id).to_string(),
+        activity_type,
+        activity_sub_type: sub,
+        description,
+        symbol: parsed.symbol,
+        name: parsed.name,
+        currency,
+        quantity,
+        unit_price,
+        net_cash_amount: net_cash,
+        category,
+        balance,
+        source: "statement".into(),
+        ..Default::default()
+    }), issue)
 }
 
 /// `map_canonical`.
-pub fn map_canonical(row: &Row) -> Option<Value> {
-    let transaction_date = parse_date(&pick(row, &["transaction_date", "date", "trade_date", "activity_date"]));
+pub fn map_canonical(row: &CsvRow) -> Option<ActivityRow> {
+    let transaction_date = parse_date(&row.pick(&["transaction_date", "date", "trade_date", "activity_date"]));
     if transaction_date.is_empty() {
         return None;
     }
-    let activity_type = pick(row, &["activity_type", "type"]);
-    let sub = pick(row, &["activity_sub_type", "activity_subtype", "sub_type", "subtype"]);
-    let settlement = or_default(parse_date(&pick(row, &["settlement_date", "settle_date"])), &transaction_date);
-    Some(json!({
-        "id": uuid4(),
-        "occurredAt": transaction_date,
-        "transactionDate": transaction_date,
-        "settlementDate": settlement,
-        "accountId": pick(row, &["account_id", "account"]),
-        "accountType": pick(row, &["account_type"]),
-        "activityType": or_default(activity_type.clone(), "Unknown"),
-        "activitySubType": sub,
-        "description": pick(row, &["description", "memo", "details"]),
-        "direction": pick(row, &["direction"]).to_uppercase(),
-        "symbol": pick(row, &["symbol", "ticker"]),
-        "name": pick(row, &["name", "security_name", "instrument"]),
-        "currency": or_default(pick(row, &["currency", "ccy"]), "CAD").to_uppercase(),
-        "quantity": parse_number(&pick(row, &["quantity", "qty"])),
-        "unitPrice": parse_number(&pick(row, &["unit_price", "price", "fill_price"])),
-        "commission": parse_number(&pick(row, &["commission", "fee", "fees"])).abs(),
-        "netCashAmount": parse_number(&pick(row, &["net_cash_amount", "amount", "net_amount", "net_cash"])),
-        "category": categorize(&activity_type, &sub),
-        "source": "canonical",
-    }))
+    let activity_type = row.pick(&["activity_type", "type"]);
+    let sub = row.pick(&["activity_sub_type", "activity_subtype", "sub_type", "subtype"]);
+    let settlement = or_default(parse_date(&row.pick(&["settlement_date", "settle_date"])), &transaction_date);
+    Some(ActivityRow {
+        id: uuid4(),
+        occurred_at: transaction_date.clone(),
+        transaction_date: transaction_date.clone(),
+        settlement_date: settlement,
+        account_id: row.pick(&["account_id", "account"]),
+        account_type: row.pick(&["account_type"]),
+        activity_type: or_default(activity_type.clone(), "Unknown"),
+        activity_sub_type: sub.clone(),
+        description: row.pick(&["description", "memo", "details"]),
+        direction: row.pick(&["direction"]).to_uppercase(),
+        symbol: row.pick(&["symbol", "ticker"]),
+        name: row.pick(&["name", "security_name", "instrument"]),
+        currency: or_default(row.pick(&["currency", "ccy"]), "CAD").to_uppercase(),
+        quantity: parse_number(&row.pick(&["quantity", "qty"])),
+        unit_price: parse_number(&row.pick(&["unit_price", "price", "fill_price"])),
+        commission: parse_number(&row.pick(&["commission", "fee", "fees"])).abs(),
+        net_cash_amount: parse_number(&row.pick(&["net_cash_amount", "amount", "net_amount", "net_cash"])),
+        category: categorize(&activity_type, &sub).into(),
+        source: "canonical".into(),
+        ..Default::default()
+    })
 }
 
 /// `map_legacy`.
-pub fn map_legacy(row: &Row) -> Option<Value> {
-    let transaction_date = parse_date(&pick(row, &["date", "transaction_date"]));
+pub fn map_legacy(row: &CsvRow) -> Option<ActivityRow> {
+    let transaction_date = parse_date(&row.pick(&["date", "transaction_date"]));
     if transaction_date.is_empty() {
         return None;
     }
-    let action = pick(row, &["action", "type", "activity"]).to_lowercase();
+    let action = row.pick(&["action", "type", "activity"]).to_lowercase();
     let (activity_type, sub): (String, String) = if action == "buy" || action == "sell" {
         ("Trade".into(), action.to_uppercase())
     } else if action.contains("dividend") {
@@ -551,42 +620,43 @@ pub fn map_legacy(row: &Row) -> Option<Value> {
     } else {
         ("Other".into(), String::new())
     };
-    let mut quantity = parse_number(&pick(row, &["quantity", "qty"]));
+    let mut quantity = parse_number(&row.pick(&["quantity", "qty"]));
     if sub == "SELL" {
         quantity = -quantity.abs();
     } else if sub == "BUY" {
         quantity = quantity.abs();
     }
-    Some(json!({
-        "id": uuid4(),
-        "occurredAt": transaction_date,
-        "transactionDate": transaction_date,
-        "settlementDate": transaction_date,
-        "accountId": or_default(pick(row, &["account_id", "account"]), "legacy"),
-        "accountType": pick(row, &["account_type"]),
-        "activityType": activity_type,
-        "activitySubType": sub,
-        "description": pick(row, &["description", "memo"]),
-        "direction": "",
-        "symbol": pick(row, &["symbol", "ticker"]),
-        "name": pick(row, &["name", "security_name"]),
-        "currency": or_default(pick(row, &["currency", "ccy"]), "CAD").to_uppercase(),
-        "quantity": quantity,
-        "unitPrice": parse_number(&pick(row, &["price", "unit_price"])),
-        "commission": parse_number(&pick(row, &["commission", "fee", "fees"])).abs(),
-        "netCashAmount": parse_number(&pick(row, &["amount", "net_cash_amount", "net_amount"])),
-        "category": categorize(&activity_type, &sub),
-        "source": "legacy",
-    }))
+    Some(ActivityRow {
+        id: uuid4(),
+        occurred_at: transaction_date.clone(),
+        transaction_date: transaction_date.clone(),
+        settlement_date: transaction_date,
+        account_id: or_default(row.pick(&["account_id", "account"]), "legacy"),
+        account_type: row.pick(&["account_type"]),
+        activity_type: activity_type.clone(),
+        activity_sub_type: sub.clone(),
+        description: row.pick(&["description", "memo"]),
+        symbol: row.pick(&["symbol", "ticker"]),
+        name: row.pick(&["name", "security_name"]),
+        currency: or_default(row.pick(&["currency", "ccy"]), "CAD").to_uppercase(),
+        quantity,
+        unit_price: parse_number(&row.pick(&["price", "unit_price"])),
+        commission: parse_number(&row.pick(&["commission", "fee", "fees"])).abs(),
+        net_cash_amount: parse_number(&row.pick(&["amount", "net_cash_amount", "net_amount"])),
+        category: categorize(&activity_type, &sub).into(),
+        source: "legacy".into(),
+        ..Default::default()
+    })
 }
 
-fn skip(row: usize, message: &str, raw: String) -> Value {
-    json!({"row": row, "message": message, "raw": raw})
+fn skip(row: usize, message: &str, raw: String) -> Skipped {
+    Skipped { row, message: message.to_string(), raw }
 }
 
-/// `parse_csv`: {format, activities, skipped, footerStripped,
-/// countsByType, rowCount}. An error is the file the csv reader refuses.
-pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
+/// `parse_csv`: format, the parsed rows, what was skipped and why, whether a
+/// footer line was stripped, and a count by activity type. An error is the
+/// file the csv reader refuses.
+pub fn parse_csv(text: &str, name: &str) -> std::result::Result<CsvReport, String> {
     let text = text.replace('\u{feff}', "");
     let mut footer = false;
     let mut lines: Vec<&str> = Vec::new();
@@ -602,40 +672,35 @@ pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
         table.pop();
     }
     if table.is_empty() {
-        return Ok(json!({
-            "format": "unknown", "activities": [], "skipped": [{"row": 1, "message": "Empty file", "raw": ""}],
-            "footerStripped": footer, "countsByType": {}, "rowCount": 0,
-        }));
+        return Ok(CsvReport {
+            format: "unknown".into(),
+            skipped: vec![skip(1, "Empty file", String::new())],
+            footer_stripped: footer,
+            ..Default::default()
+        });
     }
     let headers: Vec<String> = table[0].iter().map(|h| trim_space(&h.replace('\u{feff}', "")).to_string()).collect();
     let fmt = detect_format(&headers);
     let norms: Vec<String> = headers.iter().map(|h| normalize_header(h)).collect();
-    let mut skipped: Vec<Value> = Vec::new();
-    let mut activities: Vec<Value> = Vec::new();
-    let mut counts = Map::new();
+    let mut skipped: Vec<Skipped> = Vec::new();
+    let mut activities: Vec<ActivityRow> = Vec::new();
+    let mut counts: CountsByType = IndexMap::new();
     if fmt == "unknown" {
         skipped.push(skip(1, "Unrecognized CSV format. Expected a Wealthsimple activities export, a statement export with date/transaction/description/amount columns, or a Date/Action/Symbol file.", headers.join(",")));
-        return Ok(json!({
-            "format": fmt, "activities": [], "skipped": skipped, "footerStripped": footer,
-            "countsByType": {}, "rowCount": table.len() - 1,
-        }));
+        return Ok(CsvReport { format: fmt.to_string(), skipped, footer_stripped: footer, row_count: table.len() - 1, ..Default::default() });
     }
     let book = book_id_from_file_name(name);
     for (i, cells) in table.iter().enumerate().skip(1) {
         let i = i + 1;
-        let mut row: Row = Map::new();
-        for (j, n) in norms.iter().enumerate() {
-            row.insert(n.clone(), json!(cells.get(j).cloned().unwrap_or_default()));
-        }
-        let values: Vec<&str> = row.values().map(|v| v.as_str().unwrap_or("")).collect();
-        if values.iter().all(|v| trim_space(v).is_empty()) {
+        let row = CsvRow::from_cells(&norms, cells);
+        if row.values().all(|v| trim_space(v).is_empty()) {
             continue;
         }
-        if is_footer_line(&values.join(" ")) {
+        if is_footer_line(&row.values().collect::<Vec<_>>().join(" ")) {
             footer = true;
             continue;
         }
-        let raw = crate::tables::json_text(&Value::Object(row.clone()));
+        let raw = row.raw();
         let (activity, issue) = match fmt {
             "statement" => map_statement(&row, &book),
             "legacy" => (map_legacy(&row), None),
@@ -651,41 +716,34 @@ pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
                 continue;
             }
         };
-        let at = activity.get("activityType").and_then(|v| v.as_str()).unwrap_or("");
-        let key = if at.is_empty() { activity.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string() } else { at.to_string() };
-        let n = counts.get(&key).and_then(|v| v.as_i64()).unwrap_or(0);
-        counts.insert(key, json!(n + 1));
+        let key = if activity.activity_type.is_empty() { activity.category.clone() } else { activity.activity_type.clone() };
+        *counts.entry(key).or_insert(0) += 1;
         activities.push(activity);
     }
-    Ok(json!({
-        "format": fmt, "activities": activities, "skipped": skipped, "footerStripped": footer,
-        "countsByType": counts, "rowCount": table.len() - 1,
-    }))
+    Ok(CsvReport { format: fmt.to_string(), activities, skipped, footer_stripped: footer, counts_by_type: counts, row_count: table.len() - 1 })
 }
 
 /// `import_text`: parse one CSV and merge it into the store.
-pub fn import_text(conn: &Connection, name: &str, text: &str) -> std::result::Result<Value, String> {
+pub fn import_text(conn: &Connection, name: &str, text: &str) -> std::result::Result<ImportReport, String> {
     let report = parse_csv(text, name)?;
-    let rows = report["activities"].as_array().cloned().unwrap_or_default();
-    let (added, duplicates) = if rows.is_empty() {
+    let (added, duplicates) = if report.activities.is_empty() {
         (0, 0)
     } else {
-        let merged = crate::merge::merge_local_rows(conn, &rows, &uuid4).map_err(|e| e.to_string())?;
+        let merged = crate::merge::merge_local_rows(conn, &report.activities, &uuid4).map_err(|e| e.to_string())?;
         (merged.added, merged.duplicates)
     };
-    let skipped = report["skipped"].as_array().cloned().unwrap_or_default();
-    Ok(json!({
-        "ok": true,
-        "file": name.rsplit('/').next().unwrap_or(""),
-        "format": report["format"],
-        "rows": report["rowCount"],
-        "added": added,
-        "duplicates": duplicates,
-        "skipped": skipped.iter().take(20).cloned().collect::<Vec<_>>(),
-        "skippedCount": skipped.len(),
-        "footerStripped": report["footerStripped"],
-        "countsByType": report["countsByType"],
-    }))
+    Ok(ImportReport {
+        ok: true,
+        file: name.rsplit('/').next().unwrap_or("").to_string(),
+        format: report.format,
+        rows: report.row_count,
+        added,
+        duplicates,
+        skipped_count: report.skipped.len(),
+        skipped: report.skipped.into_iter().take(20).collect(),
+        footer_stripped: report.footer_stripped,
+        counts_by_type: report.counts_by_type,
+    })
 }
 
 // --- folder watching (the server scans; no browser needed) ---------------------
@@ -710,8 +768,17 @@ pub fn expanduser(p: &str) -> String {
     p.to_string()
 }
 
+/// One CSV file a watched folder holds, as `list_csv_files` reports it.
+#[derive(Debug, Clone, Default, Serialize, ts_rs::TS)]
+pub struct CsvFile {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub mtime: i64,
+}
+
 /// `list_csv_files`.
-pub fn list_csv_files(folder: &str) -> Vec<Value> {
+pub fn list_csv_files(folder: &str) -> Vec<CsvFile> {
     let mut names: Vec<String> = match std::fs::read_dir(folder) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
         Err(_) => return vec![],
@@ -733,7 +800,7 @@ pub fn list_csv_files(folder: &str) -> Vec<Value> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        out.push(json!({"path": p, "name": n, "size": meta.len(), "mtime": mtime}));
+        out.push(CsvFile { path: p, name: n, size: meta.len(), mtime });
     }
     out
 }
@@ -743,17 +810,29 @@ pub fn watch_folder(conn: &Connection) -> Result<String> {
     crate::tables::get_meta(conn, WATCH_META, "")
 }
 
+/// What `set_watch_folder` (and, on success, the same-shaped part of
+/// `scan_folder`) answers: a folder taken, or the reason it was refused.
+#[derive(Debug, Clone, Default, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchSet {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 /// `set_watch_folder`.
-pub fn set_watch_folder(conn: &Connection, path: &str) -> Result<Value> {
+pub fn set_watch_folder(conn: &Connection, path: &str) -> Result<WatchSet> {
     let p = expanduser(trim_space(path));
     if p.is_empty() {
-        return Ok(json!({"ok": false, "error": "Folder path required"}));
+        return Ok(WatchSet { ok: false, error: Some("Folder path required".into()), path: None });
     }
     if !std::path::Path::new(&p).is_dir() {
-        return Ok(json!({"ok": false, "error": format!("Not a folder: {}", p)}));
+        return Ok(WatchSet { ok: false, error: Some(format!("Not a folder: {}", p)), path: None });
     }
     crate::tables::set_meta(conn, WATCH_META, &p)?;
-    Ok(json!({"ok": true, "path": p}))
+    Ok(WatchSet { ok: true, error: None, path: Some(p) })
 }
 
 /// `clear_watch_folder`.
@@ -763,11 +842,30 @@ pub fn clear_watch_folder(conn: &Connection) -> Result<()> {
     crate::tables::set_meta(conn, WATCH_LAST_META, "")
 }
 
-fn seen_files(conn: &Connection) -> Result<Map<String, Value>> {
+/// One watched file's last scan, kept across scans in the `watch_files` meta
+/// blob -- read leniently, since an older build's blob may carry looser types.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SeenFile {
+    #[serde(deserialize_with = "lenient::number")]
+    pub size: f64,
+    #[serde(deserialize_with = "lenient::number")]
+    pub mtime: f64,
+    #[serde(deserialize_with = "lenient::number")]
+    pub added: f64,
+    #[serde(deserialize_with = "lenient::number")]
+    pub duplicates: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    pub format: String,
+    #[serde(deserialize_with = "lenient::text", rename = "scannedAt")]
+    pub scanned_at: String,
+}
+
+fn seen_files(conn: &Connection) -> Result<IndexMap<String, SeenFile>> {
     let raw = crate::tables::get_meta(conn, WATCH_FILES_META, "")?;
     Ok(match serde_json::from_str::<Value>(&raw) {
-        Ok(Value::Object(m)) => m,
-        _ => Map::new(),
+        Ok(Value::Object(m)) => m.into_iter().filter(|(_, v)| v.is_object()).filter_map(|(k, v)| SeenFile::deserialize(v).ok().map(|s| (k, s))).collect(),
+        _ => IndexMap::new(),
     })
 }
 
@@ -786,87 +884,150 @@ fn os_error(e: &std::io::Error, path: &str) -> String {
     format!("[Errno {}] {}: '{}'", code, words, path)
 }
 
+/// One file `scan_folder` looked at: unchanged since the last scan, a read
+/// that failed, or one it just imported.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum ScannedFile {
+    Unchanged { file: String, unchanged: bool, added: f64, duplicates: f64, format: String },
+    Failed { file: String, error: String },
+    Scanned {
+        file: String,
+        unchanged: bool,
+        added: usize,
+        duplicates: usize,
+        format: String,
+        rows: usize,
+        #[serde(rename = "skippedCount")]
+        skipped_count: usize,
+    },
+}
+
+/// What `scan_folder` answers: a refusal, or the folder scanned and what each
+/// file in it did.
+#[derive(Debug, Clone, Default, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanReport {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duplicates: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<ScannedFile>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanned_at: Option<String>,
+}
+
 /// `scan_folder`: import every top-level CSV in the folder;
 /// unchanged files are skipped unless forced.
-pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Result<Value> {
+pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Result<ScanReport> {
     let given = match folder { Some(f) if !f.is_empty() => f.to_string(), _ => watch_folder(conn)? };
     let path = expanduser(trim_space(&given));
     if path.is_empty() {
-        return Ok(json!({"ok": false, "error": "No folder is being watched"}));
+        return Ok(ScanReport { ok: false, error: Some("No folder is being watched".into()), ..Default::default() });
     }
     if !std::path::Path::new(&path).is_dir() {
-        return Ok(json!({"ok": false, "error": format!("Folder not found: {}", path), "path": path}));
+        return Ok(ScanReport { ok: false, error: Some(format!("Folder not found: {}", path)), path: Some(path), ..Default::default() });
     }
     let mut seen = seen_files(conn)?;
-    let mut files: Vec<Value> = Vec::new();
+    let mut files: Vec<ScannedFile> = Vec::new();
     let (mut added, mut duplicates) = (0i64, 0i64);
     for f in list_csv_files(&path) {
-        let fp = f["path"].as_str().unwrap_or("").to_string();
-        let name = f["name"].as_str().unwrap_or("").to_string();
-        let prev = seen.get(&fp).cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
-        if !force && prev.get("size") == Some(&f["size"]) && prev.get("mtime") == Some(&f["mtime"]) {
-            files.push(json!({
-                "file": name, "unchanged": true,
-                "added": prev.get("added").cloned().unwrap_or(json!(0)),
-                "duplicates": prev.get("duplicates").cloned().unwrap_or(json!(0)),
-                "format": prev.get("format").cloned().unwrap_or(json!("")),
-            }));
+        let prev = seen.get(&f.path).cloned();
+        if !force && prev.as_ref().is_some_and(|p| p.size == f.size as f64 && p.mtime == f.mtime as f64) {
+            let p = prev.unwrap();
+            files.push(ScannedFile::Unchanged { file: f.name.clone(), unchanged: true, added: p.added, duplicates: p.duplicates, format: p.format.clone() });
             continue;
         }
-        let text = match std::fs::read(&fp) {
+        let text = match std::fs::read(&f.path) {
             // utf-8-sig with errors="replace"
             Ok(bytes) => {
                 let t = String::from_utf8_lossy(&bytes).into_owned();
                 t.strip_prefix('\u{feff}').map(|s| s.to_string()).unwrap_or(t)
             }
             Err(e) => {
-                files.push(json!({"file": name, "error": os_error(&e, &fp)}));
+                files.push(ScannedFile::Failed { file: f.name.clone(), error: os_error(&e, &f.path) });
                 continue;
             }
         };
-        let rep = match import_text(conn, &name, &text) {
+        let rep = match import_text(conn, &f.name, &text) {
             Ok(r) => r,
             Err(e) => return Err(rusqlite::Error::ToSqlConversionFailure(e.into())),
         };
-        added += rep["added"].as_i64().unwrap_or(0);
-        duplicates += rep["duplicates"].as_i64().unwrap_or(0);
-        seen.insert(fp.clone(), json!({
-            "size": f["size"], "mtime": f["mtime"], "added": rep["added"], "duplicates": rep["duplicates"],
-            "format": rep["format"], "scannedAt": stamp(),
-        }));
-        files.push(json!({
-            "file": name, "unchanged": false, "added": rep["added"], "duplicates": rep["duplicates"],
-            "format": rep["format"], "rows": rep["rows"], "skippedCount": rep["skippedCount"],
-        }));
+        added += rep.added as i64;
+        duplicates += rep.duplicates as i64;
+        seen.insert(f.path.clone(), SeenFile {
+            size: f.size as f64,
+            mtime: f.mtime as f64,
+            added: rep.added as f64,
+            duplicates: rep.duplicates as f64,
+            format: rep.format.clone(),
+            scanned_at: stamp(),
+        });
+        files.push(ScannedFile::Scanned {
+            file: f.name.clone(),
+            unchanged: false,
+            added: rep.added,
+            duplicates: rep.duplicates,
+            format: rep.format,
+            rows: rep.rows,
+            skipped_count: rep.skipped_count,
+        });
     }
     let now = stamp();
-    let kept: Map<String, Value> = seen.into_iter().filter(|(k, _)| std::path::Path::new(k).exists()).collect();
-    crate::tables::set_meta(conn, WATCH_FILES_META, &crate::tables::json_text(&Value::Object(kept)))?;
+    let kept: IndexMap<String, SeenFile> = seen.into_iter().filter(|(k, _)| std::path::Path::new(k).exists()).collect();
+    crate::tables::set_meta(conn, WATCH_FILES_META, &crate::tables::json_text(&serde_json::to_value(&kept).unwrap_or(Value::Null)))?;
     crate::tables::set_meta(conn, WATCH_LAST_META, &now)?;
-    Ok(json!({"ok": true, "path": path, "added": added, "duplicates": duplicates, "files": files, "scannedAt": now}))
+    Ok(ScanReport { ok: true, error: None, path: Some(path), added: Some(added), duplicates: Some(duplicates), files: Some(files), scanned_at: Some(now) })
+}
+
+/// One watched file, as `status` reports it.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusFile {
+    pub file: String,
+    pub added: f64,
+    pub duplicates: f64,
+    pub format: String,
+    pub scanned_at: String,
+}
+
+/// `GET /api/watch`'s answer: the folder, whether one is set, when it was
+/// last scanned, and each file it has seen.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchStatus {
+    pub ok: bool,
+    pub path: String,
+    pub watching: bool,
+    pub last_scan: String,
+    pub files: Vec<StatusFile>,
 }
 
 /// `status`.
-pub fn status(conn: &Connection) -> Result<Value> {
+pub fn status(conn: &Connection) -> Result<WatchStatus> {
     let path = watch_folder(conn)?;
     let seen = seen_files(conn)?;
     let mut keys: Vec<&String> = seen.keys().collect();
     keys.sort();
-    let files: Vec<Value> = keys
+    let files: Vec<StatusFile> = keys
         .into_iter()
         .map(|k| {
             let v = &seen[k];
-            let g = |f: &str, d: Value| v.get(f).cloned().unwrap_or(d);
-            json!({
-                "file": k.rsplit('/').next().unwrap_or(""),
-                "added": g("added", json!(0)), "duplicates": g("duplicates", json!(0)),
-                "format": g("format", json!("")), "scannedAt": g("scannedAt", json!("")),
-            })
+            StatusFile {
+                file: k.rsplit('/').next().unwrap_or("").to_string(),
+                added: v.added,
+                duplicates: v.duplicates,
+                format: v.format.clone(),
+                scanned_at: v.scanned_at.clone(),
+            }
         })
         .collect();
-    Ok(json!({
-        "ok": true, "path": path, "watching": !path.is_empty(),
-        "lastScan": crate::tables::get_meta(conn, WATCH_LAST_META, "")?,
-        "files": files,
-    }))
+    let watching = !path.is_empty();
+    Ok(WatchStatus { ok: true, path, watching, last_scan: crate::tables::get_meta(conn, WATCH_LAST_META, "")?, files })
 }

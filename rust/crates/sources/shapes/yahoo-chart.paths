@@ -1,0 +1,81 @@
+.
+chart
+chart.error
+chart.result
+chart.result[]
+chart.result[].events ?
+chart.result[].events.dividends ?
+chart.result[].events.dividends.* ?
+chart.result[].events.dividends.*.amount
+chart.result[].events.dividends.*.date
+chart.result[].events.splits ?
+chart.result[].events.splits.*
+chart.result[].events.splits.*.date
+chart.result[].events.splits.*.denominator
+chart.result[].events.splits.*.numerator
+chart.result[].events.splits.*.splitRatio
+chart.result[].indicators
+chart.result[].indicators.adjclose
+chart.result[].indicators.adjclose[]
+chart.result[].indicators.adjclose[].adjclose ?
+chart.result[].indicators.adjclose[].adjclose[]
+chart.result[].indicators.quote
+chart.result[].indicators.quote[]
+chart.result[].indicators.quote[].close ?
+chart.result[].indicators.quote[].close[]
+chart.result[].indicators.quote[].high ?
+chart.result[].indicators.quote[].high[]
+chart.result[].indicators.quote[].low ?
+chart.result[].indicators.quote[].low[]
+chart.result[].indicators.quote[].open ?
+chart.result[].indicators.quote[].open[]
+chart.result[].indicators.quote[].volume ?
+chart.result[].indicators.quote[].volume[]
+chart.result[].meta
+chart.result[].meta.chartPreviousClose
+chart.result[].meta.currency
+chart.result[].meta.currentTradingPeriod
+chart.result[].meta.currentTradingPeriod.post
+chart.result[].meta.currentTradingPeriod.post.end
+chart.result[].meta.currentTradingPeriod.post.gmtoffset
+chart.result[].meta.currentTradingPeriod.post.start
+chart.result[].meta.currentTradingPeriod.post.timezone
+chart.result[].meta.currentTradingPeriod.pre
+chart.result[].meta.currentTradingPeriod.pre.end
+chart.result[].meta.currentTradingPeriod.pre.gmtoffset
+chart.result[].meta.currentTradingPeriod.pre.start
+chart.result[].meta.currentTradingPeriod.pre.timezone
+chart.result[].meta.currentTradingPeriod.regular
+chart.result[].meta.currentTradingPeriod.regular.end
+chart.result[].meta.currentTradingPeriod.regular.gmtoffset
+chart.result[].meta.currentTradingPeriod.regular.start
+chart.result[].meta.currentTradingPeriod.regular.timezone
+chart.result[].meta.dataGranularity
+chart.result[].meta.exchangeName
+chart.result[].meta.exchangeTimezoneName
+chart.result[].meta.fiftyTwoWeekHigh
+chart.result[].meta.fiftyTwoWeekLow
+chart.result[].meta.firstTradeDate
+chart.result[].meta.fullExchangeName
+chart.result[].meta.fulldayChange
+chart.result[].meta.fulldayChangePercent
+chart.result[].meta.fulldayPrice
+chart.result[].meta.gmtoffset
+chart.result[].meta.hasPrePostMarketData
+chart.result[].meta.instrumentType
+chart.result[].meta.longName
+chart.result[].meta.priceHint
+chart.result[].meta.range
+chart.result[].meta.regularMarketChangePercent
+chart.result[].meta.regularMarketDayHigh
+chart.result[].meta.regularMarketDayLow
+chart.result[].meta.regularMarketPrice
+chart.result[].meta.regularMarketTime
+chart.result[].meta.regularMarketVolume
+chart.result[].meta.shortName
+chart.result[].meta.symbol
+chart.result[].meta.timezone
+chart.result[].meta.validRanges
+chart.result[].meta.validRanges[]
+chart.result[].timestamp ?
+chart.result[].timestamp[]

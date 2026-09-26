@@ -6,7 +6,7 @@
 //! late start never beats one that has the earlier days. The winner is
 //! remembered for the symbol, so the next span asks it first.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 use crate::http::{post_json, TMX_HEADERS};
@@ -14,7 +14,9 @@ use crate::parse::{parse_coinbase_candles, parse_tmx_history};
 use crate::quotes::{yahoo_forms, tmx_quote_symbol};
 use crate::http::FetchError;
 use crate::tmx::{tmx_lookup, tmx_lookup_try, TMX_URL};
-use bagholder_model::value::{field_s, get, num};
+use bagholder_model::input::Listing;
+use bagholder_model::value::field_s;
+use bagholder_store::bars::{day_of_epoch, Bar, ChartBars, DayBar, Ohlcv, SourceBar, TimeBar};
 
 /// A source covers a span when its first bar is
 /// within this of the span's start.
@@ -36,10 +38,10 @@ pub const YAHOO_CHART_RANGE_URL: &str = "https://query1.finance.yahoo.com/v8/fin
 /// pair in the position's own currency, then the USD market and pair, which
 /// are converted at the Bank of Canada rate. Nothing for an option contract
 /// itself -- the chart maps it to its underlying first.
-pub fn history_candidates(rec: &Value) -> Vec<(String, String)> {
-    let kind = { let k = field_s(rec, "kind"); if k.is_empty() { "Shares".to_string() } else { k } };
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
-    let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
+pub fn history_candidates(rec: &Listing) -> Vec<(String, String)> {
+    let kind = { let k = rec.kind.clone(); if k.is_empty() { "Shares".to_string() } else { k } };
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let ccy = { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
     if sym.is_empty() {
         return vec![];
     }
@@ -58,20 +60,20 @@ pub fn history_candidates(rec: &Value) -> Vec<(String, String)> {
         return vec![];
     }
     let mut out = Vec::new();
-    if let Some(k) = tmx_quote_symbol(&field_s(rec, "symbol"), &field_s(rec, "exchange"), &ccy) {
+    if let Some(k) = tmx_quote_symbol(&rec.symbol, &rec.exchange, &ccy) {
         out.push(("tmx".to_string(), k));
     }
     out.extend(yahoo_forms(rec).into_iter().map(|f| ("yahoo".to_string(), f)));
     out
 }
 
-fn bars_meta_key(rec: &Value) -> String {
-    format!("bars_source:{}", bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol")))
+fn bars_meta_key(rec: &Listing) -> String {
+    format!("bars_source:{}", bagholder_model::venues::tmx_symbol(&rec.symbol))
 }
 
 /// The candidates with the remembered winner
 /// first.
-pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Value) -> Vec<(String, String)> {
+pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Listing) -> Vec<(String, String)> {
     let cands = history_candidates(rec);
     if cands.is_empty() {
         return cands;
@@ -88,20 +90,20 @@ pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Value) -> Vec<(Stri
     cands
 }
 
-fn remember_winner(conn: &rusqlite::Connection, rec: &Value, source: &str, key: &str) {
+fn remember_winner(conn: &rusqlite::Connection, rec: &Listing, source: &str, key: &str) {
     let _ = bagholder_store::tables::set_meta(conn, &bars_meta_key(rec), &format!("{}|{}", source, key));
 }
 
 /// The currency a candidate's bars are quoted in -- a
 /// crypto pair's quote currency, otherwise the listing's own.
-pub fn bar_currency(source_kind: &str, key: &str, rec: &Value) -> String {
+pub fn bar_currency(source_kind: &str, key: &str, rec: &Listing) -> String {
     let _ = source_kind;
-    if field_s(rec, "kind") == "Crypto" {
+    if rec.kind.clone() == "Crypto" {
         if let Some((_, q)) = key.split_once('-') {
             return q.to_string();
         }
     }
-    let c = field_s(rec, "currency");
+    let c = rec.currency.clone();
     if c.is_empty() { "CAD".into() } else { c.to_uppercase() }
 }
 
@@ -125,7 +127,7 @@ fn rate_on_or_before(fx: &BTreeMap<String, f64>, day: &str, days: i64) -> Option
 /// USD bars become CAD at the Bank of Canada rate of the bar's own day. A bar
 /// whose day has no published rate within a week is dropped, never guessed;
 /// anything else cannot be converted and yields nothing at all.
-pub fn in_position_currency(conn: &rusqlite::Connection, bars: &[Value], quoted_in: &str, currency: &str) -> Vec<Value> {
+pub fn in_position_currency<B: Bar + Clone>(conn: &rusqlite::Connection, bars: &[B], quoted_in: &str, currency: &str) -> Vec<B> {
     let quote = quoted_in.to_uppercase();
     let ccy = { let c = currency; if c.is_empty() { "CAD".to_string() } else { c.to_uppercase() } };
     if quote == ccy {
@@ -139,7 +141,7 @@ pub fn in_position_currency(conn: &rusqlite::Connection, bars: &[Value], quoted_
 }
 
 /// The same, with the rates the caller has already read.
-pub fn in_position_currency_with(bars: &[Value], quoted_in: &str, currency: &str, fx: &BTreeMap<String, f64>) -> Vec<Value> {
+pub fn in_position_currency_with<B: Bar + Clone>(bars: &[B], quoted_in: &str, currency: &str, fx: &BTreeMap<String, f64>) -> Vec<B> {
     let quote = quoted_in.to_uppercase();
     let ccy = { let c = currency; if c.is_empty() { "CAD".to_string() } else { c.to_uppercase() } };
     if quote == ccy {
@@ -150,25 +152,17 @@ pub fn in_position_currency_with(bars: &[Value], quoted_in: &str, currency: &str
     }
     let mut out = Vec::new();
     for b in bars {
-        let day = {
-            let d = field_s(b, "date");
-            if !d.is_empty() { d } else { day_of_epoch(num(get(b, "time"), 0.0) as i64) }
-        };
+        let day = b.day();
         let rate = match rate_on_or_before(fx, &day, 7) { Some(r) => r, None => continue };
-        let mut m = b.as_object().cloned().unwrap_or_default();
-        for k in ["open", "high", "low", "close"] {
-            if let Some(v) = m.get(k).and_then(|x| x.as_f64()) {
-                m.insert(k.into(), json!(v * rate));
-            }
-        }
-        out.push(Value::Object(m));
+        let mut nb = b.clone();
+        let px = nb.px_mut();
+        if let Some(v) = px.open.as_mut() { *v *= rate; }
+        if let Some(v) = px.high.as_mut() { *v *= rate; }
+        if let Some(v) = px.low.as_mut() { *v *= rate; }
+        px.close *= rate;
+        out.push(nb);
     }
     out
-}
-
-fn day_of_epoch(ts: i64) -> String {
-    let (y, m, d) = bagholder_model::dates::from_days(ts.div_euclid(86400));
-    bagholder_model::dates::fmt(y, m, d)
 }
 
 fn epoch_of_day(day: &str) -> i64 {
@@ -180,10 +174,8 @@ fn epoch_of_day(day: &str) -> i64 {
 
 /// Only bars with an open, a high and a low -- the chart
 /// draws candlesticks or nothing.
-fn whole_bars(bars: Vec<Value>) -> Vec<Value> {
-    bars.into_iter()
-        .filter(|b| ["open", "high", "low"].iter().all(|k| b.get(*k).map(|v| !v.is_null()).unwrap_or(false)))
-        .collect()
+fn whole_bars<B: Bar>(bars: Vec<B>) -> Vec<B> {
+    bars.into_iter().filter(|b| { let px = b.px(); px.open.is_some() && px.high.is_some() && px.low.is_some() }).collect()
 }
 
 /// The Coinbase Exchange market for a pair, or
@@ -220,7 +212,7 @@ pub const COINBASE_CANDLE_LIMIT: i64 = 300;
 
 /// Candles of `granularity` seconds over the
 /// span, three hundred at a time, a few spans in parallel.
-pub fn fetch_coinbase_candles(product: &str, granularity: i64, start_ts: i64, end_ts: i64) -> Vec<Value> {
+pub fn fetch_coinbase_candles(product: &str, granularity: i64, start_ts: i64, end_ts: i64) -> Vec<TimeBar> {
     let span = COINBASE_CANDLE_LIMIT * granularity;
     let mut chunks: Vec<(i64, i64)> = Vec::new();
     let mut cur = start_ts.div_euclid(granularity) * granularity;
@@ -228,7 +220,7 @@ pub fn fetch_coinbase_candles(product: &str, granularity: i64, start_ts: i64, en
         chunks.push((cur, (cur + span).min(end_ts)));
         cur += span;
     }
-    let one = |c: (i64, i64)| -> Vec<Value> {
+    let one = |c: (i64, i64)| -> Vec<TimeBar> {
         let url = COINBASE_CANDLES_URL
             .replacen("{}", product, 1)
             .replacen("{}", &granularity.to_string(), 1)
@@ -240,10 +232,10 @@ pub fn fetch_coinbase_candles(product: &str, granularity: i64, start_ts: i64, en
         }
     };
     let answers = parallel(chunks, 4, one);
-    let mut by_time: BTreeMap<i64, Value> = BTreeMap::new();
+    let mut by_time: BTreeMap<i64, TimeBar> = BTreeMap::new();
     for bars in answers {
         for b in bars {
-            by_time.insert(num(get(&b, "time"), 0.0) as i64, b);
+            by_time.insert(b.time, b);
         }
     }
     by_time.into_values().collect()
@@ -280,7 +272,7 @@ fn iso_instant(ts: i64) -> String {
 /// A symbol Yahoo says it does not carry is remembered
 /// for the day and not asked again; any other failure is the chain's to
 /// record.
-pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end_ts: i64, interval: &str, today: &str) -> Result<Vec<Value>, FetchError> {
+pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end_ts: i64, interval: &str, today: &str) -> Result<Vec<SourceBar>, FetchError> {
     let miss_key = format!("yahoo_miss:{}", symbol);
     if bagholder_store::tables::get_meta(conn, &miss_key, "").unwrap_or_default() == today {
         return Ok(vec![]);
@@ -306,16 +298,16 @@ pub fn fetch_daily_from(
     conn: &rusqlite::Connection,
     source: &str,
     key: &str,
-    rec: &Value,
+    rec: &Listing,
     start: &str,
     end: &str,
     today: &str,
-) -> Result<Vec<Value>, FetchError> {
+) -> Result<Vec<DayBar>, FetchError> {
     let start_ts = epoch_of_day(start);
     let end_ts = epoch_of_day(end) + 86400;
     match source {
         "tmx" => {
-            let daily = |form: &str| -> Result<Option<Value>, FetchError> {
+            let daily = |form: &str| -> Result<Option<Vec<DayBar>>, FetchError> {
                 let payload = json!({
                     "operationName": "getTimeSeriesData",
                     "variables": {"symbol": form, "freq": "day", "interval": 1, "start": start, "end": end},
@@ -323,40 +315,21 @@ pub fn fetch_daily_from(
                 });
                 let data = post_json(TMX_URL, &payload, &TMX_HEADERS)?;
                 let bars = parse_tmx_history(&data);
-                Ok(if bars.is_empty() { None } else { Some(Value::Array(bars)) })
+                Ok(if bars.is_empty() { None } else { Some(bars) })
             };
             let got = tmx_lookup_try(conn, key, today, daily)?.0;
-            Ok(whole_bars(got.and_then(|v| v.as_array().cloned()).unwrap_or_default()))
+            Ok(whole_bars(got.unwrap_or_default()))
         }
         "coinbase" => {
             if coinbase_market(conn, key, today).is_empty() {
                 return Ok(vec![]);
             }
-            let days: Vec<Value> = fetch_coinbase_candles(key, 86400, start_ts, end_ts)
-                .into_iter()
-                .map(|b| {
-                    let mut m = b.as_object().cloned().unwrap_or_default();
-                    m.insert("date".into(), json!(day_of_epoch(num(m.get("time"), 0.0) as i64)));
-                    Value::Object(m)
-                })
-                .collect();
-            Ok(in_position_currency(conn, &days, &bar_currency(source, key, rec), &field_s(rec, "currency")))
+            let days: Vec<DayBar> = fetch_coinbase_candles(key, 86400, start_ts, end_ts).into_iter().map(|b| DayBar { date: b.day(), px: b.px }).collect();
+            Ok(in_position_currency(conn, &days, &bar_currency(source, key, rec), &rec.currency))
         }
         "yahoo" => {
-            let days: Vec<Value> = fetch_yahoo(conn, key, start_ts, end_ts, "1d", today)?
-                .into_iter()
-                .map(|b| {
-                    json!({
-                        "date": field_s(&b, "day"),
-                        "open": b.get("open").cloned().unwrap_or(Value::Null),
-                        "high": b.get("high").cloned().unwrap_or(Value::Null),
-                        "low": b.get("low").cloned().unwrap_or(Value::Null),
-                        "close": b.get("close").cloned().unwrap_or(Value::Null),
-                        "volume": b.get("volume").cloned().unwrap_or(Value::Null),
-                    })
-                })
-                .collect();
-            Ok(in_position_currency(conn, &whole_bars(days), &bar_currency(source, key, rec), &field_s(rec, "currency")))
+            let days: Vec<DayBar> = fetch_yahoo(conn, key, start_ts, end_ts, "1d", today)?.into_iter().map(|b| b.on_day()).collect();
+            Ok(in_position_currency(conn, &whole_bars(days), &bar_currency(source, key, rec), &rec.currency))
         }
         _ => Ok(vec![]),
     }
@@ -365,10 +338,10 @@ pub fn fetch_daily_from(
 /// The index of the first answer whose bars reach
 /// back to the span's start, else the one reaching furthest back. The winner
 /// is remembered.
-fn pick_covering<F: Fn(&Value) -> i64>(
+fn pick_covering<B, F: Fn(&B) -> i64>(
     conn: &rusqlite::Connection,
-    rec: &Value,
-    answers: &[(String, String, Vec<Value>)],
+    rec: &Listing,
+    answers: &[(String, String, Vec<B>)],
     span_start: i64,
     first_of: F,
 ) -> Option<usize> {
@@ -405,16 +378,16 @@ fn chart_notes() -> &'static std::sync::Mutex<std::collections::HashMap<(String,
     N.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-fn remember_notes(rec: &Value, which: &'static str, notes: Vec<(String, String, Note)>) {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+fn remember_notes(rec: &Listing, which: &'static str, notes: Vec<(String, String, Note)>) {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     chart_notes().lock().unwrap().insert((sym, which), notes);
 }
 
 /// Why a chart has no bars, in one sentence -- what
 /// failed, or which sources were asked and had none.
-pub fn chart_reason(rec: &Value, tf: &str) -> String {
+pub fn chart_reason(rec: &Listing, tf: &str) -> String {
     let which: &'static str = if INTRADAY.contains(&tf) { "hourly" } else { "daily" };
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let notes = chart_notes().lock().unwrap().get(&(sym, which)).cloned().unwrap_or_default();
     let label = |s: &str| -> String {
         crate::http::SOURCE_LABELS.iter().find(|(k, _)| *k == s).map(|(_, v)| v.to_string()).unwrap_or_else(|| s.to_string())
@@ -451,9 +424,9 @@ pub fn chart_reason(rec: &Value, tf: &str) -> String {
 
 /// The chain, stopping as soon as one candidate covers
 /// the span.
-pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end: &str, today: &str) -> (Vec<Value>, String) {
+pub fn fetch_history(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str, today: &str) -> (Vec<DayBar>, String) {
     let span_start = epoch_of_day(start);
-    let mut answers: Vec<(String, String, Vec<Value>)> = Vec::new();
+    let mut answers: Vec<(String, String, Vec<DayBar>)> = Vec::new();
     let mut notes: Vec<(String, String, Note)> = Vec::new();
     for (source, key) in ordered_candidates(conn, rec) {
         let bars = match fetch_daily_from(conn, &source, &key, rec, start, end, today) {
@@ -466,13 +439,13 @@ pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end:
                 vec![]
             }
         };
-        let covered = bars.first().map(|b| epoch_of_day(&field_s(b, "date")) <= span_start + COVERAGE_SLACK_DAYS * 86400).unwrap_or(false);
+        let covered = bars.first().map(|b| epoch_of_day(&b.date) <= span_start + COVERAGE_SLACK_DAYS * 86400).unwrap_or(false);
         answers.push((source, key, bars));
         if covered {
             break;
         }
     }
-    match pick_covering(conn, rec, &answers, span_start, |b| epoch_of_day(&field_s(b, "date"))) {
+    match pick_covering(conn, rec, &answers, span_start, |b: &DayBar| epoch_of_day(&b.date)) {
         Some(i) => (answers[i].2.clone(), answers[i].0.clone()),
         None => {
             remember_notes(rec, "daily", notes);
@@ -481,70 +454,127 @@ pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end:
     }
 }
 
-/// The stored bars for a span, fetching when it was
-/// never fetched or the copy is stale and the span reaches the present.
+/// Whether a span's daily bars are due a read: never read from its start, or
+/// stale where the span reaches the present, and not a read that came back empty
+/// a few minutes ago (then it waits, as an intraday miss does).
+pub fn daily_due(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str, today: &str, now_unix: f64) -> bool {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let start: String = start.chars().take(10).collect();
+    let end: String = end.chars().take(10).collect();
+    if sym.is_empty() || start.len() != 10 || end.len() != 10 || intraday_missed_recently(conn, &sym, "1d", now_unix) {
+        return false;
+    }
+    let last = bagholder_store::market::history_fetch(conn, &sym).unwrap_or(None);
+    let covered = last.as_ref().map_or(false, |l| l.start <= start);
+    let fresh = last
+        .as_ref()
+        .and_then(|l| crate::quotes::instant_secs_public(&l.fetched_at))
+        .map_or(false, |then| (now_unix - then) < HISTORY_STALE_HOURS * 3600.0);
+    !covered || (end >= bagholder_model::dates::shift_date(today, -3) && !fresh)
+}
+
+/// Read a span's daily bars from the sources and store them; a read that finds
+/// nothing is remembered so the next few minutes do not ask again.
+fn fill_daily(conn: &rusqlite::Connection, rec: &Listing, start: &str, today: &str, now_stamp: &str) -> rusqlite::Result<()> {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let start: String = start.chars().take(10).collect();
+    let last_start = bagholder_store::market::history_fetch(conn, &sym)?.map(|l| l.start).unwrap_or_default();
+    // a span already read from an earlier day is read again from that day, so the stamp stays true
+    let fetch_from = if !last_start.is_empty() && last_start < start { last_start } else { start };
+    let (bars, source) = fetch_history(conn, rec, &fetch_from, today, today);
+    if bars.is_empty() {
+        record_intraday_miss(conn, &sym, "1d", now_stamp);
+        return Ok(());
+    }
+    bagholder_store::market::upsert_price_history(conn, &sym, &bars, &source)?;
+    // the stamp says what is covered: when the bars begin well after the day
+    // asked for, only from their first day, so an earlier span asks again
+    let got_from = bars[0].date.clone();
+    let slack = bagholder_model::dates::shift_date(&fetch_from, COVERAGE_SLACK_DAYS);
+    let covered_from = if got_from <= slack { fetch_from } else { got_from };
+    bagholder_store::market::mark_history_fetched(conn, &sym, &covered_from, now_stamp)
+}
+
+/// The stored bars for a span, fetching first when it was never fetched or the
+/// copy is stale and the span reaches the present. What a background job calls;
+/// a chart asked for by a page reads what is stored and has the read done in the
+/// background (`ensure_daily_in_background`).
 pub fn ensure_history(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     start: &str,
     end: &str,
     today: &str,
     now_unix: f64,
     now_stamp: &str,
-) -> rusqlite::Result<Vec<Value>> {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+) -> rusqlite::Result<Vec<DayBar>> {
+    if daily_due(conn, rec, start, end, today, now_unix) {
+        fill_daily(conn, rec, start, today, now_stamp)?;
+    }
+    stored_daily(conn, rec, start, end)
+}
+
+/// The daily bars stored for a span, asking nothing.
+pub fn stored_daily(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str) -> rusqlite::Result<Vec<DayBar>> {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let start: String = start.chars().take(10).collect();
     let end: String = end.chars().take(10).collect();
     if sym.is_empty() || start.len() != 10 || end.len() != 10 {
         return Ok(vec![]);
     }
-    let last = bagholder_store::market::history_fetch(conn, &sym)?;
-    let last_start = field_s(&last, "start");
-    let covered = !last.is_null() && last_start <= start;
-    let fresh = !last.is_null()
-        && match crate::quotes::instant_secs_public(&field_s(&last, "fetchedAt")) {
-            Some(then) => (now_unix - then) < HISTORY_STALE_HOURS * 3600.0,
-            None => false,
-        };
-    let needs_recent = end >= bagholder_model::dates::shift_date(today, -3);
-
-    if !covered || (needs_recent && !fresh) {
-        let fetch_from = if !covered {
-            start.clone()
-        } else if last_start < start {
-            last_start.clone()
-        } else {
-            start.clone()
-        };
-        let (bars, source) = fetch_history(conn, rec, &fetch_from, today, today);
-        if !bars.is_empty() {
-            bagholder_store::market::upsert_price_history(conn, &sym, &bars, &source)?;
-            // the stamp says what is covered: when the bars begin well after
-            // the day asked for, only from their first day, so an earlier span
-            // asks again
-            let got_from = field_s(&bars[0], "date");
-            let slack = bagholder_model::dates::shift_date(&fetch_from, COVERAGE_SLACK_DAYS);
-            let covered_from = if got_from <= slack { fetch_from } else { got_from };
-            bagholder_store::market::mark_history_fetched(conn, &sym, &covered_from, now_stamp)?;
-        }
-    }
     bagholder_store::market::price_history(conn, &sym, &start, &end)
 }
 
+fn daily_pending_set() -> &'static std::sync::Mutex<Vec<String>> {
+    static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    &PENDING
+}
+
+/// Whether a daily read for this listing is under way now.
+pub fn daily_pending(rec: &Listing) -> bool {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).contains(&sym)
+}
+
+/// Start the daily read for a span, once per listing at a time, and return at
+/// once; `done` is called when it ends, whatever it found, so whoever showed the
+/// stored bars meanwhile is told to look again.
+pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Listing, start: String, done: impl FnOnce() + Send + 'static) {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    {
+        let mut p = daily_pending_set().lock().unwrap_or_else(|e| e.into_inner());
+        if p.contains(&sym) {
+            return;
+        }
+        p.push(sym.clone());
+    }
+    let left = sym.clone();
+    let run = move || {
+        if let Ok(conn) = pool.get() {
+            let (today, _, stamp) = crate::clock_now();
+            let _ = fill_daily(&conn, &rec, &start, &today, &stamp);
+        }
+        daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != sym);
+        done();
+    };
+    if std::thread::Builder::new().name("bagholder-daily".into()).spawn(run).is_err() {
+        // no thread to read on: nothing is under way, so nothing is left pending
+        daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != left);
+    }
+}
+
 fn read_fx(conn: &rusqlite::Connection) -> rusqlite::Result<BTreeMap<String, f64>> {
-    let m = bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)?;
-    Ok(m.into_iter().filter_map(|(k, v)| v.as_f64().map(|f| (k, f))).collect())
+    bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)
 }
 
 /// Weekly (Monday start) or monthly bars from daily
 /// ones -- the period's first open, highest high, lowest low, last close and
 /// summed volume.
-pub fn aggregate_daily(bars: &[Value], tf: &str) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
+pub fn aggregate_daily(bars: &[DayBar], tf: &str) -> Vec<DayBar> {
+    let mut out: Vec<DayBar> = Vec::new();
     let mut cur_key = String::new();
     for b in bars {
-        let date = field_s(b, "date");
-        let (y, m, d) = match bagholder_model::dates::parse_iso(&date) { Some(p) => p, None => continue };
+        let (y, m, d) = match bagholder_model::dates::parse_iso(&b.date) { Some(p) => p, None => continue };
         let key = if tf == "1w" {
             let days = bagholder_model::dates::to_days(y, m, d);
             // Monday is 0: 1970-01-01 was a Thursday
@@ -556,29 +586,20 @@ pub fn aggregate_daily(bars: &[Value], tf: &str) -> Vec<Value> {
         };
         if out.is_empty() || cur_key != key {
             cur_key = key.clone();
-            out.push(json!({
-                "date": key,
-                "open": b.get("open").cloned().unwrap_or(Value::Null),
-                "high": b.get("high").cloned().unwrap_or(Value::Null),
-                "low": b.get("low").cloned().unwrap_or(Value::Null),
-                "close": b.get("close").cloned().unwrap_or(Value::Null),
-                "volume": b.get("volume").cloned().unwrap_or(Value::Null),
-            }));
+            out.push(DayBar { date: key, px: b.px });
             continue;
         }
         let cur = out.last_mut().unwrap();
-        cur["close"] = b.get("close").cloned().unwrap_or(Value::Null);
-        if let Some(h) = b.get("high").and_then(|v| v.as_f64()) {
-            let now = cur.get("high").and_then(|v| v.as_f64());
-            cur["high"] = json!(match now { Some(x) => x.max(h), None => h });
+        cur.px.close = b.px.close;
+        if let Some(h) = b.px.high {
+            cur.px.high = Some(match cur.px.high { Some(x) => x.max(h), None => h });
         }
-        if let Some(l) = b.get("low").and_then(|v| v.as_f64()) {
-            let now = cur.get("low").and_then(|v| v.as_f64());
-            cur["low"] = json!(match now { Some(x) => x.min(l), None => l });
+        if let Some(l) = b.px.low {
+            cur.px.low = Some(match cur.px.low { Some(x) => x.min(l), None => l });
         }
-        if let Some(v) = b.get("volume").and_then(|x| x.as_f64()) {
-            let now = cur.get("volume").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            cur["volume"] = json!(now + v);
+        if let Some(v) = b.px.volume {
+            let now = cur.px.volume.unwrap_or(0.0);
+            cur.px.volume = Some(now + v);
         }
     }
     out
@@ -592,19 +613,19 @@ pub const INTRADAY_SECONDS: [(&str, i64); 2] = [("1h", 3600), ("4h", 14400)];
 /// What the chart draws for an instrument -- itself,
 /// or for an option contract its underlying, since no source keeps contract
 /// history.
-pub fn chart_instrument(rec: &Value) -> Value {
-    if field_s(rec, "kind") == "Options" {
-        let under = bagholder_model::symbols::underlying_symbol(&field_s(rec, "symbol"));
+pub fn chart_instrument(rec: &Listing) -> Listing {
+    if rec.kind == "Options" {
+        let under = bagholder_model::symbols::underlying_symbol(&rec.symbol);
         if !under.is_empty() && under != "—" {
-            let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "USD".to_string() } else { c } };
-            return json!({"symbol": under, "exchange": field_s(rec, "exchange"), "currency": ccy, "kind": "Shares"});
+            let ccy = if rec.currency.is_empty() { "USD" } else { &rec.currency };
+            return Listing::new(under, rec.exchange.clone(), ccy, "Shares");
         }
     }
     rec.clone()
 }
 
 /// The preferred source for an instrument's bars.
-pub fn history_source(rec: &Value) -> Option<(String, String)> {
+pub fn history_source(rec: &Listing) -> Option<(String, String)> {
     history_candidates(rec).into_iter().next()
 }
 
@@ -667,20 +688,14 @@ pub fn minute_stamp(text: &str) -> Option<(i64, String, i64, i64)> {
     let mm: i64 = parts.get(1).map(|x| x.parse().ok()).unwrap_or(Some(0))?;
     let ss: i64 = parts.get(2).map(|x| x.split('.').next().unwrap_or("0").parse().ok()).unwrap_or(Some(0))?;
     let wall = bagholder_model::dates::to_days(y, m, dd) * 86400 + hh * 3600 + mm * 60 + ss;
-    // a time with no offset is the machine's own local time to `timestamp()`,
-    // and has no offset of its own
-    let epoch = if naive { wall - local_offset_at(wall) } else { wall - offset };
-    Some((epoch, bagholder_model::dates::fmt(y, m, dd), hh * 60 + mm, if naive { 0 } else { offset }))
+    // a time with no offset is the exchange's own wall clock (TMX: Toronto),
+    // never the machine's, which can be anywhere
+    let offset = if naive { bagholder_model::clock::offset_for_wall(TMX_ZONE, wall)? } else { offset };
+    Some((wall - offset, bagholder_model::dates::fmt(y, m, dd), hh * 60 + mm, offset))
 }
 
-/// The machine's local UTC offset for a wall-clock time, as `mktime` settles
-/// it.
-fn local_offset_at(wall: i64) -> i64 {
-    static LOCAL: std::sync::OnceLock<Option<tz::TimeZone>> = std::sync::OnceLock::new();
-    let zone = match LOCAL.get_or_init(|| tz::TimeZone::local().ok()) { Some(z) => z, None => return 0 };
-    let first = zone.find_local_time_type(wall).map(|t| t.ut_offset() as i64).unwrap_or(0);
-    zone.find_local_time_type(wall - first).map(|t| t.ut_offset() as i64).unwrap_or(first)
-}
+/// TMX's exchange zone: a chart time it sends without an offset is read here.
+const TMX_ZONE: &str = "America/Toronto";
 
 fn opt_num(v: Option<&Value>) -> Option<f64> {
     match v {
@@ -695,9 +710,9 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
 
 /// One-minute bars from TMX's chart feed, with the
 /// exchange-local minute of day, oldest first.
-pub fn parse_tmx_minutes(data: &Value) -> Vec<Value> {
+pub fn parse_tmx_minutes(data: &Value) -> Vec<SourceBar> {
     let rows = data.get("data").and_then(|d| d.get("intraday")).and_then(|r| r.as_array()).cloned().unwrap_or_default();
-    let mut out: Vec<Value> = Vec::new();
+    let mut out: Vec<SourceBar> = Vec::new();
     for r in rows {
         let when = field_s(&r, "dateTime");
         if !r.is_object() || when.is_empty() {
@@ -705,82 +720,77 @@ pub fn parse_tmx_minutes(data: &Value) -> Vec<Value> {
         }
         let (stamp, day, minute, offset) = match minute_stamp(&when) { Some(s) => s, None => continue };
         let close = match opt_num(r.get("close")) { Some(c) if c > 0.0 => c, _ => continue };
-        out.push(json!({
-            "time": stamp, "day": day, "minute": minute, "offset": offset,
-            "open": opt_num(r.get("open")), "high": opt_num(r.get("high")), "low": opt_num(r.get("low")),
-            "close": close, "volume": opt_num(r.get("volume")),
-        }));
+        out.push(SourceBar {
+            time: stamp,
+            day,
+            minute,
+            offset,
+            px: Ohlcv { open: opt_num(r.get("open")), high: opt_num(r.get("high")), low: opt_num(r.get("low")), close, volume: opt_num(r.get("volume")) },
+        });
     }
-    out.sort_by_key(|b| b["time"].as_i64().unwrap_or(0));
+    out.sort_by_key(|b| b.time);
     out
 }
 
 /// Bars of `bucket_minutes` aligned to the session
 /// open, the bucket's first open, highest high, lowest low, last close and
 /// summed volume; the bar's time is the bucket's start.
-pub fn aggregate_session(minutes: &[Value], bucket_minutes: i64) -> Vec<Value> {
+pub fn aggregate_session(minutes: &[SourceBar], bucket_minutes: i64) -> Vec<TimeBar> {
     let mut order: Vec<(String, i64)> = Vec::new();
-    let mut out: std::collections::HashMap<(String, i64), Map<String, Value>> = std::collections::HashMap::new();
+    let mut out: std::collections::HashMap<(String, i64), TimeBar> = std::collections::HashMap::new();
     for m in minutes {
-        let minute = m["minute"].as_i64().unwrap_or(0);
-        let rel = (minute - SESSION_OPEN_MINUTES).max(0);
+        let rel = (m.minute - SESSION_OPEN_MINUTES).max(0);
         let idx = rel.div_euclid(bucket_minutes);
         let start_minute = SESSION_OPEN_MINUTES + idx * bucket_minutes;
-        let day = field_s(m, "day");
-        let key = (day.clone(), idx);
-        let close = m.get("close").cloned().unwrap_or(Value::Null);
-        let or_close = |k: &str| match m.get(k) { Some(v) if !v.is_null() => v.clone(), _ => close.clone() };
+        let key = (m.day.clone(), idx);
+        let close = m.px.close;
+        let or_close = |v: Option<f64>| v.unwrap_or(close);
         match out.get_mut(&key) {
             None => {
-                let start = epoch_of_day(&day) + start_minute * 60 - m["offset"].as_i64().unwrap_or(0);
-                let vol = match m.get("volume") { Some(v) if !v.is_null() && v.as_f64() != Some(0.0) => v.clone(), _ => json!(0) };
-                let mut b = Map::new();
-                b.insert("time".into(), json!(start));
-                b.insert("open".into(), or_close("open"));
-                b.insert("high".into(), or_close("high"));
-                b.insert("low".into(), or_close("low"));
-                b.insert("close".into(), close);
-                b.insert("volume".into(), vol);
-                out.insert(key.clone(), b);
+                let start = epoch_of_day(&m.day) + start_minute * 60 - m.offset;
+                out.insert(
+                    key.clone(),
+                    TimeBar {
+                        time: start,
+                        px: Ohlcv {
+                            open: Some(or_close(m.px.open)),
+                            high: Some(or_close(m.px.high)),
+                            low: Some(or_close(m.px.low)),
+                            close,
+                            volume: Some(m.px.volume.unwrap_or(0.0)),
+                        },
+                    },
+                );
                 order.push(key);
             }
             Some(b) => {
-                b.insert("close".into(), close);
-                if let Some(h) = opt_num(m.get("high")) {
-                    let cur = b["high"].as_f64().unwrap_or(f64::MIN);
-                    if h > cur {
-                        b.insert("high".into(), m["high"].clone());
+                b.px.close = close;
+                if let Some(h) = m.px.high {
+                    if h > b.px.high.unwrap_or(f64::MIN) {
+                        b.px.high = Some(h);
                     }
                 }
-                if let Some(l) = opt_num(m.get("low")) {
-                    let cur = b["low"].as_f64().unwrap_or(f64::MAX);
-                    if l < cur {
-                        b.insert("low".into(), m["low"].clone());
+                if let Some(l) = m.px.low {
+                    if l < b.px.low.unwrap_or(f64::MAX) {
+                        b.px.low = Some(l);
                     }
                 }
-                let have = b.get("volume").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let add = opt_num(m.get("volume")).unwrap_or(0.0);
-                b.insert("volume".into(), sum_of(b.get("volume"), m.get("volume"), have + add));
+                b.px.volume = Some(b.px.volume.unwrap_or(0.0) + m.px.volume.unwrap_or(0.0));
             }
         }
     }
-    let mut rows: Vec<Map<String, Value>> = order.into_iter().map(|k| out.remove(&k).unwrap()).collect();
-    rows.sort_by_key(|b| b["time"].as_i64().unwrap_or(0));
-    rows.into_iter().map(Value::Object).collect()
-}
-
-/// `(a or 0) + (b or 0)` kept an integer where both are.
-fn sum_of(a: Option<&Value>, b: Option<&Value>, float_sum: f64) -> Value {
-    let int = |v: Option<&Value>| match v { None | Some(Value::Null) => Some(0i64), Some(Value::Number(n)) => n.as_i64(), _ => None };
-    match (int(a), int(b)) {
-        (Some(x), Some(y)) => json!(x + y),
-        _ => json!(float_sum),
-    }
+    let mut rows: Vec<TimeBar> = order.into_iter().map(|k| out.remove(&k).unwrap()).collect();
+    rows.sort_by_key(|b| b.time);
+    rows
 }
 
 /// One-minute bars over [start, end], a month at a
 /// time, a few months in parallel. A month that fails is a month with none.
-pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str) -> Vec<Value> {
+/// The gap the archive leaves between months it asks TMX for. A chart someone is
+/// waiting on is not paced; the archive's own backfill has all day.
+pub const ARCHIVE_TMX_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+
+pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str, on_demand: bool) -> Vec<SourceBar> {
     let mut chunks: Vec<(String, String)> = Vec::new();
     let mut cur = match bagholder_model::dates::parse_iso(&start.chars().take(10).collect::<String>()) { Some(d) => d, None => return vec![] };
     let last = match bagholder_model::dates::parse_iso(&end.chars().take(10).collect::<String>()) { Some(d) => d, None => return vec![] };
@@ -791,55 +801,50 @@ pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str) -> Vec<Value> {
         chunks.push((bagholder_model::dates::fmt(cur.0, cur.1, cur.2), bagholder_model::dates::fmt(stop.0, stop.1, stop.2)));
         cur = bagholder_model::dates::from_days(day_n(stop) + 1);
     }
-    let one = |span: (String, String)| -> Vec<Value> {
+    let one = |span: (String, String)| -> Vec<SourceBar> {
+        if !on_demand {
+            crate::http::pace_host("app-money.tmx.com", ARCHIVE_TMX_GAP);
+        }
         let payload = json!({"operationName": "getCompanyChart", "variables": {"symbol": key, "from": span.0, "to": span.1}, "query": TMX_CHART_QUERY});
         match post_json(TMX_URL, &payload, &TMX_HEADERS) {
             Ok(d) => parse_tmx_minutes(&d),
             Err(_) => vec![],
         }
     };
-    let mut out: Vec<Value> = parallel(chunks, 4, one).into_iter().flatten().collect();
-    out.sort_by_key(|b| b["time"].as_i64().unwrap_or(0));
+    let mut out: Vec<SourceBar> = parallel(chunks, if on_demand { 4 } else { 1 }, one).into_iter().flatten().collect();
+    out.sort_by_key(|b| b.time);
     out
 }
 
 /// Hourly bars onto a coarser grid aligned to the
 /// clock.
-pub fn aggregate_hourly(bars: &[Value], seconds: i64) -> Vec<Value> {
-    let mut out: BTreeMap<i64, Map<String, Value>> = BTreeMap::new();
+pub fn aggregate_hourly(bars: &[TimeBar], seconds: i64) -> Vec<TimeBar> {
+    let mut out: BTreeMap<i64, TimeBar> = BTreeMap::new();
     for b in bars {
-        let k = (b["time"].as_i64().unwrap_or(0)).div_euclid(seconds) * seconds;
-        let close = b.get("close").cloned().unwrap_or(Value::Null);
-        let pick = |key: &str| b.get(key).cloned().unwrap_or_else(|| close.clone());
-        let (hi, lo) = (pick("high"), pick("low"));
+        let k = b.time.div_euclid(seconds) * seconds;
+        let close = b.px.close;
+        let pick = |v: Option<f64>| v.unwrap_or(close);
+        let (hi, lo) = (pick(b.px.high), pick(b.px.low));
         match out.get_mut(&k) {
             None => {
-                let vol = match b.get("volume") { Some(v) if !v.is_null() && v.as_f64() != Some(0.0) => v.clone(), _ => json!(0) };
-                let mut m = Map::new();
-                m.insert("time".into(), json!(k));
-                m.insert("open".into(), pick("open"));
-                m.insert("high".into(), hi);
-                m.insert("low".into(), lo);
-                m.insert("close".into(), close);
-                m.insert("volume".into(), vol);
-                out.insert(k, m);
+                out.insert(
+                    k,
+                    TimeBar { time: k, px: Ohlcv { open: Some(pick(b.px.open)), high: Some(hi), low: Some(lo), close, volume: Some(b.px.volume.unwrap_or(0.0)) } },
+                );
             }
             Some(cur) => {
-                if hi.as_f64().unwrap_or(f64::MIN) > cur["high"].as_f64().unwrap_or(f64::MIN) {
-                    cur.insert("high".into(), hi);
+                if hi > cur.px.high.unwrap_or(f64::MIN) {
+                    cur.px.high = Some(hi);
                 }
-                if lo.as_f64().unwrap_or(f64::MAX) < cur["low"].as_f64().unwrap_or(f64::MAX) {
-                    cur.insert("low".into(), lo);
+                if lo < cur.px.low.unwrap_or(f64::MAX) {
+                    cur.px.low = Some(lo);
                 }
-                cur.insert("close".into(), close);
-                let have = cur["volume"].as_f64().unwrap_or(0.0);
-                let add = opt_num(b.get("volume")).unwrap_or(0.0);
-                let sum = sum_of(cur.get("volume"), b.get("volume"), have + add);
-                cur.insert("volume".into(), sum);
+                cur.px.close = close;
+                cur.px.volume = Some(cur.px.volume.unwrap_or(0.0) + b.px.volume.unwrap_or(0.0));
             }
         }
     }
-    out.into_values().map(Value::Object).collect()
+    out.into_values().collect()
 }
 
 /// The earliest date a source has intraday bars
@@ -855,7 +860,7 @@ pub fn source_intraday_reach(source: &str, today: &str) -> String {
 
 /// The earliest date intraday bars exist for across
 /// the instrument's sources, or "".
-pub fn intraday_reach(rec: &Value, today: &str) -> String {
+pub fn intraday_reach(rec: &Listing, today: &str) -> String {
     history_candidates(rec)
         .iter()
         .map(|(s, _)| source_intraday_reach(s, today))
@@ -866,7 +871,7 @@ pub fn intraday_reach(rec: &Value, today: &str) -> String {
 
 /// What the chart can show for a trade starting
 /// on `start`.
-pub fn available_timeframes(rec: &Value, start: &str, today: &str) -> Vec<&'static str> {
+pub fn available_timeframes(rec: &Listing, start: &str, today: &str) -> Vec<&'static str> {
     if history_candidates(rec).is_empty() {
         return vec![];
     }
@@ -901,8 +906,8 @@ pub fn intraday_missed_recently(conn: &rusqlite::Connection, symbol: &str, tf: &
 
 /// The available timeframes less an intraday one
 /// a recent fetch could not supply and nothing is stored for.
-pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Value, start: &str, today: &str, now_unix: f64) -> Vec<&'static str> {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Listing, start: &str, today: &str, now_unix: f64) -> Vec<&'static str> {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     available_timeframes(rec, start, today)
         .into_iter()
         .filter(|tf| {
@@ -914,8 +919,8 @@ pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Value, start: &str,
 }
 
 /// Whether the stored bars already cover [start, now].
-pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start: &str, today: &str, now_unix: f64) -> bool {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Listing, tf: &str, start: &str, today: &str, now_unix: f64) -> bool {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let reach = intraday_reach(rec, today);
     if sym.is_empty() || reach.is_empty() || !INTRADAY.contains(&tf) {
         return true;
@@ -927,15 +932,15 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start:
     let start10: String = start.chars().take(10).collect();
     let start_day = if start10 > reach { start10 } else { reach };
     let start_ts = epoch_of_day(&start_day);
-    let last = bagholder_store::market::bar_fetch(conn, &sym, tf).unwrap_or(Value::Null);
-    !last.is_null() && last["startTs"].as_i64().map(|s| s <= start_ts).unwrap_or(false)
+    let last = bagholder_store::market::bar_fetch(conn, &sym, tf).unwrap_or(None);
+    last.and_then(|l| l.start_ts).map(|s| s <= start_ts).unwrap_or(false)
 }
 
 /// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once.
-pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: String, start: String, end: String) {
+pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Listing, tf: String, start: String, end: String) {
     static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(&rec, "symbol"));
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     {
         let mut p = PENDING.lock().unwrap();
         if p.contains(&sym) {
@@ -944,8 +949,7 @@ pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: Str
         p.push(sym.clone());
     }
     let _ = std::thread::Builder::new().name(format!("bagholder-intraday-{}", sym)).spawn(move || {
-        if let Ok(conn) = rusqlite::Connection::open(&db) {
-            let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+        if let Ok(conn) = pool.get() {
             let (today, now_unix, stamp) = crate::clock_now();
             let _ = ensure_intraday(&conn, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true);
         }
@@ -953,63 +957,78 @@ pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: Str
     });
 }
 
+/// The bars of a fetch, per intraday timeframe: one fetch covers both, so
+/// the caller never asks a source twice for the same span.
+#[derive(Clone, Debug, Default)]
+pub struct ByTimeframe {
+    pub h1: Vec<TimeBar>,
+    pub h4: Vec<TimeBar>,
+}
+
+impl ByTimeframe {
+    pub fn get(&self, tf: &str) -> &[TimeBar] {
+        match tf {
+            "1h" => &self.h1,
+            "4h" => &self.h4,
+            _ => &[],
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.h1.is_empty() && self.h4.is_empty()
+    }
+}
+
 /// {tf: bars} of one candidate over the span.
 pub fn fetch_intraday_from(
     conn: &rusqlite::Connection,
     source: &str,
     key: &str,
-    rec: &Value,
+    rec: &Listing,
     start_ts: i64,
     end_ts: i64,
     today: &str,
-) -> Result<Map<String, Value>, FetchError> {
-    let crypto = field_s(rec, "kind") == "Crypto";
-    let mut out = Map::new();
+    on_demand: bool,
+) -> Result<ByTimeframe, FetchError> {
+    let crypto = rec.kind.clone() == "Crypto";
+    let mut out = ByTimeframe::default();
     match source {
         "tmx" => {
             let start = day_of_epoch(start_ts);
             let end = day_of_epoch(end_ts);
             let minutes = tmx_lookup(conn, key, today, |form| {
-                let bars = fetch_tmx_minutes(form, &start, &end);
-                if bars.is_empty() { None } else { Some(Value::Array(bars)) }
+                let bars = fetch_tmx_minutes(form, &start, &end, on_demand);
+                if bars.is_empty() { None } else { Some(bars) }
             })
             .0
-            .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
             if !minutes.is_empty() {
-                out.insert("1h".into(), json!(aggregate_session(&minutes, 60)));
-                out.insert("4h".into(), json!(aggregate_session(&minutes, 240)));
+                out.h1 = aggregate_session(&minutes, 60);
+                out.h4 = aggregate_session(&minutes, 240);
             }
         }
         "coinbase" => {
             if coinbase_market(conn, key, today).is_empty() {
                 return Ok(out);
             }
-            let hourly = in_position_currency(conn, &fetch_coinbase_candles(key, 3600, start_ts, end_ts), &bar_currency(source, key, rec), &field_s(rec, "currency"));
+            let hourly = in_position_currency(conn, &fetch_coinbase_candles(key, 3600, start_ts, end_ts), &bar_currency(source, key, rec), &rec.currency);
             if !hourly.is_empty() {
-                out.insert("4h".into(), json!(aggregate_hourly(&hourly, 14400)));
-                out.insert("1h".into(), json!(hourly));
-                // 1h is named first
-                let four = out.remove("4h").unwrap();
-                out.insert("4h".into(), four);
+                out.h4 = aggregate_hourly(&hourly, 14400);
+                out.h1 = hourly;
             }
         }
         "yahoo" => {
             let fetched = whole_bars(fetch_yahoo(conn, key, start_ts, end_ts, "60m", today)?);
-            let hourly = in_position_currency(conn, &fetched, &bar_currency(source, key, rec), &field_s(rec, "currency"));
+            let hourly = in_position_currency(conn, &fetched, &bar_currency(source, key, rec), &rec.currency);
             if hourly.is_empty() {
                 return Ok(out);
             }
             if crypto {
-                let slim: Vec<Value> = hourly
-                    .iter()
-                    .map(|b| json!({"time": b["time"], "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "volume": b["volume"]}))
-                    .collect();
-                out.insert("1h".into(), json!(slim));
-                out.insert("4h".into(), json!(aggregate_hourly(&hourly, 14400)));
+                let as_time: Vec<TimeBar> = hourly.iter().map(|b| b.at_time()).collect();
+                out.h4 = aggregate_hourly(&as_time, 14400);
+                out.h1 = as_time;
             } else {
-                out.insert("1h".into(), json!(aggregate_session(&hourly, 60)));
-                out.insert("4h".into(), json!(aggregate_session(&hourly, 240)));
+                out.h1 = aggregate_session(&hourly, 60);
+                out.h4 = aggregate_session(&hourly, 240);
             }
         }
         _ => {}
@@ -1022,44 +1041,44 @@ pub fn fetch_intraday_from(
 /// tried first. The background sweep leaves the rate-limited sources alone.
 pub fn fetch_intraday(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     start_ts: i64,
     end_ts: i64,
     today: &str,
     on_demand: bool,
-) -> (Map<String, Value>, String) {
+) -> (ByTimeframe, String) {
     let start_day = day_of_epoch(start_ts);
-    let mut answers: Vec<(String, String, Vec<Value>)> = Vec::new();
-    let mut by: Vec<Map<String, Value>> = Vec::new();
+    let mut answers: Vec<(String, String, Vec<TimeBar>)> = Vec::new();
+    let mut by: Vec<ByTimeframe> = Vec::new();
     let mut notes: Vec<(String, String, Note)> = Vec::new();
     for (source, key) in ordered_candidates(conn, rec) {
         let reach = source_intraday_reach(&source, today);
         if reach.is_empty() || start_day < reach || (!on_demand && ON_DEMAND_ONLY_SOURCES.contains(&source.as_str())) {
             continue;
         }
-        let by_tf = match fetch_intraday_from(conn, &source, &key, rec, start_ts, end_ts, today) {
+        let by_tf = match fetch_intraday_from(conn, &source, &key, rec, start_ts, end_ts, today, on_demand) {
             Ok(m) => {
                 notes.push((source.clone(), key.clone(), Note::Bars));
                 m
             }
             Err(e) => {
                 notes.push((source.clone(), key.clone(), Note::Failed(e)));
-                Map::new()
+                ByTimeframe::default()
             }
         };
-        let hourly = by_tf.get("1h").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-        let covered = hourly.first().map(|b| b["time"].as_i64().unwrap_or(0) <= start_ts + COVERAGE_SLACK_DAYS * 86400).unwrap_or(false);
+        let hourly = by_tf.h1.clone();
+        let covered = hourly.first().map(|b| b.time <= start_ts + COVERAGE_SLACK_DAYS * 86400).unwrap_or(false);
         answers.push((source, key, hourly));
         by.push(by_tf);
         if covered {
             break;
         }
     }
-    match pick_covering(conn, rec, &answers, start_ts, |b| b["time"].as_i64().unwrap_or(0)) {
+    match pick_covering(conn, rec, &answers, start_ts, |b: &TimeBar| b.time) {
         Some(i) => (by[i].clone(), answers[i].0.clone()),
         None => {
             remember_notes(rec, "hourly", notes);
-            (Map::new(), String::new())
+            (ByTimeframe::default(), String::new())
         }
     }
 }
@@ -1071,7 +1090,7 @@ pub fn fetch_intraday(
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_intraday(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     tf: &str,
     start: &str,
     end: &str,
@@ -1080,8 +1099,8 @@ pub fn ensure_intraday(
     now_stamp: &str,
     max_age_hours: f64,
     on_demand: bool,
-) -> rusqlite::Result<Vec<Value>> {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+) -> rusqlite::Result<Vec<TimeBar>> {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let reach = intraday_reach(rec, today);
     if sym.is_empty() || reach.is_empty() || !INTRADAY.contains(&tf) {
         return Ok(vec![]);
@@ -1092,10 +1111,10 @@ pub fn ensure_intraday(
     let now_i = now_unix as i64;
     let end_ts = (epoch_of_day(&end.chars().take(10).collect::<String>()) + 86400).min(now_i);
     let last = bagholder_store::market::bar_fetch(conn, &sym, tf)?;
-    let last_start = last["startTs"].as_i64();
-    let covered = !last.is_null() && last_start.map(|s| s <= start_ts).unwrap_or(false);
-    let fresh = !last.is_null()
-        && match crate::quotes::instant_secs_public(&field_s(&last, "fetchedAt")) {
+    let last_start = last.as_ref().and_then(|l| l.start_ts);
+    let covered = last.is_some() && last_start.map(|s| s <= start_ts).unwrap_or(false);
+    let fresh = last.is_some()
+        && match crate::quotes::instant_secs_public(last.as_ref().map(|l| l.fetched_at.as_str()).unwrap_or("")) {
             Some(then) => now_unix - then < max_age_hours * 3600.0,
             None => false,
         };
@@ -1112,27 +1131,23 @@ pub fn ensure_intraday(
         let (by_tf, source) = fetch_intraday(conn, rec, from, now_i, today, on_demand);
         // one fetch fills every intraday timeframe, so a miss covers them all
         for (k, _) in INTRADAY_SECONDS {
-            if by_tf.get(k).and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true) {
-                record_intraday_miss(conn, &sym, k, now_stamp);
-            }
-        }
-        for (k, bars) in &by_tf {
-            let bars = bars.as_array().cloned().unwrap_or_default();
+            let bars = by_tf.get(k);
             if bars.is_empty() {
+                record_intraday_miss(conn, &sym, k, now_stamp);
                 continue;
             }
-            bagholder_store::market::upsert_price_bars(conn, &sym, k, &bars, &source)?;
-            let first = bars[0]["time"].as_i64().unwrap_or(0);
+            bagholder_store::market::upsert_price_bars(conn, &sym, k, bars, &source)?;
+            let first = bars[0].time;
             let covered_from = if first <= from + COVERAGE_SLACK_DAYS * 86400 { from } else { first };
-            let stamp_from = match last_start { Some(s) if !last.is_null() => covered_from.min(s), _ => covered_from };
+            let stamp_from = last_start.map_or(covered_from, |s| covered_from.min(s));
             bagholder_store::market::mark_bars_fetched(conn, &sym, k, stamp_from, now_stamp)?;
         }
     }
     bagholder_store::market::price_bars(conn, &sym, tf, start_ts, end_ts)
 }
 
-fn age_hours(last: &Value, now_unix: f64) -> Option<f64> {
-    crate::quotes::instant_secs_public(&field_s(last, "fetchedAt")).map(|then| (now_unix - then) / 3600.0)
+fn age_hours(fetched_at: Option<&str>, now_unix: f64) -> Option<f64> {
+    crate::quotes::instant_secs_public(fetched_at?).map(|then| (now_unix - then) / 3600.0)
 }
 
 /// Hours since the archive last asked for `sym`'s intraday bars, whether it got any
@@ -1140,7 +1155,8 @@ fn age_hours(last: &Value, now_unix: f64) -> Option<f64> {
 /// as missed -- and one that is asked again on every pass for that reason is asked
 /// without end: a miss is a read, and the next is due when any other would be.
 fn archive_read_age_hours(conn: &rusqlite::Connection, sym: &str, now_unix: f64) -> Option<f64> {
-    let fetched = age_hours(&bagholder_store::market::bar_fetch(conn, sym, "1h").unwrap_or(Value::Null), now_unix);
+    let last = bagholder_store::market::bar_fetch(conn, sym, "1h").unwrap_or(None);
+    let fetched = age_hours(last.as_ref().map(|l| l.fetched_at.as_str()), now_unix);
     let missed = crate::quotes::instant_secs_public(&bagholder_store::tables::get_meta(conn, &miss_key(sym, "1h"), "").unwrap_or_default())
         .map(|then| (now_unix - then) / 3600.0);
     match (fetched, missed) {
@@ -1152,12 +1168,12 @@ fn archive_read_age_hours(conn: &rusqlite::Connection, sym: &str, now_unix: f64)
 /// Keep the intraday bars of recently traded or
 /// held instruments for good, a few per call -- those never fetched first,
 /// then those whose copy is older than a day. Returns the symbols worked.
-pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
+pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
     let mut todo = archive_intraday_due(conn, recs, today, now_unix);
     todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let mut done = Vec::new();
     for (_, sym, rec) in todo.into_iter().take(limit) {
-        let start = { let s = field_s(&rec, "start"); if s.is_empty() { today.to_string() } else { s } };
+        let start = rec.start.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| today.to_string());
         let _ = ensure_intraday(conn, &rec, "1h", &start, today, today, now_unix, now_stamp, ARCHIVE_TOPUP_HOURS, false);
         // however that went, it was asked: never the same listing again on the next pass
         if archive_read_age_hours(conn, &sym, now_unix).map_or(true, |age| age > ARCHIVE_TOPUP_HOURS) {
@@ -1170,10 +1186,10 @@ pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str
 
 /// The listings whose intraday bars the archive should ask for now: never asked
 /// first (0), then those last asked more than `ARCHIVE_TOPUP_HOURS` ago (1).
-pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64) -> Vec<(u8, String, Value)> {
-    let mut todo: Vec<(u8, String, Value)> = Vec::new();
+pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64) -> Vec<(u8, String, Listing)> {
+    let mut todo: Vec<(u8, String, Listing)> = Vec::new();
     for rec in recs {
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
         if sym.is_empty() || intraday_reach(rec, today).is_empty() {
             continue;
         }
@@ -1186,28 +1202,48 @@ pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Value], today: 
     todo
 }
 
+/// Seconds until the archive next has something to top up: the moment the oldest
+/// stored read among `recs` passes `ARCHIVE_TOPUP_HOURS`. `None` when nothing is
+/// archived at all -- then only a change to the book can make work. What the
+/// archive waits for, in place of asking every five minutes.
+pub fn archive_next_due_secs(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64) -> Option<f64> {
+    let mut soonest: Option<f64> = None;
+    for rec in recs {
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+        if sym.is_empty() || intraday_reach(rec, today).is_empty() {
+            continue;
+        }
+        let left = match archive_read_age_hours(conn, &sym, now_unix) {
+            Some(age) => ((ARCHIVE_TOPUP_HOURS - age) * 3600.0).max(0.0),
+            None => 0.0,
+        };
+        soonest = Some(soonest.map_or(left, |s: f64| s.min(left)));
+    }
+    soonest
+}
+
 /// Keep daily bars for instruments whose source forgets
 /// them. No current source does, so this is idle until one is added.
-pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
-    let mut todo: Vec<(u8, String, Value)> = Vec::new();
+pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
+    let mut todo: Vec<(u8, String, Listing)> = Vec::new();
     for rec in recs {
         let src = history_source(rec);
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
         let short = src.as_ref().map(|(s, _)| SHORT_DAILY_SOURCES.contains(&s.as_str())).unwrap_or(false);
         if !short || sym.is_empty() {
             continue;
         }
-        let last = bagholder_store::market::history_fetch(conn, &sym).unwrap_or(Value::Null);
-        if last.is_null() {
+        let last = bagholder_store::market::history_fetch(conn, &sym).unwrap_or(None);
+        if last.is_none() {
             todo.push((0, sym, rec.clone()));
-        } else if age_hours(&last, now_unix).map(|a| a > ARCHIVE_TOPUP_HOURS).unwrap_or(true) {
+        } else if age_hours(last.as_ref().map(|l| l.fetched_at.as_str()), now_unix).map(|a| a > ARCHIVE_TOPUP_HOURS).unwrap_or(true) {
             todo.push((1, sym, rec.clone()));
         }
     }
     todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let mut done = Vec::new();
     for (_, sym, rec) in todo.into_iter().take(limit) {
-        let start = { let s = field_s(&rec, "start"); if s.is_empty() { today.to_string() } else { s } };
+        let start = rec.start.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| today.to_string());
         let _ = ensure_history(conn, &rec, &start, today, today, now_unix, now_stamp);
         done.push(sym);
     }
@@ -1220,17 +1256,17 @@ pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, n
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_bars(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     tf: &str,
     start: &str,
     end: &str,
     today: &str,
     now_unix: f64,
     now_stamp: &str,
-) -> rusqlite::Result<Vec<Value>> {
+) -> rusqlite::Result<ChartBars> {
     if INTRADAY.contains(&tf) {
-        return ensure_intraday(conn, rec, tf, start, end, today, now_unix, now_stamp, 1.0, true);
+        return Ok(ChartBars::Hours(ensure_intraday(conn, rec, tf, start, end, today, now_unix, now_stamp, 1.0, true)?));
     }
     let daily = ensure_history(conn, rec, start, end, today, now_unix, now_stamp)?;
-    Ok(if tf == "1d" { daily } else { aggregate_daily(&daily, tf) })
+    Ok(ChartBars::Days(if tf == "1d" { daily } else { aggregate_daily(&daily, tf) }))
 }

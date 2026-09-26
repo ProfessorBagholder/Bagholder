@@ -1,0 +1,47 @@
+[
+  {
+    "name": "a multi-leg order whose row names a share: the share and every contract on it wait",
+    "spec": "docs/plans/stage-2-engine.md, options: a multi-leg record without legs leaves what it could have moved waiting",
+    "working": [
+      "long 1 C1 (a call on U) bought for 50, and 100 U bought for 1,000",
+      "a multi-leg order's row names U and states only its cash: its legs could be U or any contract on U",
+      "C1 sold for 80 and U sold for 1,100: both round trips wait (leg-unstated)"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-09-18", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:01:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-1000"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "buy", "instrument": "U", "cash": "-30", "problems": ["leg-unstated"]},
+      {"id": "t4", "account": "A", "day": "2026-05-01", "at": "2026-05-01T15:00:00Z", "kind": "sell", "instrument": "C1", "qty": "-1", "cash": "80"},
+      {"id": "t5", "account": "A", "day": "2026-05-01", "at": "2026-05-01T15:01:00Z", "kind": "sell", "instrument": "U", "qty": "-100", "cash": "1100"}
+    ],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": {"gaps": ["leg-unstated"]}}, {"opened_by": "t2", "pnl": {"gaps": ["leg-unstated"]}}]}
+  },
+  {
+    "name": "a multi-leg order whose row names nothing: everything the account holds waits, and only that account",
+    "spec": "docs/plans/stage-2-engine.md, options: a multi-leg record without legs leaves what it could have moved waiting",
+    "working": [
+      "A and B each buy 100 X for 1,000",
+      "a multi-leg order's row in A names no instrument: its legs could be anything A holds",
+      "each sells for 1,100: A's round trip waits (leg-unstated), B's is 100"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "a1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "b1", "account": "B", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "a2", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "buy", "cash": "-30", "problems": ["leg-unstated"]},
+      {"id": "a3", "account": "A", "day": "2026-05-01", "at": "2026-05-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-100", "cash": "1100"},
+      {"id": "b2", "account": "B", "day": "2026-05-01", "at": "2026-05-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-100", "cash": "1100"}
+    ],
+    "expect": {"trades": [{"opened_by": "a1", "pnl": {"gaps": ["leg-unstated"]}}, {"opened_by": "b1", "pnl": "100.00"}]}
+  }
+]

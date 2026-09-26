@@ -1,0 +1,309 @@
+[
+  {
+    "name": "a split marker with its ratio from the record",
+    "spec": "docs/architecture.md §18, splits from the record: a ratio applies to a marker that states no quantity; the cost stays",
+    "working": ["100 X bought for 1,000; a 2-for-1 split; 200 sold for 1,200: P&L 200; entry 1,000 ÷ 200 = 5; marked split"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-200", "cash": "1200"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]}],
+    "expect": {"trade_count": 1, "trades": [{"opened_by": "t1", "qty": "200", "entry": "5", "pnl": "200.00", "flags": ["split"]}]}
+  },
+  {
+    "name": "a consolidation under a new security id, stated as units out and in: the holding continues",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: the broker's units stand; a whole holding continuing under another instrument keeps its round trip, cost and dates",
+    "working": [
+      "100 of the old listing bought for 1,000",
+      "the event: 100 out of the old, 20 into the new (one for five); the round trip continues on the new listing with cost 1,000",
+      "20 sold for 1,200: P&L 200, one trade opened by the first purchase, named after the new listing"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "OLD", "symbol": "MSTY"}, {"id": "NEW", "symbol": "MSTY"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "OLD", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "OLD", "qty": "-100"},
+      {"id": "t3", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:01Z", "kind": "corporate-event", "instrument": "NEW", "qty": "20"},
+      {"id": "t4", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "NEW", "qty": "-20", "cash": "1200"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "OLD", "to": "NEW", "units_per_unit": "0.2", "cost_share": "1"}]}],
+    "expect": {"trade_count": 1, "position_count": 0, "trades": [{"opened_by": "t1", "named_after": "NEW", "pnl": "200.00", "flags": ["continued"]}]}
+  },
+  {
+    "name": "a stock dividend is income, and its value is the new units' cost",
+    "spec": "docs/plans/stage-2-engine.md, Corporate events: a stock dividend's value is income and becomes the units' cost",
+    "working": [
+      "100 X bought for 1,000; 5 units paid as a dividend worth 60",
+      "a dividend row of 60 in the cashflow; 105 sold for 1,260: P&L 1,260 − 1,000 − 60 = 200"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "5"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-105", "cash": "1260"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.05", "cost": "60"}]}],
+    "expect": {
+      "trade_count": 1,
+      "trades": [{"opened_by": "t1", "pnl": "200.00"}],
+      "cash": [{"tx": "t2", "amount_cad": "60.00"}],
+      "kpi": {"dividends": "60.00"}
+    }
+  },
+  {
+    "name": "a spin-off with two children: each takes its share of the parent's cost as it stood, and the parent's dates",
+    "spec": "docs/plans/stage-2-engine.md, Corporate events: the parent's cost is split, the child's lots keep the parent's acquisition dates",
+    "working": [
+      "100 P bought for 1,000 (Jan 5); the event: 50 C and 20 D received, C taking 20 % of the cost and D 10 %",
+      "C's cost 1,000 × 0.2 = 200, D's 1,000 × 0.1 = 100, both of the cost before the event; P keeps 700",
+      "50 C sold for 300 (Apr 1): P&L 100, held from Jan 5 → 86 days; 100 P sold for 900: P&L 200; D held, 20 at 100",
+      "Open trades (SPEC.md §2 Trade, 2026-09-24), re-derived without the engine:",
+      "SPEC §2 Trade: a trade is a round trip from first fill until flat; open while any of it is held. Every round trip still held is an open trade, even with no sale yet.",
+      "t1: buy 100 P for 1000 (10.00/unit), lot dated 2026-01-05.",
+      "t2/t3 (one spin-off, adjustment on t2): C gets 50 units (0.5/unit), cost share 0.2 of the parent's cost as it stood = 200; D gets 20 units (0.2/unit), cost share 0.1 = 100. Parent keeps 1000 - 200 - 100 = 700. Children's lots carry the parent's date 2026-01-05 (stage-2 plan, Corporate events).",
+      "t4: sell 50 C for 300: C's round trip closes 2026-04-01, P&L 300 - 200 = 100.00, entry 200/50 = 4, exit 6, pnl% 100/200 = 0.5, Open = earliest lot date 2026-01-05, hold 86 days.",
+      "t5: sell 100 P for 900: P closes 2026-04-01, P&L 900 - 700 = 200.00, entry basis of units closed 700, pnl% 200/700, hold 2026-01-05..2026-04-01 = 86.",
+      "D: 20 units still held, no sale: an OPEN trade, entry 100/20 = 5, no exit, realized 0.00, Open 2026-01-05, hold to today 2026-06-01 = 147.",
+      "trade_count 3 (2 closed + 1 open). CAD book, so pnl_cad = pnl.",
+      "KPI: realized = 100 + 200 = 300.00, both on 2026-04-01; closed trades 2, both wins; win rate 1; expectancy 300/2 = 150.00; profit factor has no losses (infinite, not written). Monthly: 2026-04 300.00, 2 trades.",
+      "Settled against the engine's reading, which SPEC.md leaves open: every child of a spin-off is opened by the event its adjustment applies to (t2); the broker's row for D (t3) states its units."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "C"
+      },
+      {
+        "id": "D"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T11:00:00Z",
+        "kind": "corporate-event",
+        "instrument": "C",
+        "qty": "50"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T11:00:01Z",
+        "kind": "corporate-event",
+        "instrument": "D",
+        "qty": "20"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-50",
+        "cash": "300"
+      },
+      {
+        "id": "t5",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T16:00:00Z",
+        "kind": "sell",
+        "instrument": "P",
+        "qty": "-100",
+        "cash": "900"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "legs": [
+          {
+            "from": "P",
+            "to": "C",
+            "units_per_unit": "0.5",
+            "cost_share": "0.2"
+          },
+          {
+            "from": "P",
+            "to": "D",
+            "units_per_unit": "0.2",
+            "cost_share": "0.1"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 3,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "P",
+          "closed": "2026-04-01",
+          "opened": "2026-01-05",
+          "qty": "100",
+          "entry": "7",
+          "exit": "9",
+          "pnl": "200.00",
+          "pnl_cad": "200.00",
+          "pnl_pct": 0.2857142857142857,
+          "hold_days": 86,
+          "direction": "long"
+        },
+        {
+          "opened_by": "t2",
+          "instrument": "C",
+          "closed": "2026-04-01",
+          "opened": "2026-01-05",
+          "qty": "50",
+          "entry": "4",
+          "exit": "6",
+          "pnl": "100.00",
+          "pnl_cad": "100.00",
+          "pnl_pct": 0.5,
+          "hold_days": 86,
+          "direction": "long"
+        },
+        {
+          "opened_by": "t2",
+          "instrument": "D",
+          "closed": "open",
+          "opened": "2026-01-05",
+          "qty": "20",
+          "entry": "5",
+          "exit": null,
+          "pnl": "0.00",
+          "pnl_cad": "0.00",
+          "hold_days": 147,
+          "direction": "long"
+        }
+      ],
+      "positions": [
+        {
+          "account": "A",
+          "instrument": "D",
+          "qty": "20",
+          "book": "100.00"
+        }
+      ],
+      "kpi": {
+        "realized": "300.00",
+        "count": 2,
+        "wins": 2,
+        "losses": 0,
+        "breakeven": 0,
+        "win_rate": 1.0,
+        "expectancy": "150.00",
+        "monthly": [
+          {
+            "year": 2026,
+            "month": 4,
+            "value": "300.00",
+            "count": 2
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "a merger for cash closes the holding at the cash per unit",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a merger for cash",
+    "working": ["100 X bought for 1,000; merged for 15 a unit: closed at 1,500, P&L 500"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-05-01", "at": "2026-05-01T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "-100"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "cash_per_unit": "15"}]}],
+    "expect": {"trade_count": 1, "position_count": 0, "trades": [{"opened_by": "t1", "pnl": "500.00", "closed": "2026-05-01"}]}
+  },
+  {
+    "name": "an event nothing says the kind of: the units the broker states move at an unknown cost, and the holding waits",
+    "spec": "docs/plans/stage-2-engine.md: an event without an adjustment moves the units the broker states and leaves the holding waiting",
+    "working": ["100 X bought for 1,000; 100 more arrive by an event with no values; 200 sold for 3,000: the P&L waits (event-unknown)"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "100"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-200", "cash": "3000"}
+    ],
+    "expect": {"beyond": [], "position_count": 0, "trades": [{"opened_by": "t1", "pnl": {"gaps": ["event-unknown"]}}]}
+  },
+  {
+    "name": "a short through a split: the short is scaled by the ratio, its proceeds kept",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split or a continuation by its ratio scales or moves a short as it does a long; any other event on a short leaves the holding waiting",
+    "working": ["100 X sold short (to open) for +1,000; a 2-for-1 split: a short of 200, entry 1,000 ÷ 200 = 5", "200 bought back for −800: P&L 1,000 − 800 = 200, marked split"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "X", "qty": "-100", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "X", "qty": "200", "cash": "-800"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]}],
+    "expect": {"trade_count": 1, "position_count": 0, "beyond": [], "unapplied": {}, "trades": [{"opened_by": "t1", "direction": "short", "qty": "200", "entry": "5", "pnl": "200.00", "flags": ["split"]}]}
+  },
+  {
+    "name": "a short through a continuation under a new instrument: the short moves whole by the ratio",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split or a continuation by its ratio scales or moves a short as it does a long; any other event on a short leaves the holding waiting",
+    "working": ["100 OLD sold short (to open) for +1,000; OLD continues as NEW, one for five: a short of 20 NEW, its round trip and proceeds kept", "20 NEW bought back for −800: P&L 200, one trade opened by the short sale, named after NEW"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "OLD"}, {"id": "NEW"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "OLD", "qty": "-100", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "OLD"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "NEW", "qty": "20", "cash": "-800"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "OLD", "to": "NEW", "units_per_unit": "0.2", "cost_share": "1"}]}],
+    "expect": {"trade_count": 1, "position_count": 0, "beyond": [], "unapplied": {}, "trades": [{"opened_by": "t1", "direction": "short", "named_after": "NEW", "pnl": "200.00", "flags": ["continued"]}]}
+  },
+  {
+    "name": "a stock dividend on a short: what the short owes is not worked out, and the holding waits",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split or a continuation by its ratio scales or moves a short as it does a long; any other event on a short leaves the holding waiting",
+    "working": ["100 X sold short (to open) for +1,000; a stock dividend of 0.05 new units per unit valued at 50: the short owes the lender those units, which the ledger does not work out", "the event is not applied; the short of 100 waits on it"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "10"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "X", "qty": "-100", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.05", "cost": "50"}]}],
+    "expect": {"position_count": 1, "positions": [{"account": "A", "instrument": "X", "direction": "short", "qty": "100", "gaps": ["event-on-short"]}], "unapplied": {"t2": ["event-on-short"]}}
+  }
+]

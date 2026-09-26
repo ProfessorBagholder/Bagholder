@@ -4,16 +4,31 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the diff `#[derive(Diff)]` implements
+bagholder-diff = { path = "../diff" }
+# the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
+# model's are: the two sides of the wire cannot drift
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings", "indexmap-impl"] }
 bagholder-model = { path = "../model" }
+# the database plumbing (opening a file, transactions, the pool), shared with the book
+bagholder-sqlite = { path = "../sqlite" }
+bagholder-diff-derive = { path = "../diff-derive" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # SQLite itself, built from source so a copy of the app carries its own and
 # does not depend on what the machine happens to have.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# "hooks": SQLite tells the process when a transaction commits (open_db), so a change
+# reaches the page because it happened, not because something polled for it
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # the CSV importer's patterns
 regex = "1"
+# the CSV importer's per-type counts, insertion-ordered like the `Map` they
+# replace; already in the tree through serde_json's `preserve_order`
+indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
+# tests read the time zone rules built into jiff, never the machine's
+bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"
 
 [[bin]]

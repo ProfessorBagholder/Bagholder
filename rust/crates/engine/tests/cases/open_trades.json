@@ -1,0 +1,856 @@
+[
+ {
+  "name": "a partly sold coin is one open trade whose P&L is the part sold",
+  "spec": "SPEC.md §2 Trade (open until flat; each sale realized on its day) and §4 Dashboard",
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "C",
+    "kind": "crypto"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "ETH",
+    "kind": "crypto"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "C",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "ETH",
+    "qty": "1",
+    "cash": "-4000"
+   },
+   {
+    "id": "t2",
+    "account": "C",
+    "day": "2026-02-10",
+    "at": "2026-02-10T15:00:00Z",
+    "kind": "sell",
+    "instrument": "ETH",
+    "qty": "-0.9999",
+    "cash": "4999.50"
+   }
+  ],
+  "working": [
+   "CAD book. t1 buy 1 ETH for 4000 (4000/coin).",
+   "t2 sell 0.9999 for 4999.50 on 2026-02-10 against cost 0.9999 x 4000 = 3999.60: P&L 999.90 realized that day; exit 4999.50/0.9999 = 5000.",
+   "0.0001 still held: not flat, so ONE OPEN trade (closed 'open'), qty opened 1, entry 4000, exit 5000, P&L 999.90, pnl% 999.90/3999.60 = 0.25, hold 2026-01-05..2026-03-01 = 55.",
+   "KPI: realized 999.90 (the open trade's sale on its day); closed trades 0, so no win rate or expectancy (null). Monthly 2026-02 999.90, 1 trade."
+  ],
+  "expect": {
+   "trade_count": 1,
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "ETH",
+     "closed": "open",
+     "opened": "2026-01-05",
+     "qty": "1",
+     "entry": "4000",
+     "exit": "5000",
+     "pnl": "999.90",
+     "pnl_cad": "999.90",
+     "pnl_pct": 0.25,
+     "hold_days": 55,
+     "direction": "long"
+    }
+   ],
+   "kpi": {
+    "realized": "999.90",
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "expectancy": null,
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 2,
+      "value": "999.90",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "the same coin sold to flat is one closed trade whose P&L is all its sales",
+  "spec": "SPEC.md §2 Trade (open until flat; each sale realized on its day) and §4 Dashboard",
+  "today": "2026-03-10",
+  "accounts": [
+   {
+    "id": "C",
+    "kind": "crypto"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "ETH",
+    "kind": "crypto"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "C",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "ETH",
+    "qty": "1",
+    "cash": "-4000"
+   },
+   {
+    "id": "t2",
+    "account": "C",
+    "day": "2026-02-10",
+    "at": "2026-02-10T15:00:00Z",
+    "kind": "sell",
+    "instrument": "ETH",
+    "qty": "-0.9999",
+    "cash": "4999.50"
+   },
+   {
+    "id": "t3",
+    "account": "C",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "ETH",
+    "qty": "-0.0001",
+    "cash": "0.55"
+   }
+  ],
+  "working": [
+   "As the previous case, then t3 sells the last 0.0001 for 0.55 on 2026-03-02 against cost 0.40: P&L 0.15 realized that day.",
+   "Flat: ONE CLOSED trade, closed 2026-03-02, qty 1, entry 4000, exit (4999.50 + 0.55)/1 = 5000.05, P&L 999.90 + 0.15 = 1000.05 (= the fills' net cash 4999.50 + 0.55 - 4000), pnl% 1000.05/4000 = 0.2500125, hold 2026-01-05..2026-03-02 = 56.",
+   "KPI: realized 1000.05; closed 1, a win; win rate 1; expectancy 1000.05. Monthly: 2026-02 999.90 (1 trade), 2026-03 0.15 (1 trade)."
+  ],
+  "expect": {
+   "trade_count": 1,
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "ETH",
+     "closed": "2026-03-02",
+     "opened": "2026-01-05",
+     "qty": "1",
+     "entry": "4000",
+     "exit": "5000.05",
+     "pnl": "1000.05",
+     "pnl_cad": "1000.05",
+     "pnl_pct": 0.2500125,
+     "hold_days": 56,
+     "direction": "long"
+    }
+   ],
+   "kpi": {
+    "realized": "1000.05",
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "breakeven": 0,
+    "win_rate": 1.0,
+    "expectancy": "1000.05",
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 2,
+      "value": "999.90",
+      "count": 1
+     },
+     {
+      "year": 2026,
+      "month": 3,
+      "value": "0.15",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "realized P&L counts an open trade's partial sale on its day; win rate, profit factor and expectancy count only closed trades",
+  "spec": "SPEC.md §2 Trade (open until flat; each sale realized on its day) and §4 Dashboard",
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "Y"
+   },
+   {
+    "id": "Z"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-01-20",
+    "at": "2026-01-20T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-10",
+    "cash": "150"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-01-06",
+    "at": "2026-01-06T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Z",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-01-21",
+    "at": "2026-01-21T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Z",
+    "qty": "-10",
+    "cash": "90"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2026-01-10",
+    "at": "2026-01-10T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Y",
+    "qty": "10",
+    "cash": "-200"
+   },
+   {
+    "id": "t6",
+    "account": "A",
+    "day": "2026-02-03",
+    "at": "2026-02-03T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Y",
+    "qty": "-4",
+    "cash": "60"
+   }
+  ],
+  "working": [
+   "CAD book.",
+   "X: buy 10 for 100, sell 10 for 150: CLOSED 2026-01-20, P&L +50.00 (a win), hold 15.",
+   "Z: buy 10 for 100, sell 10 for 90: CLOSED 2026-01-21, P&L -10.00 (a loss), hold 15.",
+   "Y: buy 10 for 200 (20/unit), sell 4 for 60 (15/unit) on 2026-02-03 against cost 80: P&L -20.00 realized that day; 6 still held: OPEN trade, entry 20, exit 15, pnl% -20/80 = -0.25, hold 2026-01-10..2026-03-01 = 50.",
+   "Realized P&L: 50 - 10 - 20 = 20.00 (the open trade's partial sale included).",
+   "Closed trades: X and Z only. Count 2, wins 1, losses 1, win rate 0.5; profit factor 50/10 = 5 (it would be 50/30 had Y's partial loss counted); expectancy (50 - 10)/2 = 20.00.",
+   "Monthly: 2026-01 40.00 (X and Z, 2 trades), 2026-02 -20.00 (Y, 1 trade)."
+  ],
+  "expect": {
+   "trade_count": 3,
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "X",
+     "closed": "2026-01-20",
+     "pnl": "50.00",
+     "hold_days": 15
+    },
+    {
+     "opened_by": "t3",
+     "instrument": "Z",
+     "closed": "2026-01-21",
+     "pnl": "-10.00",
+     "hold_days": 15
+    },
+    {
+     "opened_by": "t5",
+     "instrument": "Y",
+     "closed": "open",
+     "opened": "2026-01-10",
+     "qty": "10",
+     "entry": "20",
+     "exit": "15",
+     "pnl": "-20.00",
+     "pnl_cad": "-20.00",
+     "pnl_pct": -0.25,
+     "hold_days": 50,
+     "direction": "long"
+    }
+   ],
+   "kpi": {
+    "realized": "20.00",
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "breakeven": 0,
+    "win_rate": 0.5,
+    "profit_factor": 5.0,
+    "expectancy": "20.00",
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 1,
+      "value": "40.00",
+      "count": 2
+     },
+     {
+      "year": 2026,
+      "month": 2,
+      "value": "-20.00",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "monthly P&L puts each sale of one trade in its own month",
+  "spec": "SPEC.md §2 Trade (open until flat; each sale realized on its day) and §4 Dashboard",
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-01-20",
+    "at": "2026-01-20T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-4",
+    "cash": "60"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-02-10",
+    "at": "2026-02-10T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-6",
+    "cash": "48"
+   }
+  ],
+  "working": [
+   "CAD book. t1 buy 10 for 100 (10/unit).",
+   "t2 sell 4 for 60 on 2026-01-20 against cost 40: +20.00 realized in January.",
+   "t3 sell 6 for 48 on 2026-02-10 against cost 60: -12.00 realized in February. Flat: one CLOSED trade, closed 2026-02-10, P&L 20 - 12 = 8.00, exit 108/10 = 10.8, pnl% 8/100 = 0.08, hold 36.",
+   "Monthly: 2026-01 20.00 (1 trade realizing), 2026-02 -12.00 (1 trade realizing). Realized 8.00; closed 1, a win; expectancy 8.00."
+  ],
+  "expect": {
+   "trade_count": 1,
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "X",
+     "closed": "2026-02-10",
+     "opened": "2026-01-05",
+     "qty": "10",
+     "entry": "10",
+     "exit": "10.8",
+     "pnl": "8.00",
+     "pnl_cad": "8.00",
+     "pnl_pct": 0.08,
+     "hold_days": 36,
+     "direction": "long"
+    }
+   ],
+   "kpi": {
+    "realized": "8.00",
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "breakeven": 0,
+    "win_rate": 1.0,
+    "expectancy": "8.00",
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 1,
+      "value": "20.00",
+      "count": 1
+     },
+     {
+      "year": 2026,
+      "month": 2,
+      "value": "-12.00",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "a date range: a trade opened before it and still open is in scope, and only its sales inside the range count",
+  "spec": "SPEC.md §2 Trade (open until flat; each sale realized on its day) and §4 Dashboard, a trade is in scope when open at any time in the range; a sale counts when it falls in it; a closed trade's statistics when its close does",
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "Y"
+   },
+   {
+    "id": "Z"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2025-11-03",
+    "at": "2025-11-03T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2025-12-15",
+    "at": "2025-12-15T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-3",
+    "cash": "45"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-02-10",
+    "at": "2026-02-10T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-3",
+    "cash": "36"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2025-10-01",
+    "at": "2025-10-01T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Y",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2025-10-20",
+    "at": "2025-10-20T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Y",
+    "qty": "-10",
+    "cash": "120"
+   },
+   {
+    "id": "t6",
+    "account": "A",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Z",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t7",
+    "account": "A",
+    "day": "2026-01-15",
+    "at": "2026-01-15T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Z",
+    "qty": "-10",
+    "cash": "90"
+   }
+  ],
+  "working": [
+   "CAD book. Range 2026-01-01..2026-02-28.",
+   "X: buy 10 for 100 on 2025-11-03; sell 3 for 45 on 2025-12-15 (+15, before the range); sell 3 for 36 on 2026-02-10 (+6, inside); 4 still held: OPEN trade, open throughout the range, so in scope. Its own P&L is 21.00 (not scoped), exit 81/6 = 13.5, pnl% 21/60 = 0.35, hold 2025-11-03..2026-03-01 = 118.",
+   "Y: opened and closed in October 2025: never open in the range, not in scope.",
+   "Z: buy 10 for 100, sell for 90 on 2026-01-15: CLOSED in the range, -10.00.",
+   "In scope: X (t1) and Z (t6).",
+   "Realized in range: X's 2026-02-10 sale +6 and Z's -10 = -4.00 (X's December sale is outside).",
+   "Closed-trade statistics: only Z closed in the range: count 1, losses 1, win rate 0, profit factor 0, expectancy -10.00.",
+   "Monthly in range: 2026-01 -10.00 (Z, 1 trade), 2026-02 6.00 (X, 1 trade)."
+  ],
+  "expect": {
+   "trade_count": 3,
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "X",
+     "closed": "open",
+     "opened": "2025-11-03",
+     "qty": "10",
+     "entry": "10",
+     "exit": "13.5",
+     "pnl": "21.00",
+     "pnl_cad": "21.00",
+     "pnl_pct": 0.35,
+     "hold_days": 118,
+     "direction": "long"
+    }
+   ],
+   "kpi": {
+    "from": "2026-01-01",
+    "to": "2026-02-28",
+    "realized": "-4.00",
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "breakeven": 0,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "expectancy": "-10.00",
+    "trades": [
+     "t1",
+     "t6"
+    ],
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 1,
+      "value": "-10.00",
+      "count": 1
+     },
+     {
+      "year": 2026,
+      "month": 2,
+      "value": "6.00",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "a roll chain still open is one open trade named after the last contract",
+  "spec": "SPEC.md §2 Trade, Options: a multileg fill is a roll; the chain is one trade named after the last contract; open while any of it is held",
+  "today": "2026-08-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "U",
+    "currency": "USD"
+   },
+   {
+    "id": "C1",
+    "kind": "option",
+    "currency": "USD",
+    "underlying": "U",
+    "expiry": "2026-06-19",
+    "strike": "10",
+    "right": "call",
+    "multiplier": "100"
+   },
+   {
+    "id": "C2",
+    "kind": "option",
+    "currency": "USD",
+    "underlying": "U",
+    "expiry": "2026-09-18",
+    "strike": "12",
+    "right": "call",
+    "multiplier": "100"
+   }
+  ],
+  "rates": {
+   "USD": {
+    "2026-01-02": "1.35"
+   }
+  },
+  "covered": {
+   "USD": [
+    [
+     "2026-01-01",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "C1",
+    "qty": "-2",
+    "cash": "300",
+    "effect": "open"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-05-01",
+    "at": "2026-05-01T14:00:00Z",
+    "kind": "buy",
+    "instrument": "C1",
+    "qty": "2",
+    "cash": "-150",
+    "effect": "close",
+    "record": "roll",
+    "leg": "close"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-05-01",
+    "at": "2026-05-01T14:00:00Z",
+    "kind": "sell",
+    "instrument": "C2",
+    "qty": "-2",
+    "cash": "400",
+    "effect": "open",
+    "record": "roll",
+    "leg": "open"
+   }
+  ],
+  "working": [
+   "Every USD day in 2026 uses 1.35: the only stated rate is 2026-01-02 and the read covers all of 2026, so every later weekday without a rate is not a business day and takes the previous business day's rate.",
+   "t1 sells to open 2 C1 for 300 (short, 1.50).",
+   "The roll record's legs: t2 buys to close 2 C1 for 150: slice P&L 300 - 150 = 150.00 realized 2026-05-01, CAD 202.50; t3 sells to open 2 C2 for 400 in the same round trip.",
+   "C2 (expiry 2026-09-18) is still held on 2026-08-01: the chain is ONE OPEN trade opened by t1, named after C2, short, P&L so far 150.00, pnl% 150/300 (entry basis of the units closed, 2 x 1.50 x 100) = 0.5, Open 2026-03-02, hold to 2026-08-01 = 152.",
+   "KPI: realized 202.50 (May); closed trades 0, expectancy null. Monthly 2026-05 202.50, 1 trade."
+  ],
+  "expect": {
+   "trade_count": 1,
+   "trades": [
+    {
+     "opened_by": "t1",
+     "named_after": "C2",
+     "closed": "open",
+     "opened": "2026-03-02",
+     "pnl": "150.00",
+     "pnl_cad": "202.50",
+     "pnl_pct": 0.5,
+     "hold_days": 152,
+     "direction": "short"
+    }
+   ],
+   "kpi": {
+    "realized": "202.50",
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "expectancy": null,
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 5,
+      "value": "202.50",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "a position transferred wholly out with no sale is no trade",
+  "spec": "SPEC.md §2 Trade: a round trip that goes flat without a sale is not a trade; Crypto: a transfer out is not a sale",
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "C",
+    "kind": "crypto"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "BTC",
+    "kind": "crypto"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "C",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "BTC",
+    "qty": "1",
+    "cash": "-50000"
+   },
+   {
+    "id": "t2",
+    "account": "C",
+    "day": "2026-01-10",
+    "at": "2026-01-10T15:00:00Z",
+    "kind": "transfer-out",
+    "instrument": "BTC",
+    "qty": "-1"
+   }
+  ],
+  "working": [
+   "t1 buys 1 BTC for 50000. t2 sends the whole coin out: it comes off the lot at its cost with no P&L and is not a fill of the trade.",
+   "The round trip went flat without a sale: not a trade (not open, not closed). trade_count 0.",
+   "KPI: nothing realized, no closed trade: realized 0.00, count 0, expectancy null, no monthly bars."
+  ],
+  "expect": {
+   "trade_count": 0,
+   "kpi": {
+    "realized": "0.00",
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "expectancy": null,
+    "monthly": []
+   }
+  }
+ },
+ {
+  "name": "a saved group is open while any member is open",
+  "spec": "SPEC.md §2 Trade: a saved group is open while any of its members is open",
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-01-10",
+    "at": "2026-01-10T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-10",
+    "cash": "120"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-01-12",
+    "at": "2026-01-12T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-01-20",
+    "at": "2026-01-20T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-4",
+    "cash": "48"
+   }
+  ],
+  "trades": [
+   {
+    "id": "T1",
+    "opened_by": "t1",
+    "instrument": "X"
+   },
+   {
+    "id": "T2",
+    "opened_by": "t3",
+    "instrument": "X"
+   }
+  ],
+  "groups": [
+   {
+    "id": "G",
+    "members": [
+     "T1",
+     "T2"
+    ]
+   }
+  ],
+  "working": [
+   "CAD book. T1 (t1..t2): buy 10 for 100, sell 10 for 120: closed, +20.00 on 2026-01-10.",
+   "T2 (t3..): buy 10 for 100, sell 4 for 48 on 2026-01-20 against cost 40: +8.00; 6 held: open.",
+   "Group G shows T1 and T2 as one trade, and is open because T2 is open: trade_count 1.",
+   "KPI: realized 20 + 8 = 28.00 (each sale on its day); the group is not closed, so closed-trade count 0, expectancy null. Monthly 2026-01 28.00, 1 trade (the group) realizing."
+  ],
+  "expect": {
+   "trade_count": 1,
+   "kpi": {
+    "realized": "28.00",
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "expectancy": null,
+    "monthly": [
+     {
+      "year": 2026,
+      "month": 1,
+      "value": "28.00",
+      "count": 1
+     }
+    ]
+   }
+  }
+ },
+  {"name": "a managed account's buys and sales make no round trip, and its holding stays", "spec": "docs/decisions.md 2026-09-25 (managed accounts: holdings, cash, income and value, no round trips)", "today": "2026-03-10", "accounts": [{"id": "M", "managed": true}], "instruments": [{"id": "X"}], "quotes": {"X": {"price": "12", "change": "0.5"}}, "transactions": [{"id": "t1", "account": "M", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"}, {"id": "t2", "account": "M", "day": "2026-03-05", "at": "2026-03-05T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-40", "cash": "600"}], "working": ["Wealthsimple buys 100 X for 1000 and sells 40 for 600 in a managed account: no trade, open or closed.", "The holding stays: 60 X, book 60 x 10 = 600.00, market 60 x 12 = 720.00, unrealized 120.00."], "expect": {"trade_count": 0, "trades": [], "positions": [{"account": "M", "instrument": "X", "qty": "60", "book": "600.00", "avg": "10", "market": "720.00", "unrealized": "120.00", "market_cad": "720.00"}]}}
+]

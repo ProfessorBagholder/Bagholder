@@ -1,0 +1,123 @@
+[
+  {
+    "name": "cash and its fee paid in another currency both convert at the rate the record states",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: a fill's value is its cash less its fee",
+    "working": [
+      "10 U (USD) bought for 1,260 CAD with a 10 CAD fee at 1.25 CAD per USD: cash 1,008 USD, fee 8 USD, value 1,000 USD",
+      "10 U sold for 1,490 CAD with a 10 CAD fee at 1.25: cash 1,192 USD, fee 8 USD, value 1,200 USD",
+      "P&L 1,200 − 1,000 − 8 − 8 = 184 USD, fees 16 USD"
+    ],
+    "today": "2026-03-02",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "U", "currency": "USD"}],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-03-01"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "10", "cash": "-1260", "fee": "10", "cash_currency": "CAD", "fx_rate": "1.25"},
+      {"id": "t2", "account": "A", "day": "2026-02-09", "at": "2026-02-09T15:00:00Z", "kind": "sell", "instrument": "U", "qty": "-10", "cash": "1490", "fee": "10", "cash_currency": "CAD", "fx_rate": "1.25"}
+    ],
+    "expect": {
+      "position_count": 0,
+      "trades": [{"opened_by": "t1", "pnl": "184.00", "fees": "16.00"}]
+    }
+  },
+  {
+    "name": "a fee in a currency that is neither the instrument's nor the cash's, at no stated rate, leaves the fill's value unstated",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: nothing the record does not state is worked out",
+    "working": [
+      "10 U (USD) bought for 1,000 USD with a 5 CAD fee and no rate: the lot opens with its quantity, its value waiting",
+      "10 U sold for 1,200 USD: the round trip closes, its P&L waiting on the fee's currency"
+    ],
+    "today": "2026-03-02",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "U", "currency": "USD"}],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-03-01"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "10", "cash": "-1000", "fee": "5", "fee_currency": "CAD"},
+      {"id": "t2", "account": "A", "day": "2026-02-09", "at": "2026-02-09T15:00:00Z", "kind": "sell", "instrument": "U", "qty": "-10", "cash": "1200"}
+    ],
+    "expect": {
+      "position_count": 0,
+      "beyond": [],
+      "trades": [{"opened_by": "t1", "pnl": {"gaps": ["currency-unstated"]}}]
+    }
+  },
+  {
+    "name": "a fill that states neither its cash nor its price has no value on the record",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: a fill's value is its cash, or its price where no cash is stated",
+    "working": [
+      "100 X bought with no cash and no price: the lot opens with its quantity, its value waiting (never zero)",
+      "100 X sold for 1,200: the round trip's P&L waits on the purchase's value"
+    ],
+    "today": "2026-03-02",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100"},
+      {"id": "t2", "account": "A", "day": "2026-02-09", "at": "2026-02-09T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-100", "cash": "1200"}
+    ],
+    "expect": {
+      "position_count": 0,
+      "trades": [{"opened_by": "t1", "pnl": {"gaps": ["value-unstated"]}}]
+    }
+  },
+  {
+    "name": "price and cash are compared at the cash's cents: a difference each way is listed, one the cash's or the stated rate's rounding explains is not",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: where a record states both and they disagree, the cash stands and the record is a problem",
+    "working": [
+      "t1: 3 X at 33.333 is 99.999, 100.00 at the cash's cents, and the cash is 100.00: they agree",
+      "t2: 1 X at 10 against cash 10.50: the cash is more than the price says",
+      "t3: 2 X at 31 is 62 against cash 60: the price says more than the cash",
+      "t4: 2 X at 29 is 58.00 USD against 75 CAD at 1.25 CAD per USD, 60.00 USD: every cash and rate that round to 75 and 1.25 give 59.76 to 60.25, so the price disagrees",
+      "the cash stands: P&L (60 + 60) − (100 + 10.50) = 9.50"
+    ],
+    "today": "2026-03-02",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X", "currency": "USD"}],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-03-01"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "3", "price": "33.333", "cash": "-100.00"},
+      {"id": "t2", "account": "A", "day": "2026-02-03", "at": "2026-02-03T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "1", "price": "10", "cash": "-10.50"},
+      {"id": "t3", "account": "A", "day": "2026-02-04", "at": "2026-02-04T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-2", "price": "31", "cash": "60"},
+      {"id": "t4", "account": "A", "day": "2026-02-05", "at": "2026-02-05T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-2", "price": "29", "cash": "75", "cash_currency": "CAD", "fx_rate": "1.25"}
+    ],
+    "expect": {
+      "position_count": 0,
+      "disagreements": ["t2", "t3",
+    "t4"],
+      "trades": [{"opened_by": "t1", "pnl": "9.50"}]
+    }
+  },
+  {
+    "name": "what a fill opens after closing part of it is exactly what the close left of its value",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: the parts of a fill add up to it exactly",
+    "working": [
+      "1 C bought for 100; 2 C sold for 199.999999999999: one closes the long, one opens a short",
+      "the close takes half, 99.9999999999995, which rounds half-even to 100.000000000000 at 12 places",
+      "the short opens with what is left, 99.999999999999, not a second half rounded the same way",
+      "the short is covered for 50: its P&L is 49.999999999999, and the two trips add to the cash, 49.999999999999"
+    ],
+    "today": "2026-03-02",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-12-18", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-03-01"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "C", "qty": "1", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-02-03", "at": "2026-02-03T15:00:00Z", "kind": "sell", "instrument": "C", "qty": "-2", "cash": "199.999999999999"},
+      {"id": "t3", "account": "A", "day": "2026-02-04", "at": "2026-02-04T15:00:00Z", "kind": "buy", "instrument": "C", "qty": "1", "cash": "-50"}
+    ],
+    "expect": {
+      "position_count": 0,
+      "trades": [
+        {"opened_by": "t1", "pnl": "0.000000000000"},
+        {"opened_by": "t2", "pnl": "49.999999999999"}
+      ]
+    }
+  }
+]

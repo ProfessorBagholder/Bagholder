@@ -16,3 +16,5 @@ python/tests
 python/tools
 python/screenshots
 rust/target
+web/node_modules
+web/dist

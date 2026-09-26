@@ -1,170 +1,133 @@
 //! The figures one filtered list of trades produces: the KPI tiles, the
 //! by-symbol and monthly tables, the grade buckets and the review queue.
 //!
-//! Every one of them reads `pnlCad`, so a book in two currencies adds up.
+//! Every one of them reads the trade's CAD figures, so a book in two currencies
+//! adds up.
 
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::dates::{days_between, MONTHS};
-use crate::value::{FSum, field_s, get, num};
+use crate::value::FSum;
+use crate::wire::{BySymbolRow, GradeBucket, Grades, Kpi, MonthlyBar, QueueRow, Trade};
 
 pub const GRADES: [&str; 4] = ["A", "B", "C", "F"];
 
-/// `metrics`.
-pub fn metrics(trades: &[Value]) -> Value {
-    let vals: Vec<f64> = trades.iter().map(|t| num(get(t, "pnlCad"), 0.0)).collect();
+pub fn metrics(trades: &[&Trade]) -> Kpi {
+    let vals: Vec<f64> = trades.iter().map(|t| t.pnl_cad).collect();
     let wins: Vec<f64> = vals.iter().copied().filter(|v| *v > 0.0).collect();
     let losses: Vec<f64> = vals.iter().copied().filter(|v| *v < 0.0).collect();
-    let be = vals.iter().filter(|v| **v == 0.0).count();
-    let gw: f64 = wins.iter().fsum();
-    let gl: f64 = losses.iter().fsum().abs();
+    let gross_win: f64 = wins.iter().fsum();
+    let gross_loss: f64 = losses.iter().fsum().abs();
     let n = vals.len();
     let total: f64 = vals.iter().fsum();
-
-    // A book with wins and no losses has no finite profit factor; the page is
-    // told so rather than being handed a division by zero.
-    let profit_factor = if gl > 0.0 {
-        json!(gw / gl)
-    } else if gw > 0.0 {
-        Value::Null
-    } else {
-        json!(0.0)
-    };
-
-    json!({
-        "realized": crate::value::sum_of(vals.is_empty(), total),
-        "count": n,
-        "wins": wins.len(),
-        "losses": losses.len(),
-        "breakeven": be,
-        "winRate": if n > 0 { json!(wins.len() as f64 / n as f64) } else { Value::Null },
-        "grossWin": crate::value::sum_of(wins.is_empty(), gw),
-        "grossLoss": crate::value::sum_of(losses.is_empty(), gl),
-        "profitFactor": profit_factor,
-        "profitFactorInfinite": gl == 0.0 && gw > 0.0,
-        "expectancy": if n > 0 { json!(total / n as f64) } else { Value::Null },
-        "avgWin": if !wins.is_empty() { gw / wins.len() as f64 } else { 0.0 },
-        "avgLoss": if !losses.is_empty() { -gl / losses.len() as f64 } else { 0.0 },
-        "fees": crate::value::sum_of(trades.is_empty(), trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).fsum()),
-        "avgHold": if n > 0 {
-            json!(trades.iter().map(|t| num(get(t, "holdDays"), 0.0)).fsum() / n as f64)
-        } else { Value::Null },
-        "openCount": trades.iter().filter(|t| field_s(t, "status") == "open").count(),
-    })
+    Kpi {
+        realized: total + 0.0,
+        count: n,
+        wins: wins.len(),
+        losses: losses.len(),
+        breakeven: vals.iter().filter(|v| **v == 0.0).count(),
+        win_rate: (n > 0).then(|| wins.len() as f64 / n as f64),
+        gross_win: gross_win + 0.0,
+        gross_loss: gross_loss + 0.0,
+        // A book with wins and no losses has no finite profit factor; the page is
+        // told so rather than being handed a division by zero.
+        profit_factor: if gross_loss > 0.0 { Some(gross_win / gross_loss) } else if gross_win > 0.0 { None } else { Some(0.0) },
+        profit_factor_infinite: gross_loss == 0.0 && gross_win > 0.0,
+        expectancy: (n > 0).then(|| total / n as f64),
+        avg_win: if wins.is_empty() { 0.0 } else { gross_win / wins.len() as f64 },
+        avg_loss: if losses.is_empty() { 0.0 } else { -gross_loss / losses.len() as f64 },
+        fees: trades.iter().map(|t| t.fees_cad).fsum() + 0.0,
+        avg_hold: (n > 0).then(|| trades.iter().map(|t| t.hold_days as f64).fsum() / n as f64),
+        open_count: trades.iter().filter(|t| t.status == "open").count(),
+    }
 }
 
-/// `by_symbol`: grouped by the underlying, so a chain of contracts sits
-/// under the name it is written on.
-pub fn by_symbol(trades: &[Value]) -> Vec<Value> {
-    struct G { pnl: f64, n: usize, wins: usize, hold: f64, legs: i64, ids: Vec<String> }
-    let mut by: HashMap<String, G> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
+/// Grouped by the underlying, so a chain of contracts sits under the name it is
+/// written on. Largest gain first.
+pub fn by_symbol(trades: &[&Trade]) -> Vec<BySymbolRow> {
+    #[derive(Default)]
+    struct Group {
+        pnl: f64,
+        wins: usize,
+        hold: f64,
+        legs: usize,
+        ids: Vec<String>,
+    }
+    let mut by: HashMap<&str, Group> = HashMap::new();
+    let mut order: Vec<&str> = Vec::new();
     for t in trades {
-        let k = field_s(t, "underlying");
-        if !by.contains_key(&k) {
-            by.insert(k.clone(), G { pnl: 0.0, n: 0, wins: 0, hold: 0.0, legs: 0, ids: vec![] });
-            order.push(k.clone());
+        if !by.contains_key(t.underlying.as_str()) {
+            order.push(&t.underlying);
         }
-        let g = by.get_mut(&k).unwrap();
-        let p = num(get(t, "pnlCad"), 0.0);
-        g.pnl += p;
-        g.n += 1;
-        g.legs += num(get(t, "legCount"), 0.0) as i64;
-        g.hold += num(get(t, "holdDays"), 0.0);
-        g.ids.push(field_s(t, "id"));
-        if p > 0.0 {
+        let g = by.entry(&t.underlying).or_default();
+        g.pnl += t.pnl_cad;
+        g.legs += t.leg_count;
+        g.hold += t.hold_days as f64;
+        g.ids.push(t.id.clone());
+        if t.pnl_cad > 0.0 {
             g.wins += 1;
         }
     }
-    let mut rows: Vec<Value> = order
-        .iter()
-        .map(|k| {
-            let g = &by[k];
-            json!({
-                "symbol": k,
-                "pnl": g.pnl,
-                "n": g.n,
-                "legs": g.legs,
-                "winRate": if g.n > 0 { g.wins as f64 / g.n as f64 } else { 0.0 },
-                "avgHold": if g.n > 0 { g.hold / g.n as f64 } else { 0.0 },
-                "tradeIds": g.ids,
-            })
+    let mut rows: Vec<BySymbolRow> = order
+        .into_iter()
+        .map(|symbol| {
+            let g = by.remove(symbol).unwrap();
+            let n = g.ids.len();
+            BySymbolRow { symbol: symbol.to_string(), pnl: g.pnl, n, legs: g.legs, win_rate: g.wins as f64 / n as f64, avg_hold: g.hold / n as f64, trade_ids: g.ids }
         })
         .collect();
-    rows.sort_by(|a, b| {
-        num(get(b, "pnl"), 0.0).partial_cmp(&num(get(a, "pnl"), 0.0)).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    rows.sort_by(|a, b| b.pnl.partial_cmp(&a.pnl).unwrap_or(std::cmp::Ordering::Equal));
     rows
 }
 
-/// `month_label`: `2026-02` -> `Feb '26`.
+/// `2026-02` -> `Feb '26`.
 pub fn month_label(key: &str) -> String {
     let m: usize = key[5..7].parse().unwrap_or(1);
     format!("{} '{}", MONTHS[m - 1], &key[2..4])
 }
 
-/// `monthly`.
-pub fn monthly(trades: &[Value]) -> Vec<Value> {
-    struct B { label: String, value: f64, count: usize, ids: Vec<String> }
-    let mut by: std::collections::BTreeMap<String, B> = std::collections::BTreeMap::new();
+pub fn monthly(trades: &[&Trade]) -> Vec<MonthlyBar> {
+    let mut by: BTreeMap<String, MonthlyBar> = BTreeMap::new();
     for t in trades {
-        let k: String = field_s(t, "exitDate").chars().take(7).collect();
-        if k.len() < 7 {
+        let key: String = t.exit_date.chars().take(7).collect();
+        if key.len() < 7 {
             continue;
         }
-        let b = by.entry(k.clone()).or_insert_with(|| B { label: month_label(&k), value: 0.0, count: 0, ids: vec![] });
-        b.value += num(get(t, "pnlCad"), 0.0);
-        b.count += 1;
-        b.ids.push(field_s(t, "id"));
+        let bar = by.entry(key.clone()).or_insert_with(|| MonthlyBar { label: month_label(&key), key, value: 0.0, count: 0, trade_ids: vec![] });
+        bar.value += t.pnl_cad;
+        bar.count += 1;
+        bar.trade_ids.push(t.id.clone());
     }
-    by.into_iter()
-        .map(|(k, b)| json!({"key": k, "label": b.label, "value": b.value, "count": b.count, "tradeIds": b.ids}))
-        .collect()
+    by.into_values().collect()
 }
 
-/// `grade_buckets`.
-pub fn grade_buckets(trades: &[Value]) -> Value {
-    let mut buckets = Vec::new();
-    for g in GRADES {
-        let rows: Vec<&Value> = trades.iter().filter(|t| field_s(t, "grade") == g).collect();
-        buckets.push(json!({
-            "grade": g,
-            "n": rows.len(),
-            "pnl": crate::value::sum_of(rows.is_empty(), rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).fsum()),
-            "tradeIds": rows.iter().map(|t| field_s(t, "id")).collect::<Vec<_>>(),
-        }));
-    }
-    let ungraded = trades.iter().filter(|t| field_s(t, "grade").is_empty()).count();
-    json!({"buckets": buckets, "ungraded": ungraded, "graded": trades.len() - ungraded})
+pub fn grade_buckets(trades: &[&Trade]) -> Grades {
+    let buckets = GRADES
+        .iter()
+        .map(|grade| {
+            let rows: Vec<&&Trade> = trades.iter().filter(|t| t.grade == *grade).collect();
+            GradeBucket { grade, n: rows.len(), pnl: rows.iter().map(|t| t.pnl_cad).fsum() + 0.0, trade_ids: rows.iter().map(|t| t.id.clone()).collect() }
+        })
+        .collect();
+    let ungraded = trades.iter().filter(|t| t.grade.is_empty()).count();
+    Grades { buckets, ungraded, graded: trades.len() - ungraded }
 }
 
-/// `review_queue`: the closed trades still missing a grade or a thesis.
-pub fn review_queue(trades: &[Value]) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
-    for t in trades {
-        let no_grade = field_s(t, "grade").is_empty();
-        let no_thesis = field_s(t, "thesis").trim().is_empty();
-        if !(no_grade || no_thesis) {
-            continue;
-        }
-        let missing = if no_grade && no_thesis {
-            "no grade or thesis"
-        } else if no_grade {
-            "no grade"
-        } else {
-            "no thesis"
-        };
-        out.push(json!({
-            "id": field_s(t, "id"),
-            "symbol": field_s(t, "symbol"),
-            "date": field_s(t, "exitDate"),
-            "pnl": num(get(t, "pnlCad"), 0.0),
-            "currency": "CAD",
-            "missing": missing,
-        }));
-    }
-    out.sort_by(|a, b| field_s(b, "date").cmp(&field_s(a, "date")));
+/// The closed trades still missing a grade or a thesis, newest first.
+pub fn review_queue(trades: &[&Trade]) -> Vec<QueueRow> {
+    let mut out: Vec<QueueRow> = trades
+        .iter()
+        .filter_map(|t| {
+            let missing = match (t.grade.is_empty(), t.thesis.trim().is_empty()) {
+                (true, true) => "no grade or thesis",
+                (true, false) => "no grade",
+                (false, true) => "no thesis",
+                (false, false) => return None,
+            };
+            Some(QueueRow { id: t.id.clone(), symbol: t.symbol.clone(), date: t.exit_date.clone(), pnl: t.pnl_cad, currency: "CAD", missing })
+        })
+        .collect();
+    out.sort_by(|a, b| b.date.cmp(&a.date));
     out
 }
 

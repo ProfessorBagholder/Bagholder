@@ -1,0 +1,16 @@
+{
+    "terms": {
+        "url": "https://www.bankofcanada.ca/terms/"
+    },
+    "seriesDetail": {
+        "FXPLNCAD": {
+            "label": "PLN/CAD",
+            "description": "Daily average exchange rate of the Polish zloty in Canadian dollars.",
+            "dimension": {
+                "key": "d",
+                "name": "Date"
+            }
+        }
+    },
+    "observations": []
+}

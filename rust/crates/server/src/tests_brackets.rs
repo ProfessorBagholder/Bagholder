@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use bagholder_store::orders as so;
@@ -11,6 +10,7 @@ use bagholder_store::tables as tb;
 use bagholder_ws::session::CallError;
 
 use crate::orders::{self as od, bracket_seam, seam};
+use crate::tests_common::app;
 
 static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 static REJECTIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -19,15 +19,16 @@ fn lk<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn db() -> Connection {
-    crate::app::app().open().unwrap()
+fn db() -> bagholder_store::pool::Pooled<'static> {
+    crate::tests_common::app_ref().open().unwrap()
 }
 
 fn now() -> String {
     crate::app::now_iso()
 }
 
-fn sv(v: &Value, k: &str) -> String {
+fn sv(v: &impl serde::Serialize, k: &str) -> String {
+    let v = serde_json::to_value(v).unwrap();
     match v.get(k) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Null) | None => String::new(),
@@ -35,40 +36,38 @@ fn sv(v: &Value, k: &str) -> String {
     }
 }
 
-fn fv(v: &Value, k: &str) -> f64 {
-    v.get(k).and_then(|x| x.as_f64()).unwrap_or(f64::NAN)
+fn fv(v: &impl serde::Serialize, k: &str) -> f64 {
+    serde_json::to_value(v).unwrap().get(k).and_then(|x| x.as_f64()).unwrap_or(f64::NAN)
 }
 
-fn tv(v: &Value, k: &str) -> bool {
-    crate::app::truthy(v.get(k))
+fn tv(v: &impl serde::Serialize, k: &str) -> bool {
+    crate::app::truthy(serde_json::to_value(v).unwrap().get(k))
 }
 
-fn get_bracket(id: &str) -> Value {
-    so::get_bracket(&db(), id).unwrap().expect("bracket")
+fn get_bracket(id: &str) -> so::Bracket {
+    so::typed::get_bracket(&db(), id).unwrap().expect("bracket")
 }
 
-fn get_order(id: &str) -> Value {
-    so::get_order(&db(), id).unwrap().unwrap_or(json!({}))
+fn get_order(id: &str) -> so::Order {
+    so::typed::get_order(&db(), id).unwrap().unwrap_or_default()
 }
 
 fn update_order(id: &str, patch: Value) {
-    so::update_order(&db(), id, &patch, &now()).unwrap()
+    let patch: so::OrderPatch = serde_json::from_value(patch).unwrap();
+    so::typed::update_order(&db(), id, &patch, &now()).unwrap()
 }
 
 fn update_bracket(id: &str, patch: Value) {
-    so::update_bracket(&db(), id, &patch, &now()).unwrap()
+    let patch: so::BracketPatch = serde_json::from_value(patch).unwrap();
+    so::typed::update_bracket(&db(), id, &patch, &now()).unwrap()
 }
 
-fn list_orders() -> Vec<Value> {
-    so::list_orders(&db(), 200).unwrap()
+fn list_orders() -> Vec<so::Order> {
+    so::typed::list_orders(&db(), 200).unwrap()
 }
 
-fn set_meta(k: &str, v: &str) {
-    tb::set_meta(&db(), k, v).unwrap()
-}
-
-fn replace_balances(rows: Value) {
-    tb::replace_balances(&db(), rows.as_array().unwrap()).unwrap()
+fn typed_rows<T: serde::de::DeserializeOwned>(v: &Value) -> Vec<T> {
+    v.as_array().unwrap().iter().map(|x| serde_json::from_value(x.clone()).unwrap()).collect()
 }
 
 fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
@@ -81,8 +80,10 @@ fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
         "SoOrdersOrderCreate" => {
             let mut r = lk(&REJECTIONS);
             if !r.is_empty() {
+                // `CODE|message` states Wealthsimple's code; a bare message comes with code x
                 let m = r.remove(0);
-                json!({"soOrdersCreateOrder": {"errors": [{"code": "x", "message": m}], "order": null}})
+                let (code, m) = m.split_once('|').map(|(c, m)| (c.to_string(), m.to_string())).unwrap_or(("x".into(), m));
+                json!({"soOrdersCreateOrder": {"errors": [{"code": code, "message": m}], "order": null}})
             } else {
                 json!({"soOrdersCreateOrder": {"errors": [], "order": {"orderId": format!("ws-{}", n), "createdAt": "2026-09-10T13:30:00Z"}}})
             }
@@ -90,7 +91,7 @@ fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
         "SoOrdersOrderCancel" => json!({"orderServiceCancelOrder": {"externalId": vars["cancelOrderRequest"]["externalId"], "errors": []}}),
         "FetchSecurityMarketData" => json!({"security": {"id": vars["id"], "allowedOrderSubtypes": ["MARKET", "LIMIT", "STOP", "STOP_LIMIT"], "marginRates": {"clientMarginRate": 0.3}}}),
         "FetchSoOrdersExtendedOrder" => {
-            let row = so::get_order(&db(), vars["externalId"].as_str().unwrap_or("")).unwrap().unwrap_or(json!({}));
+            let row = so::typed::get_order(&db(), vars["externalId"].as_str().unwrap_or("")).unwrap().unwrap_or_default();
             let ws = match sv(&row, "status").as_str() {
                 "cancelling" => "CANCEL_PENDING",
                 "filled" => "FILLED",
@@ -99,10 +100,10 @@ fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
                 "rejected" => "REJECTED",
                 _ => "SUBMITTED",
             };
-            let exp = if tv(&row, "expiresAt") { row["expiresAt"].clone() } else { Value::Null };
-            json!({"soOrdersExtendedOrder": {"status": ws, "filledQuantity": row.get("filledQty").cloned().unwrap_or(Value::Null),
-                "averageFilledPrice": row.get("avgFill").cloned().unwrap_or(Value::Null), "submittedQuantity": row.get("quantity").cloned().unwrap_or(Value::Null),
-                "timeInForce": row.get("tif").cloned().unwrap_or(Value::Null), "expiredAtUtc": exp}})
+            let exp = if !row.expires_at.is_empty() { json!(row.expires_at) } else { Value::Null };
+            json!({"soOrdersExtendedOrder": {"status": ws, "filledQuantity": row.filled_qty,
+                "averageFilledPrice": row.avg_fill, "submittedQuantity": row.quantity,
+                "timeInForce": row.tif, "expiredAtUtc": exp}})
         }
         other => panic!("{}", other),
     })
@@ -116,7 +117,7 @@ fn live(on: bool) {
 fn setup() -> MutexGuard<'static, ()> {
     let g = crate::tests_common::guard();
     seam::reset();
-    bracket_seam::reset();
+    bracket_seam::reset(crate::tests_common::app_ref());
     lk(&SENT).clear();
     lk(&REJECTIONS).clear();
     let c = db();
@@ -124,23 +125,24 @@ fn setup() -> MutexGuard<'static, ()> {
     for t in ["orders", "brackets", "activities", "balances", "margin", "securities", "accounts"] {
         c.execute(&format!("DELETE FROM {}", t), []).unwrap();
     }
-    tb::replace_accounts(&c, json!([
+    tb::replace_accounts(&c, &typed_rows(&json!([
         {"id": "acct-margin", "nickname": "Trading", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "CAD", "status": "open", "type": "non_registered"},
         {"id": "acct-tfsa", "nickname": "TFSA", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa", "marginAccountId": "acct-margin"},
         {"id": "acct-crypto", "nickname": "Crypto", "unifiedAccountType": "SELF_DIRECTED_CRYPTO", "currency": "CAD", "status": "open", "type": "crypto"},
         {"id": "acct-old", "nickname": "Old", "unifiedAccountType": "SELF_DIRECTED_RRSP", "currency": "CAD", "status": "closed", "type": "rrsp"},
         {"id": "acct-managed", "nickname": "Managed", "unifiedAccountType": "MANAGED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa"}
-    ]).as_array().unwrap()).unwrap();
-    bagholder_store::admin::upsert_securities(&c, json!([
+    ]))).unwrap();
+    bagholder_store::admin::upsert_securities(&c, &typed_rows(&json!([
         {"id": "sec-o-1", "symbol": "QNC", "name": "", "primaryExchange": "", "primaryMic": "", "currency": "USD", "underlyingId": "sec-s-us"},
         {"id": "sec-s-us", "symbol": "QNC", "name": "Quantum Emotion Corp", "primaryExchange": "NYSE", "primaryMic": "XNYS", "currency": "USD", "underlyingId": null},
         {"id": "sec-s-ca", "symbol": "QNC.TO", "name": "Quantum Emotion Corp", "primaryExchange": "TSX-V", "primaryMic": "XTSX", "currency": "CAD", "underlyingId": null}
-    ]).as_array().unwrap(), &now()).unwrap();
-    tb::replace_margin(&c, json!([{"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"}]).as_array().unwrap(), &now()).unwrap();
-    tb::replace_balances(&c, json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]).as_array().unwrap()).unwrap();
+    ])), &now()).unwrap();
+    tb::replace_margin(&c, &typed_rows(&json!([{"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"}])), &now()).unwrap();
+    tb::replace_balances(&c, &typed_rows(&json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]))).unwrap();
     tb::set_meta(&c, "balances_read_at", "").unwrap();
+    crate::tests_common::order_accounts_in_book();
     *lk(&seam::GQL) = Some(Arc::new(fake));
-    *lk(&seam::SESSION) = Some(Some(json!({"access_token": "t"})));
+    *lk(&seam::SESSION) = Some(Some(serde_json::from_value(json!({"access_token": "t"})).unwrap()));
     live(true);
     g
 }
@@ -155,9 +157,9 @@ fn ticket(over: Value) -> Value {
     body
 }
 
-fn entry(over: Value) -> (String, Value) {
-    let r = od::place_order(&ticket(over));
-    assert!(tv(&r, "ok"), "{}", r);
+fn entry(over: Value) -> (String, so::Bracket) {
+    let r = od::place_order(&app(), &ticket(over));
+    assert!(tv(&r, "ok"), "{:?}", r);
     (sv(&r, "id"), get_bracket(&sv(&r, "bracketId")))
 }
 
@@ -168,9 +170,9 @@ fn q(last: f64, bid: Option<f64>, status: &str) -> Value {
 fn tick(quote: Option<Value>) -> Value {
     let mut m = HashMap::new();
     if let Some(v) = quote {
-        m.insert("sec-s-us".to_string(), v);
+        m.insert("sec-s-us".to_string(), serde_json::from_value(v).unwrap());
     }
-    od::bracket_tick(Some(m))
+    od::bracket_tick(&app(), Some(m))
 }
 
 fn t0() {
@@ -211,7 +213,7 @@ fn test_a_ticket_with_brackets_makes_a_waiting_bracket() {
     let (oid, b) = entry(json!({}));
     assert_eq!((sv(&b, "orderId"), sv(&b, "status"), sv(&b, "slKind"), fv(&b, "slPrice"), fv(&b, "tpPrice"), fv(&b, "quantity"), sv(&b, "tif")),
         (oid, "waiting".into(), "stop".into(), 157.13, 181.94, 25.0, "UNTIL_CANCEL".into()));
-    assert!(so::bracket_for_order(&db(), "nope").unwrap().is_none());
+    assert!(so::typed::bracket_for_order(&db(), "nope").unwrap().is_none());
     t0();
     assert_eq!(sv(&get_bracket(&sv(&b, "id")), "status"), "waiting", "an unfilled entry leaves the bracket waiting");
 }
@@ -224,7 +226,7 @@ fn test_the_fill_arms_the_bracket_and_places_the_stop_as_wealthsimples_own_order
     clear();
     t0();
     let b = get_bracket(&sv(&b, "id"));
-    assert_eq!((sv(&b, "status"), sv(&b, "slMode"), b["slNative"].clone()), ("armed".into(), "native".into(), json!(true)));
+    assert_eq!((sv(&b, "status"), sv(&b, "slMode"), b.sl_native), ("armed".into(), "native".into(), true));
     assert!(sv(&b, "slOrderId").starts_with("order-"));
     let c = creates();
     assert_eq!(c.len(), 1);
@@ -457,6 +459,23 @@ fn test_a_price_changed_by_hand_at_wealthsimple_is_adopted() {
 }
 
 #[test]
+fn test_a_quantity_changed_by_hand_at_wealthsimple_is_adopted() {
+    let _g = setup();
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let b = get_bracket(&sv(&b, "id"));
+    assert_eq!(fv(&b, "quantity"), 25.0);
+    update_order(&sv(&b, "slOrderId"), json!({"quantity": 18.0}));
+    clear();
+    t0();
+    let after = get_bracket(&sv(&b, "id"));
+    assert_eq!(fv(&after, "quantity"), 18.0, "the bracket follows the quantity set by hand");
+    assert_eq!(sv(&after, "status"), "armed", "and keeps guarding it");
+    assert!(creates().is_empty(), "nothing is placed again for it");
+}
+
+#[test]
 fn test_an_ending_is_confirmed_before_the_bracket_is_done() {
     let _g = setup();
     let (oid, b) = entry(json!({}));
@@ -465,7 +484,7 @@ fn test_an_ending_is_confirmed_before_the_bracket_is_done() {
     let id = sv(&b, "id");
     let stop = sv(&get_bracket(&id), "slOrderId");
     *lk(&bracket_seam::CANCEL_ORDER) = Some(json!({"ok": false, "error": "Wealthsimple is busy"}));
-    od::cancel_bracket(&id);
+    od::cancel_bracket(&app(), &id);
     *lk(&bracket_seam::CANCEL_ORDER) = None;
     let b = get_bracket(&id);
     assert_eq!((sv(&b, "status"), sv(&b, "outcome")), ("closing".into(), "cancelled by the user".into()));
@@ -493,8 +512,10 @@ fn test_an_exit_resting_with_no_bracket_holding_it_is_swept() {
     assert_eq!(cancels(), vec![stop]);
 }
 
+/// SPEC §4, Nothing left behind: a sale from the ticket on shares a bracket holds
+/// ends the bracket and goes out only once Wealthsimple confirms its stop cancelled.
 #[test]
-fn test_a_sell_from_the_ticket_ends_the_bracket_on_those_shares_first() {
+fn test_a_sell_from_the_ticket_waits_for_the_stops_cancel_to_be_confirmed() {
     let _g = setup();
     let (oid, b) = entry(json!({}));
     filled(&oid);
@@ -502,15 +523,19 @@ fn test_a_sell_from_the_ticket_ends_the_bracket_on_those_shares_first() {
     let id = sv(&b, "id");
     let stop = sv(&get_bracket(&id), "slOrderId");
     clear();
-    let r = od::place_order(&ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
-    assert!(tv(&r, "ok"), "{}", r);
-    let o = ops();
-    assert_eq!(o[0], "SoOrdersOrderCancel", "the resting stop goes first");
-    assert_eq!(o[o.len() - 1], "SoOrdersOrderCreate", "then the sell");
-    assert!(o.iter().position(|x| x == "SoOrdersOrderCancel") < o.iter().position(|x| x == "SoOrdersOrderCreate"));
+    // Wealthsimple has not confirmed the cancel: nothing is sold, and the refusal says so
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
+    assert!(!tv(&r, "ok"), "{:?}", r);
+    assert!(sv(&r, "error").starts_with("Nothing was sold"), "{:?}", r);
+    assert!(ops().iter().all(|x| x != "SoOrdersOrderCreate"), "no sell goes out while the stop may still rest: {:?}", ops());
+    assert_eq!(ops()[0], "SoOrdersOrderCancel", "the resting stop's cancel is sent");
     assert_eq!(sv(&get_bracket(&id), "outcome"), "sold from the ticket");
-    assert!(["closing", "done"].contains(&sv(&get_bracket(&id), "status").as_str()));
-    assert_eq!(sv(&get_order(&stop), "status"), "cancelling");
+    // confirmed: the same sale goes out
+    update_order(&stop, json!({"status": "cancelled"}));
+    clear();
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
+    assert!(tv(&r, "ok"), "{:?}", r);
+    assert_eq!(ops().last().map(String::as_str), Some("SoOrdersOrderCreate"));
 }
 
 #[test]
@@ -521,11 +546,17 @@ fn test_selling_part_of_the_shares_keeps_the_bracket_on_the_rest() {
     t0();
     let id = sv(&b, "id");
     let first = sv(&get_bracket(&id), "slOrderId");
-    let r = od::place_order(&ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
-    assert!(tv(&r, "ok"), "{}", r);
+    // the stop's cancel not confirmed: nothing sold, and the bracket guards all 25 again
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
+    assert!(!tv(&r, "ok"), "{:?}", r);
+    assert_eq!(fv(&get_bracket(&id), "quantity"), 25.0, "a sale held back takes no shares out of the bracket");
+    // confirmed: the sale goes out and the bracket keeps the fifteen left
+    update_order(&first, json!({"status": "cancelled"}));
+    clear();
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
+    assert!(tv(&r, "ok"), "{:?}", r);
     let b = get_bracket(&id);
     assert_eq!((sv(&b, "status"), fv(&b, "quantity"), sv(&b, "slOrderId")), ("armed".into(), 15.0, "".into()));
-    update_order(&first, json!({"status": "cancelled"}));
     clear();
     t0();
     let c = creates();
@@ -598,11 +629,9 @@ fn test_the_balances_feed_never_touches_a_bracket_with_a_resting_order() {
     filled(&oid);
     t0();
     let id = sv(&b, "id");
-    replace_balances(json!([{"accountId": "acct-margin", "securityId": "sec-other", "quantity": 1}]));
-    update_bracket(&id, json!({"armedAt": "2020-01-01T00:00:00Z", "seenHeld": true}));
+    update_bracket(&id, json!({"armedAt": "2020-01-01T00:00:00Z", "seenHeld": true, "missedAt": "2020-01-02T00:00:00Z"}));
     clear();
-    for stamp in ["2099-01-01T00:00:00Z", "2099-01-01T01:00:00Z", "2099-01-01T02:00:00Z"] {
-        set_meta("balances_read_at", stamp);
+    for _ in 0..3 {
         t0();
     }
     let b = get_bracket(&id);
@@ -611,56 +640,39 @@ fn test_the_balances_feed_never_touches_a_bracket_with_a_resting_order() {
     assert!(sent_empty(), "nothing is cancelled on the balances' word");
 }
 
-fn watched_only() -> (String, Value) {
-    let (oid, b) = entry(json!({}));
-    filled(&oid);
-    *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
-    t0();
-    *lk(&bracket_seam::STOP_ALLOWED) = None;
-    let b = get_bracket(&sv(&b, "id"));
-    assert_eq!((sv(&b, "status"), sv(&b, "slMode"), sv(&b, "slOrderId")), ("armed".into(), "watched".into(), "".into()));
-    update_bracket(&sv(&b, "id"), json!({"armedAt": "2020-01-01T00:00:00Z"}));
-    (oid, b)
+/// SPEC §4, Brackets after the fill: Wealthsimple refusing an exit for shares that
+/// are not there ends the bracket, the reason on the leg; nothing is tried again.
+#[test]
+fn test_an_exit_refused_for_shares_that_are_not_there_ends_the_bracket_with_the_reason() {
+    for code in ["BALANCE_INSUFFICIENT_SHARES", "NOT_ENOUGH_SHARES", "balance_insufficient_shares"] {
+        let _g = setup();
+        let (oid, b) = entry(json!({}));
+        filled(&oid);
+        *lk(&REJECTIONS) = vec![format!("{code}|You do not have enough shares")];
+        t0();
+        let id = sv(&b, "id");
+        let b = get_bracket(&id);
+        assert!(["done", "closing"].contains(&sv(&b, "status").as_str()), "{code}: {:?}", b);
+        assert_eq!(sv(&b, "outcome"), "the shares are not there");
+        assert!(sv(&b, "error").contains("You do not have enough shares"), "the reason is on the leg");
+        clear();
+        t0();
+        assert!(creates().is_empty(), "{code}: nothing is placed again");
+    }
 }
 
+/// SPEC §4, Trailing: the resting stop moves whenever the new level is at least half
+/// a percent above the current one, and by at least a cent.
 #[test]
-fn test_a_watched_only_bracket_ends_on_the_second_balance_read_without_the_position() {
-    let _g = setup();
-    let (_oid, b) = watched_only();
-    let id = sv(&b, "id");
-    replace_balances(json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]));
-    set_meta("balances_read_at", "2099-01-01T00:00:00Z");
-    *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
-    t0();
-    assert!(tv(&get_bracket(&id), "seenHeld"));
-    replace_balances(json!([{"accountId": "acct-margin", "securityId": "sec-other", "quantity": 1}]));
-    set_meta("balances_read_at", "2099-01-01T01:00:00Z");
-    t0();
-    let b = get_bracket(&id);
-    assert_eq!((sv(&b, "status"), sv(&b, "missedAt")), ("armed".into(), "2099-01-01T01:00:00Z".into()), "one read never ends it");
-    t0();
-    assert_eq!(sv(&get_bracket(&id), "status"), "armed", "the same read again is still one read");
-    set_meta("balances_read_at", "2099-01-01T02:00:00Z");
-    t0();
-    *lk(&bracket_seam::STOP_ALLOWED) = None;
-    let b = get_bracket(&id);
-    assert_eq!(sv(&b, "status"), "done");
-    assert!(sv(&b, "outcome").contains("two balance reads"), "{}", sv(&b, "outcome"));
-}
-
-#[test]
-fn test_a_watched_only_bracket_ends_when_the_activity_feed_shows_the_sale() {
-    let _g = setup();
-    let (_oid, b) = watched_only();
-    let act = json!({"id": "act-sale", "transactionDate": "2026-09-10", "occurredAt": "2026-09-10T15:00:00Z", "accountId": "acct-margin", "securityId": "sec-s-us", "symbol": "QNC",
-        "quantity": 25, "unitPrice": 170.0, "netCashAmount": 4250.0, "activityType": "Trade", "activitySubType": "SELL", "source": "csv"});
-    bagholder_store::activities::insert_activity(&db(), &act, None, None, &crate::app::uuid4).unwrap();
-    *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
-    t0();
-    *lk(&bracket_seam::STOP_ALLOWED) = None;
-    let b = get_bracket(&sv(&b, "id"));
-    assert_eq!(sv(&b, "status"), "done");
-    assert!(sv(&b, "outcome").contains("sold"), "{}", sv(&b, "outcome"));
+fn test_a_trailing_stop_moves_at_half_a_percent_or_more_and_not_below() {
+    use crate::orders::trail_moves;
+    for current in [0.5, 1.0, 1.99, 2.0, 12.34, 157.13, 999.99, 4321.0] {
+        let step = f64::max(0.01, current * 0.005);
+        assert!(trail_moves(current + step, current), "exactly the step from {current}");
+        assert!(trail_moves(current + step * 1.5, current), "past the step from {current}");
+        assert!(!trail_moves(current + step * 0.9, current), "short of the step from {current}");
+        assert!(!trail_moves(current, current), "no move to the same level");
+    }
 }
 
 #[test]
@@ -678,12 +690,12 @@ fn test_a_rejected_exit_is_tried_again_spaced_out_for_as_long_as_the_bracket_liv
     t0();
     assert!(creates().is_empty(), "no second try within the minute");
     for n in 2..7 {
-        so::update_bracket(&db(), &id, &json!({"error": "Market closed"}), "2020-01-01T00:00:00Z").unwrap();
+        so::typed::update_bracket(&db(), &id, &so::BracketPatch { error: Some("Market closed".into()), ..Default::default() }, "2020-01-01T00:00:00Z").unwrap();
         t0();
         let b = get_bracket(&id);
         assert_eq!((sv(&b, "status"), fv(&b, "attempts")), ("armed".into(), n as f64), "attempt {}, still armed", n);
     }
-    so::update_bracket(&db(), &id, &json!({"error": "Market closed"}), "2020-01-01T00:00:00Z").unwrap();
+    so::typed::update_bracket(&db(), &id, &so::BracketPatch { error: Some("Market closed".into()), ..Default::default() }, "2020-01-01T00:00:00Z").unwrap();
     t0();
     let b = get_bracket(&id);
     assert!(tv(&b, "slOrderId"));
@@ -694,11 +706,11 @@ fn test_a_rejected_exit_is_tried_again_spaced_out_for_as_long_as_the_bracket_liv
 fn test_with_orders_off_nothing_is_placed_and_the_line_is_printed_once() {
     let _g = setup();
     live(false);
-    let r = od::place_order(&ticket(json!({})));
+    let r = od::place_order(&app(), &ticket(json!({})));
     let (oid, bid) = (sv(&r, "id"), sv(&r, "bracketId"));
     filled(&oid);
-    od::bracket_tick(Some(HashMap::new()));
-    od::bracket_tick(Some(HashMap::new()));
+    od::bracket_tick(&app(), Some(HashMap::new()));
+    od::bracket_tick(&app(), Some(HashMap::new()));
     let b = get_bracket(&bid);
     assert_eq!((sv(&b, "status"), sv(&b, "slOrderId")), ("armed".into(), "".into()));
     assert!(creates().is_empty());
@@ -714,7 +726,7 @@ fn test_cancel_bracket_cancels_its_resting_orders_and_stops_watching() {
     t0();
     let id = sv(&b, "id");
     clear();
-    let r = od::cancel_bracket(&id);
+    let r = od::cancel_bracket(&app(), &id);
     assert!(tv(&r, "ok"));
     assert_eq!(ops(), vec!["SoOrdersOrderCancel"]);
     let b = get_bracket(&id);
@@ -728,8 +740,187 @@ fn test_cancel_bracket_cancels_its_resting_orders_and_stops_watching() {
     t0();
     let b = get_bracket(&id);
     assert_eq!(sv(&b, "status"), "done", "done once Wealthsimple confirms the cancel");
-    assert!(sv(&od::cancel_bracket(&id), "error").contains("not live"));
-    assert_eq!(sv(&od::cancel_bracket("nope"), "error"), "No such bracket.");
-    let ids: Vec<String> = od::orders_payload(false)["brackets"].as_array().unwrap().iter().map(|x| sv(x, "id")).collect();
+    assert!(sv(&od::cancel_bracket(&app(), &id), "error").contains("not live"));
+    assert_eq!(sv(&od::cancel_bracket(&app(), "nope"), "error"), "No such bracket.");
+    let ids: Vec<String> = od::orders_payload(&app(), false).brackets.iter().map(|b| b.id.clone()).collect();
     assert_eq!(ids, vec![id]);
+}
+
+// --- a resting exit is placed again before Wealthsimple lets it lapse ---
+
+/// The time `days` from now, as Wealthsimple writes one.
+fn in_days(days: f64) -> String {
+    let t = (crate::app::now_unix() + days * 86400.0) as i64;
+    let (y, m, d) = bagholder_model::dates::from_days(t.div_euclid(86400));
+    let s = t.rem_euclid(86400);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z", y, m, d, s / 3600, s % 3600 / 60, s % 60)
+}
+
+/// An armed bracket whose stop rests at Wealthsimple, lapsing in `days`.
+fn armed_with_stop_lapsing_in(days: f64) -> (so::Bracket, String) {
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let b = get_bracket(&sv(&b, "id"));
+    let stop = sv(&b, "slOrderId");
+    update_order(&stop, json!({"expiresAt": in_days(days)}));
+    clear();
+    (b, stop)
+}
+
+#[test]
+fn test_a_stop_far_from_lapsing_is_left_alone() {
+    let _g = setup();
+    let (b, stop) = armed_with_stop_lapsing_in(30.0);
+    tick(Some(q(170.0, None, "CLOSED")));
+    tq(170.0, 170.0);
+    assert!(ops().is_empty(), "{:?}", ops());
+    assert_eq!(sv(&get_bracket(&sv(&b, "id")), "slOrderId"), stop);
+}
+
+#[test]
+fn test_a_stop_within_a_week_of_lapsing_is_rolled_while_the_market_is_closed_not_while_it_trades() {
+    let _g = setup();
+    let (b, stop) = armed_with_stop_lapsing_in(5.0);
+    tq(170.0, 170.0);
+    assert!(ops().is_empty(), "with days in hand, the stop is not taken off a trading market: {:?}", ops());
+    tick(Some(q(170.0, None, "CLOSED")));
+    assert_eq!(cancels(), vec![stop.clone()]);
+    let after = get_bracket(&sv(&b, "id"));
+    assert_eq!((sv(&after, "status"), sv(&after, "slOrderId"), fv(&after, "slPrice")), ("armed".into(), "".into(), 157.13));
+    assert!(creates().is_empty(), "not placed again while the old one's cancel is still in the air");
+    // Wealthsimple confirms the cancel: the stop goes back at the same level, and the bracket stands
+    update_order(&stop, json!({"status": "cancelled"}));
+    clear();
+    tick(Some(q(170.0, None, "CLOSED")));
+    let c = creates();
+    assert_eq!(c.len(), 1, "{:?}", ops());
+    assert_eq!((sv(&c[0], "executionType"), c[0]["stopPrice"].as_f64()), ("STOP".into(), Some(157.13)));
+    let again = get_bracket(&sv(&b, "id"));
+    assert_eq!(sv(&again, "status"), "armed");
+    assert!(sv(&again, "slOrderId").starts_with("order-") && sv(&again, "slOrderId") != stop);
+}
+
+#[test]
+fn test_a_stop_within_two_days_of_lapsing_is_rolled_whatever_the_market_is_doing() {
+    let _g = setup();
+    let (_b, stop) = armed_with_stop_lapsing_in(1.5);
+    tq(170.0, 170.0);
+    assert_eq!(cancels(), vec![stop]);
+}
+
+#[test]
+fn test_a_good_till_cancelled_stop_with_no_expiry_given_lapses_ninety_days_from_when_it_was_sent() {
+    let _g = setup();
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let stop = sv(&get_bracket(&sv(&b, "id")), "slOrderId");
+    // sent eighty-nine days ago, and Wealthsimple has not said when it lapses
+    update_order(&stop, json!({"submittedAt": in_days(-89.0), "expiresAt": ""}));
+    clear();
+    tq(170.0, 170.0);
+    assert_eq!(cancels(), vec![stop]);
+}
+
+#[test]
+fn test_a_resting_target_is_rolled_too_and_placed_again() {
+    let _g = setup();
+    let (oid, b) = entry(json!({"stopLoss": null}));
+    filled(&oid);
+    t0();
+    tq(182.0, 182.0);
+    let placed = get_bracket(&sv(&b, "id"));
+    assert_eq!(sv(&placed, "status"), "target_placed");
+    let target = sv(&placed, "tpOrderId");
+    update_order(&target, json!({"expiresAt": in_days(1.0)}));
+    clear();
+    tq(181.0, 181.0);
+    assert_eq!(cancels(), vec![target.clone()]);
+    assert_eq!(sv(&get_bracket(&sv(&b, "id")), "tpOrderId"), "");
+    update_order(&target, json!({"status": "cancelled"}));
+    clear();
+    tq(181.0, 181.0);
+    let c = creates();
+    assert_eq!(c.len(), 1, "{:?}", ops());
+    assert_eq!((sv(&c[0], "executionType"), c[0]["limitPrice"].as_f64()), ("LIMIT".into(), Some(181.94)));
+    assert_eq!(sv(&get_bracket(&sv(&b, "id")), "status"), "target_placed");
+}
+
+/// SPEC §4, Brackets after the fill: every live bracket is checked while the app
+/// runs connected; a sync in progress does not pause the checks.
+#[test]
+fn test_the_order_and_bracket_checks_run_while_a_sync_does() {
+    let _g = setup();
+    let a = app();
+    let set = |connected: bool, syncing: bool| {
+        let mut st = a.state.lock().unwrap();
+        st.connected = connected;
+        st.syncing = syncing;
+    };
+    for syncing in [false, true] {
+        set(true, syncing);
+        assert!(crate::orders::orders_can_run(&a), "connected, syncing {syncing}: the checks run");
+        set(false, syncing);
+        assert!(!crate::orders::orders_can_run(&a), "not connected: nothing to check with");
+    }
+    set(true, false);
+}
+
+/// SPEC §4, Orders, Refresh: with orders off (`BAGHOLDER_DRY_ORDERS=1`) a
+/// bracket's Save, a leg's Remove and the bracket's Cancel answer `Orders are off`,
+/// and neither the bracket nor Wealthsimple is touched, whatever the leg.
+#[test]
+fn test_with_orders_off_a_brackets_changes_answer_orders_are_off_and_change_nothing() {
+    let _g = setup();
+    let (oid, b) = entry(json!({"stopLoss": {"kind": "trail", "trail": 5, "trailUnit": "pct"}}));
+    filled(&oid);
+    t0();
+    let id = sv(&b, "id");
+    let before = get_bracket(&id);
+    assert!(!before.sl_order_id.is_empty(), "the stop rests at Wealthsimple");
+    live(false);
+    clear();
+    let tries: Vec<(&str, od::OrderActionAnswer)> = vec![
+        ("stop moved", od::adjust_bracket(&app(), &id, "sl", Some(150.0), None, false)),
+        ("trail changed", od::adjust_bracket(&app(), &id, "sl", None, Some(8.0), false)),
+        ("target moved", od::adjust_bracket(&app(), &id, "tp", Some(190.0), None, false)),
+        ("stop removed", od::adjust_bracket(&app(), &id, "sl", None, None, true)),
+        ("target removed", od::adjust_bracket(&app(), &id, "tp", None, None, true)),
+        ("bracket cancelled", od::cancel_bracket(&app(), &id)),
+    ];
+    for (what, r) in tries {
+        assert!(!r.ok, "{what}: refused");
+        assert_eq!(r.error.as_deref(), Some(od::ORDERS_OFF), "{what}");
+    }
+    assert!(sent_empty(), "nothing reached Wealthsimple: {:?}", ops());
+    assert_eq!(get_bracket(&id), before, "the bracket is as it was");
+    live(true);
+}
+
+/// SPEC §4, Submit: every submit is a row, written before anything is sent. With no
+/// session nothing can be sent: the row is written with that failure, the answer
+/// names it, and a sale touches no bracket on the shares it would have sold.
+#[test]
+fn test_a_submit_with_no_session_is_a_row_with_its_failure_and_touches_no_bracket() {
+    let _g = setup();
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let armed = get_bracket(&sv(&b, "id"));
+    assert_eq!(armed.status, so::BracketStatus::Armed);
+    *lk(&seam::SESSION) = Some(None);
+    for side in ["BUY", "SELL"] {
+        clear();
+        let before = list_orders().len();
+        let r = od::place_order(&app(), &ticket(json!({"side": side, "stopLoss": null, "takeProfit": null})));
+        assert!(!r.ok, "{side}");
+        assert_eq!(r.error.as_deref(), Some("Not connected."), "{side}");
+        let id = r.id.clone().expect("the answer names the row it wrote");
+        let row = get_order(&id);
+        assert_eq!((row.status, row.error.as_str(), row.side.as_str()), (so::OrderStatus::Failed, "Not connected.", side));
+        assert_eq!(list_orders().len(), before + 1, "{side}: one row, this one");
+        assert!(sent_empty(), "{side}: nothing sent: {:?}", ops());
+    }
+    assert_eq!(get_bracket(&sv(&b, "id")), armed, "the bracket on those shares is untouched");
 }

@@ -1,0 +1,85 @@
+[
+  {
+    "name": "a back-dated opening leaves the trade its id",
+    "spec": "docs/architecture.md §5: a trade's id survives a back-dated row arriving; docs/plans/stage-2-engine.md, trade identity",
+    "working": ["trade T1 is anchored on the Jan 5 purchase; a Jan 3 purchase arrives later and becomes the round trip's opening: the round trip keeps T1, and no new trade is asked for"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-03", "at": "2026-01-03T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t3", "account": "A", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-20", "cash": "260"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t2", "instrument": "X"}],
+    "expect": {"needs_trade": 0, "trade_ids": {"t1": "T1"}, "trades": [{"opened_by": "t1", "pnl": "60.00"}]}
+  },
+  {
+    "name": "a correction that joins two round trips keeps the earlier opening's id and names the other as joined",
+    "spec": "docs/plans/stage-2-engine.md, trade identity: when a correction joins two round trips, the trade on the earlier opening keeps the id",
+    "working": ["T1 on the Jan 5 purchase, T2 on the Jan 12 purchase; the Jan 10 sale is now 5, not 10, so the holding never went flat: one round trip, keeping T1; T2 joined into it"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-5", "cash": "60"},
+      {"id": "t3", "account": "A", "day": "2026-01-12", "at": "2026-01-12T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t4", "account": "A", "day": "2026-01-20", "at": "2026-01-20T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-15", "cash": "180"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t1", "instrument": "X"}, {"id": "T2", "opened_by": "t3", "instrument": "X"}],
+    "expect": {"trade_count": 1, "joined": [["T2", "T1"]], "trade_ids": {"t1": "T1"}}
+  },
+  {
+    "name": "a round trip split in two keeps the id on the part holding the anchor and asks for one trade for the other",
+    "spec": "docs/plans/stage-2-engine.md, trade identity",
+    "working": ["T1 on the Jan 5 purchase; the holding went flat on Jan 10 and opened again on Jan 12: two round trips, the first keeping T1, the second needing a trade"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "120"},
+      {"id": "t3", "account": "A", "day": "2026-01-12", "at": "2026-01-12T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t4", "account": "A", "day": "2026-01-20", "at": "2026-01-20T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "90"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t1", "instrument": "X"}],
+    "expect": {"trade_count": 2, "needs_trade": 1, "trade_ids": {"t1": "T1"}}
+  },
+  {
+    "name": "an assignment's delivery is a round trip of its own, never the contract's",
+    "spec": "docs/plans/stage-2-engine.md, trade identity: a round trip's key is its opening transaction and instrument",
+    "working": ["T1 on the put sold to open; its assignment opens the shares' round trip, keyed by the assignment and the shares: it asks for a trade of its own"],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "8", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "P1", "qty": "-1", "cash": "60"},
+      {"id": "t2", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "P1", "qty": "1", "cash": "-800"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t1", "instrument": "P1"}],
+    "expect": {"needs_trade": 1, "trade_ids": {"t1": "T1"}}
+  },
+  {
+    "name": "a group shows its members' round trips as one trade",
+    "spec": "SPEC.md §2 Trade, grade, thesis, tags: journal entries keyed by the trade id; docs/plans/stage-2-engine.md: a group shows its members as one trade",
+    "working": ["two round trips, P&L 20 and −10, grouped by the person: one trade of 10"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "120"},
+      {"id": "t3", "account": "A", "day": "2026-01-12", "at": "2026-01-12T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t4", "account": "A", "day": "2026-01-20", "at": "2026-01-20T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "90"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t1", "instrument": "X"}, {"id": "T2", "opened_by": "t3", "instrument": "X"}],
+    "groups": [{"id": "G", "members": ["T1", "T2"]}],
+    "expect": {"trade_count": 1, "kpi": {"realized": "10.00", "count": 1}}
+  }
+]

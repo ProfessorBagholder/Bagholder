@@ -1,0 +1,12 @@
+# A selection of the fields Wealthsimple's own CreditCardAccount fragment asks (web app release 0.3.668812): its balance.
+query FetchCreditCardAccount($id: ID!) {
+  creditCardAccount(id: $id) {
+    id
+    status
+    balance {
+      current
+      outstanding
+      pending
+    }
+  }
+}

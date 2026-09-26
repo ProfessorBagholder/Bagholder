@@ -23,41 +23,41 @@
         "count": 0,
         "label": "2024",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2025",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2026 YTD",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "All time",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "Last 12 months",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
-        "book": 0,
-        "earned": 0,
+        "book": 0.0,
+        "earned": 0.0,
         "label": "Yield on cost",
         "projected": 0.0,
         "yield": null
       }
     ],
-    "cashflowTotal": 0,
+    "cashflowTotal": 0.0,
     "equity": {
       "annualized": {
         "count": 0,
@@ -80,22 +80,22 @@
         {
           "grade": "A",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "B",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "C",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "F",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         }
       ],
       "graded": 0,
@@ -108,7 +108,7 @@
       "breakeven": 0,
       "count": 1,
       "expectancy": 67.5,
-      "grossLoss": 0,
+      "grossLoss": 0.0,
       "grossWin": 67.5,
       "losses": 0,
       "profitFactor": null,
@@ -155,13 +155,13 @@
       ],
       "availableMargin": null,
       "availableMarginUnavailable": [],
-      "cash": 0,
+      "cash": 0.0,
       "cashPct": null,
       "costBasis": 675.0,
       "dayChange": null,
       "dayChangePct": null,
       "hasMargin": false,
-      "marginUsed": 0,
+      "marginUsed": 0.0,
       "marginUsedBy": {},
       "marginUsedPct": 0.0,
       "marketValue": 675.0,

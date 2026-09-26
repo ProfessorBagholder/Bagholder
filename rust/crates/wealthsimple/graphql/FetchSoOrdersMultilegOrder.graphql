@@ -1,0 +1,44 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchSoOrdersMultilegOrder($branchId: String!, $orderBatchId: String!) {
+  soOrdersMultilegOrder(branchId: $branchId, orderBatchId: $orderBatchId) {
+    ...SoOrdersMultilegOrder
+  }
+}
+fragment SoOrdersMultilegOrder on SoOrders_MultilegOrderResponse {
+  orderBatchId
+  externalId
+  createdAtUtc
+  submittedAtUtc
+  updatedAtUtc
+  status
+  optionStrategy
+  limitPrice
+  timeInForce
+  totalFee
+  filledExchangeRateWithSpread
+  orderCurrency
+  securityCurrency
+  legs {
+    ...SoOrdersOrderLeg
+  }
+}
+fragment SoOrdersOrderLeg on SoOrders_OrderLeg {
+  orderId
+  externalId
+  securityId
+  symbol
+  side
+  openClose
+  status
+  submittedQuantity
+  filledQuantity
+  averageFillPrice {
+    amount
+    currency
+  }
+  filledNetValue
+  orderCurrency
+  createdAtUtc
+  firstFilledAtUtc
+  lastFilledAtUtc
+}

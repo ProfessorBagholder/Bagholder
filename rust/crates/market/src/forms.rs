@@ -8,10 +8,10 @@
 //! a value that is not found is left out of the sentence rather than filled in.
 
 use regex::Regex;
-use serde_json::{json, Value};
 use std::sync::OnceLock;
 
 use bagholder_model::textrules::{parse_float, parse_int};
+use crate::disclosures::Enrichment;
 
 fn marks() -> &'static [Regex; 8] {
     static M: OnceLock<[Regex; 8]> = OnceLock::new();
@@ -91,7 +91,7 @@ fn day(iso: &str) -> String {
 
 /// Form 45-106F1, Report of Exempt Distribution -- what
 /// was raised, from how many purchasers, on what date, under which exemption.
-pub fn read_45_106f1(text: &str) -> Value {
+pub fn read_45_106f1(text: &str) -> Option<Enrichment> {
     static AMOUNT: OnceLock<Regex> = OnceLock::new();
     static BUYERS: OnceLock<Regex> = OnceLock::new();
     static EXEMPTION: OnceLock<Regex> = OnceLock::new();
@@ -110,7 +110,7 @@ pub fn read_45_106f1(text: &str) -> Value {
         .map(|m| format!("NI 45-106 {} ({})", &m[1], bagholder_model::textrules::trim_space(&m[2]).to_lowercase()))
         .unwrap_or_default();
     if amount.is_none() && buyers.is_none() {
-        return json!({});
+        return None;
     }
     let mut parts: Vec<String> = Vec::new();
     if amount.is_some() {
@@ -128,19 +128,20 @@ pub fn read_45_106f1(text: &str) -> Value {
     }
     // the title says what the document is about, not what it is
     let subject = if amount.is_some() { format!("Exempt distribution of {}", money(amount)) } else { String::new() };
-    json!({"subject": subject, "summary": format!("{}.", head)})
+    Some(Enrichment { subject, summary: format!("{}.", head), final_: false })
 }
 
 /// The document read exactly where this module knows its form,
-/// {} otherwise. A form is claimed by the words on its own first page.
-pub fn read(text: &str) -> Value {
+/// `None` otherwise. A form is claimed by the words on its own first page.
+pub fn read(text: &str) -> Option<Enrichment> {
     static CLAIM: OnceLock<Regex> = OnceLock::new();
     let head: String = text.chars().take(4000).collect();
     if CLAIM.get_or_init(|| Regex::new(r"(?i)Form\s*45-106F1|Report of Exempt Distribution").unwrap()).is_match(&head) {
-        let out = read_45_106f1(text);
-        if out.get("summary").and_then(|s| s.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
-            return out;
+        if let Some(out) = read_45_106f1(text) {
+            if !out.summary.is_empty() {
+                return Some(out);
+            }
         }
     }
-    json!({})
+    None
 }

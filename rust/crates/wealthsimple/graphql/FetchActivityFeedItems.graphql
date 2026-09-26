@@ -1,0 +1,89 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchActivityFeedItems($first: Int, $cursor: Cursor, $condition: ActivityCondition, $orderBy: [ActivitiesOrderBy!] = OCCURRED_AT_DESC, $accountScope: AccountScope = OWN) {
+  activityFeedItems(first: $first, after: $cursor, condition: $condition, orderBy: $orderBy, accountScope: $accountScope) {
+    edges {
+      node {
+        ...Activity
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+fragment Activity on ActivityFeedItem {
+  accountId
+  aftOriginatorName
+  aftTransactionCategory
+  aftTransactionType
+  amount
+  amountSign
+  assetQuantity
+  assetSymbol
+  canonicalId
+  currency
+  eTransferEmail
+  eTransferName
+  externalCanonicalId
+  groupId
+  identityId
+  institutionName
+  occurredAt
+  p2pHandle
+  p2pMessage
+  spendMerchant
+  securityId
+  billPayCompanyName
+  billPayPayeeNickname
+  redactedExternalAccountNumber
+  opposingAccountId
+  status
+  subType
+  title
+  subtitle
+  type
+  strikePrice
+  contractType
+  expiryDate
+  chequeNumber
+  provisionalCreditAmount
+  primaryBlocker
+  productNickname
+  interestRate
+  frequency
+  counterAssetSymbol
+  rewardProgram
+  counterPartyCurrency
+  counterPartyCurrencyAmount
+  counterPartyName
+  fxRate
+  fees
+  reference
+  transferReason
+  actorIdentityId
+  actorRelationship
+  transferType
+  optionStrategy
+  rejectionReason
+  resolvable
+  withholdingTaxAmount
+  announcementDate
+  recordDate
+  payableDate
+  grossDividendRate
+  unifiedStatus
+  estimatedCompletionDate
+  realizedPnl
+  settlementIndicator
+  security {
+    id
+    logo
+    stock {
+      symbol
+    }
+    futuresDetails {
+      rootSymbol
+    }
+  }
+}

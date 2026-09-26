@@ -1,0 +1,47 @@
+{
+    "terms": {
+        "url": "https://www.bankofcanada.ca/terms/"
+    },
+    "seriesDetail": {
+        "IEXE2702": {
+            "label": "ARS_NOON",
+            "description": "Argentine peso (local)",
+            "dimension": {
+                "key": "d",
+                "name": "Date"
+            }
+        }
+    },
+    "observations": [
+        {
+            "d": "2010-01-04",
+            "IEXE2702": {
+                "v": "0.2690"
+            }
+        },
+        {
+            "d": "2010-01-05",
+            "IEXE2702": {
+                "v": "0.2689"
+            }
+        },
+        {
+            "d": "2010-01-06",
+            "IEXE2702": {
+                "v": "0.2670"
+            }
+        },
+        {
+            "d": "2010-01-07",
+            "IEXE2702": {
+                "v": "0.2678"
+            }
+        },
+        {
+            "d": "2010-01-08",
+            "IEXE2702": {
+                "v": "0.2671"
+            }
+        }
+    ]
+}

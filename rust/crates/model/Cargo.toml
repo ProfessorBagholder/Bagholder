@@ -4,16 +4,31 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+# the diff `#[derive(Diff)]` implements
+bagholder-diff = { path = "../diff" }
+# "rc": a trade's legs and fills are shared, not copied, between the model and each view of it
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-# The activity clock is America/Edmonton. The rules have to come from the
-# system's own tzdata, not a bundled copy: a bundled
-# snapshot drifts, and Alberta's move to permanent Central Standard Time in
-# 2026 is already in the system database but not in older bundles.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-tz-rs = "0.7"
+# Time zone rules (the activity clock is America/Edmonton; market hours and bars
+# use the exchange's zone). The convention Python's zoneinfo and Go's time
+# follow: the system's IANA database, kept current by the OS, and a built-in copy
+# used only where the system has none (Windows, a slim container), as Python's
+# docs recommend for cross-platform programs (the `tzdata` package). jiff reads
+# the system's first and falls back to its own (`TimeZoneDatabase::from_env`).
+jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
+ts-rs = "12.0.1"
+# the stream's differ: each wire type compared field by field, each row type by its own id
+bagholder-diff-derive = { path = "../diff-derive" }
+
+[features]
+# Tests read the rules built into jiff, not the machine's, so the same inputs give
+# the same times on every machine, however current its database is. Enabled
+# through dev-dependencies only: a release build never has it.
+pinned-tzdb = []
 
 [dev-dependencies]
+bagholder-model = { path = ".", features = ["pinned-tzdb"] }
 
 [[bin]]
 name = "make-cases"

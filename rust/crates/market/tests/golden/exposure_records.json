@@ -1,0 +1,410 @@
+{
+  "parse_ishares_csv": {
+    "asOf": "Sep 9, 2026",
+    "rows": [
+      {
+        "ticker": "RY",
+        "name": "ROYAL BANK OF CANADA",
+        "weight": 9.73,
+        "sector": "Financials",
+        "country": "Canada",
+        "exchange": "Toronto Stock Exchange",
+        "currency": "CAD",
+        "fund": false
+      },
+      {
+        "ticker": "SHOP",
+        "name": "SHOPIFY SUBORDINATE VOTING CLASS A",
+        "weight": 5.21,
+        "sector": "Information Technology",
+        "country": "Canada",
+        "exchange": "Toronto Stock Exchange",
+        "currency": "CAD",
+        "fund": false
+      },
+      {
+        "ticker": "XEF",
+        "name": "ISHARES MSCI EAFE IMI INDEX",
+        "weight": 24.37,
+        "sector": "",
+        "country": "Canada",
+        "exchange": "Toronto Stock Exchange",
+        "currency": "CAD",
+        "fund": true
+      }
+    ]
+  },
+  "parse_evolve_page": {
+    "sectors": {
+      "Information Technology": 27.86,
+      "Financials": 24.63,
+      "Communication Services": 15.72
+    },
+    "holdings": [
+      {
+        "ticker": "MSFT",
+        "name": "Microsoft Corp",
+        "weight": 4.11,
+        "sector": "Information Technology",
+        "country": "United States",
+        "exchange": "",
+        "currency": "",
+        "fund": false
+      },
+      {
+        "ticker": "RY",
+        "name": "Royal Bank of Canada",
+        "weight": 2.0,
+        "sector": "Financials",
+        "country": "Canada",
+        "exchange": "",
+        "currency": "",
+        "fund": false
+      }
+    ]
+  },
+  "parse_harvest_tables_plain": {
+    "referenceAsset": "",
+    "rows": [
+      {
+        "ticker": "IBIT",
+        "name": "iShares Bitcoin Trust ETF",
+        "weight": 130.3,
+        "sector": "Digital assets",
+        "country": "United States",
+        "exchange": "",
+        "currency": "",
+        "fund": true
+      }
+    ]
+  },
+  "parse_harvest_tables_single_stock": {
+    "referenceAsset": "PLTR",
+    "rows": [
+      {
+        "ticker": "",
+        "name": "Palantir Technologies Inc.",
+        "weight": 128.2,
+        "sector": "",
+        "country": "",
+        "exchange": "",
+        "currency": "",
+        "fund": false
+      }
+    ]
+  },
+  "parse_harvest_tables_fund_of_funds": {
+    "referenceAsset": "",
+    "rows": [
+      {
+        "ticker": "",
+        "name": "Harvest Apple Enhanced High Income Shares ETF",
+        "weight": 7.0,
+        "sector": "",
+        "country": "",
+        "exchange": "",
+        "currency": "",
+        "fund": true
+      },
+      {
+        "ticker": "",
+        "name": "Harvest NVIDIA Enhanced High Income Shares ETF",
+        "weight": 6.9,
+        "sector": "",
+        "country": "",
+        "exchange": "",
+        "currency": "",
+        "fund": true
+      }
+    ]
+  },
+  "parse_ninepoint_page": [
+    "CCHI",
+    "CCO",
+    "TSX"
+  ],
+  "parse_yahoo_summary": {
+    "sectors": {
+      "Real Estate": 2.0,
+      "Information Technology": 30.0,
+      "Financials": 20.0
+    },
+    "holdings": [
+      {
+        "ticker": "AAPL",
+        "name": "Apple Inc",
+        "weight": 7.0,
+        "sector": "",
+        "country": "",
+        "exchange": "",
+        "currency": "",
+        "fund": false
+      },
+      {
+        "ticker": "RY.TO",
+        "name": "Royal Bank of Canada",
+        "weight": 3.0,
+        "sector": "",
+        "country": "",
+        "exchange": "TSX",
+        "currency": "CAD",
+        "fund": false
+      }
+    ]
+  },
+  "parse_yahoo_summary_empty": {
+    "sectors": {},
+    "holdings": []
+  },
+  "norm_sector_examples": [
+    "Information Technology",
+    "Financials",
+    "Digital assets",
+    "",
+    "Aerospace"
+  ],
+  "norm_country_examples": [
+    "United States",
+    "South Korea"
+  ],
+  "issuer_of_examples": [
+    "vanguard",
+    "ishares",
+    "harvest",
+    "ninepoint",
+    "evolve",
+    ""
+  ],
+  "classify_share_cdr_retry": {
+    "sector": "Information Technology",
+    "industry": "Software",
+    "country": "United States",
+    "source": "TMX Money"
+  },
+  "classify_share_nothing_found": {
+    "sector": "",
+    "industry": "",
+    "country": "Canada",
+    "source": ""
+  },
+  "share_exposure_ry": {
+    "sectors": {
+      "Financials": 1.0
+    },
+    "countries": {
+      "Canada": 1.0
+    },
+    "coverage": 1.0,
+    "source": "TMX Money",
+    "asOf": "",
+    "industry": "Banking",
+    "error": ""
+  },
+  "share_exposure_cache_key_hit": true,
+  "lookthrough_spread_by_weight": {
+    "sectors": {
+      "Financials": 0.6,
+      "Information Technology": 0.2
+    },
+    "countries": {
+      "Canada": 0.8
+    },
+    "coverage": 0.8,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "lookthrough_stated_holding": {
+    "sectors": {
+      "Digital assets": 1.0
+    },
+    "countries": {
+      "United States": 1.0
+    },
+    "coverage": 1.0,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "fund_exposure_fund_of_funds": {
+    "sectors": {
+      "Financials": 0.5,
+      "Information Technology": 0.5
+    },
+    "countries": {
+      "Canada": 0.5,
+      "United States": 0.5
+    },
+    "coverage": 1.0,
+    "source": "t",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "fund_exposure_inner_fund_kept": {
+    "sectors": {
+      "Financials": 1.0
+    },
+    "countries": {
+      "Canada": 1.0
+    },
+    "coverage": 1.0,
+    "source": "t",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "fund_exposure_yahoo_fallback": {
+    "sectors": {
+      "Financials": 1.0
+    },
+    "countries": {
+      "Canada": 1.0
+    },
+    "coverage": 1.0,
+    "source": "Yahoo Finance",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "refresh_security_fund_no_source": {
+    "sectors": {},
+    "countries": {},
+    "coverage": 0.0,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "refresh_security_fund_no_source_stored": {
+    "sectors": {},
+    "countries": {},
+    "coverage": 0.0,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "refresh_security_share": {
+    "sectors": {
+      "Financials": 1.0
+    },
+    "countries": {
+      "Canada": 1.0
+    },
+    "coverage": 1.0,
+    "source": "TMX Money",
+    "asOf": "",
+    "industry": "Banking",
+    "error": ""
+  },
+  "stale_ids": [
+    "sec-s-none"
+  ],
+  "lookthrough_resolved_by_name": {
+    "sectors": {
+      "Information Technology": 1.0
+    },
+    "countries": {
+      "United States": 1.0
+    },
+    "coverage": 1.0,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
+  },
+  "store_exposure_record_ry": {
+    "sectors": {
+      "Financials": 1.0
+    },
+    "countries": {
+      "Canada": 1.0
+    },
+    "coverage": 1.0,
+    "source": "TMX Money",
+    "asOf": "",
+    "industry": "Banking",
+    "error": "",
+    "fetchedAt": "2026-09-17T09:00:00Z"
+  },
+  "store_exposure_record_missing": null,
+  "store_admin_exposures_map_keys": [
+    "fund:XEQT",
+    "share:RY:"
+  ],
+  "store_admin_exposures_map_xeqt": {
+    "sectors": {
+      "Financials": 0.3,
+      "Information Technology": 0.7
+    },
+    "countries": {
+      "Canada": 0.6,
+      "United States": 0.4
+    },
+    "coverage": 0.9,
+    "source": "Yahoo Finance",
+    "asOf": "2026-09-01",
+    "industry": "",
+    "error": "",
+    "fetchedAt": "2026-09-16T12:00:00Z"
+  },
+  "store_rows_exposures": {
+    "share:RY:": {
+      "sectors": [
+        [
+          "Financials",
+          1.0
+        ]
+      ],
+      "countries": [
+        [
+          "Canada",
+          1.0
+        ]
+      ]
+    },
+    "fund:XEQT": {
+      "sectors": [
+        [
+          "Financials",
+          0.3
+        ],
+        [
+          "Information Technology",
+          0.7
+        ]
+      ],
+      "countries": [
+        [
+          "Canada",
+          0.6
+        ],
+        [
+          "United States",
+          0.4
+        ]
+      ]
+    }
+  },
+  "store_snapshot_exposures_part_keys": [
+    "fund:XEQT",
+    "share:RY:"
+  ],
+  "store_snapshot_exposures_part_ry": {
+    "sectors": {
+      "Financials": 1.0
+    },
+    "countries": {
+      "Canada": 1.0
+    },
+    "coverage": 1.0,
+    "source": "TMX Money",
+    "asOf": "",
+    "industry": "Banking",
+    "error": "",
+    "fetchedAt": "2026-09-17T09:00:00Z"
+  }
+}
