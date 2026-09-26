@@ -117,11 +117,12 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
 }
 
 // Add a listing to the watchlist: show it at once (a stub row), then persist; the
-// server's quote and sector reach that row as a change to it.
+// server's row, under its instrument, takes the stub's place, and its quote and
+// sector reach that row as changes to it.
 export async function addWatch(m: { symbol: string; exchange: string; name: string; currency: string }): Promise<void> {
-  const mk = markets.data?.markets
+  const mk = markets.data
   if (mk && !mk.watchlist.some((w) => w.symbol === m.symbol && w.exchange === m.exchange)) {
-    mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', kind: 'Shares', positionId: null })
+    mk.watchlist.unshift({ id: '', symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, change: null, percentChange: null, sector: '', kind: 'Shares', positionId: null })
   }
   const d = await call('POST /api/watchlist/add', { body: { symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency } })
   if (!d.ok) {
@@ -130,14 +131,14 @@ export async function addWatch(m: { symbol: string; exchange: string; name: stri
   }
 }
 
-// Remove a watchlist listing: drop it at once (so the Watchlist card and the
+// Stop watching an instrument: drop its row at once (so the Watchlist card and the
 // heatmap's watchlist universe update, and nothing else does), then persist. On
 // failure, said, and the server's word taken again.
-export async function removeWatch(symbol: string, exchange: string): Promise<void> {
-  const mk = markets.data?.markets
+export async function removeWatch(id: string, symbol: string): Promise<void> {
+  const mk = markets.data
   if (!mk) return
-  mk.watchlist = mk.watchlist.filter((w) => !(w.symbol === symbol && w.exchange === exchange))
-  const d = await call('POST /api/watchlist/remove', { body: { symbol, exchange } })
+  mk.watchlist = mk.watchlist.filter((w) => w.id !== id)
+  const d = await call('POST /api/watchlist/remove', { body: { id } })
   if (!d.ok) {
     flash('Could not remove ' + symbol + ' from the watchlist: ' + (d.error || 'no answer'), 'err')
     resync()

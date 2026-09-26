@@ -32,6 +32,8 @@ function load(): Record<string, SortState> {
       const kept = { ...DEFAULTS, ...JSON.parse(raw) } as Record<string, SortState>
       // a column the table no longer has (the trailing twelve months the earlier page sorted by)
       if (kept.yoc?.key === 'ttm') kept.yoc = { ...DEFAULTS.yoc }
+      // the short-volume column's earlier name
+      if (kept.shorts?.key === 'volumePct') kept.shorts = { ...kept.shorts, key: 'ofVolume' }
       return kept
     }
   } catch {
@@ -48,6 +50,7 @@ export function toggleSort(table: string, key: string): void {
   // a list the server sorts starts again at its first rows in the new order
   if (table === 'trades') limits.trades = FIRST_ROWS
   if (table === 'cash') limits.cash = FIRST_ROWS
+  if (table === 'news') limits.news = FIRST_ROWS
   const s = sort[table]
   if (s.key === key) s.dir = s.dir === 'desc' ? 'asc' : 'desc'
   else {

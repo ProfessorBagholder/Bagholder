@@ -13,7 +13,8 @@
     v: Fig<Dec> | number
     share: number
     color: string
-    count?: number | null
+    /** A count the slice stands for, as the server states it (a share count). */
+    count?: Dec | null
   }
   let {
     items,

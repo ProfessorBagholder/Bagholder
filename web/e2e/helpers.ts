@@ -33,7 +33,7 @@ export async function figures(request: APIRequestContext, filters?: Record<strin
     view(request, 'exposure', f),
     view(request, 'markets', f),
   ])
-  return { ...book, ...dashboard, ...positions, trades: trades.trades, cashflow: cashflow.cashflow, ...exposure, markets: markets.markets }
+  return { ...book, ...dashboard, ...positions, trades: trades.trades, cashflow: cashflow.cashflow, ...exposure, markets }
 }
 
 /**
@@ -63,7 +63,7 @@ export function docsOf(model: any): Record<string, unknown> {
     trades: { total: (model.trades ?? []).length, trades: model.trades ?? [] },
     cashflow: { cashflow: model.cashflow, rowsTotal: (model.cashflow?.rows ?? []).length },
     exposure: pick('sectors', 'regions'),
-    markets: { markets: model.markets },
+    markets: model.markets,
   }
   for (const t of model.trades ?? []) out['trade:' + t.id] = { id: t.id, trade: t, position: (model.positions ?? []).find((p: { id: string }) => p.id === t.position) ?? null }
   for (const p of model.positions ?? []) out['trade:' + p.id] = { id: p.id, trade: null, position: p }
@@ -270,4 +270,45 @@ export function subUrl(tab: string, id: string): RegExp {
  */
 export function tradesInListOrder<T extends { lastDate: string }>(trades: T[]): T[] {
   return trades.map((t, i) => ({ t, i })).sort((a, b) => (a.t.lastDate < b.t.lastDate ? 1 : a.t.lastDate > b.t.lastDate ? -1 : a.i - b.i)).map((x) => x.t)
+}
+
+/**
+ * The page's stream stood in for by one the test drives: nothing arrives until the
+ * test sends it (`send`), so a change can be sent after the page is drawn and what it
+ * touches watched.
+ */
+export async function drivenStream(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __streams: EventTarget[] }
+    w.__streams = []
+    class Driven extends EventTarget {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSED = 2
+      readyState = 1
+      url: string
+      onerror: ((e: Event) => void) | null = null
+      onopen: ((e: Event) => void) | null = null
+      constructor(url: string | URL) {
+        super()
+        this.url = String(url)
+        w.__streams.push(this)
+      }
+      close() {
+        this.readyState = 2
+      }
+    }
+    window.EventSource = Driven as unknown as typeof EventSource
+  })
+}
+
+/** Send `data` as the event `name` on the page's driven stream (`drivenStream`). */
+export async function send(page: Page, name: string, data: unknown): Promise<void> {
+  await page.evaluate(
+    ([n, d]) => {
+      const streams = (window as unknown as { __streams: EventTarget[] }).__streams
+      streams[streams.length - 1].dispatchEvent(new MessageEvent(n as string, { data: JSON.stringify(d) }))
+    },
+    [name, data] as const,
+  )
 }

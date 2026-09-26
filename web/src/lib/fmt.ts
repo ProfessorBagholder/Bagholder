@@ -37,7 +37,7 @@ export function esc(s: unknown): string {
 }
 
 function n2(v: number, dp: number): string {
-  return Number(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  return v.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
 }
 
 // What a figure waits on, as the one short word the page shows after its dash

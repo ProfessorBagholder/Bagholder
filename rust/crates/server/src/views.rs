@@ -33,15 +33,16 @@ use bagholder_engine::trades::{TradeFig, TradeKey};
 use bagholder_engine::Engine;
 
 use crate::wire::build::{self, Names};
-use crate::wire::context::MarketBase;
 use crate::wire::figures::*;
+use crate::wire::markets::{self, ExposureDoc, Following, Tables};
 
 /// What a subscription is built from: the engine, what the broker calls things,
-/// and the market's context.
+/// the market's context tables and what the person follows.
 pub struct Cx<'a> {
     pub engine: &'a Engine,
     pub names: &'a Names,
-    pub base: &'a MarketBase,
+    pub tables: &'a dyn Tables,
+    pub following: &'a Following,
 }
 
 /// The direction a list is sorted in.
@@ -70,6 +71,19 @@ pub struct Params {
     pub sort: Option<Sort>,
     /// How many rows of a long list the page shows: as far as it has scrolled.
     pub limit: Option<usize>,
+    /// The heatmap's universe: `holdings`, `watchlist`, `both`, `ca`, `us`, `intl`.
+    pub universe: Option<String>,
+    /// The heatmap's sizing: `value` or `equal`.
+    pub size: Option<String>,
+    /// The News card's scope: `all`, `holdings`, `watchlist`.
+    pub scope: Option<String>,
+    /// The News card's tab: `stories` or `releases`.
+    pub kind: Option<String>,
+    /// The News card's chip: a listing's bare ticker and its venue.
+    pub symbol: Option<String>,
+    pub exchange: Option<String>,
+    /// What is typed in the News card's box.
+    pub query: Option<String>,
 }
 
 /// How many rows of a long list are sent before the page asks for more.
@@ -80,7 +94,7 @@ pub const FIRST_ROWS: usize = 100;
 /// the key's kind does not know is refused.
 pub fn open(key: &str, params: &Value) -> Option<Result<Box<dyn View>, String>> {
     let kind = key.split(':').next().unwrap_or(key);
-    if !matches!(kind, "book" | "dashboard" | "positions" | "trades" | "cashflow" | "exposure" | "markets" | "trade") {
+    if !matches!(kind, "book" | "dashboard" | "positions" | "trades" | "cashflow" | "exposure" | "markets" | "heatmap" | "headlines" | "trade") {
         return None;
     }
     let p: Params = match serde_json::from_value(params.clone()) {
@@ -100,16 +114,52 @@ pub fn open(key: &str, params: &Value) -> Option<Result<Box<dyn View>, String>> 
                 let f = filters()?;
                 Box::new(Whole::<ExposureDoc>::new(Reads::Holdings, move |cx: &Cx| {
                     let pf = cx.engine.portfolio(&f);
-                    let c = build::context_of(cx.engine, cx.names, &build::links(cx.engine), &pf, cx.base);
-                    ExposureDoc { sectors: c.sectors, regions: c.regions }
+                    markets::exposure_doc(cx.engine, cx.names, &pf, cx.tables)
                 }))
             }
             "markets" => {
                 let f = filters()?;
-                Box::new(Whole::<MarketsDoc>::new(Reads::Holdings, move |cx: &Cx| {
+                Box::new(Followers::new(false, move |cx: &Cx| {
                     let pf = cx.engine.portfolio(&f);
-                    MarketsDoc { markets: build::context_of(cx.engine, cx.names, &build::links(cx.engine), &pf, cx.base).markets }
+                    markets::markets_doc(cx.engine, &pf, cx.tables, cx.following)
                 }))
+            }
+            "heatmap" => {
+                let f = filters()?;
+                let universe = p.universe.clone().unwrap_or_else(|| "holdings".into());
+                let size = p.size.clone().unwrap_or_else(|| "value".into());
+                if !matches!(universe.as_str(), "holdings" | "watchlist" | "both" | "ca" | "us" | "intl") {
+                    return Err(format!("the heatmap has no universe {universe:?}"));
+                }
+                if !matches!(size.as_str(), "value" | "equal") {
+                    return Err(format!("the heatmap has no sizing {size:?}"));
+                }
+                // only the holdings' tiles are sized and coloured by their figures
+                let sized = matches!(universe.as_str(), "holdings" | "both");
+                Box::new(Followers::new(sized, move |cx: &Cx| {
+                    let pf = cx.engine.portfolio(&f);
+                    markets::heatmap_doc(cx.engine, cx.names, &pf, cx.tables, cx.following, &universe, &size)
+                }))
+            }
+            "headlines" => {
+                let shown = crate::wire::news::Shown {
+                    scope: p.scope.clone().unwrap_or_else(|| "all".into()),
+                    kind: p.kind.clone().unwrap_or_else(|| "stories".into()),
+                    symbol: p.symbol.clone().filter(|s| !s.trim().is_empty()),
+                    exchange: p.exchange.clone(),
+                    query: p.query.clone().unwrap_or_default(),
+                };
+                if !matches!(shown.scope.as_str(), "all" | "holdings" | "watchlist") {
+                    return Err(format!("the news has no scope {:?}", shown.scope));
+                }
+                if !matches!(shown.kind.as_str(), "stories" | "releases") {
+                    return Err(format!("the news has no tab {:?}", shown.kind));
+                }
+                let sort = p.sort.clone().unwrap_or(Sort { key: "when".into(), dir: Dir::Desc });
+                if !matches!(sort.key.as_str(), "when" | "news" | "symbol" | "change") {
+                    return Err(format!("the news has no column {:?} to sort by", sort.key));
+                }
+                Box::new(Headlines { filters: filters()?, shown, sort, limit: p.limit.unwrap_or(FIRST_ROWS), stories: None, followed: BTreeSet::new(), sent: None })
             }
             "trade" => {
                 let id = key.strip_prefix("trade:").unwrap_or_default().to_string();
@@ -212,6 +262,150 @@ impl<T: Diff + Serialize + Send> View for Whole<T> {
     }
     fn update(&mut self, cx: &Cx, _moved: &Moved, _base: bool) -> Vec<Value> {
         let now = (self.build)(cx);
+        let ops = match &self.sent {
+            Some(was) => bagholder_diff::typed(was, &now),
+            None => vec![json!(["set", [], serde_json::to_value(&now).expect("plain data")])],
+        };
+        self.sent = Some(now);
+        ops
+    }
+    fn version(&self) -> u64 {
+        self.sent.as_ref().map(version_of).unwrap_or(0)
+    }
+}
+
+/// A subscription to part of the Markets tab: built again when a holding came or
+/// went, the record changed, a followed instrument's quote moved, or the market's
+/// context did (what is followed, the tables it reads); with `holdings`, when any
+/// holding's figures moved too (the heatmap sizes and colours them). Compared
+/// field by field with what was sent.
+struct Followers<T> {
+    holdings: bool,
+    build: Box<dyn Fn(&Cx) -> T + Send>,
+    /// The instruments followed when it was last built, whose quotes it shows.
+    followed: BTreeSet<bagholder_core::InstrumentId>,
+    sent: Option<T>,
+}
+
+impl<T> Followers<T> {
+    fn new(holdings: bool, build: impl Fn(&Cx) -> T + Send + 'static) -> Followers<T> {
+        Followers { holdings, build: Box::new(build), followed: BTreeSet::new(), sent: None }
+    }
+
+    fn built(&mut self, cx: &Cx) -> T {
+        self.followed = cx.following.watched.iter().chain(&cx.following.tiles).map(|f| f.id).collect();
+        (self.build)(cx)
+    }
+}
+
+impl<T: Diff + Serialize + Send> View for Followers<T> {
+    fn reads(&self, moved: &Moved, base: bool) -> bool {
+        base || moved.0.iter().any(|(e, fields)| match e {
+            Entity::Book => true,
+            Entity::Position(..) => self.holdings || fields.contains("*"),
+            Entity::Quote(i) => self.followed.contains(i),
+            _ => false,
+        })
+    }
+    fn snapshot(&mut self, cx: &Cx) -> Value {
+        let now = self.built(cx);
+        let v = serde_json::to_value(&now).expect("a wire value is plain data");
+        self.sent = Some(now);
+        v
+    }
+    fn update(&mut self, cx: &Cx, _moved: &Moved, _base: bool) -> Vec<Value> {
+        let now = self.built(cx);
+        let ops = match &self.sent {
+            Some(was) => bagholder_diff::typed(was, &now),
+            None => vec![json!(["set", [], serde_json::to_value(&now).expect("plain data")])],
+        };
+        self.sent = Some(now);
+        ops
+    }
+    fn version(&self) -> u64 {
+        self.sent.as_ref().map(version_of).unwrap_or(0)
+    }
+}
+
+/// The News card's list: every story in its scope, tab, chip and words, sorted by
+/// its column, the first `limit` sent with how many there are. Built again when
+/// the headlines or what is followed changed (the context), a holding moved (a
+/// tag carries its day change), or a followed listing's quote moved.
+struct Headlines {
+    filters: bagholder_engine::scope::Filters,
+    shown: crate::wire::news::Shown,
+    sort: Sort,
+    limit: usize,
+    /// The stories, made once from the headlines they were made from.
+    stories: Option<(usize, std::sync::Arc<Vec<crate::wire::news::Story>>)>,
+    followed: BTreeSet<bagholder_core::InstrumentId>,
+    sent: Option<crate::wire::news::HeadlinesDoc>,
+}
+
+impl Headlines {
+    fn build(&mut self, cx: &Cx) -> crate::wire::news::HeadlinesDoc {
+        use crate::wire::news::{self, Known};
+        let rows = cx.tables.news();
+        let ptr = std::sync::Arc::as_ptr(&rows) as usize;
+        let stories = match &self.stories {
+            Some((p, s)) if *p == ptr => s.clone(),
+            _ => {
+                let s = std::sync::Arc::new(news::stories(&rows));
+                self.stories = Some((ptr, s.clone()));
+                s
+            }
+        };
+        // what the card knows of each listing: held (and as which holding), watched, its change
+        let engine = cx.engine;
+        let inputs = engine.inputs();
+        let pf = engine.portfolio(&self.filters);
+        let figs = engine.figures();
+        let mut known: HashMap<(String, String), Known> = HashMap::new();
+        for i in &pf.positions {
+            let p = &figs.positions[*i];
+            let s = build::shown(inputs, p.instrument);
+            let k = known.entry(news::listing_key(&s.symbol, &s.exchange)).or_insert_with(|| Known { exchange: s.exchange.clone(), ..Known::default() });
+            if k.held.is_none() {
+                k.held = Some((build::position_id(p), p.mark.as_ref().ok().and_then(|m| m.change_pct).map(|c| c.to_f64() / 100.0)));
+            }
+        }
+        for f in &cx.following.watched {
+            let change = inputs.market.quotes.get(&f.id).and_then(|q| q.change_pct).map(|c| c.to_f64() / 100.0);
+            let k = known.entry(news::listing_key(&f.symbol, &f.exchange)).or_insert_with(|| Known { exchange: f.exchange.clone(), ..Known::default() });
+            k.watched.get_or_insert(change);
+        }
+        self.followed = cx.following.watched.iter().map(|f| f.id).collect();
+        let (filed, filed_failed) = if self.shown.kind == "releases" {
+            let chip = self.shown.symbol.as_deref().map(|s| (s, self.shown.exchange.as_deref().unwrap_or_default()));
+            match cx.tables.filed_releases(&self.shown.scope, chip) {
+                Ok(f) => (f, None),
+                Err(e) => (Default::default(), Some(format!("The issuers' filed releases could not be read: {e}"))),
+            }
+        } else {
+            (Default::default(), None)
+        };
+        let sort = news::NewsSort { key: self.sort.key.clone(), dir: self.sort.dir };
+        let (all, chip) = news::headlines(&stories, &filed, &known, &self.shown, &sort);
+        news::HeadlinesDoc { total: all.len(), items: all.into_iter().take(self.limit).collect(), chip, filed_failed }
+    }
+}
+
+impl View for Headlines {
+    fn reads(&self, moved: &Moved, base: bool) -> bool {
+        base || moved.0.iter().any(|(e, _)| match e {
+            Entity::Book | Entity::Position(..) => true,
+            Entity::Quote(i) => self.followed.contains(i),
+            _ => false,
+        })
+    }
+    fn snapshot(&mut self, cx: &Cx) -> Value {
+        let d = self.build(cx);
+        let v = serde_json::to_value(&d).expect("plain data");
+        self.sent = Some(d);
+        v
+    }
+    fn update(&mut self, cx: &Cx, _moved: &Moved, _base: bool) -> Vec<Value> {
+        let now = self.build(cx);
         let ops = match &self.sent {
             Some(was) => bagholder_diff::typed(was, &now),
             None => vec![json!(["set", [], serde_json::to_value(&now).expect("plain data")])],
@@ -694,7 +888,16 @@ mod tests {
     }
 
     /// Every screen a page can show, each held as the page holds it.
-    const VIEWS: [&str; 7] = ["book", "dashboard", "positions", "trades", "cashflow", "exposure", "markets"];
+    const VIEWS: [&str; 9] = ["book", "dashboard", "positions", "trades", "cashflow", "exposure", "markets", "heatmap", "headlines"];
+
+    /// What each screen is asked with: every row, and the heatmap of what is held and watched.
+    fn params_of(key: &str) -> Value {
+        match key {
+            k if k.starts_with("trade:") => serde_json::json!({}),
+            "heatmap" => serde_json::json!({"limit": 1_000_000, "universe": "both"}),
+            _ => serde_json::json!({"limit": 1_000_000}),
+        }
+    }
 
     struct Page {
         feed: Feed,
@@ -704,17 +907,27 @@ mod tests {
     impl Page {
         /// What the stream sent, written into what the page holds; the docs that moved.
         fn step(&mut self) -> Vec<String> {
+            self.step_ops().into_iter().map(|(doc, _)| doc).collect()
+        }
+
+        /// `step`, with the ops each doc was sent (a snapshot as one `set` of the whole).
+        fn step_ops(&mut self) -> Vec<(String, Vec<Value>)> {
             let mut moved = Vec::new();
             for (name, m) in self.feed.step(&crate::status::status) {
                 let doc = m["doc"].as_str().unwrap_or_default().to_string();
-                match name {
+                let ops = match name {
                     "snapshot" => {
                         self.held.insert(doc.clone(), m["data"].clone());
+                        vec![serde_json::json!(["set", [], m["data"]])]
                     }
-                    "patch" => apply(self.held.get_mut(&doc).expect("a patch to what is held"), m["ops"].as_array().unwrap()),
+                    "patch" => {
+                        let ops = m["ops"].as_array().unwrap().clone();
+                        apply(self.held.get_mut(&doc).expect("a patch to what is held"), &ops);
+                        ops
+                    }
                     _ => continue,
-                }
-                moved.push(doc);
+                };
+                moved.push((doc, ops));
             }
             moved
         }
@@ -730,8 +943,7 @@ mod tests {
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
         let feed = Feed::open(app.clone());
-        let all = serde_json::json!({"limit": 1_000_000});
-        let mut docs: std::collections::BTreeMap<String, Want> = VIEWS.iter().map(|k| (k.to_string(), Want { params: all.clone(), have: None })).collect();
+        let mut docs: std::collections::BTreeMap<String, Want> = VIEWS.iter().map(|k| (k.to_string(), Want { params: params_of(k), have: None })).collect();
         // a holding's page too
         let held = app.figures.get().unwrap().read(|e| build::position_id(&e.figures().positions[0])).unwrap();
         docs.insert(format!("trade:{held}"), Want { params: serde_json::json!({}), have: None });
@@ -747,10 +959,10 @@ mod tests {
     fn same_as_fresh(app: &Arc<crate::app::App>, page: &Page, when: &str) {
         let f = app.figures.get().unwrap();
         let names = f.names().unwrap();
-        let base = app.market_base().unwrap();
+        let context = app.market_context().unwrap();
+        let door = crate::wire::context::Door { built: &context, app: &app };
         for (key, held) in &page.held {
-            let params = if key.starts_with("trade:") { serde_json::json!({}) } else { serde_json::json!({"limit": 1_000_000}) };
-            let fresh = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, base: &base }, key, params)).unwrap().unwrap();
+            let fresh = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, tables: &door, following: &context.following }, key, params_of(key))).unwrap().unwrap();
             assert!(*held == fresh, "{when}: {key} as the page holds it is not what a fresh build says");
         }
     }
@@ -823,6 +1035,75 @@ mod tests {
         same_as_fresh(&app, &page, "the day turning");
     }
 
+    /// The paths a doc's ops touch, as text: `watchlist/<id>/last`.
+    fn touched(ops: &[Value]) -> Vec<String> {
+        ops.iter()
+            .map(|op| {
+                op[1].as_array().unwrap().iter().map(|s| match s {
+                    Value::String(k) => k.clone(),
+                    Value::Object(step) => step["v"].as_str().unwrap_or_default().to_string(),
+                    other => other.to_string(),
+                }).collect::<Vec<_>>().join("/")
+            })
+            .collect()
+    }
+
+    fn quote(f: &crate::figures::Figures, instrument: bagholder_core::InstrumentId, price: &str, change: &str, pct: &str, at: &str) {
+        let now: bagholder_core::jiff::Timestamp = at.parse().unwrap();
+        let currency = f.book().unwrap().instrument(instrument).unwrap().currency;
+        let d = |s: &str| bagholder_core::Dec::parse(s).unwrap();
+        f.cache().unwrap().store_quote(&bagholder_sources::cache::StoredQuote { instrument, source: bagholder_core::SourceName::named("tmx"), price: bagholder_core::Money::new(d(price), currency), change: Some(d(change)), change_pct: Some(d(pct)), quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now }).unwrap();
+        assert!(!f.price_changed(instrument).unwrap().is_empty(), "the quote moved something");
+    }
+
+    /// A watched listing's quote moving sends its watchlist row and its heatmap tile,
+    /// and nothing else; a holding's sends its tile and its sector's block (the
+    /// block's value and change are its tiles'), each equal to a fresh build.
+    #[test]
+    fn a_quote_moves_only_the_markets_rows_that_show_it() {
+        let (_home, app, mut page, _) = opened();
+        crate::following::ensure(&app).unwrap();
+        let f = app.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let named = crate::following::Named { symbol: "SHOP".into(), exchange: "TSX".into(), name: "Shopify Inc.".into(), currency: "CAD".into(), ..Default::default() };
+        let shop = book.watch(&crate::following::draft(&book, &named).unwrap(), "2025-11-19T21:00:00Z".parse().unwrap()).unwrap();
+        app.followed();
+        page.step();
+        same_as_fresh(&app, &page, "a listing watched");
+        assert!(page.held["markets"]["watchlist"].as_array().unwrap().iter().any(|w| w["id"] == shop.to_string()));
+
+        quote(f, shop, "101.50", "1.50", "1.5", "2025-11-19T21:01:00Z");
+        let sent = page.step_ops();
+        let docs: Vec<&str> = sent.iter().map(|(d, _)| d.as_str()).collect();
+        assert!(docs.iter().all(|d| ["markets", "heatmap", "headlines"].contains(d)), "a watched quote reached {docs:?}");
+        let markets = &sent.iter().find(|(d, _)| d == "markets").expect("the watchlist row moved").1;
+        let id = shop.to_string();
+        assert!(touched(markets).iter().all(|p| p.starts_with(&format!("watchlist/{id}/"))), "{:?}", touched(markets));
+        let row = page.held["markets"]["watchlist"].as_array().unwrap().iter().find(|w| w["id"] == id).unwrap().clone();
+        assert_eq!((row["last"].as_str(), row["change"].as_str()), (Some("101.5"), Some("1.5")));
+        let heat = &sent.iter().find(|(d, _)| d == "heatmap").expect("its heatmap tile moved").1;
+        // its tile, and its block's change (its tiles' weighted), in its one block
+        let paths = touched(heat);
+        let block = paths[0].split('/').take(2).collect::<Vec<_>>().join("/");
+        let tile_key = page.held["heatmap"]["blocks"].as_array().unwrap().iter().flat_map(|b| b["tiles"].as_array().unwrap()).find(|t| t["symbol"] == "SHOP").unwrap()["key"].as_str().unwrap().to_string();
+        assert!(paths.iter().all(|p| p.starts_with(&format!("{block}/tiles/{tile_key}/")) || *p == format!("{block}/percentChange")), "the watched tile and its block alone: {paths:?}");
+        assert!(paths.iter().any(|p| p.starts_with(&format!("{block}/tiles/"))), "{paths:?}");
+        same_as_fresh(&app, &page, "a watched quote");
+
+        // a holding's quote: its tile and its block on the heatmap
+        let held = f.read(|e| e.figures().positions[0].instrument).unwrap();
+        quote(f, held, "12.34", "0.20", "1.65", "2025-11-19T21:02:00Z");
+        let sent = page.step_ops();
+        let heat = &sent.iter().find(|(d, _)| d == "heatmap").expect("the holding's tile moved").1;
+        let paths = touched(heat);
+        assert!(paths.iter().all(|p| p.starts_with("blocks/")), "{paths:?}");
+        assert!(paths.iter().any(|p| p.ends_with("/value") || p.ends_with("/percentChange")), "the block's own figures: {paths:?}");
+        if let Some((_, m)) = sent.iter().find(|(d, _)| d == "markets") {
+            panic!("a holding not watched moved the markets doc: {:?}", touched(m));
+        }
+        same_as_fresh(&app, &page, "a holding's quote");
+    }
+
     /// A page opening again with the version it kept of a screen is told it is the
     /// same; one holding another version is sent the screen.
     #[test]
@@ -849,12 +1130,13 @@ mod tests {
         assert!(all > 3, "a book with more trades than the window");
         let f = app.figures.get().unwrap();
         let names = f.names().unwrap();
-        let base = app.market_base().unwrap();
-        let three = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, base: &base }, "trades", serde_json::json!({"limit": 3}))).unwrap().unwrap();
+        let context = app.market_context().unwrap();
+        let door = crate::wire::context::Door { built: &context, app: &app };
+        let three = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, tables: &door, following: &context.following }, "trades", serde_json::json!({"limit": 3}))).unwrap().unwrap();
         assert_eq!(three["total"], serde_json::json!(all));
         assert_eq!(three["trades"].as_array().unwrap(), &page.held["trades"]["trades"].as_array().unwrap()[..3]);
         // the order is the page's: by symbol, ascending
-        let by = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, base: &base }, "trades", serde_json::json!({"limit": 1_000_000, "sort": {"key": "symbol", "dir": "asc"}}))).unwrap().unwrap();
+        let by = f.read(|e| snapshot_of(&Cx { engine: e, names: &names, tables: &door, following: &context.following }, "trades", serde_json::json!({"limit": 1_000_000, "sort": {"key": "symbol", "dir": "asc"}}))).unwrap().unwrap();
         let symbols: Vec<String> = by["trades"].as_array().unwrap().iter().map(|t| t["symbol"].as_str().unwrap().to_lowercase()).collect();
         let mut sorted = symbols.clone();
         sorted.sort();

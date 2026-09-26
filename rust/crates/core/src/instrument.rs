@@ -105,13 +105,21 @@ pub enum RefScheme {
     TmxForm,
     SecCik,
     SedarProfile,
+    /// Bagholder's own directory of market instruments (indices, futures, rates,
+    /// currency pairs): `<symbol>@<venue>` as the directory names it (`SPX@INDEX`).
+    Directory,
+    /// A listing the person picked to watch, as its symbol on its venue
+    /// (`<symbol>@<MIC or venue>`), where nothing else names it. It identifies
+    /// only among watched listings: no record carries it, so nothing is ever
+    /// merged by it.
+    Listing,
 }
 
 impl RefScheme {
     pub fn strength(&self) -> Strength {
         match self {
-            RefScheme::BrokerSecurity(_) | RefScheme::Isin | RefScheme::Cusip | RefScheme::Figi | RefScheme::Occ => Strength::Strong,
-            RefScheme::ConnectionSymbol(_) => Strength::Scoped,
+            RefScheme::BrokerSecurity(_) | RefScheme::Isin | RefScheme::Cusip | RefScheme::Figi | RefScheme::Occ | RefScheme::Directory => Strength::Strong,
+            RefScheme::ConnectionSymbol(_) | RefScheme::Listing => Strength::Scoped,
             RefScheme::Yahoo | RefScheme::TmxForm | RefScheme::SecCik | RefScheme::SedarProfile => Strength::Routing,
         }
     }
@@ -129,6 +137,8 @@ impl RefScheme {
             RefScheme::TmxForm => "tmx-form".into(),
             RefScheme::SecCik => "sec-cik".into(),
             RefScheme::SedarProfile => "sedar-profile".into(),
+            RefScheme::Directory => "directory".into(),
+            RefScheme::Listing => "listing".into(),
         }
     }
 
@@ -148,6 +158,8 @@ impl RefScheme {
             "tmx-form" => RefScheme::TmxForm,
             "sec-cik" => RefScheme::SecCik,
             "sedar-profile" => RefScheme::SedarProfile,
+            "directory" => RefScheme::Directory,
+            "listing" => RefScheme::Listing,
             _ => return Err(IdError(s.to_string())),
         })
     }
@@ -207,6 +219,8 @@ mod tests {
             RefScheme::TmxForm,
             RefScheme::SecCik,
             RefScheme::SedarProfile,
+            RefScheme::Directory,
+            RefScheme::Listing,
         ] {
             assert_eq!(RefScheme::parse(&s.to_text()).unwrap(), s);
         }

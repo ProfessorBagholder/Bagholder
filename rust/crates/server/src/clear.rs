@@ -148,7 +148,7 @@ impl std::fmt::Display for Refused {
 
 /// The book's part of the kinds ticked.
 pub fn book_clearing(kinds: &[Kind]) -> Clearing {
-    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market), orders: kinds.contains(&Kind::Orders) }
+    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market), orders: kinds.contains(&Kind::Orders), following: kinds.contains(&Kind::Settings) }
 }
 
 /// Empty the earlier store's tables of `kinds`, in one transaction.
@@ -220,6 +220,10 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
         st.error.clear();
     }
     f.rebuild(now).map_err(Refused::Failed)?;
+    if kinds.contains(&Kind::Settings) {
+        // the tile row is the default six again, until the person changes it
+        crate::following::open(app);
+    }
     app.events.signal();
     Ok(())
 }
@@ -313,6 +317,10 @@ mod tests {
         let day: bagholder_core::jiff::civil::Date = "2025-11-18".parse().unwrap();
         book.store_rates(usd, &[(day, bagholder_core::Dec::parse("1.4").unwrap())], (day, day), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
         book.set_setting("watch.folder", Some("/somewhere"), t).unwrap();
+        // what the person follows: the default tiles, and a listing watched under the name picked for it
+        crate::following::ensure(app).unwrap();
+        let shop = crate::following::Named { symbol: "SHOP".into(), exchange: "TSX".into(), name: "Shopify Inc.".into(), ..Default::default() };
+        book.watch(&crate::following::draft(&book, &shop).unwrap(), t).unwrap();
         let ws_account = book.accounts().unwrap().into_iter().find(|a| a.nickname.as_deref() != Some("Manual")).unwrap();
         let read = book.broker_read(ws_account.connection, "balances", t).unwrap();
         book.store_buying_power(ws_account.id, t, &Ok(bagholder_core::Money::new(bagholder_core::Dec::parse("100").unwrap(), bagholder_core::Currency::parse("CAD").unwrap())), &read).unwrap();
@@ -368,6 +376,15 @@ mod tests {
             match t.as_str() {
                 "schema_migrations" => {}
                 "settings" => assert_eq!(f.book().unwrap().setting("zone").unwrap().as_deref(), Some("America/Toronto"), "the zone stays"),
+                // the tile row is the default six again, and nothing else names an instrument
+                "tiles" => assert_eq!(n as usize, crate::following::DEFAULT_TILES.len(), "the default tiles after Clear all"),
+                "instruments" | "instrument_refs" | "instrument_routes" | "listings_named" => {
+                    let b = f.book().unwrap();
+                    let conn = b.conn_for_tests();
+                    let column = if t == "instruments" { "id" } else { "instrument_id" };
+                    let strays: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t} WHERE {column} NOT IN (SELECT instrument_id FROM tiles)"), [], |r| r.get(0)).unwrap();
+                    assert_eq!(strays, 0, "the book's {t} after Clear all holds only the default tiles'");
+                }
                 _ => assert_eq!(n, 0, "the book's {t} after Clear all"),
             }
         }

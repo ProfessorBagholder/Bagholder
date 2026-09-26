@@ -16,6 +16,7 @@ mod clear;
 mod csv_import;
 mod entries;
 mod figures;
+mod following;
 mod pull_broker;
 mod read_sources;
 mod events;
@@ -142,6 +143,9 @@ fn serve() -> i32 {
                 (_, Err(e)) => log(&format!("bagholder: {e}")),
             }
             a.set_figures(f);
+            // what the person follows: the earlier store's watchlist carried into the
+            // book once, the default tile row where none was chosen
+            following::open(&a);
         }
         Err(e) => {
             log(&format!("bagholder: {e}"));
@@ -194,21 +198,9 @@ fn serve() -> i32 {
     a.spawn_with("bagholder-update-check", |app| {
         update::check_for_update(&app);
     });
-    a.spawn_with("bagholder-quote-loop", feeds::quote_loop);
     a.spawn_with("bagholder-orders-loop", |app| orders::orders_loop(&app));
     a.spawn_with("bagholder-bracket-loop", |app| orders::bracket_loop(&app));
     a.spawn_with("bagholder-exposure-loop", feeds::exposure_loop);
-    // rows added before the bare-ticker convention (Wealthsimple's `.TO` on a dual listing) take it now
-    if let Ok(conn) = a.open() {
-        for w in bagholder_store::feeds::list_watchlist(&conn).unwrap_or_default() {
-            let sym = w.symbol.clone();
-            let bare = bagholder_model::venues::tmx_symbol(&sym);
-            if !bare.is_empty() && bare != sym {
-                let _ = bagholder_store::feeds::remove_watch(&conn, &sym, &w.exchange);
-                let _ = bagholder_store::feeds::add_watch(&conn, &bare, &w.exchange, &w.name, &w.currency, &w.security_id, &w.added_at);
-            }
-        }
-    }
     a.spawn_with("bagholder-news-loop", feeds::news_loop);
     a.spawn_with("bagholder-market-loop", feeds::market_loop);
     a.spawn_with("bagholder-archive", feeds::archive_loop);

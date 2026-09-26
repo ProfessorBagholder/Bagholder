@@ -118,6 +118,9 @@ fn a_tmx_quote_states_its_venue_and_schedule() {
     // TMX's answer for the TSX listing, read for a CSE form: another listing, not carried
     assert!(matches!(quote("quote-ENB.json", "ENB:CNX"), Outcome::NotCarried(w) if w.contains("Toronto Stock Exchange")));
     assert_eq!(quote("quote-ENB.json", "ENB").kind(), OutcomeKind::Answered);
+    // a CSE listing, which TMX names by the form asked
+    let Outcome::Answered(q) = quote("quote-QIMC-CNX.json", "QIMC:CNX") else { panic!("a CSE listing's own quote") };
+    assert_eq!((q.price, q.change, q.currency, q.exchange_name.as_str()), (dec("0.56"), Some(dec("-0.01")), Currency::CAD, "Canadian Securities Exchange"));
     assert!(matches!(quote("wrong-shape-quote-ENB-price-null.json", "ENB"), Outcome::Mismatch(m) if m.path == "data.getQuoteBySymbol.price"));
     assert!(matches!(quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB"), Outcome::Mismatch(m) if m.why.contains("Fortnightly")));
     assert!(matches!(quote("wrong-meaning-quote-ENB-another-symbol.json", "ENB"), Outcome::Meaning(w) if w.contains("TRP")));
@@ -202,8 +205,11 @@ fn a_coins_close_is_each_ended_utc_days_close() {
 
 #[test]
 fn a_cboe_canada_quote_is_its_last_price_at_its_trade_time() {
-    let Outcome::Answered(q) = cboe_ca::parse(&common::json(CBOE, "quote-MAXQ.json"), "MAXQ") else { panic!() };
+    let Outcome::Answered(cboe_ca::CboeAnswer::Traded(q)) = cboe_ca::parse(&common::json(CBOE, "quote-MAXQ.json"), "MAXQ") else { panic!() };
     assert_eq!((q.price, q.at, q.change), (dec("0.4400"), t("2026-09-23T20:00:00Z"), Some(dec("-0.0150"))));
+    // a Saturday's answer: the listing named, no trade this session, the previous close standing
+    assert_eq!(cboe_ca::parse(&common::json(CBOE, "quote-HBIX-no-trade-this-session.json"), "HBIX"), Outcome::Answered(cboe_ca::CboeAnswer::NoTradeYet { prev_close: dec("7.2400") }));
+    assert!(matches!(cboe_ca::parse(&common::json(CBOE, "quote-HBIX-no-trade-this-session.json"), "MAXQ"), Outcome::Meaning(_)), "another listing's blank answer is not this one's");
     assert!(matches!(cboe_ca::parse(&common::json(CBOE, "wrong-shape-quote-MAXQ-last-null.json"), "MAXQ"), Outcome::Mismatch(m) if m.path == "data.last"));
     assert!(matches!(cboe_ca::parse(&common::json(CBOE, "wrong-meaning-quote-MAXQ-another-symbol.json"), "MAXQ"), Outcome::Meaning(w) if w.contains("HBIX")));
 }

@@ -2,9 +2,9 @@
   // The heatmap: Markets' card (heatmapCardHtml) and, with `alone`, the heatmap on its
   // own at `#heatmap/...` (heatmapFullHtml) -- the same header row, the same box, the
   // window to itself.
-  import type { Markets } from '../model'
-  import type { Tile } from './treemap'
+  import type { HeatCounts } from '../model'
   import { heatColor } from './treemap'
+  import { heatmap as doc, use, filtered } from '../subs.svelte'
   import { ICONS } from '../icons'
   import Mseg from '../markets/Mseg.svelte'
   import Icon from '../markets/Icon.svelte'
@@ -14,28 +14,18 @@
   import { go, goHash, rewrite, route } from '../router.svelte'
   import { heat, show, remember, heatHash, applyAddress, nextScope, marketsOnShow, MARKET_U, EVERY_SCOPE } from './heat.svelte'
 
-  let { markets, alone = false }: { markets: Markets; alone?: boolean } = $props()
+  let { alone = false }: { alone?: boolean } = $props()
 
   const UNIVERSE_OPTS = [['holdings', 'Holdings'], ['watchlist', 'Watchlist'], ['both', 'Both'], '|', ['ca', 'Canada'], ['us', 'US'], ['intl', 'International']] as const
   const SIZE_OPTS = [['value', 'Market value'], ['equal', 'Equal']] as const
-  const LEGEND = [-3, -2, -1, -0.2, 0.2, 1, 2, 3]
+  const LEGEND = [-0.03, -0.02, -0.01, -0.002, 0.002, 0.01, 0.02, 0.03]
 
-  // ledger's heatTiles: the tiles for the chosen universe
-  function heatTilesFor(h: { universe: string; size: string }): Tile[] {
-    const held = (markets.holdings || []) as Tile[]
-    const watched = (markets.watchlist || []).filter((w) => !w.positionId)
-    let tiles: Tile[]
-    if (MARKET_U[h.universe]) {
-      tiles = ((markets.universes as Record<string, Tile[]>)[h.universe] || []).slice()
-    } else {
-      const minHeld = held.length ? Math.min(...held.map((t) => t.value)) : 1
-      const w: Tile[] = watched.map((x) => ({ id: null, symbol: x.symbol, exchange: x.exchange, value: h.universe === 'both' ? minHeld : 1, percentChange: x.percentChange, sector: x.sector }))
-      tiles = h.universe === 'holdings' ? held.slice() : h.universe === 'watchlist' ? w : held.concat(w)
-    }
-    if (h.size === 'equal') tiles = tiles.map((t) => ({ ...t, value: 1 }))
-    return tiles
-  }
-  const tiles = $derived(heatTilesFor(heat))
+  // The heatmap the server builds for the universe and sizing shown: its sector
+  // blocks, each with its value and change, the tiles in each with the small ones
+  // folded into `Other (N)`, and how many tiles each universe has.
+  use('heatmap', doc, () => ({ ...filtered(), universe: heat.universe, size: heat.size }))
+  // what was shown stands until the new universe's arrives, so its tiles travel
+  const blocks = $derived(doc.data?.blocks ?? [])
 
   // Each market universe on show is a document the server is told of: it reads the
   // universe when it has no rows or they are stale, and keeps it fresh while shown,
@@ -69,7 +59,8 @@
     const s = show.on
     if (!alone || !s) return
     const id = setInterval(() => {
-      const next = nextScope(s.list, heat.universe, (u) => heatTilesFor({ ...heat, universe: u }).length > 0)
+      const counts = doc.data?.counts
+      const next = nextScope(s.list, heat.universe, (u) => !!counts && (counts[u as keyof HeatCounts] ?? 0) > 0)
       if (next === heat.universe) return
       heat.universe = next
       remember()
@@ -105,8 +96,8 @@
 {#if alone}
   <div id="heatFull">
     {@render header(true)}
-    {#if tiles.length}
-      <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;flex:1;min-height:0" />
+    {#if blocks.length}
+      <HeatBox {blocks} universe={heat.universe} boxStyle="position:relative;flex:1;min-height:0" />
     {:else}
       <div class="muted empty" style="font-size:12px">{emptyWord}</div>
     {/if}
@@ -114,8 +105,8 @@
 {:else}
   <div class="card elev-sm" style="padding:14px 16px 16px">
     {@render header(false)}
-    {#if tiles.length}
-      <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;width:100%;height:430px" />
+    {#if blocks.length}
+      <HeatBox {blocks} universe={heat.universe} boxStyle="position:relative;width:100%;height:430px" />
     {:else}
       <div class="muted empty" style="font-size:12px">{emptyWord}</div>
     {/if}

@@ -242,8 +242,8 @@ test('Allocation shows the folded Other slice the document sends past ten holdin
 test('Sectors and Regions read the span the positions cover, excluding Not classified from the count', async ({ page, request }) => {
   const m = await figures(request)
   // every sector or country with value, `Not classified` not counted; `Other (N)` is N of them
-  const span = (rows: { name: string; value: number }[]) =>
-    rows.filter((x) => x.name !== 'Not classified' && x.value > 0).reduce((n, x) => n + (Number(/^Other \((\d+)\)$/.exec(x.name)?.[1]) || 1), 0)
+  const span = (rows: { label: string }[]) =>
+    rows.filter((x) => x.label !== 'Not classified').reduce((n, x) => n + (Number(/^Other \((\d+)\)$/.exec(x.label)?.[1]) || 1), 0)
   const secCount = span(m.sectors)
   const regCount = span(m.regions)
   await page.goto('/#portfolio')

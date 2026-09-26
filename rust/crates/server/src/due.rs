@@ -13,7 +13,8 @@
 //! - each payer's next distribution window (`payers::run::next_due`);
 //! - a failed read's source rest ending;
 //! - a minute, for the quotes of what is held, only while a page shows a
-//!   holding's price (`PRICED`).
+//!   holding's price (`PRICED`), and of what the person follows (the watchlist,
+//!   the tiles) only while a page shows the Markets tab (`FOLLOWED`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -36,7 +37,10 @@ use crate::figures::{bank_zone, Figures};
 pub const QUOTES_EVERY: Duration = Duration::from_secs(60);
 /// The subscriptions that show a holding's price: while a page shows one, what is
 /// held is quoted (`docs/architecture.md` §13, sources are read on demand).
-pub const PRICED: [&str; 5] = ["positions", "exposure", "markets", "cashflow", "trade"];
+pub const PRICED: [&str; 6] = ["positions", "exposure", "markets", "heatmap", "cashflow", "trade"];
+/// The subscriptions that show a followed instrument's price: while a page shows
+/// one, the watched listings and the tiles are quoted.
+pub const FOLLOWED: [&str; 2] = ["markets", "heatmap"];
 /// How many times the needs are worked out again after a pass of reads.
 const PASSES: usize = 4;
 
@@ -119,15 +123,29 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
         read_all(f, &ctx, &needs).map_err(|e| e.to_string())?;
         last = Some(n);
     }
-    // what is held is quoted while a page shows a holding's price
-    let open = app.events.showing(&PRICED);
-    if open {
-        quotes::read_quotes(&ctx, &needs.held).map_err(|e| e.to_string())?;
-        for l in &needs.held {
-            f.price_changed(l.id)?;
+    let quoting = demand(app, &book, &needs.held)?;
+    quotes::read_quotes(&ctx, &quoting).map_err(|e| e.to_string())?;
+    for l in &quoting {
+        f.price_changed(l.id)?;
+    }
+    next_due(&ctx, &needs, &zone, !quoting.is_empty(), now).map(Some)
+}
+
+/// What is quoted now: what is held while a page shows a holding's price, what
+/// is followed while a page shows the Markets tab.
+fn demand(app: &App, book: &bagholder_book::Book, held: &[bagholder_sources::contract::Listing]) -> Result<Vec<bagholder_sources::contract::Listing>, String> {
+    let mut quoting: Vec<bagholder_sources::contract::Listing> = Vec::new();
+    if app.events.showing(&PRICED) {
+        quoting.extend(held.iter().cloned());
+    }
+    if app.events.showing(&FOLLOWED) {
+        for l in crate::following::listings(book)? {
+            if !quoting.iter().any(|q| q.id == l.id) {
+                quoting.push(l);
+            }
         }
     }
-    next_due(&ctx, &needs, &zone, open, now).map(Some)
+    Ok(quoting)
 }
 
 /// Read the payers held under `symbol` now, each change applied: the ones read.
@@ -213,7 +231,7 @@ fn next_settle(m: Market, now: Timestamp, bank: &TimeZone) -> Option<Timestamp> 
 }
 
 /// The earliest instant after `now` any read can next be due.
-fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, open: bool, now: Timestamp) -> Result<Timestamp, String> {
+fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, quoting: bool, now: Timestamp) -> Result<Timestamp, String> {
     let bank = ctx.bank;
     let mut at: Vec<Timestamp> = Vec::new();
     at.extend(next_midnight(now, zone));
@@ -234,7 +252,7 @@ fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, open: bool, now: Timestam
             at.push(payers::run::next_due(declared.get(&p.listing.id), frequencies.get(&p.listing.id), now, bank));
         }
     }
-    if open && !needs.held.is_empty() {
+    if quoting {
         at.push(now + SignedDuration::try_from(QUOTES_EVERY).map_err(|e| e.to_string())?);
     }
     // a read that failed is asked again when its source's rest ends
@@ -279,6 +297,49 @@ fn rest_ends(ctx: &Ctx, now: Timestamp) -> Result<Vec<Timestamp>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The watched listings and the tiles are quoted only while a page shows the
+    /// Markets tab; the holdings while a page shows a price; nothing with no page.
+    #[test]
+    fn what_is_followed_is_quoted_only_while_the_markets_tab_is_shown() {
+        use crate::events::{Feed, Want};
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        app.set_figures(f);
+        let f = app.figures.get().unwrap();
+        crate::following::ensure(&app).unwrap();
+        let book = f.book().unwrap();
+        let shop = crate::following::Named { symbol: "SHOP".into(), exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
+        book.watch(&crate::following::draft(&book, &shop).unwrap(), now).unwrap();
+        let n = f.read(|e| e.needs()).unwrap();
+        let held = crate::read_sources::needs_of(&book, &n, now.to_zoned(TimeZone::get("America/Toronto").unwrap()).date()).unwrap().held;
+        assert!(!held.is_empty());
+        let followed = crate::following::listings(&book).unwrap();
+        assert_eq!(followed.len(), 7, "the six tiles and the watched listing");
+        let ids = |ls: &[bagholder_sources::contract::Listing]| -> BTreeSet<InstrumentId> { ls.iter().map(|l| l.id).collect() };
+        let show = |keys: &[&str]| {
+            let feed = Feed::open(app.clone());
+            let docs = keys.iter().map(|k| (k.to_string(), Want { params: serde_json::json!({}), have: None })).collect();
+            assert!(app.events.watch(&app, feed.id(), docs));
+            feed
+        };
+        assert!(demand(&app, &book, &held).unwrap().is_empty(), "no page: nothing quoted");
+        {
+            let _positions = show(&["positions"]);
+            assert_eq!(ids(&demand(&app, &book, &held).unwrap()), ids(&held), "the Positions tab: the holdings alone");
+        }
+        {
+            let _markets = show(&["markets"]);
+            let want: BTreeSet<InstrumentId> = ids(&held).union(&ids(&followed)).copied().collect();
+            assert_eq!(ids(&demand(&app, &book, &held).unwrap()), want, "the Markets tab: the holdings and what is followed");
+        }
+        assert!(demand(&app, &book, &held).unwrap().is_empty(), "the page closed: nothing quoted");
+    }
 
     fn t(s: &str) -> Timestamp {
         s.parse().unwrap()

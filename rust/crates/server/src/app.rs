@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 pub const APP_VERSION: &str = "1.47.0";
 /// Bumped whenever the page and the server change together.
-pub const PROTOCOL: &str = "2026-09-26.1";
+pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
 /// read again. A row that has both keeps them: a re-read of everything costs a
 /// download and a reading each, which is minutes of a list standing still.
@@ -132,6 +132,10 @@ pub struct App {
     /// Fills of Bagholder's own orders whose Wealthsimple row the book does not
     /// hold yet, by Wealthsimple's order id, and when each was first seen waiting.
     pub fill_waits: Mutex<std::collections::BTreeMap<String, bagholder_core::jiff::Timestamp>>,
+    /// Counts each change to what the person follows (the watchlist, the tile
+    /// row), which the book keeps: the Markets tab's documents read it
+    /// (`following`).
+    following: std::sync::atomic::AtomicU64,
 }
 
 impl App {
@@ -174,6 +178,7 @@ impl App {
             net,
             pull_asked: AtomicBool::new(false),
             fill_waits: Mutex::new(std::collections::BTreeMap::new()),
+            following: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -236,8 +241,25 @@ impl App {
         self.notify.wake_streams();
     }
 
+    /// What the person follows changed: every page's stream looks.
+    pub fn followed(&self) {
+        self.following.fetch_add(1, Ordering::SeqCst);
+        self.events.signal();
+    }
+
+    /// Which change to what the person follows the app is at.
+    pub fn following_version(&self) -> u64 {
+        self.following.load(Ordering::SeqCst)
+    }
+
     /// The market's context the earlier readers are given (`market_context`).
     pub fn market_base(&self) -> Result<std::sync::Arc<bagholder_model::context::MarketBase>, String> {
+        Ok(self.market.get(self)?.base.clone())
+    }
+
+    /// The market's context with what the person follows, as the Markets tab's
+    /// documents read it (`market_context`).
+    pub fn market_context(&self) -> Result<std::sync::Arc<crate::market_context::Built>, String> {
         self.market.get(self)
     }
 

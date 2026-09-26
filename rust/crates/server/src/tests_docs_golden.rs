@@ -251,11 +251,12 @@ fn test_a_fear_reading_change_is_the_score_and_the_as_of() {
 
 fn shorts_row(shares: f64) -> ShortsFeedRow {
     ShortsFeedRow {
-        shorts: StoredShorts {
+        shorts: crate::feeds::ShortsView::of(&StoredShorts {
             shorts: Shorts { symbol: "QNC".into(), exchange: "TSX-V".into(), market: ShortMarket::Ca, name: "Quantum eMotion".into(), as_of: "2026-09-15".into(), shares: Some(shares), previous: Some(shares - 1000.0), previous_of: "2026-08-31".into(), change: Some(1000.0), float: None, of_float: None, average_volume: None, days_to_cover: None, volume_of: String::new(), volume_span: None, short_volume: None, total_volume: None, volume_pct: None, series: None },
             fetched_at: "2026-09-15T14:00:00Z".into(),
             read_version: 1,
-        },
+        })
+        .unwrap(),
         position_id: Some("p1".into()),
         held: true,
         watched: false,
@@ -267,8 +268,8 @@ fn test_a_shorts_figure_change_is_the_row_that_moved() {
     let (a, b) = (ShortsFeed { ok: true, rows: vec![shorts_row(120_000.0)], reading: false }, ShortsFeed { ok: true, rows: vec![shorts_row(135_000.0)], reading: false });
     let ops = tdiff(&a, &b);
     assert_eq!(ops, vec![
-        json!(["set", ["rows", {"k": "symbol", "v": "QNC"}, "shares"], 135000.0]),
-        json!(["set", ["rows", {"k": "symbol", "v": "QNC"}, "previous"], 134000.0]),
+        json!(["set", ["rows", {"k": "symbol", "v": "QNC"}, "shares"], "135000"]),
+        json!(["set", ["rows", {"k": "symbol", "v": "QNC"}, "previous"], "134000"]),
     ]);
 }
 

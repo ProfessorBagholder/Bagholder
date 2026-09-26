@@ -10,8 +10,8 @@ const EARLIER: [&str; 4] = ["bagholder_model", "bagholder_store", "bagholder_ws"
 
 /// The figure path: what builds and sends the figures document, keeps the engine
 /// current, and writes the book.
-const FIGURE_PATH: [&str; 13] = [
-    "wire/mod.rs", "wire/build.rs", "wire/figures.rs", "wire/filters.rs",
+const FIGURE_PATH: [&str; 15] = [
+    "wire/mod.rs", "wire/build.rs", "wire/figures.rs", "wire/filters.rs", "wire/markets.rs", "wire/news.rs",
     "figures.rs", "engine_inputs.rs", "due.rs", "read_sources.rs", "broker_reads.rs",
     "entries.rs", "csv_import.rs", "events.rs", "http/model.rs",
 ];
@@ -116,4 +116,27 @@ fn the_order_path_reads_nothing_leniently_and_nothing_from_the_earlier_store() {
             assert!(!code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(word)), "{f} uses {word}");
         }
     }
+}
+
+/// What reads or writes the earlier store's quotes, in a file's code outside its tests.
+fn earlier_quotes(text: &str) -> Vec<&'static str> {
+    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    const NAMES: [&str; 11] = [
+        "upsert_quote", "refresh_quotes", "refresh_distributions", "refresh_all", "refresh_periodic", "quote_loop",
+        "quote_symbols_needing_refresh", "peek_quote", "store::market::quotes", "fetch_yahoo_quote", "fetch_cboe_ca_quote",
+    ];
+    NAMES.iter().copied().filter(|n| code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(n))).collect()
+}
+
+/// Every quote the app reads goes into the market cache through the sources' quote
+/// readers (`docs/plans/stage-5-interface-and-running.md`, A2): nothing in the server
+/// writes or reads the earlier store's `quotes` table.
+#[test]
+fn nothing_reads_or_writes_the_earlier_store_s_quotes() {
+    for (f, text) in server_sources() {
+        assert_eq!(earlier_quotes(&text), Vec::<&str>::new(), "{f} reaches the earlier store's quotes");
+    }
+    assert_eq!(earlier_quotes("fn f() { bagholder_store::market::upsert_quote(c, s, &q, \"tmx\", n) }"), vec!["upsert_quote"]);
+    assert_eq!(earlier_quotes("fn f() { spawn(quote_loop); bagholder_market::quotes::refresh_quotes(c) }"), vec!["refresh_quotes", "quote_loop"]);
+    assert!(earlier_quotes("// once upsert_quote\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { peek_quote(c) } }").is_empty());
 }

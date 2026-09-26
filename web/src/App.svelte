@@ -196,7 +196,7 @@
   // nothing to show yet: every tab is the first-run page, which carries a sync error itself
   const showingEmpty = $derived(!!book.data && !book.data.activityCount)
   // a listing the book does not hold: its own page, under Markets
-  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, markets.data?.markets ?? null) : null)
+  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, markets.data ?? null) : null)
   $effect(() => {
     if (route.tab !== 'markets' || !isListingId(route.sub)) return
     loadListing(route.sub!, (positionId) => {
@@ -314,7 +314,7 @@
 
 {#if route.heat && !showingEmpty && !(conn.error && !markets.data)}
   {#if markets.data}
-    <Heatmap markets={markets.data.markets} alone />
+    <Heatmap alone />
   {:else}
     <!-- a wall display starting up: the window is the heatmap's from the first frame -->
     <div id="heatFull" aria-hidden="true"><div class="bhsk" style="width:220px;height:22px"></div><div class="bhsk" style="flex:1;min-height:0;border-radius:5px;animation-delay:120ms"></div></div>
@@ -417,7 +417,7 @@
     {:else if route.tab === 'trades'}
       {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else if trades.data}<Trades doc={trades.data} />{/if}
     {:else if route.tab === 'markets'}
-      {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else if markets.data}<Markets markets={markets.data.markets} />{/if}
+      {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else if markets.data}<Markets markets={markets.data} />{/if}
     {/if}
     </div>
     {/if}

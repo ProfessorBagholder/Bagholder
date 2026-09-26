@@ -5,7 +5,7 @@ import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, TradesDoc } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
-import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
+import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
 import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
@@ -48,7 +48,7 @@ export interface Routes {
   'GET /api/shorts/feed': { answer: ShortsFeed }
   'GET /api/history': { query: HistoryQuery; answer: HistoryAnswer }
   'POST /api/watchlist/add': { body: WatchlistBody; answer: WatchlistAnswer }
-  'POST /api/watchlist/remove': { body: WatchlistBody; answer: WatchlistAnswer }
+  'POST /api/watchlist/remove': { body: WatchlistRemove; answer: WatchlistAnswer }
   'POST /api/tiles/set': { body: TilesSet; answer: TilesAnswer }
   'GET /api/status': { answer: StatusAnswer }
   'GET /api/figures/detail': { query: TradeQuery; answer: Detail }

@@ -30,7 +30,8 @@
   use('positions', positions, filtered)
   const waitingEvent = $derived((book.data?.waiting ?? []).find((w) => w.what === 'event' && w.instrument === trade.instrument && w.account === trade.accountId) ?? null)
 
-  const signedPct = (v: number | null | undefined) => (v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2) + '%')
+  // a listing's day change, a fraction
+  const signedPct = (v: number | null | undefined) => (v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v * 100).toFixed(2) + '%')
 
   // ---- the chart: mount the wanted timeframe, falling back a step coarser when a
   // timeframe is not offered, and showing the daily chart while minute data loads.

@@ -59,6 +59,9 @@ pub enum Entity {
     /// What the record is as a whole: its accounts and instruments, the facts it
     /// waits on the person for, how many transactions it holds, and today.
     Book,
+    /// An instrument's quote, held or not: what a screen showing a listing's own
+    /// price reads (a watched listing, a tile).
+    Quote(InstrumentId),
 }
 
 /// The entities whose figures moved, each with the fields that did; an entity
@@ -343,10 +346,11 @@ impl Engine {
                 self.compare(&before, &mut moved);
             }
             Change::Quote(i, q) => {
-                match q {
+                let was = match q.clone() {
                     Some(q) => self.inputs.market.quotes.insert(i, q),
                     None => self.inputs.market.quotes.remove(&i),
                 };
+                quote_moved(i, was.as_ref(), q.as_ref(), &mut moved);
                 self.reprice(i, &mut moved);
             }
             Change::Closes(i, c) => {
@@ -469,7 +473,32 @@ impl Engine {
     pub fn differences(&self, other: &Engine) -> Moved {
         let mut m = Moved::default();
         self.compare(&other.snapshot(Parts::ALL), &mut m);
+        let (mine, theirs) = (&self.inputs.market.quotes, &other.inputs.market.quotes);
+        for i in mine.keys().chain(theirs.keys()).collect::<BTreeSet<_>>() {
+            quote_moved(*i, theirs.get(i), mine.get(i), &mut m);
+        }
         m
+    }
+}
+
+/// An instrument's quote as reported moved: `*` when it came or went, else the
+/// fields that differ.
+fn quote_moved(i: InstrumentId, was: Option<&Quote>, now: Option<&Quote>, moved: &mut Moved) {
+    let fields: BTreeSet<&'static str> = match (was, now) {
+        (None, None) => BTreeSet::new(),
+        (Some(_), None) | (None, Some(_)) => BTreeSet::from(["*"]),
+        (Some(a), Some(b)) => {
+            // every field named, so a field added to a quote is compared too
+            let Quote { price, change, change_pct, at, source } = a;
+            [("price", *price != b.price), ("change", *change != b.change), ("changePct", *change_pct != b.change_pct), ("at", *at != b.at), ("source", *source != b.source)]
+                .into_iter()
+                .filter(|(_, differs)| *differs)
+                .map(|(f, _)| f)
+                .collect()
+        }
+    };
+    if !fields.is_empty() {
+        moved.0.entry(Entity::Quote(i)).or_default().extend(fields);
     }
 }
 

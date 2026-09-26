@@ -480,9 +480,10 @@ impl Feed {
                 return;
             }
         };
-        // the market's context still comes from the earlier model's readers (moved in part A)
-        let base = match self.app.market_base() {
-            Ok(b) => b,
+        // the market's context: what the person follows, and the tables the
+        // earlier store keeps (rebuilt only when one of them moved)
+        let context = match self.app.market_context() {
+            Ok(c) => c,
             Err(e) => {
                 for key in self.views.keys() {
                     out.push(("refused", serde_json::json!({"doc": key, "error": format!("the market's context: {e}")})));
@@ -491,14 +492,15 @@ impl Feed {
                 return;
             }
         };
-        let base_ptr = Arc::as_ptr(&base) as usize;
+        let base_ptr = Arc::as_ptr(&context) as usize;
         let base_moved = self.base != base_ptr;
         let at = self.at;
         let views = &mut self.views;
         let done = f.read(|engine| {
             let since = f.moved_since(at);
             let now_at = f.version();
-            let cx = crate::views::Cx { engine, names: &names, base: &base };
+            let door = crate::wire::context::Door { built: &context, app: &self.app };
+            let cx = crate::views::Cx { engine, names: &names, tables: &door, following: &context.following };
             let none = bagholder_engine::engine::Moved::default();
             for (key, (_, view)) in views.iter_mut() {
                 if fresh.contains(key) {

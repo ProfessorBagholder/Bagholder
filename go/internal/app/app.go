@@ -35,7 +35,7 @@ const (
 	UpdateCheckHours      = 1
 	UpdatesOffMessage     = "This copy is updated with docker compose pull; a new release is a new image."
 	ImagePage             = RepoURL + "/pkgs/container/bagholder"
-	Protocol              = "2026-09-26.1"
+	Protocol              = "2026-09-26.2"
 	EnrichVersion         = 11
 	LoginURL              = "https://my.wealthsimple.com/app/login"
 

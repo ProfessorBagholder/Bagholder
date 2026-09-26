@@ -15,6 +15,8 @@ pub mod build;
 pub mod context;
 pub mod filters;
 pub mod figures;
+pub mod markets;
+pub mod news;
 
 use serde::Serialize;
 use ts_rs::TS;

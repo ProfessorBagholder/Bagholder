@@ -11,7 +11,7 @@
 // them, and only when they are applied (`applied`), never while they are edited.
 
 import type { Status } from './generated/status'
-import type { BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc, ExposureDoc, MarketsDoc } from './generated/figures'
+import type { BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc, ExposureDoc, MarketsDoc, HeatmapDoc, HeadlinesDoc } from './generated/figures'
 import { watchDoc, type Holder } from './live.svelte'
 import { filters, type Filters } from './filters.svelte'
 
@@ -28,6 +28,8 @@ export const trades: Slot<TradesDoc> = $state({ data: null, error: '' })
 export const cashflow: Slot<CashflowDoc> = $state({ data: null, error: '' })
 export const exposure: Slot<ExposureDoc> = $state({ data: null, error: '' })
 export const markets: Slot<MarketsDoc> = $state({ data: null, error: '' })
+export const heatmap: Slot<HeatmapDoc> = $state({ data: null, error: '' })
+export const headlines: Slot<HeadlinesDoc> = $state({ data: null, error: '' })
 export const trade: Slot<TradeDoc> = $state({ data: null, error: '' })
 
 /** The filters as last applied: what the subscriptions are asked with. */
@@ -40,6 +42,7 @@ export function applyFilters(): void {
   // a long list starts again at its first rows under the new filters
   limits.trades = FIRST_ROWS
   limits.cash = FIRST_ROWS
+  limits.news = FIRST_ROWS
 }
 
 // One subscription per key and parameters, however many components read it.
@@ -89,7 +92,7 @@ export const FIRST_ROWS = 100
  * scrolls to the end of what is there (`more`), and starts again at the first page
  * when the list is asked for under other filters or another order.
  */
-export const limits = $state({ trades: FIRST_ROWS, cash: FIRST_ROWS })
+export const limits = $state({ trades: FIRST_ROWS, cash: FIRST_ROWS, news: FIRST_ROWS })
 
 
 /** The person reached the end of what a list shows: the next rows are asked for. */

@@ -2,7 +2,6 @@
 // `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.
 
 import type { Dec } from '../dec'
-import type { Markets, ExposureSlice } from './wire'
 
 export type Fig<T> = T | { 
 /**
@@ -312,9 +311,162 @@ export type TradeDoc = {
  */
 id: string, trade: Trade | null, position: Position | null, };
 
-export type ExposureDoc = { sectors: Array<ExposureSlice>, regions: Array<ExposureSlice>, };
+export type MarketTile = { id: string, symbol: string, exchange: string, 
+/**
+ * What people call it (`GOLD`, `10Y`), else its symbol.
+ */
+label: string, name: string, kind: string, last: Dec | null, 
+/**
+ * The day's change in points.
+ */
+change: Dec | null, 
+/**
+ * The day's change, as a fraction.
+ */
+percentChange: number | null, 
+/**
+ * Its prices' scale.
+ */
+decimals: number, 
+/**
+ * Quoted as 100 minus the rate it settles against: the tile shows the rate.
+ */
+pricedAsRate: boolean, 
+/**
+ * That rate, 100 − the price; none for any other instrument, or before a quote.
+ */
+rate: Dec | null, 
+/**
+ * The rate's move, against the price's; none where the price's is not known.
+ */
+rateChange: Dec | null, };
 
-export type MarketsDoc = { markets: Markets, };
+export type WatchItem = { 
+/**
+ * The instrument, which removing it names.
+ */
+id: string, symbol: string, exchange: string, name: string, 
+/**
+ * What its prices are in.
+ */
+currency: string, last: Dec | null, 
+/**
+ * The day's change in points.
+ */
+change: Dec | null, 
+/**
+ * The day's change, as a fraction.
+ */
+percentChange: number | null, sector: string, 
+/**
+ * `Shares`, `Crypto`, or the directory's kind (`Index`, `Future`, …).
+ */
+kind: string, 
+/**
+ * The holding it is, where the book holds it: a click opens that page.
+ */
+positionId: string | null, };
+
+export type DirectoryEntry = { 
+/**
+ * `SYMBOL@VENUE`.
+ */
+key: string, symbol: string, label: string, name: string, exchange: string, kind: string, aliases: Array<string>, };
+
+export type MarketsDoc = { tiles: Array<MarketTile>, watchlist: Array<WatchItem>, directory: Array<DirectoryEntry>, };
+
+export type HeatTile = { 
+/**
+ * Its own in the heatmap: its symbol, told apart from another of the same by
+ * its venue, a folded remainder by its sector. A tile keeps it from one
+ * universe or sizing to the next, so it travels.
+ */
+key: string, 
+/**
+ * The holding it is, where it is one: a click opens that page.
+ */
+id: string | null, symbol: string, exchange: string, currency: string, name: string, 
+/**
+ * What it is sized by: its value in CAD, its index weight or market cap, or
+ * one under `Equal`.
+ */
+value: Dec, 
+/**
+ * The day's change, as a fraction; for `Other (N)`, its tiles' value-weighted.
+ */
+percentChange: number | null, 
+/**
+ * Several small tiles folded into one, which opens nothing.
+ */
+other: boolean, };
+
+export type HeatBlock = { label: string, 
+/**
+ * Σ its tiles' values.
+ */
+value: Dec, 
+/**
+ * Its tiles' value-weighted day change, as a fraction.
+ */
+percentChange: number | null, tiles: Array<HeatTile>, };
+
+export type HeatCounts = { holdings: number, watchlist: number, both: number, ca: number, us: number, intl: number, };
+
+export type HeatmapDoc = { universe: string, size: string, blocks: Array<HeatBlock>, counts: HeatCounts, };
+
+export type ExposureDoc = { sectors: Array<Slice>, regions: Array<Slice>, };
+
+export type NewsTag = { 
+/**
+ * Its bare ticker.
+ */
+symbol: string, exchange: string, held: boolean, watched: boolean, 
+/**
+ * The listing's day change, as a fraction: the holding's where the book
+ * holds it, the watched listing's otherwise.
+ */
+percentChange: number | null, 
+/**
+ * The holding it is, where the book holds it.
+ */
+positionId: string | null, };
+
+export type Filed = { id: string, symbol: string, source: string, url: string, 
+/**
+ * Its title is still being read.
+ */
+pending: boolean, };
+
+export type Headline = { id: string, headline: string, 
+/**
+ * The wire or publisher, or the regulator for a filed release.
+ */
+source: string, url: string, publishedAt: string, 
+/**
+ * From the market's own feed rather than a listing's.
+ */
+market: boolean, 
+/**
+ * `story`, or `release` for a company's own.
+ */
+kind: string, tags: Array<NewsTag>, 
+/**
+ * A release as the issuer filed it, beside the wires'.
+ */
+filed: Filed | null, };
+
+export type ChipKinds = { stories: number, releases: number, };
+
+export type HeadlinesDoc = { items: Array<Headline>, total: number, 
+/**
+ * Under a chip: how many of its items each tab holds.
+ */
+chip: ChipKinds | null, 
+/**
+ * Why the issuers' filed releases are not on the Releases tab, when they
+ * could not be read.
+ */
+filedFailed: string | null, };
 
 export type Range = { 
 /**
@@ -353,4 +505,28 @@ sort: Sort | null,
 /**
  * How many rows of a long list the page shows: as far as it has scrolled.
  */
-limit: number | null, };
+limit: number | null, 
+/**
+ * The heatmap's universe: `holdings`, `watchlist`, `both`, `ca`, `us`, `intl`.
+ */
+universe: string | null, 
+/**
+ * The heatmap's sizing: `value` or `equal`.
+ */
+size: string | null, 
+/**
+ * The News card's scope: `all`, `holdings`, `watchlist`.
+ */
+scope: string | null, 
+/**
+ * The News card's tab: `stories` or `releases`.
+ */
+kind: string | null, 
+/**
+ * The News card's chip: a listing's bare ticker and its venue.
+ */
+symbol: string | null, exchange: string | null, 
+/**
+ * What is typed in the News card's box.
+ */
+query: string | null, };

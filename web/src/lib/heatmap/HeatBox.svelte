@@ -1,38 +1,27 @@
 <script lang="ts">
-  // The treemap itself: sector blocks and symbol tiles laid out by the squarified
-  // algorithm and placed with absolute left/top/width/height. Nodes are keyed by
-  // sector label and by symbol so that when the universe or sizer changes the same
-  // node travels to its new slot (the .heat-tile/.heat-blk CSS transitions animate
-  // it) instead of being recreated; a genuinely new tile gets .bh-new for its
-  // arrival keyframe, but never on the first draw.
-  import type { Tile } from './treemap'
+  // The treemap itself: the server's sector blocks and tiles laid out by the
+  // squarified algorithm and placed with absolute left/top/width/height. Nodes are
+  // keyed by sector label and by the tile's own key so that when the universe or
+  // sizer changes the same node travels to its new slot (the .heat-tile/.heat-blk
+  // CSS transitions animate it) instead of being recreated; a genuinely new tile
+  // gets .bh-new for its arrival keyframe, but never on the first draw.
+  import type { HeatBlock } from '../model'
+  import type { HeatCell } from './treemap'
   import { heatmapLayout, heatColor } from './treemap'
   import { signedPct } from '../markets/util'
   import { bareSymbol } from '../sym'
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
 
-  let { tiles, universe, boxStyle }: { tiles: Tile[]; universe: string; boxStyle: string } = $props()
+  let { blocks, universe, boxStyle }: { blocks: HeatBlock[]; universe: string; boxStyle: string } = $props()
 
   const MARKET_U: Record<string, string> = { ca: 'Canada', us: 'US', intl: 'International' }
 
   let W = $state(0)
   let H = $state(0)
-  const layout = $derived(W > 0 && H > 0 && tiles.length ? heatmapLayout(tiles, W, H) : { blocks: [], cells: [] })
-
-  // A tile is kept under its symbol so it travels; what a symbol alone does not tell apart
-  // is told apart by more: a sector's folded remainder by its sector (two sectors may each
-  // fold to `Other (2)`), a symbol met twice by its venue and then by its place.
-  const cells = $derived.by(() => {
-    const taken = new Set<string>()
-    return layout.cells.map((c, i) => {
-      let key = c.other ? 'other|' + c.sector : c.symbol
-      if (taken.has(key)) key += '|' + (c.exchange || '')
-      if (taken.has(key)) key += '|' + i
-      taken.add(key)
-      return { ...c, key }
-    })
-  })
+  const layout = $derived(W > 0 && H > 0 && blocks.length ? heatmapLayout(blocks, W, H) : { blocks: [], cells: [] })
+  // a tile travels under the server's key for it
+  const cells = $derived(layout.cells)
 
   // arrival tracking, mirroring mountHeatmap's `had`/`fresh`
   let seen = new Set<string>()
@@ -48,7 +37,7 @@
   const px1 = (n: number) => n.toFixed(1) + 'px'
 
   // a market universe's tiles carry no venue of their own: the universe is the venue
-  function heatListing(c: Tile) {
+  function heatListing(c: HeatCell) {
     const venue = c.exchange || (universe === 'ca' ? 'TSX' : '')
     return {
       symbol: bareSymbol(c.symbol),
@@ -57,14 +46,14 @@
       name: c.name || '',
     }
   }
-  function openCell(c: Tile & { other?: boolean }) {
+  function openCell(c: HeatCell) {
     if (c.id) goSub('portfolio', c.id)
     else if (c.symbol && !c.other) {
       const o = heatListing(c)
       goSub('markets', rememberListing(o))
     }
   }
-  const opens = (c: Tile & { other?: boolean }) => !!c.id || (!!c.symbol && !c.other)
+  const opens = (c: HeatCell) => !!c.id || (!!c.symbol && !c.other)
   const blkColor = (chg: number | null) => (chg == null ? 'var(--ink55)' : chg >= 0 ? 'var(--pos)' : 'var(--neg)')
 </script>
 

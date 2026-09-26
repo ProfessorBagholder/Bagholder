@@ -74,6 +74,10 @@ pub struct Chart {
     pub dividends: Vec<(Date, Dec)>,
     pub splits: Vec<Split>,
     pub quote: YahooQuote,
+    /// The close before the chart's span, as stated (`chartPreviousClose`): for
+    /// the one-day chart a quote is read from, the previous session's close, which
+    /// the day's change is measured from.
+    pub previous_close: Option<Dec>,
 }
 
 fn instant(n: i64, path: &str) -> Result<Timestamp, Mismatch> {
@@ -142,6 +146,13 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
         Ok(n) => Some(n.as_dec()?),
         Err(_) => None,
     };
+    let previous_close = match meta.field("chartPreviousClose") {
+        Ok(n) => Some(n.as_dec()?),
+        Err(_) => None,
+    };
+    if previous_close.is_some_and(|p| p <= Dec::ZERO) {
+        return Ok(Err(format!("{symbol}'s previous close is {}", previous_close.unwrap_or(Dec::ZERO))));
+    }
     if price <= Dec::ZERO {
         return Ok(Err(format!("{symbol}'s price is {price}")));
     }
@@ -218,7 +229,7 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
             }
         }
     }
-    Ok(Ok(Chart { symbol: answered.to_string(), currency, closes, dividends: declared, splits, quote: YahooQuote { price, at, change_pct } }))
+    Ok(Ok(Chart { symbol: answered.to_string(), currency, closes, dividends: declared, splits, quote: YahooQuote { price, at, change_pct }, previous_close }))
 }
 
 /// Epoch seconds at the start of `d` in UTC: the chart's `period1`/`period2`.
