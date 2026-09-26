@@ -37,8 +37,21 @@ test('Escape in the News box clears the words typed; in the Short interest box t
 })
 
 test('the News card reads Reading… while the server\'s pass still has the market feed to read', async ({ page, request }) => {
-  await openWithStatus(page, request, { newsReading: ['*'] }, '#markets', (m) => { (m.markets as { news: unknown[] }).news = [] })
+  const noNews = (m: Record<string, unknown>) => { (m.markets as { news: unknown[] }).news = [] }
+  await openWithStatus(page, request, {}, '#markets', noNews, { news: { reading: ['*'] } })
   await expect(page.locator('#page')).toContainText('Reading…')
-  await openWithStatus(page, request, { newsReading: [] }, '#markets', (m) => { (m.markets as { news: unknown[] }).news = [] })
+  await openWithStatus(page, request, {}, '#markets', noNews, { news: { reading: [] } })
   await expect(page.locator('#page')).toContainText('No news.')
+})
+
+test('the news is asked for while the News card shows, and not by a page on another tab', async ({ page, request }) => {
+  let docs: string[] = []
+  await page.route('**/api/events/watch', async (route) => {
+    docs = Object.keys((route.request().postDataJSON() as { docs: Record<string, unknown> }).docs)
+    await route.fulfill({ status: 200, json: { ok: true } })
+  })
+  await openWithStatus(page, request, {}, '#markets')
+  await expect.poll(() => docs.includes('news')).toBe(true)
+  await page.getByRole('button', { name: 'Trades' }).click()
+  await expect.poll(() => docs.includes('news')).toBe(false)
 })

@@ -371,6 +371,20 @@ pub fn news_reading(app: &Arc<App>) -> Vec<String> {
     left
 }
 
+/// `news`: what a page showing the News card is sent beside the model's items -- the
+/// listings the running pass has still to read (`*` the market feed), so the card
+/// reads `Reading…` rather than `No news.` for a listing not read yet. A page showing
+/// it is also what the news is read for.
+#[derive(Clone, Debug, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsDoc {
+    pub reading: Vec<String>,
+}
+
+pub fn news_stored(app: &Arc<App>) -> NewsDoc {
+    NewsDoc { reading: news_reading(app) }
+}
+
 /// Every source for every listing with one due. Never fails. Each listing's
 /// items reach the model as it lands, and the listings still to read are in
 /// the status, so the News card says a read is under way instead of `No
@@ -403,15 +417,18 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
     })
 }
 
-/// At start, then every five minutes, each listing read once per fifteen.
-/// Whether anyone is owed the news: a page is open to show it, or a Releases
-/// notification set is on and must hear of a release with no page open.
-fn news_wanted(app: &Arc<App>) -> bool {
-    app.events.watchers() > 0 || conn(app).map_or(false, |c| crate::notify::any_release_scope(&c))
+/// Whether anyone is owed the news: a page shows the News card (the `news`
+/// document), or a Releases notification set is on and must hear of a release
+/// whoever is looking. A page open on another tab is not owed it.
+pub(crate) fn news_wanted(app: &Arc<App>) -> bool {
+    app.events.watched("news") || conn(app).map_or(false, |c| crate::notify::any_release_scope(&c))
 }
 
+/// While someone is owed the news: at once when they come to be (a page starting to
+/// show the card wakes the park), then every five minutes, each listing's sources
+/// read when due (once per fifteen). The sources publish no feed to be told by, so
+/// they are read on that clock; with nobody owed them, nothing is read.
 pub fn news_loop(app: Arc<App>) {
-    // no wire pushes, so the sources are read; but only while someone is owed them
     while app.events.park_until(&app, || news_wanted(&app)) {
         refresh_news(&app);
         if app.wait(Duration::from_secs(300)) {
@@ -3449,6 +3466,47 @@ mod tests {
             assert!(!after.reading, "a failed read is not still being read");
             assert_eq!(after.gauge.map(|g| g.gauge.score), Some(40.0));
         }
+    }
+
+    // --- News: read for a page showing the card, not for any open page
+
+    /// An app of its own on a home of its own, no page open, no notification set on.
+    fn own_app() -> (tempfile::TempDir, Arc<App>) {
+        let home = tempfile::tempdir().unwrap();
+        let a = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        bagholder_store::schema::init_schema(&a.open().unwrap()).unwrap();
+        (home, a)
+    }
+
+    fn page_showing(a: &Arc<App>, keys: &[&str]) -> crate::events::Feed {
+        let feed = crate::events::Feed::open(a.clone(), None);
+        let docs = keys.iter().map(|k| (k.to_string(), json!({}))).collect();
+        assert!(a.events.watch(a, feed.id(), docs));
+        feed
+    }
+
+    #[test]
+    fn test_news_is_owed_to_a_page_showing_the_news_card_and_to_no_other() {
+        let (_home, a) = own_app();
+        assert!(!news_wanted(&a), "no page open");
+        let elsewhere = page_showing(&a, &[]);
+        assert!(!news_wanted(&a), "a page open on another tab is not owed the news");
+        let news = page_showing(&a, &["news"]);
+        assert!(news_wanted(&a), "a page showing the card is");
+        drop(news);
+        assert!(!news_wanted(&a), "and once it stops, nobody is");
+        drop(elsewhere);
+    }
+
+    #[test]
+    fn test_the_news_document_names_the_listings_the_pass_has_still_to_read() {
+        let (_home, a) = own_app();
+        let read = |a: &Arc<App>| serde_json::to_value(crate::docs::read(a, "news").expect("the news card's document")).unwrap();
+        assert_eq!(read(&a), json!({"reading": []}));
+        *a.feeds.news_left.lock().unwrap() = ["*".to_string(), "QNC".to_string()].into_iter().collect();
+        assert_eq!(read(&a), json!({"reading": ["*", "QNC"]}));
+        a.feeds.news_left.lock().unwrap().clear();
+        assert_eq!(read(&a), json!({"reading": []}));
     }
 
     // --- the listing page

@@ -6,6 +6,8 @@
   // merge the issuer's filed releases; disclosures come from /api/filings/feed (or
   // one listing's /api/filings under a chip).
   import type { NewsItem, NewsTag } from '../model'
+  import type { NewsDoc } from '../generated/markets'
+  import { watchDoc } from '../live'
   import { signedPct, newsWhen, discDate, newsTextKey } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, sortRows } from '../sort.svelte'
@@ -21,6 +23,11 @@
   import { escapable } from '../escape'
 
   let { news }: { news: NewsItem[] } = $props()
+
+  // Shown, the card says so: the news is read for a page showing it (and for a
+  // Releases notification), and the server sends the listings its pass has still to read.
+  const pass = $state<{ data: NewsDoc | null }>({ data: null })
+  $effect(() => watchDoc('news', {}, pass))
 
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
@@ -257,7 +264,7 @@
   // card's scope (or the chip) still to read (the status names them; `*` is the market's feed)
   const passReading = $derived.by(() => {
     if (sym && reading === sym.symbol) return true
-    const left = store.model?.status?.newsReading ?? []
+    const left = pass.data?.reading ?? []
     if (!left.length) return false
     const has = (s: string) => left.includes(bareSymbol(s).toUpperCase())
     if (sym) return has(sym.symbol)

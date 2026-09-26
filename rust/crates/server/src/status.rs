@@ -10,7 +10,7 @@ use ts_rs::TS;
 
 use crate::app::{self, App};
 use crate::notify::NotifyStatus;
-use crate::{feeds, login, notify, orders, session, update, versions};
+use crate::{login, notify, orders, session, update, versions};
 
 /// The header's own data: the connection, the sync under way, the update on
 /// offer, the counts. In the order `payload` has always written it.
@@ -46,7 +46,6 @@ pub struct Status {
     pub updating: String,
     pub update_error: String,
     pub notify: NotifyStatus,
-    pub news_reading: Vec<String>,
 }
 
 /// `GET /api/status`: `Status` plus the two version strings the legacy
@@ -104,7 +103,6 @@ pub fn status(app: &Arc<App>) -> Status {
         updating: st.updating.clone(),
         update_error: st.update_error.clone(),
         notify: notify_status,
-        news_reading: feeds::news_reading(app),
     }
 }
 

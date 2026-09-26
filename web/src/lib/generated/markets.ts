@@ -27,6 +27,8 @@ export type UniverseDoc = {
  */
 failed: string | null, };
 
+export type NewsDoc = { reading: Array<string>, };
+
 export type ShortMarket = "us" | "ca";
 
 export type VolumeSpan = "day" | "period";

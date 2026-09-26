@@ -58,7 +58,6 @@ fn status_doc(sync_step: &str) -> Status {
         updating: String::new(),
         update_error: String::new(),
         notify: NotifyStatus { settings: NotifySettings { fills: true, ..Default::default() }, native: String::new(), unread: 0 },
-        news_reading: vec![],
     }
 }
 

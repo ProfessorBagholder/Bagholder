@@ -62,4 +62,6 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
   },
   'universe': {
   },
+  'news': {
+  },
 }

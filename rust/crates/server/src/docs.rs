@@ -22,7 +22,7 @@ use bagholder_diff::Diff;
 use ts_rs::TS;
 
 use crate::app::App;
-use crate::feeds::{FearDoc, FilingsDoc, FilingsFeed, ShortsFeed, UniverseDoc};
+use crate::feeds::{FearDoc, FilingsDoc, FilingsFeed, NewsDoc, ShortsFeed, UniverseDoc};
 use crate::notify::NotificationsDoc;
 use crate::orders::OrdersDoc;
 
@@ -108,6 +108,8 @@ pub enum Doc {
     History(HistoryPending),
     /// `universe:<key>`: what the last read of a market universe came to.
     Universe(UniverseDoc),
+    /// `news`: the News card's pass, the listings it has still to read.
+    News(NewsDoc),
 }
 
 impl Diff for Doc {
@@ -123,6 +125,7 @@ impl Diff for Doc {
             (Quote(a), Quote(b)) => a.diff(b, path, ops),
             (History(a), History(b)) => a.diff(b, path, ops),
             (Universe(a), Universe(b)) => a.diff(b, path, ops),
+            (News(a), News(b)) => a.diff(b, path, ops),
             // a key's document never actually changes shape once opened: kept only
             // so a mismatch here is a whole-object diff (as the untyped differ gave
             // two unlike objects), never a panic
@@ -156,6 +159,7 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         k if k.starts_with("history:") => Some(Doc::History(HistoryPending { pending: crate::feeds::history_pending(app, &crate::feeds::HistoryQuery::parse(&k["history:".len()..])) })),
         // `universe:<key>`: a market universe the heatmap shows
         k if k.starts_with("universe:") => crate::feeds::universe_stored(app, &k["universe:".len()..]).map(Doc::Universe),
+        "news" => Some(Doc::News(crate::feeds::news_stored(app))),
         _ => None,
     }
 }
