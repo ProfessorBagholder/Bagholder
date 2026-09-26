@@ -2,7 +2,7 @@
   // The confirmation dialog, ported from confirmDialogHtml: Clear data / Disconnect,
   // and the order/bracket cancel variants (confirm = `cancel:<id>` / `bracket:<id>`).
   import { ui, clearDataNow, disconnectNow, DATA_KINDS } from './ui.svelte'
-  import { ordersStore, orderLine, bracketLegs, cancelOrderNow, cancelBracketNow } from './orders/orders.svelte'
+  import { ordersStore, orderLine, legRow, cancelOrderNow, cancelBracketNow } from './orders/orders.svelte'
   import { symText } from './sym'
 
   const cancelId = $derived(ui.confirm.startsWith('cancel:') ? ui.confirm.slice(7) : '')
@@ -17,7 +17,7 @@
     return clear ? 'Clear data' : 'Disconnect'
   }
   function body(): string {
-    if (bracketId) return bracket ? symText(bracket.symbol) + ' · ' + bracketLegs(bracket).map((l) => (l.label + ' ' + l.line).trim()).join(' · ') : ''
+    if (bracketId) return bracket ? symText(bracket.symbol) + ' · ' + bracket.legs.map(legRow).map((l) => l.label + ' ' + l.line).join(' · ') : ''
     if (cancelId) return order ? orderLine(order) : ''
     return 'Signs out of Wealthsimple on this machine. Your synced history stays.'
   }

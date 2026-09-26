@@ -18,14 +18,22 @@ fn book_of(app: &Arc<App>) -> Result<bagholder_book::Book, String> {
 }
 
 /// What the order stands at now: the broker's own statement where it made one, else
-/// the newest change asked for that was not refused, else what it was placed with.
+/// the newest change asked for that the broker did not refuse, else what it was
+/// placed with.
 fn standing(o: &bagholder_book::orders::StoredOrder, log: &[bagholder_book::orders::Logged<OrderEvent>]) -> (Dec, Option<Dec>) {
     let mut qty = o.request.quantity;
     let mut limit = o.request.limit_price;
+    // what it stood at before the change last asked, for a refusal of that change
+    let mut before = (qty, limit);
     for l in log.iter().filter(|l| l.refused.is_none()) {
-        if let OrderEvent::ModifyAsked { limit_price, quantity } = &l.event {
-            qty = quantity.unwrap_or(qty);
-            limit = limit_price.or(limit);
+        match &l.event {
+            OrderEvent::ModifyAsked { limit_price, quantity } => {
+                before = (qty, limit);
+                qty = quantity.unwrap_or(qty);
+                limit = limit_price.or(limit);
+            }
+            OrderEvent::ModifyRefused { .. } => (qty, limit) = before,
+            _ => {}
         }
     }
     if let Some(q) = o.stated_quantity {

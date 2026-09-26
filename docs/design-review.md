@@ -19,7 +19,7 @@ These are wrong today, whatever the design.
 3. **Order handling sees only the newest 200 orders** (`store.list_orders(limit=200)`; Rust `tools.rs:172`). Each move of a trailing stop adds an order, so this fills. Past it, a waiting bracket's entry is not found and the bracket is cancelled without a word, and the refresh can fail on every pass.
 
 **In the Rust build** (not in use yet):
-- A sale from the ticket does not wait for the stop's cancel to be confirmed (`ticket.rs:687-705`; a test asserts the violation, `tests_brackets.rs:504-521`).
+- A sale from the ticket does not wait for the stop's cancel to be confirmed. Fixed in stage 4 (`server/src/tests_execution.rs` `a_sale_from_the_ticket_goes_out_only_once_the_stops_cancel_is_confirmed`).
 - A watched stop can fire while the target's cancel is unconfirmed (`brackets.rs:633-687`).
 - A bracket whose watched market sell is refused is stuck in `Firing` and never retried (`brackets.rs:567-575`).
 - With the container port published beyond loopback, anyone on the network can place orders (`http/mod.rs:267-295`).

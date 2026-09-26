@@ -205,3 +205,24 @@ fn the_words_the_tables_allow_are_exactly_the_states_the_machines_have() {
     assert_eq!(list("time_in_force"), TimeInForce::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>());
     assert_eq!(list("role"), OrderRole::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>());
 }
+
+#[test]
+fn an_order_and_a_bracket_carried_over_stand_where_the_earlier_app_had_them_and_read_back() {
+    let (_d, b) = book();
+    let (was, at) = (t("2026-09-01T14:00:00Z"), t("2026-09-28T14:00:00Z"));
+    let stop = Some(StopLeg { level: d("95"), trail: Some(Trail::Amount(d("2"))), high: Some(d("97")) });
+    let bracket = BracketEvent::Imported { phase: Phase::Guarding, quantity: d("10"), stop, target: Some(d("110")), native: true, exit: Some((ExitRole::Stop, "order-2".into())), attempts: 1, why: Some("closed".into()), outcome: None, seen_held: true, row: "{\"id\":\"bracket-1\"}".into() };
+    b.import_bracket(&place(), &bracket, was, at).unwrap();
+    let sb = b.bracket("bracket-1").unwrap().unwrap();
+    assert_eq!((sb.bracket.phase, sb.bracket.exit.clone(), sb.created_at), (Phase::Guarding, Some((ExitRole::Stop, "order-2".to_string())), was));
+    assert_eq!(b.bracket_log("bracket-1").unwrap()[0].event, bracket);
+    let order = OrderEvent::Imported { state: OrderState::PartlyFilled, broker_id: Some("ws-9".into()), filled: d("4"), average: Some(d("96.5")), why: None, row: "{\"id\":\"order-2\"}".into() };
+    b.import_order(&request("order-2", Some(("bracket-1", OrderRole::Stop))), &order, was, at).unwrap();
+    let o = b.order("order-2").unwrap().unwrap();
+    assert_eq!((o.fold.state, o.fold.filled, o.fold.broker_id.as_deref(), o.created_at), (OrderState::PartlyFilled, d("4"), Some("ws-9"), was));
+    assert_eq!(b.orders_in_flight().unwrap().len(), 1, "found by its state like any other");
+    assert_eq!(b.live_brackets().unwrap().len(), 1);
+    assert!(b.states_disagreeing().unwrap().is_empty());
+    // only an imported event starts one this way
+    assert!(b.import_order(&request("order-3", None), &OrderEvent::Written { dry: false }, was, at).is_err());
+}

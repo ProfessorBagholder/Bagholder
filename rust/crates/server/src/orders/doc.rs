@@ -337,6 +337,17 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
                 (true, None) => leg.note = "Filled".into(),
                 (false, _) => leg.note = not_exited.into(),
             }
+            // an exit refused for shares that are not there: the reason on its leg
+            if exited_by.is_none() && b.outcome.as_deref() == Some("the shares are not there") {
+                let refused = orders.iter().rev().find(|o| o.fold.state == OrderState::Rejected && o.request.bracket.as_ref().is_some_and(|(_, r)| *r != OrderRole::Entry));
+                let mine = refused.is_some_and(|o| {
+                    let r = o.request.bracket.as_ref().map(|(_, r)| *r);
+                    if is_stop { matches!(r, Some(OrderRole::Stop | OrderRole::Market)) } else { r == Some(OrderRole::Target) }
+                });
+                if mine {
+                    leg.note = format!("Off · {}", refused.and_then(|o| o.fold.why.clone()).or_else(|| b.why.clone()).unwrap_or_else(|| "the shares are not there".into()));
+                }
+            }
         }
         out.push(leg);
     }
@@ -414,7 +425,8 @@ fn order_card(o: &StoredOrder, waiting: Option<(&Bracket, &[StoredOrder])>, name
         state: o.fold.state.as_str().into(),
         filled: t(o.fold.filled),
         average: o.fold.average.map(t),
-        why: o.fold.why.clone(),
+        // a reading that could not be taken is the newest word on it
+        why: o.refused.clone().or_else(|| o.fold.why.clone()),
         value,
         approx,
         tab: tab_of(o.fold.state).into(),

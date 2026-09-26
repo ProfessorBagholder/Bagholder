@@ -13,6 +13,7 @@ pub mod identity;
 pub mod import;
 pub mod links;
 pub mod mapping;
+pub mod fills;
 pub mod orders;
 pub mod person;
 pub mod records;

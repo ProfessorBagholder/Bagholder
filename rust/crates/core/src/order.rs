@@ -162,6 +162,9 @@ pub enum OrderEvent {
     ModifyAsked { limit_price: Option<Dec>, quantity: Option<Dec> },
     /// The broker refused the change.
     ModifyRefused { why: String },
+    /// Carried over from the earlier app's store once, where it stood then: the
+    /// state, the broker's id, what had filled, and the row as it was (JSON text).
+    Imported { state: OrderState, broker_id: Option<String>, filled: Dec, average: Option<Dec>, why: Option<String>, row: String },
 }
 
 impl OrderEvent {
@@ -178,6 +181,7 @@ impl OrderEvent {
             OrderEvent::CancelRefused { .. } => "cancel-refused",
             OrderEvent::ModifyAsked { .. } => "modify-asked",
             OrderEvent::ModifyRefused { .. } => "modify-refused",
+            OrderEvent::Imported { .. } => "imported",
         }
     }
 }
@@ -222,9 +226,15 @@ impl std::fmt::Display for NotAllowed {
 }
 
 impl OrderFold {
-    /// The order as its first event makes it: only `Written` can start one.
+    /// The order as its first event makes it: `Written`, or `Imported` from the earlier app.
     pub fn start(first: &OrderEvent) -> Result<OrderFold, NotAllowed> {
         match first {
+            OrderEvent::Imported { state, broker_id, filled, average, why, .. } => {
+                if filled.is_negative() {
+                    return Err(NotAllowed { state: *state, event: first.kind(), why: "a negative filled quantity".into() });
+                }
+                Ok(OrderFold { state: *state, broker_id: broker_id.clone(), filled: *filled, average: *average, why: why.clone(), code: None })
+            }
             OrderEvent::Written { dry } => Ok(OrderFold {
                 state: if *dry { OrderState::Dry } else { OrderState::Sending },
                 broker_id: None,
@@ -276,7 +286,7 @@ impl OrderFold {
     pub fn apply(&mut self, event: &OrderEvent) -> Result<Applied, NotAllowed> {
         use OrderState::*;
         match event {
-            OrderEvent::Written { .. } => Err(self.refuse(event, "an order is written once")),
+            OrderEvent::Written { .. } | OrderEvent::Imported { .. } => Err(self.refuse(event, "an order is written once")),
             OrderEvent::NotSent { why } => match self.state {
                 Sending => {
                     self.why = Some(why.clone());
@@ -466,6 +476,7 @@ mod tests {
             OrderEvent::CancelRefused { why: "x".into() },
             OrderEvent::ModifyAsked { limit_price: Some(d("9")), quantity: None },
             OrderEvent::ModifyRefused { why: "x".into() },
+            OrderEvent::Imported { state: Pending, broker_id: None, filled: Dec::ZERO, average: None, why: None, row: "{}".into() },
         ];
         for s in [BrokerStatus::Open, BrokerStatus::Filled, BrokerStatus::Cancelled, BrokerStatus::Expired, BrokerStatus::Rejected, BrokerStatus::NotFound] {
             v.push(read(s, "0"));

@@ -159,6 +159,9 @@ pub enum BracketEvent {
     SaleDropped { why: String },
     /// A statement of the account's units read at `read_at` lists the position, or not.
     PositionRead { held: bool, read_at: Timestamp },
+    /// Carried over from the earlier app's store once, where it stood then, with the
+    /// row as it was (JSON text).
+    Imported { phase: Phase, quantity: Dec, stop: Option<StopLeg>, target: Option<Dec>, native: bool, exit: Option<(ExitRole, String)>, attempts: u32, why: Option<String>, outcome: Option<String>, seen_held: bool, row: String },
 }
 
 impl BracketEvent {
@@ -182,6 +185,7 @@ impl BracketEvent {
             BracketEvent::Sold { .. } => "sold",
             BracketEvent::SaleDropped { .. } => "sale-dropped",
             BracketEvent::PositionRead { .. } => "position-read",
+            BracketEvent::Imported { .. } => "imported",
         }
     }
 }
@@ -238,8 +242,27 @@ impl Bracket {
     /// event that is not a move from where it falls is skipped, as when it was recorded.
     pub fn of(events: &[(Timestamp, BracketEvent)]) -> Option<Bracket> {
         let (first, rest) = events.split_first()?;
-        let BracketEvent::Created { quantity, stop, target } = &first.1 else { return None };
-        let mut b = Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, attempts: 0, refused_at: None, why: None, outcome: None, sale: None, seen_held: false, missed_at: None };
+        let mut b = match &first.1 {
+            BracketEvent::Created { quantity, stop, target } => Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, attempts: 0, refused_at: None, why: None, outcome: None, sale: None, seen_held: false, missed_at: None },
+            BracketEvent::Imported { phase, quantity, stop, target, native, exit, attempts, why, outcome, seen_held, .. } => Bracket {
+                phase: *phase,
+                quantity: *quantity,
+                stop: *stop,
+                target: *target,
+                native: *native,
+                exit: exit.clone(),
+                // the exit stands where the earlier app placed it: what the broker states is followed
+                exit_at: exit.as_ref().map(|(role, _)| (if *role == ExitRole::Target { *target } else { stop.map(|s| s.level) }, *quantity)),
+                attempts: *attempts,
+                refused_at: None,
+                why: why.clone(),
+                outcome: outcome.clone(),
+                sale: None,
+                seen_held: *seen_held,
+                missed_at: None,
+            },
+            _ => return None,
+        };
         for (at, e) in rest {
             let _ = b.apply(*at, e);
         }
@@ -251,7 +274,7 @@ impl Bracket {
         use Phase::*;
         let refuse = |b: &Bracket| Err(format!("{} is not a move from {}", e.kind(), b.phase.as_str()));
         match e {
-            BracketEvent::Created { .. } => return refuse(self),
+            BracketEvent::Created { .. } | BracketEvent::Imported { .. } => return refuse(self),
             BracketEvent::Armed { quantity, high, native } => {
                 if self.phase != Waiting {
                     return refuse(self);
@@ -880,4 +903,150 @@ where
         }
     }
     steps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use Phase::*;
+
+    fn d(s: &str) -> Dec {
+        Dec::parse(s).unwrap()
+    }
+
+    fn t() -> Timestamp {
+        "2026-09-28T14:00:00Z".parse().unwrap()
+    }
+
+    fn placed(role: ExitRole, id: &str) -> BracketEvent {
+        BracketEvent::Placed { role, order_id: id.into(), price: Some(d("95")), quantity: d("10") }
+    }
+
+    /// A bracket brought to `phase` by allowed events, with its current exit where
+    /// the phase has one.
+    fn at(phase: Phase) -> Bracket {
+        let stop = Some(StopLeg { level: d("95"), trail: None, high: None });
+        let mut path = vec![BracketEvent::Created { quantity: d("10"), stop, target: Some(d("110")) }];
+        let armed = BracketEvent::Armed { quantity: d("10"), high: None, native: true };
+        let more: Vec<BracketEvent> = match phase {
+            Waiting => vec![],
+            Guarding => vec![armed],
+            ToTarget => vec![armed, placed(ExitRole::Stop, "x1"), BracketEvent::Moved { to: ToTarget }],
+            Target => vec![armed, placed(ExitRole::Target, "x1")],
+            BackToStop => vec![armed, placed(ExitRole::Target, "x1"), BracketEvent::Moved { to: BackToStop }],
+            ToMarket => vec![armed, placed(ExitRole::Target, "x1"), BracketEvent::Moved { to: ToMarket }],
+            Firing => vec![armed, placed(ExitRole::Market, "x1")],
+            ClosingForSale => vec![armed, placed(ExitRole::Stop, "x1"), BracketEvent::SaleAsked { quantity: d("4") }],
+            Closing => vec![armed, placed(ExitRole::Stop, "x1"), BracketEvent::Ended { outcome: "cancelled".into() }],
+            Halted => vec![armed, BracketEvent::Halted { why: "cap".into() }],
+            Ended => vec![armed, BracketEvent::Ended { outcome: "cancelled".into() }],
+        };
+        path.extend(more);
+        let events: Vec<(Timestamp, BracketEvent)> = path.into_iter().map(|e| (t(), e)).collect();
+        let b = Bracket::of(&events).unwrap();
+        assert_eq!(b.phase, phase, "the path to {phase:?}");
+        b
+    }
+
+    fn every_event() -> Vec<BracketEvent> {
+        let mut v = vec![
+            BracketEvent::Created { quantity: d("1"), stop: None, target: None },
+            BracketEvent::Armed { quantity: d("10"), high: None, native: true },
+            BracketEvent::EntryEnded { why: "x".into() },
+            BracketEvent::Trailed { level: d("96"), high: d("101") },
+            BracketEvent::Adopted { level: Some(d("94")), target: None, quantity: None },
+            BracketEvent::Adjusted { stop: Some(StopLeg { level: d("93"), trail: None, high: None }), target: Some(d("111")) },
+            placed(ExitRole::Target, "x2"),
+            BracketEvent::Refused { why: "x".into(), code: None },
+            BracketEvent::Refused { why: "x".into(), code: Some("NOT_ENOUGH_SHARES".into()) },
+            BracketEvent::CancelAsked { order_id: "x1".into() },
+            BracketEvent::Cleared { filled: Dec::ZERO },
+            BracketEvent::Ended { outcome: "x".into() },
+            BracketEvent::Done,
+            BracketEvent::Halted { why: "x".into() },
+            BracketEvent::SaleAsked { quantity: d("4") },
+            BracketEvent::Sold { quantity: d("4") },
+            BracketEvent::SaleDropped { why: "x".into() },
+            BracketEvent::PositionRead { held: true, read_at: t() },
+            BracketEvent::Imported { phase: Guarding, quantity: d("1"), stop: None, target: None, native: false, exit: None, attempts: 0, why: None, outcome: None, seen_held: false, row: "{}".into() },
+        ];
+        for &p in Phase::ALL {
+            v.push(BracketEvent::Moved { to: p });
+        }
+        v
+    }
+
+    /// The table of moves, written out: from a phase (and whether it holds an exit),
+    /// the phase an event leaves the bracket in; `None` where the event is refused.
+    fn allowed(from: Phase, exit: bool, e: &BracketEvent) -> Option<Phase> {
+        let live = from != Ended;
+        match e {
+            BracketEvent::Created { .. } | BracketEvent::Imported { .. } => None,
+            BracketEvent::Armed { .. } => (from == Waiting).then_some(Guarding),
+            BracketEvent::EntryEnded { .. } => (from == Waiting).then_some(Ended),
+            BracketEvent::Trailed { .. } => (live && from != Waiting).then_some(from),
+            BracketEvent::Adopted { .. } => live.then_some(from),
+            BracketEvent::Adjusted { .. } => match from {
+                Ended | Closing | ClosingForSale => None,
+                Halted => Some(Guarding),
+                p => Some(p),
+            },
+            BracketEvent::Placed { role, .. } => {
+                if exit || !live || from == Waiting {
+                    return None;
+                }
+                Some(match (from, role) {
+                    (Guarding | ToTarget | Target, ExitRole::Target) => Target,
+                    (_, ExitRole::Market) => Firing,
+                    (p, _) => p,
+                })
+            }
+            BracketEvent::Refused { code, .. } => {
+                if !live {
+                    return None;
+                }
+                if code.is_some() {
+                    return Some(if exit { Closing } else { Ended });
+                }
+                Some(if from == Firing && !exit { Guarding } else { from })
+            }
+            BracketEvent::CancelAsked { .. } => exit.then_some(from),
+            BracketEvent::Cleared { .. } => exit.then_some(if from == Firing { Guarding } else { from }),
+            BracketEvent::Moved { to } => {
+                let ok = matches!(
+                    (from, to),
+                    (Guarding, ToTarget) | (Guarding, Target) | (ToTarget, Target) | (ToTarget, Guarding) | (Target, ToMarket) | (Target, BackToStop) | (Target, Guarding) | (BackToStop, Guarding) | (ToMarket, Firing) | (ToMarket, Guarding) | (Firing, Guarding)
+                );
+                ok.then_some(*to)
+            }
+            BracketEvent::Ended { .. } => (!matches!(from, Closing | Ended)).then_some(if exit { Closing } else { Ended }),
+            BracketEvent::Done => (from == Closing && !exit).then_some(Ended),
+            BracketEvent::Halted { .. } => (live && !matches!(from, Closing | Waiting)).then_some(Halted),
+            BracketEvent::SaleAsked { .. } => (!matches!(from, Waiting | Closing | Ended | ClosingForSale)).then_some(ClosingForSale),
+            BracketEvent::Sold { .. } => (from == ClosingForSale).then_some(Guarding),
+            BracketEvent::SaleDropped { .. } => (from == ClosingForSale).then_some(Guarding),
+            BracketEvent::PositionRead { .. } => (live && from != Waiting).then_some(from),
+        }
+    }
+
+    #[test]
+    fn every_move_in_the_table_is_made_and_every_other_event_is_refused_and_changes_nothing() {
+        for &phase in Phase::ALL {
+            for e in every_event() {
+                let before = at(phase);
+                let mut b = before.clone();
+                let got = b.apply(t(), &e);
+                match allowed(phase, before.exit.is_some(), &e) {
+                    Some(to) => {
+                        assert!(got.is_ok(), "{phase:?} on {e:?}: {got:?}");
+                        assert_eq!(b.phase, to, "{phase:?} on {e:?}");
+                    }
+                    None => {
+                        assert!(got.is_err(), "{phase:?} takes {e:?}, which the table refuses");
+                        assert_eq!(b, before, "a refused event changes nothing: {phase:?} on {e:?}");
+                    }
+                }
+            }
+        }
+    }
 }

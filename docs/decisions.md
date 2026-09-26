@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
 
+## 2026-09-26
+
+- **No guard against a single far-off quote, and no global switch for automated orders.** Each was drafted from one line of the architecture and answers nothing observed or established for a person's own tool; cancelling a bracket stops its orders, and the per-bracket cap stops a runaway one. The guards kept: at most ten orders a minute from one bracket (one more stops it until the person acts), and no action on a quote whose own time is more than fifteen seconds old or on a failed quote read, said in the header. (Owner; `docs/plans/stage-4-execution.md`.) Held by: `server/src/tests_execution.rs` (`a_bracket_that_sends_more_than_its_cap_stops_and_the_header_says_so`, `a_quote_older_than_fifteen_seconds_by_its_own_time_is_not_acted_on`, `nothing_fires_on_a_stale_quote`).
+
 ## 2026-09-25
 
 - **The owner's list in a plan holds only the owner's choices**: a real choice between options the owner cares about, or a departure from one of the owner's standing rules. A correctness fix goes into `SPEC.md` with its reason and is checked at the gate. Replaces brief 01 §2.2, which asked for every figure change. (Owner; brief 09.) Held by: review only.
@@ -45,7 +49,7 @@ Every decision the owner has made about the app and the work, newest first, one 
 - **A live mark uses the latest rate the Bank of Canada has published.** (Owner; stage 2 plan, b0b934e.) Held by: `engine/tests/cases/rates.json` (the live rate).
 - **External answers are read strictly against the shape the source really sends**; a mismatch is a visible error naming the source and field, never coerced. (Owner.) Held by: `sources/tests/reply.rs`; `wealthsimple/tests/mapping.rs` (`a_reply_of_another_shape_is_unreadable_and_named`); the scan for `lenient`.
 - **A second brokerage is expected.** Wealthsimple sits behind one adapter so another fits beside it; nothing is built for a second one until asked (2026-09-24 above). Self-hosted comes first and always. (Owner.) Held by: `core/tests/boundaries.rs` (the broker interface depends on no adapter).
-- **The watched stop stays a market sell.** A limit can fail to fill, and the stop exists to get out. (Owner; d0a95f8.) Held by: `server/src/tests_brackets.rs` (`test_a_watched_stop_fires_as_a_market_sell_when_wealthsimple_takes_no_stop_order`).
+- **The watched stop stays a market sell.** A limit can fail to fill, and the stop exists to get out. (Owner; d0a95f8.) Held by: `core/tests/brackets.rs` (`a_watched_stop_fires_a_market_sell_on_the_bid_and_its_fill_ends_the_bracket`); `server/src/tests_execution.rs` (`a_market_sell_rejected_after_it_was_taken_puts_the_stop_back`).
 - **Clear data does what `SPEC.md` and its confirmation say.** (Owner.) Replaced 2026-09-25: Clear data clears everything (above).
 - **No backups feature** unless the owner asks for one; it is never slipped into a design as if agreed. (Owner.) Held by: review only.
 - **Autonomous agent trading is the person's choice.** (Owner; `docs/architecture.md` §14.) Held by: review only.
@@ -63,7 +67,7 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 ## Earlier
 
-- **Exits rest at the broker good till cancelled**: a protective order never depends on the app being up. (Owner, 2026-09-10.) Held by: `server/src/tests_brackets.rs` (`test_exits_go_out_good_till_cancelled_whatever_the_entry_was`).
+- **Exits rest at the broker good till cancelled**: a protective order never depends on the app being up. (Owner, 2026-09-10.) Held by: `server/src/tests_execution.rs` (`a_fill_arms_the_bracket_and_the_stop_goes_to_the_broker_at_once`, `a_partly_filled_exit_that_expires_is_placed_again_for_the_rest_good_till_cancelled`).
 - **Only what was asked**: nothing on screen the owner did not ask for. (Owner; `SPEC.md` §1; worded as the owner meant it on 2026-09-25, below.) Held by: review only.
 - **Per-instrument figures in the instrument's own currency; aggregates in CAD, never labelled.** (Owner; `SPEC.md` §1.) Held by: review only.
 - **Raw broker rows are never rewritten.** (Owner; `SPEC.md` §1.) Held by: `book/tests/records.rs` (`a_changed_payload_is_a_revision_and_is_derived_again`); the scan for `relabel`.

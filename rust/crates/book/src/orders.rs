@@ -50,6 +50,9 @@ pub struct StoredOrder {
     pub stated_quantity: Option<Dec>,
     pub expires_at: Option<jiff::Timestamp>,
     pub updated_at: jiff::Timestamp,
+    /// Why the newest event was not a move, when it was not: a reading the broker gave
+    /// that could not be taken (a filled quantity that went down), shown on the order.
+    pub refused: Option<String>,
 }
 
 /// One entry of a log: when, who asked, what, and why it was refused if it was.
@@ -88,11 +91,37 @@ const BRACKET_COLUMNS: &str = "id, broker, broker_account, broker_security, symb
 impl Book {
     /// Write an order before anything is sent: `dry` when orders are off.
     pub fn write_order(&self, o: &OrderRequest, dry: bool, asker: &Asker, at: jiff::Timestamp) -> Result<()> {
+        self.insert_order(o, &OrderEvent::Written { dry }, asker, at, at)
+    }
+
+    /// Carry the earlier app's brackets and orders over in one transaction: all of
+    /// them, or none. Each is (what it is, its `Imported` first event, when it was written).
+    pub fn import_orders(&self, brackets: &[(BracketPlace, BracketEvent, jiff::Timestamp)], orders: &[(OrderRequest, OrderEvent, jiff::Timestamp)], at: jiff::Timestamp) -> Result<()> {
+        self.atomically(|| {
+            for (place, first, created) in brackets {
+                self.import_bracket(place, first, *created, at)?;
+            }
+            for (o, first, created) in orders {
+                self.import_order(o, first, *created, at)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Carry an order over from the earlier app's store, as `first` (an `Imported`
+    /// event) says it stood, written when it was.
+    pub fn import_order(&self, o: &OrderRequest, first: &OrderEvent, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
+        let OrderEvent::Imported { .. } = first else {
+            return Err(BookError::Refused("an order carried over starts by being imported".into()));
+        };
+        self.insert_order(o, first, &Asker::Person, created_at, at)
+    }
+
+    fn insert_order(&self, o: &OrderRequest, first: &OrderEvent, asker: &Asker, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
         if !o.quantity.is_positive() {
             return Err(BookError::Refused(format!("an order for {} is not an order", o.quantity)));
         }
-        let first = OrderEvent::Written { dry };
-        let fold = OrderFold::start(&first).map_err(|e| BookError::Refused(e.to_string()))?;
+        let fold = OrderFold::start(first).map_err(|e| BookError::Refused(e.to_string()))?;
         self.atomically(|| {
             if let Some((bracket, _)) = &o.bracket {
                 let known: Option<String> = self.conn().query_row("SELECT id FROM brackets WHERE id = ?", [bracket], |r| r.get(0)).optional()?;
@@ -101,16 +130,17 @@ impl Book {
                 }
             }
             self.conn().execute(
-                "INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, limit_price, stop_price, time_in_force, bracket_id, role, request, created_at, state, filled, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?16)",
+                "INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, limit_price, stop_price, time_in_force, bracket_id, role, request, created_at, state, filled, updated_at, broker_id, average, why)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
                 params![
                     o.id, o.broker, o.broker_account, o.broker_security, o.symbol, o.currency.as_str(), o.side.as_str(), o.kind.as_str(), o.quantity.to_text(),
                     o.limit_price.map(Dec::to_text), o.stop_price.map(Dec::to_text), o.time_in_force.as_str(),
                     o.bracket.as_ref().map(|(b, _)| b.clone()), o.bracket.as_ref().map(|(_, r)| r.as_str()),
-                    o.request.to_string(), at_text(at), fold.state.as_str(), fold.filled.to_text(),
+                    o.request.to_string(), at_text(created_at), fold.state.as_str(), fold.filled.to_text(), at_text(at),
+                    fold.broker_id, fold.average.map(Dec::to_text), fold.why,
                 ],
             )?;
-            self.append("order_events", "order_id", &o.id, 0, at, asker, first.kind(), &order_body(&first), None)?;
+            self.append("order_events", "order_id", &o.id, 0, at, asker, first.kind(), &order_body(first), None)?;
             Ok(())
         })
     }
@@ -125,9 +155,15 @@ impl Book {
             }
             let events: Vec<OrderEvent> = log.iter().map(|l| l.event.clone()).collect();
             let mut fold = OrderFold::of(&events).ok_or_else(|| text::corrupt("order_events", "kind", id, "a log that does not start with the order written"))?;
+            let before = fold.clone();
             let applied = fold.apply(e);
             let seq = log.last().map_or(0, |l| l.seq) + 1;
             self.append("order_events", "order_id", id, seq, at, asker, e.kind(), &order_body(e), applied.as_ref().err().map(|n| n.to_string()))?;
+            if applied.is_ok() && fold.filled > before.filled {
+                // what newly filled is booked with the reading that said so
+                let o = self.order(id)?.ok_or_else(|| BookError::Refused(format!("no order {id}")))?;
+                self.book_fill(&o.request, &before, &fold, at)?;
+            }
             if applied.is_ok() {
                 let stated = match e {
                     OrderEvent::Read(r) => Some(r),
@@ -196,6 +232,7 @@ impl Book {
     fn stored_order(&self, r: OrderColumns) -> Result<StoredOrder> {
         const T: &str = "orders";
         let log = self.order_log(&r.id)?;
+        let refused = log.last().and_then(|l| l.refused.clone());
         let events: Vec<OrderEvent> = log.into_iter().map(|l| l.event).collect();
         let fold = OrderFold::of(&events).ok_or_else(|| text::corrupt("order_events", "kind", &r.id, "a log that does not start with the order written"))?;
         let bracket = match (r.bracket_id, r.role) {
@@ -226,7 +263,38 @@ impl Book {
             stated_quantity: text::opt_dec(T, "stated_quantity", r.stated_quantity)?,
             expires_at: text::opt_instant(T, "expires_at", r.expires_at)?,
             updated_at: text::instant(T, "updated_at", &r.updated_at)?,
+            refused,
         })
+    }
+
+    /// Every order and bracket whose kept state is not what its log folds to, each
+    /// named with both: empty when the state is the log everywhere.
+    pub fn states_disagreeing(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let orders: Vec<(String, String)> = {
+            let mut s = self.conn().prepare("SELECT id, state FROM orders ORDER BY id")?;
+            let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        for (id, kept) in orders {
+            let events: Vec<OrderEvent> = self.order_log(&id)?.into_iter().map(|l| l.event).collect();
+            let folded = OrderFold::of(&events).map(|f| f.state.as_str().to_string()).unwrap_or_default();
+            if folded != kept {
+                out.push(format!("order {id}: kept {kept}, its log says {folded}"));
+            }
+        }
+        let brackets: Vec<(String, String)> = {
+            let mut s = self.conn().prepare("SELECT id, phase FROM brackets ORDER BY id")?;
+            let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        for (id, kept) in brackets {
+            let folded = fold_bracket(&id, &self.bracket_log(&id)?)?.phase.as_str().to_string();
+            if folded != kept {
+                out.push(format!("bracket {id}: kept {kept}, its log says {folded}"));
+            }
+        }
+        Ok(out)
     }
 
     /// Write a bracket, with its first event.
@@ -234,10 +302,24 @@ impl Book {
         let BracketEvent::Created { .. } = created else {
             return Err(BookError::Refused("a bracket starts by being created".into()));
         };
+        self.insert_bracket(place, created, asker, at, at)
+    }
+
+    /// Carry a bracket over from the earlier app's store, as `first` (an `Imported`
+    /// event) says it stood, created when it was.
+    pub fn import_bracket(&self, place: &BracketPlace, first: &BracketEvent, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
+        let BracketEvent::Imported { .. } = first else {
+            return Err(BookError::Refused("a bracket carried over starts by being imported".into()));
+        };
+        self.insert_bracket(place, first, &Asker::Person, created_at, at)
+    }
+
+    fn insert_bracket(&self, place: &BracketPlace, created: &BracketEvent, asker: &Asker, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
+        let phase = Bracket::of(&[(at, created.clone())]).ok_or_else(|| BookError::Refused("a bracket starts by being created".into()))?.phase;
         self.atomically(|| {
             self.conn().execute(
-                "INSERT INTO brackets (id, broker, broker_account, broker_security, symbol, currency, created_at, phase, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'waiting', ?7)",
-                params![place.id, place.broker, place.broker_account, place.broker_security, place.symbol, place.currency.as_str(), at_text(at)],
+                "INSERT INTO brackets (id, broker, broker_account, broker_security, symbol, currency, created_at, phase, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![place.id, place.broker, place.broker_account, place.broker_security, place.symbol, place.currency.as_str(), at_text(created_at), phase.as_str(), at_text(at)],
             )?;
             self.append("bracket_events", "bracket_id", &place.id, 0, at, asker, created.kind(), &bracket_body(created), None)?;
             Ok(())
@@ -446,6 +528,9 @@ fn order_body(e: &OrderEvent) -> Value {
         OrderEvent::CancelAsked => json!({}),
         OrderEvent::ModifyAsked { limit_price, quantity } => json!({ "limit_price": opt_dec_v(*limit_price), "quantity": opt_dec_v(*quantity) }),
         OrderEvent::ModifyRefused { why } => json!({ "why": why }),
+        OrderEvent::Imported { state, broker_id, filled, average, why, row } => json!({
+            "state": state.as_str(), "broker_id": broker_id, "filled": dec_v(*filled), "average": opt_dec_v(*average), "why": why, "row": row,
+        }),
     }
 }
 
@@ -562,6 +647,10 @@ fn order_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<Ord
             f.only(&["why"])?;
             OrderEvent::ModifyRefused { why: f.text("why")? }
         }
+        "imported" => {
+            f.only(&["state", "broker_id", "filled", "average", "why", "row"])?;
+            OrderEvent::Imported { state: f.word("state", OrderState::parse)?, broker_id: f.opt_text("broker_id")?, filled: f.dec("filled")?, average: f.opt_dec("average")?, why: f.opt_text("why")?, row: f.text("row")? }
+        }
         other => return Err(format!("not an order event: {other:?}")),
     })
 }
@@ -612,6 +701,11 @@ fn bracket_body(e: &BracketEvent) -> Value {
         BracketEvent::Done => json!({}),
         BracketEvent::SaleAsked { quantity } | BracketEvent::Sold { quantity } => json!({ "quantity": dec_v(*quantity) }),
         BracketEvent::PositionRead { held, read_at } => json!({ "held": held, "read_at": at_text(*read_at) }),
+        BracketEvent::Imported { phase, quantity, stop, target, native, exit, attempts, why, outcome, seen_held, row } => json!({
+            "phase": phase.as_str(), "quantity": dec_v(*quantity), "stop": stop_v(stop), "target": opt_dec_v(*target), "native": native,
+            "exit_role": exit.as_ref().map(|(r, _)| r.as_str()), "exit_id": exit.as_ref().map(|(_, id)| id.clone()),
+            "attempts": attempts, "why": why, "outcome": outcome, "seen_held": seen_held, "row": row,
+        }),
     }
 }
 
@@ -685,6 +779,28 @@ fn bracket_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<B
         "sold" => {
             f.only(&["quantity"])?;
             BracketEvent::Sold { quantity: f.dec("quantity")? }
+        }
+        "imported" => {
+            f.only(&["phase", "quantity", "stop", "target", "native", "exit_role", "exit_id", "attempts", "why", "outcome", "seen_held", "row"])?;
+            let exit = match (f.opt_text("exit_role")?, f.opt_text("exit_id")?) {
+                (Some(r), Some(id)) => Some((ExitRole::parse(&r).map_err(|e| e.to_string())?, id)),
+                (None, None) => None,
+                _ => return Err("an exit with a role and no id, or an id and no role".into()),
+            };
+            let attempts = m.get("attempts").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).ok_or("no count \"attempts\"")?;
+            BracketEvent::Imported {
+                phase: f.word("phase", Phase::parse)?,
+                quantity: f.dec("quantity")?,
+                stop: stop_of(m.get("stop"))?,
+                target: f.opt_dec("target")?,
+                native: f.bool("native")?,
+                exit,
+                attempts,
+                why: f.opt_text("why")?,
+                outcome: f.opt_text("outcome")?,
+                seen_held: f.bool("seen_held")?,
+                row: f.text("row")?,
+            }
         }
         "position-read" => {
             f.only(&["held", "read_at"])?;

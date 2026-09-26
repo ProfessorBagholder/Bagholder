@@ -350,7 +350,7 @@ test('submitting sends Wealthsimple\'s own request shape and flashes the order p
   })
   await ready(page)
   let sent: unknown = null
-  await page.route('**/api/order', (route) => { sent = route.request().postDataJSON(); return route.fulfill({ json: { ok: true, status: 'sent' } }) })
+  await page.route('**/api/order', (route) => { sent = route.request().postDataJSON(); return route.fulfill({ json: { ok: true, status: 'pending' } }) })
   await page.keyboard.press('Control+k')
   await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
   await page.getByRole('button', { name: 'Buy NVDA', exact: true }).click()
@@ -361,9 +361,10 @@ test('submitting sends Wealthsimple\'s own request shape and flashes the order p
   await page.getByRole('button', { name: 'Submit' }).click()
   await expect.poll(() => sent).toEqual({
     symbol: 'NVDA', securityId: 'sec-nvda', accountId: nvdaAccount, side: 'BUY', type: 'LIMIT', tif: 'DAY',
-    quantity: 25, limitPrice: 165.4, stopPrice: null, currency: 'USD',
-    stopLoss: { kind: 'stop', price: 157.13, trail: 5, trailUnit: 'pct' },
-    takeProfit: { price: 181.94 },
+    // the exact decimal text of the server's preview, never a float
+    quantity: '25', limitPrice: '165.4', stopPrice: null, currency: 'USD',
+    stopLoss: { kind: 'stop', price: '157.13', trail: '5', trailUnit: 'pct' },
+    takeProfit: { price: '181.94' },
   })
   await expect(page.locator('#syncline')).toContainText('Order placed · Buy 25 NVDA at 165.40 limit, stop 157.13, target 181.94')
   await expect(page.getByRole('dialog')).toHaveCount(0) // the panel closes
@@ -379,6 +380,18 @@ test('under dry orders the header says the order was not sent', async ({ page, r
   await page.getByRole('button', { name: 'Review' }).click()
   await page.getByRole('button', { name: 'Submit' }).click()
   await expect(page.locator('#syncline')).toContainText('Not sent (orders are off) · Buy 1 NVDA')
+})
+
+test('an order sent whose answer could not be read says so in the header', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '')
+  await ready(page)
+  await page.route('**/api/order', (route) => route.fulfill({ json: { ok: true, status: 'unconfirmed' } }))
+  await page.keyboard.press('Control+k')
+  await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
+  await page.getByRole('button', { name: 'Buy NVDA', exact: true }).click()
+  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Submit' }).click()
+  await expect(page.locator('#syncline')).toContainText('Sent, not confirmed · Buy 1 NVDA')
 })
 
 test('a rejection stays on the review step with its reason', async ({ page, request }) => {

@@ -377,8 +377,8 @@ fn merge(into: &mut Moved, more: Moved) {
 
 
 /// Every source's mapping, as the book stores records under it.
-pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 4] {
-    [&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::import::mapping::ImportMapping, &bagholder_book::person::PersonMapping, &bagholder_broker::csv::CsvMapping]
+pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 5] {
+    [&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::import::mapping::ImportMapping, &bagholder_book::person::PersonMapping, &bagholder_broker::csv::CsvMapping, &bagholder_book::fills::FillMapping]
 }
 
 /// Derive again every record a newer version of its mapping reads differently: a

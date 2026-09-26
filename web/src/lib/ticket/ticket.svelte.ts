@@ -261,9 +261,10 @@ export function fetchQuote() {
   })
 }
 
-function notice(v: ReturnType<typeof view>, sent: boolean) {
+// the header's notice after a submit, by where the order stands in the answer
+function notice(v: ReturnType<typeof view>, status: string | undefined) {
   const t = ticketStore.t!
-  const head = sent ? 'Order placed · ' : 'Not sent (orders are off) · '
+  const head = status === 'dry' ? 'Not sent (orders are off) · ' : status === 'unconfirmed' || status === 'sending' ? 'Sent, not confirmed · ' : 'Order placed · '
   return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : px(v.entry) + ' ' + v.typeWord.toLowerCase()) +
     (v.slOn ? ', stop ' + px(v.slPrice) : '') + (v.tpOn ? ', target ' + px(v.tpPrice) : '')
 }
@@ -273,15 +274,15 @@ export async function submit() {
   if (!t || t.busy) return
   const v = view(t, ctx(), ticketStore.preview)
   const q = v.q
-  // the order API takes numbers: the server's figures cross into them here
+  // the exact decimal text of the server's own figures for the ticket
   const body = {
     symbol: t.symbol, securityId: q.securityId || t.securityId || '', accountId: t.accountId, side: t.side, type: t.type, tif: t.tif,
-    quantity: ticketNumber(v.qty),
-    limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? ticketNumber(v.limit) : null,
-    stopPrice: t.type === 'STOP' || t.type === 'STOP_LIMIT' ? ticketNumber(v.stop) : null,
+    quantity: v.qty,
+    limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? v.limit : null,
+    stopPrice: t.type === 'STOP' || t.type === 'STOP_LIMIT' ? v.stop : null,
     currency: q.currency || '',
-    stopLoss: v.slOn ? { kind: t.sl.kind, price: ticketNumber(v.slPrice), trail: ticketNumber(v.trail), trailUnit: t.sl.unit } : null,
-    takeProfit: v.tpOn ? { price: ticketNumber(v.tpPrice) } : null,
+    stopLoss: v.slOn ? { kind: t.sl.kind, price: v.slPrice, trail: v.trail, trailUnit: t.sl.unit } : null,
+    takeProfit: v.tpOn ? { price: v.tpPrice } : null,
   }
   t.busy = true
   t.submitError = ''
@@ -293,7 +294,7 @@ export async function submit() {
     cur.submitError = (r && (r.error as string)) || 'Could not submit the order.'
     return
   }
-  flash(notice(v, r.status === 'sent'), 'ok', 10000) // longer than the other notices: it names the whole order
+  flash(notice(v, r.status), 'ok', 10000) // longer than the other notices: it names the whole order
   closeTicket(true)
 }
 

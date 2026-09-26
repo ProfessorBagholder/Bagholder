@@ -1,202 +1,38 @@
 {
   "extendedOrder": {
-    "filled": {
-      "wsStatus": "FILLED",
-      "status": "filled",
-      "filledQty": 25.0,
-      "avgFill": 165.38,
-      "submittedAt": "2026-09-10T13:30:00Z",
-      "expiresAt": "",
-      "firstFilledAt": "2026-09-10T13:31:00Z",
-      "lastFilledAt": "2026-09-10T13:32:00Z",
-      "error": "",
-      "quantity": 25.0,
-      "limitPrice": 165.4,
-      "stopPrice": null,
-      "tif": "DAY",
-      "currency": "USD",
-      "accountId": "acct-tfsa",
-      "securityId": "sec-s-us",
-      "type": "BUY_QUANTITY"
-    },
+    "filled": "Order(Reading { status: Filled, filled: Dec(25), average: Some(Dec(165.38)), price: Some(Dec(165.4)), quantity: Some(Dec(25)), expires_at: None, why: None, code: None })",
     "lowercase status, numbers as text": {
-      "wsStatus": "PARTIALLY_FILLED",
-      "status": "pending",
-      "filledQty": 10.0,
-      "avgFill": 1.735,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "",
-      "quantity": 40.0,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "UNTIL_CANCEL",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
+      "failed": "stopPrice: not a decimal number: \"abc\""
     },
-    "cancel pending": {
-      "wsStatus": "CANCEL_PENDING",
-      "status": "cancelling",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
-    },
+    "cancel pending": "Order(Reading { status: Open, filled: Dec(0), average: None, price: None, quantity: None, expires_at: None, why: None, code: None })",
     "unknown status": {
-      "wsStatus": "SOMETHING_NEW",
-      "status": "pending",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
+      "failed": "a status this build does not know: \"SOMETHING_NEW\""
     },
     "status as a number": {
-      "wsStatus": "5",
-      "status": "pending",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
+      "failed": "an order with no status"
     },
-    "rejected with a code only": {
-      "wsStatus": "REJECTED",
-      "status": "rejected",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "INSUFFICIENT_FUNDS",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
-    },
-    "rejected with both": {
-      "wsStatus": "REJECTED",
-      "status": "rejected",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "Not enough cash",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
-    },
-    "rejected with an empty cause": {
-      "wsStatus": "REJECTED",
-      "status": "rejected",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "X",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "",
-      "securityId": "",
-      "type": ""
-    },
-    "account id only": {
-      "wsStatus": "EXPIRED",
-      "status": "expired",
-      "filledQty": null,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "",
-      "currency": "",
-      "accountId": "cust-9",
-      "securityId": "",
-      "type": ""
-    },
+    "rejected with a code only": "Order(Reading { status: Rejected, filled: Dec(0), average: None, price: None, quantity: None, expires_at: None, why: None, code: Some(\"INSUFFICIENT_FUNDS\") })",
+    "rejected with both": "Order(Reading { status: Rejected, filled: Dec(0), average: None, price: None, quantity: None, expires_at: None, why: Some(\"Not enough cash\"), code: Some(\"INSUFFICIENT_FUNDS\") })",
+    "rejected with an empty cause": "Order(Reading { status: Rejected, filled: Dec(0), average: None, price: None, quantity: None, expires_at: None, why: None, code: Some(\"X\") })",
+    "account id only": "Order(Reading { status: Expired, filled: Dec(0), average: None, price: None, quantity: None, expires_at: None, why: None, code: None })",
     "booleans and numbers where text is": {
-      "wsStatus": "POSTED",
-      "status": "filled",
-      "filledQty": 1.0,
-      "avgFill": null,
-      "submittedAt": "",
-      "expiresAt": "",
-      "firstFilledAt": "",
-      "lastFilledAt": "",
-      "error": "",
-      "quantity": null,
-      "limitPrice": null,
-      "stopPrice": null,
-      "tif": "FALSE",
-      "currency": "",
-      "accountId": "",
-      "securityId": "1234",
-      "type": ""
+      "failed": "filledQuantity is true, not a number"
     },
-    "status empty": null,
-    "status missing": null,
-    "order null": null,
-    "order not an object": null,
-    "no order key": null,
+    "status empty": {
+      "failed": "a status this build does not know: \"\""
+    },
+    "status missing": {
+      "failed": "an order with no status"
+    },
+    "order null": "None",
+    "order not an object": {
+      "failed": "soOrdersExtendedOrder is [\"FILLED\"]"
+    },
+    "no order key": {
+      "failed": "an answer with no soOrdersExtendedOrder"
+    },
     "data null": {
-      "failed": "graphql failed: golden"
+      "failed": "an answer with no soOrdersExtendedOrder"
     }
   },
   "feed": {
@@ -205,36 +41,7 @@
         null
       ],
       "rows": [
-        {
-          "id": "o-1",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        }
+        "Elsewhere { id: \"o-1\", broker_id: Some(\"ws-9\"), account: \"acct-tfsa\", security: \"sec-s-us\", symbol: \"QNC\", currency: \"USD\", side: Buy, kind: Limit, quantity: Dec(3), limit_price: Some(Dec(1.76)), stop_price: None, state: Pending, filled: Dec(0), average: None, created_at: 2026-09-10T01:00:00Z, ended_at: None }"
       ]
     },
     "two pages": {
@@ -243,293 +50,65 @@
         "c1"
       ],
       "rows": [
-        {
-          "id": "o-1",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        },
-        {
-          "id": "o-2",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "SELL",
-          "type": "STOP_LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": 1.5,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        }
+        "Elsewhere { id: \"o-1\", broker_id: Some(\"ws-9\"), account: \"acct-tfsa\", security: \"sec-s-us\", symbol: \"QNC\", currency: \"USD\", side: Buy, kind: Limit, quantity: Dec(3), limit_price: Some(Dec(1.76)), stop_price: None, state: Pending, filled: Dec(0), average: None, created_at: 2026-09-10T01:00:00Z, ended_at: None }",
+        "Elsewhere { id: \"o-2\", broker_id: Some(\"ws-9\"), account: \"acct-tfsa\", security: \"sec-s-us\", symbol: \"QNC\", currency: \"USD\", side: Sell, kind: StopLimit, quantity: Dec(3), limit_price: Some(Dec(1.76)), stop_price: Some(Dec(1.5)), state: Pending, filled: Dec(0), average: None, created_at: 2026-09-10T01:00:00Z, ended_at: None }"
       ]
     },
     "next page with no cursor": {
       "cursors": [
         null
       ],
-      "rows": [
-        {
-          "id": "o-1",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        }
-      ]
+      "rows": {
+        "failed": "a next page with no cursor"
+      }
     },
     "next page spelled as text": {
       "cursors": [
         null
       ],
-      "rows": [
-        {
-          "id": "o-1",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        }
-      ]
+      "rows": {
+        "failed": "pageInfo with no hasNextPage"
+      }
     },
     "rows that are not orders": {
       "cursors": [
         null
       ],
-      "rows": [
-        {
-          "id": "77",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        }
-      ]
+      "rows": {
+        "failed": "id is \"\", not text"
+      }
     },
     "fallbacks": {
       "cursors": [
         null
       ],
-      "rows": [
-        {
-          "id": "o-3",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-unknown",
-          "symbol": "ZZZ",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 3.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        },
-        {
-          "id": "o-4",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-tfsa",
-          "account": "TFSA",
-          "securityId": "sec-other",
-          "symbol": "",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "LIMIT",
-          "quantity": 0.0,
-          "limitPrice": 1.76,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "",
-          "filledQty": null,
-          "avgFill": null,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        },
-        {
-          "id": "o-5",
-          "createdAt": "2026-09-10T01:00:00Z",
-          "accountId": "acct-nope",
-          "account": "",
-          "securityId": "sec-s-us",
-          "symbol": "QNC",
-          "currency": "USD",
-          "side": "BUY",
-          "type": "MARKET",
-          "quantity": 12.0,
-          "limitPrice": null,
-          "stopPrice": null,
-          "tif": "",
-          "stopLoss": null,
-          "takeProfit": null,
-          "status": "pending",
-          "wsOrderId": "ws-9",
-          "error": "",
-          "updatedAt": "",
-          "source": "wealthsimple",
-          "wsStatus": "SUBMITTED",
-          "filledQty": null,
-          "avgFill": 1.1,
-          "submittedAt": "",
-          "expiresAt": "",
-          "parentId": "",
-          "role": "entry",
-          "fillBookedQty": null
-        }
-      ]
+      "rows": {
+        "failed": "status is null, not text"
+      }
     },
     "no feed": {
       "cursors": [
         null
       ],
-      "rows": []
+      "rows": {
+        "failed": "a feed with no edges"
+      }
     },
     "no identity": {
       "cursors": [
         null
       ],
-      "rows": []
+      "rows": {
+        "failed": "an answer with no orderServiceExtendedOrderFeed"
+      }
     },
     "edges not a list": {
       "cursors": [
         null
       ],
-      "rows": []
+      "rows": {
+        "failed": "a feed with no edges"
+      }
     }
   },
   "quote": {
@@ -953,7 +532,7 @@
       "42",
       "sec-s-us"
     ],
-    "summary: securities not a list": 0
+    "summary: securities not a list": "Ok(0)"
   },
   "listingSearch": {
     "the equity, not the option": {
@@ -1010,230 +589,44 @@
     }
   },
   "create": {
-    "accepted": {
-      "answer": {
-        "ok": true,
-        "wsOrderId": "ws-123",
-        "status": "sent"
-      },
-      "stored": [
-        "sent",
-        "",
-        "ws-123"
-      ]
-    },
-    "accepted, errors null": {
-      "answer": {
-        "ok": true,
-        "wsOrderId": "ws-124",
-        "status": "sent"
-      },
-      "stored": [
-        "sent",
-        "",
-        "ws-124"
-      ]
-    },
-    "accepted, numeric order id": {
-      "answer": {
-        "ok": true,
-        "wsOrderId": "125",
-        "status": "sent"
-      },
-      "stored": [
-        "sent",
-        "",
-        "125"
-      ]
-    },
-    "accepted, no order": {
-      "answer": {
-        "ok": true,
-        "wsOrderId": "",
-        "status": "sent"
-      },
-      "stored": [
-        "sent",
-        "",
-        ""
-      ]
-    },
-    "no result": {
-      "answer": {
-        "ok": true,
-        "wsOrderId": "",
-        "status": "sent"
-      },
-      "stored": [
-        "sent",
-        "",
-        ""
-      ]
-    },
-    "empty answer": {
-      "answer": {
-        "ok": true,
-        "wsOrderId": "",
-        "status": "sent"
-      },
-      "stored": [
-        "sent",
-        "",
-        ""
-      ]
-    },
-    "refused with a message": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order: Insufficient funds"
-      },
-      "stored": [
-        "rejected",
-        "Insufficient funds",
-        ""
-      ]
-    },
-    "refused with a code only": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order: ORDER.halted"
-      },
-      "stored": [
-        "rejected",
-        "ORDER.halted",
-        ""
-      ]
-    },
-    "refused with an empty message": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order: ORDER.x"
-      },
-      "stored": [
-        "rejected",
-        "ORDER.x",
-        ""
-      ]
-    },
-    "refused with neither": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order."
-      },
-      "stored": [
-        "rejected",
-        "",
-        ""
-      ]
-    },
-    "refused with text": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order: market closed"
-      },
-      "stored": [
-        "rejected",
-        "market closed",
-        ""
-      ]
-    },
-    "refused with null": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order."
-      },
-      "stored": [
-        "rejected",
-        "",
-        ""
-      ]
-    },
-    "refused, errors an object": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order: Account locked"
-      },
-      "stored": [
-        "rejected",
-        "Account locked",
-        ""
-      ]
-    },
-    "refused, errors text": {
-      "answer": {
-        "ok": false,
-        "error": "Wealthsimple rejected the order: Account locked"
-      },
-      "stored": [
-        "rejected",
-        "Account locked",
-        ""
-      ]
-    }
+    "accepted": "Accepted { broker_id: Some(\"ws-123\") }",
+    "accepted, errors null": "Accepted { broker_id: Some(\"ws-124\") }",
+    "accepted, numeric order id": "Accepted { broker_id: Some(\"125\") }",
+    "accepted, no order": "Accepted { broker_id: None }",
+    "no result": "Unclear { why: \"SoOrdersOrderCreate: an answer that names no order\" }",
+    "empty answer": "Unclear { why: \"SoOrdersOrderCreate: an answer that names no order\" }",
+    "refused with a message": "Refused { why: \"Insufficient funds\", code: Some(\"ORDER.insufficient_funds\") }",
+    "refused with a code only": "Refused { why: \"ORDER.halted\", code: Some(\"ORDER.halted\") }",
+    "refused with an empty message": "Refused { why: \"ORDER.x\", code: Some(\"ORDER.x\") }",
+    "refused with neither": "Refused { why: \"\", code: None }",
+    "refused with text": "Refused { why: \"market closed\", code: None }",
+    "refused with null": "Refused { why: \"\", code: None }",
+    "refused, errors an object": "Refused { why: \"Account locked\", code: None }",
+    "refused, errors text": "Refused { why: \"Account locked\", code: None }"
   },
   "cancel": {
-    "accepted": {
-      "ok": true,
-      "status": "cancelling"
-    },
-    "accepted, errors null": {
-      "ok": true,
-      "status": "cancelling"
-    },
-    "accepted, no result": {
-      "ok": true,
-      "status": "cancelling"
-    },
-    "refused with a message": {
-      "ok": false,
-      "error": "Wealthsimple refused the cancel: Order already filled"
-    },
-    "refused with a code only": {
-      "ok": false,
-      "error": "Wealthsimple refused the cancel: ORDER.not_cancellable"
-    },
-    "refused with text": {
-      "ok": false,
-      "error": "Wealthsimple refused the cancel: too late"
-    },
-    "refused, errors an object": {
-      "ok": false,
-      "error": "Wealthsimple refused the cancel: Account locked"
-    },
-    "refused, errors text": {
-      "ok": false,
-      "error": "Wealthsimple refused the cancel: Account locked"
-    }
+    "accepted": "Accepted { broker_id: None }",
+    "accepted, errors null": "Accepted { broker_id: None }",
+    "accepted, no result": "Unclear { why: \"SoOrdersOrderCancel: an answer with nothing in it\" }",
+    "refused with a message": "Refused { why: \"Order already filled\", code: Some(\"C\") }",
+    "refused with a code only": "Refused { why: \"ORDER.not_cancellable\", code: Some(\"ORDER.not_cancellable\") }",
+    "refused with text": "Refused { why: \"too late\", code: None }",
+    "refused, errors an object": "Refused { why: \"Account locked\", code: None }",
+    "refused, errors text": "Refused { why: \"Account locked\", code: None }"
   },
   "modify": {
-    "accepted": {
-      "ok": true
-    },
-    "accepted, errors null": {
-      "ok": true
-    },
-    "accepted, no result": {
-      "ok": true
-    },
-    "refused with a message": {
-      "ok": false,
-      "error": "Wealthsimple refused the change: Order already filled"
-    },
-    "refused with a code only": {
-      "ok": false,
-      "error": "Wealthsimple refused the change: ORDER.not_cancellable"
-    },
-    "refused with text": {
-      "ok": false,
-      "error": "Wealthsimple refused the change: too late"
-    },
-    "refused, errors an object": {
-      "ok": false,
-      "error": "Wealthsimple refused the change: Account locked"
-    },
-    "refused, errors text": {
-      "ok": false,
-      "error": "Wealthsimple refused the change: Account locked"
-    }
+    "accepted": "Accepted { broker_id: None }",
+    "accepted, errors null": "Accepted { broker_id: None }",
+    "accepted, no result": "Unclear { why: \"SoOrdersOrderModify: an answer with nothing in it\" }",
+    "refused with a message": "Refused { why: \"Order already filled\", code: Some(\"C\") }",
+    "refused with a code only": "Refused { why: \"ORDER.not_cancellable\", code: Some(\"ORDER.not_cancellable\") }",
+    "refused with text": "Refused { why: \"too late\", code: None }",
+    "refused, errors an object": "Refused { why: \"Account locked\", code: None }",
+    "refused, errors text": "Refused { why: \"Account locked\", code: None }"
+  },
+  "transport": {
+    "refused": "Refused { why: \"Bad request\", code: None }",
+    "session lapsed": "Refused { why: \"The Wealthsimple session lapsed.\", code: None }",
+    "no answer": "Unclear { why: \"the connection dropped\" }"
   }
 }

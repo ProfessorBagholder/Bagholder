@@ -172,6 +172,12 @@ pub fn order_notice(o: &StoredOrder, before: &OrderFold, account: &str) -> Optio
 /// newly filled quantity's own Wealthsimple row pulled at once, and the page told.
 pub(crate) fn followed(app: &Arc<App>, _book: &Book, before: &OrderFold, after: &StoredOrder) {
     if after.fold.filled > before.filled {
+        // booked with the reading (`Book::book_fill`): the figures take it in now
+        if let Some(f) = app.figures.get() {
+            if let Err(e) = f.record_changed(Timestamp::now()) {
+                log(&format!("bagholder orders: the fill of {} is booked and the figures could not take it in: {e}", after.request.id));
+            }
+        }
         app.pull_asked.store(true, Ordering::SeqCst);
         log(&format!("bagholder orders: {} filled {}: Wealthsimple's row for it is pulled", after.request.id, after.fold.filled.to_text()));
     }
@@ -288,7 +294,7 @@ pub fn read_feed_node(node: &Value) -> Result<Elsewhere, String> {
 }
 
 /// Every order the feed lists as pending, page by page, read strictly.
-fn read_feed(app: &Arc<App>, sess: &bagholder_ws::session::Session) -> Result<Vec<Elsewhere>, String> {
+pub(crate) fn read_feed(app: &Arc<App>, sess: &bagholder_ws::session::Session) -> Result<Vec<Elsewhere>, String> {
     let identity = sess.identity();
     if identity.is_empty() {
         return Err("the session names no identity to read the pending orders of".into());
@@ -568,6 +574,7 @@ mod tests {
             stated_quantity: None,
             expires_at: None,
             updated_at: at(),
+            refused: None,
         }
     }
 

@@ -801,7 +801,7 @@ fn told(o: &OrderRequest, fold: &bagholder_core::order::OrderFold, bracket: Opti
 
 /// An order with no sale to clear: a buy (its bracket written first when it asks for
 /// legs, so a fill is never without one), or any order with orders off or no session.
-fn entry(app: &Arc<App>, book: &Book, asked: TicketOrder) -> Result<PlaceTicketAnswer, String> {
+pub(crate) fn entry(app: &Arc<App>, book: &Book, asked: TicketOrder) -> Result<PlaceTicketAnswer, String> {
     let now = Timestamp::now();
     let mut o = asked.order;
     // a bracket waits on a fill: with orders off, or nothing to send with, none can come
@@ -864,7 +864,7 @@ fn record(book: &Book, id: &str, now: Timestamp, e: &BracketEvent) -> Result<(),
 /// the sale goes out only then. A sale not confirmed in time, refused, or unsettled
 /// puts each bracket back to guarding, its stop placed again by the next check: the
 /// position is never left with neither.
-fn sell(app: &Arc<App>, book: &Book, o: &OrderRequest) -> Result<PlaceTicketAnswer, String> {
+pub(crate) fn sell(app: &Arc<App>, book: &Book, o: &OrderRequest) -> Result<PlaceTicketAnswer, String> {
     let brackets = guarding(book, o)?;
     let started = Timestamp::now();
     for (id, take) in &brackets {
@@ -900,7 +900,7 @@ fn sell(app: &Arc<App>, book: &Book, o: &OrderRequest) -> Result<PlaceTicketAnsw
         if clear {
             break;
         }
-        if waited >= CANCEL_CONFIRM_SECONDS || app.wait(Duration::from_secs(1)) {
+        if waited >= app.orders.sale_wait.load(std::sync::atomic::Ordering::SeqCst) || app.wait(Duration::from_secs(1)) {
             drop_all("Wealthsimple did not confirm the exit cancelled in time")?;
             log(&format!("bagholder order: sell of {} held back: the bracket's exit is not confirmed cancelled", o.symbol));
             return Ok(PlaceTicketAnswer::err(format!("Nothing was sold: Wealthsimple has not confirmed the bracket's stop on {} cancelled yet. Try again in a moment.", o.symbol)));
@@ -917,7 +917,7 @@ fn sell(app: &Arc<App>, book: &Book, o: &OrderRequest) -> Result<PlaceTicketAnsw
     };
     // an answer that was not Wealthsimple's is settled by reading the order back, within the wait
     let mut tries = 0;
-    while matches!(fold.state, OrderState::Unconfirmed | OrderState::Sending) && tries < CANCEL_CONFIRM_SECONDS {
+    while matches!(fold.state, OrderState::Unconfirmed | OrderState::Sending) && tries < app.orders.sale_wait.load(std::sync::atomic::Ordering::SeqCst) {
         if app.wait(Duration::from_secs(1)) {
             break;
         }

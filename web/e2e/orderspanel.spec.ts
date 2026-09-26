@@ -8,34 +8,47 @@ import { openWithStatus, ready, modelDoc, streamBody } from './helpers'
 // a waiting bracket's leg rows versus an armed bracket's own card, bracket edit/remove/
 // cancel, the draft card, and the orders document updating a card in place.
 
-const entry = (over: Record<string, unknown>) => ({
-  id: '', createdAt: '2026-09-18T14:31:00Z', account: 'TFSA', accountId: 'acct-tfsa', symbol: 'QNC', currency: 'CAD',
-  side: 'BUY', type: 'LIMIT', quantity: 1, limitPrice: null, stopPrice: null, tif: 'DAY', status: 'pending',
-  filledQty: 0, avgFill: null, role: '', exchange: 'TSX-V', ...over,
+// cards as the server builds them (web/src/lib/generated/orders.ts): amounts as exact
+// decimal text, each card's tab, date and whether it acts, each leg's word
+const card = (over: Record<string, unknown>) => ({
+  id: '', account: 'acct-tfsa', exchange: 'TSX-V', symbol: 'QNC', side: 'buy', kind: 'limit', tif: 'day',
+  quantity: '1', limitPrice: null, stopPrice: null, state: 'pending', filled: '0', average: null, why: null,
+  value: null, approx: false, tab: 'pending', at: '2026-09-18T14:31:00Z', live: true, editable: true, legs: [], ...over,
 })
+const leg = (over: Record<string, unknown>) => ({ key: 'sl', quantity: '1', level: '1', trailPct: null, trailAmount: null, filled: null, note: '', amount: '1', ...over })
 
-const oPending = entry({ id: 'o-1', quantity: 100, limitPrice: 1.75, tif: 'UNTIL_CANCEL' })
-const oStop = entry({ id: 'o-2', symbol: 'NVDA', exchange: 'NASDAQ', account: 'Trading', accountId: 'acct-trading', currency: 'USD', side: 'SELL', type: 'STOP', quantity: 10, stopPrice: 150 })
-const oPartial = entry({ id: 'o-3', symbol: 'AAPL', exchange: 'NASDAQ', account: 'Trading', accountId: 'acct-trading', currency: 'USD', quantity: 100, limitPrice: 160, filledQty: 40, avgFill: 159.5 })
-const oFilled = entry({ id: 'o-4', symbol: 'TD', exchange: 'TSX', side: 'SELL', type: 'MARKET', quantity: 50, status: 'filled', filledQty: 50, avgFill: 81.2 })
-const oRejected = entry({ id: 'o-5', symbol: 'SHOP', exchange: 'TSX', quantity: 20, limitPrice: 100, status: 'rejected', error: 'Insufficient funds.' })
+const oPending = card({ id: 'o-1', quantity: '100', limitPrice: '1.75', tif: 'until-cancel', value: '175' })
+const oStop = card({ id: 'o-2', symbol: 'NVDA', exchange: 'NASDAQ', account: 'acct-trading', side: 'sell', kind: 'stop', quantity: '10', stopPrice: '150', value: '1500', editable: false })
+const oPartial = card({ id: 'o-3', symbol: 'AAPL', exchange: 'NASDAQ', account: 'acct-trading', quantity: '100', limitPrice: '160', state: 'partly-filled', filled: '40', average: '159.5', value: '16000' })
+const oFilled = card({ id: 'o-4', symbol: 'TD', exchange: 'TSX', side: 'sell', kind: 'market', quantity: '50', state: 'filled', filled: '50', average: '81.2', value: '4060', tab: 'filled', live: false, editable: false })
+const oRejected = card({ id: 'o-5', symbol: 'SHOP', exchange: 'TSX', quantity: '20', limitPrice: '100', state: 'rejected', why: 'Insufficient funds.', value: '2000', tab: 'cancelled', live: false, editable: false })
 
-// an armed bracket: the entry has filled, so it is not a card of its own -- only the bracket is
-const oArmedEntry = entry({ id: 'o-6', symbol: 'NVDA', exchange: 'NASDAQ', account: 'Trading', accountId: 'acct-trading', currency: 'USD', quantity: 25, limitPrice: 165.4, status: 'filled', filledQty: 25, avgFill: 165.4 })
-const oArmedStopLeg = entry({ id: 'o-6-sl', symbol: 'NVDA', exchange: 'NASDAQ', account: 'Trading', accountId: 'acct-trading', quantity: 25, role: 'stop', stopPrice: 157.13, status: 'pending' })
-const bArmed = { id: 'b-1', orderId: 'o-6', symbol: 'NVDA', quantity: 25, slKind: 'stop', slPrice: 157.13, slTrail: null, slTrailUnit: 'amt', slOrderId: 'o-6-sl', tpPrice: 181.94, status: 'armed', outcome: '', armedAt: '2026-09-19T09:00:00Z', createdAt: '2026-09-18T14:00:00Z' }
+// an armed bracket: its entry has filled (a card on the Filled tab), the bracket is its own card
+const oArmedEntry = card({ id: 'o-6', symbol: 'NVDA', exchange: 'NASDAQ', account: 'acct-trading', quantity: '25', limitPrice: '165.4', state: 'filled', filled: '25', average: '165.4', value: '4135', tab: 'filled', at: '2026-09-18T14:00:00Z', live: false, editable: false })
+const bArmed = {
+  id: 'b-1', account: 'acct-trading', exchange: 'NASDAQ', symbol: 'NVDA', tab: 'pending', at: '2026-09-19T09:00:00Z', live: true, value: '4135',
+  legs: [leg({ quantity: '25', level: '157.13', amount: '3928.25' }), leg({ key: 'tp', quantity: '25', level: '181.94', amount: '4548.5' })],
+  endWord: null, stopLevel: '157.13', trailPct: null, trailAmount: null, target: '181.94',
+}
 
 // a bracket still waiting for its entry: leg rows on the entry's own pending card, no card of its own
-const oWaitingEntry = entry({ id: 'o-7', symbol: 'TD', exchange: 'TSX', quantity: 50, limitPrice: 80 })
-const bWaiting = { id: 'b-2', orderId: 'o-7', symbol: 'TD', quantity: 50, slKind: 'stop', slPrice: 76, slTrail: null, slTrailUnit: 'amt', tpPrice: 84, status: 'waiting', outcome: '', createdAt: '2026-09-18T14:31:00Z' }
+const oWaitingEntry = card({
+  id: 'o-7', symbol: 'TD', exchange: 'TSX', quantity: '50', limitPrice: '80', value: '4000',
+  legs: [leg({ quantity: '50', level: '76', amount: '3800' }), leg({ key: 'tp', quantity: '50', level: '84', amount: '4200' })],
+})
 
 // a bracket cancelled by the person without either leg exiting
-const oCancelledEntry = entry({ id: 'o-8', symbol: 'ENB', exchange: 'TSX', quantity: 10, limitPrice: 50, status: 'filled', filledQty: 10, avgFill: 50 })
-const bCancelled = { id: 'b-3', orderId: 'o-8', symbol: 'ENB', quantity: 10, slKind: 'stop', slPrice: 47, slTrail: null, slTrailUnit: 'amt', tpPrice: null, status: 'cancelled', outcome: 'cancelled by the user', armedAt: '2026-09-17T09:00:00Z', updatedAt: '2026-09-17T09:05:00Z', createdAt: '2026-09-17T08:00:00Z' }
+const oCancelledEntry = card({ id: 'o-8', symbol: 'ENB', exchange: 'TSX', quantity: '10', limitPrice: '50', state: 'filled', filled: '10', average: '50', value: '500', tab: 'filled', at: '2026-09-17T08:00:00Z', live: false, editable: false })
+const bCancelled = {
+  id: 'b-3', account: 'acct-tfsa', exchange: 'TSX', symbol: 'ENB', tab: 'cancelled', at: '2026-09-17T09:05:00Z', live: false, value: '500',
+  legs: [leg({ quantity: '10', level: '47', amount: '470', note: 'Off' })],
+  endWord: 'Cancelled', stopLevel: '47', trailPct: null, trailAmount: null, target: null,
+}
 
-const allOrders = { ok: true, live: false, orders: [oPending, oStop, oPartial, oFilled, oRejected, oArmedEntry, oArmedStopLeg, oWaitingEntry, oCancelledEntry], brackets: [bArmed, bWaiting, bCancelled] }
+const allOrders = { ok: true, live: false, refreshedAt: null, error: null, orders: [oPending, oStop, oPartial, oFilled, oRejected, oArmedEntry, oWaitingEntry, oCancelledEntry], brackets: [bArmed, bCancelled] }
+const noOrders = { ok: true, live: false, refreshedAt: null, error: null, orders: [], brackets: [] }
 
-async function openPanel(page: Page, request: APIRequestContext, orders = allOrders, status: Record<string, unknown> = { openOrders: 5 }): Promise<void> {
+async function openPanel(page: Page, request: APIRequestContext, orders: unknown = allOrders, status: Record<string, unknown> = { openOrders: 5 }): Promise<void> {
   await openWithStatus(page, request, status, '', () => {}, { orders })
   await ready(page)
   await page.getByRole('button', { name: 'Orders' }).click()
@@ -165,7 +178,7 @@ test('editing a bracket opens both legs, and Save sends only the leg that change
   await expect(page.locator('#od-tp')).toHaveValue('181.94')
   await page.locator('#od-sl').fill('150')
   await card.getByRole('button', { name: 'Save' }).click()
-  await expect.poll(() => sent).toEqual([{ id: 'b-1', leg: 'sl', price: 150 }])
+  await expect.poll(() => sent).toEqual([{ id: 'b-1', leg: 'sl', price: '150', trail: null }])
   await expect(page.locator('#syncline')).toContainText('Bracket changed · NVDA')
 })
 
@@ -176,7 +189,7 @@ test('Remove stop loss on a bracket sends the leg\'s removal and flashes it', as
   const card = page.locator('.od-card', { hasText: 'NASDAQ: NVDA' }).filter({ hasText: 'Bracket' })
   await card.getByRole('button', { name: 'Edit' }).click()
   await page.getByRole('button', { name: 'Remove stop loss' }).click()
-  await expect.poll(() => sent).toEqual({ id: 'b-1', leg: 'sl', remove: true })
+  await expect.poll(() => sent).toEqual({ id: 'b-1', leg: 'sl', price: null, trail: null, remove: true })
   await expect(page.locator('#syncline')).toContainText('Stop loss removed · NVDA')
 })
 
@@ -229,7 +242,7 @@ test('a closed-without-sending draft is an amber card above Pending, with Resume
     preview: { entry: '1.72', limit: '1.72', quantity: '1', notional: '1.72', stopLossOn: true, takeProfitOn: false, trailing: false, stopLossPrice: '1.6', stopLossValue: '1.6', takeProfitPrice: null, takeProfitValue: null },
   }
   await page.addInitScript((d) => localStorage.setItem('bh2.ticketDraft', JSON.stringify(d)), draft)
-  await openPanel(page, request, { ok: true, live: false, orders: [], brackets: [] }, { openOrders: 0 })
+  await openPanel(page, request, noOrders, { openOrders: 0 })
   const card = page.locator('.od-card.draft')
   await expect(card.locator('.od-draft')).toHaveText('Draft')
   await expect(card.locator('.od-title')).toContainText('TSX-V: QNC')
@@ -253,7 +266,7 @@ test('Discard removes the draft card', async ({ page, request }) => {
     text: {},
   }
   await page.addInitScript((d) => localStorage.setItem('bh2.ticketDraft', JSON.stringify(d)), draft)
-  await openPanel(page, request, { ok: true, live: false, orders: [], brackets: [] }, { openOrders: 0 })
+  await openPanel(page, request, noOrders, { openOrders: 0 })
   await expect(page.locator('.od-card.draft')).toBeVisible()
   await page.locator('.od-card.draft').getByRole('button', { name: 'Discard' }).click()
   await expect(page.locator('.od-card.draft')).toHaveCount(0)
@@ -261,14 +274,14 @@ test('Discard removes the draft card', async ({ page, request }) => {
 })
 
 test('while the limit sell at the target rests, the stop row reads Watching; once the stop is hit, Placing', async ({ page, request }) => {
-  const tpLeg = entry({ id: 'o-6-tp', symbol: 'NVDA', exchange: 'NASDAQ', account: 'Trading', accountId: 'acct-trading', side: 'SELL', quantity: 25, role: 'target', parentId: 'o-6', limitPrice: 181.94, tif: 'UNTIL_CANCEL', status: 'pending' })
-  const resting = { ...bArmed, status: 'target_placed', slOrderId: '', tpOrderId: 'o-6-tp' }
+  // the server's words for the legs: Watching on the stop while the target's limit sell rests
+  const resting = { ...bArmed, legs: [{ ...bArmed.legs[0], note: 'Watching' }, bArmed.legs[1]] }
   const model = await modelDoc(request)
   const patch = `event: patch\ndata: ${JSON.stringify({ doc: 'orders', ops: [
-    ['set', ['brackets', { k: 'id', v: 'b-1' }, 'status'], 'stopping'],
-    ['set', ['brackets', { k: 'id', v: 'b-1' }, 'tpOrderId'], ''],
+    ['set', ['brackets', { k: 'id', v: 'b-1' }, 'legs', { k: 'key', v: 'sl' }, 'note'], 'Placing'],
+    ['set', ['brackets', { k: 'id', v: 'b-1' }, 'legs', { k: 'key', v: 'tp' }, 'note'], 'Cancelling'],
   ] })}\n\n`
-  const docs = { orders: { ok: true, live: true, orders: [oArmedEntry, tpLeg], brackets: [resting] } }
+  const docs = { orders: { ...noOrders, live: true, orders: [oArmedEntry], brackets: [resting] } }
   await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model, docs) }))
   await page.goto('/')
   await ready(page)
@@ -283,30 +296,49 @@ test('while the limit sell at the target rests, the stop row reads Watching; onc
   await ready(page)
   await page.getByRole('button', { name: 'Orders' }).click()
   await expect(page.locator('.od-card', { hasText: 'Bracket' }).locator('.od-leg').filter({ hasText: 'Stop loss' }).locator('.od-leg-state')).toHaveText('Placing')
+  await expect(page.locator('.od-card', { hasText: 'Bracket' }).locator('.od-leg').filter({ hasText: 'Take profit' }).locator('.od-leg-state')).toHaveText('Cancelling')
 })
 
 test('a bracket that ended without exiting reads Off on both legs, and its foot says how it ended', async ({ page, request }) => {
-  const ended = (id: string, orderId: string, outcome: string, updatedAt: string) => ({ ...bArmed, id, orderId, status: 'done', outcome, slOrderId: '', updatedAt })
-  const e2 = { ...oArmedEntry, id: 'o-9', symbol: 'TD', exchange: 'TSX' }
-  const byUser = ended('b-u', 'o-6', 'cancelled by the user', '2026-09-19T10:00:00Z')
-  const sold = { ...ended('b-s', 'o-9', 'sold from the ticket', '2026-09-19T11:00:00Z'), symbol: 'TD' }
-  await openPanel(page, request, { ok: true, live: true, orders: [oArmedEntry, e2], brackets: [byUser, sold] } as never, { openOrders: 0 })
+  const off = (l: Record<string, unknown>) => ({ ...l, note: 'Off' })
+  const ended = { ...bArmed, tab: 'cancelled', live: false, legs: bArmed.legs.map(off) }
+  const byUser = { ...ended, id: 'b-u', at: '2026-09-19T10:00:00Z', endWord: 'Cancelled' }
+  const sold = { ...ended, id: 'b-s', exchange: 'TSX', symbol: 'TD', at: '2026-09-19T11:00:00Z', endWord: 'Off' }
+  await openPanel(page, request, { ...noOrders, live: true, brackets: [byUser, sold] }, { openOrders: 0 })
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
   const user = page.locator('.od-card', { hasText: 'NASDAQ: NVDA' })
   await expect(user.locator('.od-leg-state')).toHaveText(['Off', 'Off'])
   await expect(user.locator('.od-state')).toHaveText('Cancelled')
-  const off = page.locator('.od-card', { hasText: 'TSX: TD' })
-  await expect(off.locator('.od-leg-state')).toHaveText(['Off', 'Off'])
-  await expect(off.locator('.od-state')).toHaveText('Off')
+  await expect(user.getByRole('button', { name: 'Edit' })).toHaveCount(0)
+  const offCard = page.locator('.od-card', { hasText: 'TSX: TD' })
+  await expect(offCard.locator('.od-leg-state')).toHaveText(['Off', 'Off'])
+  await expect(offCard.locator('.od-state')).toHaveText('Off')
+})
+
+test('a bracket that exited stands on the Filled tab, the exit\'s fill on its leg and Cancelled on the other', async ({ page, request }) => {
+  const exited = {
+    ...bArmed, tab: 'filled', live: false, at: '2026-09-19T12:00:00Z',
+    legs: [{ ...bArmed.legs[0], filled: { quantity: '25', average: '157.02' }, amount: '3925.5' }, { ...bArmed.legs[1], note: 'Cancelled' }],
+  }
+  await openPanel(page, request, { ...noOrders, live: true, brackets: [exited] }, { openOrders: 0 })
+  await page.keyboard.press('ArrowRight')
+  const c = page.locator('.od-card', { hasText: 'Bracket' })
+  const stop = c.locator('.od-leg').filter({ hasText: 'Stop loss' })
+  await expect(stop.locator('.od-leg-value')).toHaveText('Filled 25 at 157.02')
+  await expect(stop.locator('.od-leg-amt')).toHaveText('$3,925.50')
+  await expect(stop.locator('.od-leg-state')).toHaveCount(0)
+  await expect(c.locator('.od-leg').filter({ hasText: 'Take profit' }).locator('.od-leg-state')).toHaveText('Cancelled')
+  await expect(c.locator('.od-state')).toHaveCount(0)
 })
 
 test('after Cancel is accepted the card reads Cancelling on its second line, with no Edit or Cancel, until the next read', async ({ page, request }) => {
   const model = await modelDoc(request)
   const patch = `event: patch\ndata: ${JSON.stringify({ doc: 'orders', ops: [
-    ['set', ['orders', { k: 'id', v: 'o-1' }, 'status'], 'cancelling'],
+    ['set', ['orders', { k: 'id', v: 'o-1' }, 'state'], 'cancelling'],
+    ['set', ['orders', { k: 'id', v: 'o-1' }, 'live'], false],
   ] })}\n\n`
-  const body = streamBody(model, { orders: { ok: true, live: true, orders: [oPending], brackets: [] } }, patch)
+  const body = streamBody(model, { orders: { ...noOrders, live: true, orders: [oPending] } }, patch)
   await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
   await page.goto('/')
   await ready(page)
@@ -317,14 +349,26 @@ test('after Cancel is accepted the card reads Cancelling on its second line, wit
   await expect(card.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
 })
 
-test('an order Wealthsimple has not answered for is a Pending card reading Sent, with nothing to act on yet', async ({ page, request }) => {
-  const unanswered = { ...oPending, status: 'sending' }
-  await openPanel(page, request, { ok: true, live: true, orders: [unanswered], brackets: [] } as never, { openOrders: 1 })
-  const card = page.locator('.od-card', { hasText: 'TSX-V: QNC' })
-  await expect(card.locator('.od-line')).toHaveText('100 at 1.75 limit · GTC')
-  await expect(card.locator('.od-state')).toHaveText('Sent')
-  await expect(card.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
-  await expect(page.locator('button[aria-label="Orders"] .od-badge')).toHaveText('1')
+test('an order Wealthsimple has not answered for is a Pending card reading Sent · not confirmed, with nothing to act on yet', async ({ page, request }) => {
+  for (const state of ['sending', 'unconfirmed']) {
+    const unanswered = { ...oPending, state, live: false, editable: false }
+    await openPanel(page, request, { ...noOrders, live: true, orders: [unanswered] }, { openOrders: 1 })
+    const c = page.locator('.od-card', { hasText: 'TSX-V: QNC' })
+    await expect(c.locator('.od-line')).toHaveText('100 at 1.75 limit · GTC')
+    await expect(c.locator('.od-state')).toHaveText('Sent · not confirmed')
+    await expect(c.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+    await expect(page.locator('button[aria-label="Orders"] .od-badge')).toHaveText('1')
+    await page.unroute('**/api/events?*')
+  }
+})
+
+test('a market order\'s value is its guessed fill, marked ≈; a value that waits reads the dash and its word', async ({ page, request }) => {
+  const market = card({ id: 'o-m', symbol: 'TD', exchange: 'TSX', kind: 'market', quantity: '5', value: '406', approx: true })
+  const waiting = card({ id: 'o-w', symbol: 'AAPL', exchange: 'NASDAQ', quantity: '1', limitPrice: '3', value: { gaps: ['multiplier-unstated'] } })
+  await openPanel(page, request, { ...noOrders, live: true, orders: [market, waiting] }, { openOrders: 2 })
+  await expect(page.locator('.od-card', { hasText: 'TSX: TD' }).locator('.od-value')).toHaveText('≈ $406.00')
+  await expect(page.locator('.od-card', { hasText: 'TSX: TD' }).locator('.od-line')).toHaveText('5 at market')
+  await expect(page.locator('.od-card', { hasText: 'NASDAQ: AAPL' }).locator('.od-value')).toHaveText('— size')
 })
 
 test('the orders document updates a card in place, with the panel open', async ({ page, request }) => {
@@ -333,8 +377,8 @@ test('the orders document updates a card in place, with the panel open', async (
   // panel refetching or rebuilding its list.
   const model = await modelDoc(request)
   const patch = `event: patch\ndata: ${JSON.stringify({ doc: 'orders', ops: [
-    ['set', ['orders', { k: 'id', v: 'o-3' }, 'filledQty'], 70],
-    ['set', ['orders', { k: 'id', v: 'o-3' }, 'avgFill'], 160.1],
+    ['set', ['orders', { k: 'id', v: 'o-3' }, 'filled'], '70'],
+    ['set', ['orders', { k: 'id', v: 'o-3' }, 'average'], '160.1'],
   ] })}\n\n`
   const body = streamBody(model, { orders: allOrders }, patch)
   await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))

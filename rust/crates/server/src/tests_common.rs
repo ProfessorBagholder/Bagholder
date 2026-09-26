@@ -77,14 +77,25 @@ pub fn pulled_book(home: &std::path::Path) {
 /// The same accounts in the book the ticket reads, beside the shared test book's
 /// own month: each added once, the margin account's buying power stated again.
 pub fn order_accounts_in_book() {
+    order_accounts_in(&app());
+}
+
+/// The ticket's accounts in `a`'s book, as `order_accounts_in_book`: an app of a
+/// test's own gets its figures built and a Wealthsimple connection first.
+pub fn order_accounts_in(a: &Arc<App>) {
     use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType, Registration};
     use bagholder_core::{Broker, Currency, Dec, Money};
-    let a = app();
     let f = a.figures.get().unwrap();
     let book = f.book().unwrap();
     let now = bagholder_core::jiff::Timestamp::now();
+    if f.read(|_| ()).is_none() {
+        f.state_zone("America/Toronto", now).unwrap();
+    }
     let ws = Broker::named("wealthsimple");
-    let conn = book.connections().unwrap().into_iter().find(|c| c.broker == ws).unwrap().id;
+    let conn = match book.connections().unwrap().into_iter().find(|c| c.broker == ws) {
+        Some(c) => c.id,
+        None => book.add_connection(&ws, "Wealthsimple", now).unwrap(),
+    };
     let accounts = [
         ("acct-margin", "Trading", AccountKind::Margin, Registration::Unregistered, false, AccountStatus::Open),
         ("acct-tfsa", "TFSA", AccountKind::Cash, Registration::Tfsa, false, AccountStatus::Open),

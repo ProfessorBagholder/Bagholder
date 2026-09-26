@@ -119,7 +119,15 @@ At the gate, initialled: no state in the tables that no move reaches; no event k
 
 ## Verification
 
-To be filled with the commands and their numbers as each criterion is met.
+Departures from the approach above, each for a reason found while building:
+
+- **A provisional fill is a record of its own source, not a record state.** `book/src/fills.rs`: each newly filled quantity is a record of the source `bagholder-fill` (keyed by the order and the cumulative quantity it brings the order to), written in the same transaction as the reading that said so; when the pull brings Wealthsimple's row for the order, that row supersedes every such record of the order through the book's existing supersede link (`Book::fills_give_way`, run after every pull). A new `RecordState` would have duplicated what the supersede link already does for CSV rows. Its value is the cash that makes the booked total equal the stated average × the cumulative quantity × the contract's size, exactly (`book/tests/fills.rs`).
+- **Orders placed in Wealthsimple's own app are held in memory, not in the book** (`OrdersState::elsewhere`): they are not the app's requests and have no asker; one that leaves the feed is read back once for how it ended (a fill is told). They still act from their card: Cancel and Edit go through `gate::cancel_elsewhere` / `gate::modify_elsewhere`, sent once, never by another path.
+- **The engine reads back a bracket's exit on every five-second check** while the broker may act on it, so a fill, a cancel or a change made by hand is seen at the check, as `SPEC.md` §4 has it.
+- **`orderType` on Wealthsimple's read-back is the side** (`buy_quantity`), not how the order is priced: the stated price is the stop where one is stated, else the limit (`gate::read_extended`). The read-back also carries the rejection's reason and code, which end a bracket whose exit is refused for shares that are not there.
+- **The old store's orders and brackets are carried at start** (`server/src/legacy_orders.rs`), each with an `imported` first event keeping the old row; a row that cannot be read stops the start, naming it, with nothing half carried and the old tables kept; orders Wealthsimple reported from its own app are left to the feed.
+
+Commands and their numbers are added below as each criterion is met.
 
 ## Handoff
 

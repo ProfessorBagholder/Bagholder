@@ -14,7 +14,7 @@ const sources = import.meta.glob(['/src/**/*.svelte', '/src/**/*.ts', '!/src/**/
 const MAKES_A_NUMBER = /Number\(|parseFloat\(|parseInt\(|as unknown as number|as number\b/g
 
 const ALLOWED: Record<string, [number, string]> = {
-  '/src/lib/dec.ts': [4, "`plot` (a chart's coordinate, never shown), `ticketNumber` (the order API's own numbers), and Intl's typing of the exact text it formats"],
+  '/src/lib/dec.ts': [4, "`plot` (a chart's coordinate, never shown), `ticketNumber` (a starting value for the ticket's quantity field), and Intl's typing of the exact text it formats"],
   '/src/lib/live.ts': [1, "a stream message's number"],
   '/src/lib/router.svelte.ts': [1, "the heatmap address's seconds"],
   '/src/lib/Portfolio.svelte': [1, "the count in the server's `Other (n)`"],
@@ -28,10 +28,9 @@ const ALLOWED: Record<string, [number, string]> = {
   '/src/lib/trade/ShortInterest.svelte': [4, 'share counts the short-interest source states as numbers (stage 5)'],
   '/src/lib/actions/roll.ts': [2, "a rolling digit's position"],
   '/src/lib/actions/tradeChart.ts': [6, "a chart bar's values for the charting library"],
-  '/src/lib/ticket/ticket.svelte.ts': [9, 'the order API takes numbers: the server\'s figures, the held units and the Max cross into them (`ticketNumber`)'],
+  '/src/lib/ticket/ticket.svelte.ts': [3, "the quantity field's typed number, started from the held units (a Sell's default and its Max) or the server's Max (`ticketNumber`); the order itself is sent as the server's decimal text"],
   '/src/lib/ticket/OrderTicket.svelte': [1, "the units an amount bought, as the server stated them, into the field's number"],
   '/src/lib/ticket/vals.ts': [1, 'the number typed into a field, which the server reads as text'],
-  '/src/lib/orders/orders.svelte.ts': [1, 'the number typed into an order edit (stage 4)'],
   '/src/lib/heatmap/treemap.ts': [1, "a tile's day change, a ratio (stage 5)"],
 }
 

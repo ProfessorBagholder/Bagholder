@@ -235,10 +235,11 @@ fn held_back(app: &Arc<App>, book: &Book, sb: &StoredBracket, held: Held, now: T
     Ok(())
 }
 
-/// Whether the broker's answer on the bracket's order is awaited: its request is out
-/// and not answered, or the phase is waiting on it.
-fn awaited(phase: Phase, x: &Exit) -> bool {
-    x.fold.state.in_flight() && (matches!(x.fold.state, OrderState::Sending | OrderState::Unconfirmed | OrderState::Cancelling) || matches!(phase, Phase::ToTarget | Phase::BackToStop | Phase::ToMarket | Phase::Firing | Phase::ClosingForSale | Phase::Closing))
+/// Whether the bracket's exit is read back on this check: whenever the broker may
+/// still act on it, so its fill, a cancel or a change made by hand at the broker, and
+/// the answer to a request, are all seen within a check (`SPEC.md` §6, Brackets).
+fn awaited(x: &Exit) -> bool {
+    x.fold.state.in_flight()
 }
 
 /// One bracket's check: what it waits on read back, then its steps until it has
@@ -258,7 +259,7 @@ pub fn check_bracket(app: &Arc<App>, book: &Book, id: &str, quotes: &HashMap<Str
                 }
             }
         } else if let Some(x) = exit_of(book, &sb.bracket)? {
-            if awaited(sb.bracket.phase, &x) {
+            if awaited(&x) {
                 if let Err(e) = gate::read_back(app, book, &x.order_id, now) {
                     log(&format!("bagholder bracket {id}: its exit could not be read back: {e}"));
                 }

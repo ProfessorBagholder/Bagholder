@@ -8,7 +8,7 @@
 //! else here can reach Wealthsimple's order mutations.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 #[cfg(test)]
 use std::sync::Arc;
@@ -94,6 +94,9 @@ pub struct OrdersState {
     pub(crate) elsewhere: Mutex<Vec<Elsewhere>>,
     /// Why the brackets' quote could not be acted on, until the next good read.
     pub(crate) quote_problem: Mutex<Option<String>>,
+    /// Seconds a ticket's sale waits for a bracket's exit to be confirmed cancelled
+    /// (`ticket::CANCEL_CONFIRM_SECONDS`; a test shortens it).
+    pub(crate) sale_wait: AtomicU32,
     /// The gate's broker and its per-bracket locks.
     pub(crate) gate: gate::GateState,
     /// Under test: the session and Wealthsimple's read answers, per app.
@@ -113,6 +116,7 @@ impl OrdersState {
             found: Mutex::new(HashMap::new()),
             elsewhere: Mutex::new(Vec::new()),
             quote_problem: Mutex::new(None),
+            sale_wait: AtomicU32::new(ticket::CANCEL_CONFIRM_SECONDS),
             gate: gate::GateState::default(),
             #[cfg(test)]
             seam: seam::Seam::default(),

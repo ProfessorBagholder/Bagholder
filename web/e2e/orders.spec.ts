@@ -3,9 +3,14 @@ import { openWithStatus } from './helpers'
 
 // SPEC §5, the Orders panel.
 
+// the orders document as the server builds it: one card, amounts as exact decimal text
 const resting = {
-  ok: true, live: false, brackets: [],
-  orders: [{ id: 'o-1', createdAt: '2026-09-18T14:31:00Z', account: 'TFSA', symbol: 'QNC', currency: 'CAD', side: 'BUY', type: 'LIMIT', quantity: 100, limitPrice: 1.75, stopPrice: null, tif: 'GTC', status: 'pending', filledQty: 0, avgFill: null, role: '', exchange: 'TSX-V' }],
+  ok: true, live: false, refreshedAt: null, error: null, brackets: [],
+  orders: [{
+    id: 'o-1', account: 'acct-tfsa', exchange: 'TSX-V', symbol: 'QNC', side: 'buy', kind: 'limit', tif: 'until-cancel',
+    quantity: '100', limitPrice: '1.75', stopPrice: null, state: 'pending', filled: '0', average: null, why: null,
+    value: '175', approx: false, tab: 'pending', at: '2026-09-18T14:31:00Z', live: true, editable: true, legs: [],
+  }],
 }
 
 test('the page behind an open panel does not scroll, and does again when it closes', async ({ page }) => {
@@ -26,6 +31,6 @@ test('an order\'s editor takes the keyboard when it opens, and Enter saves it', 
   await expect(page.locator('#od-qty')).toBeFocused()
   await page.locator('#od-qty').fill('150')
   await page.keyboard.press('Enter')
-  await expect.poll(() => sent).toEqual({ id: 'o-1', quantity: 150, limitPrice: 1.75 })
+  await expect.poll(() => sent).toEqual({ id: 'o-1', quantity: '150', limitPrice: '1.75' })
   await expect(page.locator('#od-qty')).toHaveCount(0)
 })

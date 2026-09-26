@@ -22,6 +22,7 @@ mod events;
 mod feeds;
 mod http;
 mod legacy_import;
+mod legacy_orders;
 mod market_context;
 mod login;
 mod notify;
@@ -113,11 +114,29 @@ fn serve() -> i32 {
         Ok(f) => {
             // the earlier store's figure tables, once the book holds their rows
             match (a.open(), f.book()) {
-                (Ok(conn), Ok(book)) => match legacy_import::retire_old_figures(&a.home, &conn, &book, bagholder_core::jiff::Timestamp::now()) {
-                    Ok(Some(snapshot)) => log(&format!("bagholder: the earlier store's figure tables are the book's now; the file as it was is kept at {}", snapshot.display())),
-                    Ok(None) => {}
-                    Err(e) => log(&format!("bagholder: {e}")),
-                },
+                (Ok(conn), Ok(book)) => {
+                    match legacy_import::retire_old_figures(&a.home, &conn, &book, bagholder_core::jiff::Timestamp::now()) {
+                        Ok(Some(snapshot)) => log(&format!("bagholder: the earlier store's figure tables are the book's now; the file as it was is kept at {}", snapshot.display())),
+                        Ok(None) => {}
+                        Err(e) => log(&format!("bagholder: {e}")),
+                    }
+                    // the earlier orders and brackets, once: a live one is followed from the first check
+                    match legacy_orders::carry_orders(&a.home, &conn, &book, bagholder_core::jiff::Timestamp::now()) {
+                        Ok(c) if c.snapshot.is_some() => log(&format!(
+                            "bagholder: {} orders and {} brackets carried into the book ({} placed in Wealthsimple's own app left to its feed); the file as it was is kept at {}",
+                            c.orders,
+                            c.brackets,
+                            c.left_to_the_feed,
+                            c.snapshot.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+                        )),
+                        Ok(_) => {}
+                        // the server does not start with orders it cannot follow
+                        Err(e) => {
+                            log(&format!("bagholder: {e}"));
+                            return 1;
+                        }
+                    }
+                }
                 (Err(e), _) => log(&format!("bagholder: the store could not be opened: {e}")),
                 (_, Err(e)) => log(&format!("bagholder: {e}")),
             }
@@ -425,10 +444,13 @@ mod tests_misc;
 
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests_execution;
+#[cfg(test)]
+mod tests_orders;
 
 #[cfg(test)]
+#[cfg(test)]
+mod tests_orders_wire_golden;
 #[cfg(test)]
 mod tests_types;
 #[cfg(test)]

@@ -384,6 +384,12 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     if !linking.linked.is_empty() || !linking.ambiguous.is_empty() {
         log(&format!("bagholder: rows imported from files: {} linked to the broker's own, {} with more than one they could be", linking.linked.len(), linking.ambiguous.len()));
     }
+    // a fill booked from an order's read-back gives way to the broker's own row for it
+    let gave_way = book.fills_give_way(now).map_err(|e| e.to_string())?;
+    if gave_way > 0 {
+        f.record_changed(now)?;
+        log(&format!("bagholder: the fills of {gave_way} of Bagholder's own orders are Wealthsimple's own rows now"));
+    }
     log(&format!(
         "bagholder: pulled Wealthsimple: {} rows read, {} new, {} revised, {} removed, {} imported replaced",
         report.rows_read,

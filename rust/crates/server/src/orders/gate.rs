@@ -9,7 +9,7 @@
 //! sends more than it ever could in a minute is stopped. With orders off, nothing
 //! passes: that is checked here and nowhere else.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use bagholder_book::orders::OrderRequest;
@@ -113,6 +113,9 @@ pub fn place(app: &Arc<App>, book: &Book, o: &OrderRequest, asker: &Asker, now: 
     if !live {
         return Ok(Err(Held::Dry));
     }
+    // until its answer is recorded, a read-back must not decide it: the broker may
+    // not have it yet, and "no such order" would fail an order it is about to take
+    let _sending = Sending::start(app, &o.id);
     let event = match broker(app).create(app, &o.request) {
         Sent::Accepted { broker_id: Some(id) } => OrderEvent::Accepted { broker_id: id },
         // taken, and no id named: the read-back finds it
@@ -156,6 +159,10 @@ pub fn cancel(app: &Arc<App>, book: &Book, id: &str, asker: &Asker, now: Timesta
 pub fn read_back(app: &Arc<App>, book: &Book, id: &str, now: Timestamp) -> Result<OrderFold, String> {
     let before = fold(book, id)?;
     if before.state == OrderState::Dry {
+        return Ok(before);
+    }
+    // being sent by this run: its own answer settles it, not a read
+    if app.orders.gate.sending.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
         return Ok(before);
     }
     let found = broker(app).read(app, id)?;
@@ -221,56 +228,84 @@ const ORDER_BRANCH: &str = "TR";
 
 impl OrderBroker for Wealthsimple {
     fn create(&self, app: &Arc<App>, request: &Value) -> Sent {
-        use bagholder_ws::session::Mutation;
         let Some(sess) = super::ticket_session(app) else { return Sent::NotSent { why: "Not connected.".into() } };
-        match mutate::<bagholder_ws::wire::CreateOrderAnswer>(app, &sess, "SoOrdersOrderCreate", &json!({ "input": request })) {
-            Mutation::Answer(a) => match a.so_orders_create_order {
-                Some(r) if r.errors.0.is_some() || r.errors.1.is_some() => Sent::Refused { why: r.errors.0.clone().or(r.errors.1.clone()).unwrap_or_default(), code: r.errors.1.clone() },
-                Some(r) => Sent::Accepted { broker_id: r.order.map(|o| o.order_id).filter(|id| !id.is_empty()) },
-                None => Sent::Unclear { why: "SoOrdersOrderCreate: an answer that names no order".into() },
-            },
-            Mutation::Refused(why) => Sent::Refused { why, code: None },
-            Mutation::NotAuthorized => Sent::Refused { why: "The Wealthsimple session lapsed.".into(), code: None },
-            Mutation::Unclear(why) => Sent::Unclear { why },
-        }
+        created(mutate::<bagholder_ws::wire::CreateOrderAnswer>(app, &sess, "SoOrdersOrderCreate", &json!({ "input": request })))
     }
 
     fn cancel(&self, app: &Arc<App>, external_id: &str) -> Sent {
-        use bagholder_ws::session::Mutation;
         let Some(sess) = super::ticket_session(app) else { return Sent::NotSent { why: "Not connected.".into() } };
-        match mutate::<bagholder_ws::wire::CancelOrderAnswer>(app, &sess, "SoOrdersOrderCancel", &json!({ "cancelOrderRequest": { "externalId": external_id } })) {
-            Mutation::Answer(a) => match a.order_service_cancel_order {
-                Some(r) if r.errors.0.is_some() || r.errors.1.is_some() => Sent::Refused { why: r.errors.0.clone().or(r.errors.1.clone()).unwrap_or_default(), code: r.errors.1.clone() },
-                Some(_) => Sent::Accepted { broker_id: None },
-                None => Sent::Unclear { why: "SoOrdersOrderCancel: an answer with nothing in it".into() },
-            },
-            Mutation::Refused(why) => Sent::Refused { why, code: None },
-            Mutation::NotAuthorized => Sent::Refused { why: "The Wealthsimple session lapsed.".into(), code: None },
-            Mutation::Unclear(why) => Sent::Unclear { why },
-        }
+        cancelled(mutate::<bagholder_ws::wire::CancelOrderAnswer>(app, &sess, "SoOrdersOrderCancel", &json!({ "cancelOrderRequest": { "externalId": external_id } })))
     }
 
     fn modify(&self, app: &Arc<App>, external_id: &str, change: &Value) -> Sent {
-        use bagholder_ws::session::Mutation;
         let Some(sess) = super::ticket_session(app) else { return Sent::NotSent { why: "Not connected.".into() } };
         let mut input = change.clone();
         input["externalId"] = json!(external_id);
-        match mutate::<bagholder_ws::wire::ModifyOrderAnswer>(app, &sess, "SoOrdersOrderModify", &json!({ "input": input })) {
-            Mutation::Answer(a) => match a.so_orders_modify_order {
-                Some(r) if r.errors.0.is_some() || r.errors.1.is_some() => Sent::Refused { why: r.errors.0.clone().or(r.errors.1.clone()).unwrap_or_default(), code: r.errors.1.clone() },
-                Some(_) => Sent::Accepted { broker_id: None },
-                None => Sent::Unclear { why: "SoOrdersOrderModify: an answer with nothing in it".into() },
-            },
-            Mutation::Refused(why) => Sent::Refused { why, code: None },
-            Mutation::NotAuthorized => Sent::Refused { why: "The Wealthsimple session lapsed.".into(), code: None },
-            Mutation::Unclear(why) => Sent::Unclear { why },
-        }
+        modified(mutate::<bagholder_ws::wire::ModifyOrderAnswer>(app, &sess, "SoOrdersOrderModify", &json!({ "input": input })))
     }
 
     fn read(&self, app: &Arc<App>, external_id: &str) -> Result<Found, String> {
         let Some(sess) = super::ticket_session(app) else { return Err("Not connected.".into()) };
         let data: Value = super::gql_as(app, &sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id})).map_err(|e| e.to_string())?;
         read_extended(&data)
+    }
+}
+
+
+use bagholder_ws::session::Mutation;
+
+fn refused_or(m: Mutation<()>) -> Sent {
+    match m {
+        Mutation::Answer(()) => Sent::Accepted { broker_id: None },
+        Mutation::Refused(why) => Sent::Refused { why, code: None },
+        Mutation::NotAuthorized => Sent::Refused { why: "The Wealthsimple session lapsed.".into(), code: None },
+        Mutation::Unclear(why) => Sent::Unclear { why },
+    }
+}
+
+fn split<T>(m: Mutation<T>) -> Result<T, Sent> {
+    match m {
+        Mutation::Answer(a) => Ok(a),
+        Mutation::Refused(why) => Err(refused_or(Mutation::Refused(why))),
+        Mutation::NotAuthorized => Err(refused_or(Mutation::NotAuthorized)),
+        Mutation::Unclear(why) => Err(refused_or(Mutation::Unclear(why))),
+    }
+}
+
+fn errors_of(e: &bagholder_ws::wire::Refusal) -> Option<Sent> {
+    (e.0.is_some() || e.1.is_some()).then(|| Sent::Refused { why: e.0.clone().or(e.1.clone()).unwrap_or_default(), code: e.1.clone() })
+}
+
+/// What Wealthsimple's answer to a create says of the order.
+pub fn created(m: Mutation<bagholder_ws::wire::CreateOrderAnswer>) -> Sent {
+    match split(m) {
+        Err(sent) => sent,
+        Ok(a) => match a.so_orders_create_order {
+            Some(r) => errors_of(&r.errors).unwrap_or(Sent::Accepted { broker_id: r.order.map(|o| o.order_id).filter(|id| !id.is_empty()) }),
+            None => Sent::Unclear { why: "SoOrdersOrderCreate: an answer that names no order".into() },
+        },
+    }
+}
+
+/// What Wealthsimple's answer to a cancel says.
+pub fn cancelled(m: Mutation<bagholder_ws::wire::CancelOrderAnswer>) -> Sent {
+    match split(m) {
+        Err(sent) => sent,
+        Ok(a) => match a.order_service_cancel_order {
+            Some(r) => errors_of(&r.errors).unwrap_or(Sent::Accepted { broker_id: None }),
+            None => Sent::Unclear { why: "SoOrdersOrderCancel: an answer with nothing in it".into() },
+        },
+    }
+}
+
+/// What Wealthsimple's answer to a change says.
+pub fn modified(m: Mutation<bagholder_ws::wire::ModifyOrderAnswer>) -> Sent {
+    match split(m) {
+        Err(sent) => sent,
+        Ok(a) => match a.so_orders_modify_order {
+            Some(r) => errors_of(&r.errors).unwrap_or(Sent::Accepted { broker_id: None }),
+            None => Sent::Unclear { why: "SoOrdersOrderModify: an answer with nothing in it".into() },
+        },
     }
 }
 
@@ -371,6 +406,27 @@ pub fn read_extended(data: &Value) -> Result<Found, String> {
 pub struct GateState {
     pub broker: Mutex<Option<Arc<dyn OrderBroker>>>,
     pub bracket_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// The orders this run is sending now, whose create has not been answered yet.
+    pub sending: Mutex<HashSet<String>>,
+}
+
+/// An order marked as being sent for as long as this lives.
+struct Sending<'a> {
+    app: &'a App,
+    id: String,
+}
+
+impl<'a> Sending<'a> {
+    fn start(app: &'a App, id: &str) -> Sending<'a> {
+        app.orders.gate.sending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
+        Sending { app, id: id.to_string() }
+    }
+}
+
+impl Drop for Sending<'_> {
+    fn drop(&mut self) {
+        self.app.orders.gate.sending.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+    }
 }
 
 /// Cancel an order placed elsewhere (in Wealthsimple's own app): not the app's, so
