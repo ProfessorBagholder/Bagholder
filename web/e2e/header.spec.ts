@@ -12,6 +12,15 @@ test('a release that can be installed is a button, and pressing it asks for the 
   expect(asked).toBe(1)
 })
 
+test('the Update button is gone while the update installs, and back if it fails', async ({ page, request }) => {
+  const offer = { updateAvailable: true, canUpdate: true, latestVersion: 'v9.9.9' }
+  await openWithStatus(page, request, { ...offer, updating: 'Downloading…' })
+  await expect(page.locator('#syncline')).toHaveText('Downloading…')
+  await expect(page.getByRole('button', { name: 'Update to v9.9.9' })).toHaveCount(0)
+  await openWithStatus(page, request, { ...offer, updating: '', updateError: 'The update could not be verified.' })
+  await expect(page.getByRole('button', { name: 'Update to v9.9.9' })).toBeVisible()
+})
+
 test('a release this copy cannot install itself is a link to it', async ({ page, request }) => {
   await openWithStatus(page, request, { updateAvailable: true, canUpdate: false, updateBy: 'app', updateUrl: 'https://example.test/release' })
   await expect(page.getByRole('link', { name: 'Update available' })).toHaveAttribute('href', 'https://example.test/release')

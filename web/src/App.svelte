@@ -283,7 +283,8 @@
       <img src="/favicon.png" alt="" style="width:24px;height:24px;border-radius:6px" />
       <span style="font-size:15px;font-weight:600;letter-spacing:var(--brand-spacing);color:var(--brand-color);text-transform:var(--brand-transform)">Bagholder</span>
       {#if status?.version}<span class="muted" style="font-size:11px;margin-left:8px">v{status.version}</span>{/if}
-      {#if status?.updateAvailable}
+      <!-- nothing to press while an update installs: its progress is in the header's line -->
+      {#if status?.updateAvailable && !status.updating}
         {#if status.canUpdate}
           <button class="pill" style="font-size:11px;margin-left:8px;padding:1px 8px;width:auto;color:var(--accent-300)" onclick={updateNow}>Update to {status.latestVersion}</button>
         {:else}
