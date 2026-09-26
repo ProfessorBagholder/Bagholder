@@ -175,3 +175,13 @@ Each recommendation is checked against every line here before it reaches the own
 **Option contract adjustments**
 - OCC doesn't adjust for ordinary cash dividends, nor for specials under $0.125.
 - An adjusted option gets "a numeral following the letters of the option symbol", and the deliverable changes (for example 5 shares after a 1-for-20), with the multiplier "to remain 100".
+
+## Agents and running on the person's machine
+
+**Tools for agents** (Anthropic, "Writing effective tools for agents")
+- "A common error we've observed is tools that merely wrap existing software functionality or API endpoints".
+- "More tools don't always lead to better outcomes." The advice is "a few thoughtful tools targeting specific high-impact workflows".
+
+**A broker's own agent order tool:** Questrade's MCP `create_order_instruction` "never executes a trade directly". It sends a push-to-approve request to the customer's app, and "the trade is only sent to the market after the customer reviews the order details there and explicitly approves it".
+
+**Starting at login:** Apple's App Review Guideline 2.4.5 says Mac App Store apps "may not auto-launch or have other code automatically run at startup or login without consent". The usual form is a setting, off by default.

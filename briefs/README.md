@@ -9,7 +9,7 @@ Read from any checkout without switching branches:
 
 | # | Brief | Status |
 |---|---|---|
-| 01 | [Stage 3, and how we work from here](01-stage-3-and-the-gate.md) | Current; §2.2 replaced by 09 |
+| 01 | [Stage 3, and how we work from here](01-stage-3-and-the-gate.md) | Current; §2.2 replaced by 09; §13's browser store withdrawn by 10 |
 | 02 | [Verdict on the stage 3a plan: Go with changes](02-stage-3a-verdict.md) | Current; the named-fund exception replaced by 09 |
 | 03 | [The instruction files](03-instructions-audit.md) | Current |
 | 04 | [Options, trade marks, and a blind check of the cases](04-clean-room-case-check.md) | Current (rewritten after reading the engine) |
@@ -18,3 +18,4 @@ Read from any checkout without switching branches:
 | 07 | [Verdicts: stage 3b (Go with changes) and the trade plan (Go with one change)](07-stage-3b-and-trades-verdict.md) | Current |
 | 08 | [Stage 3b as built: accepted with three fixes; managed accounts decided](08-stage-3b-built-verdict.md) | Current |
 | 09 | [Verdict on the stage 3c plan: Go with changes](09-stage-3c-verdict.md) | Current |
+| 10 | [Verdict on the stage 5 plan: Go with changes](10-stage-5-verdict.md) | Current |
