@@ -4,6 +4,7 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 ## 2026-09-26
 
+- **The app never sets itself up to start at login.** Whether it runs all the time is the person's own choice: the container keeps it running (compose restarts it), or they set it up themselves; not everyone expects or wants an app to install itself as a service. A release install changes nothing about how the machine starts. (Owner; stage 5 plan, item 1.) Held by: review only.
 - **No guard against a single far-off quote, and no global switch for automated orders.** Each was drafted from one line of the architecture and answers nothing observed or established for a person's own tool; cancelling a bracket stops its orders, and the per-bracket cap stops a runaway one. The guards kept: at most ten orders a minute from one bracket (one more stops it until the person acts), and no action on a quote whose own time is more than fifteen seconds old or on a failed quote read, said in the header. (Owner; `docs/plans/stage-4-execution.md`.) Held by: `server/src/tests_execution.rs` (`a_bracket_that_sends_more_than_its_cap_stops_and_the_header_says_so`, `a_quote_older_than_fifteen_seconds_by_its_own_time_is_not_acted_on`, `nothing_fires_on_a_stale_quote`).
 
 ## 2026-09-25
