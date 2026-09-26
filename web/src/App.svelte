@@ -197,16 +197,24 @@
     return { duration: 300, css: (t: number) => `opacity:${t}` }
   }
   // the arriving page settles in once; the class goes when it has, so nothing fixed
-  // inside the page is left positioned against an animated ancestor
+  // inside the page is left positioned against an animated ancestor. It settles on the
+  // animation's end, on its cancellation (hidden, or the class changed under it), and at
+  // once where no animation runs at all, so the page is never left mid-arrival.
   function arrive(node: HTMLElement) {
     node.classList.add('bh-skin')
-    const done = (e: AnimationEvent) => {
-      if (e.target !== node) return
+    const settle = () => {
+      node.removeEventListener('animationend', done)
+      node.removeEventListener('animationcancel', done)
       node.classList.remove('bh-skin')
       node.dataset.arrived = ''
     }
+    const done = (e: AnimationEvent) => {
+      if (e.target === node) settle()
+    }
     node.addEventListener('animationend', done)
-    return { destroy: () => node.removeEventListener('animationend', done) }
+    node.addEventListener('animationcancel', done)
+    if (!node.getAnimations?.().length) settle()
+    return { destroy: () => settle() }
   }
 
   const notesUnread = $derived(notesStore.unread || status?.notify?.unread || 0)

@@ -29,6 +29,19 @@ test('the app is there before the model is: header, tabs and the tab\'s own silh
   await expect(page.locator('.bh-skin')).toHaveCount(0)
 })
 
+test('the page settles where its arrival never animates', async ({ page }) => {
+  await page.addInitScript(() => {
+    addEventListener('DOMContentLoaded', () => {
+      const s = document.createElement('style')
+      s.textContent = '.bh-skin{animation:none!important}'
+      document.head.append(s)
+    })
+  })
+  await page.goto('/')
+  await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+  await expect(page.locator('.bh-skin')).toHaveCount(0)
+})
+
 test('a server that cannot be reached is said, with Retry, and Retry loads the page', async ({ page }) => {
   let refuse = true
   await page.route('**/api/events?*', (route) => (refuse ? route.abort() : route.continue()))

@@ -32,7 +32,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`. — fixed (d162919e): the executables are kept before a checkout's build, so the supervisor puts them and the checkout's commit back and starts that version; the failure is written for the restarted server, which says it in the header.
 - [x] A disclosure or release banner opens the page only for a held symbol. `notes/channel.svelte.ts:88`. — fixed (ba7870a3): it opens the listing's page, the holding's where the book holds it.
 - [x] Short interest is asked for an option's underlying and for a coin. `trade/shorts.svelte.ts:19`. — fixed (690f1757): asked and drawn for shares only.
-- [ ] The book's own rows name an index, a rate, a currency pair and an event contract `Shares` (`server/src/wire/build.rs` `kind_word`), so the page cannot tell them from shares (the short-interest gate reads that word). Each kind needs its own word, and the Kind filter must read them; a wire change.
+- [x] The book's own rows name an index, a rate, a currency pair and an event contract `Shares` (`server/src/wire/build.rs` `kind_word`), so the page cannot tell them from shares (the short-interest gate reads that word). Each kind needs its own word, and the Kind filter must read them; a wire change. — fixed (10d7c71d): one table of words, sent and read back; SPEC's Kind filter lists them.
 - [x] A failed bars request shows "No price history for this span." instead of the failure. `trade/chart.ts:91`. — fixed (175cd3d0).
 - [ ] With no history source, the priced executions are not plotted on a time axis. Old page same.
 - [x] A remembered or addressed universe with no rows is never read until clicked. `heat.svelte.ts:35`. — fixed (7dd46288).
@@ -60,7 +60,7 @@ This file is the done-contract for what was found. An item is ticked when it is 
 - [x] Listing addresses are percent-encoded. — fixed (55d05da4).
 - [x] Watchlist match quotes never expire. — fixed (024b887b).
 - [x] A `sending` order left by a stop is on no tab; dry orders do not cover bracket edits; no row is written without a session; trade page Buy/Sell open the ticket; Max on a Sell uses the position picked at open; trailing moves only strictly above half a percent; position size converts only USD; `—/mo margin interest` with no month charged. — fixed: `sending` rows read back and shown (1c1718c3); orders off and no session (edafb4a2); the trade page's Buy/Sell kept by the owner, SPEC updated (87e1c54c); Max on a Sell (485d3cdf); trailing at half a percent (1d95dcda); position size at the Bank's rate for any currency (9b928696); no margin interest subtitle with no month charged (1598c6c4).
-- [ ] The skeleton's removal uses an animation callback. (Fixed: Disclosures `Opening…`, 47dbc752; the data modal's entrance motion, ab423bc7.)
+- [x] The skeleton's removal uses an animation callback. (Fixed: Disclosures `Opening…`, 47dbc752; the data modal's entrance motion, ab423bc7.) — fixed: the arriving page settles on the animation's end, its cancellation, or at once where none runs.
 - [x] The store runs `synchronous = NORMAL`. — fixed (b319efa3): FULL, every commit flushed.
 - [x] A replaced database is not migrated until restart. — fixed (f54d5c93): each borrow checks the file is the one kept connections hold and reads its stamped version; a replaced or rolled-back file is prepared on that borrow.
 
