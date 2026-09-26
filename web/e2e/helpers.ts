@@ -184,9 +184,10 @@ export const symText = (s: string) => {
   return m ? bareSymbol(m[1]) + m[2] : s
 }
 
-/** A hash address of a sub page, as the page writes it (ids can hold ':'). */
+/** A hash address of a sub page, as the page writes it: ids can hold ':' and '@', which stay readable (SPEC.md §4 Markets). */
 export function subUrl(tab: string, id: string): RegExp {
-  return new RegExp('#' + tab + '/' + encodeURIComponent(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
+  const readable = encodeURIComponent(id).replace(/%3A/gi, ':').replace(/%40/gi, '@')
+  return new RegExp('#' + tab + '/' + readable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
 }
 
 /**

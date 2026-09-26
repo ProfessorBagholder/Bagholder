@@ -138,7 +138,16 @@ export function go(tab: Tab): void {
   follow()
 }
 
+/**
+ * The address of a sub page, `tab/id`. The id is escaped as a URL's fragment needs, but
+ * `:` and `@`, which a fragment carries as they are, stay readable: a listing's address
+ * reads `markets/listing:SYMBOL@VENUE` (SPEC.md §4 Markets).
+ */
+export function subHash(tab: Tab, sub: string): string {
+  return tab + '/' + encodeURIComponent(sub).replace(/%3A/gi, ':').replace(/%40/gi, '@')
+}
+
 export function goSub(tab: Tab, sub: string): void {
-  location.hash = tab + '/' + encodeURIComponent(sub)
+  location.hash = subHash(tab, sub)
   follow()
 }

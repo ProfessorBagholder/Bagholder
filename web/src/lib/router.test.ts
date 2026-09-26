@@ -1,5 +1,18 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { tabFromHash, route, startRouter, go, goSub, keepScroll } from './router.svelte'
+import { tabFromHash, subFromHash, subHash, route, startRouter, go, goSub, keepScroll } from './router.svelte'
+
+describe("a sub page's address", () => {
+  it('keeps `:` and `@` readable, escapes what a fragment cannot carry, and reads back as the id', () => {
+    const ids = ['listing:ABC@TSX-V', 'listing:BRK.B@NYSE', 'a:b:long', 'x y/z#?%&', 'listing:É@X']
+    for (const id of ids) {
+      const hash = subHash('markets', id)
+      expect(hash).not.toMatch(/%3A|%40/i)
+      expect(hash).not.toMatch(/[ #?]|\/.*\//)
+      expect(subFromHash('#' + hash)).toBe(id)
+    }
+    expect(subHash('markets', 'listing:ABC@TSX')).toBe('markets/listing:ABC@TSX')
+  })
+})
 
 describe('hash router', () => {
   // jsdom has no window scrolling to do

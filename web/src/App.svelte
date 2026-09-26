@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { store, refilter, resync, loadDetail } from './lib/state.svelte'
   import { disconnect } from './lib/live'
-  import { route, startRouter, go, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
+  import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
   import { symText } from './lib/sym'
   import { relTime } from './lib/fmt'
@@ -174,7 +174,7 @@
     if (route.tab !== 'markets' || !isListingId(route.sub)) return
     loadListing(route.sub!, (positionId) => {
       // held after all: its page is the holding's, and Back does not return here
-      history.replaceState(null, '', '#portfolio/' + encodeURIComponent(positionId))
+      history.replaceState(null, '', '#' + subHash('portfolio', positionId))
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
   })

@@ -247,7 +247,8 @@ test.describe('Heatmap card', () => {
     await ready(page)
     await page.locator('.card', { has: page.locator('h5', { hasText: 'Heatmap' }) }).locator('.mseg-opt', { hasText: 'Both' }).click()
     await page.locator('#heatBox .heat-tile[data-sym="ZZZQ"]').click()
-    await expect(page).toHaveURL(/#markets\/listing%3AZZZQ%40TSX$/)
+    // the address reads markets/listing:SYMBOL@VENUE, as SPEC names it
+    await expect(page).toHaveURL(/#markets\/listing:ZZZQ@TSX$/)
     await expect(page.locator('#page')).toContainText('Zzzq Corp')
   })
 })
