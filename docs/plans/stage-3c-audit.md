@@ -18,26 +18,26 @@ This file is the done-contract for what was found. An item is ticked when it is 
 ## High
 
 - [x] **Source failures never reach the header** (the header's error is now built from each source's newest outcome in the cache, beside Wealthsimple's and the figures' own; a cache commit tells the page) (§1, §2 Distribution rate). A failed read of the Bank of Canada, TMX, Yahoo, a payer reader or a quote source is recorded in the cache and nothing more; the header shows only Wealthsimple's failures. `sources/src/rates.rs:185`, `server/src/status.rs:84`.
-- [ ] **The page never reloads after an update** (§2 Versions). A new server answering only drops the chart cache; the old page keeps running, and a protocol bump reads "Restart Bagholder to finish the update". `web/src/lib/live.ts:258`.
-- [ ] **Back loses the list's scroll** (§4 Trades). Only the window's scroll is kept; the Trades and Holdings tables scroll inside their cards. `router.svelte.ts:73`.
-- [ ] **A sync error is cut to 57 characters in the header** (§4 header). The Chrome-closed message reads "…Choo…". Old page same. `App.svelte:185,302`.
-- [ ] **The market universes are never read at start or every 30 minutes** (§4 Markets). Only a click on an unread one reads it; after that their day changes go stale. `feeds.rs:2305`.
+- [x] **The page never reloads after an update** (§2 Versions). A new server answering only drops the chart cache; the old page keeps running, and a protocol bump reads "Restart Bagholder to finish the update". `web/src/lib/live.ts:258`. — fixed (428e9589): a restarted server of another version or protocol reloads the page, once.
+- [x] **Back loses the list's scroll** (§4 Trades). Only the window's scroll is kept; the Trades and Holdings tables scroll inside their cards. `router.svelte.ts:73`. — fixed (f62f5307): each list's inner scroll comes back.
+- [x] **A sync error is cut to 57 characters in the header** (§4 header). The Chrome-closed message reads "…Choo…". Old page same. `App.svelte:185,302`. — fixed (65d14d29): shown whole, the header never overflowing.
+- [x] **The market universes are never read at start or every 30 minutes** (§4 Markets). Only a click on an unread one reads it; after that their day changes go stale. `feeds.rs:2305`. — fixed (7dd46288): read while a page shows one, when it has no rows or they are 30 minutes old; SPEC corrected.
 - [x] **A Sell from the ticket on shares a bracket holds does not wait for the stop's cancel** (fc293360: it waits for the confirmation, and without it nothing is sold) (§4 Order ticket, Nothing left behind). After 8 s it sends the sell whatever the cancel's state, so a stop and a sell can both rest on the same shares. `orders/ticket.rs:735`.
 - [x] **A fill of a Bagholder order is not written at once** (§4 Orders). It asked one pull and, if Wealthsimple had not listed the fill yet, nothing more until the next day's sync. Now it is pulled for until Wealthsimple's own row for that order is in the book, soon at first and hourly after three hours; SPEC describes the pull (the broker's row, never a synthetic one), not the local trade it used to name.
 
 ## Medium
 
-- [ ] Sync status: `folder scanned` notice missing after Scan now or Watch folder. `ui.svelte.ts:343`.
+- [x] Sync status: `folder scanned` notice missing after Scan now or Watch folder. `ui.svelte.ts:343`. — fixed (22be8ddf, 80272e5b; the count is the server's).
 - [x] A failed figures pass's header error is never cleared by a later good pass (it has its own place now, cleared by the next good pass and by nothing else). `due.rs:45`.
 - [ ] A failed update's rollback is not said in the header; in a git checkout the supervisor exits instead of restarting. `update.rs:640`.
 - [ ] A disclosure or release banner opens the page only for a held symbol. `notes/channel.svelte.ts:88`.
 - [ ] Short interest is asked for an option's underlying and for a coin. `trade/shorts.svelte.ts:19`.
 - [ ] A failed bars request shows "No price history for this span." instead of the failure. `trade/chart.ts:91`.
 - [ ] With no history source, the priced executions are not plotted on a time axis. Old page same.
-- [ ] A remembered or addressed universe with no rows is never read until clicked. `heat.svelte.ts:35`.
+- [x] A remembered or addressed universe with no rows is never read until clicked. `heat.svelte.ts:35`. — fixed (7dd46288).
 - [ ] The tile picker opens inside the tile row, not under the header. `MarketTiles.svelte:142`.
 - [ ] News search: any 1–6 letter word becomes a chip. Old page same. `News.svelte:205`.
-- [ ] Brackets: a quantity changed at Wealthsimple is not adopted; a refusal for shares not there does not end the bracket; the 5 s check pauses during a sync; the stop leg never reads `Watching`; an ended bracket reads `Cancelled` not `Off`; a card being cancelled has no `Cancelling`. `brackets.rs`, `orders.svelte.ts`.
+- [ ] Brackets: the stop leg never reads `Watching`; an ended bracket reads `Cancelled` not `Off`; a card being cancelled has no `Cancelling`. (Fixed in 1d95dcda: a quantity changed at Wealthsimple is adopted; a refusal for shares not there ends the bracket; the checks run through a sync; trailing moves at half a percent.)
 - [ ] Ticket: switching Buy/Sell keeps the quantity and account; a draft card shows no amount or legs; the badge counts every account while the panel follows the filter. Old page same for the first two.
 - [ ] Disclosures: the Summary column is drawn with no summary; half-filled rows are read again without limit; a titled row without a sentence waits until shown again; the re-read button shows no reading state.
 - [ ] Filters: single-list filters other than Symbol and Tag have no keys; a found instrument row has two icons and does nothing on click. Old page same for the second.
