@@ -412,6 +412,8 @@ html.panel-open{overflow:hidden}
 .tk-scrim{animation:bhfade .18s ease both}
 #confirmDlg{animation:bhfade .18s ease both}
 #confirmDlg .card{animation:bhrise .24s var(--ease-travel) both}
+#modalDlg{animation:bhfade .18s ease both}
+#modalDlg > .card{animation:bhrise .24s var(--ease-travel) both}
 .btn,.pill,.mseg-opt,.chip .cv,.chip .cx{transition:background .16s ease,color .16s ease}
 .tk-go{transition:color .24s ease,background .24s ease,box-shadow .24s ease}
 .bh-check{stroke-dasharray:26;stroke-dashoffset:26;animation:bhdraw .36s cubic-bezier(.4,0,.2,1) .05s forwards}

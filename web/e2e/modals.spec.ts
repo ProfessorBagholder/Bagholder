@@ -28,3 +28,27 @@ test('Enter in the Add trade boxes submits the trade', async ({ page }) => {
   // the server's refusal is said under the form, in its words
   await expect(page.locator('#modalDlg .status-err')).toHaveText('not in this test')
 })
+
+test('a dialog rises 8 px and scales from 98% over .24 s, and its scrim fades in over .18 s', async ({ page }) => {
+  await page.goto('/')
+  for (const item of ['Add trade', 'Import CSV', 'Load folder']) {
+    await page.getByRole('button', { name: 'Menu' }).click()
+    await page.getByText(item, { exact: true }).click()
+    const motion = (sel: string) =>
+      page.locator(sel).evaluate((el) =>
+        el.getAnimations().map((a) => {
+          const k = (a.effect as KeyframeEffect).getKeyframes()
+          return { ms: Number((a.effect as KeyframeEffect).getTiming().duration), from: { opacity: k[0].opacity, transform: k[0].transform }, to: { opacity: k[k.length - 1].opacity } }
+        }),
+      )
+    const scrim = await motion('#modalDlg')
+    expect(scrim, item).toEqual([{ ms: 180, from: { opacity: '0', transform: undefined }, to: { opacity: '1' } }])
+    const dialog = await motion('#modalDlg > .card')
+    expect(dialog, item).toHaveLength(1)
+    expect(dialog[0].ms).toBe(240)
+    expect(dialog[0].from.opacity).toBe('0')
+    expect(String(dialog[0].from.transform).replace(/\s+/g, '')).toBe('translateY(8px)scale(0.98)')
+    await page.keyboard.press('Escape')
+    await expect(page.locator('#modalDlg')).toHaveCount(0)
+  }
+})
