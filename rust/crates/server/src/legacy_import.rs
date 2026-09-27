@@ -326,15 +326,46 @@ pub fn python_home(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<s
     Some(Path::new(&home).join(".bagholder"))
 }
 
-/// A first start with nothing of its own takes the Python app's database: when
-/// `home` holds neither a book nor a `bagholder.db` and `python` holds a
-/// `bagholder.db`, a copy of it is put in `home`, where the start imports it as
-/// its own. `python` is only read. Answers the file copied, if one was.
+/// When a database was last written: the later of the file's and its write-ahead
+/// log's modification times, since a running app writes the log first.
+fn last_written(db: &Path) -> Result<std::time::SystemTime, String> {
+    let when = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).map_err(|e| format!("{}: {e}", p.display()));
+    let file = when(db)?;
+    let wal = db.with_file_name(format!("{}-wal", db.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+    if wal.is_file() {
+        return Ok(file.max(when(&wal)?));
+    }
+    Ok(file)
+}
+
+/// A first start with no book takes the Python app's database: when `home` holds
+/// no book and `python` holds a `bagholder.db` written later than any `home`
+/// holds, a copy of it is put in `home`, where the start imports it as its own.
+/// A `bagholder.db` of `home`'s own that the Python app's is newer than (one an
+/// earlier Rust build left, never made into a book) is moved into `snapshots/`
+/// first, with its log. `python` is only read. Answers the file copied, if one was.
 pub fn adopt_python_database(home: &Path, python: &Path) -> Result<Option<std::path::PathBuf>, String> {
     let from = python.join(crate::figures::OLD_FILE);
     let to = home.join(crate::figures::OLD_FILE);
-    if home.join(bagholder_book::BOOK_FILE).exists() || to.exists() || !from.is_file() {
+    if home.join(bagholder_book::BOOK_FILE).exists() || !from.is_file() {
         return Ok(None);
+    }
+    if to.exists() {
+        if last_written(&to)? >= last_written(&from)? {
+            return Ok(None);
+        }
+        let dir = home.join("snapshots");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let stamp = jiff::Timestamp::now().as_millisecond();
+        for ext in ["", "-wal", "-shm"] {
+            let own = home.join(format!("{}{ext}", crate::figures::OLD_FILE));
+            let kept = dir.join(format!("bagholder-before-the-python-copy-{stamp}.db{ext}"));
+            match std::fs::rename(&own, &kept) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && !ext.is_empty() => {}
+                Err(e) => return Err(format!("{} could not be moved aside for the Python app's newer database: {e}", own.display())),
+            }
+        }
     }
     // written under another name and then put in place, so a copy cut short is never taken for the database
     let part = home.join(format!("{}.part", crate::figures::OLD_FILE));
@@ -581,6 +612,26 @@ mod tests {
         assert_eq!(ids, ["b1", "b2"], "the row still in the log is copied");
         assert_eq!(names(&python), before, "nothing added to the Python app's folder");
         drop(running);
+    }
+
+    #[test]
+    fn a_database_of_its_own_older_than_the_python_app_s_is_set_aside_and_the_python_app_s_taken() {
+        let person = tempfile::tempdir().unwrap();
+        let python = python_folder(person.path());
+        // an earlier Rust build's database, never made into a book, last written days before
+        let home = tempfile::tempdir().unwrap();
+        let own = home.path().join("bagholder.db");
+        std::fs::write(&own, b"days old").unwrap();
+        std::fs::write(home.path().join("bagholder.db-wal"), b"its log").unwrap();
+        let days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(5 * 86_400);
+        for f in ["bagholder.db", "bagholder.db-wal"] {
+            std::fs::File::options().write(true).open(home.path().join(f)).unwrap().set_modified(days_ago).unwrap();
+        }
+        assert_eq!(adopt_python_database(home.path(), &python).unwrap(), Some(python.join("bagholder.db")));
+        assert_eq!(std::fs::read(&own).unwrap(), std::fs::read(python.join("bagholder.db")).unwrap(), "the Python app's is the one taken");
+        assert!(!home.path().join("bagholder.db-wal").exists(), "its own log went with it");
+        let kept: Vec<Vec<u8>> = listing(&home.path().join("snapshots")).into_iter().map(|(_, bytes)| bytes).collect();
+        assert_eq!(kept, [b"days old".to_vec(), b"its log".to_vec()], "set aside, not deleted");
     }
 
     #[test]

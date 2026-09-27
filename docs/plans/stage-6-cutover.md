@@ -45,7 +45,7 @@ None.
 - Remove `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` (the icon moves to the embedded `web/dist` copy or `web/public/favicon.png`), their CI, release and image jobs. `root_dir()` finds the checkout by `rust/Cargo.toml`. `/v2`, `/ledger.html`, `/lightweight-charts.js` go.
 - Root `bagholder.py` and `python/bagholder.py`: the few lines above.
 - `docker.yml`: the Rust image is `:latest` and `:X.Y.Z` (and keeps `:rust`, `:rust-X.Y.Z` for installs that follow those tags); compose runs it on `./data`, which holds the Python app's database, carried on first start.
-- First start with no book: the database in the app's own folder, else the Python app's folder's (`~/.bagholder/bagholder.db`), copied.
+- First start with no book: the database written last, the app's own folder's or the Python app's (`~/.bagholder/bagholder.db`, copied); an own one the Python app's is newer than (an earlier Rust build's, never made into a book) is set aside in `snapshots/`.
 - Docs: one build; the version trio becomes `APP_VERSION` in `rust/crates/server/src/app.rs`, the iOS and Android numbers; `CLAUDE.md` and `README.md` rewritten for one build; `SPEC.md` where it names the Python supervisor, `-web.zip` or the Python image.
 
 **Stays the same:** every screen, figure and word; `PROTOCOL` unless the page and the server change together; the stores' existing tables; `legacy_import`.
@@ -66,7 +66,7 @@ Every part:
 **6b**
 - [x] No `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` in the tree; no CI, release or image job for them; `git grep` finds no reference outside the history docs (`docs/plans/`, `docs/decisions.md`), the launcher that replaces them, and the phones' own files (out of scope).
 - [x] The release workflow's steps, run by hand here, build the Rust archive with the page embedded and nothing else; the image builds from `rust/Dockerfile` (CI's `image` job, on every pull request, since Docker does not run in this sandbox and `docker.yml` builds only on a tag).
-- [x] A first start with no book and a `bagholder.db` in the Python folder carries it (test with `HOME` pointed at a scratch folder).
+- [x] A first start with no book and a `bagholder.db` in the Python folder carries it, and takes it over an older one of its own (tests with `HOME` pointed at a scratch folder).
 - [x] Root `bagholder.py` starts the Rust server (test: run it with a stand-in binary).
 - [x] The notification icon and the root are found without `ledger.html` (tests).
 
@@ -122,5 +122,7 @@ Initialled at the gate: the carry run on a copy of the owner's data and the coun
 - On 6a (rebased, with the tile fix): `RUSTFLAGS="-D warnings" cargo test -q --workspace` 1,383 passed, 0 failed; clippy clean; `npx playwright test` 276 passed.
 - A first start on the owner's data the way a Python user meets it: `HOME` a scratch folder holding only `.bagholder/bagholder.db` (a copy of the owner's), no `BAGHOLDER_HOME`, release build, offline, orders dry. The start took a copy into `~/.bagholder-rust`, imported it into a book (29 accounts, 6,156 transactions), and carried the orders, notices and market data (the same counts as 6a's table); the Python folder afterwards held only its `bagholder.db`. The second start carried nothing; the Dashboard drew the book's figures; `/` and `/favicon.png` answered 200, `/ledger.html`, `/v2` and `/lightweight-charts.js` 404.
 - CI builds the image from `rust/Dockerfile` on every pull request (`tests.yml` `image`, not pushed): Docker does not run in this sandbox, and `docker.yml` builds only on a tag.
+
+- Found on this machine and fixed: the Rust folder held a `bagholder.db` an earlier Rust build left (five days older, never made into a book), and the first start would have imported it rather than the Python app's live one. The newer is taken and the older set aside (`legacy_import` `a_database_of_its_own_older_than_the_python_app_s_is_set_aside_and_the_python_app_s_taken`); on copies of both, the start took the Python app's (6,156 transactions to 2026-09-25) and kept the other in `snapshots/`.
 
 ## Handoff
