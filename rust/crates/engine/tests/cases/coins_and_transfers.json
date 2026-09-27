@@ -160,7 +160,7 @@
           "instrument": "BTC",
           "closed": "2026-02-01",
           "opened": "2026-01-05",
-          "qty": "2",
+          "qty": "2.0",
           "entry": "50000",
           "exit": "60000",
           "pnl": "15000.00",
@@ -307,7 +307,7 @@
     "transfer_links": [{"out": "t2", "in": "t3"}],
     "expect": {
       "trade_count": 2,
-      "trades": [{"opened_by": "t3", "pnl": "20.00", "opened": "2026-01-05", "hold_days": 27}, {"opened_by": "t1", "pnl": "30.00"}]
+      "trades": [{"opened_by": "t3", "pnl": "20.00", "opened": "2026-01-05", "hold_days": 27}, {"opened_by": "t1", "qty": "10.0", "pnl": "30.00"}]
     }
   },
   {
@@ -685,6 +685,7 @@
         {
           "opened_by": "t1",
           "closed": "2026-02-02",
+          "qty": "1.00",
           "pnl": "-0.50"
         }
       ],

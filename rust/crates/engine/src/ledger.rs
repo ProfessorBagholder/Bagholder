@@ -189,6 +189,11 @@ pub struct Trip {
     pub closed: BTreeSet<TransactionId>,
     /// Lots of it still open, across its books.
     pub open_lots: usize,
+    /// Units it opened that left it with no sale: sent out of the person's
+    /// accounts, moved to a round trip of their own in another of them, or taken
+    /// by an event with nothing after it. Still units it opened (`SPEC.md` §2
+    /// Trade, Qty).
+    pub moved_out: Fig<Dec>,
     /// Every opening, in order: the candidates for its trade id.
     pub openings: Vec<TripKey>,
 }
@@ -704,6 +709,7 @@ impl<'a> Matcher<'a> {
             opened: BTreeSet::new(),
             closed: BTreeSet::new(),
             open_lots: 0,
+            moved_out: Ok(Dec::ZERO),
             openings: Vec::new(),
         });
         trip.account = account;
@@ -825,6 +831,16 @@ impl<'a> Matcher<'a> {
         }
         self.settle(account, instrument);
         Ok(Closed { left, value_left, fee_left })
+    }
+
+    /// Lots that left their round trip with no sale: counted as units it opened.
+    fn moved_out(&mut self, lots: &[Lot]) {
+        for l in lots {
+            let t = self.trip_mut(&l.trip);
+            if let Ok(m) = t.moved_out {
+                t.moved_out = m.checked_add(l.qty).map_err(Gaps::from);
+            }
+        }
     }
 
     /// Take `qty` of longs off the front of a holding with their cost and no
@@ -1319,7 +1335,7 @@ impl<'a> Matcher<'a> {
                     self.beyond(t, account, instrument, left);
                 }
                 // the person's own accounts: the lots move with their cost and dates
-                let Some((to, dest, dest_instr)) = link else { return };
+                let Some((to, dest, dest_instr)) = link else { return self.moved_out(&lots) };
                 self.consumed.insert(to.clone());
                 if !waiting.is_empty() {
                     self.taint(dest, dest_instr, &waiting);
@@ -1346,6 +1362,7 @@ impl<'a> Matcher<'a> {
                 } else {
                     // part of it moved: a round trip of its own in the receiving
                     // account, each lot keeping its cost and the day it was bought
+                    self.moved_out(&lots);
                     for mut l in lots {
                         l.flags.insert(Flag::Transferred);
                         let own = TripKey { opening: to.clone(), instrument: dest_instr };
@@ -1454,7 +1471,8 @@ impl<'a> Matcher<'a> {
                     let currency = self.currency(instrument);
                     let flags = BTreeSet::from([Flag::FromEvent]);
                     self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, q, Err(unknown.clone()), Money::zero(currency), flags, None);
-                } else if let Ok((_, left)) = self.take(account, instrument, q.abs()) {
+                } else if let Ok((lots, left)) = self.take(account, instrument, q.abs()) {
+                    self.moved_out(&lots);
                     if left.is_positive() {
                         self.beyond(t, account, instrument, left);
                     }

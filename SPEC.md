@@ -33,7 +33,7 @@ Per-trade fields, all in the trade's currency unless stated:
 | Close | Latest exit date, once the trade is closed; an open trade's reads `Open` |
 | Symbol | The instrument; for a rolled chain, the last contract |
 | Exchange | Listing venue from the security record (TSX, TSX-V, CSE, Cboe Canada, NYSE, NASDAQ, NYSE American, NYSE Arca); `Crypto` for crypto |
-| Qty | Units opened (shares, contracts or coins) |
+| Qty | Units opened (shares, contracts or coins), those that later left it with no sale (sent out, or moved to another account's round trip) included |
 | Entry | Quantity-weighted average entry price over the units opened |
 | Exit | Quantity-weighted average exit price over the units closed so far; none before the first |
 | FX | Currency code, CAD or USD |

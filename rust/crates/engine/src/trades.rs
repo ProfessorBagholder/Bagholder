@@ -189,8 +189,10 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
     let direction = slices.first().map(|s| s.direction).or_else(|| lots.first().map(|(_, l)| l.direction))?;
     let status = if lots.is_empty() { TradeStatus::Closed } else { TradeStatus::Open };
     let mult = |i: InstrumentId| multiplier(inputs.ledger.instruments.get(&i), i);
-    // units opened: the units closed and the units still held
-    let qty: Fig<Dec> = slices.iter().map(|s| s.qty).chain(lots.iter().map(|(_, l)| l.qty)).try_fold(Dec::ZERO, |a, q| a.checked_add(q)).map_err(Gaps::from);
+    // units opened: the units closed, the units still held, and the units that
+    // left with no sale (a transfer out, a move to another round trip)
+    let moved: Fig<Dec> = trips.iter().filter_map(|k| matched.trips.get(k)).try_fold(Dec::ZERO, |a, t| Ok(a.checked_add(t.moved_out.clone()?)?));
+    let qty: Fig<Dec> = moved.and_then(|m| slices.iter().map(|s| s.qty).chain(lots.iter().map(|(_, l)| l.qty)).try_fold(m, |a, q| a.checked_add(q)).map_err(Gaps::from));
     let closed_entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()));
     let all_entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()).chain(lots.iter().map(|(_, l)| l.value.clone())));
     let exits = sum_money(currency, slices.iter().map(|s| s.exit.clone()));
