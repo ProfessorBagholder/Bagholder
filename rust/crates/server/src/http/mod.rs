@@ -203,10 +203,10 @@ pub async fn answer<T: Serialize + Send + 'static>(work: impl FnOnce() -> T + Se
     Ok(Json(blocking(work).await?))
 }
 
-/// Synchronous work on a connection to the store.
-pub async fn with_store<T: Serialize + Send + 'static>(state: &AppState, work: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T> + Send + 'static) -> Api<T> {
+/// Synchronous work on the book the notices are kept in (`notify::book`).
+pub async fn with_notices<T: Serialize + Send + 'static>(state: &AppState, work: impl FnOnce(&bagholder_book::Book) -> rusqlite::Result<T> + Send + 'static) -> Api<T> {
     let app = state.app.clone();
-    Ok(Json(blocking(move || app.open().and_then(|conn| work(&conn))).await??))
+    Ok(Json(blocking(move || crate::notify::book(&app).and_then(|book| work(&book))).await??))
 }
 
 pub fn router(state: AppState) -> Router {

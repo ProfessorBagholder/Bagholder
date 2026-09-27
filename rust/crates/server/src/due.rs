@@ -306,7 +306,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
-        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
         let now = t("2025-11-19T21:00:00Z");
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();

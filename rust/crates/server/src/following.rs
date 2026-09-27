@@ -146,7 +146,7 @@ pub fn draft(book: &Book, n: &Named) -> Result<ListingDraft, String> {
 }
 
 /// The draft of a tile: an instrument of the directory only.
-fn tile_draft(book: &Book, symbol: &str, exchange: &str) -> Result<ListingDraft, String> {
+pub(crate) fn tile_draft(book: &Book, symbol: &str, exchange: &str) -> Result<ListingDraft, String> {
     if directory::find(symbol, exchange).is_none() {
         return Err(format!("{symbol} is not an instrument of the directory"));
     }
@@ -157,31 +157,12 @@ fn book(app: &App) -> Result<Book, String> {
     app.figures.get().ok_or("the figures are not open")?.book()
 }
 
-/// The earlier store's watchlist carried into the book once, and the tile row set
-/// to the default six when it was never chosen (a first start, or after Clear data).
+/// The tile row set to the default six when it was never chosen (a first start,
+/// or after Clear data). The earlier store's watchlist and tiles are carried
+/// before, at start (`carry`).
 pub fn ensure(app: &Arc<App>) -> Result<(), String> {
     let b = book(app)?;
     let now = Timestamp::now();
-    if !b.following_carried().map_err(err)? {
-        let conn = app.open().map_err(err)?;
-        let rows = bagholder_store::feeds::list_watchlist(&conn).map_err(err)?;
-        let mut watched = Vec::new();
-        for w in &rows {
-            let n = Named { instrument: None, symbol: w.symbol.clone(), exchange: w.exchange.clone(), name: w.name.clone(), currency: w.currency.clone(), security_id: w.security_id.clone() };
-            let d = draft(&b, &n).map_err(|e| format!("the watched {} could not be carried into the book: {e}", w.symbol))?;
-            // a row the earlier store kept without its day counts from now
-            let added = match w.added_at.trim() {
-                "" => now,
-                t => t.parse::<Timestamp>().map_err(|e| format!("the watched {} was added at {t:?}: {e}", w.symbol))?,
-            };
-            watched.push((d, added));
-        }
-        let tiles = match bagholder_store::rows::tiles(&conn).map_err(err)? {
-            Some(saved) => Some(saved.iter().filter(|t| directory::find(&t.symbol, &t.exchange).is_some()).map(|t| tile_draft(&b, &t.symbol, &t.exchange)).collect::<Result<Vec<_>, String>>()?),
-            None => None,
-        };
-        b.carry_following(&watched, tiles.as_deref(), now).map_err(err)?;
-    }
     if b.tiles().map_err(err)?.is_none() {
         let defaults = DEFAULT_TILES.iter().map(|(s, e)| tile_draft(&b, s, e)).collect::<Result<Vec<_>, String>>()?;
         b.set_tiles(&defaults, now).map_err(err)?;
@@ -197,7 +178,7 @@ pub fn open(app: &Arc<App>) {
         Ok(()) => crate::feeds::feed_answered(app, "following"),
         Err(e) => {
             crate::app::log(&format!("bagholder: the watchlist and tiles: {e}"));
-            crate::feeds::feed_failed(app, "following", format!("The watchlist could not be carried into the book: {e}"));
+            crate::feeds::feed_failed(app, "following", format!("The tile row could not be set: {e}"));
         }
     }
 }
@@ -444,7 +425,6 @@ mod tests {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let net = bagholder_net::Net::answered_by(Arc::new(bagholder_net::SystemClock), Arc::new(bagholder_net::Limiter::new()), Box::new(Refused(asked.clone())));
         let app = App::with_net(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
-        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
         let now: Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
@@ -464,40 +444,45 @@ mod tests {
         b.watched().unwrap().into_iter().map(|w| w.instrument).collect()
     }
 
+    /// An earlier store beside the app's book, in its own schema.
+    fn old_store(app: &App) -> rusqlite::Connection {
+        let conn = bagholder_store::connect(&app.home).unwrap();
+        bagholder_store::relabel::ensure(&conn).unwrap();
+        conn
+    }
+
     #[test]
     fn the_earlier_store_s_rows_are_carried_into_the_book_once_in_their_order() {
         let (_home, app, _) = opened();
-        let conn = app.open().unwrap();
+        let conn = old_store(&app);
         for (i, (s, e, c)) in [("QNC", "TSX-V", "CAD"), ("AAPL", "NASDAQ", "USD"), ("SPX", "Index", ""), ("BTC", "CRYPTO", "USD")].iter().enumerate() {
             bagholder_store::feeds::add_watch(&conn, s, e, &format!("{s} named"), c, "", &format!("2026-09-0{}T14:00:00Z", i + 1)).unwrap();
         }
         let saved = [("VIX", "Index"), ("GC", "COMEX")].map(|(s, e)| bagholder_model::input::TileRef { symbol: s.into(), exchange: e.into() });
         bagholder_store::admin::save_tiles(&conn, &saved).unwrap();
-        ensure(&app).unwrap();
         let b = book(&app).unwrap();
+        crate::carry::carry_following(&b, &conn, Timestamp::now()).unwrap();
+        ensure(&app).unwrap();
         // newest first, as the earlier store listed them oldest first
         assert_eq!(symbols(&b, &watched(&b)), ["BTC", "SPX", "AAPL", "QNC"]);
         assert_eq!(symbols(&b, &b.tiles().unwrap().unwrap()), ["VIX", "GC"], "the tiles chosen before, in their order");
         // carried once: a row the earlier store gains later is not carried
         bagholder_store::feeds::add_watch(&conn, "SHOP", "TSX", "", "CAD", "", "2026-09-10T14:00:00Z").unwrap();
-        ensure(&app).unwrap();
+        crate::carry::carry_following(&b, &conn, Timestamp::now()).unwrap();
         assert_eq!(watched(&b).len(), 4);
     }
 
     #[test]
-    fn a_watchlist_that_cannot_be_read_is_said_and_nothing_is_carried_until_it_can_be() {
+    fn a_watchlist_that_cannot_be_read_carries_nothing_until_it_can_be() {
         let (_home, app, _) = opened();
-        let conn = app.open().unwrap();
+        let conn = old_store(&app);
         bagholder_store::feeds::add_watch(&conn, "QNC", "TSX-V", "QNC named", "CAD", "", "2026-09-01T14:00:00Z").unwrap();
         conn.execute("ALTER TABLE watchlist RENAME TO watchlist_away", []).unwrap();
-        open(&app);
-        let said = crate::status::status(&app).error;
-        assert!(said.contains("The watchlist could not be carried into the book"), "{said}");
         let b = book(&app).unwrap();
+        assert!(crate::carry::carry_following(&b, &conn, Timestamp::now()).is_err());
         assert!(watched(&b).is_empty() && !b.following_carried().unwrap(), "no row is carried until they all can be");
         conn.execute("ALTER TABLE watchlist_away RENAME TO watchlist", []).unwrap();
-        open(&app);
-        assert!(!crate::status::status(&app).error.contains("watchlist"), "the next good read takes the failure away");
+        crate::carry::carry_following(&b, &conn, Timestamp::now()).unwrap();
         assert_eq!(symbols(&b, &watched(&b)), ["QNC"]);
     }
 

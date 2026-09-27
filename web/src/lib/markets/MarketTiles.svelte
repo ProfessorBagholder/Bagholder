@@ -46,13 +46,20 @@
     if (!plus && tileAdd) tileAdd = false // the plus cell is gone: its box goes with it
   })
 
-  async function postTiles(next: MarketTile[]) {
+  // Each row is sent after the one before it has been answered: two picks in quick
+  // succession would otherwise race, and the server could keep the earlier one.
+  let sending: Promise<void> = Promise.resolve()
+  function postTiles(next: MarketTile[]) {
     order = next.slice()
-    const r = await call('POST /api/tiles/set', { body: { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) } })
-    if (r.ok) return
-    // refused: said in the header, and the row back to what the server has
-    flash('Could not save the tiles: ' + r.error, 'err')
-    order = null
+    const body = { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) }
+    sending = sending.then(async () => {
+      const r = await call('POST /api/tiles/set', { body })
+      if (r.ok) return
+      // refused: said in the header, and the row back to what the server has
+      flash('Could not save the tiles: ' + r.error, 'err')
+      order = null
+    })
+    return sending
   }
   // The saved row reaches the page as a change to the tiles, and each tile's price as
   // a change to that tile when the server has read it. The optimistic order steps

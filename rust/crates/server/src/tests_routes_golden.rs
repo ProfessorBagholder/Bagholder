@@ -48,7 +48,6 @@ fn isolated() -> Arc<App> {
     std::fs::create_dir_all(&dir).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let app = App::new(dir, root, "127.0.0.1".into());
-    bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
     // the figure path, on the recorded month, as the shared test app has it
     let book = app.home.join("figures");
     std::fs::create_dir_all(&book).unwrap();
@@ -241,7 +240,6 @@ fn test_refresh_route_reaches_a_connected_answer() {
     std::fs::create_dir_all(&dir).unwrap();
     let net = bagholder_net::Net::answered_by(std::sync::Arc::new(bagholder_net::SystemClock), std::sync::Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(asked.clone())));
     let app = App::with_net(dir, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
-    bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
     seed_refreshable_session(&app);
     let req = from_the_page(&app, Method::POST, "/api/refresh", None);
     let got = runtime().block_on(json_of(app.clone(), req));

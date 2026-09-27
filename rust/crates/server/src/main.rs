@@ -6,6 +6,7 @@
 //! `http`.
 
 mod app;
+mod carry;
 mod compare;
 mod demo_facts;
 mod docs;
@@ -121,52 +122,29 @@ fn serve() -> i32 {
     if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
         log(&format!("bagholder: the local model is off: {}", e));
     }
-    // the first borrow prepares the store (the pool's schema), so a store that
-    // cannot be prepared stops the server here, saying why
-    if let Err(e) = a.open() {
-        log(&format!("bagholder: the store could not be opened or prepared: {}", e));
-        return 1;
-    }
     // the figure path: a book this build cannot open stops the server, saying why
     match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
         Ok(f) => {
-            // the earlier store's figure tables, once the book holds their rows
-            match (a.open(), f.book()) {
-                (Ok(conn), Ok(book)) => {
-                    match legacy_import::retire_old_figures(&a.home, &conn, &book, bagholder_core::jiff::Timestamp::now()) {
-                        Ok(Some(snapshot)) => log(&format!("bagholder: the earlier store's figure tables are the book's now; the file as it was is kept at {}", snapshot.display())),
-                        Ok(None) => {}
-                        Err(e) => log(&format!("bagholder: {e}")),
-                    }
-                    // the earlier orders and brackets, once: a live one is followed from the first check
-                    match legacy_orders::carry_orders(&a.home, &conn, &book, bagholder_core::jiff::Timestamp::now()) {
-                        Ok(c) if c.snapshot.is_some() => log(&format!(
-                            "bagholder: {} orders and {} brackets carried into the book ({} placed in Wealthsimple's own app left to its feed); the file as it was is kept at {}",
-                            c.orders,
-                            c.brackets,
-                            c.left_to_the_feed,
-                            c.snapshot.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
-                        )),
-                        Ok(_) => {}
-                        // the server does not start with orders it cannot follow
-                        Err(e) => {
-                            log(&format!("bagholder: {e}"));
-                            return 1;
-                        }
-                    }
-                }
-                (Err(e), _) => log(&format!("bagholder: the store could not be opened: {e}")),
-                (_, Err(e)) => log(&format!("bagholder: {e}")),
+            // the earlier store, carried once into the book and the market cache;
+            // nothing opens it after this
+            if let Err(e) = carry::from_old_store(&a, &f, bagholder_core::jiff::Timestamp::now()) {
+                log(&format!("bagholder: {e}"));
+                return 1;
             }
             a.set_figures(f);
-            // what the person follows: the earlier store's watchlist carried into the
-            // book once, the default tile row where none was chosen
+            // the default tile row where none was chosen
             following::open(&a);
         }
         Err(e) => {
             log(&format!("bagholder: {e}"));
             return 1;
         }
+    }
+    // the market cache's first borrow brings it to this build's schema, so one that
+    // cannot be opened stops the server here, saying why
+    if let Err(e) = a.cache() {
+        log(&format!("bagholder: the market cache could not be opened: {}", e));
+        return 1;
     }
     session::boot_session(&a);
 

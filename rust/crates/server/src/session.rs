@@ -220,23 +220,13 @@ pub fn delete_session(app: &Arc<App>) -> Result<(), String> {
     Ok(())
 }
 
+/// The saved session read and its tokens checked. When Wealthsimple was last
+/// pulled is the book's (`broker_reads::run`), not the session's.
 pub fn boot_session(app: &Arc<App>) {
-    let conn = match app.open() {
-        Ok(c) => c,
-        Err(e) => {
-            set_error(app, &format!("Could not open the database: {}", e));
-            return;
-        }
-    };
     let mut sess = match load_session(app) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            let mut st = app.state.lock().unwrap();
-            st.connected = false;
-            match bagholder_store::tables::get_meta(&conn, "synced_at", "") {
-                Ok(v) => st.last_sync = v,
-                Err(e) => st.error = format!("Could not read the database: {}", e),
-            }
+            app.state.lock().unwrap().connected = false;
             return;
         }
         Err(e) => {
@@ -283,10 +273,6 @@ pub fn boot_session(app: &Arc<App>) {
         st.error = e;
     }
     st.email = sess.email.clone();
-    match bagholder_store::tables::get_meta(&conn, "synced_at", "") {
-        Ok(v) => st.last_sync = v,
-        Err(e) => st.error = format!("Could not read the database: {}", e),
-    }
 }
 
 /// Told once per expiry.

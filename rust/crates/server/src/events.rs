@@ -70,10 +70,12 @@ pub struct Bus {
 /// Where a change came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// A commit to the earlier store (`bagholder.db`): feeds, notifications, the
-    /// market's context tables.
+    /// A commit to what the earlier store kept, in its new places: the earlier
+    /// readers' tables in the market cache (feeds, the market's context tables,
+    /// on the app's pool of it) and the notices in the book (`notify::book`).
     Store = 0,
-    /// A commit to the market cache (`market.db`): quotes, closes, sources' outcomes.
+    /// A commit to the market cache by the figure path (`market.db`): quotes,
+    /// closes, sources' outcomes.
     Cache = 1,
     /// A write to the app's own state in memory (orders read back, a ticket's
     /// quote, a sync's step), and any change said by hand.
@@ -584,7 +586,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
-        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
         let now = bagholder_core::jiff::Timestamp::now();
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();

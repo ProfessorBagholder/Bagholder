@@ -140,3 +140,51 @@ fn nothing_reads_or_writes_the_earlier_store_s_quotes() {
     assert_eq!(earlier_quotes("fn f() { spawn(quote_loop); bagholder_market::quotes::refresh_quotes(c) }"), vec!["refresh_quotes", "quote_loop"]);
     assert!(earlier_quotes("// once upsert_quote\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { peek_quote(c) } }").is_empty());
 }
+
+/// What reaches the earlier store (`bagholder.db`) in a file's code, outside its
+/// tests: its file or its connections, its schema and repairs, the tables and
+/// keys that stayed in it (the rest moved to the book and the market cache,
+/// `docs/plans/stage-6-cutover.md`, 6a), and the functions that read those.
+fn earlier_store(text: &str) -> Vec<&'static str> {
+    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    const NAMES: [&str; 22] = [
+        "OLD_FILE", "bagholder.db", "bagholder_store::pool", "bagholder_store::connect", "bagholder_store::open_db", "bagholder_store::schema",
+        "bagholder_store::relabel", "gens::install", "bagholder_store::activities", "bagholder_store::rows", "bagholder_store::csvimport",
+        "list_watchlist", "tables::fx_rates", "benchmark_days", "benchmark_prices", "FROM fx_rates", "FROM activities", "FROM securities",
+        "synced_at", "notify_settings", "notify_seen:", ".open()",
+    ];
+    NAMES.iter().copied().filter(|n| code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(n))).collect()
+}
+
+/// Nothing reads or writes the earlier store after the carry: only the carry and
+/// the one-time imports it runs open it (`carry.rs`, `legacy_import.rs`,
+/// `legacy_orders.rs`), and Clear data, which empties a cleared kind from it
+/// through the carry's own `carry::clear_old_store`, and the tools that read a copy of one the person names
+/// (`compare.rs`, `compare-figures`; `demo_facts.rs`, the demo's). The figure
+/// path names its file only to import it into a new book. The market readers
+/// convert and count days from the book's rates and the market cache's tracker
+/// closes, not the earlier store's tables.
+#[test]
+fn nothing_reads_the_earlier_store_but_the_carry() {
+    const CARRY: [&str; 5] = ["carry.rs", "legacy_import.rs", "legacy_orders.rs", "compare.rs", "demo_facts.rs"];
+    for (f, text) in server_sources() {
+        let found = earlier_store(&text);
+        match f.as_str() {
+            f if CARRY.contains(&f) => {}
+            "figures.rs" => assert_eq!(found, vec!["OLD_FILE", "bagholder.db"], "the figure path names the earlier store only to import it"),
+            _ => assert_eq!(found, Vec::<&str>::new(), "{f} reaches the earlier store"),
+        }
+    }
+    let market = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../market/src");
+    for f in ["history.rs", "shorts.rs"] {
+        let text = std::fs::read_to_string(market.join(f)).unwrap();
+        let code = text.split("#[cfg(test)]").next().unwrap_or("");
+        for dropped in ["read_fx", "tables::fx_rates", "benchmark_days", "benchmark_prices"] {
+            // the earlier quote readers keep their own rates, in `quotes.rs`
+            assert!(!code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(dropped)), "market/{f} reads {dropped}");
+        }
+    }
+    assert_eq!(earlier_store("fn f() { let c = bagholder_store::connect(&home)?; }"), vec!["bagholder_store::connect"]);
+    assert_eq!(earlier_store("fn f() { get_meta(&c, \"synced_at\", \"\") }"), vec!["synced_at"]);
+    assert!(earlier_store("// bagholder.db once\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { app.open() } }").is_empty());
+}

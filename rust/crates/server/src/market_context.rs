@@ -1,12 +1,13 @@
 //! The market's context: what the earlier readers are given until stage 6 moves
 //! them (`bagholder_model::context::MarketBase`: the holdings and round trips, and
-//! the tables the earlier store keeps), and what the person follows as the book
+//! the earlier readers' tables), and what the person follows as the book
 //! holds it (`wire::markets::Following`).
 //!
 //! Built again only when something it reads moved: a holding came or went, a
 //! record or a round trip changed (the engine's report says so), what the person
-//! follows changed, one of the earlier store's tables it reads was written, or
+//! follows changed, one of the earlier readers' tables it reads was written, or
 //! the day turned. A quote moves none of these, so a price tick never rebuilds it.
+//! The earlier readers' tables are the market cache's (`App::cache`).
 
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +25,7 @@ use crate::app::App;
 use crate::figures::{Figures, Since};
 use crate::wire::markets::{Followed, Following};
 
-/// The earlier store's tables the context reads.
+/// The earlier readers' tables the context reads, in the market cache.
 const TABLES: [&str; 3] = ["exposures", "news", "universes"];
 /// The issuers' filed documents, read on demand by the News card's Releases.
 const FILED: [&str; 1] = ["filings"];
@@ -42,7 +43,7 @@ pub struct Built {
 struct Kept {
     /// The figures' version it was built at, and brought forward to.
     at: u64,
-    /// The day, what the person follows, the earlier store's tables.
+    /// The day, what the person follows, the earlier readers' tables.
     key: String,
     /// The filed documents' generation.
     filed: String,
@@ -56,7 +57,7 @@ pub struct MarketContext {
 
 /// Whether what moved can move the context: a holding that came or went, a
 /// round trip, the record as a whole. A holding's figures moving (a quote) cannot.
-fn moves_it(m: &Moved) -> bool {
+pub(crate) fn moves_it(m: &Moved) -> bool {
     m.0.iter().any(|(e, fields)| match e {
         Entity::Book | Entity::Trade(_) => true,
         Entity::Position(..) => fields.contains("*"),
@@ -72,7 +73,7 @@ impl MarketContext {
     /// The context now: the one built last when nothing it reads has moved.
     pub fn get(&self, app: &App) -> Result<Arc<Built>, String> {
         let f = app.figures.get().ok_or("the figures are not open")?;
-        let conn = app.open().map_err(|e| e.to_string())?;
+        let conn = app.cache().map_err(|e| e.to_string())?;
         let today = f.read(|e| e.inputs().clock.today.to_string()).ok_or("the figures are not built yet")?;
         let all = gens::all(&conn).map_err(|e| e.to_string())?;
         let key = format!("{}|{}|{}", today, app.following_version(), gens::key(&all, &TABLES));

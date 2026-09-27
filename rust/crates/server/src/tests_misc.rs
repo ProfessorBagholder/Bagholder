@@ -9,14 +9,12 @@ use crate::app;
 use crate::tests_common::{app, app_ref};
 use crate::update;
 
-/// The shared app, its store's schema in place.
+/// The shared app.
 fn guard() -> std::sync::MutexGuard<'static, ()> {
-    let g = crate::tests_common::guard();
-    bagholder_store::relabel::ensure(&app_ref().open().unwrap()).unwrap();
-    g
+    crate::tests_common::guard()
 }
 
-/// A fresh database of its own, in a temporary home.
+/// A fresh market cache of its own, in a temporary home.
 struct Db {
     dir: PathBuf,
     conn: Connection,
@@ -33,19 +31,16 @@ fn db() -> Db {
     static N: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!("bh-misc-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
     std::fs::create_dir_all(&dir).unwrap();
-    let conn = Connection::open(dir.join("bagholder.db")).unwrap();
-    bagholder_store::relabel::ensure(&conn).unwrap();
+    let path = dir.join(crate::figures::CACHE_FILE);
+    bagholder_sources::cache::MarketCache::open(&path, app::APP_VERSION, bagholder_core::jiff::Timestamp::now()).unwrap();
+    let conn = Connection::open(&path).unwrap();
     Db { dir, conn }
 }
 
-fn insert_local(conn: &Connection, row: Value) {
-    let n = std::cell::Cell::new(0u64);
-    let id = || {
-        n.set(n.get() + 1);
-        format!("00000000-0000-4000-8000-{:012}", n.get())
-    };
-    let row: bagholder_store::activities::ActivityRow = serde_json::from_value(row).unwrap();
-    bagholder_store::activities::insert_local(conn, &row, &id).unwrap();
+/// A listing's news, as a read stores it.
+fn news(conn: &Connection, symbol: &str, headline: &str) {
+    let item = NewsItem { id: format!("tmx:{headline}"), headline: headline.into(), source: "Business Wire".into(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: Feed::Tmx };
+    bagholder_store::feeds::replace_news(conn, symbol, "TSX", &[item], &app::now_iso()).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -55,22 +50,14 @@ fn insert_local(conn: &Connection, row: Value) {
 #[test]
 fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let _g = guard();
-    let conn = app_ref().open().unwrap();
+    let conn = app_ref().cache().unwrap();
     let v0 = crate::status::answer(&app()).unwrap().data_version;
     assert!(!v0.is_empty());
-    let price = 4.75 + (app::now_unix() % 1000.0) / 1e4;
-    bagholder_store::market::upsert_quote(&conn, "RDDY", &bagholder_store::market::QuoteRecord { price: Some(price), ..Default::default() }, "tmx", &app::now_iso()).unwrap();
+    news(&conn, "VERSQ", &format!("A release at {}", app::now_unix()));
     let v1 = crate::status::answer(&app()).unwrap().data_version;
-    assert_ne!(v0, v1);
-    bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2026-09-30".into(), pay_date: "2026-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
-    let v2 = crate::status::answer(&app()).unwrap().data_version;
-    // the shared home may already hold this row: then a second, later one moves it
-    if v1 == v2 {
-        bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2099-09-30".into(), pay_date: "2099-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
-    }
-    assert_ne!(v1, crate::status::answer(&app()).unwrap().data_version);
-    let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
-    let _ = conn.execute("DELETE FROM distributions WHERE symbol = 'RDDY'", []);
+    assert_ne!(v0, v1, "a news row stored moves the version");
+    conn.execute("DELETE FROM news WHERE symbol = 'VERSQ'", []).unwrap();
+    assert_ne!(v1, crate::status::answer(&app()).unwrap().data_version, "and one removed");
 }
 
 /// The clock cannot be stood in for here: the version is checked to carry
@@ -130,16 +117,18 @@ impl UpdateFakes {
 impl Drop for UpdateFakes {
     fn drop(&mut self) {
         *update::FAKE_RELEASE.lock().unwrap() = None;
-        if let Ok(c) = app_ref().open() {
+        if let Ok(c) = app_ref().cache() {
             let _ = c.execute("DELETE FROM meta WHERE key = 'update_check'", []);
-            let _ = c.execute("DELETE FROM notifications WHERE key LIKE 'update:%'", []);
+        }
+        if let Ok(b) = crate::notify::book(app_ref()) {
+            let _ = b.notices().execute("DELETE FROM notifications WHERE key LIKE 'update:%'", []);
         }
         *crate::notify::test_hooks::DELIVERED.lock().unwrap() = None;
     }
 }
 
 fn set_checked_at(secs_ago: f64) {
-    let c = app_ref().open().unwrap();
+    let c = app_ref().cache().unwrap();
     let mut rec = update::update_status(&app()).unwrap();
     rec.checked_at = app::stamp_of((app::now_unix() - secs_ago) as i64);
     bagholder_store::tables::set_meta(&c, "update_check", &serde_json::to_string(&rec).unwrap()).unwrap();
@@ -198,7 +187,7 @@ fn test_history_endpoint_validates_and_serves_bars() {
 fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_background() {
     let _g = guard();
     let app = app();
-    let conn = app.open().unwrap();
+    let conn = app.cache().unwrap();
     let (today, now, _) = bagholder_market::clock_now();
     let from = bagholder_model::dates::shift_date(&today, -40);
     let day = bagholder_model::dates::shift_date(&today, -30);
@@ -235,26 +224,17 @@ fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_backgro
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_a_price_moves_the_version_but_not_the_core() {
-    let d = db();
-    let now = "2026-09-12T10:00:00Z";
-    bagholder_store::market::upsert_quote(&d.conn, "AAA", &bagholder_store::market::QuoteRecord { price: Some(10.0), ..Default::default() }, "tmx", now).unwrap();
-    let (full_before, core_before) = crate::versions::versions(&d.conn).unwrap();
-    bagholder_store::market::upsert_quote(&d.conn, "AAA", &bagholder_store::market::QuoteRecord { price: Some(11.0), ..Default::default() }, "tmx", now).unwrap();
-    let (full_after, core_after) = crate::versions::versions(&d.conn).unwrap();
-    assert_ne!(full_before, full_after, "the page is told the price moved");
-    assert_eq!(core_before, core_after, "but nothing else did, so the match is kept");
-    assert_eq!(crate::versions::data_version(&d.conn).unwrap(), full_after);
-}
-
-#[test]
-fn test_a_row_moves_both() {
+fn test_a_row_moves_both_and_the_same_row_read_again_moves_neither() {
     let d = db();
     let (full_before, core_before) = crate::versions::versions(&d.conn).unwrap();
-    insert_local(&d.conn, json!({"id": "r1", "transactionDate": "2026-03-03", "symbol": "BBB", "category": "trade", "activitySubType": "BUY", "quantity": 1, "unitPrice": 3.0, "netCashAmount": -3.0, "currency": "CAD"}));
+    news(&d.conn, "BBB", "A release");
     let (full_after, core_after) = crate::versions::versions(&d.conn).unwrap();
     assert_ne!(full_before, full_after);
     assert_ne!(core_before, core_after);
+    assert_eq!(crate::versions::data_version(&d.conn).unwrap(), full_after);
+    // read again, the same: only when it was read changed
+    news(&d.conn, "BBB", "A release");
+    assert_eq!(crate::versions::versions(&d.conn).unwrap(), (full_after, core_after));
 }
 
 
@@ -308,7 +288,7 @@ fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
 fn test_update_button_refuses_during_a_sync() {
     let _g = guard();
     let _fakes = UpdateFakes::new(None);
-    let conn = app_ref().open().unwrap();
+    let conn = app_ref().cache().unwrap();
     bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": true, "latest": "v9.9.9", "assets": {"archive": "z", "sha": "s"}}).to_string()).unwrap();
     {
         let mut st = app_ref().state.lock().unwrap();
@@ -335,7 +315,7 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
     // security records the sync brought, then TMX's resolver, which names the venue it verified
     // by the quote. A ticker TMX cannot place is a US one.
     let _g = guard();
-    let c = app_ref().open().unwrap();
+    let c = app_ref().cache().unwrap();
     let today = bagholder_market::clock_now().0;
     let seen = std::sync::Mutex::new((Vec::<String>::new(), None::<String>));
     let get = |url: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
@@ -364,7 +344,7 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
 #[test]
 fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
     let _g = guard();
-    let c = app_ref().open().unwrap();
+    let c = app_ref().cache().unwrap();
     let now = bagholder_market::clock_now().1 as i64;
     // every source read a moment ago: only a forced read asks them again
     for k in news::EXTRA_SOURCES {

@@ -64,7 +64,7 @@ pub struct StatusAnswer {
 pub fn status(app: &Arc<App>) -> Status {
     // what the header reads that fails is said in its error line, never read as nothing
     let mut unread: Vec<String> = vec![];
-    let conn = app.open().map_err(|e| format!("The book could not be opened: {e}"));
+    let notices = crate::notify::book(app).map_err(|e| format!("The book could not be opened: {e}"));
     // the book's counts, as the figures hold them
     let (acts, accounts) = app.figures.get().and_then(|f| f.read(|e| (e.inputs().ledger.transactions.len() as i64, e.inputs().ledger.accounts.len() as i64))).unwrap_or((0, 0));
     let upd = update::update_status(app).unwrap_or_else(|e| {
@@ -75,8 +75,8 @@ pub fn status(app: &Arc<App>) -> Status {
         unread.push(e);
         None
     });
-    let notify_status = match &conn {
-        Ok(c) => notify::status(c).unwrap_or_else(|e| {
+    let notify_status = match &notices {
+        Ok(b) => notify::status(b).unwrap_or_else(|e| {
             unread.push(format!("The notifications could not be read: {e}"));
             NotifyStatus::default()
         }),
@@ -156,9 +156,9 @@ fn sentence(s: &str) -> String {
 /// polling page reloads on. A version that cannot be read fails the request: a
 /// page told nothing moved would reload nothing.
 pub fn answer(app: &Arc<App>) -> Result<StatusAnswer, String> {
-    let conn = app.open().map_err(|e| format!("The book could not be opened: {e}"))?;
-    let data_version = versions::data_version(&conn).map_err(|e| format!("The book's version could not be read: {e}"))?;
-    let core_version = versions::core_version(&conn).map_err(|e| format!("The book's version could not be read: {e}"))?;
+    let conn = app.cache().map_err(|e| format!("The market cache could not be opened: {e}"))?;
+    let data_version = versions::data_version(&conn).map_err(|e| format!("The market cache's version could not be read: {e}"))?;
+    let core_version = versions::core_version(&conn).map_err(|e| format!("The market cache's version could not be read: {e}"))?;
     drop(conn);
     let today = bagholder_model::clock::today_local();
     Ok(StatusAnswer {
@@ -192,7 +192,6 @@ mod tests {
     fn fresh() -> (tempfile::TempDir, Arc<App>) {
         let home = tempfile::tempdir().unwrap();
         let app = app_on(home.path());
-        bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
         app.set_figures(crate::figures::Figures::open(home.path(), Timestamp::now()).unwrap());
         (home, app)
     }
@@ -287,7 +286,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let app = app_on(home.path());
-        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
         let now = Timestamp::now();
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();

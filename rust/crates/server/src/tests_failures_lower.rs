@@ -26,11 +26,10 @@ fn until(what: &str, ok: impl Fn() -> bool) {
 fn own_app() -> (tempfile::TempDir, Arc<App>) {
     let home = tempfile::tempdir().unwrap();
     let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
-    bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
     (home, app)
 }
 
-/// SQL run on `app`'s store now, and its undoing run when dropped, whatever the
+/// SQL run on `app`'s market cache now, and its undoing run when dropped, whatever the
 /// test did in between: the shared app's store is left as it was found.
 struct Broken<'a> {
     app: &'a Arc<App>,
@@ -39,14 +38,14 @@ struct Broken<'a> {
 
 impl<'a> Broken<'a> {
     fn new(app: &'a Arc<App>, sql: &str, undo: &'static str) -> Self {
-        app.open().unwrap().execute_batch(sql).unwrap();
+        app.cache().unwrap().execute_batch(sql).unwrap();
         Broken { app, undo }
     }
 }
 
 impl Drop for Broken<'_> {
     fn drop(&mut self) {
-        self.app.open().unwrap().execute_batch(self.undo).unwrap();
+        self.app.cache().unwrap().execute_batch(self.undo).unwrap();
     }
 }
 
@@ -112,7 +111,7 @@ fn short_interest_that_could_not_be_read_is_said_in_the_header_until_the_listing
     shorts::warm_ca_volume("ca_volume", "2026-09-01/2026-09-15", volume);
     {
         // the market's trading days, which days to cover is counted over, cannot be read
-        let _broken = Broken::new(&app, "ALTER TABLE benchmark_prices RENAME TO benchmark_prices_away;", "ALTER TABLE benchmark_prices_away RENAME TO benchmark_prices;");
+        let _broken = Broken::new(&app, "ALTER TABLE benchmark_closes RENAME TO benchmark_closes_away;", "ALTER TABLE benchmark_closes_away RENAME TO benchmark_closes;");
         assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());
         assert!(error(&app).contains("short interest of QNC could not be read"), "{}", error(&app));
     }

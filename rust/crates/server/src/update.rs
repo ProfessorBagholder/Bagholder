@@ -200,7 +200,7 @@ pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
             }
         }
     }
-    let kept = app.open().and_then(|c| bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap())));
+    let kept = app.cache().and_then(|c| bagholder_store::tables::set_meta(&c, CHECK_KEY, &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap())));
     match kept {
         Ok(()) => crate::feeds::feed_answered(app, UPDATE_CHECK),
         Err(e) => crate::feeds::feed_failed(app, UPDATE_CHECK, format!("The update check could not be kept: {e}")),
@@ -208,10 +208,13 @@ pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
     record
 }
 
+/// The market cache's `meta` key the last check's record is kept under.
+pub const CHECK_KEY: &str = "update_check";
+
 /// The last check's record, default when none has been kept; one that cannot be
 /// read is the error.
 pub fn update_status(app: &Arc<App>) -> Result<UpdateRecord, String> {
-    let raw = app.open().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "")).map_err(|e| format!("The update check could not be read: {e}"))?;
+    let raw = app.cache().and_then(|c| bagholder_store::tables::get_meta(&c, CHECK_KEY, "")).map_err(|e| format!("The update check could not be read: {e}"))?;
     if raw.is_empty() { return Ok(UpdateRecord::default()); }
     serde_json::from_str(&raw).map_err(|e| format!("The update check could not be read: {e}"))
 }

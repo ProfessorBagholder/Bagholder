@@ -634,7 +634,7 @@ fn an_order_placed_in_wealthsimples_app_is_shown_from_the_feed_and_read_back_onc
     let w = World::new();
     // fills are told, and never reach the system's own notifications from a test
     let channel = crate::notify::test_hooks::CHANNEL.lock().unwrap().replace(String::new());
-    crate::notify::set_settings(&w.app.open().unwrap(), &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
+    crate::notify::set_settings(&crate::notify::book(&w.app).unwrap(), &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
     set_session(&w.app, Some(ident()));
     let edges: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![placed_elsewhere("order-ws-placed", "ws-9", "acct-tfsa")]));
     feed_gql(&w.app, edges.clone(), Arc::default());
@@ -657,7 +657,7 @@ fn an_order_placed_in_wealthsimples_app_is_shown_from_the_feed_and_read_back_onc
     o::refresh_orders(&w.app);
     let e = w.app.orders.elsewhere.lock().unwrap()[0].clone();
     assert_eq!((e.state, e.filled, e.average, e.ended_at.is_some()), (OrderState::Filled, d("3"), Some(d("1.75")), true));
-    let told = bagholder_store::feeds::list_notifications(&w.app.open().unwrap(), 0, "", false, 100, true).unwrap();
+    let told = bagholder_store::feeds::list_notifications(crate::notify::book(&w.app).unwrap().notices(), 0, "", false, 100, true).unwrap();
     *crate::notify::test_hooks::CHANNEL.lock().unwrap() = channel;
     assert!(told.iter().any(|n| n.key == "order:order-ws-placed:filled" && n.title == "Order filled · QNC"), "{:?}", told.iter().map(|n| &n.key).collect::<Vec<_>>());
     o::refresh_orders(&w.app);
