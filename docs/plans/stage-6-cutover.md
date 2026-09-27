@@ -53,9 +53,9 @@ None.
 ## Acceptance criteria
 
 Every part:
-- [ ] `cargo test --workspace` green in `rust/`, a test for each behaviour change, `RUSTFLAGS="-D warnings"` clean, `cargo clippy --workspace --lib --bins` clean.
-- [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/`.
-- [ ] Rendered on the Rust scratch server on a copy of the owner's data (orders dry): the header's error line names nothing but sources out of reach; News, Disclosures, short interest, the heatmap, a chart, the notification history and settings show what the old store held.
+- [x] `cargo test --workspace` green in `rust/`, a test for each behaviour change, `RUSTFLAGS="-D warnings"` clean, `cargo clippy --workspace --lib --bins` clean.
+- [x] `npm run check`, `npm test` and `npm run e2e` green in `web/`.
+- [x] Rendered on the Rust scratch server on a copy of the owner's data (orders dry): the header's error line names nothing but sources out of reach; News, Disclosures, short interest, the heatmap, a chart, the notification history and settings show what the old store held.
 
 **6a**
 - [x] **Carried once:** on a copy of the owner's data, every row of each moved table and each moved `meta` key is in its new store after the first start, the same count and the same values (a test on a made-up old store, and the counts on the owner's copy written into Verification); a second start carries nothing; a write after the carry lands in the new store and nothing writes the old one (a test that makes `bagholder.db` read-only after the carry and runs a news pass, a filings pass, a notification and a chart read).
@@ -64,8 +64,8 @@ Every part:
 - [x] **Clear data** empties each kind in its new place and keeps the rest (the existing tests, re-pointed).
 
 **6b**
-- [x] No `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` in the tree; no CI, release or image job for them; `git grep` finds no reference outside the history docs (`docs/plans/`, `docs/decisions.md`).
-- [ ] The release workflow run on a test tag in a fork-free dry run (`act`-less: the workflow's steps run by hand here) builds the Rust archive with the page embedded and nothing else; `docker build -f rust/Dockerfile .` builds.
+- [x] No `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` in the tree; no CI, release or image job for them; `git grep` finds no reference outside the history docs (`docs/plans/`, `docs/decisions.md`), the launcher that replaces them, and the phones' own files (out of scope).
+- [x] The release workflow's steps, run by hand here, build the Rust archive with the page embedded and nothing else; the image builds from `rust/Dockerfile` (CI's `image` job, on every pull request, since Docker does not run in this sandbox and `docker.yml` builds only on a tag).
 - [x] A first start with no book and a `bagholder.db` in the Python folder carries it (test with `HOME` pointed at a scratch folder).
 - [x] Root `bagholder.py` starts the Rust server (test: run it with a stand-in binary).
 - [x] The notification icon and the root are found without `ledger.html` (tests).
@@ -118,5 +118,9 @@ Initialled at the gate: the carry run on a copy of the owner's data and the coun
 - `docker build -f rust/Dockerfile .` not run: the Docker daemon is not running on this machine. The Dockerfile's lines are held by `test_the_image_builds_this_workspace_and_the_page_from_the_repository_root` and `.dockerignore` by `test_nothing_the_image_needs_is_kept_out_of_it`.
 - The page of the same commit as the server: a checkout's update (`update.rs` `pull`) builds the page (`npm ci`, `npm run build` in `web/`) before `cargo build`, and a page that does not build, or no npm, fails the update and puts the previous commit back as a failed server build does (`build_checkout`, tested with stand-in npm and cargo: order, each step's failure stopping what follows, npm missing). The launcher builds the page when `web/dist/index.html` is missing or older than any file under `web/src`, `web/public`, or `web/index.html`, `package.json`, `package-lock.json`, `vite.config.*` (tested for each). Suite after: 1,372 passed, 0 failed; clippy clean.
 - Tests added: `legacy_import`: `the_python_app_s_folder_is_found_in_the_person_s_home`, `a_first_start_with_no_book_takes_a_copy_of_the_python_app_s_database` (the copy imported, the Python folder byte for byte and file for file unchanged, a second start takes nothing), `a_python_app_that_is_running_is_copied_with_what_its_log_holds`, `a_folder_with_a_database_or_a_book_of_its_own_takes_nothing`; `main.rs`: `test_the_root_is_the_checkout_the_server_was_built_in`, `test_the_launcher_is_one_file_in_both_places`, and under `launcher` (Unix, python3 required): the built server takes the launcher's process (its parent is the test), cargo builds and runs in `rust/`, a page not built is built with npm first, neither says what to run and exits 1; `notify.rs`: `test_the_notification_icon_is_the_pages_own`; `http/tests.rs`: the removed routes answer 404.
+
+- On 6a (rebased, with the tile fix): `RUSTFLAGS="-D warnings" cargo test -q --workspace` 1,383 passed, 0 failed; clippy clean; `npx playwright test` 276 passed.
+- A first start on the owner's data the way a Python user meets it: `HOME` a scratch folder holding only `.bagholder/bagholder.db` (a copy of the owner's), no `BAGHOLDER_HOME`, release build, offline, orders dry. The start took a copy into `~/.bagholder-rust`, imported it into a book (29 accounts, 6,156 transactions), and carried the orders, notices and market data (the same counts as 6a's table); the Python folder afterwards held only its `bagholder.db`. The second start carried nothing; the Dashboard drew the book's figures; `/` and `/favicon.png` answered 200, `/ledger.html`, `/v2` and `/lightweight-charts.js` 404.
+- CI builds the image from `rust/Dockerfile` on every pull request (`tests.yml` `image`, not pushed): Docker does not run in this sandbox, and `docker.yml` builds only on a tag.
 
 ## Handoff

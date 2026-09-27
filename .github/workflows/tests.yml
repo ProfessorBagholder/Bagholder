@@ -108,6 +108,21 @@ jobs:
       - name: The bundle builds
         run: npm run build
 
+  # The image the release publishes, built on every pull request and not pushed:
+  # docker.yml builds it only on a tag, so a Dockerfile that no longer builds would
+  # otherwise first fail at a release.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: The image builds
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: rust/Dockerfile
+          push: false
+
   # The page driven in a real browser against the real server, on a made-up book
   # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE.
   browser:
