@@ -189,6 +189,9 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
     out
 }
 
+/// Where the book keeps what the last pull's statements said, for a restart.
+pub const STATEMENTS_SAID: &str = "statements.said";
+
 /// Each month whose statement the book does not reconcile with, one sentence
 /// each (`docs/plans/statement-gaps.md`): nothing of that month on is booked
 /// from the statements until it does.
