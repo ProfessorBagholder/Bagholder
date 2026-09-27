@@ -1,0 +1,80 @@
+# Plan: the movements Wealthsimple's activity feed leaves out, read from its statement transactions
+
+## For the owner to decide
+
+Nothing open. (Whether to do this at all was the owner's call, 2026-09-27: "let's see what you propose".)
+
+**Needed from the owner before the rule is fixed** (brief 11, change 6): one paste from the browser console on Wealthsimple's Documents page, which reads the chequing account's January 2026 statement (to explain the $2 between $72,950 and $72,948) and the LIRA's June 2025 and January 2026 statements (the recorded replies the adapter's tests run on). The snippet sends the page's own request, as captured, with new values only.
+
+## Scope
+
+Wealthsimple's activity feed, the one source the sync reads a record from, leaves some cash movements out. Found on the owner's book: two withdrawals from a locked-in account (a LIRA) to a chequing account, $35,650.00 on 2025-06-26 and $37,300.00 around 2026-01-12. The feed has the sale before each and the withholding tax, but no row for the money leaving, and no row for it arriving. Wealthsimple's own activity screen doesn't show them either. Its monthly statement does: `WD Withdrawal −35,650.00` in the LIRA, `Transfer in $35,650.00` in the chequing account. So the book holds $72,950 the LIRA no longer has, and the chequing account is $72,948 short. The header says so, correctly, in two sentences.
+
+This plan reads each account's statement transactions, which Wealthsimple serves as data (not a document), and books only what the feed left out. Proof is by reconciliation: each statement row is matched to the feed's row for it, and each month's closing balance must agree with the book.
+
+It also closes a hole the work exposed. Importing a statement file (Scan now, Watch folder) links only trade fills to the broker's rows. That file's cash rows (deposits, withdrawals, dividends, tax) are booked a second time beside the synced ones.
+
+It also gives the file import and the sync one list of Wealthsimple's statement codes. The file import knows nine (`BUY`, `SELL`, `DIV`, `INT`, `FEE`, `CONT`, `WD`, `TRFIN`, `TRFOUT`) and reports every other row, the withholding tax `WHTFED` among them, as a problem it did not book. The sync's reader and the file import will map codes through one table, so a code is placed, or reported, the same way in both.
+
+Out of scope: statement rows that are trades. Their units and price are the feed's to state. A trade row only the statement has is reported, not booked. Credit-card statements are also out, because the card is not in the book.
+
+## The old app here
+
+It read the same activity feed and had the same gap: neither withdrawal is in its database (checked, 2026-09-27). It never read statements. Nothing is carried over.
+
+`docs/old-app-mistakes.md` gains nothing: this is a hole in the source, and the old app missed it too.
+
+## How the leading products do it
+
+- **Bank reconciliation** (the accounting practice every ledger product follows) matches each line of the institution's statement to one entry in the ledger. Unmatched statement lines are the entries missing from the ledger, and the reconciled closing balance must equal the statement's. [Sage Intacct, "Troubleshoot reconciliation"](https://www.intacct.com/ia/docs/en_US/help_action/Cash_Management/Reconcile/Troubleshooting/top-solutions-bank-rec.htm), read 2026-09-27. This plan is that procedure, run by the sync.
+- **Sharesight**, which keeps a synced broker feed beside imported files, names duplicates as the common failure of importing next to a sync: a trade imported that the sync already brought. It leaves removing them to the person. [Sharesight, "My portfolio doesn't match my broker"](https://www.sharesight.com/partners/my-portfolio-doesnt-match-my-broker-what-to-do/) and ["Common errors when bulk importing trades"](https://help.sharesight.com/common-errors-when-bulk-importing-trades/), read 2026-09-27. This plan links the duplicate instead of booking it, and reports any row it cannot link to exactly one.
+- **Wealthsimple** builds its own statement CSV from `FetchMonthlyStatementWithTransactions` (its web app, release read 2026-09-27: the Documents page's Download CSV calls it with the account's id, the statement's period, and `statementType` `cash_monthly_statement` or `brokerage_monthly_statement`). The rows carry a type code (`SELL`, `WHTFED`, `WD`, …), a description, a signed cash movement and the running balance. Captured by the owner on the LIRA, June 2025.
+
+## Open questions
+
+1. **The request's values: settled 2026-09-27.** The page sends `accountId` (the account's own id, `lira-…`), `period` (the month's first day, `2025-06-01`) and `statementType` (`brokerage_monthly_statement` or `cash_monthly_statement`), captured from the page by the owner. The same values sent with the pull client's headers were refused (`UNPROCESSABLE_ENTITY`); replayed with the page's own request they answer. The page's headers, captured the same way (2026-09-27): the seven the client already sends, plus `x-ws-operation-name`, `x-ws-operation-hash` (the document's hash in the web app's build, `d5950e5b8d4b7b49a8fe02d68d3d5f7d33d3b7bd555a95db3089fff3dd4d917a` in the release read), `x-ws-device-id`, `x-ws-page`, `x-ws-client-tier` and `x-web-version`. The adapter sends the web app's document verbatim with its operation name and hash, as the page does. The adapter sends the page's request as captured: its document, operation name, hash and headers, never a subset worked out by sending refused requests on the owner's account (brief 11, change 7). The document and hash are Wealthsimple's, so a new web-app release can change them: a refused read is a sync failure naming the request, never a silent gap.
+2. **The chequing account's row for an arriving withdrawal: settled 2026-09-27.** 💰Cash, June 2025: `2025-06-26 TRFIN Transfer in 35650.0`, balance 171.69 → 35,821.69. Retirement, January 2026: `2026-01-12 WHTFED −15985.71`, then `WD Withdrawal −37300.0`, balance to 1.17 (Wealthsimple's balance for the account today). Codes seen in these three statements: `SELL`, `WHTFED`, `WD`, `TRFIN`, `TRFOUT`, `TRFOUTTF`, `AFT_IN`. The file import knows neither `TRFOUTTF`, `AFT_IN` nor `WHTFED`.
+3. **How statement dates relate to feed dates.** Objective: match every row one-to-one. What is known: the statement dates the sale 2025-06-26 and states `(executed at 2025-06-25)`, the feed's day for it. Settled by brief 11: the statement dates a trade at settlement and the feed at execution, in Toronto's zone, so the two are matched by the day rule below and the month's balance is compared by each book row's matched statement date, never by the book's own date. Matching and reconciliation use the feed's day in Toronto's zone and the statement's own dates, never the viewer's zone.
+
+## Approach
+
+- **The adapter.** `BrokerAdapter` (`rust/crates/broker/src/lib.rs`) gains `statement(account, month) -> Answer<Vec<StatementRow>>`. The Wealthsimple adapter answers it with `FetchMonthlyStatementWithTransactions` (new `rust/crates/wealthsimple/graphql/FetchMonthlyStatementWithTransactions.graphql`, Wealthsimple's own document, as the others are). A row is read strictly: a type code the mapping does not know is a problem naming it, never guessed.
+- **Stored as the broker's raw rows.** Each statement row is a record of its own under a new source, `wealthsimple-statement`, kept as it came (raw rows never rewritten). Its key is the account, month, and the row's position among identical rows, so a re-read stores nothing twice. The mapping turns `WD`, `DEP`, transfers in and out, `WHTFED`/`WHTPROV`, interest, fees and dividends into cash transactions. Codes beyond `SELL`, `WHTFED` and `WD` are taken from the reads, not assumed. Trades become no transaction, only the reconciliation's match.
+- **One table of statement codes.** `bagholder_broker::csv`'s `statement` mapping and the sync's statement reader share one table from a Wealthsimple code to a kind. Codes beyond those already known (`WHTFED`, `WHTPROV`, and any others) enter it only as the reads show them, each with the row that showed it. An unknown code is a problem naming it in both.
+- **Linking, one mechanism and one precedence for the three sources** (brief 11, changes 3 and 5). A movement can reach the book from the activity feed, the statement the sync reads, and a statement file the person imports. Precedence is fixed, in that order: the feed, then the sync's statement, then the file; the linking is one-to-one across all three, so a movement all three state is booked once, and one only the statement and the file state is booked once (the file's row gives way to the statement's). The linking pass that supersedes an imported file's fill with the broker's row (`server/src/csv_import.rs`, `link`, and `Book::supersede`) is widened to cash movements and to the sync's statement rows: same account, same currency, exact signed cash amount (no tolerance), and the same day or the day the row states it was executed. The kind is used only to break a tie, since the feed and the statement code the same move differently (a move between the person's own accounts is `INTERNAL_TRANSFER` in the feed and `WD` on the statement). One row takes at most one other row's place. With exactly one match, the lower-precedence row gives way; with several, it is linked to none and the header names it; with none, it is an unmatched row, booked only as the reconciliation below allows.
+- **The two sides of a withdrawal between the person's own accounts** are joined as a transfer by the existing `transfer_links`: the LIRA's `WD` and the chequing account's transfer in, same day and exact amount, no tolerance. It is one move of money, not income or a withdrawal from the person's wealth. A pair that does not join stays two named, unlinked movements.
+- **Reconciliation per month, as bank reconciliation does it** (brief 11, changes 1 and 2). A month reconciles when every statement row in it is matched or booked and the closing balance agrees to the cent, each book row counted on its matched statement row's date. A book row the month's statement lacks is an outstanding item, reconciled only if the next month's statement holds it (a sale executed on a month's last session settles in the next); otherwise it is a difference. Unmatched statement rows are booked only once their month is proven: the walk back finds the base month, the newest month that reconciles with nothing unmatched, then goes forward from it, and a month's unmatched rows are booked only if the month reconciles with them. If it does not, none of that month's rows are booked, nor any later month's, and the header names the account, the month and both balances (`status.rs` `broker_failures`, a new `Difference`). Booking on a weaker rule would put double-counting back, for every user and every pull.
+- **What is read, and when** (the owner's decision of 2026-09-24: calls kept to what is necessary; an account is re-read only over the span a broker-check difference points to). Statements are read for an account only while its cash disagrees with the broker's. A completed month's statement is read once and kept (brief 11, change 4): reading starts at the newest completed month not yet read and goes back one month at a time until the base month, or the account's first month; a later walk resumes from the oldest month not yet read. A difference the kept statements cannot explain is reported, and nothing more is read until a new month's statement is issued. A statement not issued yet (the first days after a month ends) is its own named state, neither a failure nor an empty month, its reply shape taken from a recorded reply. An account that agrees costs nothing. On the owner's book today that is the LIRA and the chequing account, not all fourteen.
+- **`SPEC.md`**: §2's paragraph on where the record comes from gains the statement as the source of movements the feed leaves out, with the linking and reconciliation rules; the header paragraph gains the month that does not reconcile. `docs/architecture.md`'s broker-adapter section gains the method.
+- **Stays the same**: the feed stays the source of every row it has. No figure's definition changes. Nothing on screen changes except which header sentences stand.
+
+## Acceptance criteria
+
+- [ ] `cargo test --workspace` green, no warnings; clippy clean.
+- [ ] Adapter tests on recorded replies (the owner's June 2025 LIRA capture, anonymised by `ws-anonymise`): rows read exactly; an unknown type code is a problem naming it; a refused request is a failure naming the account and month.
+- [ ] Linking tests: a statement row with exactly one feed row gives way to it; with two, neither is linked and the header names it; with none, it is unmatched. The same three for an imported statement file's cash rows. A movement in the feed, the sync's statement and a file is booked once; one in the statement and the file only is booked once. A move coded `WD` on the statement and a transfer in the feed matches.
+- [ ] Code tests: every code in the shared table maps the same way from a statement file and from the sync's reader; a code not in it is a problem in both; a statement file's `WHTFED` row books a withholding tax.
+- [ ] Reconciliation tests: a month whose closing balance agrees says nothing; one that differs is a header sentence with account, month and both balances, and books none of its unmatched rows nor any later month's; a sale executed on a month's last session and settled in the next is an outstanding item, not a difference; an unmatched row stated differently from the feed's (a day apart) is never booked twice. One test with the home zone set far from Toronto.
+- [ ] Reading tests (request counted, as the pull's are): an account that agrees reads no statement; one that disagrees reads back month by month and stops at the base month; two pulls in a row with a persistent difference: the second sends no statement request; a statement not issued yet is its named state.
+- [ ] **On a copy of the owner's book**, one pull with the statements read: every statement row read matches exactly one feed row, except the two LIRA withdrawals and their two arrivals. That list is printed and checked by hand before anything else. Then the LIRA and chequing sentences are gone from the header, and every other account's cash, units, trades and figures are unchanged to the cent (compared with `bagholder compare-figures`).
+- [ ] A browser test: a statement-only withdrawal between two accounts on the made-up book leaves no header sentence, and both accounts' cash agree.
+
+## Surfaces to check beyond the diff
+
+`rust/crates/broker/src/pull.rs` (when the method is called, request count); `rust/crates/wealthsimple/src/replay.rs` (captures for tests); a book migration if the new source needs a table (records and links should not); `SPEC.md` §2 and the header paragraph; `docs/architecture.md` (the adapter contract); `web/src/lib/generated/wire.ts` if the header's disagreement type is on the wire.
+
+## Right to refuse
+
+If the owner's first full read shows statement rows that cannot be matched one-to-one by any rule stated here (dates that drift without an executed-at date, amounts split differently), building stops and the list goes to the owner. Booking on a weaker rule would put double-counting back.
+
+## Anti-stub self-check
+
+To be initialled at the end: no definition nobody references; no field written and never read; the owner-copy pull actually run and its list read.
+
+## Verification
+
+To be filled when built.
+
+## Handoff
+
+Blocked on the gate's verdict.
