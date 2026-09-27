@@ -33,6 +33,10 @@ pub struct Stated {
     pub days: BTreeMap<jiff::civil::Date, (Money, Money)>,
     /// The newest statement of cash, and when it was stated.
     pub cash: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
+    /// The newest statement of cash made at or before the last full read of the
+    /// activity: every fill it reflects is on the record, so the book's cash is
+    /// checked against it.
+    pub cash_read: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
     /// The newest statement of units, and the day they are as of.
     pub units: Option<(jiff::civil::Date, BTreeMap<InstrumentId, Dec>)>,
     /// When the account's activity was last read in full.
@@ -256,18 +260,32 @@ impl Book {
             let c = text::currency(t, "currency", &c)?;
             out.days.insert(text::date(t, "day", &d)?, (Money::new(text::dec(t, "net_value", &v)?, c), Money::new(text::dec(t, "net_deposits", &n)?, c)));
         }
-        let cash: Option<(String, String)> = self
-            .conn()
-            .query_row("SELECT id, stated_at FROM statements WHERE account_id = ?1 AND kind = 'cash' ORDER BY stated_at DESC, id DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?)))
-            .optional()?;
-        if let Some((id, at)) = cash {
+        out.activity_read_at = self.activity_read_at(account)?;
+        let cash_of = |id: &str| -> Result<BTreeMap<Currency, Dec>> {
             let mut m = BTreeMap::new();
-            let mut st = self.conn().prepare("SELECT currency, amount FROM statement_cash WHERE statement_id = ?1")?;
+            let mut st = self.conn().prepare_cached("SELECT currency, amount FROM statement_cash WHERE statement_id = ?1")?;
             for r in st.query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                 let (c, v) = r?;
                 m.insert(text::currency("statement_cash", "currency", &c)?, text::dec("statement_cash", "amount", &v)?);
             }
-            out.cash = Some((text::instant("statements", "stated_at", &at)?, m));
+            Ok(m)
+        };
+        // newest first, by the instant rather than its text (whose fraction's
+        // length varies): the newest, and the newest the last full read covers
+        let mut st = self.conn().prepare("SELECT id, stated_at FROM statements WHERE account_id = ?1 AND kind = 'cash'")?;
+        let mut stated: Vec<(jiff::Timestamp, String)> = vec![];
+        for r in st.query_map(params![a], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (id, at) = r?;
+            stated.push((text::instant("statements", "stated_at", &at)?, id));
+        }
+        stated.sort_unstable_by(|x, y| y.cmp(x));
+        if let Some((at, id)) = stated.first() {
+            out.cash = Some((*at, cash_of(id)?));
+        }
+        if let Some(read) = out.activity_read_at {
+            if let Some((at, id)) = stated.iter().find(|(at, _)| *at <= read) {
+                out.cash_read = Some((*at, cash_of(id)?));
+            }
         }
         let units: Option<(String, String)> = self
             .conn()
@@ -282,7 +300,6 @@ impl Book {
             }
             out.units = Some((text::date("statements", "as_of_day", &d)?, m));
         }
-        out.activity_read_at = self.activity_read_at(account)?;
         let bp: Option<(String, Option<String>, Option<String>, Option<String>)> = self
             .conn()
             .query_row(

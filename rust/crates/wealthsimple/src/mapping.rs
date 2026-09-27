@@ -74,8 +74,10 @@ impl Mapping for WealthsimpleMapping {
     /// 5: a stated value of zero is kept as one.
     /// 6: a security's standing is kept, so an id retired by a corporate action
     /// and the id its listing trades under now are one instrument.
+    /// 7: a move between two accounts whose one side's positions are not kept
+    ///    is its stated cash where the other side's show no holdings moving.
     fn version(&self) -> u32 {
-        6
+        7
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -718,6 +720,10 @@ fn conversion(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(
 /// - holdings whose fall in one account is their rise in another (from another
 ///   institution, their rise): the holdings, where the group is one move, since
 ///   which row moved which is not stated otherwise.
+/// Where one of the two accounts' positions are not kept (Wealthsimple did not
+/// answer a closed account's day), what left one arrived in the other, so the
+/// other's showing no holdings moving says the move was cash, the row's stated
+/// amount.
 /// Anything else is not stated, and named.
 fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(), Failed> {
     let incoming = matches!(row.sub, Some("DESTINATION" | "TRANSFER_IN"));
@@ -778,16 +784,31 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
         }
     }
     let mut change: BTreeMap<&str, BTreeMap<String, Dec>> = BTreeMap::new();
+    let mut not_kept = 0;
     for a in &accounts {
         match changed(root, a, first, last)? {
             Some(c) => {
                 change.insert(a, c);
             }
-            None => {
-                unstated(out, format!("a {kind} whose holdings Wealthsimple states only as a value, with no positions kept to show what moved"));
-                return Ok(());
-            }
+            None => not_kept += 1,
         }
+    }
+    if not_kept > 0 {
+        // a move between two accounts: what left one arrived in the other, so
+        // one account's positions showing no holdings moving says the move was
+        // cash, whichever side's are not kept. Holdings moving there, or no
+        // side kept, leave what moved unstated
+        let holdings = |c: &BTreeMap<String, Dec>| c.keys().any(|id| !id.starts_with("sec-c-"));
+        let one_side_shows_cash = accounts.len() == 2 && change.len() == 1 && !change.values().any(holdings);
+        if !one_side_shows_cash {
+            unstated(out, format!("a {kind} whose holdings Wealthsimple states only as a value, with no positions kept to show what moved"));
+            return Ok(());
+        }
+        if row.amount.is_some() {
+            return cash_leg(out);
+        }
+        unstated(out, format!("a {kind} that states no amount, and whose cash the positions do not show moving between the two accounts"));
+        return Ok(());
     }
     // holdings that left one account of the group and arrived in another: a
     // change the other side does not mirror moved nothing between them

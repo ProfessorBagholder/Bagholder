@@ -145,7 +145,7 @@ pub(crate) fn contract_label(underlying: &str, t: &bagholder_core::instrument::O
 }
 
 /// An account's name: the person's for it, else what it is.
-fn account_name(inputs: &Inputs, a: AccountId) -> String {
+pub(crate) fn account_name(inputs: &Inputs, a: AccountId) -> String {
     inputs.ledger.accounts.get(&a).map(|info| info.account.name()).unwrap_or_default()
 }
 

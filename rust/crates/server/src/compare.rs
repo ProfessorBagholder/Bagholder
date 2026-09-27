@@ -511,8 +511,8 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
             writeln!(out, "  {} ({}){}", names.get(&c.account).cloned().unwrap_or_default(), c.account, if c.pending { ", activity since the statement not read" } else { "" }).expect("writing to a String cannot fail");
             for d in &c.differences {
                 match d {
-                    bagholder_engine::equity::Difference::Cash { currency, own, broker } => writeln!(out, "      cash {currency}: book {} broker {}", own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).expect("writing to a String cannot fail"),
-                    bagholder_engine::equity::Difference::Units { instrument, own, broker } => writeln!(out, "      units {}: book {} broker {}", figures_symbol(&engine, *instrument), own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).expect("writing to a String cannot fail"),
+                    bagholder_engine::equity::Difference::Cash { currency, own, broker, .. } => writeln!(out, "      cash {currency}: book {} broker {}", own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).expect("writing to a String cannot fail"),
+                    bagholder_engine::equity::Difference::Units { instrument, own, broker, .. } => writeln!(out, "      units {}: book {} broker {}", figures_symbol(&engine, *instrument), own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).expect("writing to a String cannot fail"),
                 };
             }
         }

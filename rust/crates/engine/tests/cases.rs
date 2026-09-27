@@ -470,6 +470,12 @@ fn run(path: &Path) -> Vec<String> {
             if Some(got) != want.get("differences").and_then(Value::as_u64) {
                 c.fail(format!("broker check differences: expected {:?}, got {:?}", want.get("differences"), chk.differences));
             }
+            if let Some(n) = want.get("pending_differences").and_then(Value::as_u64) {
+                let got = chk.differences.iter().filter(|d| d.pending()).count() as u64;
+                if got != n {
+                    c.fail(format!("broker check pending differences: expected {n}, got {:?}", chk.differences));
+                }
+            }
             if let Some(p) = want.get("pending").and_then(Value::as_bool) {
                 if chk.pending != p {
                     c.fail(format!("broker check pending: expected {p}"));

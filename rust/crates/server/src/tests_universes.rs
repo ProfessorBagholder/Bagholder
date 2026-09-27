@@ -63,11 +63,12 @@ fn test_a_shown_universe_with_no_rows_is_read_from_its_own_source_only() {
     for (key, source, other) in [("ca", Source::Tmx, Source::Screener), ("us", Source::Screener, Source::Tmx), ("intl", Source::Screener, Source::Tmx)] {
         let (_home, app) = app();
         let _page = page_showing(&app, &[&format!("universe:{key}")]);
-        until("the read", || reads(&app) == vec![source]);
-        let c = app.cache().unwrap();
-        for k in source.keys() {
-            assert!(bagholder_store::feeds::universe_read_at(&c, k).unwrap().is_some(), "{k}: a read stores every universe its source carries");
-        }
+        // the read is counted as it starts and stored as it ends: wait for the end
+        let stored = || {
+            let c = app.cache().unwrap();
+            source.keys().iter().all(|k| bagholder_store::feeds::universe_read_at(&c, k).unwrap().is_some())
+        };
+        until("the read, stored for every universe its source carries", || reads(&app) == vec![source] && stored());
         settle();
         assert_eq!(reads(&app), vec![source], "{key}: read once, and a universe nobody shows ({other:?}) is not read");
         assert_eq!(doc(&app, &format!("universe:{key}")), json!({"failed": null}));
