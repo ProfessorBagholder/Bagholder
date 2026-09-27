@@ -17,11 +17,11 @@ fn err(e: impl std::fmt::Display) -> String {
 /// The ledger: accounts, instruments with their names and terms, the live
 /// transactions and their records, the trades, groups and journal.
 pub fn ledger(book: &Book) -> Result<Ledger, String> {
-    let brokers: BTreeMap<_, _> = book.connections().map_err(err)?.into_iter().map(|c| (c.id, c.broker)).collect();
+    let brokers: BTreeMap<_, _> = book.connections().map_err(err)?.into_iter().map(|c| (c.id, (c.broker, c.label))).collect();
     let mut accounts = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
-        let broker = brokers.get(&a.connection).cloned().ok_or_else(|| format!("account {} has no connection", a.id))?;
-        accounts.insert(a.id, AccountInfo { account: a, broker });
+        let (broker, broker_label) = brokers.get(&a.connection).cloned().ok_or_else(|| format!("account {} has no connection", a.id))?;
+        accounts.insert(a.id, AccountInfo { account: a, broker, broker_label });
     }
     let mut instruments = BTreeMap::new();
     for i in book.instruments().map_err(err)? {
@@ -121,6 +121,7 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
             b.held = units;
         }
         b.activity_read_at = s.activity_read_at;
+        b.cash_read = s.cash_read.map(|(_, c)| c);
         b.buying_power = match s.buying_power {
             None => None,
             Some((_, Ok(m))) if m.currency == Currency::CAD => Some(Ok(m.amount)),

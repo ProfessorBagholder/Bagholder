@@ -79,10 +79,20 @@ pub fn build_equity(inputs: &Inputs, only: Option<&BTreeSet<AccountId>>) -> BTre
 
 /// One difference between what Bagholder holds and what the broker states.
 /// Bagholder's side is the failure when its record cannot be summed exactly.
+/// `pending` when the statement is newer than the last full read of the
+/// activity: the difference may be a fill the record does not hold yet.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Difference {
-    Cash { currency: Currency, own: Fig<Dec>, broker: Dec },
-    Units { instrument: InstrumentId, own: Fig<Dec>, broker: Dec },
+    Cash { currency: Currency, own: Fig<Dec>, broker: Dec, pending: bool },
+    Units { instrument: InstrumentId, own: Fig<Dec>, broker: Dec, pending: bool },
+}
+
+impl Difference {
+    pub fn pending(&self) -> bool {
+        match self {
+            Difference::Cash { pending, .. } | Difference::Units { pending, .. } => *pending,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,26 +119,35 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
                 }
             }
         }
-        let mut differences = Vec::new();
-        let currencies: BTreeSet<Currency> = own_cash.keys().chain(b.cash.keys()).copied().collect();
-        for c in currencies {
-            let (o, br) = (own_cash.get(&c).cloned().unwrap_or(Ok(Dec::ZERO)), b.cash.get(&c).copied().unwrap_or(Dec::ZERO));
-            if o != Ok(br) {
-                differences.push(Difference::Cash { currency: c, own: o, broker: br });
-            }
-        }
-        let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
-        for i in instruments {
-            let (o, br) = (matched.units_on(*account, i, b.held_as_of.unwrap_or(today)), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
-            if o != Ok(br) {
-                differences.push(Difference::Units { instrument: i, own: o, broker: br });
-            }
-        }
         let pending = match (b.as_of, b.activity_read_at) {
             (Some(stated), Some(read)) => stated > read,
             (Some(_), None) => true,
             (None, _) => false,
         };
+        let mut differences = Vec::new();
+        // the cash stated at the last full read, which every fill it reflects is
+        // on the record for; else the newest, pending while it is newer than the read
+        let (stated_cash, cash_pending) = match &b.cash_read {
+            Some(c) => (c, false),
+            None => (&b.cash, pending),
+        };
+        let currencies: BTreeSet<Currency> = own_cash.keys().chain(stated_cash.keys()).copied().collect();
+        for c in currencies {
+            let (o, br) = (own_cash.get(&c).cloned().unwrap_or(Ok(Dec::ZERO)), stated_cash.get(&c).copied().unwrap_or(Dec::ZERO));
+            if o != Ok(br) {
+                differences.push(Difference::Cash { currency: c, own: o, broker: br, pending: cash_pending });
+            }
+        }
+        // units stated as of a day whose activity is read in full are never
+        // pending; units stated as of today are, while the statement is newer
+        let units_pending = b.held_as_of.is_none() && pending;
+        let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
+        for i in instruments {
+            let (o, br) = (matched.units_on(*account, i, b.held_as_of.unwrap_or(today)), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
+            if o != Ok(br) {
+                differences.push(Difference::Units { instrument: i, own: o, broker: br, pending: units_pending });
+            }
+        }
         out.push(BrokerCheck { account: *account, differences, pending });
     }
     out

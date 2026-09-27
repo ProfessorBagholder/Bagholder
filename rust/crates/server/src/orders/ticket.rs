@@ -366,7 +366,7 @@ pub fn ws_execution(kind: OrderKind) -> &'static str {
 pub(super) const LOOKUP_TYPES: [&str; 2] = ["EQUITY", "EXCHANGE_TRADED_FUND"];
 pub(super) const CANADIAN_SUFFIXES: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
 
-pub(super) fn bare_symbol(sym: &str) -> String {
+pub(crate) fn bare_symbol(sym: &str) -> String {
     let sym = sym.to_uppercase();
     for suf in CANADIAN_SUFFIXES {
         if let Some(b) = sym.strip_suffix(suf) {

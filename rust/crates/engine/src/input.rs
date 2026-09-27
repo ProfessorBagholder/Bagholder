@@ -19,6 +19,9 @@ use bagholder_core::{AccountId, Broker, Currency, Dec, InstrumentId, Money, Reco
 pub struct AccountInfo {
     pub account: Account,
     pub broker: Broker,
+    /// What the person calls the broker it is held at (`Wealthsimple`), for the
+    /// screens: the connection's label.
+    pub broker_label: String,
 }
 
 /// An instrument with what it is called and, for a contract, its terms.
@@ -245,6 +248,9 @@ pub struct BrokerAccount {
     pub activity_read_at: Option<Timestamp>,
     /// Cash per currency now.
     pub cash: BTreeMap<Currency, Dec>,
+    /// Cash per currency as stated at or before `activity_read_at`: every fill
+    /// it reflects is on the record, so the broker check compares with it.
+    pub cash_read: Option<BTreeMap<Currency, Dec>>,
     /// Units held per instrument, as of `held_as_of`.
     pub held: BTreeMap<InstrumentId, Dec>,
     /// The day the broker states `held` as of: the last day whose activity is

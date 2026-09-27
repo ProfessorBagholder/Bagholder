@@ -109,5 +109,187 @@
       "D": {"cash": {"CAD": "500"}, "held": {"X": "12"}, "as_of": "2026-01-07T15:00:00Z"}
     },
     "expect": {"checks": [{"account": "A", "differences": 0, "pending": false}, {"account": "B", "differences": 1, "pending": true}, {"account": "C", "differences": 1, "pending": false}, {"account": "D", "differences": 1, "pending": true}]}
+  },
+  {
+    "name": "the broker check compares cash with the statement the last full read covers, and units stated as of a read day are never pending",
+    "spec": "SPEC.md §4 Pages (the header's failures): the broker check's disagreements",
+    "working": [
+      "each account: 1,000 deposited, 10 X bought for 500 on 01-06: cash 500 CAD and 10 X",
+      "E: activity read in full at 01-07 16:00; cash stated then 500 (agrees), stated again at 01-08 10:00 as 480 (a fill the record may not hold yet): the cash is checked against 500, no difference",
+      "F: the same, but the cash stated at the read is 450: one cash difference, not pending, though the newest statement is newer than the read",
+      "G: activity read at 01-07 16:00, cash newest at 01-08 10:00 and none at or before the read, units stated as of 01-07 (a day read in full) as 12 X: the cash (500) agrees; the units differ and are not pending; the check is pending",
+      "H: as G but units stated as of today (no day given) as 12 X: the difference is pending"
+    ],
+    "today": "2026-01-08",
+    "accounts": [
+      {
+        "id": "E"
+      },
+      {
+        "id": "F"
+      },
+      {
+        "id": "G"
+      },
+      {
+        "id": "H"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "E1",
+        "account": "E",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "E2",
+        "account": "E",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "F1",
+        "account": "F",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "F2",
+        "account": "F",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "G1",
+        "account": "G",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "G2",
+        "account": "G",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "H1",
+        "account": "H",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "H2",
+        "account": "H",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      }
+    ],
+    "brokers": {
+      "E": {
+        "cash": {
+          "CAD": "480"
+        },
+        "cash_read": {
+          "CAD": "500"
+        },
+        "held": {
+          "X": "10"
+        },
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      },
+      "F": {
+        "cash": {
+          "CAD": "480"
+        },
+        "cash_read": {
+          "CAD": "450"
+        },
+        "held": {
+          "X": "10"
+        },
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      },
+      "G": {
+        "cash": {
+          "CAD": "500"
+        },
+        "held": {
+          "X": "12"
+        },
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      },
+      "H": {
+        "cash": {
+          "CAD": "500"
+        },
+        "held": {
+          "X": "12"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      }
+    },
+    "expect": {
+      "checks": [
+        {
+          "account": "E",
+          "differences": 0,
+          "pending_differences": 0
+        },
+        {
+          "account": "F",
+          "differences": 1,
+          "pending_differences": 0
+        },
+        {
+          "account": "G",
+          "differences": 1,
+          "pending_differences": 0,
+          "pending": true
+        },
+        {
+          "account": "H",
+          "differences": 1,
+          "pending_differences": 1,
+          "pending": true
+        }
+      ]
+    }
   }
 ]

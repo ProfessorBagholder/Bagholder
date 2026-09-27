@@ -61,6 +61,25 @@ fn the_newest_cash_and_units_are_the_ones_read() {
 }
 
 #[test]
+fn the_cash_a_full_read_covers_is_the_newest_stated_at_or_before_it() {
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let r = f.book.broker_read(f.connection, "balances", t0()).unwrap();
+    // fractions of different lengths: ordered by the instant, not the text
+    f.book.store_cash(a, at("2026-09-23T10:00:00.5Z"), &BTreeMap::from([(Currency::CAD, d("5"))]), &r).unwrap();
+    f.book.store_cash(a, at("2026-09-23T10:00:00.450401Z"), &BTreeMap::from([(Currency::CAD, d("4"))]), &r).unwrap();
+    f.book.store_cash(a, at("2026-09-24T10:00:00Z"), &BTreeMap::from([(Currency::CAD, d("7"))]), &r).unwrap();
+    assert!(f.book.stated(a).unwrap().cash_read.is_none(), "no full read: no cash it covers");
+    f.book.note_activity_read(a, at("2026-09-23T10:00:00.450401Z"), true).unwrap();
+    let s = f.book.stated(a).unwrap();
+    assert_eq!(s.cash.unwrap().1[&Currency::CAD], d("7"));
+    let (when, cash) = s.cash_read.unwrap();
+    assert_eq!((when, cash[&Currency::CAD]), (at("2026-09-23T10:00:00.450401Z"), d("4")));
+    f.book.note_activity_read(a, at("2026-09-23T11:00:00Z"), true).unwrap();
+    assert_eq!(f.book.stated(a).unwrap().cash_read.unwrap().1[&Currency::CAD], d("5"));
+}
+
+#[test]
 fn a_move_s_two_sides_are_linked_as_stated() {
     let f = Fixture::new();
     f.account(&["tfsa-1"]);

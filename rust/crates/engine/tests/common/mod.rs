@@ -108,7 +108,7 @@ pub fn build(case: &Value) -> Built {
         let status = AccountStatus::parse(s(&a, "status").unwrap_or("open")).unwrap();
         let managed = a.get("managed").and_then(Value::as_bool).unwrap_or(false);
         let account = Account { id, connection, account_type: AccountType::Known { kind, registration, managed, joint: false }, status, nickname: Some(label.to_string()) };
-        accounts.insert(id, AccountInfo { account, broker: broker.clone() });
+        accounts.insert(id, AccountInfo { account, broker: broker.clone(), broker_label: "Testbroker".into() });
     }
     let first_day = arr(case, "transactions").iter().filter_map(|t| s(t, "day")).map(day).min().unwrap_or(day("2020-01-01"));
     let mut instruments = BTreeMap::new();
@@ -309,6 +309,10 @@ pub fn build(case: &Value) -> Built {
         acct.net_value_now = s(&b, "now").map(dec);
         acct.as_of = s(&b, "as_of").map(at);
         acct.activity_read_at = s(&b, "activity_read_at").map(at);
+        if let Some(c) = b.get("cash_read").and_then(Value::as_object) {
+            acct.cash_read = Some(c.iter().map(|(k, v)| (ccy(k), dec(v.as_str().unwrap()))).collect());
+        }
+        acct.held_as_of = s(&b, "held_as_of").map(day);
         acct.buying_power = s(&b, "buying_power").map(|v| Ok(dec(v)));
         market.brokers.insert(id, acct);
     }
