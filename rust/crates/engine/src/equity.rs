@@ -138,14 +138,19 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
                 differences.push(Difference::Cash { currency: c, own: o, broker: br, pending: cash_pending });
             }
         }
-        // units stated as of a day whose activity is read in full are never
-        // pending; units stated as of today are, while the statement is newer
-        let units_pending = b.held_as_of.is_none() && pending;
-        let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
-        for i in instruments {
-            let (o, br) = (matched.units_on(*account, i, b.held_as_of.unwrap_or(today)), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
-            if o != Ok(br) {
-                differences.push(Difference::Units { instrument: i, own: o, broker: br, pending: units_pending });
+        // units only where the broker stated them: an account whose holdings it
+        // never stated (no units and no day they are stated as of) is not stated to
+        // hold nothing. Units stated as of a day whose activity is read in full are
+        // never pending; units stated as of today are, while the statement is newer.
+        if b.held_as_of.is_some() || !b.held.is_empty() {
+            let units_pending = b.held_as_of.is_none() && pending;
+            let as_of = b.held_as_of.unwrap_or(today);
+            let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
+            for i in instruments {
+                let (o, br) = (matched.units_on(*account, i, as_of), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
+                if o != Ok(br) {
+                    differences.push(Difference::Units { instrument: i, own: o, broker: br, pending: units_pending });
+                }
             }
         }
         out.push(BrokerCheck { account: *account, differences, pending });

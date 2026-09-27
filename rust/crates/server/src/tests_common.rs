@@ -18,6 +18,9 @@ pub fn home() -> PathBuf {
         // stand-in (`bagholder_ws::standin`) answers on 127.0.0.1, which stays
         // allowed, so it still works
         std::env::set_var("BAGHOLDER_OFFLINE", "1");
+        // and nothing reaches this machine's own notifications: a test that means
+        // to see a system channel sets one through `notify::test_hooks`
+        std::env::set_var(crate::notify::MODE_ENV, "browser");
         d
     })
     .clone()

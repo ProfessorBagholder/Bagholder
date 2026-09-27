@@ -94,17 +94,24 @@ pub fn write(home: &Path) -> Result<String, String> {
     let ws = Broker::named("wealthsimple");
     let connection = book.connections().map_err(err)?.into_iter().find(|c| c.broker == ws).map(|c| c.id).ok_or("the demo book has no Wealthsimple connection")?;
     let shares = [("acct-tfsa", 0.38), ("acct-rrsp", 0.41), ("acct-trading", 0.08), ("acct-crypto", 0.13)];
-    let cash = [("acct-tfsa", "4210.35", Currency::CAD), ("acct-rrsp", "1875.00", Currency::CAD), ("acct-trading", "-18240.60", Currency::USD), ("acct-crypto", "312.40", Currency::CAD)];
+    // the made-up broker states the cash its own made-up rows come to, so the
+    // book agrees with it (the broker check says nothing on the demo)
+    let transactions = book.transactions().map_err(err)?;
     for (ws_id, share) in shares {
         let Some(account) = book.account_by_ref(&AccountRef::new(ws.clone(), ws_id)).map_err(err)? else { continue };
         let read = book.broker_read(connection, &format!("history:{ws_id}"), at).map_err(err)?;
         let cad = |v: f64| Money::new(Dec::parse(&format!("{:.2}", v * share)).expect("a value to the cent"), Currency::CAD);
         let account_days: Vec<AccountDay> = nav.iter().filter_map(|(d, v, dep)| Some(AccountDay { day: d.parse().ok()?, net_value: cad(*v), net_deposits: cad(*dep) })).collect();
         book.store_account_days(account, &account_days, &read).map_err(err)?;
-        if let Some((_, amount, currency)) = cash.iter().find(|c| c.0 == ws_id) {
-            let read = book.broker_read(connection, &format!("balances:{ws_id}"), at).map_err(err)?;
-            book.store_cash(account, at, &[(*currency, Dec::parse(amount).map_err(err)?)].into_iter().collect(), &read).map_err(err)?;
+        let mut cash: std::collections::BTreeMap<Currency, Dec> = std::collections::BTreeMap::new();
+        for t in transactions.iter().filter(|t| t.account == account) {
+            if let Some(c) = t.cash {
+                let total = cash.entry(c.currency).or_insert(Dec::ZERO);
+                *total = total.checked_add(c.amount).map_err(err)?;
+            }
         }
+        let read = book.broker_read(connection, &format!("balances:{ws_id}"), at).map_err(err)?;
+        book.store_cash(account, at, &cash, &read).map_err(err)?;
         book.note_activity_read(account, at, true).map_err(err)?;
         // what the margin account can borrow, made up as the rest
         if ws_id == "acct-trading" {
