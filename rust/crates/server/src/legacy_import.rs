@@ -49,7 +49,9 @@ pub fn translate(conn: &Connection, today: &str) -> Result<Translated, String> {
     // the row that opened the trade the old app knew by `key`
     let opening = |key: &str| -> Result<String, String> {
         if let Some(row) = key.strip_prefix("rt:").filter(|r| !r.contains('|') && row_ids.contains(*r)) {
-            return Ok(row.to_string()); // a round trip is named for its first fill
+            // a round trip is named for its first fill; where the position went flat
+            // before the old trade closed, the book's trade that closes it opened later
+            return Ok(trades.get(key).and_then(|slices| reopened_before_close(&rows, slices)).unwrap_or_else(|| row.to_string()));
         }
         match trades.get(key) {
             Some(slices) => Ok(opening_row(slices)),
@@ -122,6 +124,40 @@ pub fn translate(conn: &Connection, today: &str) -> Result<Translated, String> {
 }
 
 /// The row that opened a trade: the opening fill of its earliest piece.
+/// The row that opened the round trip the old trade `slices` closed in, where the
+/// position went flat in between. The earlier app kept one trade running through a
+/// moment the position was flat (all of it sold, then bought again); a trade in the
+/// book ends there (`SPEC.md`, a trade is one round trip), so a note the person
+/// wrote on the old trade belongs on the book's trade that closes as the old one
+/// did, the one they saw its figures for. None where the account's rows of the
+/// instrument do not replay cleanly (units moved by a row that is not a buy or a
+/// sell), or
+/// where it never went flat: the old trade's first fill then opens it.
+fn reopened_before_close(rows: &[bagholder_model::activity::RawActivity], slices: &[&Slice]) -> Option<String> {
+    let last = slices.iter().max_by(|a, b| (&a.exit_when, &a.exit_date).cmp(&(&b.exit_when, &b.exit_date)))?;
+    let close = if last.open_direction == Direction::Short { &last.buy_activity_id } else { &last.sell_activity_id };
+    let own: Vec<&bagholder_model::activity::RawActivity> = rows.iter().filter(|r| r.account_id == last.account_id && r.security_id == last.security_id && !r.security_id.is_empty()).collect();
+    let mut held = 0.0_f64;
+    let mut opened: Option<&str> = None;
+    for r in own {
+        // a distribution names the instrument and moves no units
+        if r.quantity == 0.0 {
+            continue;
+        }
+        if r.activity_type != "Trade" {
+            return None;
+        }
+        if held.abs() < 1e-9 {
+            opened = Some(&r.id);
+        }
+        held += r.quantity;
+        if &r.id == close {
+            return opened.map(str::to_string);
+        }
+    }
+    None
+}
+
 fn opening_row(slices: &[&Slice]) -> String {
     let first = slices.iter().min_by(|a, b| (&a.entry_when, &a.entry_date, slice_member_key(a)).cmp(&(&b.entry_when, &b.entry_date, slice_member_key(b))));
     match first {
@@ -454,6 +490,33 @@ mod tests {
         )
         .unwrap();
         conn.execute("INSERT OR IGNORE INTO securities(id, symbol, name, currency) VALUES ('sec-' || ?1, ?1, ?1, 'CAD')", [symbol]).unwrap();
+    }
+
+    /// The earlier app ran one trade through a moment the position was flat (all of
+    /// it sold, then bought again: the owner's QNC of 2024-12-12 → 2026-06-24). A note
+    /// the person wrote on it belongs on the book's trade that closes as it did, not
+    /// on the day-long round trip its first fill now opens.
+    #[test]
+    fn a_note_on_an_old_trade_that_went_flat_goes_to_the_book_s_trade_that_closes_as_it_did() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = bagholder_store::open_db(&dir.path().join("bagholder.db")).unwrap();
+        bagholder_store::schema::init_schema(&conn).unwrap();
+        trade(&conn, "b1", "QNC", "BUY", 1667.0, "2024-12-12T19:58:39+00:00");
+        trade(&conn, "b2", "QNC", "BUY", 1852.0, "2024-12-12T20:53:07+00:00");
+        trade(&conn, "s1", "QNC", "SELL", -3519.0, "2024-12-13T17:23:54+00:00");
+        trade(&conn, "b3", "QNC", "BUY", 5016.0, "2024-12-13T18:35:20+00:00");
+        trade(&conn, "s2", "QNC", "SELL", -5016.0, "2026-06-24T15:00:00+00:00");
+        set_meta(&conn, "journal_v2", r#"{"rt:b1": {"thesis": "long hold", "tags": ["winners"], "grade": "A"}}"#);
+        let t = translate(&conn, "2026-09-26").unwrap();
+        let on: Vec<&NoteOn> = t.journal.iter().map(|n| &n.on).collect();
+        // the earlier app's trade `rt:b1` runs through the flat moment to s2
+        let rows = bagholder_store::activities::all_raw_activities(&conn).unwrap();
+        let securities = bagholder_store::rows::securities(&conn).unwrap();
+        let book = bagholder_model::book::build_book(&rows, bagholder_model::securities::Securities::new(&securities), "2026-09-26");
+        let old = old_trades(&book.fifo.closed, &[]);
+        let pairs: Vec<(&str, &str)> = old["rt:b1"].iter().map(|x| (x.buy_activity_id.as_str(), x.sell_activity_id.as_str())).collect();
+        assert_eq!(pairs, [("b1", "s1"), ("b2", "s1"), ("b3", "s2")]);
+        assert_eq!(on, vec![&NoteOn::Trade(Ok("b3".into()))], "the book's trade that closes on s2");
     }
 
     fn set_meta(conn: &Connection, key: &str, value: &str) {
