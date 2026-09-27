@@ -296,6 +296,7 @@ dependencies = [
  "bagholder-model",
  "bagholder-net",
  "bagholder-sources",
+ "bagholder-sqlite",
  "bagholder-store",
  "bagholder-wealthsimple",
  "bagholder-ws",

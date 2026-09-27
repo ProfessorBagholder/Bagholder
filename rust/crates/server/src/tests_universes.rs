@@ -16,14 +16,13 @@ use crate::feeds::{universe_due_in, UNIVERSE_STALE_SEC};
 fn app() -> (tempfile::TempDir, Arc<App>) {
     let home = tempfile::tempdir().unwrap();
     let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
-    bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
     (home, app)
 }
 
 /// Every universe a source carries, with rows read `age` seconds ago.
 fn stored(app: &Arc<App>, source: Source, age: f64) {
     let at = stamp_of((now_unix() - age) as i64);
-    let c = app.open().unwrap();
+    let c = app.cache().unwrap();
     for key in source.keys() {
         let row = UniverseRow { symbol: format!("{}0", key.to_uppercase()), name: "Held".into(), value: 1.0, percent_change: None, sector: "Energy".into(), country: String::new() };
         bagholder_store::feeds::replace_universe(&c, key, &[row], &at).unwrap();
@@ -65,7 +64,7 @@ fn test_a_shown_universe_with_no_rows_is_read_from_its_own_source_only() {
         let (_home, app) = app();
         let _page = page_showing(&app, &[&format!("universe:{key}")]);
         until("the read", || reads(&app) == vec![source]);
-        let c = app.open().unwrap();
+        let c = app.cache().unwrap();
         for k in source.keys() {
             assert!(bagholder_store::feeds::universe_read_at(&c, k).unwrap().is_some(), "{k}: a read stores every universe its source carries");
         }
@@ -82,7 +81,7 @@ fn test_a_shown_universe_whose_rows_are_stale_is_read_again() {
         stored(&app, source, UNIVERSE_STALE_SEC + 60.0);
         let _page = page_showing(&app, &[&format!("universe:{}", source.keys()[0])]);
         until("the read", || reads(&app) == vec![source]);
-        let c = app.open().unwrap();
+        let c = app.cache().unwrap();
         let at = bagholder_store::feeds::universe_read_at(&c, source.keys()[0]).unwrap().unwrap();
         assert!(now_unix() - crate::app::parse_instant(&at).unwrap() < 60.0, "the rows are the new read's");
     }
@@ -126,7 +125,7 @@ fn test_a_failed_read_is_said_in_the_document_and_not_asked_again_within_the_hal
     let _again = page_showing(&app, &["universe:us", "universe:intl"]);
     settle();
     assert_eq!(reads(&app), vec![Source::Screener], "one attempt per half hour");
-    assert!(app.open().map(|c| bagholder_store::feeds::universe_read_at(&c, "us").unwrap().is_none()).unwrap());
+    assert!(app.cache().map(|c| bagholder_store::feeds::universe_read_at(&c, "us").unwrap().is_none()).unwrap());
 }
 
 #[test]

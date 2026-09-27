@@ -78,7 +78,7 @@ pub enum SymbolSearchAnswer {
 }
 
 async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
-    let pool = state.app.store();
+    let pool = state.app.cache_pool()?;
     answer(move || match bagholder_market::search::symbol_search(&pool, &s.q) {
         Ok(matches) => SymbolSearchAnswer::Ok { ok: true, matches },
         Err(error) => SymbolSearchAnswer::Err { ok: false, error, matches: vec![] },

@@ -161,7 +161,6 @@ pub fn fresh() -> (tempfile::TempDir, Arc<App>, Arc<FakeBroker>) {
     crate::tests_common::home(); // offline, dry orders by default
     let home = tempfile::tempdir().unwrap();
     let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
-    bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
     app.set_figures(crate::figures::Figures::open(home.path(), Timestamp::now()).unwrap());
     let fake = FakeBroker::install(&app);
     (home, app, fake)

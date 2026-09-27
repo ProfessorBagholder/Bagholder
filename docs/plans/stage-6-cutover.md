@@ -58,10 +58,10 @@ Every part:
 - [ ] Rendered on the Rust scratch server on a copy of the owner's data (orders dry): the header's error line names nothing but sources out of reach; News, Disclosures, short interest, the heatmap, a chart, the notification history and settings show what the old store held.
 
 **6a**
-- [ ] **Carried once:** on a copy of the owner's data, every row of each moved table and each moved `meta` key is in its new store after the first start, the same count and the same values (a test on a made-up old store, and the counts on the owner's copy written into Verification); a second start carries nothing; a write after the carry lands in the new store and nothing writes the old one (a test that makes `bagholder.db` read-only after the carry and runs a news pass, a filings pass, a notification and a chart read).
-- [ ] **Nothing reads the old store after the carry:** a boundary test fails when a server file other than the carry and `legacy_import` names the old store's pool or its tables.
-- [ ] **The four regressions:** a new holding or watched row starts its exposure read at once (test); days-to-cover on a Canadian listing counts the tracker's trading days (test on recorded closes); a chart in another currency converts at the Bank's rate on or before each day (test); no read of `synced_at`.
-- [ ] **Clear data** empties each kind in its new place and keeps the rest (the existing tests, re-pointed).
+- [x] **Carried once:** on a copy of the owner's data, every row of each moved table and each moved `meta` key is in its new store after the first start, the same count and the same values (a test on a made-up old store, and the counts on the owner's copy written into Verification); a second start carries nothing; a write after the carry lands in the new store and nothing writes the old one (a test that makes `bagholder.db` read-only after the carry and runs a news pass, a filings pass, a notification and a chart read).
+- [x] **Nothing reads the old store after the carry:** a boundary test fails when a server file other than the carry and `legacy_import` names the old store's pool or its tables.
+- [x] **The four regressions:** a new holding or watched row starts its exposure read at once (test); days-to-cover on a Canadian listing counts the tracker's trading days (test on recorded closes); a chart in another currency converts at the Bank's rate on or before each day (test); no read of `synced_at`.
+- [x] **Clear data** empties each kind in its new place and keeps the rest (the existing tests, re-pointed).
 
 **6b**
 - [ ] No `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` in the tree; no CI, release or image job for them; `git grep` finds no reference outside the history docs (`docs/plans/`, `docs/decisions.md`).
@@ -83,5 +83,30 @@ If a moved table cannot be carried with its values unchanged, that table is name
 Initialled at the gate: the carry run on a copy of the owner's data and the counts compared; no old-store read left behind a flag; the page rendered.
 
 ## Verification
+
+**6a** (2026-09-26):
+- Written to `bagholder.db` after the carry: only by Clear data, emptying a cleared kind (`carry::clear_old_store`); the boundary test holds every other server file to not naming it.
+- `RUSTFLAGS="-D warnings" cargo test -q --workspace` green; `cargo clippy --workspace --lib --bins` clean. `web/`: `npm run check` 0 errors, `npx vitest run` 140 passed, `npx vite build` built. `npx playwright test`: 276 passed.
+- Tests added: `book/tests/notices.rs` (carried once with every value, the next id after the earlier store's, cleared with Settings, the mark kept); `server/src/carry.rs` (every row and key of a made-up earlier store carried with its values, a second start carries nothing; after the carry, with `bagholder.db` read-only, a news pass, a disclosures pass, a notification and a chart read go through and the file is byte for byte as it was; a cache made with no earlier store never takes one in later; a carry that fails part way carries nothing and names the column); `tests_boundary.rs` `nothing_reads_the_earlier_store_but_the_carry`; the four regressions' tests named in `docs/old-app-mistakes.md` "The cutover (stage 6)"; `clear.rs` tests re-pointed to the cache's and the book's tables, and extended to the earlier store: Clear data still clears everything (`docs/decisions.md`, 2026-09-25), so each kind cleared is also emptied from `bagholder.db` (`carry::clear_old_store`, its carry flags and marks kept), the tests show the file holds none of a cleared kind's rows or keys afterwards and that a start after the clear carries nothing back. The exposure-wake test waits on the listing watched itself (`events::park_until`), no clock.
+- The owner's data (a copy of `~/.bagholder/bagholder.db`, the Python app's, on a fresh Rust home; release build, orders dry, offline): the first start imported it into a book, retired its figure tables, carried 10 orders and 1 bracket, then:
+
+  | carried to | table / keys | old store | new store |
+  |---|---|---|---|
+  | market cache | news | 1102 | 1102 |
+  | | filings | 4754 | 4754 |
+  | | exposures | 76 | 76 |
+  | | gauges | 2 | 2 |
+  | | shorts | 26 | 26 |
+  | | universes | 260 | 260 |
+  | | price_history | 8296 | 8296 |
+  | | history_fetches | 27 | 27 |
+  | | price_bars | 110236 | 110236 |
+  | | bar_fetches | 114 | 114 |
+  | | readers' `meta` keys and `update_check` | 395 | 395 |
+  | book | notifications | 51 | 51 |
+  | | told | 1393 | 1393 |
+  | | `notify_settings` and non-empty `notify_seen:*` → `notify.*` settings | 37 | 37 |
+
+  Values compared with `EXCEPT` across the two files for news, price_bars and filings: no row differs. `/api/status` error line empty; `/api/notifications` answers the carried history. Rendered from the same copy (offline, so no quotes): Markets shows the carried Fear & Greed readings, the heatmap's sectors from the carried exposures and the carried news, newest first; the header's error line is empty. Found in the render and fixed: Clear data left `snapshots/` (the files as they were before a migration or a carry, each holding every kind); any clear now removes them (`clear.rs` `a_clear_removes_the_copies_kept_of_the_files_as_they_were`).
 
 ## Handoff

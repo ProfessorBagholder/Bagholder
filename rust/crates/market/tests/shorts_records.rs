@@ -57,9 +57,13 @@ fn directory() -> String {
     .to_string()
 }
 
+/// The market cache's schema, where the shorts are kept beside the benchmarks'
+/// tracker closes.
 fn conn() -> rusqlite::Connection {
     let c = rusqlite::Connection::open_in_memory().unwrap();
-    bagholder_store::schema::init_schema(&c).unwrap();
+    for m in &bagholder_sources::cache::MIGRATIONS {
+        c.execute_batch(m.sql).unwrap();
+    }
     c
 }
 
@@ -153,7 +157,7 @@ fn answers() -> Value {
     // market's own trading days seeded so the average and days-to-cover are
     // real figures rather than blanks
     for day in ["2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"] {
-        bagholder_store::tables::upsert_benchmark_prices(&c, &[(day.to_string(), 100.0)].into_iter().collect(), "TSX").unwrap();
+        c.execute("INSERT INTO benchmark_closes (benchmark, day, close, source, first, received_at) VALUES ('TSX', ?1, '57.29', 'yahoo', 1, '2026-09-15T12:00:00Z')", [day]).unwrap();
     }
     let ca_position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))).unwrap();
     let ca_volume = shorts::ca_volume_with("QNC", "TSX-V", || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| Ok(None)).unwrap();

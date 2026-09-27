@@ -41,10 +41,21 @@ fn serial() -> MutexGuard<'static, ()> {
     g
 }
 
+/// The market cache's schema, where the shorts are kept beside the benchmarks'
+/// tracker closes.
 fn conn() -> rusqlite::Connection {
     let c = rusqlite::Connection::open_in_memory().unwrap();
-    bagholder_store::schema::init_schema(&c).unwrap();
+    for m in &bagholder_sources::cache::MIGRATIONS {
+        c.execute_batch(m.sql).unwrap();
+    }
     c
+}
+
+/// The closes of benchmark `b`'s tracker on `days`, as the benchmarks' reads keep them.
+fn closed(c: &rusqlite::Connection, b: &str, days: &[String]) {
+    for d in days {
+        c.execute("INSERT INTO benchmark_closes (benchmark, day, close, source, first, received_at) VALUES (?1, ?2, '57.29', 'yahoo', 1, '2026-09-01T00:00:00Z')", [b, d]).unwrap();
+    }
 }
 
 fn approx(a: f64, b: f64) {
@@ -254,11 +265,11 @@ fn test_days_to_cover_uses_the_volume_of_the_listings_own_market() {
 #[test]
 fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
     let c = conn();
-    for day in ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"] {
-        bagholder_store::tables::upsert_benchmark_prices(&c, &[(day.to_string(), 100.0)].into_iter().collect(), "TSX").unwrap();
-    }
+    // a day outside the period, and one of another benchmark's, are not counted
+    closed(&c, "TSX", &["2026-08-14", "2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"].map(String::from));
+    closed(&c, "SP500", &["2026-08-24".to_string()]);
     let ca = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(2667164.0), total_volume: Some(5000000.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
-    let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
+    let days = shorts::tsx_trading_days(&c, "2026-08-16", "2026-08-31").unwrap();
     assert_eq!(days, 5);
     approx(shorts::average_volume(&c, &ca).unwrap().unwrap(), 5000000.0 / days as f64);
     // no calendar stored: nothing is guessed
@@ -652,10 +663,9 @@ fn test_a_listing_the_report_carries_is_read_from_the_report() {
 #[test]
 fn test_days_to_cover_follows_from_what_the_exchange_says_was_traded() {
     let c = conn();
-    let prices: std::collections::BTreeMap<String, f64> = (17..28).map(|d| (format!("2026-08-{:02}", d), 100.0)).collect();
-    bagholder_store::tables::upsert_benchmark_prices(&c, &prices, "TSX").unwrap();
+    closed(&c, "TSX", &(17..28).map(|d| format!("2026-08-{:02}", d)).collect::<Vec<_>>());
     let rec = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(17873.0), total_volume: Some(1519546.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
-    let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
+    let days = shorts::tsx_trading_days(&c, "2026-08-16", "2026-08-31").unwrap();
     assert!(days > 0);
     approx(shorts::average_volume(&c, &rec).unwrap().unwrap(), 1519546.0 / days as f64);
     assert!(shorts::days_to_cover(&c, &rec).unwrap().is_some());

@@ -141,6 +141,7 @@ pub fn sources(key: &str) -> &'static [crate::events::Source] {
     match key.split(':').next().unwrap_or(key) {
         // the book's orders and what the broker reports of them: each change is said by hand
         "orders" | "quote" => &[State],
+        // the notices, whose book connections are heard (`notify::book`)
         "notifications" => &[Store],
         _ => &[Store, State],
     }
@@ -160,10 +161,10 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         "orders" => Some(Doc::Orders(crate::orders::orders_doc(app))),
         "shorts" => Some(Doc::Shorts(crate::feeds::shorts_feed(app))),
         "notifications" => {
-            let conn = app.open().ok()?;
+            let book = crate::notify::book(app).ok()?;
             Some(Doc::Notifications(NotificationsDoc {
-                rows: bagholder_store::feeds::list_notifications(&conn, 0, "", false, 50, true).ok()?,
-                unread: bagholder_store::feeds::unread_notifications(&conn).ok()?,
+                rows: bagholder_store::feeds::list_notifications(book.notices(), 0, "", false, 50, true).ok()?,
+                unread: bagholder_store::feeds::unread_notifications(book.notices()).ok()?,
             }))
         }
         // `filings:<symbol=…&name=…&exchange=…&currency=…>`: one listing's disclosures

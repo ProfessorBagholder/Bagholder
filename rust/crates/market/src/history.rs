@@ -160,13 +160,19 @@ fn rate_on_or_before(fx: &BTreeMap<String, f64>, day: &str, days: i64) -> Option
     None
 }
 
-/// Bars in the position's currency, with the
-/// rates read from the store.
+/// Where a chart's conversion reads the Bank of Canada's rates: CAD per US
+/// dollar by day (`YYYY-MM-DD`), as the book holds them -- the rates the figures
+/// convert with. Asked only when a chart's bars are in another currency than
+/// its listing; a rate that cannot be read is the read's failure.
+pub type Rates = std::sync::Arc<dyn Fn() -> Result<BTreeMap<String, f64>, String> + Send + Sync>;
+
+/// Bars in the position's currency, with the rates `rates` reads.
 ///
-/// USD bars become CAD at the Bank of Canada rate of the bar's own day. A bar
-/// whose day has no published rate within a week is dropped, never guessed;
-/// anything else cannot be converted and yields nothing at all.
-pub fn in_position_currency<B: Bar + Clone>(conn: &rusqlite::Connection, bars: &[B], quoted_in: &str, currency: &str) -> rusqlite::Result<Vec<B>> {
+/// USD bars become CAD at the Bank of Canada rate of the bar's own day, or the
+/// last day before it the Bank published one. A bar whose day has no published
+/// rate within a week is dropped, never guessed; anything else cannot be
+/// converted and yields nothing at all.
+pub fn in_position_currency<B: Bar + Clone>(rates: &Rates, bars: &[B], quoted_in: &str, currency: &str) -> rusqlite::Result<Vec<B>> {
     let quote = quoted_in.to_uppercase();
     let ccy = { let c = currency; if c.is_empty() { "CAD".to_string() } else { c.to_uppercase() } };
     if quote == ccy {
@@ -175,7 +181,7 @@ pub fn in_position_currency<B: Bar + Clone>(conn: &rusqlite::Connection, bars: &
     if !(quote == "USD" && ccy == "CAD") {
         return Ok(vec![]);
     }
-    let fx = read_fx(conn)?;
+    let fx = rates().map_err(|e| rusqlite::Error::ToSqlConversionFailure(format!("the Bank of Canada's rates could not be read: {e}").into()))?;
     Ok(in_position_currency_with(bars, quoted_in, currency, &fx))
 }
 
@@ -335,6 +341,7 @@ pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end
 /// first. A failure is returned, so the chain can say what failed.
 pub fn fetch_daily_from(
     conn: &rusqlite::Connection,
+    rates: &Rates,
     source: &str,
     key: &str,
     rec: &Listing,
@@ -364,11 +371,11 @@ pub fn fetch_daily_from(
                 return Ok(vec![]);
             }
             let days: Vec<DayBar> = fetch_coinbase_candles(key, 86400, start_ts, end_ts)?.into_iter().map(|b| DayBar { date: b.day(), px: b.px }).collect();
-            Ok(in_position_currency(conn, &days, &bar_currency(source, key, rec), &rec.currency)?)
+            Ok(in_position_currency(rates, &days, &bar_currency(source, key, rec), &rec.currency)?)
         }
         "yahoo" => {
             let days: Vec<DayBar> = fetch_yahoo(conn, key, start_ts, end_ts, "1d", today)?.into_iter().map(|b| b.on_day()).collect();
-            Ok(in_position_currency(conn, &whole_bars(days), &bar_currency(source, key, rec), &rec.currency)?)
+            Ok(in_position_currency(rates, &whole_bars(days), &bar_currency(source, key, rec), &rec.currency)?)
         }
         _ => Ok(vec![]),
     }
@@ -464,12 +471,12 @@ pub fn chart_reason(rec: &Listing, tf: &str) -> String {
 /// The chain, stopping as soon as one candidate covers
 /// the span. A source's failure is noted for the chart's reason and the next
 /// candidate asked; the store's fails the read.
-pub fn fetch_history(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str, today: &str) -> rusqlite::Result<(Vec<DayBar>, String)> {
+pub fn fetch_history(conn: &rusqlite::Connection, rates: &Rates, rec: &Listing, start: &str, end: &str, today: &str) -> rusqlite::Result<(Vec<DayBar>, String)> {
     let span_start = epoch_of_day(start);
     let mut answers: Vec<(String, String, Vec<DayBar>)> = Vec::new();
     let mut notes: Vec<(String, String, Note)> = Vec::new();
     for (source, key) in ordered_candidates(conn, rec)? {
-        let bars = match fetch_daily_from(conn, &source, &key, rec, start, end, today) {
+        let bars = match fetch_daily_from(conn, rates, &source, &key, rec, start, end, today) {
             Ok(b) => {
                 notes.push((source.clone(), key.clone(), Note::Bars));
                 b
@@ -516,13 +523,13 @@ pub fn daily_due(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &
 
 /// Read a span's daily bars from the sources and store them; a read that finds
 /// nothing is remembered so the next few minutes do not ask again.
-fn fill_daily(conn: &rusqlite::Connection, rec: &Listing, start: &str, today: &str, now_stamp: &str) -> rusqlite::Result<()> {
+fn fill_daily(conn: &rusqlite::Connection, rates: &Rates, rec: &Listing, start: &str, today: &str, now_stamp: &str) -> rusqlite::Result<()> {
     let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let start: String = start.chars().take(10).collect();
     let last_start = bagholder_store::market::history_fetch(conn, &sym)?.map(|l| l.start).unwrap_or_default();
     // a span already read from an earlier day is read again from that day, so the stamp stays true
     let fetch_from = if !last_start.is_empty() && last_start < start { last_start } else { start };
-    let (bars, source) = fetch_history(conn, rec, &fetch_from, today, today)?;
+    let (bars, source) = fetch_history(conn, rates, rec, &fetch_from, today, today)?;
     if bars.is_empty() {
         return record_intraday_miss(conn, &sym, "1d", now_stamp);
     }
@@ -539,8 +546,10 @@ fn fill_daily(conn: &rusqlite::Connection, rec: &Listing, start: &str, today: &s
 /// copy is stale and the span reaches the present. What a background job calls;
 /// a chart asked for by a page reads what is stored and has the read done in the
 /// background (`ensure_daily_in_background`).
+#[allow(clippy::too_many_arguments)]
 pub fn ensure_history(
     conn: &rusqlite::Connection,
+    rates: &Rates,
     rec: &Listing,
     start: &str,
     end: &str,
@@ -549,7 +558,7 @@ pub fn ensure_history(
     now_stamp: &str,
 ) -> rusqlite::Result<Vec<DayBar>> {
     if daily_due(conn, rec, start, end, today, now_unix)? {
-        fill_daily(conn, rec, start, today, now_stamp)?;
+        fill_daily(conn, rates, rec, start, today, now_stamp)?;
     }
     stored_daily(conn, rec, start, end)
 }
@@ -580,7 +589,7 @@ pub fn daily_pending(rec: &Listing) -> bool {
 /// once; `done` is called when it ends, with whether the store could be read
 /// and written, so whoever showed the stored bars meanwhile is told to look
 /// again and a failure is said.
-pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Listing, start: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rates: Rates, rec: Listing, start: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
     let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     {
         let mut p = daily_pending_set().lock().unwrap_or_else(|e| e.into_inner());
@@ -593,7 +602,7 @@ pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Po
     let run = move || {
         let read = pool.get().and_then(|conn| {
             let (today, _, stamp) = crate::clock_now();
-            fill_daily(&conn, &rec, &start, &today, &stamp)
+            fill_daily(&conn, &rates, &rec, &start, &today, &stamp)
         });
         daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != sym);
         done(read.map_err(|e| format!("The daily bars of {sym} could not be stored: {e}")));
@@ -602,10 +611,6 @@ pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Po
         // no thread to read on: nothing is under way, so nothing is left pending
         daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != left);
     }
-}
-
-fn read_fx(conn: &rusqlite::Connection) -> rusqlite::Result<BTreeMap<String, f64>> {
-    bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)
 }
 
 /// Weekly (Monday start) or monthly bars from daily
@@ -983,7 +988,7 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Listing, tf: &str, star
 /// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once; `done` is called when
 /// it ends, with whether the store could be read and written.
-pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Listing, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rates: Rates, rec: Listing, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
     static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     {
@@ -997,7 +1002,7 @@ pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool:
     let run = move || {
         let read = pool.get().and_then(|conn| {
             let (today, now_unix, stamp) = crate::clock_now();
-            ensure_intraday(&conn, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true)
+            ensure_intraday(&conn, &rates, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true)
         });
         PENDING.lock().unwrap().retain(|s| *s != sym);
         done(read.map(|_| ()).map_err(|e| format!("The hourly bars of {sym} could not be stored: {e}")));
@@ -1030,8 +1035,10 @@ impl ByTimeframe {
 }
 
 /// {tf: bars} of one candidate over the span.
+#[allow(clippy::too_many_arguments)]
 pub fn fetch_intraday_from(
     conn: &rusqlite::Connection,
+    rates: &Rates,
     source: &str,
     key: &str,
     rec: &Listing,
@@ -1061,7 +1068,7 @@ pub fn fetch_intraday_from(
             if coinbase_market(conn, key, today)?.is_empty() {
                 return Ok(out);
             }
-            let hourly = in_position_currency(conn, &fetch_coinbase_candles(key, 3600, start_ts, end_ts)?, &bar_currency(source, key, rec), &rec.currency)?;
+            let hourly = in_position_currency(rates, &fetch_coinbase_candles(key, 3600, start_ts, end_ts)?, &bar_currency(source, key, rec), &rec.currency)?;
             if !hourly.is_empty() {
                 out.h4 = aggregate_hourly(&hourly, 14400);
                 out.h1 = hourly;
@@ -1069,7 +1076,7 @@ pub fn fetch_intraday_from(
         }
         "yahoo" => {
             let fetched = whole_bars(fetch_yahoo(conn, key, start_ts, end_ts, "60m", today)?);
-            let hourly = in_position_currency(conn, &fetched, &bar_currency(source, key, rec), &rec.currency)?;
+            let hourly = in_position_currency(rates, &fetched, &bar_currency(source, key, rec), &rec.currency)?;
             if hourly.is_empty() {
                 return Ok(out);
             }
@@ -1092,6 +1099,7 @@ pub fn fetch_intraday_from(
 /// tried first. The background sweep leaves the rate-limited sources alone.
 pub fn fetch_intraday(
     conn: &rusqlite::Connection,
+    rates: &Rates,
     rec: &Listing,
     start_ts: i64,
     end_ts: i64,
@@ -1107,7 +1115,7 @@ pub fn fetch_intraday(
         if reach.is_empty() || start_day < reach || (!on_demand && ON_DEMAND_ONLY_SOURCES.contains(&source.as_str())) {
             continue;
         }
-        let by_tf = match fetch_intraday_from(conn, &source, &key, rec, start_ts, end_ts, today, on_demand) {
+        let by_tf = match fetch_intraday_from(conn, rates, &source, &key, rec, start_ts, end_ts, today, on_demand) {
             Ok(m) => {
                 notes.push((source.clone(), key.clone(), Note::Bars));
                 m
@@ -1142,6 +1150,7 @@ pub fn fetch_intraday(
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_intraday(
     conn: &rusqlite::Connection,
+    rates: &Rates,
     rec: &Listing,
     tf: &str,
     start: &str,
@@ -1180,7 +1189,7 @@ pub fn ensure_intraday(
         None
     };
     if let Some(from) = fetch_from {
-        let (by_tf, source) = fetch_intraday(conn, rec, from, now_i, today, on_demand)?;
+        let (by_tf, source) = fetch_intraday(conn, rates, rec, from, now_i, today, on_demand)?;
         // one fetch fills every intraday timeframe, so a miss covers them all
         for (k, _) in INTRADAY_SECONDS {
             let bars = by_tf.get(k);
@@ -1221,13 +1230,14 @@ fn archive_read_age_hours(conn: &rusqlite::Connection, sym: &str, now_unix: f64)
 /// held instruments for good, a few per call -- those never fetched first,
 /// then those whose copy is older than a day. Returns the symbols worked; the
 /// store failing fails the pass.
-pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> rusqlite::Result<Vec<String>> {
+#[allow(clippy::too_many_arguments)]
+pub fn archive_intraday(conn: &rusqlite::Connection, rates: &Rates, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> rusqlite::Result<Vec<String>> {
     let mut todo = archive_intraday_due(conn, recs, today, now_unix)?;
     todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let mut done = Vec::new();
     for (_, sym, rec) in todo.into_iter().take(limit) {
         let start = rec.start.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| today.to_string());
-        ensure_intraday(conn, &rec, "1h", &start, today, today, now_unix, now_stamp, ARCHIVE_TOPUP_HOURS, false)?;
+        ensure_intraday(conn, rates, &rec, "1h", &start, today, today, now_unix, now_stamp, ARCHIVE_TOPUP_HOURS, false)?;
         // however the sources answered, it was asked: never the same listing again on the next pass
         if archive_read_age_hours(conn, &sym, now_unix)?.map_or(true, |age| age > ARCHIVE_TOPUP_HOURS) {
             record_intraday_miss(conn, &sym, "1h", now_stamp)?;
@@ -1277,7 +1287,8 @@ pub fn archive_next_due_secs(conn: &rusqlite::Connection, recs: &[Listing], toda
 
 /// Keep daily bars for instruments whose source forgets
 /// them. No current source does, so this is idle until one is added.
-pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> rusqlite::Result<Vec<String>> {
+#[allow(clippy::too_many_arguments)]
+pub fn archive_daily(conn: &rusqlite::Connection, rates: &Rates, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> rusqlite::Result<Vec<String>> {
     let mut todo: Vec<(u8, String, Listing)> = Vec::new();
     for rec in recs {
         let src = history_source(rec);
@@ -1297,7 +1308,7 @@ pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Listing], today: &str,
     let mut done = Vec::new();
     for (_, sym, rec) in todo.into_iter().take(limit) {
         let start = rec.start.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| today.to_string());
-        ensure_history(conn, &rec, &start, today, today, now_unix, now_stamp)?;
+        ensure_history(conn, rates, &rec, &start, today, today, now_unix, now_stamp)?;
         done.push(sym);
     }
     Ok(done)
@@ -1309,6 +1320,7 @@ pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Listing], today: &str,
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_bars(
     conn: &rusqlite::Connection,
+    rates: &Rates,
     rec: &Listing,
     tf: &str,
     start: &str,
@@ -1318,8 +1330,8 @@ pub fn ensure_bars(
     now_stamp: &str,
 ) -> rusqlite::Result<ChartBars> {
     if INTRADAY.contains(&tf) {
-        return Ok(ChartBars::Hours(ensure_intraday(conn, rec, tf, start, end, today, now_unix, now_stamp, 1.0, true)?));
+        return Ok(ChartBars::Hours(ensure_intraday(conn, rates, rec, tf, start, end, today, now_unix, now_stamp, 1.0, true)?));
     }
-    let daily = ensure_history(conn, rec, start, end, today, now_unix, now_stamp)?;
+    let daily = ensure_history(conn, rates, rec, start, end, today, now_unix, now_stamp)?;
     Ok(ChartBars::Days(if tf == "1d" { daily } else { aggregate_daily(&daily, tf) }))
 }

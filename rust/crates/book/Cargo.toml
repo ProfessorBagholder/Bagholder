@@ -12,7 +12,8 @@ rust-version.workspace = true
 bagholder-core = { path = "../core" }
 # opening the file, transactions, numbered migrations and snapshots
 bagholder-sqlite = { path = "../sqlite" }
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# "hooks": the notices' commits are heard by the server's streams (`notices::on_commit`)
+rusqlite = { version = "0.32", features = ["bundled", "backup", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 # records' payloads are JSON; the book keeps them in a canonical form of its own
 # (`canon.rs`) so a number never passes through a float

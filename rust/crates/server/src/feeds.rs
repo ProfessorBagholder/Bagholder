@@ -105,9 +105,11 @@ pub fn feed_failures(app: &Arc<App>) -> Vec<String> {
 /// The header's entry for a listing's short interest, before its symbol.
 const SHORTS_OF: &str = "shorts:";
 
-/// The header's entry for the book itself: a pass that could not open it says
-/// so there until the next open succeeds.
-const BOOK: &str = "book";
+/// The header's entry for the market cache itself, where the feeds are kept: a
+/// pass that could not open it says so there until the next open succeeds.
+const CACHE: &str = "market-cache";
+/// The header's entry for the book the notices are kept in, as the sweeps open it.
+const NOTICES_BOOK: &str = "notices-book";
 /// The header's entry for the market's context the earlier readers are given.
 const CONTEXT: &str = "context";
 /// The header's entry for the notification settings the sweeps read.
@@ -125,7 +127,7 @@ const EXPOSURE: &str = "exposure";
 const SHORTS: &str = "shorts";
 
 /// `feed`'s outcome said: its failure until it next succeeds.
-fn went<T>(app: &Arc<App>, feed: &str, r: Result<T, String>) -> Option<T> {
+pub(crate) fn went<T>(app: &Arc<App>, feed: &str, r: Result<T, String>) -> Option<T> {
     match r {
         Ok(v) => {
             feed_answered(app, feed);
@@ -138,25 +140,41 @@ fn went<T>(app: &Arc<App>, feed: &str, r: Result<T, String>) -> Option<T> {
     }
 }
 
-/// The book, on loan from the pool; one that will not open is said in the header
-/// (`BOOK`) until one does.
-fn conn(app: &Arc<App>) -> Result<bagholder_store::pool::Pooled<'_>, String> {
-    let c = app.open().map_err(|e| format!("The book could not be opened: {e}"));
+/// The market cache, on loan from the pool; one that will not open is said in
+/// the header (`CACHE`) until one does.
+fn conn(app: &Arc<App>) -> Result<bagholder_sqlite::pool::Pooled<'_>, String> {
+    let c = app.cache().map_err(|e| format!("The market cache could not be opened: {e}"));
     if let Err(why) = &c {
-        feed_failed(app, BOOK, why.clone());
+        feed_failed(app, CACHE, why.clone());
     } else {
-        feed_answered(app, BOOK);
+        feed_answered(app, CACHE);
     }
     c
 }
 
-/// A connection of the caller's own, not the pool's: for work that hands it to
-/// threads it starts itself and keeps it for the length of a pass. Said as
-/// `conn` is.
+/// The market cache's pool itself, for a reader that borrows on threads of its
+/// own. Said as `conn` is.
+fn pool(app: &Arc<App>) -> Result<Arc<bagholder_sqlite::pool::Pool>, String> {
+    went(app, CACHE, app.cache_pool().map_err(|e| format!("The market cache could not be opened: {e}")))
+        .ok_or_else(|| "The market cache could not be opened".to_string())
+}
+
+/// A connection to the market cache of the caller's own, not the pool's: for
+/// work that hands it to threads it starts itself and keeps it for the length of
+/// a pass. Said as `conn` is.
 fn own_conn(app: &Arc<App>) -> Result<Connection, String> {
-    let c = bagholder_store::connect(&app.home).map_err(|e| format!("The book could not be opened: {e}"));
-    went(app, BOOK, c.as_ref().map(|_| ()).map_err(String::clone));
+    // the pool's borrow brings the file to this build's schema first
+    let c = conn(app).and_then(|_| bagholder_sqlite::open_db(&app.home.join(crate::figures::CACHE_FILE)).map_err(|e| format!("The market cache could not be opened: {e}")));
+    went(app, CACHE, c.as_ref().map(|_| ()).map_err(String::clone));
     c
+}
+
+/// The book the notices are kept in; one that will not open is said in the
+/// header (`NOTICES_BOOK`) until one does.
+fn notices(app: &Arc<App>) -> Result<notify::NoticesBook<'_>, String> {
+    let b = notify::book(app).map_err(|e| format!("The book could not be opened for the notifications: {e}"));
+    went(app, NOTICES_BOOK, b.as_ref().map(|_| ()).map_err(String::clone));
+    b
 }
 
 /// The market's context the earlier readers are given (stage 5 moves them): none
@@ -217,7 +235,8 @@ pub fn refresh_exposures(app: &Arc<App>) {
     let mut held: Vec<String> = held.into_iter().filter(|sid| !sid.is_empty() && !sid.starts_with("sec-c-")).collect();
     held.sort();
     let (today_s, _, _) = bagholder_market::clock_now();
-    let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s.clone() };
+    let Ok(p) = pool(app) else { return };
+    let ctx = exposure::Ctx { conn: &c, pool: p, today: today_s.clone() };
     let exposure_failed = |e: String| feed_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
     let stale = |ids: &[String]| exposure::stale(&ctx, ids);
     let mut todo: Vec<String> = match stale(&held) {
@@ -270,8 +289,8 @@ pub fn refresh_exposures(app: &Arc<App>) {
         let today_s = today_s.clone();
         let app = app.clone();
         let h = std::thread::Builder::new().name("bagholder-exposure".into()).spawn(move || {
-            let Ok(c) = conn(&app) else { return }; // said in the header by `conn`
-            let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s };
+            let (Ok(c), Ok(p)) = (conn(&app), pool(&app)) else { return }; // said in the header by `conn`
+            let ctx = exposure::Ctx { conn: &c, pool: p, today: today_s };
             loop {
                 let job = match queue.lock().unwrap().pop_front() { Some(j) => j, None => return };
                 if app.stopping() {
@@ -327,23 +346,43 @@ pub fn refresh_exposures(app: &Arc<App>) {
     went(app, EXPOSURE, if failures.is_empty() { Ok(()) } else { Err(format!("The exposure records could not be brought up to date: {}", failures.join("; "))) });
 }
 
-/// Soon after start and every half hour.
+/// Soon after start, when the listings the records are kept for change, and a
+/// few times a day.
 pub fn exposure_loop(app: Arc<App>) {
     // What a fund holds changes over months. The records are looked over shortly after
-    // start, then when the set of listings they are kept for changes (a trade, a
-    // watchlist row), and otherwise a few times a day -- not every half hour for ever.
-    // a read that fails is its own value: a failing book is looked at again when it answers
-    let listed = || conn(&app).and_then(|c| bagholder_store::gens::all(&c).map_err(|e| e.to_string())).map(|g| bagholder_store::gens::key(&g, &["activities", "watchlist", "securities"]));
+    // start, then when the set of listings they are kept for changes -- a holding came
+    // or went (the engine's report of what a change moved), a listing watched -- and
+    // otherwise a few times a day, not every half hour for ever.
     if app.wait(Duration::from_secs(EXPOSURE_FIRST_SEC)) {
         return;
     }
     loop {
-        let before = listed();
+        let before = listings_at(&app);
         refresh_exposures(&app);
-        app.events.park_until_or(&app, Duration::from_secs(6 * 3600), || listed() != before);
+        app.events.park_until_or(&app, Duration::from_secs(6 * 3600), || listings_moved(&app, before));
         if app.stopping() {
             return;
         }
+    }
+}
+
+/// Where the listings the exposure records are kept for stand: the figures'
+/// version and the version of what the person follows.
+pub(crate) fn listings_at(app: &App) -> (u64, u64) {
+    (app.figures.get().map_or(0, |f| f.version()), app.following_version())
+}
+
+/// Whether the listings the exposure records are kept for changed since `at`: a
+/// listing followed or unfollowed, or a change the engine reports as a holding
+/// that came or went (a quote, which moves a holding's figures, is none).
+pub(crate) fn listings_moved(app: &App, at: (u64, u64)) -> bool {
+    if app.following_version() != at.1 {
+        return true;
+    }
+    match app.figures.get().map(|f| f.moved_since(at.0)) {
+        None | Some(crate::figures::Since::Nothing) => false,
+        Some(crate::figures::Since::Everything) => true,
+        Some(crate::figures::Since::Moved(m)) => crate::market_context::moves_it(&m),
     }
 }
 
@@ -361,8 +400,8 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
     let (symbol, exchange, currency) = (tmx_symbol(&n.symbol), n.exchange.clone(), n.currency.clone());
     let a = app.clone();
     spawn("watch-sector", move || {
-        let Ok(c) = conn(&a) else { return }; // said in the header by `conn`
-        let ctx = exposure::Ctx { conn: &c, pool: a.store(), today: today() };
+        let (Ok(c), Ok(p)) = (conn(&a), pool(&a)) else { return }; // said in the header by `conn`
+        let ctx = exposure::Ctx { conn: &c, pool: p, today: today() };
         if let Err(e) = exposure::share_exposure(&ctx, &symbol, &exchange, &currency) {
             feed_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
         }
@@ -443,7 +482,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
             app.feeds.news_left.lock().unwrap().remove(&key(l));
             app.events.signal();
         };
-        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[NewsItem], ids: &[String]| note_wire_releases_said(app, c, sym, ex, rows, ids);
+        let on_new = |_: &Connection, sym: &str, ex: &str, rows: &[NewsItem], ids: &[String]| note_wire_releases_said(app, sym, ex, rows, ids);
         // a connection that will not open is said in the header by `own_conn`
         let got = news::refresh(&|| own_conn(app).ok(), &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
         app.feeds.news_left.lock().unwrap().clear();
@@ -466,7 +505,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
 /// document), or a Releases notification set is on and must hear of a release
 /// whoever is looking. A page open on another tab is not owed it.
 pub(crate) fn news_wanted(app: &Arc<App>) -> bool {
-    app.events.watched("news") || conn(app).is_ok_and(|c| notice_settings(app, crate::notify::any_release_scope(&c)).unwrap_or(false))
+    app.events.watched("news") || notices(app).is_ok_and(|b| notice_settings(app, crate::notify::any_release_scope(&b)).unwrap_or(false))
 }
 
 /// While someone is owed the news: at once when they come to be (a page starting to
@@ -758,13 +797,16 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Result<Vec<Fil
 /// store that fails fails the sweep, which is said in the header until the
 /// next one succeeds.
 pub fn sweep_filings(app: &Arc<App>) -> usize {
-    let Ok(c) = conn(app) else { return 0 }; // said in the header by `conn`
-    went(app, DISCLOSURES, sweep_filings_in(app, &c).map_err(|e| format!("The disclosures could not be swept: {e}"))).unwrap_or(0)
+    // said in the header by `conn` and `notices`
+    let (Ok(c), Ok(book)) = (conn(app), notices(app)) else { return 0 };
+    went(app, DISCLOSURES, sweep_filings_in(app, &c, &book).map_err(|e| format!("The disclosures could not be swept: {e}"))).unwrap_or(0)
 }
 
-fn sweep_filings_in(app: &Arc<App>, c: &Connection) -> Result<usize, String> {
-    let scopes = notify::disclosure_scopes(&c).map_err(|e| e.to_string())?;
-    let rel_scopes = notify::release_scopes(&c).map_err(|e| e.to_string())?;
+/// The sweep, the disclosures read and kept in the market cache (`c`), what is
+/// told of them and the marks of what was met kept in the book.
+fn sweep_filings_in(app: &Arc<App>, c: &Connection, book: &bagholder_book::Book) -> Result<usize, String> {
+    let scopes = notify::disclosure_scopes(book).map_err(|e| e.to_string())?;
+    let rel_scopes = notify::release_scopes(book).map_err(|e| e.to_string())?;
     if scopes.is_empty() && rel_scopes.is_empty() {
         return Ok(0);
     }
@@ -805,8 +847,8 @@ fn sweep_filings_in(app: &Arc<App>, c: &Connection) -> Result<usize, String> {
         for (src, rows) in &by_source {
             let scope = format!("filings:{}:{}", sym, src.as_str());
             let events: Vec<String> = rows.iter().map(|r| filing_mark(r).join("|")).collect();
-            let met = sf::events_told(c, &scope, &events).map_err(|e| e.to_string())?;
-            let fresh = notify::fresh_in(c, &scope, rows, |r| r.doc.date.clone(), |r| filing_mark(r).join("|"), |r| {
+            let met = sf::events_told(book.notices(), &scope, &events).map_err(|e| e.to_string())?;
+            let fresh = notify::fresh_in(book, &scope, rows, |r| r.doc.date.clone(), |r| filing_mark(r).join("|"), |r| {
                 before.contains(&filing_mark(r)) || met.contains(&filing_mark(r).join("|"))
             }).map_err(|e| e.to_string())?;
             new.extend(fresh.items);
@@ -815,7 +857,7 @@ fn sweep_filings_in(app: &Arc<App>, c: &Connection) -> Result<usize, String> {
         let rel: Vec<Filing> = new.iter().filter(|r| is_news_release(r)).cloned().collect();
         let rest: Vec<Filing> = new.iter().filter(|r| !is_news_release(r)).cloned().collect();
         let mut notices: Vec<(&str, String, String, String, sf::NotificationExtra)> = Vec::new();
-        if !rel.is_empty() && in_release_scope(app, c, &sym, Some(&rel_scopes))? && !sf::has_wire_release(c, &sym).map_err(|e| e.to_string())? {
+        if !rel.is_empty() && in_release_scope(app, &sym, &rel_scopes)? && !sf::has_wire_release(c, &sym).map_err(|e| e.to_string())? {
             let (t, bd) = release_notice(app, &sym, &rel);
             notices.push(("releases", release_key(&sym, &rel), t, bd, notice_extra(&sym, None, &rel)));
         }
@@ -830,14 +872,14 @@ fn sweep_filings_in(app: &Arc<App>, c: &Connection) -> Result<usize, String> {
         // again, a notice not kept would never tell them; either fails the sweep and
         // leaves both as they were
         let now = now_iso();
-        let rows = bagholder_store::atomically(c, || {
+        let rows = bagholder_sqlite::atomically(book.notices(), || {
             for (scope, events, mark) in &marks {
-                notify::keep_mark(c, mark)?;
-                sf::mark_told(c, scope, events, &now)?;
+                notify::keep_mark(book, mark)?;
+                sf::mark_told(book.notices(), scope, events, &now)?;
             }
             let mut rows = vec![];
             for (kind, key, t, bd, extra) in &notices {
-                rows.extend(notify::record(c, kind, key, t, bd, Some(extra.clone()))?);
+                rows.extend(notify::record(book, kind, key, t, bd, Some(extra.clone()))?);
             }
             Ok(rows)
         })
@@ -957,15 +999,7 @@ pub fn is_news_release(filing: &Filing) -> bool {
     RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&filing.doc.form)
 }
 
-pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Option<&[String]>) -> Result<bool, String> {
-    let owned;
-    let scopes = match scopes {
-        Some(x) => x,
-        None => {
-            owned = notify::release_scopes(c).map_err(|e| e.to_string())?;
-            &owned
-        }
-    };
+pub fn in_release_scope(app: &Arc<App>, sym: &str, scopes: &[String]) -> Result<bool, String> {
     if scopes.is_empty() {
         return Ok(false);
     }
@@ -1254,13 +1288,15 @@ fn release_key<T: Notable>(sym: &str, rows: &[T]) -> String {
 /// The press releases a wire answered with that
 /// are newer than any it showed for the listing.
 ///
-/// A read or a write of the store that fails is the error: a mark not kept
+/// A read or a write of the book that fails is the error: a mark not kept
 /// would tell the same release twice.
-pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) -> Result<(), String> {
+pub fn note_wire_releases(app: &Arc<App>, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) -> Result<(), String> {
+    let book = notify::book(app).map_err(|e| e.to_string())?;
+    let c = &*book;
     let scopes = notify::release_scopes(c).map_err(|e| e.to_string())?;
     let t = tmx_symbol(symbol);
     let sym = (if t.is_empty() { symbol.to_string() } else { t }).trim().to_uppercase();
-    if scopes.is_empty() || !in_release_scope(app, c, &sym, Some(&scopes))? {
+    if scopes.is_empty() || !in_release_scope(app, &sym, &scopes)? {
         return Ok(());
     }
     let rel: Vec<NewsItem> = rows.iter().filter(|r| r.is_release()).cloned().collect();
@@ -1271,7 +1307,7 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
     // not, so the back catalogue a first read brings can never ring later.
     let scope = format!("news:{}", sf::news_key(symbol, exchange));
     let events: Vec<String> = rel.iter().map(release_event).collect();
-    let met = sf::events_told(c, &scope, &events).map_err(|e| e.to_string())?;
+    let met = sf::events_told(c.notices(), &scope, &events).map_err(|e| e.to_string())?;
     let fresh = notify::fresh_in(c, &scope, &rel, |r: &NewsItem| r.published_at.clone(), |r: &NewsItem| r.id.clone(), |r: &NewsItem| {
         !new_ids.contains(&r.id) || met.contains(&release_event(r))
     }).map_err(|e| e.to_string())?;
@@ -1279,9 +1315,9 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
     // the notice are kept together, so a failure of either leaves the release to tell again
     let notice = if fresh.items.is_empty() { None } else { Some((release_key(&sym, &fresh.items), release_notice(app, &sym, &fresh.items), notice_extra(&sym, Some(exchange), &fresh.items))) };
     let now = now_iso();
-    let row = bagholder_store::atomically(c, || {
+    let row = bagholder_sqlite::atomically(c.notices(), || {
         notify::keep_mark(c, &fresh.mark)?;
-        sf::mark_told(c, &scope, &events, &now)?;
+        sf::mark_told(c.notices(), &scope, &events, &now)?;
         match &notice {
             Some((key, (title, body), extra)) => notify::record(c, "releases", key, title, body, Some(extra.clone())),
             None => Ok(None),
@@ -1296,8 +1332,8 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
 
 /// `note_wire_releases` from the news pass: a failure is said in the header until
 /// a wire's releases are next noted.
-pub(crate) fn note_wire_releases_said(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) {
-    went(app, RELEASES, note_wire_releases(app, c, symbol, exchange, rows, new_ids).map_err(|e| format!("The press releases could not be told: {e}")));
+pub(crate) fn note_wire_releases_said(app: &Arc<App>, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) {
+    went(app, RELEASES, note_wire_releases(app, symbol, exchange, rows, new_ids).map_err(|e| format!("The press releases could not be told: {e}")));
 }
 
 /// `New disclosure · QNC` and what was filed.
@@ -1446,8 +1482,8 @@ pub fn filings_sweep_loop(app: Arc<App>) {
     // filing means asking; but only while they have asked to be told. With no
     // Disclosures or Releases set on, this waits for one to be switched on.
     let wanted = || {
-        conn(&app).is_ok_and(|c| {
-            notice_settings(&app, notify::disclosure_scopes(&c).and_then(|d| Ok(!d.is_empty() || !notify::release_scopes(&c)?.is_empty()))).unwrap_or(false)
+        notices(&app).is_ok_and(|b| {
+            notice_settings(&app, notify::disclosure_scopes(&b).and_then(|d| Ok(!d.is_empty() || !notify::release_scopes(&b)?.is_empty()))).unwrap_or(false)
         })
     };
     while app.events.park_until(&app, wanted) {
@@ -2884,6 +2920,26 @@ pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
     app.root.join("ledger.html")
 }
 
+/// The Bank of Canada's rates a chart in another currency than its bars converts
+/// with: CAD per US dollar by day, as the book holds them -- the rates the figures
+/// use, read from the engine's inputs once the figures are built, from the book
+/// before. Read only when a chart's bars need converting.
+pub fn bank_rates(app: &Arc<App>) -> history::Rates {
+    let weak = Arc::downgrade(app);
+    Arc::new(move || {
+        let app = weak.upgrade().ok_or("the app has stopped")?;
+        let f = app.figures.get().ok_or("the book is not open yet")?;
+        let usd = bagholder_core::Currency::USD;
+        let as_text = |rates: Option<&std::collections::BTreeMap<bagholder_core::jiff::civil::Date, bagholder_core::Dec>>| -> std::collections::BTreeMap<String, f64> {
+            rates.map(|r| r.iter().map(|(d, v)| (d.to_string(), v.to_f64())).collect()).unwrap_or_default()
+        };
+        match f.read(|e| as_text(e.inputs().facts.rates.by_currency.get(&usd))) {
+            Some(r) => Ok(r),
+            None => Ok(as_text(f.book()?.rates().map_err(|e| e.to_string())?.get(&usd))),
+        }
+    })
+}
+
 /// A few instruments per call.
 pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String> {
     app.single_flight("archive", vec![], || {
@@ -2892,8 +2948,9 @@ pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String
         let recs = bagholder_model::symbols_of::intraday_archive_symbols(&b);
         let limit = limit.map(|l| l.max(1)).unwrap_or(history::ARCHIVE_BATCH);
         let (today_s, now, stamp) = bagholder_market::clock_now();
-        let worked = history::archive_daily(&c, &recs, &today_s, now, &stamp, limit).and_then(|mut out| {
-            out.extend(history::archive_intraday(&c, &recs, &today_s, now, &stamp, limit)?);
+        let rates = bank_rates(app);
+        let worked = history::archive_daily(&c, &rates, &recs, &today_s, now, &stamp, limit).and_then(|mut out| {
+            out.extend(history::archive_intraday(&c, &rates, &recs, &today_s, now, &stamp, limit)?);
             Ok(out)
         });
         match worked {
@@ -2996,24 +3053,7 @@ pub fn market_loop(app: Arc<App>) {
 
 pub const WATCH_SCAN_SEC: u64 = 10 * 60;
 
-/// The folder an earlier version watched, watched again, once: taken from the old
-/// store, it is cleared there, so a folder no longer watched is not taken again at
-/// the next start. A failure is said in the header.
-pub(crate) fn carry_watch_folder(app: &Arc<App>) {
-    let Some(f) = app.figures.get() else { return };
-    let carried = conn(app).and_then(|c| {
-        let old = bagholder_store::csvimport::watch_folder(&c).map_err(|e| e.to_string())?;
-        crate::csv_import::adopt(f, &old, bagholder_core::jiff::Timestamp::now())?;
-        if !old.is_empty() {
-            set_meta(&c, bagholder_store::csvimport::WATCH_META, "").map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    });
-    went(app, "watch-folder", carried.map_err(|e| format!("The folder watched before could not be watched again: {e}")));
-}
-
 pub fn watch_loop(app: Arc<App>) {
-    carry_watch_folder(&app);
     // Only while a folder is watched and the figures are built; until then, this
     // waits for them. The folder itself is looked at on a period: the standard
     // library has no file-system notification (docs/architecture.md, "Timers that remain").
@@ -3165,11 +3205,12 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let inst = history::chart_instrument(&rec);
     let src = history::history_source(&inst);
     let (today_s, now, stamp) = bagholder_market::clock_now();
-    let c = match conn(app) {
-        Ok(c) => c,
-        Err(e) => return HistoryAnswer::Refused(OkOr::err(e)),
+    let (c, p) = match (conn(app), pool(app)) {
+        (Ok(c), Ok(p)) => (c, p),
+        (Err(e), _) | (_, Err(e)) => return HistoryAnswer::Refused(OkOr::err(e)),
     };
     let c = &c;
+    let rates = bank_rates(app);
     let available: Vec<&'static str> = match history::offered_timeframes(c, &inst, &start, &today_s, now) {
         Ok(a) => a,
         Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
@@ -3186,11 +3227,11 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
                 }
             {
                 let told = app.clone();
-                history::ensure_intraday_in_background(app.store(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| bars_read(&told, read));
+                history::ensure_intraday_in_background(p.clone(), rates.clone(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| bars_read(&told, read));
                 pending = true;
                 ChartBars::default()
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
-                match history::ensure_bars(c, &inst, &tf, &start, &end, &today_s, now, &stamp) {
+                match history::ensure_bars(c, &rates, &inst, &tf, &start, &end, &today_s, now, &stamp) {
                     Ok(b) => b,
                     Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
                 }
@@ -3203,7 +3244,7 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
                 };
                 if due {
                     let signal = app.clone();
-                    history::ensure_daily_in_background(app.store(), inst.clone(), start.clone(), move |read| {
+                    history::ensure_daily_in_background(p.clone(), rates.clone(), inst.clone(), start.clone(), move |read| {
                         bars_read(&signal, read);
                         signal.events.signal();
                     });
@@ -3244,9 +3285,72 @@ mod tests {
     use serde_json::{json, Value};
     use std::cell::Cell;
 
+    /// An app of its own on a home of its own, the recorded month in its book and
+    /// its figures built.
+    fn built_app() -> (tempfile::TempDir, Arc<App>) {
+        crate::tests_common::home(); // offline, dry orders
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let at: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        f.state_zone("America/Toronto", at).unwrap();
+        app.set_figures(f);
+        (home, app)
+    }
+
+    /// The exposure pass waits on what the book reports of its own changes: a
+    /// holding that came or a listing watched starts it at once; a quote, which
+    /// moves a holding's figures and not the listings, does not.
+    #[test]
+    fn a_new_holding_or_a_watched_listing_starts_the_exposure_read_at_once() {
+        let (_home, app) = built_app();
+        let f = app.figures.get().unwrap();
+        let t: bagholder_core::jiff::Timestamp = "2025-11-19T21:10:00Z".parse().unwrap();
+        let at = listings_at(&app);
+        assert!(!listings_moved(&app, at), "nothing changed");
+        let held = f.read(|e| e.figures().positions[0].instrument).unwrap();
+        let cur = f.read(|e| e.figures().positions[0].currency).unwrap();
+        f.cache().unwrap().store_quote(&bagholder_sources::cache::StoredQuote { instrument: held, source: bagholder_core::SourceName::named("tmx"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("123.45").unwrap(), cur), change: None, change_pct: None, quoted_at: t, allowance: Default::default(), received_at: t }).unwrap();
+        assert!(!f.price_changed(held).unwrap().is_empty(), "the quote moved the holding's figures");
+        assert!(!listings_moved(&app, at), "a quote is no new listing");
+        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
+        assert!(listings_moved(&app, at), "a holding that came");
+        // a listing watched: a pass parked on the listings wakes on it, by the change
+        // itself and not by a clock (parked before or after, it ends)
+        let at = listings_at(&app);
+        let parked = {
+            let app = app.clone();
+            std::thread::spawn(move || app.events.park_until(&app, || listings_moved(&app, at)))
+        };
+        app.followed();
+        assert!(parked.join().unwrap(), "woken by the listing watched, the app still running");
+    }
+
+    /// A chart in another currency than its bars converts with the Bank's rates as
+    /// the book holds them (the rates the figures use), not a table of the earlier store.
+    #[test]
+    fn a_chart_converts_with_the_books_bank_rates() {
+        let (_home, app) = built_app();
+        let f = app.figures.get().unwrap();
+        let t: bagholder_core::jiff::Timestamp = "2025-11-19T21:10:00Z".parse().unwrap();
+        let usd = bagholder_core::Currency::USD;
+        let (a, b): (bagholder_core::jiff::civil::Date, bagholder_core::jiff::civil::Date) = ("2025-11-17".parse().unwrap(), "2025-11-18".parse().unwrap());
+        f.book().unwrap().store_rates(usd, &[(a, bagholder_core::Dec::parse("1.4012").unwrap()), (b, bagholder_core::Dec::parse("1.4050").unwrap())], (a, b), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
+        f.rebuild(t).unwrap();
+        let rates = bank_rates(&app)().unwrap();
+        assert_eq!((rates.get("2025-11-17").copied(), rates.get("2025-11-18").copied()), (Some(1.4012), Some(1.405)));
+        let bar = |date: &str| bagholder_store::bars::DayBar { date: date.into(), px: bagholder_store::bars::Ohlcv { open: None, high: None, low: None, close: 10.0, volume: None } };
+        let got = history::in_position_currency(&bank_rates(&app), &[bar("2025-11-18"), bar("2025-11-19")], "USD", "CAD").unwrap();
+        assert_eq!(got.iter().map(|b| (b.date.as_str(), (b.px.close * 1000.0).round() / 1000.0)).collect::<Vec<_>>(), vec![("2025-11-18", 14.05), ("2025-11-19", 14.05)], "each day at its rate, or the last before it");
+    }
+
+    /// The market cache's schema, where the filings are kept.
     fn store() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        bagholder_store::schema::init_schema(&c).unwrap();
+        for m in &bagholder_sources::cache::MIGRATIONS {
+            c.execute_batch(m.sql).unwrap();
+        }
         c
     }
 
@@ -3885,7 +3989,6 @@ mod tests {
     fn own_app() -> (tempfile::TempDir, Arc<App>) {
         let home = tempfile::tempdir().unwrap();
         let a = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
-        bagholder_store::schema::init_schema(&a.open().unwrap()).unwrap();
         (home, a)
     }
 

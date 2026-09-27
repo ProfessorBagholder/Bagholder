@@ -979,10 +979,23 @@ pub fn ca_volume_from<F: FnOnce() -> Result<Option<f64>, String>>(key: &str, row
     })
 }
 
+/// The days the Canadian market traded from `start` to `end`, both included: the
+/// days the S&P/TSX Composite's tracker closed, as the market cache keeps its
+/// closes (the benchmarks' reads keep them current).
+pub fn tsx_trading_days(conn: &rusqlite::Connection, start: &str, end: &str) -> rusqlite::Result<i64> {
+    let s: String = start.chars().take(10).collect();
+    let e: String = end.chars().take(10).collect();
+    conn.query_row(
+        "SELECT COUNT(*) FROM benchmark_closes WHERE benchmark = ?1 AND first = 1 AND day >= ?2 AND day <= ?3",
+        rusqlite::params![bagholder_sources::contract::Benchmark::Tsx.key(), s, e],
+        |r| r.get(0),
+    )
+}
+
 /// The average daily volume in the listing's own
 /// market over the period its short report covers. FINRA publishes the
 /// average itself; Canada's total is divided by the days the Canadian market
-/// actually traded, counted from the index series the app keeps.
+/// actually traded (`tsx_trading_days`).
 pub fn average_volume(conn: &rusqlite::Connection, rec: &Shorts) -> rusqlite::Result<Option<f64>> {
     if rec.market == ShortMarket::Us {
         return Ok(rec.average_volume);
@@ -992,7 +1005,7 @@ pub fn average_volume(conn: &rusqlite::Connection, rec: &Shorts) -> rusqlite::Re
         return Ok(None);
     }
     let (start, end) = rec.volume_of.split_once('/').unwrap();
-    let days = bagholder_store::tables::benchmark_days(conn, "TSX", start, end)?;
+    let days = tsx_trading_days(conn, start, end)?;
     Ok(if days != 0 { finite(total.unwrap() / days as f64) } else { None })
 }
 

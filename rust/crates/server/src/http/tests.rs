@@ -15,11 +15,9 @@ use tower::ServiceExt;
 use super::{router, AppState};
 use crate::tests_common::{app, app_ref};
 
-/// The one app, with its store prepared as the server prepares it at start.
+/// The one app.
 fn guard() -> std::sync::MutexGuard<'static, ()> {
-    let g = crate::tests_common::guard();
-    bagholder_store::relabel::ensure(&app_ref().open().unwrap()).unwrap();
-    g
+    crate::tests_common::guard()
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -227,9 +225,9 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
 fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let _g = guard();
     std::env::set_var(crate::notify::MODE_ENV, "browser"); // never the system's own notifications from a test
-    let conn = app_ref().open().unwrap();
+    let conn = crate::notify::book(app_ref()).unwrap();
     crate::notify::set_settings(&conn, &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
-    bagholder_store::feeds::clear_notifications(&conn).unwrap();
+    bagholder_store::feeds::clear_notifications(conn.notices()).unwrap();
     let mut feed = crate::events::Feed::open(app());
     assert!(app().events.watch(&app(), feed.id(), [("notifications".to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
     let first = feed.step(&crate::status::status);

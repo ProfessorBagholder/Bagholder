@@ -29,6 +29,9 @@ bagholder-engine = { path = "../engine" }
 # the readers of market data and facts: `read-sources` and `source-health`
 # (docs/plans/stage-3a-sources.md)
 bagholder-sources = { path = "../sources" }
+# the connections kept between uses on the market cache, where the earlier readers'
+# tables are (docs/plans/stage-6-cutover.md, 6a)
+bagholder-sqlite = { path = "../sqlite" }
 jiff = "0.2.37"
 regex = "1"
 openssl = "0.10"

@@ -106,7 +106,10 @@ pub struct App {
     stop_bell: (Mutex<()>, std::sync::Condvar),
     pub exit_code: AtomicI32,
     market: crate::market_context::MarketContext,
-    store: Arc<bagholder_store::pool::Pool>,
+    /// The market cache (`market.db`), for the earlier readers' tables it holds
+    /// (news, filings, exposures, gauges, short interest, universes, chart bars,
+    /// and what the readers remember by key): connections kept between uses.
+    cache: Arc<bagholder_sqlite::pool::Pool>,
     jobs: Mutex<HashMap<String, Job>>,
     /// Every page's live connection to this app: what changed, who is looking,
     /// what each open stream is showing.
@@ -150,13 +153,20 @@ impl App {
             let events = events.clone();
             std::sync::Arc::new(move || events.signal_from(crate::events::Source::Store)) as std::sync::Arc<dyn Fn() + Send + Sync>
         };
+        let cache_file = home.join(crate::figures::CACHE_FILE);
+        // brought to this build's schema on the first borrow, and again on the
+        // borrow that finds the file replaced or rolled back under the running app:
+        // by the cache's own migrations, on a connection of their own
+        let migrate = {
+            let path = cache_file.clone();
+            Arc::new(move |_: &rusqlite::Connection| {
+                bagholder_sources::cache::MarketCache::open(&path, APP_VERSION, bagholder_core::jiff::Timestamp::now())
+                    .map(|_| ())
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+            }) as bagholder_sqlite::pool::Prepare
+        };
         Arc::new(App {
-            // the schema and its repairs on the first borrow, and again on the borrow
-            // that finds the file replaced or rolled back under the running app
-            store: Arc::new(
-                bagholder_store::pool::Pool::with_hook(&home.join("bagholder.db"), hook)
-                    .with_schema(bagholder_store::schema::SCHEMA_VERSION as i32, Arc::new(|c| bagholder_store::relabel::ensure(c))),
-            ),
+            cache: Arc::new(bagholder_sqlite::pool::Pool::with_hook(&cache_file, hook).with_schema(bagholder_sources::cache::SCHEMA.latest() as i32, migrate)),
             home,
             root,
             bind_host,
@@ -188,12 +198,13 @@ impl App {
         spawn(name, move || f(app));
     }
 
-    /// A connection to the store, on loan from the pool: used as a `&Connection`
-    /// and given back when dropped.
-    pub fn open(&self) -> rusqlite::Result<bagholder_store::pool::Pooled<'_>> {
-        // every connection passes here: a test never opens the live database
+    /// A connection to the market cache, on loan from the pool: used as a
+    /// `&Connection` and given back when dropped. Its commits are heard on the
+    /// bus (`events::Source::Store`).
+    pub fn cache(&self) -> rusqlite::Result<bagholder_sqlite::pool::Pooled<'_>> {
+        // every connection passes here: a test never opens the live data folder
         bagholder_store::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
-        self.store.get()
+        self.cache.get()
     }
 
     /// Hold the figure path, its cache's commits heard on this app's bus as the
@@ -213,11 +224,12 @@ impl App {
         bagholder_ws::session::Home::new(&self.home)
     }
 
-    /// The pool itself, for a connection opened outside a request's lifetime (a
-    /// background fetch on a thread of its own): still a connection this pool
-    /// hands out, so its commits are heard the same way.
-    pub fn store(&self) -> Arc<bagholder_store::pool::Pool> {
-        self.store.clone()
+    /// The market cache's pool itself, for a connection opened outside a
+    /// request's lifetime (a background fetch on a thread of its own): still a
+    /// connection this pool hands out, so its commits are heard the same way.
+    pub fn cache_pool(&self) -> rusqlite::Result<Arc<bagholder_sqlite::pool::Pool>> {
+        bagholder_store::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
+        Ok(self.cache.clone())
     }
 
     pub fn stopping(&self) -> bool {

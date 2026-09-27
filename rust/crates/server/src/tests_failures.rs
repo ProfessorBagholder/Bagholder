@@ -19,7 +19,6 @@ fn fresh() -> (tempfile::TempDir, Arc<App>) {
     crate::tests_common::home(); // offline, dry orders
     let home = tempfile::tempdir().unwrap();
     let app = App::new(home.path().to_path_buf(), root(), "127.0.0.1".into());
-    bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
     app.set_figures(crate::figures::Figures::open(home.path(), Timestamp::now()).unwrap());
     (home, app)
 }
@@ -28,29 +27,29 @@ fn error(app: &Arc<App>) -> String {
     crate::status::status(app).error
 }
 
-/// The book's file moved aside and a folder put in its place: nothing can open it.
-fn break_book(home: &Path) {
-    std::fs::rename(home.join("bagholder.db"), home.join("bagholder.db.kept")).unwrap();
-    std::fs::create_dir(home.join("bagholder.db")).unwrap();
+/// The market cache's file moved aside and a folder put in its place: nothing can open it.
+fn break_cache(home: &Path) {
+    std::fs::rename(home.join("market.db"), home.join("market.db.kept")).unwrap();
+    std::fs::create_dir(home.join("market.db")).unwrap();
 }
 
-fn mend_book(home: &Path) {
-    std::fs::remove_dir(home.join("bagholder.db")).unwrap();
-    std::fs::rename(home.join("bagholder.db.kept"), home.join("bagholder.db")).unwrap();
+fn mend_cache(home: &Path) {
+    std::fs::remove_dir(home.join("market.db")).unwrap();
+    std::fs::rename(home.join("market.db.kept"), home.join("market.db")).unwrap();
 }
 
 #[test]
-fn test_a_book_that_will_not_open_is_said_by_the_pass_that_met_it_until_it_opens() {
+fn test_a_market_cache_that_will_not_open_is_said_by_the_pass_that_met_it_until_it_opens() {
     let (home, app) = fresh();
     assert_eq!(error(&app), "");
-    break_book(home.path());
+    break_cache(home.path());
     assert_eq!(crate::feeds::sweep_shorts(&app), 0);
     let said = error(&app);
-    assert_eq!(said.matches("The book could not be opened").count(), 1, "said once, by the pass and the header alike: {said}");
+    assert_eq!(said.matches("The market cache could not be opened").count(), 1, "said once, by the pass and the header alike: {said}");
     // the request that meets it answers it, not an empty or a default answer
-    assert!(crate::status::answer(&app).unwrap_err().contains("The book could not be opened"));
-    assert!(crate::feeds::filings_stored(&app, "QNC").unwrap_err().contains("The book could not be opened"));
-    mend_book(home.path());
+    assert!(crate::status::answer(&app).unwrap_err().contains("The market cache could not be opened"));
+    assert!(crate::feeds::filings_stored(&app, "QNC").unwrap_err().contains("The market cache could not be opened"));
+    mend_cache(home.path());
     assert_eq!(crate::feeds::sweep_shorts(&app), 0);
     assert_eq!(error(&app), "", "the next pass that opens it takes the failure away");
     assert!(crate::status::answer(&app).is_ok());
@@ -60,7 +59,7 @@ fn test_a_book_that_will_not_open_is_said_by_the_pass_that_met_it_until_it_opens
 fn test_a_read_that_fails_is_the_answer_of_the_request_never_an_empty_list() {
     let (_home, app) = fresh();
     assert!(crate::feeds::filings_stored(&app, "QNC").unwrap().filings.is_empty());
-    let c = app.open().unwrap();
+    let c = app.cache().unwrap();
     c.execute("ALTER TABLE filings RENAME TO filings_away", []).unwrap();
     let e = crate::feeds::filings_stored(&app, "QNC").unwrap_err();
     assert!(e.contains("filings"), "{e}");
@@ -92,14 +91,14 @@ fn test_a_saved_login_that_cannot_be_read_is_said_never_taken_for_signed_out() {
 #[test]
 fn test_notifications_that_cannot_be_recorded_or_read_are_said_until_they_can() {
     let (_home, app) = fresh();
-    let c = app.open().unwrap();
+    let c = crate::notify::book(&app).unwrap();
     crate::notify::set_settings(&c, &serde_json::from_value(serde_json::json!({"fills": true})).unwrap()).unwrap();
-    c.execute("ALTER TABLE notifications RENAME TO notifications_away", []).unwrap();
+    c.notices().execute("ALTER TABLE notifications RENAME TO notifications_away", []).unwrap();
     assert!(crate::notify::tell(&app, "fills", "order:1:filled", "Order filled · QNC", "Bought 5", None).is_none());
     let said = error(&app);
     assert!(said.contains("A notification could not be recorded"), "{said}");
     assert!(said.contains("The notifications could not be read"), "the header's own read of the bell: {said}");
-    c.execute("ALTER TABLE notifications_away RENAME TO notifications", []).unwrap();
+    c.notices().execute("ALTER TABLE notifications_away RENAME TO notifications", []).unwrap();
     assert!(crate::notify::tell(&app, "fills", "order:2:filled", "Order filled · QNC", "Bought 5", None).is_some());
     assert_eq!(error(&app), "");
 }
@@ -107,20 +106,20 @@ fn test_notifications_that_cannot_be_recorded_or_read_are_said_until_they_can() 
 #[test]
 fn test_notification_settings_stored_unreadable_are_an_error_never_every_kind_off() {
     let (_home, app) = fresh();
-    let c = app.open().unwrap();
-    bagholder_store::tables::set_meta(&c, "notify_settings", "{ nope").unwrap();
+    let c = crate::notify::book(&app).unwrap();
+    c.set_setting(crate::notify::SETTINGS_KEY, Some("{ nope"), Timestamp::now()).unwrap();
     assert!(crate::notify::settings(&c).is_err());
     assert!(crate::notify::release_scopes(&c).is_err());
     let said = error(&app);
     assert!(said.contains("The notifications could not be read"), "{said}");
-    bagholder_store::tables::set_meta(&c, "notify_settings", "{}").unwrap();
+    c.set_setting(crate::notify::SETTINGS_KEY, Some("{}"), Timestamp::now()).unwrap();
     assert_eq!(error(&app), "");
 }
 
 #[test]
 fn test_an_update_check_that_cannot_be_read_is_said_and_refuses_an_update_until_it_can() {
     let (_home, app) = fresh();
-    let c = app.open().unwrap();
+    let c = app.cache().unwrap();
     bagholder_store::tables::set_meta(&c, "update_check", "{ nope").unwrap();
     let said = error(&app);
     assert!(said.contains("The update check could not be read"), "{said}");
@@ -167,26 +166,29 @@ fn test_the_folder_an_earlier_version_watched_is_taken_once_and_not_again_once_l
     let (home, app) = fresh();
     let folder = home.path().join("drop");
     std::fs::create_dir(&folder).unwrap();
-    bagholder_store::csvimport::set_watch_folder(&app.open().unwrap(), &folder.to_string_lossy()).unwrap();
-    crate::feeds::carry_watch_folder(&app);
+    let old = bagholder_store::connect(home.path()).unwrap();
+    bagholder_store::schema::init_schema(&old).unwrap();
+    bagholder_store::csvimport::set_watch_folder(&old, &folder.to_string_lossy()).unwrap();
     let f = app.figures.get().unwrap();
+    crate::carry::carry_watch_folder(f, &old, Timestamp::now()).unwrap();
     assert!(crate::csv_import::watching(f), "the folder watched before is watched again");
     crate::csv_import::unwatch(f, Timestamp::now()).unwrap();
     // the next start
-    crate::feeds::carry_watch_folder(&app);
+    crate::carry::carry_watch_folder(f, &old, Timestamp::now()).unwrap();
     assert!(!crate::csv_import::watching(f), "a folder let go stays let go");
     assert_eq!(error(&app), "");
 }
 
 #[test]
-fn test_a_folder_watched_before_that_cannot_be_read_is_said_until_it_can() {
+fn test_a_folder_watched_before_that_cannot_be_read_is_a_failure_until_it_can_be() {
     let (home, app) = fresh();
-    break_book(home.path());
-    crate::feeds::carry_watch_folder(&app);
-    assert!(error(&app).contains("The folder watched before could not be watched again"), "{}", error(&app));
-    mend_book(home.path());
-    crate::feeds::carry_watch_folder(&app);
-    assert_eq!(error(&app), "");
+    let old = bagholder_store::connect(home.path()).unwrap();
+    bagholder_store::schema::init_schema(&old).unwrap();
+    old.execute("ALTER TABLE meta RENAME TO meta_away", []).unwrap();
+    let f = app.figures.get().unwrap();
+    assert!(crate::carry::carry_watch_folder(f, &old, Timestamp::now()).is_err());
+    old.execute("ALTER TABLE meta_away RENAME TO meta", []).unwrap();
+    crate::carry::carry_watch_folder(f, &old, Timestamp::now()).unwrap();
 }
 
 #[test]

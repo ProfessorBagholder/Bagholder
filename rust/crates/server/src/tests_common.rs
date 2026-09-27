@@ -28,7 +28,6 @@ fn made() -> &'static Arc<App> {
     APP.get_or_init(|| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let app = App::new(home(), root, "127.0.0.1".into());
-        bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
         // the figure path, on a month of one account's recorded replies of its own
         let book = home().join("figures");
         std::fs::create_dir_all(&book).unwrap();

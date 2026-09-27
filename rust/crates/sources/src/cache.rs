@@ -2,9 +2,11 @@
 //! second store, `market.db` in the data folder. What the sources answered that
 //! can be asked again: quotes, daily closes, the benchmark trackers' closes and
 //! events, the option chain last read per underlying, which source won for each
-//! instrument, and every request's outcome. Every read and write is
+//! instrument, and every request's outcome. Every read and write here is
 //! typed; a stored value that does not read back is an error naming its table
-//! and column, never a default.
+//! and column, never a default. The earlier readers' tables (news, filings,
+//! exposures, gauges, short interest, universes, chart bars: migration 4) are
+//! in the same file and are read and written by those readers' own SQL.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -20,10 +22,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 3] = [
+pub static MIGRATIONS: [Migration; 4] = [
     Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
     Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
     Migration { number: 3, name: "benchmark trackers and option chains", sql: include_str!("../migrations/003-benchmark-trackers-and-option-chains.sql") },
+    Migration { number: 4, name: "the earlier readers", sql: include_str!("../migrations/004-the-earlier-readers.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {

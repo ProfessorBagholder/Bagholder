@@ -22,7 +22,8 @@ pub struct Clearing {
     pub market: bool,
     /// The orders Bagholder sent and its brackets, with their logs.
     pub orders: bool,
-    /// The watched listings and the tile row.
+    /// The watched listings and the tile row, and the notifications, what their
+    /// streams met, and their settings.
     pub following: bool,
 }
 
@@ -41,7 +42,8 @@ pub enum Holds {
     Journal,
     Market,
     Orders,
-    /// The watched listings and the tile row, with the names the person picked.
+    /// The watched listings and the tile row, with the names the person picked;
+    /// the notifications and what their streams met.
     Following,
     /// What records and statements name: kept while anything left names it.
     Named,
@@ -93,6 +95,8 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("watched", Holds::Following),
     ("tiles", Holds::Following),
     ("listings_named", Holds::Following),
+    ("notifications", Holds::Following),
+    ("told", Holds::Following),
     ("broker_connections", Holds::Named),
     ("accounts", Holds::Named),
     ("account_refs", Holds::Named),
@@ -184,7 +188,10 @@ impl Book {
                 c.execute_batch("DELETE FROM order_events; DELETE FROM orders; DELETE FROM bracket_events; DELETE FROM brackets;")?;
             }
             if what.following {
-                c.execute_batch("DELETE FROM watched; DELETE FROM tiles; DELETE FROM settings WHERE key = 'tiles.chosen';")?;
+                c.execute_batch(
+                    "DELETE FROM watched; DELETE FROM tiles; DELETE FROM settings WHERE key = 'tiles.chosen';
+                     DELETE FROM notifications; DELETE FROM told; DELETE FROM settings WHERE key LIKE 'notify.%';",
+                )?;
             }
             self.clear_unnamed()
 
