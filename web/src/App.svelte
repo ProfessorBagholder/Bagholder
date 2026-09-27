@@ -66,7 +66,7 @@
     return !!el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
   }
 
-  // The global keyboard shortcuts, ported from ledger.html's document keydown:
+  // The global keyboard shortcuts, ported from the old page's document keydown:
   // ⌘/Ctrl+O toggles Orders, ⌘/Ctrl+K opens the filter popover, ←/→ move between
   // tabs, and Escape unwinds whatever is open (ticket → notes → orders → menu →
   // filter → modal → confirm → back out of a trade → clear filters).

@@ -15,7 +15,7 @@
 //! machine; a body is at most `BODY_LIMIT`. Routes that answer once are given
 //! `ROUTE_TIMEOUT`; the three that stream are not.
 
-mod assets;
+pub(crate) mod assets;
 mod error;
 mod extract;
 pub(crate) mod markets;

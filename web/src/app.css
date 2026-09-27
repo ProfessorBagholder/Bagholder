@@ -1,4 +1,4 @@
-/* The app's design system, ported verbatim from ledger.html (the reference page).
+/* The app's design system, ported verbatim from the old page (the reference page).
    Do not invent colours, radii, or type here — every token and component class
    below is the original's, and the Svelte components use these classes so the
    Svelte build and the legacy page render identically. */

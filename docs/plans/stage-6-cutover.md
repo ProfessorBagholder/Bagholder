@@ -64,11 +64,11 @@ Every part:
 - [x] **Clear data** empties each kind in its new place and keeps the rest (the existing tests, re-pointed).
 
 **6b**
-- [ ] No `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` in the tree; no CI, release or image job for them; `git grep` finds no reference outside the history docs (`docs/plans/`, `docs/decisions.md`).
+- [x] No `python/`, `go/`, `ledger.html`, `lightweight-charts.js`, root `favicon.png` in the tree; no CI, release or image job for them; `git grep` finds no reference outside the history docs (`docs/plans/`, `docs/decisions.md`).
 - [ ] The release workflow run on a test tag in a fork-free dry run (`act`-less: the workflow's steps run by hand here) builds the Rust archive with the page embedded and nothing else; `docker build -f rust/Dockerfile .` builds.
-- [ ] A first start with no book and a `bagholder.db` in the Python folder carries it (test with `HOME` pointed at a scratch folder).
-- [ ] Root `bagholder.py` starts the Rust server (test: run it with a stand-in binary).
-- [ ] The notification icon and the root are found without `ledger.html` (tests).
+- [x] A first start with no book and a `bagholder.db` in the Python folder carries it (test with `HOME` pointed at a scratch folder).
+- [x] Root `bagholder.py` starts the Rust server (test: run it with a stand-in binary).
+- [x] The notification icon and the root are found without `ledger.html` (tests).
 
 ## Surfaces to check beyond the diff
 
@@ -108,5 +108,14 @@ Initialled at the gate: the carry run on a copy of the owner's data and the coun
   | | `notify_settings` and non-empty `notify_seen:*` → `notify.*` settings | 37 | 37 |
 
   Values compared with `EXCEPT` across the two files for news, price_bars and filings: no row differs. `/api/status` error line empty; `/api/notifications` answers the carried history. Rendered from the same copy (offline, so no quotes): Markets shows the carried Fear & Greed readings, the heatmap's sectors from the carried exposures and the carried news, newest first; the header's error line is empty. Found in the render and fixed: Clear data left `snapshots/` (the files as they were before a migration or a carry, each holding every kind); any clear now removes them (`clear.rs` `a_clear_removes_the_copies_kept_of_the_files_as_they_were`).
+
+**6b** (2026-09-26, on bfe46430):
+- Removed: `go/` (all of it), `python/` but for the launcher, `ledger.html`, `lightweight-charts.js`, the root `favicon.png` (byte-identical to `web/public/favicon.png`, `cmp`); `tests.yml`'s `python` and `go` jobs, `release.yml`'s `python` and `go` jobs and the package step's copies of the page files and of `web/dist` (the page is in the binary), `docker.yml`'s `python`, `go` and `go-image` jobs; the server's `/v2`, `/ledger.html`, `/lightweight-charts.js` routes, the `ledger.html` fallback for `/` and `feeds::ledger_path`. `tests/cases`, `tests/fixtures` and `tests/wire` kept: `rust/crates/model` (cases, wire), `bagholder-diff` (wire), the market crate (fixtures) and the phones (cases) read them.
+- `git grep -n -I -e 'ledger.html' -e 'python/' -e 'go/' -e 'bagholder.py'` outside the history docs finds: the launcher (`bagholder.py`, `python/bagholder.py`), its tests (`rust/crates/server/src/main.rs`) and the lines naming it (`README.md`, `CLAUDE.md`, `tests.yml`); the phones' comments and `ios/DESKTOP-API.md`, `ios/README.md`, `ios/project.yml` (the phones are out of scope; `project.yml` is an XcodeGen spec the checked-in `Bagholder.xcodeproj` does not follow, and the project does not reference the removed files); `/wp-json/wp/v2/` in recorded fund pages (`rust/crates/sources/tests/replies/harvest`), a match of the pattern `go/` inside another word.
+- `RUSTFLAGS="-D warnings" cargo test -q --workspace`: 1,370 passed, 0 failed (with `web/dist` built); the three tests that depend on a built page run again with `web/dist` moved away: 3 passed. `cargo clippy --workspace --lib --bins`: no output, exit 0.
+- `web/`: `npm run check` 0 errors (19 warnings, as before); `npx vitest run` 28 files, 140 tests passed; `npx vite build` built, `dist/favicon.png` byte-identical to `public/favicon.png`.
+- The release package for `aarch64-apple-darwin`, the workflow's steps by hand: `npm ci && npm run build`, `cargo build --release --locked` of the four binaries, the package step: the archive lists `bagholder`, `bagholder-browser`, `disclosures-mcp`, `sedar` and nothing else (15.2 MB, with its `.sha256`). Unpacked into an empty folder and started there (scratch `HOME` and data folder, offline, dry orders): `--version` answers `bagholder 1.47.0`; `/` 200 (817 bytes), its script 200, `/favicon.png` 200 (8,009 bytes), `/v2`, `/ledger.html`, `/lightweight-charts.js` 404.
+- `docker build -f rust/Dockerfile .` not run: the Docker daemon is not running on this machine. The Dockerfile's lines are held by `test_the_image_builds_this_workspace_and_the_page_from_the_repository_root` and `.dockerignore` by `test_nothing_the_image_needs_is_kept_out_of_it`.
+- Tests added: `legacy_import`: `the_python_app_s_folder_is_found_in_the_person_s_home`, `a_first_start_with_no_book_takes_a_copy_of_the_python_app_s_database` (the copy imported, the Python folder byte for byte and file for file unchanged, a second start takes nothing), `a_python_app_that_is_running_is_copied_with_what_its_log_holds`, `a_folder_with_a_database_or_a_book_of_its_own_takes_nothing`; `main.rs`: `test_the_root_is_the_checkout_the_server_was_built_in`, `test_the_launcher_is_one_file_in_both_places`, and under `launcher` (Unix, python3 required): the built server takes the launcher's process (its parent is the test), cargo builds and runs in `rust/`, a page not built is built with npm first, neither says what to run and exits 1; `notify.rs`: `test_the_notification_icon_is_the_pages_own`; `http/tests.rs`: the removed routes answer 404.
 
 ## Handoff

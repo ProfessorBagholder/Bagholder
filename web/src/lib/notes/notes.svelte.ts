@@ -3,7 +3,7 @@
 // A notification's `extra`: the symbol/exchange it is about, the moment it
 // happened (`at`, a day or a full timestamp), and its link (a filed document id
 // with its source, or an external url). Drives the timestamp word and the click
-// target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
+// target, exactly as the old page's noteWhenWord/noteOpen read n.extra.
 import { call } from '../api'
 import { flash } from '../ui.svelte'
 import { resyncAll } from '../live.svelte'

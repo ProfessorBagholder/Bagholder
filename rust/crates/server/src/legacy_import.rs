@@ -319,6 +319,48 @@ pub fn import(old: &Path, home: &Path, at: jiff::Timestamp) -> Result<Report, St
     }
 }
 
+/// The Python app's data folder, as that app finds it: `.bagholder` in the
+/// person's home (`USERPROFILE` on Windows, `HOME` elsewhere), read through `var`.
+pub fn python_home(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let home = var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty())?;
+    Some(Path::new(&home).join(".bagholder"))
+}
+
+/// A first start with nothing of its own takes the Python app's database: when
+/// `home` holds neither a book nor a `bagholder.db` and `python` holds a
+/// `bagholder.db`, a copy of it is put in `home`, where the start imports it as
+/// its own. `python` is only read. Answers the file copied, if one was.
+pub fn adopt_python_database(home: &Path, python: &Path) -> Result<Option<std::path::PathBuf>, String> {
+    let from = python.join(crate::figures::OLD_FILE);
+    let to = home.join(crate::figures::OLD_FILE);
+    if home.join(bagholder_book::BOOK_FILE).exists() || to.exists() || !from.is_file() {
+        return Ok(None);
+    }
+    // written under another name and then put in place, so a copy cut short is never taken for the database
+    let part = home.join(format!("{}.part", crate::figures::OLD_FILE));
+    let beside = |ext: &str| python.join(format!("{}-{ext}", crate::figures::OLD_FILE));
+    let copied = if beside("wal").exists() || beside("shm").exists() {
+        // the Python app is running, or left changes in its write-ahead log: SQLite's
+        // own copy reads them, through the files the Python app already made
+        bagholder_book::import::copy_database(&from, &part).map_err(|e| e.to_string())
+    } else {
+        // everything is in the file: copied as it is, since opening it with SQLite
+        // would leave SQLite's own files beside it in the Python app's folder
+        std::fs::copy(&from, &part).map(|_| ()).map_err(|e| e.to_string())
+    }
+    .and_then(|()| std::fs::rename(&part, &to).map_err(|e| e.to_string()));
+    match copied {
+        Ok(()) => Ok(Some(from)),
+        Err(e) => {
+            let left = match std::fs::remove_file(&part) {
+                Err(r) if r.kind() != std::io::ErrorKind::NotFound => format!("; and {} could not be removed: {r}", part.display()),
+                _ => String::new(),
+            };
+            Err(format!("the Python app's database {} could not be copied into {}: {e}{left}", from.display(), home.display()))
+        }
+    }
+}
+
 /// `bagholder import-book <old database> <data folder>`: import and print the report.
 pub fn cli(args: &[String]) -> i32 {
     let [old, home] = args else {
@@ -465,6 +507,100 @@ mod tests {
         let again = import(&old, &home, at).unwrap();
         assert_eq!((again.records_new, again.records_unchanged), (0, 1));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A made-up person's home: the Python app's folder with its database in it.
+    fn python_folder(person: &Path) -> std::path::PathBuf {
+        let python = person.join(".bagholder");
+        std::fs::create_dir_all(&python).unwrap();
+        let conn = bagholder_store::open_db(&python.join("bagholder.db")).unwrap();
+        bagholder_store::schema::init_schema(&conn).unwrap();
+        trade(&conn, "b1", "QNC", "BUY", 10.0, "2026-01-02T15:00:00+00:00");
+        set_meta(&conn, "journal_v2", r#"{"rt:b1": {"thesis": "from the Python app", "tags": [], "grade": ""}}"#);
+        python
+    }
+
+    fn listing(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap())).collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn the_python_app_s_folder_is_found_in_the_person_s_home() {
+        let person = tempfile::tempdir().unwrap();
+        let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let env = |k: &str| (k == key).then(|| person.path().as_os_str().to_owned());
+        assert_eq!(python_home(env), Some(person.path().join(".bagholder")));
+        assert_eq!(python_home(|_| None), None);
+        assert_eq!(python_home(|_| Some(std::ffi::OsString::new())), None, "an empty home is no home");
+    }
+
+    #[test]
+    fn a_first_start_with_no_book_takes_a_copy_of_the_python_app_s_database() {
+        let person = tempfile::tempdir().unwrap();
+        let python = python_folder(person.path());
+        let before = listing(&python);
+        let env = |k: &str| (k == if cfg!(windows) { "USERPROFILE" } else { "HOME" }).then(|| person.path().as_os_str().to_owned());
+        let home = person.path().join(".bagholder-rust");
+        std::fs::create_dir_all(&home).unwrap();
+        let from = adopt_python_database(&home, &python_home(env).unwrap()).unwrap();
+        assert_eq!(from, Some(python.join("bagholder.db")));
+        // the start imports it as its own: the rows and the journal are the book's
+        let at: jiff::Timestamp = "2026-09-26T12:00:00Z".parse().unwrap();
+        crate::figures::Figures::open(&home, at).unwrap();
+        let (book, _) = Book::open_in(&home, crate::app::APP_VERSION, at).unwrap();
+        assert_eq!(book.record_count(&bagholder_book::import::import_source()).unwrap(), 1);
+        assert!(listing(&python) == before, "the Python app's folder is only read");
+        assert!(!home.join("bagholder.db.part").exists());
+        // started again, there is a book: nothing more is taken
+        let copied = std::fs::read(home.join("bagholder.db")).unwrap();
+        {
+            let conn = bagholder_store::open_db(&python.join("bagholder.db")).unwrap();
+            trade(&conn, "b2", "ABC", "BUY", 1.0, "2026-02-02T15:00:00+00:00");
+        }
+        assert_eq!(adopt_python_database(&home, &python).unwrap(), None);
+        assert_eq!(std::fs::read(home.join("bagholder.db")).unwrap(), copied);
+    }
+
+    #[test]
+    fn a_python_app_that_is_running_is_copied_with_what_its_log_holds() {
+        let person = tempfile::tempdir().unwrap();
+        let python = python_folder(person.path());
+        // the Python app open, a row in its write-ahead log and not yet in the file
+        let running = bagholder_store::open_db(&python.join("bagholder.db")).unwrap();
+        running.execute_batch("PRAGMA wal_autocheckpoint = 0").unwrap();
+        trade(&running, "b2", "ABC", "BUY", 1.0, "2026-02-02T15:00:00+00:00");
+        assert!(python.join("bagholder.db-wal").metadata().unwrap().len() > 0);
+        let names = |d: &Path| { let mut n: Vec<String> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect(); n.sort(); n };
+        let before = names(&python);
+        let home = tempfile::tempdir().unwrap();
+        adopt_python_database(home.path(), &python).unwrap().unwrap();
+        let copy = rusqlite::Connection::open(home.path().join("bagholder.db")).unwrap();
+        let ids: Vec<String> = copy.prepare("SELECT id FROM activities ORDER BY id").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(ids, ["b1", "b2"], "the row still in the log is copied");
+        assert_eq!(names(&python), before, "nothing added to the Python app's folder");
+        drop(running);
+    }
+
+    #[test]
+    fn a_folder_with_a_database_or_a_book_of_its_own_takes_nothing() {
+        let person = tempfile::tempdir().unwrap();
+        let python = python_folder(person.path());
+        // a database of its own
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("bagholder.db"), b"its own").unwrap();
+        assert_eq!(adopt_python_database(home.path(), &python).unwrap(), None);
+        assert_eq!(std::fs::read(home.path().join("bagholder.db")).unwrap(), b"its own");
+        // a book of its own
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        assert_eq!(adopt_python_database(home.path(), &python).unwrap(), None);
+        assert!(!home.path().join("bagholder.db").exists());
+        // no Python app here
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(adopt_python_database(home.path(), &person.path().join("nowhere")).unwrap(), None);
+        assert!(listing(home.path()).is_empty());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 <script lang="ts">
   // The in-app Wealthsimple sign-in window (loginViewHtml): Wealthsimple's page,
   // streamed as frames from the app's headless browser, with clicks, the wheel,
-  // keystrokes and paste sent back to it. Ported from ledger.html.
+  // keystrokes and paste sent back to it. Ported from the old page.
   import { onMount } from 'svelte'
   import { cancelConnect, loginInput } from './ui.svelte'
 

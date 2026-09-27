@@ -2915,11 +2915,6 @@ pub fn universe_shown(app: Arc<App>, doc: String, key: String) {
 // market data
 // ---------------------------------------------------------------------------
 
-/// The page, beside the app.
-pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
-    app.root.join("ledger.html")
-}
-
 /// The Bank of Canada's rates a chart in another currency than its bars converts
 /// with: CAD per US dollar by day, as the book holds them -- the rates the figures
 /// use, read from the engine's inputs once the figures are built, from the book

@@ -12,14 +12,14 @@
 >
 > A broad or blind move (searching everything, trying things until one works, watching to see what happens) is almost never the best course; it means the problem is not understood yet, so stop and think. If you cannot answer both questions for an action, don't do it.
 
-Bagholder is a local-first trading journal for Wealthsimple users. The app being built is the Rust server (`rust/`, a Cargo workspace, toolchain pinned in `rust/rust-toolchain.toml`) with the Svelte page (`web/`, Svelte 5 + TypeScript + Vite, served from `web/dist`). Four documents govern it:
+Bagholder is a local-first trading journal for Wealthsimple users. The app is one build: the Rust server (`rust/`, a Cargo workspace, toolchain pinned in `rust/rust-toolchain.toml`) with the Svelte page (`web/`, Svelte 5 + TypeScript + Vite, built to `web/dist` and carried in the server's release build). Four documents govern it:
 
 - `SPEC.md`: what the app shows and does, every figure and every screen.
 - `docs/architecture.md`: how it is built, and the rules every change is held to (work only because something changed; the server tells the page; one element updates, never a screen; types, not blobs; every behaviour in `SPEC.md` driven by a browser test).
 - `docs/decisions.md`: the owner's decisions. Where anything else disagrees with it, it wins and the other is fixed.
 - `docs/design-review.md`: the order of work, the one place status is kept.
 
-Also: `docs/old-app-mistakes.md` (the old app's known mistakes and what guards each), `docs/parity.md` (what the old page shows and does, the one place the old app is the reference, for the screen only), `docs/plans/` (stage plans). The old builds (`python/`, `go/`, `ledger.html`) are frozen and removed at cutover; nothing is done for them. The phone apps (`ios/`, `android/`, `MOBILE.md`) are on hold. The repository is public.
+Also: `docs/old-app-mistakes.md` (the old app's known mistakes and what guards each), `docs/parity.md` (what the old page shows and does, the one place the old app is the reference, for the screen only), `docs/plans/` (stage plans). `bagholder.py` (the same file at the root and in `python/`) is not an app: it starts the Rust server from a checkout, and is what a Python install that updated itself by `git pull` restarts; its tests are in `rust/crates/server/src/main.rs`. The phone apps (`ios/`, `android/`, `MOBILE.md`) are on hold. The repository is public.
 
 ## The gate: plans for heavy lifts only
 
@@ -62,7 +62,7 @@ Delegate only when all three hold: the task separates cleanly with a clear contr
 
 ## Verifying a change
 
-- **Rust**, from `rust/`: `cargo test --workspace`, and `cargo build --workspace --all-targets` with no warnings. A behaviour change comes with a test. A pushed book migration is never edited; a change is a new migration.
+- **Rust**, from `rust/`: `RUSTFLAGS="-D warnings" cargo test --workspace`, and `cargo clippy --workspace --lib --bins` clean (the workspace denies a discarded failure). A behaviour change comes with a test. A pushed book migration is never edited; a change is a new migration.
 - **The page**, from `web/`: `npm run check` (svelte-check), `npm test` (Vitest), `npm run e2e` (builds the page, then Playwright against the real server on a made-up book: offline, dry orders, its own temporary home, port 8791; `E2E_PORT=<n>` gives a second run its own server). A behaviour in `SPEC.md` is not done until a browser test drives it.
 - **The wire** is typed in `rust/crates/model/src/wire.rs`; `cargo test -p bagholder-model --test types` regenerates `web/src/lib/generated/wire.ts`, and the page takes its types from there.
 - **Timers:** a timer anywhere is replaced by waiting for the thing itself, or argued for in `TIMED_WAITS` (`rust/crates/server/src/tests_misc.rs`), the one list of timers that remain; `test_no_wait_on_a_clock_that_is_not_accounted_for` holds the code to it.
@@ -74,6 +74,10 @@ Delegate only when all three hold: the task separates cleanly with a clear contr
   ```
   `BAGHOLDER_DRY_ORDERS=1` is not optional: orders are live by default, and a scratch copy that ever carries a login must never place one. `BAGHOLDER_NO_BROWSER=1` is not optional: without it every scratch start opens the scratch data in the owner's browser. Open `http://127.0.0.1:8798/` (`localhost` is refused by design). The owner's own instance runs on 8765; never restart or write to it.
 - **What to check** is `SPEC.md` §7: every displayed figure traced to its field and meaning; every page at 1200, 1340, 1440 and 1680 px with no table overflowing or clipping at 1340 and above; headers level; lookups by id, exercised with a duplicate symbol in a second account. Take screenshots; measure with JavaScript rather than by eye.
+
+## Releases
+
+A version is a GitHub release tagged `vMAJOR.MINOR.PATCH` (semantic versioning: PATCH for fixes only, MINOR for anything new a user can see or do, MAJOR for a change that breaks existing installs). The product carries one number, bumped together in the last change before the release: `APP_VERSION` in `rust/crates/server/src/app.rs` (the workspace `version` in `rust/Cargo.toml` mirrors it), `MARKETING_VERSION` in `ios/Bagholder.xcodeproj/project.pbxproj` and `versionName` in `android/app/build.gradle.kts`. To release, bump, merge, then `gh release create vX.Y.Z --target master --title vX.Y.Z --notes "..."` with the merged PRs in the notes. The tag starts `.github/workflows/release.yml`, which checks the tag against `APP_VERSION` and attaches `bagholder-vX.Y.Z-rust-<target-triple>.tar.gz` (`.zip` on Windows) per platform, each with its `.sha256`, named as the updater looks for them: the server with the page built in, `bagholder-browser`, `disclosures-mcp` and `sedar`. `.github/workflows/docker.yml` builds `rust/Dockerfile` from the repository root, fails when the tag differs from `APP_VERSION`, and publishes `ghcr.io/professorbagholder/bagholder:X.Y.Z` and `:latest`, and `:rust-X.Y.Z` and `:rust`. The Android build goes on the same release page as `bagholder-vX.Y.Z-android.apk`, built from the same tag.
 
 ## Handoffs from Claude Design
 

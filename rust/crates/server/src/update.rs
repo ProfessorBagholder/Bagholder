@@ -220,7 +220,7 @@ pub fn update_status(app: &Arc<App>) -> Result<UpdateRecord, String> {
 }
 
 /// This platform's archive in the release `tag`: `bagholder-vX.Y.Z-rust-<target>.tar.gz`
-/// (`.zip` on Windows), beside the Python app's `bagholder-vX.Y.Z-web.zip`.
+/// (`.zip` on Windows).
 pub fn archive_name(tag: &str) -> String {
     format!("bagholder-{}-rust-{}.{}", tag, target_triple(), archive_ext())
 }

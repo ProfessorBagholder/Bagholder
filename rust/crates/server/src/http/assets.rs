@@ -8,9 +8,6 @@
 //! Files under `/assets/` carry a hash of their contents in their name, so they
 //! are `immutable`: a browser never asks for one twice. `index.html` names them
 //! and is `no-cache`: always revalidated, so a new build is picked up at once.
-//!
-//! The legacy page (`ledger.html`, with its chart library) is served from the
-//! repository root at `/v2` until the cutover removes it.
 
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue};
@@ -31,10 +28,6 @@ pub fn routes() -> Router<AppState> {
         .route("/assets/{*path}", get(asset))
         .route("/favicon.png", get(|s: State<AppState>| page_file(s, "favicon.png")))
         .route("/favicon.ico", get(|s: State<AppState>| page_file(s, "favicon.png")))
-        .route("/v2", get(legacy))
-        .route("/v2/", get(legacy))
-        .route("/ledger.html", get(legacy))
-        .route("/lightweight-charts.js", get(|s: State<AppState>| root_file(s, "lightweight-charts.js")))
 }
 
 fn content_type(name: &str) -> &'static str {
@@ -63,9 +56,7 @@ fn file(name: &str, data: Vec<u8>, cache: &'static str) -> Response {
 
 async fn index(State(state): State<AppState>) -> Result<Response, ApiError> {
     let root = state.app.root.clone();
-    let app = state.app.clone();
-    // a checkout where the page has not been built still opens: on the legacy page
-    let data = blocking(move || built(&root, "index.html").or_else(|| std::fs::read(crate::feeds::ledger_path(&app)).ok())).await?;
+    let data = blocking(move || built(&root, "index.html")).await?;
     data.map(|d| file("index.html", d, "no-cache")).ok_or_else(|| ApiError::NotFound("index missing".into()))
 }
 
@@ -83,22 +74,20 @@ async fn asset(State(state): State<AppState>, Path(path): Path<String>) -> Resul
     data.map(|d| file(&name, d, "public, max-age=31536000, immutable")).ok_or_else(|| ApiError::NotFound("asset missing".into()))
 }
 
-/// A file of the built page that is not hashed (the icons).
+/// Whether there is a built page to serve.
+#[cfg(test)]
+pub(crate) fn built_page(root: &std::path::Path) -> bool {
+    built(root, "index.html").is_some()
+}
+
+/// A file of the built page that is not hashed (the icons), or of the page's
+/// sources (`web/public`) in a checkout where the page has not been built.
+pub(crate) fn unhashed(root: &std::path::Path, name: &str) -> Option<Vec<u8>> {
+    built(root, name).or_else(|| std::fs::read(root.join("web/public").join(name)).ok())
+}
+
 async fn page_file(State(state): State<AppState>, name: &'static str) -> Result<Response, ApiError> {
     let root = state.app.root.clone();
-    let data = blocking(move || built(&root, name).or_else(|| std::fs::read(root.join(name)).ok())).await?;
+    let data = blocking(move || unhashed(&root, name)).await?;
     data.map(|d| file(name, d, "no-cache")).ok_or_else(|| ApiError::NotFound(format!("{} missing", name)))
-}
-
-/// A file beside the legacy page, at the repository root.
-async fn root_file(State(state): State<AppState>, name: &'static str) -> Result<Response, ApiError> {
-    let root = state.app.root.clone();
-    let data = blocking(move || std::fs::read(root.join(name)).ok()).await?;
-    data.map(|d| file(name, d, "no-cache")).ok_or_else(|| ApiError::NotFound(format!("{} missing", name)))
-}
-
-async fn legacy(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let app = state.app.clone();
-    let data = blocking(move || std::fs::read(crate::feeds::ledger_path(&app)).ok()).await?;
-    data.map(|d| file("ledger.html", d, "no-cache")).ok_or_else(|| ApiError::NotFound("ledger.html missing".into()))
 }

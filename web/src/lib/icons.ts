@@ -1,4 +1,4 @@
-// Phosphor icon path data, ported verbatim from ledger.html's ICONS map. Each
+// Phosphor icon path data, ported verbatim from the old page's ICONS map. Each
 // value is the `d` of a single <path> in a 0 0 256 256 viewBox, fill=currentColor.
 export const ICONS: Record<string, string> = {
   plus: 'M224 128a8 8 0 0 1-8 8h-80v80a8 8 0 0 1-16 0v-80H40a8 8 0 0 1 0-16h80V40a8 8 0 0 1 16 0v80h80a8 8 0 0 1 8 8Z',

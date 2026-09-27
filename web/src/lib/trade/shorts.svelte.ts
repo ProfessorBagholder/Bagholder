@@ -1,5 +1,5 @@
 // Short interest per listing, read from /api/shorts and cached. Ported from
-// ledger.html (_shorts / ensureShorts / shortsKey / shortDay / shortSpan). The
+// the old page (_shorts / ensureShorts / shortsKey / shortDay / shortSpan). The
 // store is reactive $state so the ShortInterest card renders when a fetch lands.
 import type { Trade, ShortsPayload } from '../model'
 import { listingTicker } from './chart'

@@ -10,7 +10,7 @@
   let { onclose }: { onclose: () => void } = $props()
 
   // Closing is having looked: every row reads read, the badge clears. Faithful to
-  // ledger.html closeNotes() — read on close, so the unread dots stay while open.
+  // the old page's closeNotes() — read on close, so the unread dots stay while open.
   onDestroy(() => { markAllRead() })
 
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']

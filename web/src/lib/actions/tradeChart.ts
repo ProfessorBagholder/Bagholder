@@ -12,7 +12,7 @@ import {
 import type { Fill } from '../model'
 import { fillMarkers, localTime, STEP, type Bar, type ChartColors } from '../trade/chart'
 
-// The trade chart as a Svelte `use:` action — a faithful port of ledger.html's
+// The trade chart as a Svelte `use:` action — a faithful port of the old page's
 // drawTradeChart: candlesticks with each execution marked (up arrow below for a
 // buy, down arrow above for a sell), the trade framed with ~15% padding either
 // side, and labels shown on the arrows only once ≤40 executions are in view.

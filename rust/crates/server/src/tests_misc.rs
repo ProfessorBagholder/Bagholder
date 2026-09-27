@@ -72,8 +72,8 @@ fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight()
 #[test]
 fn test_page_and_server_agree_on_the_protocol_stamp() {
     let _g = guard();
-    let page = std::fs::read_to_string(crate::feeds::ledger_path(&app())).unwrap();
-    let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&page).expect("PROTOCOL on the page");
+    let page = std::fs::read_to_string(app().root.join("web/src/lib/protocol.ts")).unwrap();
+    let m = regex::Regex::new(r"export const PROTOCOL = '([^']+)'").unwrap().captures(&page).expect("PROTOCOL on the page");
     assert_eq!(&m[1], app::PROTOCOL);
     assert_eq!(crate::status::status(&app()).protocol, app::PROTOCOL);
 }
@@ -242,7 +242,7 @@ fn test_a_row_moves_both_and_the_same_row_read_again_moves_neither() {
 // InAppUpdateTest
 // ---------------------------------------------------------------------------
 
-/// The Rust release names its archive `-rust-<target>`, beside the Python app's `-web.zip`.
+/// The Rust release names its archive `-rust-<target>`; any other asset on the release is not this copy's.
 #[test]
 fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
     let rel = |names: &[String]| update::GithubRelease {
@@ -373,7 +373,7 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
 #[test]
 fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root() {
     let _g = guard();
-    assert!(app().root.join("ledger.html").is_file(), "the root is the repository's");
+    assert!(app().root.join("rust/Cargo.toml").is_file(), "the root is the repository's");
     assert_eq!(update::cargo_dir(&app()), app().root.join("rust"));
     assert!(update::cargo_dir(&app()).join("Cargo.toml").is_file());
 }
