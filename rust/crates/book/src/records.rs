@@ -15,6 +15,7 @@ use bagholder_core::record::{Problem, RecordState, SourceRecord};
 use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, InstrumentId, Leg, MappingVersion, Money, RecordId, SourceName, TradeId, TransactionId};
 
+use crate::identity::Splits;
 use crate::mapping::{Draft, MapContext, Mapping};
 use crate::text::{self, at as at_text, day};
 use crate::{canon, new_uuid, Book, BookError, Result};
@@ -66,6 +67,15 @@ pub struct Stored {
     pub changes: Changes,
 }
 
+/// Which instrument a transaction is read on.
+#[derive(Clone, Copy)]
+enum Read {
+    /// The one the book reads it as, a succession's joins applied.
+    AsBook,
+    /// The one its record's own references name.
+    AsNamed,
+}
+
 /// The way a transaction moves a position: in (1), out (-1), or neither (0).
 pub(crate) fn direction(t: &Transaction) -> i8 {
     match t.quantity {
@@ -108,7 +118,11 @@ impl Book {
     /// Store a record: new, a new revision, or nothing when the payload is the
     /// same. A new or revised live record's transactions are derived by `mapping`.
     pub fn store(&self, mapping: &dyn Mapping, incoming: &Incoming, at: jiff::Timestamp) -> Result<Stored> {
-        self.atomically(|| self.store_inner(mapping, incoming, at))
+        self.atomically(|| {
+            let stored = self.store_inner(mapping, incoming, at)?;
+            self.settle_successions()?;
+            Ok(stored)
+        })
     }
 
     /// Store a record that replaces others, in one transaction, so the new record
@@ -130,6 +144,7 @@ impl Book {
                 let (_, removed) = self.supersede_counting(&pending, &[stored.record], reason, at)?;
                 stored.changes.removed.extend(removed);
             }
+            self.settle_successions()?;
             Ok(stored)
         })
     }
@@ -163,7 +178,7 @@ impl Book {
             self.conn().execute("INSERT OR IGNORE INTO record_refs(scheme, value, record_id) VALUES (?, ?, ?)", params![scheme, value, record.to_string()])?;
         }
         let changes = if outcome != Outcome::Unchanged && self.record(record)?.state == RecordState::Live {
-            self.derive(record, incoming.connection, &payload, mapping, at)?
+            self.derive(record, incoming.connection, &payload, mapping, None, at)?
         } else {
             Changes::default()
         };
@@ -178,7 +193,7 @@ impl Book {
         Ok(())
     }
 
-    fn latest_revision(&self, id: RecordId) -> Result<(String, u32)> {
+    pub(crate) fn latest_revision(&self, id: RecordId) -> Result<(String, u32)> {
         self.conn()
             .query_row(
                 "SELECT payload, revision FROM record_revisions WHERE record_id = ? ORDER BY revision DESC LIMIT 1",
@@ -190,8 +205,13 @@ impl Book {
     }
 
     /// Derive a live record's transactions from `payload` again, replacing what
-    /// it had, and move or orphan the trades anchored on it.
-    fn derive(&self, record: RecordId, connection: Option<ConnectionId>, payload: &str, mapping: &dyn Mapping, at: jiff::Timestamp) -> Result<Changes> {
+    /// it had, and move or orphan the trades anchored on it. Each leg is kept on
+    /// the instrument its own references name (`Book::own_instrument`), so a
+    /// succession joining or parting two instruments changes nothing here.
+    /// `splits` is the repair of an earlier build's merge: a leg that lands on
+    /// an instrument split off the one it was on is the same leg, and its trade
+    /// follows it (`Book::repair_merged_successions`).
+    pub(crate) fn derive(&self, record: RecordId, connection: Option<ConnectionId>, payload: &str, mapping: &dyn Mapping, splits: Option<&Splits>, at: jiff::Timestamp) -> Result<Changes> {
         let source = mapping.source();
         let version = mapping.version();
         let ctx = MapContext { connection, record: record.clone(), zones: &self.zones };
@@ -202,7 +222,7 @@ impl Book {
         // is never half counted
         self.conn().execute("DELETE FROM instrument_sightings WHERE record_id = ?", [record.to_string()])?;
         self.conn().execute_batch("SAVEPOINT derive")?;
-        let resolved = self.resolve_legs(record, &mapped.legs, &source, version, at);
+        let resolved = self.resolve_legs(record, &mapped.legs, &source, version, splits, at);
         let rows = match resolved {
             Ok((Ok(rows), notes)) => {
                 self.conn().execute_batch("RELEASE derive")?;
@@ -220,7 +240,7 @@ impl Book {
             }
         };
 
-        let before: BTreeMap<Leg, Transaction> = self.transactions_of(record)?.into_iter().map(|t| (t.id.leg.clone(), t)).collect();
+        let before: BTreeMap<Leg, Transaction> = self.own_transactions_of(record)?.into_iter().map(|t| (t.id.leg.clone(), t)).collect();
         // the sightings the resolution just wrote are the record's new ones; its
         // transactions and problems are replaced below
         self.conn().execute("DELETE FROM transactions WHERE record_id = ?", [record.to_string()])?;
@@ -257,7 +277,21 @@ impl Book {
             let reason = match (before.get(&anchor.transaction.leg), after.get(&anchor.transaction.leg)) {
                 (_, None) => Some(format!("the record it opened on no longer has its {} transaction", anchor.transaction.leg)),
                 (Some(old), Some(new)) if !same_opening(old, new) => {
-                    Some("the record it opened on now says another account, instrument or direction".to_string())
+                    // the repair of a merge moved the leg to the instrument
+                    // split off the one it was on: the same opening
+                    let split = match (old.instrument, new.instrument, splits) {
+                        (Some(o), Some(n), Some(s)) if s.get(&n) == Some(&o) && same_opening(&Transaction { instrument: Some(n), ..old.clone() }, new) => Some((o, n)),
+                        _ => None,
+                    };
+                    match split {
+                        Some((o, n)) => {
+                            if anchor.instrument == o {
+                                self.conn().execute("UPDATE trades SET anchor_instrument = ? WHERE id = ?", params![n.to_string(), trade.to_string()])?;
+                            }
+                            None
+                        }
+                        None => Some("the record it opened on now says another account, instrument or direction".to_string()),
+                    }
                 }
                 _ => None,
             };
@@ -271,7 +305,7 @@ impl Book {
     /// Each draft as a transaction, its account and instrument resolved. `Err`
     /// holds the problems that stop the record's transactions.
     #[allow(clippy::type_complexity)]
-    fn resolve_legs(&self, record: RecordId, legs: &[Draft], source: &SourceName, version: u32, at: jiff::Timestamp) -> Result<(std::result::Result<Vec<Transaction>, Vec<Problem>>, Vec<Problem>)> {
+    fn resolve_legs(&self, record: RecordId, legs: &[Draft], source: &SourceName, version: u32, splits: Option<&Splits>, at: jiff::Timestamp) -> Result<(std::result::Result<Vec<Transaction>, Vec<Problem>>, Vec<Problem>)> {
         let mut rows = Vec::new();
         let mut blocking = Vec::new();
         let mut notes = Vec::new();
@@ -288,7 +322,7 @@ impl Book {
             let instrument = match &d.instrument {
                 None => None,
                 Some(draft) => {
-                    let (found, more) = self.resolve_instrument(draft, &TransactionId::new(record, d.leg.clone()), at)?;
+                    let (found, more) = self.resolve_instrument(draft, &TransactionId::new(record, d.leg.clone()), splits, at)?;
                     notes.extend(more);
                     match found {
                         Ok(id) => Some(id),
@@ -389,10 +423,10 @@ impl Book {
                 let record = text::parsed("source_records", "id", &id, RecordId::parse)?;
                 let connection = text::opt_parsed("source_records", "connection_id", connection, ConnectionId::parse)?;
                 let (payload, _) = self.latest_revision(record)?;
-                changes.extend(self.derive(record, connection, &payload, mapping, at)?);
+                changes.extend(self.derive(record, connection, &payload, mapping, None, at)?);
             }
             // what the records now state of the source's ids, over all of them
-            self.join_successions()?;
+            self.settle_successions()?;
             Ok(changes)
         })
     }
@@ -423,6 +457,8 @@ impl Book {
                     "the source removed a record that had replaced others; the ones it replaced stay replaced",
                 )])?;
             }
+            // a removed event row no longer states a succession
+            self.settle_successions()?;
             Ok(Changes { removed, ..Changes::default() })
         })
     }
@@ -506,24 +542,44 @@ impl Book {
         Ok(out)
     }
 
-    /// Every transaction in the book (live records only have any), by account and day.
+    /// Every transaction in the book (live records only have any), by account
+    /// and day, each on the instrument the book reads it as.
     pub fn transactions(&self) -> Result<Vec<Transaction>> {
-        self.transactions_where("", [])
+        self.transactions_where("", [], Read::AsBook)
+    }
+
+    /// Every transaction, each on the instrument its record's own references
+    /// name, before any succession joins it to another: what a broker's own
+    /// ids for its moves are matched against.
+    pub fn transactions_as_named(&self) -> Result<Vec<Transaction>> {
+        self.transactions_where("", [], Read::AsNamed)
     }
 
     pub fn transactions_of(&self, record: RecordId) -> Result<Vec<Transaction>> {
-        self.transactions_where("WHERE t.record_id = ?", [record.to_string()])
+        self.transactions_where("WHERE t.record_id = ?", [record.to_string()], Read::AsBook)
+    }
+
+    pub(crate) fn own_transactions_of(&self, record: RecordId) -> Result<Vec<Transaction>> {
+        self.transactions_where("WHERE t.record_id = ?", [record.to_string()], Read::AsNamed)
     }
 
     pub fn transaction(&self, id: &TransactionId) -> Result<Option<Transaction>> {
-        Ok(self.transactions_where("WHERE t.record_id = ? AND t.leg = ?", [id.record.to_string(), id.leg.to_string()])?.pop())
+        Ok(self.transactions_where("WHERE t.record_id = ? AND t.leg = ?", [id.record.to_string(), id.leg.to_string()], Read::AsBook)?.pop())
     }
 
-    fn transactions_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Transaction>> {
+    pub(crate) fn own_transaction(&self, id: &TransactionId) -> Result<Option<Transaction>> {
+        Ok(self.transactions_where("WHERE t.record_id = ? AND t.leg = ?", [id.record.to_string(), id.leg.to_string()], Read::AsNamed)?.pop())
+    }
+
+    fn transactions_where(&self, filter: &str, args: impl rusqlite::Params, read: Read) -> Result<Vec<Transaction>> {
+        let instrument = match read {
+            Read::AsBook => "COALESCE(j.into_id, t.instrument_id)",
+            Read::AsNamed => "t.instrument_id",
+        };
         let sql = format!(
             "SELECT t.record_id, t.leg, r.source, t.mapping_version, t.account_id, t.occurred_at, t.trade_date, t.settle_date, t.kind, t.effect,
-                    t.instrument_id, t.quantity, t.price, t.price_currency, t.cash, t.cash_currency, t.fee, t.fee_currency, t.fx_rate, t.paid_on, t.value, t.value_currency
-             FROM transactions t JOIN source_records r ON r.id = t.record_id {filter}
+                    {instrument}, t.quantity, t.price, t.price_currency, t.cash, t.cash_currency, t.fee, t.fee_currency, t.fx_rate, t.paid_on, t.value, t.value_currency
+             FROM transactions t JOIN source_records r ON r.id = t.record_id LEFT JOIN instrument_joins j ON j.instrument_id = t.instrument_id {filter}
              ORDER BY t.account_id, t.trade_date, t.occurred_at, t.record_id, t.leg"
         );
         let mut stmt = self.conn().prepare_cached(&sql)?;

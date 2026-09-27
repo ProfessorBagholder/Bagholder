@@ -244,6 +244,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     let (book, _) = Book::open_in(book_dir, crate::app::APP_VERSION, at).map_err(err)?;
     // the book as the app opens it: every source's records derived under its
     // mapping's version (`figures::Figures::open`)
+    book.repair_merged_successions(&crate::figures::mappings(), at).map_err(err)?;
     let mut changes = bagholder_book::records::Changes::default();
     for m in crate::figures::mappings() {
         let c = book.rederive(m, at).map_err(err)?;

@@ -95,19 +95,32 @@ impl Book {
 
     /// Every statement of an account's units read after `since`, newest first:
     /// when it was read, and the units of `instrument` it states (none where it
-    /// does not list it).
+    /// does not list it), with those of every instrument read as one with it.
     pub fn units_reads(&self, account: AccountId, instrument: InstrumentId, since: jiff::Timestamp) -> Result<Vec<(jiff::Timestamp, Option<Dec>)>> {
-        let mut st = self.conn().prepare(
-            "SELECT r.at, u.quantity FROM statements s JOIN broker_reads r ON r.id = s.read_id
-             LEFT JOIN statement_units u ON u.statement_id = s.id AND u.instrument_id = ?2
+        let head = self.canonical(instrument)?;
+        let mut st = self.conn().prepare(&format!(
+            "SELECT r.at, s.id, u.quantity FROM statements s JOIN broker_reads r ON r.id = s.read_id
+             LEFT JOIN statement_units u ON u.statement_id = s.id AND u.instrument_id IN {}
              WHERE s.account_id = ?1 AND s.kind = 'units' AND r.at > ?3 ORDER BY r.at DESC, s.id DESC",
-        )?;
-        let rows = st.query_map(params![account.to_string(), instrument.to_string(), at_text(since)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
-        rows.map(|r| {
-            let (at, q) = r?;
-            Ok((text::instant("broker_reads", "at", &at)?, q.map(|q| text::dec("statement_units", "quantity", &q)).transpose()?))
-        })
-        .collect()
+            crate::identity::group_sql("?2")
+        ))?;
+        let rows = st.query_map(params![account.to_string(), head.to_string(), at_text(since)], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+        })?;
+        let mut out: Vec<(String, jiff::Timestamp, Option<Dec>)> = Vec::new();
+        for row in rows {
+            let (at, statement, q) = row?;
+            let q = q.map(|q| text::dec("statement_units", "quantity", &q)).transpose()?;
+            match out.last_mut() {
+                Some((id, _, held)) if *id == statement => {
+                    if let Some(q) = q {
+                        *held = Some(held.unwrap_or(Dec::ZERO).checked_add(q).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?);
+                    }
+                }
+                _ => out.push((statement, text::instant("broker_reads", "at", &at)?, q)),
+            }
+        }
+        Ok(out.into_iter().map(|(_, at, q)| (at, q)).collect())
     }
 
     /// Each account that backs a margin account, and the margin account.
@@ -292,11 +305,17 @@ impl Book {
             .query_row("SELECT id, as_of_day FROM statements WHERE account_id = ?1 AND kind = 'units' ORDER BY as_of_day DESC, id DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
         if let Some((id, d)) = units {
-            let mut m = BTreeMap::new();
+            // each line under the instrument the book reads it as: the units of
+            // instruments read as one added up
+            let joined = self.joined()?;
+            let mut m: BTreeMap<InstrumentId, Dec> = BTreeMap::new();
             let mut st = self.conn().prepare("SELECT instrument_id, quantity FROM statement_units WHERE statement_id = ?1")?;
             for r in st.query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                 let (i, q) = r?;
-                m.insert(text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?, text::dec("statement_units", "quantity", &q)?);
+                let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
+                let q = text::dec("statement_units", "quantity", &q)?;
+                let e = m.entry(joined.get(&i).copied().unwrap_or(i)).or_insert(Dec::ZERO);
+                *e = e.checked_add(q).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?;
             }
             out.units = Some((text::date("statements", "as_of_day", &d)?, m));
         }

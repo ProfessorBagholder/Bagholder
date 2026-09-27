@@ -63,7 +63,7 @@ impl Book {
                     let mut moved = false;
                     for t in targets.iter().filter(|t| same_opening(opening, t)) {
                         if self.trade_on(&Opening { transaction: t.id.clone(), instrument: anchor.instrument })?.is_none() {
-                            self.move_anchor(trade, &t.id)?;
+                            self.move_anchor(trade, &t.id, anchor.instrument)?;
                             moved = true;
                             break;
                         }
@@ -106,6 +106,8 @@ impl Book {
                     )?;
                 }
             }
+            // a record gone from the count may have stated a succession
+            self.settle_successions()?;
             Ok((link, removed))
         })
     }

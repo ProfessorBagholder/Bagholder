@@ -126,7 +126,7 @@ pub enum Standing {
     Live,
     /// Retired by a corporate action: where no event row states what became of
     /// it, the listing continues under the source's live id of the same symbol,
-    /// venue and currency (`Book::join_successions`).
+    /// venue and currency (`Book::settle_successions`).
     RetiredByEvent,
     Delisted,
 }
