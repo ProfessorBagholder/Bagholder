@@ -248,12 +248,21 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     }
     let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
     step(Step::Balances);
-    // each of the broker's accounts' cash as it states it now, for the statements
-    let mut cash_now = BTreeMap::new();
-    store_balances(book, adapter, connection, &keys_of, &margin, now, &mut cash_now, &mut report.failures)?;
+    store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     // the movements the activity feed left out, for an account whose cash now
     // disagrees with the broker's: read from its monthly statements
-    report.statements = crate::statements::run(book, adapter, connection, &keys_of, &cash_now, today, now, step, &mut report.failures)?;
+    // every account of the broker's behind an open one of the book's, closed ones
+    // too: an account merged into another holds the history the book carries
+    // over from it, and holds no cash now
+    let mut statement_keys: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
+    let mut closed = BTreeSet::new();
+    for a in stated.iter().filter(|a| keys_of.contains_key(&ids[&a.key])) {
+        statement_keys.entry(ids[&a.key]).or_default().push(a.key.clone());
+        if !a.open {
+            closed.insert(a.key.clone());
+        }
+    }
+    report.statements = crate::statements::run(book, adapter, connection, &statement_keys, &closed, today, now, step, &mut report.failures)?;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     // units already stated as of that day are not asked again
@@ -596,7 +605,7 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         keys_of.insert(a.id, keys);
     }
     let mut failures = Vec::new();
-    let accounts = store_balances(book, adapter, connection, &keys_of, &margin, now, &mut BTreeMap::new(), &mut failures)?;
+    let accounts = store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?;
     Ok(BalancesRead { accounts, failures })
 }
 
@@ -610,7 +619,6 @@ fn store_balances(
     keys_of: &BTreeMap<AccountId, Vec<String>>,
     margin: &BTreeSet<AccountId>,
     now: jiff::Timestamp,
-    per_key: &mut BTreeMap<String, BTreeMap<bagholder_core::Currency, Dec>>,
     failures: &mut Vec<(String, Failure)>,
 ) -> Result<Vec<AccountId>> {
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
@@ -618,7 +626,6 @@ fn store_balances(
     let keys: Vec<String> = keys_of.values().flatten().cloned().collect();
     match adapter.cash(&keys) {
         Ok(cash) => {
-            per_key.clone_from(&cash);
             let read = book.broker_read(connection, "cash", now)?;
             for (id, ks) in keys_of {
                 // an account the answer does not state has its cash unstated,

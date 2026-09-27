@@ -30,6 +30,13 @@ pub fn rows(node: &Value, currency: Currency) -> Result<Vec<StatementRow>, Misma
                 out.push(row(&r, currency)?);
             }
         }
+        // an account in one currency (a crypto account's) may state no lists per
+        // currency: its rows are in its own
+        "BrokerageMonthlyStatementObject" if matches!(data.field("activitiesPerCurrency")?.value(), Value::Null) => {
+            for r in data.list("currentTransactions")? {
+                out.push(row(&r, currency)?);
+            }
+        }
         "BrokerageMonthlyStatementObject" => {
             for per in data.list("activitiesPerCurrency")? {
                 let c = per.field("currency")?;

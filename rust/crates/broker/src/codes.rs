@@ -44,8 +44,12 @@ pub fn kind(code: &str) -> Option<Kind> {
         // `Convert CAD (executed at …) - $1USD = $1.35CAD`: each currency's side in its own list
         "FXCONVERSION" => Kind::CurrencyConversion,
         // `BBAI 5.00 USD PUT …: Bought 26 contract`, `Sold 1 contract`: fills
-        "BUYTOCLOSE" => Kind::Buy,
-        "SELLTOOPEN" => Kind::Sell,
+        "BUYTOCLOSE" | "BUYTOOPEN" => Kind::Buy,
+        "SELLTOOPEN" | "SELLTOCLOSE" => Kind::Sell,
+        // `Stock lending monthly interest payment`
+        "FPLINT" => Kind::Interest,
+        // `Non-resident tax (executed at …)`
+        "NRT" => Kind::WithholdingTax,
         // `Federal withholding tax (executed at …)`
         "WHTFED" => Kind::WithholdingTax,
         _ => return None,
@@ -74,6 +78,10 @@ mod tests {
             ("FXCONVERSION", Kind::CurrencyConversion),
             ("BUYTOCLOSE", Kind::Buy),
             ("SELLTOOPEN", Kind::Sell),
+            ("BUYTOOPEN", Kind::Buy),
+            ("SELLTOCLOSE", Kind::Sell),
+            ("FPLINT", Kind::Interest),
+            ("NRT", Kind::WithholdingTax),
             ("WHTFED", Kind::WithholdingTax),
             ("SELL", Kind::Sell),
         ] {

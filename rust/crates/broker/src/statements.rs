@@ -75,10 +75,10 @@ fn previous(m: jiff::civil::Date) -> Option<jiff::civil::Date> {
 
 /// Read what is needed and book what the feed left out, for each account
 /// whose cash disagrees with what the broker states. `keys_of` names the
-/// broker's open accounts behind each of the book's; `cash_now`, each one's
-/// cash as the broker states it now.
+/// broker's accounts behind each of the book's; `closed`, those the broker
+/// states closed, which hold no cash now.
 #[allow(clippy::too_many_arguments)]
-pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, cash_now: &BTreeMap<String, BTreeMap<Currency, Dec>>, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(crate::Step), failures: &mut Vec<(String, Failure)>) -> Result<Done> {
+pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, closed: &BTreeSet<String>, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(crate::Step), failures: &mut Vec<(String, Failure)>) -> Result<Done> {
     let mut done = Done::default();
     let Some(mapping_source) = adapter.statement_mapping().map(|m| m.source()) else { return Ok(done) };
     let txs = book.transactions()?;
@@ -181,7 +181,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             // every currency that disagrees needs its base month
             let months: Vec<jiff::civil::Date> = months_between(m, top);
             for (c, b) in base.iter_mut() {
-                if b.is_none() && reconcile(*c, &months, keys, &kept, cash_now, &own).is_base(m) {
+                if b.is_none() && reconcile(*c, &months, keys, &kept, closed, &own).is_base(m) {
                     *b = Some(m);
                 }
             }
@@ -204,12 +204,12 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         for (currency, b) in base {
             let Some(b) = b else {
                 // no month read back to the account's first reconciles: nothing is booked
-                let r = reconcile(currency, &months_between(oldest, top), keys, &kept, cash_now, &own);
+                let r = reconcile(currency, &months_between(oldest, top), keys, &kept, closed, &own);
                 let (statement, book_side) = r.closings(top);
                 done.unreconciled.push(Unreconciled { account: *account, month: top, currency, statement, book: book_side, why: Some("no month read back to the account's first reconciles".into()) });
                 continue;
             };
-            let r = reconcile(currency, &months_between(b, top), keys, &kept, cash_now, &own);
+            let r = reconcile(currency, &months_between(b, top), keys, &kept, closed, &own);
             let forward = r.forward(b, top);
             // the months that reconcile: from the base to the month before any that does not
             let proven = |m: jiff::civil::Date| m >= b && forward.stopped.as_ref().is_none_or(|s| m < s.month);
@@ -358,13 +358,14 @@ impl Reconciled {
 
 /// Match one currency's statement rows over `months` to the account's book
 /// transactions and work out each month's closing on both sides.
-fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, cash_now: &BTreeMap<String, BTreeMap<Currency, Dec>>, own: &[&Transaction]) -> Reconciled {
+fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, closed: &BTreeSet<String>, own: &[&Transaction]) -> Reconciled {
     // the rows in this currency, each by its place
     let mut rows: Vec<(Place, &StatementRow)> = vec![];
     for k in keys {
         for m in months {
             if let Some(Some(list)) = kept[k].get(m) {
-                for (i, r) in list.iter().enumerate().filter(|(_, r)| r.currency == currency) {
+                // a row that moves no cash (shares lent and recalled) is nothing to match or book
+                for (i, r) in list.iter().enumerate().filter(|(_, r)| r.currency == currency && !r.cash.is_zero()) {
                     rows.push(((k.clone(), *m, i), r));
                 }
             }
@@ -408,7 +409,7 @@ fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], 
             unmatched.entry(place.1).or_default().push((place.clone(), r.cash, crate::codes::kind(&r.code)));
         }
     }
-    Reconciled { closing: closings(currency, months, keys, kept, cash_now), book, unmatched, file_rows, months: months.to_vec() }
+    Reconciled { closing: closings(currency, months, keys, kept, closed), book, unmatched, file_rows, months: months.to_vec() }
 }
 
 fn source_of(t: &Transaction) -> SourceName {
@@ -418,9 +419,10 @@ fn source_of(t: &Transaction) -> SourceName {
 /// Each month's closing balance in `currency`, summed over the broker's
 /// accounts: a month with rows closes at its last row's balance; one without
 /// carries the month before's closing, or the next month's opening. An account
-/// with no row in any month read moved nothing through them: its balance is
-/// the cash the broker states it holds now, and unstated where it states none.
-fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, cash_now: &BTreeMap<String, BTreeMap<Currency, Dec>>) -> BTreeMap<jiff::civil::Date, Option<Dec>> {
+/// with no row in any month read holds nothing where the broker states it
+/// closed; an open one's balance is not stated by them, and leaves the sum
+/// unstated (its cash now may have moved in since).
+fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, closed: &BTreeSet<String>) -> BTreeMap<jiff::civil::Date, Option<Dec>> {
     let mut sums: BTreeMap<jiff::civil::Date, Option<Dec>> = months.iter().map(|m| (*m, Some(Dec::ZERO))).collect();
     for k in keys {
         // each month's (opening, closing) where it has rows in this currency
@@ -434,7 +436,7 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
                 Some((*m, chain_ends(&rows)))
             })
             .collect();
-        let still = if known.is_empty() { cash_now.get(k).map(|c| c.get(&currency).copied().unwrap_or(Dec::ZERO)) } else { None };
+        let still = (known.is_empty() && closed.contains(k)).then_some(Dec::ZERO);
         for m in months {
             let closing = known.get(m).map(|(_, c)| *c).or_else(|| known.range(..*m).next_back().map(|(_, (_, c))| *c)).or_else(|| known.range(*m..).next().map(|(_, (o, _))| *o)).flatten().or(still);
             let s = sums.get_mut(m).expect("each month is summed");
