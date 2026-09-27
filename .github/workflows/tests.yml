@@ -1,7 +1,6 @@
 # Every suite, on every pull request and every push to master. Nothing ran on a pull request before
 # this: a branch was only ever as tested as whoever remembered to run it. The server and the page are
 # one product -- the page is built into the server -- so a pull request is green only when both are.
-# The Rust suite runs the launcher (`bagholder.py`) with the runner's python3.
 name: Tests
 
 on:

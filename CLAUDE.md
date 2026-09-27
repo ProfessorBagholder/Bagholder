@@ -19,7 +19,7 @@ Bagholder is a local-first trading journal for Wealthsimple users. The app is on
 - `docs/decisions.md`: the owner's decisions. Where anything else disagrees with it, it wins and the other is fixed.
 - `docs/design-review.md`: the order of work, the one place status is kept.
 
-Also: `docs/old-app-mistakes.md` (the old app's known mistakes and what guards each), `docs/parity.md` (what the old page shows and does, the one place the old app is the reference, for the screen only), `docs/plans/` (stage plans). `bagholder.py` (the same file at the root and in `python/`) is not an app: it starts the Rust server from a checkout, and is what a Python install that updated itself by `git pull` restarts; its tests are in `rust/crates/server/src/main.rs`. The phone apps (`ios/`, `android/`, `MOBILE.md`) are on hold. The repository is public.
+Also: `docs/old-app-mistakes.md` (the old app's known mistakes and what guards each), `docs/parity.md` (what the old page shows and does, the one place the old app is the reference, for the screen only), `docs/plans/` (stage plans). The phone apps (`ios/`, `android/`, `MOBILE.md`) are on hold. The repository is public.
 
 ## The gate: plans for heavy lifts only
 

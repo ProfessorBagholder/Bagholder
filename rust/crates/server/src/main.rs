@@ -298,8 +298,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    //! The data folder, the root, the protocol, the image and the launcher.
-    use std::path::{Path, PathBuf};
+    //! The data folder, the root, the protocol and the image.
+    use std::path::PathBuf;
 
     /// The repository root, with this workspace in rust/.
     fn root() -> PathBuf {
@@ -389,141 +389,6 @@ mod tests {
         let ignored: Vec<String> = std::fs::read_to_string(root().join(".dockerignore")).unwrap().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
         for needed in ["rust", "rust/crates", "rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml", "rust/docker-entrypoint.sh", "web", "web/src", "web/public", "web/package.json", "web/package-lock.json"] {
             assert!(!ignored.iter().any(|i| i == needed), "{} kept out of the image", needed);
-        }
-    }
-
-    // --- the launcher: `python3 bagholder.py` -------------------------------------------
-
-    #[test]
-    fn test_the_launcher_is_one_file_in_both_places() {
-        // the owner starts `bagholder.py` at the root; a Python copy's supervisor restarts `python/bagholder.py`
-        assert_eq!(std::fs::read(root().join("bagholder.py")).unwrap(), std::fs::read(root().join("python/bagholder.py")).unwrap());
-    }
-
-    #[cfg(unix)]
-    mod launcher {
-        use super::*;
-        use std::os::unix::fs::PermissionsExt;
-        use std::process::Command;
-
-        fn python3() -> PathBuf {
-            let path = std::env::var_os("PATH").unwrap_or_default();
-            std::env::split_paths(&path).map(|d| d.join("python3")).find(|p| p.is_file()).expect("python3 on the PATH: the launcher is a Python file")
-        }
-
-        /// A made-up checkout: the workspace's manifest and the launcher in both places.
-        fn checkout() -> tempfile::TempDir {
-            let t = tempfile::tempdir().unwrap();
-            let p = t.path();
-            std::fs::create_dir_all(p.join("rust")).unwrap();
-            std::fs::write(p.join("rust/Cargo.toml"), "").unwrap();
-            std::fs::create_dir_all(p.join("python")).unwrap();
-            std::fs::create_dir_all(p.join("bin")).unwrap();
-            std::fs::copy(root().join("bagholder.py"), p.join("bagholder.py")).unwrap();
-            std::fs::copy(root().join("python/bagholder.py"), p.join("python/bagholder.py")).unwrap();
-            t
-        }
-
-        /// A program that writes its parent's id, its folder, one variable of its
-        /// environment and its arguments, a line each, to `out` (appending).
-        fn stand_in(at: &Path, out: &Path) {
-            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
-            std::fs::write(at, format!("#!/bin/sh\n{{ echo \"$PPID\"; pwd -P; echo \"$BAGHOLDER_PROBE\"; for a in \"$@\"; do echo \"$a\"; done; echo ==; }} >> '{}'\n", out.display())).unwrap();
-            std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        fn launch(dir: &Path, file: &str) -> std::process::Output {
-            Command::new(python3()).arg(dir.join(file)).arg("--version").current_dir(std::env::temp_dir()).env("PATH", dir.join("bin")).env("BAGHOLDER_PROBE", "passed through").output().unwrap()
-        }
-
-        fn calls(out: &Path) -> Vec<Vec<String>> {
-            let text = std::fs::read_to_string(out).unwrap_or_default();
-            text.split("==\n").filter(|c| !c.is_empty()).map(|c| c.lines().map(String::from).collect()).collect()
-        }
-
-        fn real(p: &Path) -> String {
-            p.canonicalize().unwrap().to_string_lossy().into_owned()
-        }
-
-        #[test]
-        fn test_with_no_cargo_the_built_server_takes_the_launchers_place() {
-            for file in ["bagholder.py", "python/bagholder.py"] {
-                let t = checkout();
-                let out = t.path().join("calls");
-                stand_in(&t.path().join("rust/target/release/bagholder"), &out);
-                let r = launch(t.path(), file);
-                assert!(r.status.success(), "{file}: {}", String::from_utf8_lossy(&r.stderr));
-                // the server's parent is whatever started the launcher: the launcher's process became the server
-                assert_eq!(calls(&out), vec![vec![std::process::id().to_string(), real(t.path()), "passed through".into(), "--version".into()]], "{file}");
-            }
-        }
-
-        #[test]
-        fn test_with_cargo_the_checkout_is_built_and_run_in_its_workspace() {
-            let t = checkout();
-            let out = t.path().join("calls");
-            stand_in(&t.path().join("bin/cargo"), &out);
-            // a server built earlier is not what runs: the checkout's sources may be newer
-            stand_in(&t.path().join("rust/target/release/bagholder"), &t.path().join("stale"));
-            std::fs::create_dir_all(t.path().join("web/dist")).unwrap();
-            std::fs::write(t.path().join("web/dist/index.html"), "").unwrap();
-            let r = launch(t.path(), "python/bagholder.py");
-            assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
-            let cwd = real(&t.path().join("rust"));
-            assert_eq!(calls(&out), vec![vec![std::process::id().to_string(), cwd, "passed through".into(), "run".into(), "--release".into(), "--bin".into(), "bagholder".into(), "--".into(), "--version".into()]]);
-            assert!(!t.path().join("stale").exists());
-        }
-
-        #[test]
-        fn test_a_page_not_yet_built_is_built_before_the_server() {
-            let t = checkout();
-            let npm_out = t.path().join("npm-calls");
-            let out = t.path().join("calls");
-            stand_in(&t.path().join("bin/npm"), &npm_out);
-            stand_in(&t.path().join("bin/cargo"), &out);
-            std::fs::create_dir_all(t.path().join("web")).unwrap();
-            let r = launch(t.path(), "bagholder.py");
-            assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
-            let web = real(&t.path().join("web"));
-            let npm: Vec<Vec<String>> = calls(&npm_out).into_iter().map(|c| c[1..].to_vec()).collect();
-            assert_eq!(npm, vec![vec![web.clone(), "passed through".into(), "ci".into()], vec![web, "passed through".into(), "run".into(), "build".into()]]);
-            assert_eq!(calls(&out).len(), 1, "then the server");
-        }
-
-        /// A built page older than any of the page's sources is built again; one
-        /// newer than all of them is not.
-        #[test]
-        fn test_a_page_older_than_its_sources_is_built_again() {
-            let at = |p: &Path, secs: u64| std::fs::File::options().write(true).open(p).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)).unwrap();
-            for source in ["src/lib/deep/x.ts", "public/favicon.png", "index.html", "package.json", "package-lock.json", "vite.config.ts"] {
-                let t = checkout();
-                let web = t.path().join("web");
-                let npm_out = t.path().join("npm-calls");
-                stand_in(&t.path().join("bin/npm"), &npm_out);
-                stand_in(&t.path().join("bin/cargo"), &t.path().join("calls"));
-                std::fs::create_dir_all(web.join("dist")).unwrap();
-                std::fs::write(web.join("dist/index.html"), "").unwrap();
-                std::fs::create_dir_all(web.join(source).parent().unwrap()).unwrap();
-                std::fs::write(web.join(source), "").unwrap();
-                // the build newer than the source: nothing to build
-                at(&web.join(source), 1_000);
-                at(&web.join("dist/index.html"), 2_000);
-                assert!(launch(t.path(), "bagholder.py").status.success());
-                assert!(calls(&npm_out).is_empty(), "{source}: current");
-                // the source changed after the build
-                at(&web.join(source), 3_000);
-                assert!(launch(t.path(), "bagholder.py").status.success());
-                assert_eq!(calls(&npm_out).len(), 2, "{source}: npm ci and npm run build");
-            }
-        }
-
-        #[test]
-        fn test_with_neither_it_says_what_to_run_and_fails() {
-            let t = checkout();
-            let r = launch(t.path(), "python/bagholder.py");
-            assert_eq!(r.status.code(), Some(1));
-            let said = String::from_utf8_lossy(&r.stderr);
-            assert!(said.contains("cargo run --release --bin bagholder") && said.contains("npm ci && npm run build"), "{said}");
         }
     }
 }
