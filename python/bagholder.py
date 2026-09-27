@@ -3,7 +3,8 @@
 
 The same file is at the repository root and at python/bagholder.py. It runs,
 in this order: `cargo run --release --bin bagholder` in rust/ when cargo is on
-the PATH (building the page in web/ first when it has not been built), else the
+the PATH (building the page in web/ first when it has not been built or its
+sources are newer than the build, since the server's build carries it), else the
 server already built at rust/target/release/bagholder, else it says what to run
 and exits with 1. The environment and the arguments are passed through, and the
 server takes this process's place, so whatever started this file is running the
@@ -21,6 +22,20 @@ def checkout():
         if os.path.isfile(os.path.join(d, "rust", "Cargo.toml")):
             return d
     return None
+
+
+def page_is_current(web):
+    """web/dist/index.html is newer than every source the page is built from."""
+    try:
+        built = os.path.getmtime(os.path.join(web, "dist", "index.html"))
+        sources = [os.path.join(web, n) for n in os.listdir(web)
+                   if n in ("index.html", "package.json", "package-lock.json") or n.startswith("vite.config.")]
+        for folder in ("src", "public"):
+            for d, _, files in os.walk(os.path.join(web, folder)):
+                sources.extend(os.path.join(d, f) for f in files)
+        return all(os.path.getmtime(f) <= built for f in sources)
+    except OSError:
+        return False
 
 
 def run(argv, cwd):
@@ -42,10 +57,10 @@ def main():
     args = sys.argv[1:]
     cargo = shutil.which("cargo")
     if cargo:
-        if not os.path.isfile(os.path.join(web, "dist", "index.html")):
+        if not page_is_current(web):
             npm = shutil.which("npm")
             if not npm:
-                sys.stderr.write("bagholder: the page is not built and npm is not on the PATH. Install Node.js, then run:\n"
+                sys.stderr.write("bagholder: the page is not built from these sources and npm is not on the PATH. Install Node.js, then run:\n"
                                  "  cd %s && npm ci && npm run build\n" % web)
                 return 1
             for step in (["ci"], ["run", "build"]):

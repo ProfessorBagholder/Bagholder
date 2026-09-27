@@ -253,6 +253,46 @@ fn which(cmd: &str) -> bool {
     })
 }
 
+/// The program `cmd` on the PATH (on Windows also as `.exe` or `.cmd`, which is how npm is installed there).
+fn find_program(cmd: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{cmd}.exe"), format!("{cmd}.cmd"), cmd.to_string()] } else { vec![cmd.to_string()] };
+    std::env::split_paths(&path).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
+}
+
+/// The last line a failed command wrote, to say why it failed.
+fn last_line(out: &std::io::Result<std::process::Output>) -> String {
+    let msg = match out {
+        Ok(o) => {
+            let e = String::from_utf8_lossy(&o.stderr).to_string();
+            if e.trim().is_empty() { String::from_utf8_lossy(&o.stdout).to_string() } else { e }
+        }
+        Err(e) => e.to_string(),
+    };
+    msg.trim().lines().last().unwrap_or("").chars().take(200).collect()
+}
+
+/// Build what a checkout at `root` runs, from its sources as they are now: the
+/// page (`npm ci`, then `npm run build` in `web/`), which the server's build
+/// carries, then the server (`cargo build --release --bins` in `cargo_dir`).
+/// `find` names each program's path. The first step that fails is the error,
+/// and nothing after it runs.
+pub(crate) fn build_checkout(root: &Path, cargo_dir: &Path, find: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(), String> {
+    let run = |program: &Path, args: &[&str], dir: &Path| {
+        let out = Command::new(program).args(args).current_dir(dir).stdin(Stdio::null()).output();
+        if out.as_ref().is_ok_and(|o| o.status.success()) { Ok(()) } else { Err(last_line(&out)) }
+    };
+    let web = root.join("web");
+    if web.join("package.json").is_file() {
+        let npm = find("npm").ok_or("the page could not be built: npm is not on the PATH (install Node.js)")?;
+        for step in [&["ci"][..], &["run", "build"][..]] {
+            run(&npm, step, &web).map_err(|e| format!("the page did not build: npm {} failed: {e}", step.join(" ")))?;
+        }
+    }
+    let cargo = find("cargo").ok_or("the new version could not be built: cargo is not on the PATH")?;
+    run(&cargo, &["build", "--release", "--bins"], cargo_dir).map_err(|e| format!("the new version did not build: {e}"))
+}
+
 /// The Cargo workspace of a checkout: rust/ under the repository root.
 pub fn cargo_dir(app: &Arc<App>) -> PathBuf {
     let nested = app.root.join("rust");
@@ -639,11 +679,11 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
         let msg = { let e = String::from_utf8_lossy(&r.stderr).to_string(); if e.is_empty() { String::from_utf8_lossy(&r.stdout).to_string() } else { e } };
         return Err(format!("git pull failed: {}", msg.trim().chars().take(200).collect::<String>()));
     }
-    // a checkout runs what it builds: the new sources are built before the restart,
-    // and a build that fails puts the previous commit back
+    // a checkout runs what it builds: the new sources, the page and the server that
+    // carries it, are built before the restart, and a build that fails puts the
+    // previous commit back
     set_updating(app, &format!("Building {}…", tag));
-    let built = Command::new("cargo").args(["build", "--release", "--bins"]).current_dir(cargo_dir(app)).stdin(Stdio::null()).output();
-    if !built.as_ref().map(|o| o.status.success()).unwrap_or(false) {
+    if let Err(why) = build_checkout(&app.root, &cargo_dir(app), &find_program) {
         let mut back = vec![];
         match git(app, &["reset", "--hard", &before]) {
             Ok(o) if o.status.success() => {}
@@ -654,9 +694,7 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
         if let Err(e) = rollback(app) {
             back.push(e);
         }
-        let msg = built.map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_else(|e| e.to_string());
-        let last = msg.trim().lines().last().unwrap_or("").chars().take(200).collect::<String>();
-        return Err(if back.is_empty() { format!("the new version did not build: {}", last) } else { format!("the new version did not build: {}; and the previous version could not be put back: {}", last, back.join("; ")) });
+        return Err(if back.is_empty() { why } else { format!("{why}; and the previous version could not be put back: {}", back.join("; ")) });
     }
     write_pending(&app.home, &Pending { tag: tag.to_string(), git: Some(GitRestore { root: app.root.clone(), commit: before }) })
 }

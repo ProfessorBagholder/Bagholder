@@ -93,7 +93,7 @@ or from a clone:
 python3 bagholder.py
 ```
 
-which builds what is not built yet and starts the server (`cargo run --release --bin bagholder` in `rust/`).
+which builds the page when it is not built from the checkout's sources, then builds what changed and starts the server (`cargo run --release --bin bagholder` in `rust/`).
 
 The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
 
@@ -114,7 +114,7 @@ To build the image yourself, from the root of a clone, `docker build -f rust/Doc
 Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in the data folder.
 
 - **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release's archive for your platform, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder-rust/previous` until the next update.
-- **Cloned with git:** the same button runs `git pull` on `master`, builds the new sources with `cargo build --release --bins` in `rust/` and restarts; a build that fails puts the previous commit back. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
+- **Cloned with git:** the same button runs `git pull` on `master`, builds the new page (`npm ci` and `npm run build` in `web/`) and the server (`cargo build --release --bins` in `rust/`) and restarts; a build that fails puts the previous commit back. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
 
   ```
   git pull

@@ -544,3 +544,54 @@ fn test_a_test_app_never_turns_the_local_model_on() {
     assert_eq!(folder, None, "only the running server turns the model on");
     assert_eq!(bagholder_market::localmodel::status(), "off", "nothing detected, downloaded or started");
 }
+
+/// A checkout's update builds the page of the pulled commit before the server
+/// that carries it; a page that does not build, or no npm to build it, fails the
+/// update before the server is built (and `pull` puts the previous commit back).
+#[cfg(unix)]
+#[test]
+fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let (root, bin, log) = (t.path().join("checkout"), t.path().join("bin"), t.path().join("calls"));
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::create_dir_all(root.join("rust")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{}").unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    // each records its name, its folder and its arguments; one named in `fail` fails, saying so
+    let stand_in = |name: &str| {
+        let p = bin.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\necho \"{name} $(basename \"$(pwd -P)\") $*\" >> '{}'\nif grep -qx \"{name} $*\" '{}' 2>/dev/null; then echo \"{name} broke\" >&2; exit 1; fi\n", log.display(), t.path().join("fail").display())).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    stand_in("npm");
+    stand_in("cargo");
+    let find = |cmd: &str| Some(bin.join(cmd)).filter(|p| p.is_file());
+    let calls = || -> Vec<String> {
+        let c = std::fs::read_to_string(&log).map(|t| t.lines().map(String::from).collect()).unwrap_or_else(|_| vec![]);
+        std::fs::remove_file(&log).ok();
+        c
+    };
+    let fail = |what: &str| std::fs::write(t.path().join("fail"), what).unwrap();
+
+    update::build_checkout(&root, &root.join("rust"), &find).unwrap();
+    assert_eq!(calls(), ["npm web ci", "npm web run build", "cargo rust build --release --bins"], "the page, then the server that carries it");
+
+    fail("npm ci");
+    assert_eq!(update::build_checkout(&root, &root.join("rust"), &find), Err("the page did not build: npm ci failed: npm broke".to_string()));
+    assert_eq!(calls(), ["npm web ci"], "nothing built after a step that failed");
+
+    fail("npm run build");
+    assert_eq!(update::build_checkout(&root, &root.join("rust"), &find), Err("the page did not build: npm run build failed: npm broke".to_string()));
+    assert_eq!(calls(), ["npm web ci", "npm web run build"]);
+
+    fail("cargo build --release --bins");
+    assert_eq!(update::build_checkout(&root, &root.join("rust"), &find), Err("the new version did not build: cargo broke".to_string()));
+    assert_eq!(calls().len(), 3);
+
+    // no npm: the update fails saying so, and no server is built with a page of another commit
+    std::fs::remove_file(bin.join("npm")).unwrap();
+    let why = update::build_checkout(&root, &root.join("rust"), &find).unwrap_err();
+    assert!(why.contains("npm is not on the PATH"), "{why}");
+    assert!(calls().is_empty());
+}

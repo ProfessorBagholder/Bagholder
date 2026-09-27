@@ -490,6 +490,33 @@ mod tests {
             assert_eq!(calls(&out).len(), 1, "then the server");
         }
 
+        /// A built page older than any of the page's sources is built again; one
+        /// newer than all of them is not.
+        #[test]
+        fn test_a_page_older_than_its_sources_is_built_again() {
+            let at = |p: &Path, secs: u64| std::fs::File::options().write(true).open(p).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)).unwrap();
+            for source in ["src/lib/deep/x.ts", "public/favicon.png", "index.html", "package.json", "package-lock.json", "vite.config.ts"] {
+                let t = checkout();
+                let web = t.path().join("web");
+                let npm_out = t.path().join("npm-calls");
+                stand_in(&t.path().join("bin/npm"), &npm_out);
+                stand_in(&t.path().join("bin/cargo"), &t.path().join("calls"));
+                std::fs::create_dir_all(web.join("dist")).unwrap();
+                std::fs::write(web.join("dist/index.html"), "").unwrap();
+                std::fs::create_dir_all(web.join(source).parent().unwrap()).unwrap();
+                std::fs::write(web.join(source), "").unwrap();
+                // the build newer than the source: nothing to build
+                at(&web.join(source), 1_000);
+                at(&web.join("dist/index.html"), 2_000);
+                assert!(launch(t.path(), "bagholder.py").status.success());
+                assert!(calls(&npm_out).is_empty(), "{source}: current");
+                // the source changed after the build
+                at(&web.join(source), 3_000);
+                assert!(launch(t.path(), "bagholder.py").status.success());
+                assert_eq!(calls(&npm_out).len(), 2, "{source}: npm ci and npm run build");
+            }
+        }
+
         #[test]
         fn test_with_neither_it_says_what_to_run_and_fails() {
             let t = checkout();
