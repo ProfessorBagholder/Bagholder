@@ -3,8 +3,16 @@
 //!
 //! A round trip takes the id of the trade anchored on its earliest opening that
 //! has one. The engine assigns nothing: it says which round trips have no trade
-//! yet (for the book to open one on their key) and which trades a correction
-//! joined into another's round trip (for the book to orphan, the journal kept).
+//! yet (for the book to open one on their key), which trades a correction moved
+//! onto another opening of the same round trip (for the book to move), and which
+//! trades a correction joined into another's round trip or left with no round
+//! trip at all (for the book to orphan, the journal kept).
+//!
+//! A trade's id is kept for good (`SPEC.md` §2, Trade): a correction to the rows
+//! behind it keeps the trade and its journal. So a trade whose anchor no longer
+//! opens a round trip, but is still a fill of exactly one round trip that no
+//! other trade holds, is that round trip's trade and moves to its opening; only
+//! one with no such round trip is orphaned.
 
 use std::collections::BTreeMap;
 
@@ -24,9 +32,15 @@ pub struct Identity {
     /// A trade whose round trip a correction joined into another's: the trade
     /// that keeps the round trip, for the reason the book records.
     pub joined: Vec<(TradeId, TradeId)>,
-    /// Trades anchored on a transaction that opens no round trip any more (a
-    /// correction made it a close, or its round trip is keyed another way): the
-    /// book orphans them, their notes kept for the person to re-attach.
+    /// Trades anchored on a transaction that opens no round trip any more but is
+    /// still a fill of exactly one round trip no other trade holds (a correction
+    /// made it a close, or ordered an earlier fill before it): the round trip the
+    /// book moves each one to, its id and journal kept.
+    pub moved: Vec<(TradeId, TripKey)>,
+    /// Trades anchored on a transaction that opens no round trip any more and is
+    /// a fill of no round trip it can move to (the transaction is gone, its round
+    /// trip holds another trade, or it is a fill of more than one): the book
+    /// orphans them, their notes kept for the person to re-attach.
     pub unclaimed: Vec<TradeId>,
 }
 
@@ -70,6 +84,27 @@ pub fn identify(ledger: &Ledger, matched: &Matched) -> Identity {
         }
     }
     let openings: std::collections::BTreeSet<&TripKey> = matched.trips.values().flat_map(|t| t.openings.iter()).collect();
-    out.unclaimed = anchored.iter().filter(|(k, _)| !openings.contains(k)).map(|(_, t)| *t).collect();
+    // in the book's order, so of two trades that would move to one round trip the
+    // one made first takes it
+    for t in &ledger.trades {
+        let Anchor::Opening(ref o) = t.anchor else { continue };
+        let key = TripKey { opening: o.transaction.clone(), instrument: o.instrument };
+        if openings.contains(&key) || anchored.get(&key) != Some(&t.id) {
+            continue;
+        }
+        let mut holding = matched.trips.values().filter(|trip| trip.fills.contains(&o.transaction) && trip.instruments.contains(&o.instrument));
+        let to = match (holding.next(), holding.next()) {
+            (Some(trip), None) if !managed(ledger, trip.account) && !out.trade_of.contains_key(&trip.key) => Some(trip.key.clone()),
+            _ => None,
+        };
+        match to {
+            Some(k) => {
+                out.needs_trade.retain(|n| *n != k);
+                out.trade_of.insert(k.clone(), t.id);
+                out.moved.push((t.id, k));
+            }
+            None => out.unclaimed.push(t.id),
+        }
+    }
     out
 }

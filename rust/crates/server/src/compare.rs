@@ -20,12 +20,11 @@ use rusqlite::Connection;
 
 use bagholder_book::Book;
 use bagholder_core::instrument::InstrumentKind;
-use bagholder_core::journal::Opening;
 use bagholder_core::{Currency, Dec, InstrumentId, Money, RecordId, TransactionId};
 use bagholder_engine::input::{Clock, Declared, DeclaredRead, Inputs, Market, Quote, QuoteSource, Sourced};
 use bagholder_engine::scope::Filters;
 use bagholder_engine::trades::TradeKey;
-use bagholder_engine::{Change, Engine};
+use bagholder_engine::Engine;
 
 use crate::engine_inputs::{self, old_store_source};
 
@@ -277,17 +276,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     let clock = Clock { today, now, home, bank };
     ledger.trades = book.trades().map_err(err)?;
     let mut engine = Engine::build(Inputs { ledger, facts, market, clock });
-    for key in engine.identity().needs_trade.clone() {
-        book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at).map_err(err)?;
-    }
-    for (joined, keeps) in engine.identity().joined.clone() {
-        book.orphan_joined(joined, keeps).map_err(err)?;
-    }
-    let unclaimed = engine.identity().unclaimed.clone();
-    for trade in &unclaimed {
-        book.orphan_unclaimed(*trade).map_err(err)?;
-    }
-    engine.apply(Change::Trades(book.trades().map_err(err)?));
+    crate::figures::settle_trades(&book, &mut engine, at)?;
 
     // rows are joined by Wealthsimple's own id for them: the old store gives
     // its rows new ids of its own when it syncs again, so its ids name nothing

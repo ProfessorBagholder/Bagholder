@@ -123,7 +123,6 @@ pub fn translate(conn: &Connection, today: &str) -> Result<Translated, String> {
     Ok(Translated { journal, groups })
 }
 
-/// The row that opened a trade: the opening fill of its earliest piece.
 /// The row that opened the round trip the old trade `slices` closed in, where the
 /// position went flat in between. The earlier app kept one trade running through a
 /// moment the position was flat (all of it sold, then bought again); a trade in the
@@ -158,6 +157,7 @@ fn reopened_before_close(rows: &[bagholder_model::activity::RawActivity], slices
     None
 }
 
+/// The row that opened a trade: the opening fill of its earliest piece.
 fn opening_row(slices: &[&Slice]) -> String {
     let first = slices.iter().min_by(|a, b| (&a.entry_when, &a.entry_date, slice_member_key(a)).cmp(&(&b.entry_when, &b.entry_date, slice_member_key(b))));
     match first {
@@ -355,6 +355,121 @@ pub fn import(old: &Path, home: &Path, at: jiff::Timestamp) -> Result<Report, St
     }
 }
 
+/// The name the repair of carried notes is recorded under in the book.
+const REATTACH: &str = "carried-notes-reattached";
+
+/// The earlier app's database a book in `home` was imported from, where it is
+/// still kept whole: `bagholder.db` beside the book until its figure tables are
+/// retired, then the snapshot `retire_old_figures` took of it first (the latest,
+/// where there are several).
+fn original_database(home: &Path) -> Result<Option<std::path::PathBuf>, String> {
+    let live = home.join(crate::figures::OLD_FILE);
+    if live.is_file() {
+        let conn = Connection::open_with_flags(&live, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("{}: {e}", live.display()))?;
+        if !bagholder_store::schema::figures_moved(&conn).map_err(|e| format!("{}: {e}", live.display()))? {
+            return Ok(Some(live));
+        }
+    }
+    let dir = home.join("snapshots");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    let mut best: Option<(i64, std::path::PathBuf)> = None;
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let Some(ms) = name.strip_prefix("bagholder-before-the-book-").and_then(|r| r.strip_suffix(".db")).and_then(|n| n.parse::<i64>().ok()) else { continue };
+        if best.as_ref().is_none_or(|(b, _)| ms > *b) {
+            best = Some((ms, path));
+        }
+    }
+    Ok(best.map(|(_, p)| p))
+}
+
+/// What the earlier app's database at `old` says each key it kept names, read
+/// from a copy in `home` as the import reads it.
+fn translated_from(old: &Path, home: &Path, at: jiff::Timestamp) -> Result<Translated, String> {
+    let copy = home.join(format!("import-source-{}.db", at.as_millisecond()));
+    let result = (|| {
+        bagholder_book::import::copy_database(old, &copy).map_err(|e| e.to_string())?;
+        let conn = Connection::open_with_flags(&copy, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
+        translate(&conn, &at.to_zoned(jiff::tz::TimeZone::UTC).date().to_string())
+    })();
+    match std::fs::remove_file(&copy) {
+        Ok(()) => result,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => result,
+        Err(e) => Err(format!("the copy {} could not be removed: {e}", copy.display())),
+    }
+}
+
+/// Put back on its round trip each note carried from the earlier app whose trade
+/// an earlier build orphaned though the round trip still stands (a first pull
+/// replaced the imported rows by the broker's, and the build settled the round
+/// trips against the anchors it held from before, `figures::settle_trades`).
+/// Done once per book, recorded: each orphaned trade with a key of the earlier
+/// app and a note goes to the round trip the import places such a note on today
+/// (the one that closes as the earlier app's trade did, read again from the
+/// database the book was imported from, where it is kept), else to the round trip
+/// holding the broker's row for the fill the key names; never onto a round trip
+/// whose trade has a note of its own or is in a group (`Book::reattach`), and a
+/// trade with neither stays orphaned. Whether any trade moved.
+pub fn reattach_carried_notes(home: &Path, book: &Book, engine: &bagholder_engine::Engine, at: jiff::Timestamp) -> Result<bool, String> {
+    use bagholder_core::journal::{Anchor, Opening};
+    let e = |e: bagholder_book::BookError| e.to_string();
+    if book.repaired(REATTACH).map_err(e)? {
+        return Ok(false);
+    }
+    let orphans: Vec<(bagholder_core::TradeId, String)> = book.orphaned_journal().map_err(e)?.into_iter().filter_map(|(t, _)| Some((t.id, t.legacy_key?))).collect();
+    let mut moved = false;
+    if !orphans.is_empty() {
+        // where the import places each key's note today
+        // (one that cannot be read leaves each note to the fill its key names)
+        let translated = match original_database(home) {
+            Ok(Some(old)) => translated_from(&old, home, at).map_err(|why| format!("{}: {why}", old.display())),
+            Ok(None) => Ok(Translated::default()),
+            Err(why) => Err(why),
+        };
+        let translated = translated.unwrap_or_else(|why| {
+            crate::app::log(&format!("bagholder: the earlier app's database could not be read to place its notes again ({why}); each goes to the round trip of the fill its key names"));
+            Translated::default()
+        });
+        let placed: BTreeMap<String, String> = translated
+            .journal
+            .into_iter()
+            .filter_map(|n| match n.on {
+                NoteOn::Trade(Ok(row)) => Some((n.key, row)),
+                _ => None,
+            })
+            .collect();
+        let source = bagholder_book::import::import_source();
+        let ledger = &engine.inputs().ledger;
+        let trips = &engine.figures().matched.trips;
+        for (trade, key) in orphans {
+            let rows = placed.get(&key).cloned().into_iter().chain(key.strip_prefix("rt:").filter(|r| !r.contains('|')).map(str::to_string));
+            let mut to = None;
+            for row in rows {
+                let standing: BTreeSet<bagholder_core::TransactionId> = book.standing_for(&source, &row).map_err(e)?.into_iter().map(|t| t.id).collect();
+                let mut holding = trips.values().filter(|t| !bagholder_engine::identity::managed(ledger, t.account) && t.fills.iter().any(|f| standing.contains(f)));
+                if let (Some(trip), None) = (holding.next(), holding.next()) {
+                    to = Some(Opening { transaction: trip.key.opening.clone(), instrument: trip.key.instrument });
+                    break;
+                }
+            }
+            let Some(to) = to else { continue };
+            if !matches!(book.trade(trade).map_err(e)?.anchor, Anchor::Orphaned(_)) {
+                continue;
+            }
+            if book.reattach(trade, &to).map_err(e)? == bagholder_book::trades::Reattached::Attached {
+                moved = true;
+            }
+        }
+    }
+    book.record_repair(REATTACH, at).map_err(e)?;
+    Ok(moved)
+}
+
 /// The Python app's data folder, as that app finds it: `.bagholder` in the
 /// person's home (`USERPROFILE` on Windows, `HOME` elsewhere), read through `var`.
 pub fn python_home(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
@@ -517,6 +632,127 @@ mod tests {
         let pairs: Vec<(&str, &str)> = old["rt:b1"].iter().map(|x| (x.buy_activity_id.as_str(), x.sell_activity_id.as_str())).collect();
         assert_eq!(pairs, [("b1", "s1"), ("b2", "s1"), ("b3", "s2")]);
         assert_eq!(on, vec![&NoteOn::Trade(Ok("b3".into()))], "the book's trade that closes on s2");
+    }
+
+    /// The earlier app's QNC trade that ran through a flat moment, noted, in the
+    /// earlier app's database in a new home.
+    fn noted_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let conn = bagholder_store::open_db(&home.path().join(crate::figures::OLD_FILE)).unwrap();
+        bagholder_store::schema::init_schema(&conn).unwrap();
+        trade(&conn, "b1", "QNC", "BUY", 1667.0, "2024-12-12T19:58:39+00:00");
+        trade(&conn, "b2", "QNC", "BUY", 1852.0, "2024-12-12T20:53:07+00:00");
+        trade(&conn, "s1", "QNC", "SELL", -3519.0, "2024-12-13T17:23:54+00:00");
+        trade(&conn, "b3", "QNC", "BUY", 5016.0, "2024-12-13T18:35:20+00:00");
+        trade(&conn, "s2", "QNC", "SELL", -5016.0, "2026-06-24T15:00:00+00:00");
+        set_meta(&conn, "journal_v2", r#"{"rt:b1": {"thesis": "long hold", "tags": ["winners"], "grade": "A"}}"#);
+        home
+    }
+
+    fn at(s: &str) -> jiff::Timestamp {
+        s.parse().unwrap()
+    }
+
+    /// The book as an earlier build left it: the carried note's trade orphaned
+    /// though its round trip stands, and the repair not yet done.
+    fn orphaned_as_before(home: &Path) {
+        let c = Connection::open(home.join(bagholder_book::BOOK_FILE)).unwrap();
+        c.execute("UPDATE trades SET anchor_record = NULL, anchor_leg = NULL, anchor_instrument = NULL, orphaned_reason = 'the transaction it opened on no longer opens a round trip' WHERE legacy_key = 'rt:b1'", []).unwrap();
+        c.execute("DELETE FROM settings WHERE key LIKE 'repair.%'", []).unwrap();
+    }
+
+    /// The imported record of the earlier app's row `row`, as the trade's anchor.
+    fn on_row(book: &Book, row: &str) -> bagholder_core::RecordId {
+        book.standing_for(&bagholder_book::import::import_source(), row).unwrap()[0].id.record
+    }
+
+    fn anchored_on(book: &Book, trade: bagholder_core::TradeId) -> Option<bagholder_core::RecordId> {
+        match book.trade(trade).unwrap().anchor {
+            bagholder_core::journal::Anchor::Opening(o) => Some(o.transaction.record),
+            bagholder_core::journal::Anchor::Orphaned(_) => None,
+        }
+    }
+
+    /// A book imported before the carried notes kept their trades through a sync
+    /// is repaired on its next start, once: the orphaned note's trade goes back to
+    /// the round trip the import places it on today, read again from the snapshot
+    /// of the earlier app's database, its id and note kept, and the trade a build
+    /// gave that round trip since gives way to it.
+    #[test]
+    fn an_orphaned_carried_note_goes_back_to_the_trade_it_was_written_on_at_the_next_start() {
+        let home = noted_home();
+        let f = crate::figures::Figures::open(home.path(), at("2026-09-26T12:00:00Z")).unwrap();
+        f.state_zone("America/Edmonton", at("2026-09-26T12:00:00Z")).unwrap();
+        let book = f.book().unwrap();
+        let trade = book.trade_by_legacy_key("rt:b1").unwrap().unwrap();
+        assert_eq!(anchored_on(&book, trade), Some(on_row(&book, "b3")), "the import places it on the trade that closes as the old one did");
+        // the earlier store's figures retired: the database is kept only as the snapshot
+        let old = Connection::open(home.path().join(crate::figures::OLD_FILE)).unwrap();
+        retire_old_figures(home.path(), &old, &book, at("2026-09-26T12:30:00Z")).unwrap().expect("a snapshot");
+        drop(old);
+        drop(f);
+        orphaned_as_before(home.path());
+        // a start made before the repair existed gave the round trip a trade of its own
+        let c = Connection::open(home.path().join(bagholder_book::BOOK_FILE)).unwrap();
+        c.execute("INSERT INTO settings(key, value, source, set_at) VALUES ('repair.carried-notes-reattached', 'done', 'bagholder', '2026-09-26T12:40:00Z')", []).unwrap();
+        crate::figures::Figures::open(home.path(), at("2026-09-26T12:45:00Z")).unwrap();
+        let holder = book.trades().unwrap().into_iter().find(|t| anchored_on(&book, t.id) == Some(on_row(&book, "b3"))).expect("a trade of its own").id;
+        assert_ne!(holder, trade);
+        c.execute("DELETE FROM settings WHERE key LIKE 'repair.%'", []).unwrap();
+
+        let f = crate::figures::Figures::open(home.path(), at("2026-09-26T13:00:00Z")).unwrap();
+        assert_eq!(anchored_on(&book, trade), Some(on_row(&book, "b3")));
+        assert!(book.trade(holder).is_err(), "the trade given since gives way");
+        assert!(book.orphaned_journal().unwrap().is_empty());
+        let shown = f.read(|e| e.figures().trades.iter().find(|t| t.trade == Some(trade)).map(|t| t.journal.grade)).unwrap();
+        assert_eq!(shown, Some(Some(Grade::A)), "the figures show the trade with its note");
+        // once: a later start does nothing again
+        let before = book.trades().unwrap();
+        crate::figures::Figures::open(home.path(), at("2026-09-26T14:00:00Z")).unwrap();
+        assert_eq!(book.trades().unwrap(), before);
+    }
+
+    /// With the earlier app's database no longer kept, the note goes to the round
+    /// trip holding the fill its key names.
+    #[test]
+    fn with_no_earlier_database_kept_the_note_goes_to_the_round_trip_of_the_fill_its_key_names() {
+        let home = noted_home();
+        let f = crate::figures::Figures::open(home.path(), at("2026-09-26T12:00:00Z")).unwrap();
+        f.state_zone("America/Edmonton", at("2026-09-26T12:00:00Z")).unwrap();
+        drop(f);
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(home.path().join(format!("{}{ext}", crate::figures::OLD_FILE)));
+        }
+        orphaned_as_before(home.path());
+        let book = crate::figures::Figures::open(home.path(), at("2026-09-26T13:00:00Z")).unwrap().book().unwrap();
+        let trade = book.trade_by_legacy_key("rt:b1").unwrap().unwrap();
+        assert_eq!(anchored_on(&book, trade), Some(on_row(&book, "b1")));
+        assert!(book.orphaned_journal().unwrap().is_empty());
+    }
+
+    /// Nothing is put back onto a round trip whose trade has a note of its own:
+    /// the carried note stays orphaned, saying so.
+    #[test]
+    fn a_carried_note_is_not_put_on_a_round_trip_whose_trade_has_a_note_of_its_own() {
+        let home = noted_home();
+        let f = crate::figures::Figures::open(home.path(), at("2026-09-26T12:00:00Z")).unwrap();
+        f.state_zone("America/Edmonton", at("2026-09-26T12:00:00Z")).unwrap();
+        let book = f.book().unwrap();
+        drop(f);
+        orphaned_as_before(home.path());
+        let c = Connection::open(home.path().join(bagholder_book::BOOK_FILE)).unwrap();
+        c.execute("INSERT INTO settings(key, value, source, set_at) VALUES ('repair.carried-notes-reattached', 'done', 'bagholder', '2026-09-26T12:40:00Z')", []).unwrap();
+        crate::figures::Figures::open(home.path(), at("2026-09-26T12:45:00Z")).unwrap();
+        let holder = book.trades().unwrap().into_iter().find(|t| anchored_on(&book, t.id) == Some(on_row(&book, "b3"))).unwrap().id;
+        let theirs = JournalEntry { thesis: "written since".into(), grade: None, tags: vec![] };
+        book.set_journal(bagholder_core::journal::JournalSubject::Trade(holder), &theirs, at("2026-09-26T12:50:00Z")).unwrap();
+        c.execute("DELETE FROM settings WHERE key LIKE 'repair.%'", []).unwrap();
+        crate::figures::Figures::open(home.path(), at("2026-09-26T13:00:00Z")).unwrap();
+        let trade = book.trade_by_legacy_key("rt:b1").unwrap().unwrap();
+        assert_eq!(anchored_on(&book, trade), None);
+        assert!(book.trade(trade).unwrap().orphaned_reason().is_some_and(|why| why.contains("note of its own")));
+        assert_eq!(anchored_on(&book, holder), Some(on_row(&book, "b3")));
+        assert_eq!(book.orphaned_journal().unwrap().len(), 1, "the carried note is kept");
     }
 
     fn set_meta(conn: &Connection, key: &str, value: &str) {

@@ -14,6 +14,14 @@ use bagholder_core::{GroupId, InstrumentId, Leg, RecordId, TradeId, TransactionI
 use crate::text::{self, at as at_text};
 use crate::{new_uuid, Book, BookError, Result};
 
+/// What `Book::reattach` did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reattached {
+    Attached,
+    /// Left orphaned, with this reason.
+    Kept(String),
+}
+
 impl Book {
     /// The trade opened by `opening`, made the first time it is asked for. The
     /// opening must be a transaction in the book that moves a position of the
@@ -33,31 +41,39 @@ impl Book {
                 }
                 return Ok(t);
             }
-            let tx = &opening.transaction;
-            let Some(t) = self.transaction(tx)? else {
-                return Err(BookError::Refused(format!("no transaction {tx} to open a trade on")));
-            };
-            // a corporate event opens what an adjustment on it says it moved: a
-            // spin-off's child, a stock dividend on a marker stating no units
-            let adjusted = t.kind == Kind::CorporateEvent && self.adjustment_moves(tx, opening.instrument)?;
-            // a trade opens on a position moving: a dividend or a deposit of cash opens nothing
-            if !adjusted && (t.instrument.is_none() || t.quantity.is_none_or(|q| q.is_zero())) {
-                return Err(BookError::Refused(format!("transaction {tx} moves no position, so it opens no trade")));
-            }
-            if !adjusted && t.instrument != Some(opening.instrument) {
-                let delivers = matches!(t.kind, Kind::OptionAssignment | Kind::OptionExercise)
-                    && t.instrument.map(|i| self.option_terms(i)).transpose()?.flatten().is_some_and(|terms| terms.underlying == opening.instrument);
-                if !delivers {
-                    return Err(BookError::Refused(format!("transaction {tx} moves no position of instrument {}", opening.instrument)));
-                }
-            }
+            self.check_opening(opening)?;
             let id = TradeId::from_uuid(new_uuid(at));
             self.conn().execute(
                 "INSERT INTO trades(id, anchor_record, anchor_leg, anchor_instrument, legacy_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                params![id.to_string(), tx.record.to_string(), tx.leg.as_str(), opening.instrument.to_string(), legacy_key, at_text(at)],
+                params![id.to_string(), opening.transaction.record.to_string(), opening.transaction.leg.as_str(), opening.instrument.to_string(), legacy_key, at_text(at)],
             )?;
             Ok(id)
         })
+    }
+
+    /// Refused unless `opening` is a transaction in the book that moves a position
+    /// of the instrument named: its own instrument, or, for an assignment or an
+    /// exercise, the underlying its contract delivers.
+    fn check_opening(&self, opening: &Opening) -> Result<()> {
+        let tx = &opening.transaction;
+        let Some(t) = self.transaction(tx)? else {
+            return Err(BookError::Refused(format!("no transaction {tx} to open a trade on")));
+        };
+        // a corporate event opens what an adjustment on it says it moved: a
+        // spin-off's child, a stock dividend on a marker stating no units
+        let adjusted = t.kind == Kind::CorporateEvent && self.adjustment_moves(tx, opening.instrument)?;
+        // a trade opens on a position moving: a dividend or a deposit of cash opens nothing
+        if !adjusted && (t.instrument.is_none() || t.quantity.is_none_or(|q| q.is_zero())) {
+            return Err(BookError::Refused(format!("transaction {tx} moves no position, so it opens no trade")));
+        }
+        if !adjusted && t.instrument != Some(opening.instrument) {
+            let delivers = matches!(t.kind, Kind::OptionAssignment | Kind::OptionExercise)
+                && t.instrument.map(|i| self.option_terms(i)).transpose()?.flatten().is_some_and(|terms| terms.underlying == opening.instrument);
+            if !delivers {
+                return Err(BookError::Refused(format!("transaction {tx} moves no position of instrument {}", opening.instrument)));
+            }
+        }
+        Ok(())
     }
 
     /// A trade an earlier version of the app knew by `legacy_key` and whose
@@ -85,23 +101,69 @@ impl Book {
         Ok(())
     }
 
+    /// Whether `trade` is anchored as the engine saw it when it named the trade:
+    /// the engine reads the book, and a write in between (a pull moving anchors to
+    /// the broker's rows) makes what it named stale, so nothing is done on it and
+    /// the next settling decides again.
+    fn anchored_as(&self, trade: TradeId, seen: &Opening) -> Result<bool> {
+        Ok(matches!(self.trade(trade)?.anchor, Anchor::Opening(ref o) if o == seen))
+    }
+
     /// Orphan a trade whose round trip a correction joined into another's: the
     /// engine names it (`bagholder_engine::identity::Identity::joined`), and its
-    /// journal is kept for the person to re-attach.
-    pub fn orphan_joined(&self, trade: TradeId, keeps: TradeId) -> Result<()> {
+    /// journal is kept for the person to re-attach. Done only while the trade is
+    /// anchored on `seen`, the opening the engine saw it on; whether it was done.
+    pub fn orphan_joined(&self, trade: TradeId, keeps: TradeId, seen: &Opening) -> Result<bool> {
         self.atomically(|| {
-            drop(self.trade(trade)?);
-            self.orphan(trade, &format!("its round trip joined trade {keeps}"))
+            if !self.anchored_as(trade, seen)? {
+                return Ok(false);
+            }
+            self.orphan(trade, &format!("its round trip joined trade {keeps}"))?;
+            Ok(true)
         })
     }
 
-    /// Orphan a trade whose anchor opens no round trip any more (the engine
-    /// names it, `Identity::unclaimed`); its journal is kept.
-    pub fn orphan_unclaimed(&self, trade: TradeId) -> Result<()> {
+    /// Orphan a trade whose anchor opens no round trip any more and is a fill of
+    /// none it can move to (the engine names it, `Identity::unclaimed`); its
+    /// journal is kept. Done only while the trade is anchored on `seen`; whether
+    /// it was done.
+    pub fn orphan_unclaimed(&self, trade: TradeId, seen: &Opening) -> Result<bool> {
         self.atomically(|| {
-            drop(self.trade(trade)?);
-            self.orphan(trade, "the transaction it opened on no longer opens a round trip")
+            if !self.anchored_as(trade, seen)? {
+                return Ok(false);
+            }
+            self.orphan(trade, "the transaction it opened on no longer opens a round trip")?;
+            Ok(true)
         })
+    }
+
+    /// Move a trade to the opening of the round trip it is now a fill of (the
+    /// engine names it, `Identity::moved`): its id, journal and group places are
+    /// kept (`SPEC.md` §2, Trade). Done only while the trade is anchored on `seen`
+    /// and no trade is anchored on `to`; whether it was done. `to` must open a
+    /// position of its instrument, as an opening given to `open_trade` must.
+    pub fn move_trade(&self, trade: TradeId, seen: &Opening, to: &Opening) -> Result<bool> {
+        self.atomically(|| {
+            if !self.anchored_as(trade, seen)? || self.trade_on(to)?.is_some() {
+                return Ok(false);
+            }
+            self.anchor_on(trade, to)?;
+            Ok(true)
+        })
+    }
+
+    /// Anchor `trade`, orphaned or not, on `to`, which must open a position of its
+    /// instrument; no other trade may be anchored there.
+    pub(crate) fn anchor_on(&self, trade: TradeId, to: &Opening) -> Result<()> {
+        self.check_opening(to)?;
+        if let Some(other) = self.trade_on(to)?.filter(|t| *t != trade) {
+            return Err(BookError::Refused(format!("trade {other} is anchored on {} already", to.transaction)));
+        }
+        self.conn().execute(
+            "UPDATE trades SET anchor_record = ?, anchor_leg = ?, anchor_instrument = ?, orphaned_reason = NULL WHERE id = ?",
+            params![to.transaction.record.to_string(), to.transaction.leg.as_str(), to.instrument.to_string(), trade.to_string()],
+        )?;
+        Ok(())
     }
 
     /// The anchor moved to the counterpart transaction; the instrument it opened
@@ -110,6 +172,51 @@ impl Book {
         self.conn().execute(
             "UPDATE trades SET anchor_record = ?, anchor_leg = ?, orphaned_reason = NULL WHERE id = ?",
             params![to.record.to_string(), to.leg.as_str(), trade.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Put an orphaned trade back on the round trip opened by `to`, its id and
+    /// journal kept: a repair of what an earlier build orphaned though its round
+    /// trip still stood. A trade the book gave that round trip since (with no
+    /// note and in no group, so nothing of the person's is on it) gives way to
+    /// it; one with a note of its own, or in a group, keeps the round trip, and
+    /// the orphan stays orphaned with that reason.
+    pub fn reattach(&self, orphan: TradeId, to: &Opening) -> Result<Reattached> {
+        self.atomically(|| {
+            if !matches!(self.trade(orphan)?.anchor, Anchor::Orphaned(_)) {
+                return Err(BookError::Refused(format!("trade {orphan} is not orphaned")));
+            }
+            if let Some(holder) = self.trade_on(to)? {
+                let why = if self.journal(JournalSubject::Trade(holder))?.is_some() {
+                    Some(format!("the round trip it was written on has a note of its own, on trade {holder}"))
+                } else if self.groups()?.iter().any(|g| g.members.contains(&holder)) {
+                    Some(format!("the round trip it was written on is trade {holder}, which is in a group"))
+                } else {
+                    None
+                };
+                if let Some(why) = why {
+                    self.conn().execute("UPDATE trades SET orphaned_reason = ? WHERE id = ?", params![why, orphan.to_string()])?;
+                    return Ok(Reattached::Kept(why));
+                }
+                self.conn().execute("DELETE FROM trades WHERE id = ?", [holder.to_string()])?;
+            }
+            self.anchor_on(orphan, to)?;
+            Ok(Reattached::Attached)
+        })
+    }
+
+    /// Whether the repair `name` has been done on this book.
+    pub fn repaired(&self, name: &str) -> Result<bool> {
+        Ok(self.conn().query_row("SELECT 1 FROM settings WHERE key = ?", [format!("repair.{name}")], |_| Ok(())).optional()?.is_some())
+    }
+
+    /// Record the repair `name` as done, so it is not done again.
+    pub fn record_repair(&self, name: &str, at: jiff::Timestamp) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO settings(key, value, source, set_at) VALUES (?1, 'done', 'bagholder', ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, source = excluded.source, set_at = excluded.set_at",
+            params![format!("repair.{name}"), at_text(at)],
         )?;
         Ok(())
     }

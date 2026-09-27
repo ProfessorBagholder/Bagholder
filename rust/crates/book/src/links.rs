@@ -110,6 +110,29 @@ impl Book {
         })
     }
 
+    /// The transactions standing now for the record `source` knew by `key`: its
+    /// own while it is live, else those of the live records that replaced it,
+    /// each replacement followed to its end. None where no such record is kept,
+    /// or it and what replaced it were removed.
+    pub fn standing_for(&self, source: &bagholder_core::SourceName, key: &str) -> Result<Vec<Transaction>> {
+        let mut stmt = self.conn().prepare_cached("SELECT id FROM source_records WHERE source = ? AND source_key = ? ORDER BY id")?;
+        let found = stmt.query_map(params![source.as_str(), key], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        let mut todo: Vec<RecordId> = found.iter().map(|s| text::parsed("source_records", "id", s, RecordId::parse)).collect::<Result<_>>()?;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        while let Some(r) = todo.pop() {
+            if !seen.insert(r) {
+                continue;
+            }
+            match self.record(r)?.state {
+                RecordState::Live => out.extend(self.transactions_of(r)?),
+                RecordState::Superseded => todo.extend(self.superseded_by(r)?),
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
     /// Whether `record` has superseded others.
     pub fn has_superseded(&self, record: RecordId) -> Result<bool> {
         let n: i64 = self.conn().query_row(

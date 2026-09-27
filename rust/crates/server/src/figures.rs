@@ -62,24 +62,75 @@ pub fn build(book: &Book, cache: &MarketCache, clock: Clock) -> Result<Engine, S
 }
 
 /// Every round trip given its trade in the book: one opened for each that has
-/// none, a trade a correction joined into another's orphaned, and one whose
-/// opening no longer opens anything orphaned, its notes kept; then the trades
-/// applied. What moved.
-fn settle_trades(book: &Book, engine: &mut Engine, at: Timestamp) -> Result<Moved, String> {
-    let identity = engine.identity().clone();
-    if identity.needs_trade.is_empty() && identity.joined.is_empty() && identity.unclaimed.is_empty() {
-        return Ok(Moved::default());
+/// none, a trade whose anchor a correction made a fill of another opening's round
+/// trip moved to it, a trade a correction joined into another's orphaned, and one
+/// whose opening no longer opens anything orphaned, its notes kept; then the
+/// trades applied. What moved.
+///
+/// Each move and orphaning is done only on the anchor the engine saw (the book
+/// may have moved it since, as a pull does), so what a stale reading named is
+/// never written over the book's own; the trades then read back are settled again
+/// until a pass writes nothing.
+pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, at: Timestamp) -> Result<Moved, String> {
+    use bagholder_core::journal::{Anchor, Opening};
+    let mut moved = Moved::default();
+    loop {
+        let identity = engine.identity().clone();
+        if identity.needs_trade.is_empty() && identity.moved.is_empty() && identity.joined.is_empty() && identity.unclaimed.is_empty() {
+            return Ok(moved);
+        }
+        let seen: std::collections::BTreeMap<bagholder_core::TradeId, Opening> = engine
+            .inputs()
+            .ledger
+            .trades
+            .iter()
+            .filter_map(|t| match &t.anchor {
+                Anchor::Opening(o) => Some((t.id, o.clone())),
+                Anchor::Orphaned(_) => None,
+            })
+            .collect();
+        let before = book.trades().map_err(err)?;
+        for (trade, key) in &identity.moved {
+            if let Some(s) = seen.get(trade) {
+                book.move_trade(*trade, s, &Opening { transaction: key.opening.clone(), instrument: key.instrument }).map_err(err)?;
+            }
+        }
+        for key in &identity.needs_trade {
+            book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at).map_err(err)?;
+        }
+        for (joined, keeps) in &identity.joined {
+            if let Some(s) = seen.get(joined) {
+                book.orphan_joined(*joined, *keeps, s).map_err(err)?;
+            }
+        }
+        for trade in &identity.unclaimed {
+            if let Some(s) = seen.get(trade) {
+                book.orphan_unclaimed(*trade, s).map_err(err)?;
+            }
+        }
+        let after = book.trades().map_err(err)?;
+        let wrote = after != before;
+        if after != engine.inputs().ledger.trades {
+            merge(&mut moved, engine.apply(Change::Trades(after)));
+        }
+        if !wrote {
+            return Ok(moved);
+        }
     }
-    for key in &identity.needs_trade {
-        book.open_trade(&bagholder_core::journal::Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at).map_err(err)?;
+}
+
+/// The engine built whole from the book and the cache in `zone` at `now`, every
+/// round trip given its trade, and the notes carried from the earlier app put
+/// back on the round trips an earlier build orphaned them from
+/// (`legacy_import::reattach_carried_notes`, once per book).
+fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp) -> Result<Engine, String> {
+    let mut e = build(book, cache, clock(zone, now)?)?;
+    settle_trades(book, &mut e, now)?;
+    if crate::legacy_import::reattach_carried_notes(home, book, &e, now)? {
+        e.apply(Change::Trades(book.trades().map_err(err)?));
+        settle_trades(book, &mut e, now)?;
     }
-    for (joined, keeps) in &identity.joined {
-        book.orphan_joined(*joined, *keeps).map_err(err)?;
-    }
-    for trade in &identity.unclaimed {
-        book.orphan_unclaimed(*trade).map_err(err)?;
-    }
-    Ok(engine.apply(Change::Trades(book.trades().map_err(err)?)))
+    Ok(e)
 }
 
 /// Why a journal was not written.
@@ -131,8 +182,7 @@ impl Figures {
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
         if let Some(z) = book.zone().map_err(err)? {
-            let mut e = build(&book, &cache, clock(&z.zone, at)?)?;
-            settle_trades(&book, &mut e, at)?;
+            let e = built(home, &book, &cache, &z.zone, at)?;
             *f.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
         }
         Ok(f)
@@ -144,8 +194,7 @@ impl Figures {
     pub fn rebuild(&self, now: Timestamp) -> Result<(), String> {
         let book = self.book()?;
         let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
-        let mut e = build(&book, &self.cache()?, clock(&z.zone, now)?)?;
-        settle_trades(&book, &mut e, now)?;
+        let e = built(&self.home, &book, &self.cache()?, &z.zone, now)?;
         *self.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
         *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
         self.logged(None);
@@ -293,9 +342,7 @@ impl Figures {
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
         match engine.as_mut() {
             None => {
-                let mut e = build(&book, &self.cache()?, clock(&zone, now)?)?;
-                settle_trades(&book, &mut e, now)?;
-                *engine = Some(e);
+                *engine = Some(built(&self.home, &book, &self.cache()?, &zone, now)?);
                 drop(engine);
                 self.logged(None);
                 Ok(Moved::default())
@@ -349,6 +396,19 @@ impl Figures {
         let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
         let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
         let mut moved = Moved::default();
+        // the record and the trades anchored on it are one state: a pull that
+        // supersedes a record moves the trades on it to the broker's rows in the
+        // same write, so the trades, groups and journal read with the record are
+        // applied with it, never matched against the anchors held from before
+        if e.inputs().ledger.trades != ledger.trades {
+            merge(&mut moved, e.apply(Change::Trades(ledger.trades.clone())));
+        }
+        if e.inputs().ledger.groups != ledger.groups {
+            merge(&mut moved, e.apply(Change::Groups(ledger.groups.clone())));
+        }
+        if e.inputs().ledger.journal != ledger.journal {
+            merge(&mut moved, e.apply(Change::Journal(ledger.journal.clone())));
+        }
         if e.inputs().ledger != ledger {
             merge(&mut moved, e.apply(Change::Ledger(ledger)));
         }
@@ -550,6 +610,50 @@ mod tests {
         let later = at("2025-11-20T21:00:00Z");
         assert!(!f.clock_moved(later).unwrap().is_empty());
         same_as_fresh(&f, later);
+    }
+
+    /// A record replaced by another (an imported row by the broker's own, as the
+    /// first pull after an import does) moves the trades on it to the new row in
+    /// the same write. The engine held its trades as they were before: settling
+    /// the round trips against those would call the moved trade's old opening gone
+    /// and orphan it over the book's own anchor, cutting its journal loose (the
+    /// owner's note, after the first sync). The trade keeps its id and its note.
+    #[test]
+    fn a_trade_whose_record_is_replaced_keeps_its_id_and_its_note_through_the_change() {
+        use bagholder_core::journal::{Anchor, Grade, JournalEntry, JournalSubject};
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        // a trade on a record of its own (the only transaction of its record)
+        let trades = book.trades().unwrap();
+        let (trade, opening) = trades
+            .iter()
+            .find_map(|t| match &t.anchor {
+                Anchor::Opening(o) if book.transactions_of(o.transaction.record).unwrap().len() == 1 => Some((t.id, o.clone())),
+                _ => None,
+            })
+            .expect("a trade on a one-transaction record");
+        let note = JournalEntry { thesis: "long story".into(), grade: Some(Grade::A), tags: vec!["winners".into()] };
+        f.write_journal(&trade.to_string(), &note, now).unwrap();
+        // the same row, stored again under another key, replaces it
+        let payload = book.revisions(opening.transaction.record).unwrap().pop().unwrap().2;
+        let connection = book.connections().unwrap()[0].id;
+        let incoming = bagholder_book::records::Incoming { connection: Some(connection), source_key: "the same row again", payload: &payload, refs: vec![] };
+        let replaced = book.store_superseding(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &incoming, &[opening.transaction.record], "the broker's own row", now).unwrap();
+        f.record_changed(now).unwrap();
+        let after = book.trade(trade).unwrap();
+        match after.anchor {
+            Anchor::Opening(o) => assert_eq!(o.transaction.record, replaced.record, "the trade is on the row that replaced its own"),
+            Anchor::Orphaned(why) => panic!("the trade was orphaned: {why}"),
+        }
+        assert_eq!(book.journal(JournalSubject::Trade(trade)).unwrap(), Some(note), "its note is still on it");
+        assert!(book.orphaned_journal().unwrap().is_empty());
+        let shown = f.read(|e| e.figures().trades.iter().any(|t| t.trade == Some(trade))).unwrap();
+        assert!(shown, "the figures show the trade by its id");
+        same_as_fresh(&f, now);
     }
 
     /// A day, month or "today" is in the zone of the page in use, for every zone

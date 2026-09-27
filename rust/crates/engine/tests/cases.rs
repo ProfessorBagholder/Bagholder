@@ -521,6 +521,15 @@ fn run(path: &Path) -> Vec<String> {
                 c.fail(format!("unclaimed: expected {want:?}, got {got:?}"));
             }
         }
+        if let Some(v) = expect.get("moved") {
+            // `[["T1", "t1"]]`: the trade, and the transaction opening the round trip it moves to
+            let fresh = Engine::build(b.inputs.clone());
+            let got: BTreeSet<(TradeId, bagholder_core::TransactionId)> = fresh.identity().moved.iter().map(|(t, k)| (*t, k.opening.clone())).collect();
+            let want: BTreeSet<(TradeId, bagholder_core::TransactionId)> = v.as_array().unwrap().iter().map(|p| (b.ids.trade(p[0].as_str().unwrap()), tx[p[1].as_str().unwrap()].clone())).collect();
+            if got != want {
+                c.fail(format!("moved: expected {want:?}, got {got:?}"));
+            }
+        }
         if let Some(v) = expect.get("joined") {
             let fresh = Engine::build(b.inputs.clone());
             let got: BTreeSet<(TradeId, TradeId)> = fresh.identity().joined.iter().cloned().collect();
