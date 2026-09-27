@@ -50,7 +50,7 @@ fn session_file(refresh_token: &str) -> (tempfile::TempDir, SessionFile) {
 }
 
 fn held(refresh_token: &str) -> Tokens {
-    Tokens { access: "old-access".into(), refresh: refresh_token.into(), client_id: "the-client".into(), identity: "identity-1".into(), expires_at: None }
+    Tokens { access: "old-access".into(), refresh: refresh_token.into(), client_id: "the-client".into(), identity: "identity-1".into(), expires_at: None, device: None }
 }
 
 #[test]

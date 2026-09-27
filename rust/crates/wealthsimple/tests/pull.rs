@@ -41,7 +41,7 @@ fn once(book: &Book, replies: &Path, now: &str) -> (Report, Vec<String>) {
 /// One pull, the feed's rows edited first.
 fn once_with(book: &Book, replies: &Path, now: &str, edit: impl FnOnce(&mut Vec<Value>)) -> (Report, Vec<String>) {
     let connection = connection(book, now);
-    let mut replay = Replay::read(replies).unwrap();
+    let mut replay = Replay::read(replies).unwrap().taken_before_statements();
     edit(&mut replay.rows);
     let mut ws = Wealthsimple::new(replay);
     let r = pull(book, &mut ws, connection, "2025-11-19".parse().unwrap(), at(now), &mut |_| {}).unwrap();
@@ -55,7 +55,7 @@ fn a_pull_says_each_step_as_it_goes_every_account_by_name_and_counted() {
     let now = "2025-11-19T20:00:00Z";
     let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
     let connection = connection(&book, now);
-    let mut ws = Wealthsimple::new(Replay::read(&dir()).unwrap());
+    let mut ws = Wealthsimple::new(Replay::read(&dir()).unwrap().taken_before_statements());
     let mut steps: Vec<Step> = Vec::new();
     let r = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at(now), &mut |s| steps.push(s)).unwrap();
     assert!(r.failures.is_empty(), "{:?}", r.failures);
@@ -69,10 +69,13 @@ fn a_pull_says_each_step_as_it_goes_every_account_by_name_and_counted() {
             Step::Balances => "balances",
             Step::Holdings { .. } => "holdings",
             Step::History { .. } => "history",
+            Step::Statements => "statements",
         })
         .collect();
     kinds.dedup();
-    assert_eq!(kinds, ["accounts", "activity", "recording", "balances", "holdings", "history"]);
+    // the recorded month is part of a longer history, so its account's cash
+    // disagrees with the broker's and its statements are asked for
+    assert_eq!(kinds, ["accounts", "activity", "recording", "balances", "statements", "holdings", "history"]);
     // each counted run goes 1..=of, every account named as the screens name it
     for pick in [0u8, 1, 2] {
         let run: Vec<(String, usize, usize)> = steps
@@ -113,7 +116,10 @@ fn a_pull_with_nothing_new_asks_only_the_accounts_their_activity_and_their_cash(
     let (second, asked) = once(&book, &dir(), "2025-11-19T21:00:00Z");
     assert!(second.failures.is_empty(), "{:?}", second.failures);
     assert_eq!((second.records_new, second.records_revised), (0, 0));
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances"]);
+    // the account's cash still disagrees (the recording is one month of a
+    // longer history): the newest completed month's statement, not issued
+    // yet in this recording, is asked again, and nothing else
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "statement anon-tfsa-1 2025-10-01 brokerage_monthly_statement"]);
 }
 
 #[test]
@@ -132,7 +138,7 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     let (third, asked) = once(&book, later.path(), "2025-11-19T22:00:00Z");
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances"]);
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "statement anon-tfsa-1 2025-10-01 brokerage_monthly_statement"]);
 }
 
 /// The accounts list's edges in an accounts reply.

@@ -69,6 +69,29 @@ impl Book {
         at.map(|t| text::instant("broker_reads", "at", &t)).transpose()
     }
 
+    /// Keep an account's statement for the month starting `month`, as the
+    /// broker issued it. A month is read once and kept: a second copy of the
+    /// same month is not stored.
+    pub fn keep_monthly_statement(&self, connection: ConnectionId, account_key: &str, month: jiff::civil::Date, payload: &str, read: &ReadId) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO monthly_statements (connection_id, account_key, month, payload, read_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![connection.to_string(), account_key, month.to_string(), payload, read.0],
+        )?;
+        Ok(())
+    }
+
+    /// Every statement kept for one of the broker's accounts, by month, oldest first.
+    pub fn monthly_statements(&self, connection: ConnectionId, account_key: &str) -> Result<Vec<(jiff::civil::Date, String)>> {
+        let mut stmt = self.conn().prepare("SELECT month, payload FROM monthly_statements WHERE connection_id = ?1 AND account_key = ?2 ORDER BY month")?;
+        let rows = stmt.query_map(params![connection.to_string(), account_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (m, p) = r?;
+            out.push((text::parsed("monthly_statements", "month", &m, |d: &str| d.parse::<jiff::civil::Date>())?, p));
+        }
+        Ok(out)
+    }
+
     /// That `account` is linked to `to`, as the broker states it.
     pub fn link_accounts(&self, account: AccountId, to: AccountId, read: &ReadId) -> Result<()> {
         self.conn().execute("INSERT OR IGNORE INTO account_links (account_id, linked_to, read_id) VALUES (?1, ?2, ?3)", params![account.to_string(), to.to_string(), read.0])?;

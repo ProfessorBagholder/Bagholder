@@ -113,7 +113,7 @@ fn pulled(old_status: &str) -> Pulled {
     let now = at("2025-11-19T20:00:00Z");
     let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
     let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
-    let mut ws = Wealthsimple::new(Replay::read(replies.path()).unwrap());
+    let mut ws = Wealthsimple::new(Replay::read(replies.path()).unwrap().taken_before_statements());
     let report = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap();
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     let by = |id: &str| book.instrument_by_ref(&Reference::new(RefScheme::BrokerSecurity(Broker::named("wealthsimple")), id)).unwrap().unwrap();

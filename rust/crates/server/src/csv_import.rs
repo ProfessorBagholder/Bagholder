@@ -179,10 +179,14 @@ pub struct Linking {
     pub ambiguous: BTreeMap<RecordId, usize>,
 }
 
-/// Link each live row of a file to the broker's row for the same fill, where
-/// there is exactly one: the same account, day, instrument, side and quantity,
-/// and the price the file states (to the places it states it). A broker row that
-/// has taken a file row's place takes no other's.
+/// Link each live row of a file to the broker's row for the same movement,
+/// where there is exactly one: for a fill, the same account, day, instrument,
+/// side and quantity, and the price the file states (to the places it states
+/// it); for cash moved, the same account, currency and exact signed amount, on
+/// the same day. The broker's activity feed comes first, then a row booked from
+/// its statement (`docs/plans/statement-gaps.md`): a row of the feed takes the
+/// file row's place where one fits, else a statement row. A broker row that has
+/// taken a file row's place takes no other's.
 pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking, String> {
     let book = f.book()?;
     let csv_rows: BTreeSet<RecordId> = book.live_records(&csv::source()).map_err(|e| e.to_string())?.into_iter().collect();
@@ -195,8 +199,9 @@ pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking
     let found = f.read(|e| candidates(e, &csv_rows, &not_broker, &taken)).ok_or("the figures are not built yet")?;
     let mut out = Linking::default();
     let mut used = taken;
-    for (row, brokers) in found {
-        let free: Vec<RecordId> = brokers.into_iter().filter(|b| !used.contains(b)).collect();
+    for (row, tiers) in found {
+        // the first tier with a free candidate: the feed's, then the statement's
+        let free: Vec<RecordId> = tiers.into_iter().map(|t| t.into_iter().filter(|b| !used.contains(b)).collect::<Vec<_>>()).find(|t| !t.is_empty()).unwrap_or_default();
         match free.as_slice() {
             [] => {}
             [one] => {
@@ -215,8 +220,9 @@ pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking
     Ok(out)
 }
 
-/// Each file row that is a fill, and the broker records holding a fill like it.
-fn candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<RecordId>, taken: &BTreeSet<RecordId>) -> Vec<(RecordId, Vec<RecordId>)> {
+/// Each file row that is a fill or moved cash, and the broker records holding
+/// the same movement, the feed's before the statement's.
+fn candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<RecordId>, taken: &BTreeSet<RecordId>) -> Vec<(RecordId, Vec<Vec<RecordId>>)> {
     let ledger = &e.inputs().ledger;
     let fill = |t: &Transaction| matches!(t.kind, Kind::Buy | Kind::Sell) && t.instrument.is_some() && t.quantity.is_some_and(|q| !q.is_zero());
     let price = |t: &Transaction| bagholder_engine::ledger::fill_price(t, t.instrument.and_then(|i| ledger.instruments.get(&i))).ok();
@@ -235,7 +241,23 @@ fn candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<R
         records.sort();
         records.dedup();
         if !records.is_empty() {
-            out.push((c.id.record, records));
+            out.push((c.id.record, vec![records]));
+        }
+    }
+    // cash moved with no instrument: a deposit, a withdrawal, a transfer, a tax
+    let statement = bagholder_wealthsimple::statement::source();
+    let moved = |t: &Transaction| t.instrument.is_none() && t.cash.is_some_and(|c| !c.amount.is_zero());
+    for c in ledger.transactions.iter().filter(|t| csv_rows.contains(&t.id.record) && moved(t)) {
+        let same = |b: &&Transaction| !not_broker.contains(&b.id.record) && !taken.contains(&b.id.record) && moved(b) && b.account == c.account && b.cash == c.cash && (b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date);
+        let tier = |from_statement: bool| {
+            let mut r: Vec<RecordId> = ledger.transactions.iter().filter(same).filter(|b| (b.mapping.source == statement) == from_statement).map(|b| b.id.record).collect();
+            r.sort();
+            r.dedup();
+            r
+        };
+        let tiers = vec![tier(false), tier(true)];
+        if tiers.iter().any(|t| !t.is_empty()) {
+            out.push((c.id.record, tiers));
         }
     }
     out
@@ -536,6 +558,74 @@ mod tests {
         let again = import(&f, "activity (1).csv", &activities(&[&fill]), None, now()).unwrap();
         assert_eq!((again.added, again.unchanged, again.linked), (0, 1, 0), "{again:?}");
         assert_eq!(units_held(&f, fill.account, &fill.symbol), before);
+    }
+
+    /// A movement of cash alone the broker reported: a deposit, as a row of an
+    /// earlier import stands for the broker's own. Its account, record, day and cash.
+    fn feed_cash(f: &Figures) -> (AccountId, RecordId, bagholder_core::jiff::civil::Date, bagholder_core::Money) {
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap()[0].id;
+        let row = OldActivity {
+            id: "deposit-1".into(),
+            transaction_date: Some("2025-11-04".into()),
+            account_id: Some("anon-tfsa-1".into()),
+            activity_type: Some("Deposit".into()),
+            currency: Some("CAD".into()),
+            net_cash_amount: Some("250".into()),
+            source: Some("csv".into()),
+            ..OldActivity::default()
+        };
+        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
+        let record = book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: "deposit-1", payload: &payload, refs: vec![] }, now()).unwrap().record;
+        f.record_changed(now()).unwrap();
+        let account = book.account_by_ref(&bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+        (account, record, "2025-11-04".parse().unwrap(), bagholder_core::Money::new(Dec::parse("250").unwrap(), bagholder_core::Currency::CAD))
+    }
+
+    /// A row booked from the broker's statement for this movement, `n` among the month's.
+    fn statement_row(f: &Figures, day: bagholder_core::jiff::civil::Date, cash: bagholder_core::Money, n: usize) -> RecordId {
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap()[0].id;
+        let row = bagholder_broker::StatementRow { day, executed: None, code: "CONT".into(), description: "Contribution".into(), currency: cash.currency, cash: cash.amount, balance: cash.amount };
+        let month = day.first_of_month();
+        let key = bagholder_wealthsimple::statement::key("anon-tfsa-1", month, n);
+        let payload = bagholder_wealthsimple::statement::payload("anon-tfsa-1", month, n, &row).canonical();
+        let r = book.store(&bagholder_wealthsimple::statement::StatementMapping, &bagholder_book::records::Incoming { connection: Some(conn), source_key: &key, payload: &payload, refs: vec![] }, now()).unwrap().record;
+        f.record_changed(now()).unwrap();
+        r
+    }
+
+    fn cash_file(day: bagholder_core::jiff::civil::Date, cash: bagholder_core::Money) -> String {
+        let action = if cash.amount.is_negative() { "withdrawal" } else { "deposit" };
+        format!("Date,Action,Symbol,Quantity,Price,Amount,Currency\n{day},{action},,,,{},{}\n", cash.amount.to_text(), cash.currency)
+    }
+
+    #[test]
+    fn a_file_s_cash_row_gives_way_to_the_feed_s_row_before_a_statement_s() {
+        let (_h, f) = figures();
+        let (account, feed, day, cash) = feed_cash(&f);
+        let from_statement = statement_row(&f, day, cash, 0);
+        let r = import(&f, "statement.csv", &cash_file(day, cash), Some(account), now()).unwrap();
+        assert_eq!((r.added, r.linked), (1, 1), "{r:?}");
+        let file_row = f.book().unwrap().superseding(&csv::source()).unwrap();
+        assert_eq!(file_row, vec![feed], "the feed's row took its place, not the statement's ({from_statement})");
+    }
+
+    #[test]
+    fn a_file_s_cash_row_only_a_statement_row_holds_gives_way_to_it_and_two_hold_it_links_nothing() {
+        let (_h, f) = figures();
+        let (account, _, day, _) = feed_cash(&f);
+        let cash = bagholder_core::Money::new(Dec::parse("12.34").unwrap(), bagholder_core::Currency::CAD);
+        let from_statement = statement_row(&f, day, cash, 0);
+        let r = import(&f, "a.csv", &cash_file(day, cash), Some(account), now()).unwrap();
+        assert_eq!(r.linked, 1, "{r:?}");
+        assert_eq!(f.book().unwrap().superseding(&csv::source()).unwrap(), vec![from_statement]);
+        // two statement rows it could be: it gives way to neither and says so
+        let other = bagholder_core::Money::new(Dec::parse("56.78").unwrap(), bagholder_core::Currency::CAD);
+        statement_row(&f, day, other, 1);
+        statement_row(&f, day, other, 2);
+        let r = import(&f, "b.csv", &cash_file(day, other), Some(account), now()).unwrap();
+        assert_eq!((r.linked, r.ambiguous.len()), (0, 1), "{r:?}");
     }
 
     #[test]

@@ -67,13 +67,25 @@ It read the same activity feed and had the same gap: neither withdrawal is in it
 
 If the owner's first full read shows statement rows that cannot be matched one-to-one by any rule stated here (dates that drift without an executed-at date, amounts split differently), building stops and the list goes to the owner. Booking on a weaker rule would put double-counting back.
 
-## Anti-stub self-check
-
-To be initialled at the end: no definition nobody references; no field written and never read; the owner-copy pull actually run and its list read.
-
 ## Verification
 
-To be filled when built.
+Built 2026-09-27 (`rust/crates/broker/src/statements.rs`, `codes.rs`; `rust/crates/wealthsimple/src/statement.rs`; `rust/crates/book/migrations/019-monthly-statements.sql`). Departures from the approach above, each for a reason found while building:
+
+- **A statement is kept whole per month, and only a booked row becomes a record.** The approach made every row a record; brief 11 then required that nothing of a month count before the month reconciles, and a live record counts the moment it is stored. So each month's reply is kept as it came (`monthly_statements`, read once, never rewritten), and a row becomes a `wealthsimple-statement` record only when it is booked.
+- **The request's headers come from Wealthsimple's own build**, not from trying them: the document's hash is its `__meta__.hash` in the web app's chunk 293 (`d5950e5b…`, read 2026-09-27); `x-ws-device-id` is the `wssdi` cookie the sign-in already keeps, which the web app reads the same way; `x-ws-page` and `x-web-version` as the page sends them. The client tier is sent by the web app only where it knows one (`...i?{"x-ws-client-tier":i}:{}`), and the app knows none, so the request is one the page itself sends. A sign-in that kept no device id is a refusal naming the request.
+- **Not issued.** The newest completed month not issued yet makes the month before it the newest; an earlier month not issued is where the account's statements begin, kept as such and not asked again.
+- **Outstanding items are fills only.** An unmatched fill of the newest month may be on the next month's statement; cash moved is dated alike on both sides, so an unmatched withdrawal or deposit always counts. (A first version let any unmatched row of the newest month wait, and a withdrawal the feed dated a day after the statement was booked twice; the test `a_movement_the_feed_states_a_day_apart_is_never_booked_twice_and_its_month_is_named` holds it.)
+- **Per currency that disagrees**, and a broker account behind the book's whose months read hold no row in that currency leaves the closing unstated, which is named rather than taken as zero.
+
+Checked: `cargo test --workspace` (the 16 cases of `wealthsimple/tests/statements.rs` on the owner's recorded June 2025 reply and books built around it; the code table; the file-linking tiers; the header's sentence), clippy clean.
+
+Not done:
+- **The browser test** of a statement-only withdrawal on the made-up book. The header's sentence is the same line every failure uses (`header.spec.ts`), and the path to it is held by the server tests above; the made-up book has no statements to read, since the e2e server never pulls.
+- **The run on the owner's book.** It needs the owner's saved sign-in, which a session cannot read; the first sync of the owner's app after this lands reads the statements of the two accounts whose cash disagrees, and books the two withdrawals only if June 2025 and January 2026 reconcile. Otherwise the header names the month and nothing is booked.
+
+## Anti-stub self-check
+
+No definition nobody references; no field written and never read. The owner-copy pull is the one step not run, above.
 
 ## Handoff
 

@@ -43,6 +43,9 @@ pub struct Report {
     pub days_stored: usize,
     /// Days the broker stated again differently: kept beside the first.
     pub days_restated: usize,
+    /// What the monthly statements read and booked, and each month that does
+    /// not reconcile (`statements`).
+    pub statements: crate::statements::Done,
     /// Each part that failed, and why.
     pub failures: Vec<(String, Failure)>,
 }
@@ -246,6 +249,9 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
     step(Step::Balances);
     store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
+    // the movements the activity feed left out, for an account whose cash now
+    // disagrees with the broker's: read from its monthly statements
+    report.statements = crate::statements::run(book, adapter, connection, &keys_of, today, now, step, &mut report.failures)?;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     // units already stated as of that day are not asked again

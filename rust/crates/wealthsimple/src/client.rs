@@ -34,7 +34,31 @@ fn doc(name: &str) -> &'static str {
         "FetchInstitutionalTransfer" => include_str!("../graphql/FetchInstitutionalTransfer.graphql"),
         "FetchCreditCardAccount" => include_str!("../graphql/FetchCreditCardAccount.graphql"),
         "FetchAccountCurrentMarginBuyingPowerV2" => include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql"),
+        "FetchMonthlyStatementWithTransactions" => include_str!("../graphql/FetchMonthlyStatementWithTransactions.graphql"),
         other => panic!("no document named {other}"),
+    }
+}
+
+/// How Wealthsimple's web app sends one of its documents as it does from a
+/// page: the document's own hash in its build (the `__meta__.hash` its
+/// compiled query carries), the page it is sent from, and the build's version.
+/// The statement document is refused unless sent this way (2026-09-27: the
+/// same variables with the client's own headers answered
+/// `UNPROCESSABLE_ENTITY`; the page's request answered).
+struct AsPage {
+    hash: &'static str,
+    page: &'static str,
+}
+
+/// The web app's build these documents and hashes were read from, sent as
+/// `x-web-version` (`assets.wealthsimple.com/app-9351431b1bbd31ba.js`, read 2026-09-27).
+const WEB_VERSION: &str = "0.3.671473";
+
+fn as_page(op: &str) -> Option<AsPage> {
+    match op {
+        // chunk 293 of the build above: the Documents page's Download CSV
+        "FetchMonthlyStatementWithTransactions" => Some(AsPage { hash: "d5950e5b8d4b7b49a8fe02d68d3d5f7d33d3b7bd555a95db3089fff3dd4d917a", page: "page-docs" }),
+        _ => None,
     }
 }
 
@@ -100,7 +124,7 @@ impl<'n> Client<'n> {
         loop {
             let t = self.tokens()?;
             let auth = format!("Bearer {}", t.access);
-            let headers = [
+            let mut headers = vec![
                 ("Authorization", auth.as_str()),
                 ("Content-Type", "application/json"),
                 ("Accept", "application/json"),
@@ -110,6 +134,14 @@ impl<'n> Client<'n> {
                 ("x-platform-os", "web"),
                 ("x-ws-identity-id", t.identity.as_str()),
             ];
+            // a document the web app sends from a page: with the headers its page
+            // sends (the client tier only where the app knows one, as the page
+            // itself does: `...i?{"x-ws-client-tier":i}:{}` in its build)
+            let page = as_page(op);
+            if let Some(p) = &page {
+                let device = t.device.as_deref().ok_or_else(|| Failure::Refused(format!("{op}: the saved sign-in has no device id to send it with; connect Wealthsimple again")))?;
+                headers.extend([("x-ws-operation-name", op), ("x-ws-operation-hash", p.hash), ("x-ws-device-id", device), ("x-ws-page", p.page), ("x-web-version", WEB_VERSION)]);
+            }
             self.sent.fetch_add(1, Ordering::Relaxed);
             let reply = self.net.send(&Ask::post(GRAPHQL, &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
             if reply.status == 401 || reply.status == 403 {
@@ -254,6 +286,12 @@ impl Source for Client<'_> {
             |c| obj(vec![("id", text(account)), ("currency", text("CAD")), ("resolution", text("DAILY")), ("startDate", start.clone()), ("first", num(1000)), ("cursor", c.map(text).unwrap_or(Value::Null))]),
             |d| d.obj("account")?.obj("financials")?.obj("historicalDaily"),
         )
+    }
+    fn statement(&mut self, account: &str, month: jiff::civil::Date, kind: &str) -> Answer<Option<Value>> {
+        let op = "FetchMonthlyStatementWithTransactions";
+        let data = self.graphql(op, obj(vec![("accountId", text(account)), ("period", text(&month.to_string())), ("statementType", text(kind))]))?;
+        let s = Node::root(&data).field("monthlyStatement").map_err(|m| mismatch(op, m))?;
+        Ok(if matches!(s.value(), Value::Null) { None } else { Some(s.value().clone()) })
     }
     fn requests(&self) -> usize {
         self.sent.load(Ordering::Relaxed)

@@ -33,6 +33,10 @@ pub struct Tokens {
     /// The person's identity id, which the accounts are asked by.
     pub identity: String,
     pub expires_at: Option<jiff::Timestamp>,
+    /// The browser's device id the sign-in kept (Wealthsimple's `wssdi`
+    /// cookie), which its web app sends as `x-ws-device-id`; none where the
+    /// sign-in kept none.
+    pub device: Option<String>,
 }
 
 /// The tokens a session file holds, read strictly: an access token, a refresh
@@ -53,7 +57,12 @@ pub fn read_tokens(v: &Value) -> Read<Tokens> {
             other => return Err(f.mismatch(format!("expected an instant, found {}", other.kind()))),
         },
     };
-    Ok(Tokens { access: n.text("access_token")?.to_string(), refresh: n.text("refresh_token")?.to_string(), client_id: n.text("client_id")?.to_string(), identity: identity.to_string(), expires_at })
+    // a sign-in made before the device id was kept has none: not a failure of the file
+    let device = match n.field("wssdi").map(|f| f.value().clone()) {
+        Ok(Value::String(d)) if !d.is_empty() => Some(d),
+        _ => None,
+    };
+    Ok(Tokens { access: n.text("access_token")?.to_string(), refresh: n.text("refresh_token")?.to_string(), client_id: n.text("client_id")?.to_string(), identity: identity.to_string(), expires_at, device })
 }
 
 /// Refreshes run one at a time, in the process.
@@ -139,7 +148,7 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
     let refresh = n.text("refresh_token").map_err(|m| Failure::Mismatch(m.to_string()))?.to_string();
     let expires_in = n.int("expires_in").map_err(|m| Failure::Mismatch(m.to_string()))?;
     let expires_at = reply.received_at.checked_add(jiff::Span::new().seconds(expires_in)).ok();
-    let fresh = Tokens { access, refresh, client_id: held.client_id.clone(), identity: held.identity.clone(), expires_at };
+    let fresh = Tokens { access, refresh, client_id: held.client_id.clone(), identity: held.identity.clone(), expires_at, device: held.device.clone() };
     file.save(&previous, &fresh)?;
     Ok(fresh)
 }

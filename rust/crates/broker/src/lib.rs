@@ -11,8 +11,10 @@ use bagholder_core::instrument::Reference;
 use bagholder_core::json::Value;
 use bagholder_core::{Broker, Currency, Dec, Money};
 
+pub mod codes;
 pub mod csv;
 pub mod pull;
+pub mod statements;
 
 /// Why a read did not answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,6 +133,8 @@ pub enum Step {
     Recording { done: usize, of: usize },
     /// Cash and what margin can borrow.
     Balances,
+    /// The monthly statements of an account whose cash disagrees.
+    Statements,
     /// One account's holdings, `n` of `of`.
     Holdings { account: String, n: usize, of: usize },
     /// One account's value by day, `n` of `of`.
@@ -142,6 +146,41 @@ impl AccountStated {
     pub fn name(&self) -> String {
         bagholder_core::account::account_name(self.nickname.as_deref(), &self.account_type)
     }
+}
+
+/// One row of a broker's monthly statement, as it states it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatementRow {
+    /// The day the statement files it under (a trade's settlement).
+    pub day: jiff::civil::Date,
+    /// The day the row states it was executed, where it states one.
+    pub executed: Option<jiff::civil::Date>,
+    /// The broker's transaction code (`WD`, `TRFIN`, …).
+    pub code: String,
+    pub description: String,
+    pub currency: Currency,
+    /// The signed cash it moved.
+    pub cash: Dec,
+    /// The account's cash in that currency after it.
+    pub balance: Dec,
+}
+
+impl StatementRow {
+    /// The day the book files what it moved under: its execution where the
+    /// row states one (the feed dates a trade at execution), else its own.
+    pub fn book_day(&self) -> jiff::civil::Date {
+        self.executed.unwrap_or(self.day)
+    }
+}
+
+/// A month's statement of one account, as read.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StatementRead {
+    /// Issued: the reply as it came, kept whole, and its rows.
+    Issued { payload: Value, rows: Vec<StatementRow> },
+    /// Not issued yet (the first days after a month ends): neither a failure
+    /// nor an empty month, and asked again once the broker could have issued it.
+    NotIssued,
 }
 
 /// The book's own moves, for a record read against positions.
@@ -196,4 +235,29 @@ pub trait BrokerAdapter {
     /// An account's value and net deposits per day, from `from` (the whole of
     /// its history when `None`).
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>>;
+    /// An account's statement for the calendar month starting `month`: the
+    /// movements the activity feed may leave out (`statements`). A broker
+    /// that issues none says so.
+    fn statement(&mut self, account: &str, month: jiff::civil::Date) -> Answer<StatementRead> {
+        let _ = month;
+        Err(Failure::Refused(format!("{} issues no monthly statement for {account}", self.broker())))
+    }
+    /// A kept statement's rows, read again from the reply as it came, for the
+    /// broker's account it is of.
+    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
+        let _ = (account, payload);
+        Err(Failure::Refused(format!("{} issues no monthly statement", self.broker())))
+    }
+    /// The mapping of a statement row booked into the book: a movement the
+    /// activity feed left out.
+    fn statement_mapping(&self) -> Option<&dyn Mapping> {
+        None
+    }
+    /// A statement row booked into the book: the key its record is kept by and
+    /// the record, for one of the broker's accounts, the month and the row's
+    /// place among the month's rows.
+    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
+        let _ = (account, month, position, row);
+        None
+    }
 }

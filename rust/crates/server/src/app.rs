@@ -35,6 +35,9 @@ pub struct State {
     pub portfolio_error: String,
     /// Why the last pass of the figures failed; cleared by the next pass that succeeds.
     pub figures_error: String,
+    /// Each month whose broker statement the book does not reconcile with, as
+    /// the last pull found it; cleared by a pull that finds none.
+    pub statement_error: String,
     pub sync_fails: i64,
     pub sync_first_fail: String,
     pub login_attempt: i64,
