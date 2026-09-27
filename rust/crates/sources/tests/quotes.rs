@@ -335,8 +335,8 @@ fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_over_it
 }
 
 /// A Cboe Canada listing with no trade this session (a weekend) stands at the
-/// previous session's close Cboe states, with no change: its price now, as the
-/// earlier app showed it, never a blank.
+/// previous session's close Cboe states, unmoved from it (`+0.00%`): its price
+/// now, as the earlier app showed it, never a blank.
 #[test]
 fn a_cboe_canada_listing_with_no_trade_yet_stands_at_its_previous_close() {
     let dir = tempfile::tempdir().unwrap();
@@ -351,5 +351,5 @@ fn a_cboe_canada_listing_with_no_trade_yet_stands_at_its_previous_close() {
     quotes::read_quotes(&ctx, &[listing(2, InstrumentKind::Security, Currency::CAD, "HBIX", Some("NEOE"))]).unwrap();
     let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
     let q = &got[&id(2)];
-    assert_eq!((q.price, q.change, q.change_pct, q.quoted_at), (Money::new(dec("7.24"), Currency::CAD), None, None, at));
+    assert_eq!((q.price, q.change, q.change_pct, q.quoted_at), (Money::new(dec("7.24"), Currency::CAD), Some(Dec::ZERO), Some(Dec::ZERO), at));
 }
