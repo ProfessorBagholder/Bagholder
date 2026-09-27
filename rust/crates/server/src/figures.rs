@@ -452,11 +452,14 @@ impl Figures {
         Ok(moved)
     }
 
-    /// An instrument's quote or daily closes changed.
+    /// An instrument's quote (with the ex-dividend date it states) or daily
+    /// closes changed.
     pub fn price_changed(&self, instrument: InstrumentId) -> Result<Moved, String> {
         let m = market(&self.book()?, &self.cache()?)?;
         let (quote, closes) = (m.quotes.get(&instrument).cloned(), m.closes.get(&instrument).cloned().unwrap_or_default());
+        let ex_dividend = m.ex_dividends.get(&instrument).copied();
         let mut moved = self.apply_if(|i| i.market.quotes.get(&instrument) != quote.as_ref(), || Change::Quote(instrument, quote.clone()));
+        merge(&mut moved, self.apply_if(|i| i.market.ex_dividends.get(&instrument).copied() != ex_dividend, || Change::ExDividend(instrument, ex_dividend)));
         merge(&mut moved, self.apply_if(|i| i.market.closes.get(&instrument).cloned().unwrap_or_default() != closes, || Change::Closes(instrument, closes.clone())));
         Ok(moved)
     }
@@ -582,6 +585,11 @@ mod tests {
         let price = bagholder_core::Money::new(bagholder_core::Dec::parse("12.34").unwrap(), currency);
         cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: held, source: bagholder_core::SourceName::named("tmx"), price, change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now }).unwrap();
         assert!(!f.price_changed(held).unwrap().is_empty(), "its position moved");
+        same_as_fresh(&f, now);
+        // the ex-dividend date its quote states, kept with the quote
+        cache.store_ex_dividend(held, &bagholder_core::SourceName::named("tmx"), Some("2025-12-15".parse().unwrap()), now).unwrap();
+        f.price_changed(held).unwrap();
+        assert_eq!(f.read(|e| e.inputs().market.ex_dividends.get(&held).copied()).unwrap(), Some("2025-12-15".parse().unwrap()));
         same_as_fresh(&f, now);
         // the payer's declared record
         let row = bagholder_book::facts::DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: "2025-11-03".parse().unwrap(), record_date: None, pay_date: None, amount: bagholder_core::Money::new(bagholder_core::Dec::parse("0.10").unwrap(), currency), reinvested: None };

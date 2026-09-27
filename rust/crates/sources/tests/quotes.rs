@@ -76,7 +76,7 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     quotes::read_quotes(&ctx, &listings).unwrap();
     let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
     let q = |n: u8| (got[&id(n)].source.to_string(), got[&id(n)].price, got[&id(n)].quoted_at, got[&id(n)].allowance.as_secs());
-    assert_eq!(q(1), ("tmx".into(), Money::new(dec("67.47"), Currency::CAD), t("2026-09-24T04:20:30Z"), 0));
+    assert_eq!(q(1), ("tmx".into(), Money::new(dec("66.13"), Currency::CAD), t("2026-09-27T06:13:19Z"), 0));
     assert_eq!(q(2), ("cboe-canada".into(), Money::new(dec("7.2600"), Currency::CAD), t("2026-09-23T20:00:00Z"), 0));
     assert_eq!(q(3), ("yahoo".into(), Money::new(dec("767.81"), Currency::USD), t("2026-09-23T20:00:00Z"), 0));
     // the spot price states no time: its reply's date less the origin's sixty seconds
@@ -85,7 +85,7 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     // ENB on the CSE: TMX named another venue for the CSE form, so the other
     // Canadian forms are asked, and the bare form's answer on the TSX is kept and
     // remembered, but not written to the book, whose venue it is not
-    assert_eq!(q(6).1, Money::new(dec("67.47"), Currency::CAD));
+    assert_eq!(q(6).1, Money::new(dec("66.13"), Currency::CAD));
     let tmx_rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
     assert!(tmx_rows.iter().any(|o| o.instrument == Some(id(6)) && o.outcome == OutcomeKind::NotCarried && o.kind == DataKind::Quote && o.detail.starts_with("ENB:CNX")));
     assert_eq!(cache.winner(id(6), DataKind::Quote).unwrap().map(|w| w.1), Some("ENB".to_string()));
@@ -248,8 +248,8 @@ fn tmx_is_asked_the_other_canadian_forms_and_remembers_what_answered() {
     // ENB: ENB:CNX, then ENB; the second: ENB; ZZZQX: its three forms
     assert_eq!(run(at), 2 + 1 + 3);
     let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
-    assert_eq!(got[&id(1)].price, Money::new(dec("67.47"), Currency::CAD));
-    assert_eq!(got[&id(2)].price, Money::new(dec("67.47"), Currency::CAD));
+    assert_eq!(got[&id(1)].price, Money::new(dec("66.13"), Currency::CAD));
+    assert_eq!(got[&id(2)].price, Money::new(dec("66.13"), Currency::CAD));
     assert!(!got.contains_key(&id(3)));
     assert_eq!(cache.winner(id(1), DataKind::Quote).unwrap().map(|w| w.1), Some("ENB".to_string()));
     // not the book's venue's form: the book learns no route from it
@@ -277,9 +277,47 @@ fn a_halted_listing_keeps_the_price_read_last() {
     read("quote-ENB.json", at);
     read("edited-quote-ENB-price-null.json", "2026-09-24T15:00:00Z");
     let q = cache.quotes().unwrap();
-    assert_eq!((q.len(), q[0].price, q[0].quoted_at), (1, Money::new(dec("67.47"), Currency::CAD), t("2026-09-24T04:20:30Z")));
+    assert_eq!((q.len(), q[0].price, q[0].quoted_at), (1, Money::new(dec("66.13"), Currency::CAD), t("2026-09-27T06:13:19Z")));
     let tmx_rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
     assert!(tmx_rows.iter().all(|o| o.outcome == OutcomeKind::Answered), "{tmx_rows:?}");
+}
+
+/// The ex-dividend date a TMX quote states is kept with the quote, one per
+/// listing: replaced by the next read that states one, removed by one that
+/// states none. One in a form the reader does not know is the request's
+/// mismatch: the price stands and no ex-date is kept.
+#[test]
+fn the_ex_dividend_date_a_quote_states_is_kept_with_it() {
+    let at = "2026-09-27T06:20:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let enb = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"));
+    let fbtc = listing(2, InstrumentKind::Security, Currency::CAD, "FBTC", Some("XTSE"));
+    let read_for = |l: &Listing, name: &str| {
+        let recorded = Arc::new(common::Recorded::new().with(TMX, 200, "tmx", name));
+        let net = common::net(&recorded, at);
+        let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
+        quotes::read_quotes(&ctx, std::slice::from_ref(l)).unwrap();
+    };
+    let read = |name: &str| read_for(&enb, name);
+    let tmx = bagholder_core::SourceName::named("tmx");
+    let last = || cache.outcomes(&tmx).unwrap().into_iter().max_by_key(|o| o.at).map(|o| o.outcome);
+    read("quote-ENB.json");
+    assert_eq!(cache.ex_dividends().unwrap(), BTreeMap::from([(id(1), "2026-08-14".parse().unwrap())]));
+    assert_eq!(last(), Some(OutcomeKind::Answered));
+    // a halted listing's quote still states its ex-dividend date
+    read("edited-quote-ENB-price-null.json");
+    assert_eq!(cache.ex_dividends().unwrap().get(&id(1)), Some(&"2026-08-14".parse().unwrap()));
+    read("wrong-shape-quote-ENB-ex-dividend-unknown.json");
+    assert!(cache.ex_dividends().unwrap().is_empty(), "no ex-date kept from a form the reader does not know");
+    assert_eq!(cache.quotes().unwrap()[0].price, Money::new(dec("66.13"), Currency::CAD), "the price stands");
+    let rows = cache.outcomes(&tmx).unwrap();
+    assert!(rows.iter().any(|o| o.outcome == OutcomeKind::Mismatch && o.detail.contains("exDividendDate")), "{rows:?}");
+    // a listing whose quote states none ("") keeps none: one kept before is removed
+    cache.store_ex_dividend(id(2), &tmx, Some("2025-12-30".parse().unwrap()), t(at)).unwrap();
+    read_for(&fbtc, "quote-FBTC.json");
+    read("quote-ENB.json");
+    assert_eq!(cache.ex_dividends().unwrap(), BTreeMap::from([(id(1), "2026-08-14".parse().unwrap())]));
 }
 
 /// A schedule word TMX states that the reader does not know leaves the price
@@ -294,7 +332,7 @@ fn an_unknown_schedule_word_fails_the_payers_record_and_not_the_price() {
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
     let enb = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"));
     quotes::read_quotes(&ctx, std::slice::from_ref(&enb)).unwrap();
-    assert_eq!(cache.quotes().unwrap()[0].price, Money::new(dec("67.47"), Currency::CAD));
+    assert_eq!(cache.quotes().unwrap()[0].price, Money::new(dec("66.13"), Currency::CAD));
     use bagholder_sources::payers::Payer;
     let need = bagholder_sources::needs::PayerNeed { listing: enb, name: Some("Enbridge Inc.".into()) };
     let noted = bagholder_sources::payers::exchange::TmxRecord.read(&net, &need, t(at));

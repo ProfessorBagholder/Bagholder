@@ -22,11 +22,12 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 4] = [
+pub static MIGRATIONS: [Migration; 5] = [
     Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
     Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
     Migration { number: 3, name: "benchmark trackers and option chains", sql: include_str!("../migrations/003-benchmark-trackers-and-option-chains.sql") },
     Migration { number: 4, name: "the earlier readers", sql: include_str!("../migrations/004-the-earlier-readers.sql") },
+    Migration { number: 5, name: "quoted ex-dividend dates", sql: include_str!("../migrations/005-quoted-ex-dividend-dates.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {
@@ -261,6 +262,33 @@ impl MarketCache {
                 allowance: Duration::from_secs(u64::try_from(allow).map_err(|_| corrupt(T, "allowance_secs", &allow.to_string(), "negative"))?),
                 received_at: instant(T, "received_at", &rec)?,
             });
+        }
+        Ok(out)
+    }
+
+    /// Keep the ex-dividend date a quote read of `source` states for an
+    /// instrument, or, where it states none, remove the one kept.
+    pub fn store_ex_dividend(&self, id: InstrumentId, source: &SourceName, ex_date: Option<Date>, at: Timestamp) -> Result<()> {
+        match ex_date {
+            Some(d) => self.conn.execute(
+                "INSERT INTO quoted_ex_dividends (instrument_id, source, ex_date, received_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (instrument_id) DO UPDATE SET source = ?2, ex_date = ?3, received_at = ?4",
+                params![id.to_string(), source.as_str(), d.to_string(), at.to_string()],
+            )?,
+            None => self.conn.execute("DELETE FROM quoted_ex_dividends WHERE instrument_id = ?1", params![id.to_string()])?,
+        };
+        Ok(())
+    }
+
+    /// The ex-dividend date each instrument's quote states.
+    pub fn ex_dividends(&self) -> Result<BTreeMap<InstrumentId, Date>> {
+        const T: &str = "quoted_ex_dividends";
+        let mut stmt = self.conn.prepare("SELECT instrument_id, ex_date FROM quoted_ex_dividends")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (i, d) = row?;
+            out.insert(instrument(T, "instrument_id", &i)?, day(T, "ex_date", &d)?);
         }
         Ok(out)
     }

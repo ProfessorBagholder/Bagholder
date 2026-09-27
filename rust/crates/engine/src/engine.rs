@@ -35,6 +35,8 @@ pub enum Change {
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),
     Quote(InstrumentId, Option<Quote>),
+    /// The ex-dividend date a listing's quote states.
+    ExDividend(InstrumentId, Option<Date>),
     Closes(InstrumentId, BTreeMap<Date, Money>),
     Benchmark(String, Option<BenchmarkSeries>),
     Broker(AccountId, Option<BrokerAccount>),
@@ -341,6 +343,15 @@ impl Engine {
                 match s {
                     Some(s) => self.inputs.facts.frequencies.insert(i, s),
                     None => self.inputs.facts.frequencies.remove(&i),
+                };
+                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
+                self.compare(&before, &mut moved);
+            }
+            Change::ExDividend(i, d) => {
+                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
+                match d {
+                    Some(d) => self.inputs.market.ex_dividends.insert(i, d),
+                    None => self.inputs.market.ex_dividends.remove(&i),
                 };
                 self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
                 self.compare(&before, &mut moved);

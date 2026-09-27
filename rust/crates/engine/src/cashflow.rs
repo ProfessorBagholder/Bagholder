@@ -120,7 +120,8 @@ pub struct PayerRate {
     pub per_year: Fig<u32>,
     pub frequency_source: Option<FrequencySource>,
     /// The ex-date and pay date of the next distribution still to be paid, else
-    /// of the last known one.
+    /// of the last known one; without a record, the ex-date the listing's quote
+    /// reports and the day of the last payment received.
     pub next_ex: Option<Date>,
     pub next_pay: Option<Date>,
 }
@@ -247,9 +248,11 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTre
         let mut announced: Vec<&crate::input::Declared> = read.map(|r| r.market.iter().filter(|d| d.amount.amount.is_positive() && latest_listed.is_none_or(|l| d.ex_date > l)).collect()).unwrap_or_default();
         announced.sort_by_key(|d| (due(d), d.ex_date));
         let next = all.iter().find(|d| due(d) >= today).or_else(|| announced.iter().find(|d| due(d) >= today)).or(all.last());
+        // without a record: the ex-date the listing's quote reports, and the day
+        // of the last payment received
         let (next_ex, next_pay) = match next {
             Some(d) => (Some(d.ex_date), d.pay_date),
-            None => (None, payments.iter().map(|r| r.day).max()),
+            None => (inputs.market.ex_dividends.get(&i).copied(), payments.iter().map(|r| r.day).max()),
         };
         out.insert(i, PayerRate { instrument: i, per, source, per_year, frequency_source, next_ex, next_pay });
     }

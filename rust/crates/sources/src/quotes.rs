@@ -13,7 +13,9 @@
 //!   day. A null price is TMX's word that it has none now (a halted listing): the
 //!   price read last stands. TMX states no trade time: its quote's time is when it
 //!   served the quote, which is what is kept. It says the price is current then;
-//!   it is never presented as the time of a trade.
+//!   it is never presented as the time of a trade. The ex-dividend date the
+//!   quote states is kept with it (a halted listing's too), and removed where
+//!   it states none: the Ex-Div of a payer no declared record serves.
 //! - **Cboe Canada listings:** Cboe Canada's own quote.
 //! - **US listings:** Yahoo's chart, its forms in order, the winner first, the
 //!   day's change in points from the previous close the chart states.
@@ -202,13 +204,25 @@ fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
     for form in forms {
         let mut noted = tmx::ask_quote(ctx.net, &form);
         same_currency(&mut noted.outcome, |q| q.currency, l);
-        ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &noted, &form)?;
+        // an ex-dividend date this reader cannot read is the reply's mismatch,
+        // recorded as the request's outcome; the price it states still stands
+        let ex_mismatch = match &noted.outcome {
+            Outcome::Answered(q) => q.ex_dividend.as_ref().err().cloned(),
+            _ => None,
+        };
+        match &ex_mismatch {
+            Some(m) => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &Noted::<()> { outcome: Outcome::Mismatch(m.clone()), shape_change: noted.shape_change.clone() }, &form)?,
+            None => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &noted, &form)?,
+        }
         match noted.outcome {
             Outcome::Answered(q) => {
                 // a null price: TMX has none now, and the price read last stands
                 if let Some(price) = q.price {
                     keep(ctx, id, source.clone(), Money::new(price, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
                 }
+                // the ex-dividend date the quote states, kept with it; none where it
+                // states none or where it could not be read
+                ctx.cache.store_ex_dividend(id, &source, q.ex_dividend.unwrap_or(None), ctx.now)?;
                 ctx.cache.won(id, DataKind::Quote, &source, &form, ctx.now)?;
                 // the reply is for the venue the form asks: where that is the venue
                 // the book names, the form is this listing's
