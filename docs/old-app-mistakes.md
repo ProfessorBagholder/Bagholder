@@ -34,8 +34,8 @@ A test in the old crates that records one of these as it behaves today is named 
 
 - **No open trade, and the sold part of a held position made a trade of its own**, so a partial sale was scored as a finished trade and the position's later sales as another. Guarded: the cases in `open_trades.json` (a partly sold position is one open trade; win rate and expectancy count only closed trades).
 - **A position marked at the person's own fill** when no price was read. Guarded: scan for `last_fill`, `LastFill`.
-- **A tolerance for coins sold beyond what was held.** Guarded: scan for `fn dust`, `0.01 *`.
-- **A residue under a dollar dropped.** Guarded: scan for `< 1.0)`.
+- **A tolerance for coins sold beyond what was held, as a share of the fill** (up to 1% of any coin sale dropped, whatever it was worth). Dust is now what the broker's smallest coin order says it is, by value (`SPEC.md` §2, a coin is flat once what is left is dust). Guarded: scan for `fn dust`, `0.01 *`.
+- **A residue under a dollar dropped, by a fixed dollar at the lot's cost**, for any broker, leaving its trade open and its cost nowhere. Dust is now valued at the price the coin last moved at against the broker's own stated smallest order, written off with the transaction that left it, the trade closed (`engine/src/dust.rs`). Guarded: scan for `< 1.0)`.
 - **A price-only index beside a total return.** The yearly return keeps dividends in the account's value, while its S&P 500 and S&P/TSX benchmarks were index levels without dividends (FRED, TMX), so every year flattered the account by the index's yield. Guarded: the tracker's total return in CAD (`engine/src/stat/benchmark.rs`), checked against Yahoo's adjusted close on recorded replies; case "the index is a total return in CAD" (`returns_filters_checks.json`).
 - **Payout frequency assumed monthly, or worked out from past distribution dates** (which showed Ninepoint's funds as monthly for six weeks after they went twice a month). Guarded: scan for `payments_per_year`; case "without the payer's own record nothing is worked out from the payments" (`positions_and_income.json`).
 

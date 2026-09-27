@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
 
+## 2026-09-27
+
+- **Dust is dust: a coin left worth less than the broker's smallest coin order is not a holding and not a disagreement.** It is written off with the transaction that left it, the trade ends there, and neither the Portfolio, the heatmap nor the broker check shows it; the smallest order is the broker's own (Wealthsimple: $1.00). (Owner, 2026-09-27: "There's such a thing as dust. This was already settled before.") Held by: the dust cases in `rust/crates/engine/tests/cases/coins_and_transfers.json`.
+
 ## 2026-09-26
 
 - **The cutover keeps to the migration.** Stage 6 moves what the app keeps out of the old store and removes the Python and Go apps and `ledger.html`; the design review's "shared components, one overlay manager, accessibility" is a rework of the page, not the migration, and waits in `docs/future.md`. The Rust build keeps its own data folder; its first start with no book takes the database written last, its own folder's or a copy of the Python app's, whose folder is left as it was (`docs/plans/stage-6-cutover.md`). Held by: the plan's tests.

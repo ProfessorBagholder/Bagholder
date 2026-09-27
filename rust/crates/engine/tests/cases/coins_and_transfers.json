@@ -353,5 +353,848 @@
       {"id": "t2", "account": "C", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "1"}
     ],
     "expect": {"position_count": 1, "positions": [{"account": "C", "instrument": "BTC", "qty": "2", "opened_by": "t1", "trips": ["t1", "t2"]}]}
+  },
+  {
+    "name": "a sale that leaves a coin worth less than the broker's smallest order writes the rest off with it, and the trade closes",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 10 C bought for 100, 10.00 a unit (C states no currency: CAD, the currency of the account's smallest order)",
+      "t2: 9.95 sold for 119.40, 12.00 a unit; FIFO cost 9.95 x 10 = 99.50; the sale realizes 119.40 - 99.50 = 19.90",
+      "left: 0.05, worth 0.05 x 12.00 (the sale's own price) = 0.60 < 1.00, the smallest coin order: dust",
+      "the 0.05 is written off with t2 at nothing: 0 - 0.05 x 10 = -0.50, realized 2026-02-02",
+      "the coin is flat on 2026-02-02: one trade, opened by t1, 10 units, closed 2026-02-02, P&L 19.90 - 0.50 = 19.40",
+      "no position; no unit went beyond what the book held"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-9.95",
+        "cash": "119.40"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "19.40"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a sale that leaves a coin worth the broker's smallest order or more leaves it held, the trade open",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 10 C bought for 100, 10.00 a unit",
+      "t2: 9.9 sold for 118.80, 12.00 a unit; cost 99.00; realized 19.80",
+      "left: 0.1 x 12.00 = 1.20, not less than 1.00: not dust, held",
+      "the trade opened by t1 (10 units) is open, P&L realized so far 19.80; one position, A/C, 0.1"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-9.9",
+        "cash": "118.80"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "open",
+          "qty": "10",
+          "pnl": "19.80"
+        }
+      ],
+      "position_count": 1,
+      "positions": [
+        {
+          "instrument": "C",
+          "account": "A",
+          "qty": "0.1"
+        }
+      ],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a coin priced in another currency is valued in the currency of the broker's smallest order, at the day's rate: worth less, written off",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 10 U bought for 100 USD, 10.00 USD a unit",
+      "t2: 9.95 sold for 99.50 USD, 10.00 a unit; cost 99.50; realized 0.00",
+      "left: 0.05 x 10.00 = 0.50 USD, at 2026-02-02's rate 1.40 = 0.70 CAD < 1.00 CAD: dust",
+      "written off with t2 at nothing: -0.50 USD",
+      "trade t1 closed 2026-02-02, 10 units, P&L 0.00 - 0.50 = -0.50 (USD, the instrument's currency); no position"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "U",
+        "kind": "crypto",
+        "currency": "USD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "U",
+        "qty": "-9.95",
+        "cash": "99.50"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-01-05": "1.40",
+        "2026-02-02": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-01-05",
+          "2026-03-02"
+        ]
+      ]
+    },
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "-0.50"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a coin priced in another currency is valued in the currency of the broker's smallest order, at the day's rate: worth as much, held",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 10 U bought for 100 USD, 10.00 a unit",
+      "t2: 9.92 sold for 99.20 USD, 10.00 a unit; cost 99.20; realized 0.00",
+      "left: 0.08 x 10.00 = 0.80 USD x 1.40 = 1.12 CAD, not less than 1.00: held",
+      "trade t1 open, 10 units, P&L 0.00; one position, A/U, 0.08"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "U",
+        "kind": "crypto",
+        "currency": "USD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "U",
+        "qty": "-9.92",
+        "cash": "99.20"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-01-05": "1.40",
+        "2026-02-02": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-01-05",
+          "2026-03-02"
+        ]
+      ]
+    },
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "open",
+          "qty": "10",
+          "pnl": "0.00"
+        }
+      ],
+      "position_count": 1,
+      "positions": [
+        {
+          "instrument": "U",
+          "account": "A",
+          "qty": "0.08"
+        }
+      ],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a withdrawal that states no price leaves dust valued at the coin's last stated fill price: written off, its cost a loss",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 1 C bought for 50, 50.00 a unit",
+      "t2: 0.99 sent out; a transfer out is not a sale: 0.99 comes off at its cost (49.50), no P&L",
+      "t2 states no price, so the coin moved at the last price a fill stated: 50.00 (t1)",
+      "left: 0.01 x 50.00 = 0.50 < 1.00: dust, written off with t2 at nothing: 0 - 0.50 = -0.50",
+      "the round trip ends 2026-02-02 with a write-off, its cost a loss: a trade (it did not go flat by the transfer alone), opened by t1, 1 unit, P&L -0.50; no position"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "1",
+        "cash": "-50"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "C",
+        "qty": "-0.99"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "pnl": "-0.50"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "units sold beyond what was held, by a row stating nothing, worth less than the smallest order at the coin's last price: not listed",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 10 bought for 100; t2: 10 sold for 120 (12.00 a unit): flat, P&L 20.00, closed 2026-02-02",
+      "t3: 0.05 sold with cash 0: beyond what the book holds (0), no cost, adds nothing to P&L, never a short",
+      "t3 states no price (cash 0), so its price is the last a fill stated: 12.00 (t2); 0.05 x 12.00 = 0.60 < 1.00: dust, not listed",
+      "beyond: none; one trade; no position"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-10",
+        "cash": "120"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-0.05",
+        "cash": "0"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "20.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "units sold beyond what was held, by a row stating nothing, worth the smallest order or more at the coin's last price: listed",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "t1: 10 bought for 100; t2: 10 sold for 120 (12.00 a unit): flat, P&L 20.00, closed 2026-02-02",
+      "t3: 0.1 sold with cash 0: beyond what the book holds, adds nothing to P&L",
+      "price: the last a fill stated, 12.00; 0.1 x 12.00 = 1.20, not less than 1.00: listed",
+      "beyond: t3; one trade; no position"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-10",
+        "cash": "120"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-0.1",
+        "cash": "0"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "20.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": [
+        "t3"
+      ]
+    }
+  },
+  {
+    "name": "the broker states a coin the book no longer holds, worth less than the smallest order at its price now: no difference",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "book: 10 bought for 100, 10 sold for 120: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C",
+      "broker states 0.04 C held; difference 0.04 x 12 (price now) = 0.48 < 1.00: dust, not a disagreement",
+      "cash not stated: no cash difference; differences 0"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-10",
+        "cash": "120"
+      }
+    ],
+    "quotes": {
+      "C": {
+        "price": "12",
+        "source": "crypto"
+      }
+    },
+    "brokers": {
+      "A": {
+        "held": {
+          "C": "0.04"
+        },
+        "held_as_of": "2026-03-02",
+        "cash": {
+          "CAD": "20"
+        }
+      }
+    },
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "20.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": [],
+      "checks": [
+        {
+          "account": "A",
+          "differences": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "the broker states a coin the book no longer holds, worth the smallest order or more at its price now: a difference",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "book: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C",
+      "broker states 0.5 C; difference 0.5 x 12 (price now) = 6.00, not less than 1.00: one unit difference",
+      "cash not stated; differences 1"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-10",
+        "cash": "120"
+      }
+    ],
+    "quotes": {
+      "C": {
+        "price": "12",
+        "source": "crypto"
+      }
+    },
+    "brokers": {
+      "A": {
+        "held": {
+          "C": "0.5"
+        },
+        "held_as_of": "2026-03-02",
+        "cash": {
+          "CAD": "20"
+        }
+      }
+    },
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "20.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": [],
+      "checks": [
+        {
+          "account": "A",
+          "differences": 1
+        }
+      ]
+    }
+  },
+  {
+    "name": "the broker states a coin with no price now: its difference is valued at the last price a fill stated, worth less: no difference",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "book: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C",
+      "no price now; the last price a fill stated is t2's, 120 / 10 = 12.00",
+      "difference 0.04 x 12.00 = 0.48 < 1.00: not a disagreement; differences 0"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-10",
+        "cash": "120"
+      }
+    ],
+    "brokers": {
+      "A": {
+        "held": {
+          "C": "0.04"
+        },
+        "held_as_of": "2026-03-02",
+        "cash": {
+          "CAD": "20"
+        }
+      }
+    },
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "20.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": [],
+      "checks": [
+        {
+          "account": "A",
+          "differences": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "a broker whose smallest coin order is not known leaves nothing dust: the residue is held and the trade open",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "account B states no smallest coin order: nothing is dust",
+      "t2: 9.95 sold for 119.40 against 99.50: realized 19.90; 0.05 left, held",
+      "trade t1 open, 10 units, P&L 19.90; one position, B/C, 0.05"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "B",
+        "kind": "crypto"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "B",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "B",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-9.95",
+        "cash": "119.40"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "open",
+          "qty": "10",
+          "pnl": "19.90"
+        }
+      ],
+      "position_count": 1,
+      "positions": [
+        {
+          "instrument": "C",
+          "account": "B",
+          "qty": "0.05"
+        }
+      ],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a share is never dust, however little is left: the residue is held and the trade open",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
+    "working": [
+      "S is a security, not a coin: the dust rule does not apply",
+      "t2: 9.95 sold for 119.40 against 99.50: realized 19.90; 0.05 left, held",
+      "trade t1 open, 10 units, P&L 19.90; one position, A/S, 0.05"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "S",
+        "kind": "security"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "S",
+        "qty": "-9.95",
+        "cash": "119.40"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "open",
+          "qty": "10",
+          "pnl": "19.90"
+        }
+      ],
+      "position_count": 1,
+      "positions": [
+        {
+          "instrument": "S",
+          "account": "A",
+          "qty": "0.05"
+        }
+      ],
+      "beyond": []
+    }
   }
 ]

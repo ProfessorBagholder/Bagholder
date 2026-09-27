@@ -70,6 +70,9 @@ pub enum Flag {
     /// shows as entered by you): an opening balance, a spin-off's share, capital
     /// returned.
     Entered,
+    /// Written off at nothing as dust: what a fill left of a coin, worth less
+    /// than the smallest order the broker takes (`crate::dust`).
+    Dust,
 }
 
 impl Flag {
@@ -85,6 +88,7 @@ impl Flag {
             Flag::FromEvent => "from-event",
             Flag::Transferred => "transferred",
             Flag::Entered => "entered",
+            Flag::Dust => "dust",
         }
     }
 }
@@ -199,6 +203,18 @@ pub struct Beyond {
     pub qty: Dec,
 }
 
+/// An amount of a coin that was dust (`crate::dust`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dust {
+    pub transaction: TransactionId,
+    pub account: AccountId,
+    pub instrument: InstrumentId,
+    /// Always positive.
+    pub qty: Dec,
+    /// Taken beyond what was held (else written off from what was held).
+    pub beyond: bool,
+}
+
 /// An event's units as the broker states them against its ratio.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitsDisagree {
@@ -249,6 +265,12 @@ pub struct Matched {
     pub trips: BTreeMap<TripKey, Trip>,
     pub books: BTreeMap<(AccountId, InstrumentId), Book>,
     pub beyond: Vec<Beyond>,
+    /// Every amount of a coin that was dust (`crate::dust`): written off, or
+    /// taken beyond what was held and not listed.
+    pub dust: Vec<Dust>,
+    /// Each instrument's last price a fill stated above nothing, in its own
+    /// currency: what dust is valued at where nothing newer is known.
+    pub last_price: BTreeMap<InstrumentId, Dec>,
     pub stock_dividends: Vec<StockDividend>,
     /// Fills whose stated price and cash disagree: the cash stands, and the
     /// record is a problem for the person.
@@ -899,7 +921,26 @@ impl<'a> Matcher<'a> {
     /// have no cost on record, so they add nothing to P&L and none is made up for
     /// them (a sale's dust past the rows' rounding is cents, never a reason to lose
     /// the P&L of every unit that was held).
+    /// The price a coin moved at in a transaction: its own, where it states one
+    /// above nothing; else the last one a fill of the coin stated before it (a
+    /// withdrawal states none; a write-off states nothing). Each price stated is
+    /// kept as the coin's last.
+    fn price_of(&mut self, t: &Transaction, instrument: InstrumentId) -> Option<Dec> {
+        match fill_price(t, self.info(instrument)).ok().filter(|p| p.is_positive()) {
+            Some(p) => {
+                self.out.last_price.insert(instrument, p);
+                Some(p)
+            }
+            None => self.out.last_price.get(&instrument).copied(),
+        }
+    }
+
+    /// Units beyond worth less than the broker's smallest coin order at the
+    /// transaction's own price are dust (`crate::dust`), and not listed.
     fn beyond(&mut self, t: &Transaction, account: AccountId, instrument: InstrumentId, qty: Dec) {
+        if self.price_of(t, instrument).is_some_and(|p| crate::dust::is_dust(self.inputs, account, instrument, qty, p, t.trade_date)) {
+            return self.out.dust.push(Dust { transaction: t.id.clone(), account, instrument, qty, beyond: true });
+        }
         self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty });
     }
 
@@ -1099,6 +1140,27 @@ impl<'a> Matcher<'a> {
                 }
             }
             Move::Event | Move::Nothing => {}
+        }
+        self.write_off_dust(t, instrument);
+    }
+
+    /// What a coin transaction leaves of the holding, worth less than the
+    /// smallest coin order the broker takes at the price it was moved at
+    /// (`price_of`), is dust (`crate::dust`): it cannot be sold, so it is written
+    /// off with the transaction at nothing and the trade ends there.
+    fn write_off_dust(&mut self, t: &Transaction, instrument: InstrumentId) {
+        let account = t.account;
+        let Some(price) = self.price_of(t, instrument) else { return };
+        let held = self.book(account, instrument).lots.iter().filter(|l| l.direction == Direction::Long).try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty));
+        let Ok(held) = held else { return };
+        if !held.is_positive() || !crate::dust::is_dust(self.inputs, account, instrument, held, price, t.trade_date) {
+            return;
+        }
+        let zero = Money::zero(self.currency(instrument));
+        let flags = BTreeSet::from([Flag::Dust]);
+        match self.close(account, instrument, Direction::Long, held, Ok(zero), zero, &Closer::Transaction(t.id.clone()), t.trade_date, t.occurred_at, &flags) {
+            Ok(_) => self.out.dust.push(Dust { transaction: t.id.clone(), account, instrument, qty: held, beyond: false }),
+            Err(g) => self.taint(account, instrument, &g),
         }
     }
 

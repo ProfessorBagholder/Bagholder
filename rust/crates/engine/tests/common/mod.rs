@@ -118,7 +118,12 @@ pub fn build(case: &Value) -> Built {
         let status = AccountStatus::parse(s(&a, "status").unwrap_or("open")).unwrap();
         let managed = a.get("managed").and_then(Value::as_bool).unwrap_or(false);
         let account = Account { id, connection, account_type: AccountType::Known { kind, registration, managed, joint: false }, status, nickname: Some(label.to_string()) };
-        accounts.insert(id, AccountInfo { account, broker: broker.clone(), broker_label: "Testbroker".into() });
+        // the broker's smallest coin order, `"1.00 CAD"`, where the case states one
+        let coin_minimum = s(&a, "coin_minimum").map(|m| {
+            let (amount, currency) = m.split_once(' ').unwrap();
+            Money::new(dec(amount), ccy(currency))
+        });
+        accounts.insert(id, AccountInfo { account, broker: broker.clone(), broker_label: "Testbroker".into(), coin_minimum });
     }
     let first_day = arr(case, "transactions").iter().filter_map(|t| s(t, "day")).map(day).min().unwrap_or(day("2020-01-01"));
     let mut instruments = BTreeMap::new();

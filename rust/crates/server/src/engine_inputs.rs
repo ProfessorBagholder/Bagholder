@@ -14,6 +14,12 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// The smallest coin order each broker takes, as it states it; none for a
+/// broker that states none.
+fn coin_minimum(broker: &bagholder_core::Broker) -> Option<bagholder_core::Money> {
+    (*broker == bagholder_wealthsimple::mapping::broker()).then(bagholder_wealthsimple::mapping::coin_minimum)
+}
+
 /// The ledger: accounts, instruments with their names and terms, the live
 /// transactions and their records, the trades, groups and journal.
 pub fn ledger(book: &Book) -> Result<Ledger, String> {
@@ -21,7 +27,8 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
     let mut accounts = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
         let (broker, broker_label) = brokers.get(&a.connection).cloned().ok_or_else(|| format!("account {} has no connection", a.id))?;
-        accounts.insert(a.id, AccountInfo { account: a, broker, broker_label });
+        let coin_minimum = coin_minimum(&broker);
+        accounts.insert(a.id, AccountInfo { account: a, broker, broker_label, coin_minimum });
     }
     let mut instruments = BTreeMap::new();
     for i in book.instruments().map_err(err)? {

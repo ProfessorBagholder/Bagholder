@@ -22,6 +22,9 @@ pub struct AccountInfo {
     /// What the person calls the broker it is held at (`Wealthsimple`), for the
     /// screens: the connection's label.
     pub broker_label: String,
+    /// The smallest coin order the broker takes, as it states it: a coin amount
+    /// worth less is dust (`crate::dust`). None where the broker states none.
+    pub coin_minimum: Option<Money>,
 }
 
 /// An instrument with what it is called and, for a contract, its terms.
