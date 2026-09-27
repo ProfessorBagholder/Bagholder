@@ -312,8 +312,8 @@ struct World {
     n: usize,
     /// The broker's accounts behind the book's LIRA.
     lira_keys: Vec<String>,
-    /// Each of the broker's accounts' cash as it states it now.
-    cash_now: BTreeMap<String, BTreeMap<Currency, Dec>>,
+    /// The broker's accounts it states closed.
+    closed: BTreeSet<String>,
 }
 
 const NOW: &str = "2025-07-15T16:00:00Z";
@@ -325,7 +325,7 @@ impl World {
         let conn = book.add_connection(&ws(), "Wealthsimple", at(NOW)).unwrap();
         let lira = book.add_account(conn, &[AccountRef::new(ws(), "lira-1")], &bagholder_book::import::wealthsimple_account_type("SELF_DIRECTED_LIRA"), AccountStatus::Open, None, at(NOW)).unwrap();
         let cash = book.add_account(conn, &[AccountRef::new(ws(), "cash-1")], &bagholder_book::import::wealthsimple_account_type("CASH"), AccountStatus::Open, None, at(NOW)).unwrap();
-        World { _dir: dir, book, conn, lira, cash, broker: Statements { months: BTreeMap::new(), refuse: BTreeSet::new(), asked: vec![] }, n: 0, lira_keys: vec!["lira-1".into()], cash_now: BTreeMap::new() }
+        World { _dir: dir, book, conn, lira, cash, broker: Statements { months: BTreeMap::new(), refuse: BTreeSet::new(), asked: vec![] }, n: 0, lira_keys: vec!["lira-1".into()], closed: BTreeSet::new() }
     }
 
     fn row(&mut self, mapping: &dyn Mapping, account: &str, d: &str, kind: &str, cash: &str) -> bagholder_core::RecordId {
@@ -353,7 +353,7 @@ impl World {
     fn run(&mut self, failures: &mut Vec<(String, Failure)>) -> Done {
         self.broker.asked.clear();
         let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, self.lira_keys.clone()), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
-        run(&self.book, &mut self.broker, self.conn, &keys, &self.cash_now, day("2025-07-15"), at(NOW), &mut |_| {}, failures).unwrap()
+        run(&self.book, &mut self.broker, self.conn, &keys, &self.closed, day("2025-07-15"), at(NOW), &mut |_| {}, failures).unwrap()
     }
 
     fn book_cash(&self, account: AccountId) -> Dec {
@@ -518,7 +518,7 @@ fn a_month_not_issued_yet_is_its_own_state_and_the_month_before_is_the_newest() 
     w.month("cash-1", "2025-07-01", None);
     let keys: BTreeMap<AccountId, Vec<String>> = [(w.lira, vec!["lira-1".to_string()]), (w.cash, vec!["cash-1".to_string()])].into_iter().collect();
     let mut failures = vec![];
-    let done = run(&w.book, &mut w.broker, w.conn, &keys, &BTreeMap::new(), day("2025-08-03"), at("2025-08-03T16:00:00Z"), &mut |_| {}, &mut failures).unwrap();
+    let done = run(&w.book, &mut w.broker, w.conn, &keys, &BTreeSet::new(), day("2025-08-03"), at("2025-08-03T16:00:00Z"), &mut |_| {}, &mut failures).unwrap();
     assert!(failures.is_empty(), "not issued is not a failure: {failures:?}");
     assert_eq!(done.booked, 2);
     // July is asked again next time, since it may be issued by then; it is not kept as none
@@ -557,18 +557,18 @@ fn a_trade_only_the_statement_states_is_not_booked_and_its_month_is_named() {
 }
 
 #[test]
-fn a_second_broker_account_behind_the_book_s_with_no_statement_holds_what_the_broker_states_it_holds_now() {
+fn a_second_broker_account_behind_the_book_s_with_no_row_holds_nothing_where_closed_and_is_not_guessed_where_open() {
     // the LIRA is two of the broker's accounts, joined: one merged into the other long ago, with no statement
     let mut w = owners_june();
     w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
     w.lira_keys.push("lira-old".into());
-    w.cash_now.insert("lira-old".into(), BTreeMap::new());
+    w.closed.insert("lira-old".into());
     let mut failures = vec![];
     let done = w.run(&mut failures);
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!((done.booked, done.unreconciled.len()), (2, 0), "{done:?}");
     assert_eq!(w.book_cash(w.lira), dec("24.10"));
-    // where the broker states nothing of it at all, its balance is not taken to be anything
+    // an open one with no row: its balance then is not what it holds now, and is not guessed
     let mut w = owners_june();
     w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
     w.lira_keys.push("lira-old".into());
@@ -620,4 +620,28 @@ fn a_statement_dates_a_movement_on_the_day_it_posted_up_to_a_week_after_the_feed
             assert_eq!(done.booked, 0, "posted {posted}: the payment not matched, so June does not reconcile and nothing is booked: {done:?}");
         }
     }
+}
+
+#[test]
+fn a_closed_account_merged_into_the_book_s_carries_its_history_and_holds_no_cash_now() {
+    // the book's account is two of the broker's: the old one's statements carry the
+    // rows the book holds from it; the current one has its own
+    let mut w = owners_june();
+    let june = w.broker.months.remove(&("lira-1".into(), day("2025-06-01"))).unwrap();
+    let may = w.broker.months.remove(&("lira-1".into(), day("2025-05-01"))).unwrap();
+    w.broker.months.insert(("lira-old".into(), day("2025-06-01")), june);
+    w.broker.months.insert(("lira-old".into(), day("2025-05-01")), may);
+    w.feed("lira-1", "2025-05-21", "deposit", "10");
+    w.broker.months.insert(("lira-1".into(), day("2025-05-01")), Some(brokerage_statement(&[("2025-05-21", "CONT", "Deposit", "10", "10")])));
+    w.broker.months.insert(("lira-1".into(), day("2025-06-01")), Some(brokerage_statement(&[])));
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
+    w.lira_keys.push("lira-old".into());
+    w.closed.insert("lira-old".into());
+    let a = w.lira;
+    w.states(a, "34.10");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (2, 0), "{done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("34.10"));
 }
