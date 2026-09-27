@@ -111,6 +111,12 @@ pub(crate) struct Shown {
 
 pub(crate) fn shown(inputs: &Inputs, i: InstrumentId) -> Shown {
     let info = inputs.ledger.instruments.get(&i);
+    // an option contract is named by its terms, and its name and venue are its
+    // underlying's listing, as the broker lists the contract under none of its own
+    if let Some(terms) = info.and_then(|x| x.terms.as_ref()) {
+        let under = shown(inputs, terms.underlying);
+        return Shown { symbol: contract_label(&under.symbol, terms), name: under.name, exchange: under.exchange };
+    }
     let name = info.and_then(|x| x.current_name());
     let crypto = info.is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto);
     Shown {
@@ -118,6 +124,24 @@ pub(crate) fn shown(inputs: &Inputs, i: InstrumentId) -> Shown {
         name: name.and_then(|n| n.name.clone()).unwrap_or_default(),
         exchange: if crypto { "Crypto".into() } else { name.and_then(|n| n.venue_name.clone().or_else(|| n.venue_mic.clone())).unwrap_or_default() },
     }
+}
+
+/// A contract as the broker names it: `QNC 20NOV26 3.00 CALL`, the strike to two
+/// places at least.
+pub(crate) fn contract_label(underlying: &str, t: &bagholder_core::instrument::OptionTerms) -> String {
+    const MONTHS: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    let strike = t.strike.to_string();
+    let strike = match strike.split_once('.') {
+        None => format!("{strike}.00"),
+        Some((_, frac)) if frac.len() < 2 => format!("{strike}{}", "0".repeat(2 - frac.len())),
+        Some(_) => strike,
+    };
+    let right = match t.right {
+        bagholder_core::instrument::OptionRight::Call => "CALL",
+        bagholder_core::instrument::OptionRight::Put => "PUT",
+    };
+    let e = t.expiry;
+    format!("{underlying} {:02}{}{:02} {strike} {right}", e.day(), MONTHS[(e.month() - 1) as usize], e.year() % 100)
 }
 
 /// An account's name: the person's for it, else what it is.
@@ -874,5 +898,23 @@ mod kind_words {
             let back = KIND_WORDS.iter().find(|(_, w)| *w == kind_word(k)).map(|(k, _)| *k);
             assert_eq!(back, Some(k));
         }
+    }
+}
+
+#[cfg(test)]
+mod contracts {
+    use super::*;
+    use bagholder_core::instrument::{OptionRight, OptionTerms};
+
+    fn terms(expiry: &str, strike: &str, right: OptionRight) -> OptionTerms {
+        OptionTerms { underlying: "01a0e0a3-fd34-725f-9b12-805811b05560".parse().unwrap(), expiry: expiry.parse().unwrap(), strike: bagholder_core::Dec::parse(strike).unwrap(), right, multiplier: None, source: bagholder_core::SourceName::named("test") }
+    }
+
+    /// A contract reads as the broker names it, the strike to two places at least.
+    #[test]
+    fn a_contract_is_named_by_its_underlying_and_its_terms() {
+        assert_eq!(contract_label("QNC", &terms("2026-11-20", "3", OptionRight::Call)), "QNC 20NOV26 3.00 CALL");
+        assert_eq!(contract_label("BBAI", &terms("2028-01-21", "12.5", OptionRight::Put)), "BBAI 21JAN28 12.50 PUT");
+        assert_eq!(contract_label("SPY", &terms("2026-06-05", "512.125", OptionRight::Call)), "SPY 05JUN26 512.125 CALL");
     }
 }
