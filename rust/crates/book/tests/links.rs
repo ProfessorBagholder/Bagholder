@@ -211,3 +211,77 @@ fn cash_is_counted_once_after_a_replacement() {
     let cash: Vec<bagholder_core::Money> = f.book.transactions().unwrap().iter().filter_map(|t| t.cash).collect();
     assert_eq!(bagholder_core::Money::sum(bagholder_core::Currency::CAD, cash).unwrap(), cad("-150.01"));
 }
+
+/// What the engine names on a stale reading is never written over the book's
+/// own anchor: a trade the engine saw on a record that a replacement since moved
+/// to the broker's row is neither orphaned nor moved on the old opening, and its
+/// note stays on it.
+#[test]
+fn a_trade_is_orphaned_or_moved_only_on_the_anchor_the_engine_saw() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let later = f.store(&m, "later", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-05T15:00:00Z")]));
+    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
+    f.book.set_journal(JournalSubject::Trade(trade), &note("long story"), t0()).unwrap();
+    let seen = f.opens(a.record);
+    f.book.supersede(&[a.record], &[b.record], "the broker's own row", t0()).unwrap();
+    assert!(!f.book.orphan_unclaimed(trade, &seen).unwrap(), "the anchor moved since the engine saw it");
+    assert!(!f.book.orphan_joined(trade, trade, &seen).unwrap());
+    assert!(!f.book.move_trade(trade, &seen, &f.opens(later.record)).unwrap());
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(b.record)));
+    assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "long story");
+    // on the anchor it has, it is done
+    assert!(f.book.orphan_unclaimed(trade, &f.opens(b.record)).unwrap());
+    assert!(matches!(f.book.trade(trade).unwrap().anchor, Anchor::Orphaned(_)));
+}
+
+/// A trade whose anchor a correction made a fill of another opening's round trip
+/// moves to that opening (the engine names it, `Identity::moved`), keeping its id
+/// and note; never onto an opening another trade holds, nor onto a transaction
+/// that opens no position of the instrument.
+#[test]
+fn a_trade_moves_to_the_opening_of_the_round_trip_it_is_a_fill_of() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    let first = f.store(&m, "first", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "10", "-100", "2026-01-02T15:00:00Z")]));
+    let second = f.store(&m, "second", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "5", "-50", "2026-01-03T15:00:00Z")]));
+    let other = f.store(&m, "other", &legs(vec![buy("a1", share("CA0000000002", "XYZ"), "5", "-50", "2026-01-03T15:00:00Z")]));
+    let trade = f.book.open_trade(&f.opens(second.record), None, t0()).unwrap();
+    f.book.set_journal(JournalSubject::Trade(trade), &note("long story"), t0()).unwrap();
+    // an opening of another instrument is refused
+    let xyz_as_qnc = bagholder_core::journal::Opening { transaction: f.opens(other.record).transaction, instrument: f.opens(first.record).instrument };
+    assert!(f.book.move_trade(trade, &f.opens(second.record), &xyz_as_qnc).is_err());
+    assert!(f.book.move_trade(trade, &f.opens(second.record), &f.opens(first.record)).unwrap());
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(first.record)));
+    assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "long story");
+    // an opening another trade holds is not taken
+    let held = f.book.open_trade(&f.opens(second.record), None, t0()).unwrap();
+    assert!(!f.book.move_trade(held, &f.opens(second.record), &f.opens(first.record)).unwrap());
+    assert_eq!(f.book.trade(held).unwrap().anchor, Anchor::Opening(f.opens(second.record)));
+}
+
+/// What stands now for a record a source knew by its key: its own transactions
+/// while it is live, else those of the records that replaced it, to the end of
+/// the chain; nothing once removed.
+#[test]
+fn what_stands_for_a_record_follows_its_replacements() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let c = f.store(&m, "c", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let source = SourceName::named(m.source);
+    let standing = |key: &str| f.book.standing_for(&source, key).unwrap().into_iter().map(|t| t.id.record).collect::<Vec<_>>();
+    assert_eq!(standing("a"), vec![a.record]);
+    f.book.supersede(&[a.record], &[b.record], "b replaces a", t0()).unwrap();
+    f.book.supersede(&[b.record], &[c.record], "c replaces b", t0()).unwrap();
+    assert_eq!(standing("a"), vec![c.record]);
+    f.book.mark_removed(c.record, t0()).unwrap();
+    assert!(standing("a").is_empty());
+    assert!(standing("never stored").is_empty());
+}

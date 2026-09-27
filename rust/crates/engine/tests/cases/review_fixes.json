@@ -64,9 +64,9 @@
     "expect": {"trades": [{"opened_by": "t3", "pnl": "40.00"}, {"opened_by": "b1", "pnl": "50.00"}]}
   },
   {
-    "name": "a trade anchored on a transaction that no longer opens a round trip is named for the book to orphan",
-    "spec": "docs/architecture.md §5: a note whose trade no longer exists after a correction is shown as orphaned, never dropped",
-    "working": ["T1 was anchored on the sale t2 (an earlier reading made it an opening); now it closes the purchase's round trip: T1 opens nothing, the purchase's round trip asks for a trade of its own"],
+    "name": "a trade anchored on a transaction that no longer opens a round trip moves to the round trip it is a fill of",
+    "spec": "SPEC.md §2, Trade: its id is given at its first fill and kept for good; a correction to the rows behind it keeps the trade and its journal",
+    "working": ["T1 was anchored on the sale t2 (an earlier reading made it an opening); now t2 closes the purchase's round trip t1 → t2, which no other trade holds: T1 is that round trip's trade and moves to its opening t1, and no round trip asks for a trade"],
     "today": "2026-03-01",
     "accounts": [{"id": "A"}],
     "instruments": [{"id": "X"}],
@@ -75,7 +75,21 @@
       {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "120"}
     ],
     "trades": [{"id": "T1", "opened_by": "t2", "instrument": "X"}],
-    "expect": {"unclaimed": ["T1"], "needs_trade": 1}
+    "expect": {"moved": [["T1", "t1"]], "unclaimed": [], "needs_trade": 0, "trade_ids": {"t1": "T1"}}
+  },
+  {
+    "name": "a trade anchored on a transaction that no longer opens a round trip, whose round trip holds another trade, is named for the book to orphan",
+    "spec": "docs/architecture.md §5: a note whose trade no longer exists after a correction is shown as orphaned, never dropped",
+    "working": ["T2 was anchored on the sale t2; now t2 closes the round trip t1 → t2, which T1 holds by its opening t1: T2 has no round trip of its own and is orphaned, T1 keeps its round trip"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "120"}
+    ],
+    "trades": [{"id": "T1", "opened_by": "t1", "instrument": "X"}, {"id": "T2", "opened_by": "t2", "instrument": "X"}],
+    "expect": {"moved": [], "unclaimed": ["T2"], "needs_trade": 0, "trade_ids": {"t1": "T1"}}
   },
   {
     "name": "a consolidation with cash in lieu of the fraction: only the fraction is paid out",
