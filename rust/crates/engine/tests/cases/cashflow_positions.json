@@ -1,0 +1,407 @@
+[
+ {
+  "name": "a holding's YTD and All time are what its symbol paid into every account, one that no longer holds it included",
+  "spec": "SPEC.md §5 Cashflow Positions: YTD and All time",
+  "working": [
+   "Rows: 'One row per open long position in a dividend-paying symbol ... per account'. On 2026-06-01 A holds 10 X; B sold all 20 X on 2026-03-10, so B has no open position. The only row is (A, X).",
+   "YTD: 'CAD received from this symbol this calendar year, in every account in scope, whichever holds it now'. 2026 X dividends: b3 40 (B), a3 20 (A), a4 20 (A) = 80.00; B's counts though B no longer holds X.",
+   "All time: 'CAD received from this symbol ever, in every account in scope, whichever holds it now': b2 40 + a2 20 + b3 40 + a3 20 + a4 20 = 140.00."
+  ],
+  "today": "2026-06-01",
+  "accounts": [
+   {
+    "id": "A"
+   },
+   {
+    "id": "B"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "a1",
+    "account": "A",
+    "day": "2025-10-01",
+    "at": "2025-10-01T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "b1",
+    "account": "B",
+    "day": "2025-10-01",
+    "at": "2025-10-01T16:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "20",
+    "cash": "-200"
+   },
+   {
+    "id": "b2",
+    "account": "B",
+    "day": "2025-11-03",
+    "at": "2025-11-03T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "40"
+   },
+   {
+    "id": "a2",
+    "account": "A",
+    "day": "2025-11-03",
+    "at": "2025-11-03T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "20"
+   },
+   {
+    "id": "b3",
+    "account": "B",
+    "day": "2026-02-02",
+    "at": "2026-02-02T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "40"
+   },
+   {
+    "id": "a3",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "20"
+   },
+   {
+    "id": "b4",
+    "account": "B",
+    "day": "2026-03-10",
+    "at": "2026-03-10T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-20",
+    "cash": "210"
+   },
+   {
+    "id": "a4",
+    "account": "A",
+    "day": "2026-05-04",
+    "at": "2026-05-04T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "20"
+   }
+  ],
+  "expect": {
+   "income_holdings": [
+    {
+     "account": "A",
+     "instrument": "X"
+    }
+   ],
+   "income": [
+    {
+     "account": "A",
+     "instrument": "X",
+     "ytd": "80.00",
+     "all_time": "140.00"
+    }
+   ]
+  }
+ },
+ {
+  "name": "one row per open long position in a dividend-paying symbol: a holding that has never paid and whose record lists nothing is not one",
+  "spec": "SPEC.md §5 Cashflow Positions: one row per open long position in a dividend-paying symbol, per account",
+  "working": [
+   "'dividend-paying symbol (one the book has been paid a dividend on, in any account, or whose declared record lists a distribution of an amount per unit above zero)'.",
+   "P: held and paid a dividend (t2): a row.",
+   "D: held, never paid; its declared record lists two distributions of 0.10 per unit: a row.",
+   "N: held, never paid, its declared record empty: not dividend-paying, no row."
+  ],
+  "today": "2026-06-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "P"
+   },
+   {
+    "id": "D"
+   },
+   {
+    "id": "N"
+   }
+  ],
+  "declared": {
+   "D": [
+    {
+     "ex": "2026-04-15",
+     "pay": "2026-04-22",
+     "amount": "0.10"
+    },
+    {
+     "ex": "2026-05-15",
+     "pay": "2026-05-22",
+     "amount": "0.10"
+    }
+   ],
+   "N": []
+  },
+  "frequencies": {
+   "D": 12
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-01-05",
+    "at": "2026-01-05T15:00:00Z",
+    "kind": "buy",
+    "instrument": "P",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "P",
+    "cash": "5"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-05-25",
+    "at": "2026-05-25T15:00:00Z",
+    "kind": "buy",
+    "instrument": "D",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-01-05",
+    "at": "2026-01-05T16:00:00Z",
+    "kind": "buy",
+    "instrument": "N",
+    "qty": "1000",
+    "cash": "-150"
+   }
+  ],
+  "expect": {
+   "income_holdings": [
+    {
+     "account": "A",
+     "instrument": "P"
+    },
+    {
+     "account": "A",
+     "instrument": "D"
+    }
+   ]
+  }
+ },
+ {
+  "name": "Ex-Div and Pay Day: the next distribution still to be paid, from the exchange's record where the company's publication has not listed it yet",
+  "spec": "SPEC.md §5 Cashflow Positions: Ex-Div and Pay Day",
+  "working": [
+   "declared is the fund company's own publication (the record the rate comes from); market_declared is the exchange's (TMX) record of the same fund, read beside it",
+   "Ex-Div: 'the ex-date of the next distribution still to be paid, whether or not it has gone ex; when nothing is left to pay, of the last known one'; where the company's record 'lists nothing still to be paid, the exchange's record (TMX) is read beside it ... the next distribution TMX lists after the company's latest is the one still to be paid'. Pay Day is the pay date of that same distribution. Today 2026-09-26.",
+   "H: the company's latest, ex 2026-08-31 paid 2026-09-04, is paid; TMX lists ex 2026-09-29 paid 2026-10-06 after it: 2026-09-29 / 2026-10-06.",
+   "L: the company's own record lists ex 2026-09-29 paid 2026-10-07, still to be paid: TMX is not consulted: 2026-09-29 / 2026-10-07.",
+   "S: the company's latest is paid; TMX lists nothing after ex 2026-08-31 (its row for that same ex-date with pay 2026-09-30 is not after it): the last known one, 2026-08-31 / 2026-09-04."
+  ],
+  "today": "2026-09-26",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "H"
+   },
+   {
+    "id": "L"
+   },
+   {
+    "id": "S"
+   }
+  ],
+  "declared": {
+   "H": [
+    {
+     "ex": "2026-07-31",
+     "pay": "2026-08-06",
+     "amount": "0.20"
+    },
+    {
+     "ex": "2026-08-31",
+     "pay": "2026-09-04",
+     "amount": "0.15"
+    }
+   ],
+   "L": [
+    {
+     "ex": "2026-08-31",
+     "pay": "2026-09-04",
+     "amount": "0.27"
+    },
+    {
+     "ex": "2026-09-29",
+     "pay": "2026-10-07",
+     "amount": "0.27"
+    }
+   ],
+   "S": [
+    {
+     "ex": "2026-08-31",
+     "pay": "2026-09-04",
+     "amount": "0.12"
+    }
+   ]
+  },
+  "market_declared": {
+   "H": [
+    {
+     "ex": "2026-08-31",
+     "pay": "2026-09-04",
+     "amount": "0.15",
+     "form": "unstated"
+    },
+    {
+     "ex": "2026-09-29",
+     "pay": "2026-10-06",
+     "amount": "0.15",
+     "form": "unstated"
+    }
+   ],
+   "L": [
+    {
+     "ex": "2026-08-31",
+     "pay": "2026-09-04",
+     "amount": "0.27",
+     "form": "unstated"
+    },
+    {
+     "ex": "2026-09-29",
+     "pay": "2026-10-06",
+     "amount": "0.27",
+     "form": "unstated"
+    }
+   ],
+   "S": [
+    {
+     "ex": "2026-08-31",
+     "pay": "2026-09-30",
+     "amount": "0.12",
+     "form": "unstated"
+    }
+   ]
+  },
+  "frequencies": {
+   "H": 12,
+   "L": 12,
+   "S": 12
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-07-02",
+    "at": "2026-07-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "H",
+    "qty": "100",
+    "cash": "-500"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-07-02",
+    "at": "2026-07-02T15:01:00Z",
+    "kind": "buy",
+    "instrument": "L",
+    "qty": "100",
+    "cash": "-1200"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-07-02",
+    "at": "2026-07-02T15:02:00Z",
+    "kind": "buy",
+    "instrument": "S",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-08-06",
+    "at": "2026-08-06T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "H",
+    "cash": "20"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2026-09-04",
+    "at": "2026-09-04T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "H",
+    "cash": "15"
+   },
+   {
+    "id": "t6",
+    "account": "A",
+    "day": "2026-09-04",
+    "at": "2026-09-04T11:01:00Z",
+    "kind": "dividend",
+    "instrument": "L",
+    "cash": "27"
+   },
+   {
+    "id": "t7",
+    "account": "A",
+    "day": "2026-09-04",
+    "at": "2026-09-04T11:02:00Z",
+    "kind": "dividend",
+    "instrument": "S",
+    "cash": "12"
+   }
+  ],
+  "expect": {
+   "payers": [
+    {
+     "instrument": "H",
+     "next_ex": "2026-09-29",
+     "next_pay": "2026-10-06"
+    },
+    {
+     "instrument": "L",
+     "next_ex": "2026-09-29",
+     "next_pay": "2026-10-07"
+    },
+    {
+     "instrument": "S",
+     "next_ex": "2026-08-31",
+     "next_pay": "2026-09-04"
+    }
+   ]
+  }
+ }
+]

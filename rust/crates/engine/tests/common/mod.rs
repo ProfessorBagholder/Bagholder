@@ -44,6 +44,16 @@ impl Ids {
     pub fn instrument(&mut self, l: &str) -> InstrumentId {
         InstrumentId::parse(&self.uuid(&format!("instrument:{l}"))).unwrap()
     }
+    /// The label an id was made for, under its kind.
+    fn label_of(&self, kind: &str, id: &str) -> String {
+        self.by_label.iter().find(|(l, u)| *u == id && l.starts_with(kind)).map(|(l, _)| l[kind.len()..].to_string()).unwrap_or_else(|| id.to_string())
+    }
+    pub fn account_name(&self, a: AccountId) -> String {
+        self.label_of("account:", &a.to_string())
+    }
+    pub fn instrument_name(&self, i: InstrumentId) -> String {
+        self.label_of("instrument:", &i.to_string())
+    }
     pub fn record(&mut self, l: &str) -> RecordId {
         RecordId::parse(&self.uuid(&format!("record:{l}"))).unwrap()
     }
@@ -217,9 +227,8 @@ pub fn build(case: &Value) -> Built {
         }
     }
     rates.holidays = arr(case, "holidays").iter().map(|d| day(d.as_str().unwrap())).collect();
-    let mut declared = BTreeMap::new();
-    for (i, items) in obj(case, "declared") {
-        let items = items
+    let rows = |items: &Value| -> Vec<Declared> {
+        items
             .as_array()
             .unwrap()
             .iter()
@@ -232,8 +241,13 @@ pub fn build(case: &Value) -> Built {
                 // what the case's source states of how it is paid; stated unless the case says
                 form: s(d, "form").map(|f| bagholder_core::distribution::Form::parse(f).expect("stated or unstated")).unwrap_or(bagholder_core::distribution::Form::Stated),
             })
-            .collect();
-        declared.insert(ids.instrument(&i), DeclaredRead { read_at: Timestamp::UNIX_EPOCH, source: SourceName::named("tmx"), items });
+            .collect()
+    };
+    let mut declared = BTreeMap::new();
+    for (i, items) in obj(case, "declared") {
+        // the market's record read beside the payer's (a company's), where the case gives one
+        let market = case.get("market_declared").and_then(|m| m.get(&i)).map(&rows).unwrap_or_default();
+        declared.insert(ids.instrument(&i), DeclaredRead { read_at: Timestamp::UNIX_EPOCH, source: SourceName::named("tmx"), items: rows(&items), market });
     }
     let frequencies = obj(case, "frequencies").into_iter().map(|(i, n)| (ids.instrument(&i), Sourced { value: n.as_u64().unwrap() as u32, source: SourceName::named("tmx") })).collect();
     let mut adjustments = Vec::new();

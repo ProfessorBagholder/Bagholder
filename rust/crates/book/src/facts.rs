@@ -60,6 +60,19 @@ pub struct DeclaredReadRow {
     pub read_at: jiff::Timestamp,
     pub source: SourceName,
     pub items: Vec<DeclaredRow>,
+    /// The newest read of the market's record beside it, where the payer's
+    /// record is its company's: read for the next distribution still to be paid
+    /// while the company's publication has not listed it.
+    pub market: Option<MarketReadRow>,
+}
+
+/// One read of the market's record of a payer whose own record is its
+/// company's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarketReadRow {
+    pub read_at: jiff::Timestamp,
+    pub source: SourceName,
+    pub items: Vec<DeclaredRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,12 +262,22 @@ impl Book {
 
     /// One read of a fund's declared record, whole.
     pub fn store_declared(&self, instrument: InstrumentId, items: &[DeclaredRow], source: &SourceName, at: jiff::Timestamp) -> Result<()> {
+        self.store_read(instrument, items, source, at, "payer")
+    }
+
+    /// Store a read of the market's record of a payer whose own record is its
+    /// company's (`DeclaredReadRow::market`).
+    pub fn store_market_declared(&self, instrument: InstrumentId, items: &[DeclaredRow], source: &SourceName, at: jiff::Timestamp) -> Result<()> {
+        self.store_read(instrument, items, source, at, "market")
+    }
+
+    fn store_read(&self, instrument: InstrumentId, items: &[DeclaredRow], source: &SourceName, at: jiff::Timestamp, role: &str) -> Result<()> {
         self.atomically(|| {
             drop(self.instrument(instrument)?);
-            // a read identical to the newest, from the same source, records only its time
+            // a read identical to the newest of its role, from the same source, records only its time
             let newest: Option<(i64, String)> = self
                 .conn()
-                .query_row("SELECT id, source FROM declared_reads WHERE instrument_id = ? ORDER BY read_at DESC, id DESC LIMIT 1", [instrument.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))
+                .query_row("SELECT id, source FROM declared_reads WHERE instrument_id = ?1 AND role = ?2 ORDER BY read_at DESC, id DESC LIMIT 1", params![instrument.to_string(), role], |r| Ok((r.get(0)?, r.get(1)?)))
                 .optional()?;
             if let Some((id, stored_source)) = newest {
                 let key = |d: &DeclaredRow| (d.ex_date, d.record_date, d.pay_date, d.amount.amount.to_text(), d.amount.currency.as_str().to_string(), d.reinvested.map(Dec::to_text), d.form);
@@ -268,8 +291,8 @@ impl Book {
                 }
             }
             self.conn().execute(
-                "INSERT INTO declared_reads(instrument_id, source, read_at) VALUES (?, ?, ?)",
-                params![instrument.to_string(), source.as_str(), at_text(at)],
+                "INSERT INTO declared_reads(instrument_id, source, read_at, role) VALUES (?, ?, ?, ?)",
+                params![instrument.to_string(), source.as_str(), at_text(at), role],
             )?;
             let read = self.conn().last_insert_rowid();
             for d in items {
@@ -304,23 +327,39 @@ impl Book {
     }
 
     /// The newest read of each fund's declared record.
+    ///
+    /// Beside each, the newest read of the market's record, unless the payer's
+    /// record is that same source's (the company stopped carrying the payer and
+    /// the market's record became its record).
     pub fn declared(&self) -> Result<BTreeMap<InstrumentId, DeclaredReadRow>> {
-        let mut stmt = self.conn().prepare_cached(
-            "SELECT r.id, r.instrument_id, r.source, r.read_at FROM declared_reads r
-             WHERE r.id = (SELECT id FROM declared_reads x WHERE x.instrument_id = r.instrument_id ORDER BY x.read_at DESC, x.id DESC LIMIT 1)",
-        )?;
-        let reads = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let newest = |role: &str| -> Result<Vec<(i64, InstrumentId, SourceName, jiff::Timestamp)>> {
+            let mut stmt = self.conn().prepare_cached(
+                "SELECT r.id, r.instrument_id, r.source, r.read_at FROM declared_reads r
+                 WHERE r.id = (SELECT id FROM declared_reads x WHERE x.instrument_id = r.instrument_id AND x.role = ?1 ORDER BY x.read_at DESC, x.id DESC LIMIT 1)",
+            )?;
+            let reads = stmt.query_map([role], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            reads
+                .into_iter()
+                .map(|(id, instrument, source, read_at)| {
+                    Ok((
+                        id,
+                        text::parsed("declared_reads", "instrument_id", &instrument, InstrumentId::parse)?,
+                        text::parsed("declared_reads", "source", &source, SourceName::parse)?,
+                        read_at.parse().map_err(|_| text::corrupt("declared_reads", "read_at", &read_at, "not an instant"))?,
+                    ))
+                })
+                .collect()
+        };
+        let mut market: BTreeMap<InstrumentId, MarketReadRow> = BTreeMap::new();
+        for (id, instrument, source, read_at) in newest("market")? {
+            market.insert(instrument, MarketReadRow { read_at, source, items: self.declared_rows(id)? });
+        }
         let mut out = BTreeMap::new();
-        for (id, instrument, source, read_at) in reads {
+        for (id, instrument, source, read_at) in newest("payer")? {
             let items = self.declared_rows(id)?;
-            out.insert(
-                text::parsed("declared_reads", "instrument_id", &instrument, InstrumentId::parse)?,
-                DeclaredReadRow {
-                    read_at: read_at.parse().map_err(|_| text::corrupt("declared_reads", "read_at", &read_at, "not an instant"))?,
-                    source: text::parsed("declared_reads", "source", &source, SourceName::parse)?,
-                    items,
-                },
-            );
+            // the market's record stands beside a company's record only
+            let beside = market.remove(&instrument).filter(|m| m.source != source);
+            out.insert(instrument, DeclaredReadRow { read_at, source, items, market: beside });
         }
         Ok(out)
     }

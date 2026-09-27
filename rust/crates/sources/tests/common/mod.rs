@@ -97,6 +97,15 @@ impl Recorded {
         self.with_body("https://app-money.tmx.com/graphql", "getQuoteBySymbol", 200, "tmx", "quote-ZZZQX-unknown.json").with_prefix("https://query1.finance.yahoo.com/v8/finance/chart/", 404, "yahoo", "ZZZQX-status-404.json")
     }
 
+    /// Answer TMX's quote and distributions for `symbol` with its recorded
+    /// replies (`tmx/quote-<symbol>.json`, `tmx/dividends-<symbol>.json`): the
+    /// market's record a company's is read beside.
+    pub fn with_market_record(self, symbol: &str) -> Recorded {
+        let url = "https://app-money.tmx.com/graphql";
+        self.with_body(url, &format!("getQuoteBySymbol\",\"variables\":{{\"symbol\":\"{symbol}\""), 200, "tmx", &format!("quote-{symbol}.json"))
+            .with_body(url, &format!("getDividendsForSymbol\",\"variables\":{{\"symbol\":\"{symbol}\""), 200, "tmx", &format!("dividends-{symbol}.json"))
+    }
+
     /// Answer a request to `url` whose body contains `needle`.
     pub fn with_body(mut self, url: &str, needle: &str, status: u16, source: &str, name: &str) -> Recorded {
         self.answers.push((url.to_string(), needle.to_string(), status, read(source, name).into_bytes(), headers(source, name)));

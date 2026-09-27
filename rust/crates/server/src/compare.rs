@@ -191,7 +191,7 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
         });
     }
     let read_at = bagholder_core::jiff::Timestamp::UNIX_EPOCH;
-    let declared = declared.into_iter().map(|(i, items)| (i, DeclaredRead { read_at, source: old_store_source(), items })).collect();
+    let declared = declared.into_iter().map(|(i, items)| (i, DeclaredRead { read_at, source: old_store_source(), items, market: vec![] })).collect();
     let _ = book;
     Ok((market, rates, declared, frequencies))
 }

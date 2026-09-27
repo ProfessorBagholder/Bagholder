@@ -71,6 +71,20 @@ impl Ctx<'_> {
         Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed)))
     }
 
+    /// Whether `source`'s newest read of `subject`'s `kind` failed and its rest
+    /// has not run out: one source's failure rests that source alone, never
+    /// another asked for the same subject (a payer's company and the market's
+    /// record beside it).
+    pub fn source_resting(&self, subject: &str, kind: DataKind, source: &SourceName, host: &str) -> Result<bool> {
+        let reads: Vec<ReadRow> = self.cache.reads(subject, kind)?.into_iter().filter(|r| &r.source == source).collect();
+        if reads.is_empty() {
+            return Ok(false);
+        }
+        let instrument = InstrumentId::parse(subject).ok();
+        let failed = self.cache.failures_in_a_row(source, kind, instrument)?;
+        Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed)))
+    }
+
     /// Keep that `subject`'s `kind` was read today, and how it ended: what
     /// [`Ctx::resting`] reads.
     pub fn attempted(&self, subject: &str, kind: DataKind, source: &SourceName, outcome: OutcomeKind) -> Result<()> {

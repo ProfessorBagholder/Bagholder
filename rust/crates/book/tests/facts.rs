@@ -128,6 +128,31 @@ fn a_funds_record_is_read_whole_and_a_withdrawn_distribution_is_gone_from_the_ne
 }
 
 #[test]
+fn the_markets_record_is_kept_beside_a_companys_and_never_replaces_it() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "FUND"), "10", "-100", "2026-01-02T15:00:00Z")]));
+    let fund = f.opens(r.record).instrument;
+    let row = |ex: &str, pay: &str| DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: day(ex), record_date: None, pay_date: Some(day(pay)), amount: Money::new(d("0.15"), Currency::CAD), reinvested: None };
+    let (harvest, tmx) = (SourceName::named("harvest"), SourceName::named("tmx"));
+    f.book.store_declared(fund, &[row("2026-08-31", "2026-09-04")], &harvest, at("2026-09-26T04:00:00Z")).unwrap();
+    assert_eq!(f.book.declared().unwrap()[&fund].market, None, "nothing read beside it yet");
+    // the market's record, read later, stands beside the company's: the record the rate comes from is still the company's
+    f.book.store_market_declared(fund, &[row("2026-08-31", "2026-09-04"), row("2026-09-29", "2026-10-06")], &tmx, at("2026-09-26T05:00:00Z")).unwrap();
+    let read = &f.book.declared().unwrap()[&fund];
+    assert_eq!((read.source.as_str(), read.read_at, read.items.len()), ("harvest", at("2026-09-26T04:00:00Z"), 1));
+    let beside = read.market.as_ref().expect("the market's record beside");
+    assert_eq!((beside.source.as_str(), beside.read_at, beside.items.len()), ("tmx", at("2026-09-26T05:00:00Z"), 2));
+    // an identical read of the market's records only its time
+    f.book.store_market_declared(fund, &[row("2026-08-31", "2026-09-04"), row("2026-09-29", "2026-10-06")], &tmx, at("2026-09-27T05:00:00Z")).unwrap();
+    assert_eq!(f.book.declared().unwrap()[&fund].market.as_ref().unwrap().read_at, at("2026-09-27T05:00:00Z"));
+    // the company stops carrying the fund and the market's record becomes its record: nothing stands beside it
+    f.book.store_declared(fund, &[row("2026-08-31", "2026-09-04"), row("2026-09-29", "2026-10-06")], &tmx, at("2026-10-01T04:00:00Z")).unwrap();
+    let read = &f.book.declared().unwrap()[&fund];
+    assert_eq!((read.source.as_str(), read.items.len(), read.market.as_ref()), ("tmx", 2, None));
+}
+
+#[test]
 fn an_identical_read_of_a_funds_record_records_only_its_time() {
     let f = Fixture::new();
     f.account(&["a1"]);

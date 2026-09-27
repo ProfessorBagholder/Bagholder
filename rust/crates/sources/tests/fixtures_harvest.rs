@@ -112,7 +112,7 @@ fn hhis() -> PayerNeed {
 
 #[test]
 fn hhis_is_stored_whole_with_its_stated_schedule() {
-    let ran = run_payer(common::Recorded::new().with(URL, 200, HV, "page-hhis.html"), &hhis(), HV);
+    let ran = run_payer(common::Recorded::new().with(URL, 200, HV, "page-hhis.html").with_market_record("HHIS"), &hhis(), HV);
     assert_eq!(ran.outcome().0, OutcomeKind::Answered);
     let (source, items) = ran.declared().unwrap();
     assert_eq!((source.as_str(), items.len()), ("harvest", 19));
@@ -120,6 +120,13 @@ fn hhis_is_stored_whole_with_its_stated_schedule() {
     assert_eq!(on(date(2026, 8, 31)), stored(date(2026, 8, 31), Some(date(2026, 8, 31)), Some(date(2026, 9, 4)), "0.2700", Currency::CAD, None));
     assert!(items.iter().all(|r| r.ex_date >= date(2025, 2, 28)));
     assert_eq!(ran.frequency(), Some((12, "harvest".to_string())));
+    // the page lists nothing still to be paid (its latest was paid 2026-09-04):
+    // the exchange's record is read beside it, and lists the distribution
+    // declared 2026-09-23, going ex 2026-09-29 and paid 2026-10-06
+    let beside = ran.book.declared().unwrap().remove(&id()).unwrap().market.expect("the market's record beside");
+    assert_eq!(beside.source.as_str(), "tmx");
+    let next = beside.items.iter().find(|r| r.ex_date == date(2026, 9, 29)).expect("the declared distribution");
+    assert_eq!((next.pay_date, next.amount.amount), (Some(date(2026, 10, 6)), dec("0.27")));
 }
 
 #[test]
