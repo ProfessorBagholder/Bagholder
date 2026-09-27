@@ -35,3 +35,6 @@ bagholder-model = { path = ".", features = ["pinned-tzdb"] }
 [[bin]]
 name = "make-cases"
 path = "src/bin/make_cases.rs"
+
+[lints]
+workspace = true

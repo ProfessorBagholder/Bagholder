@@ -32,3 +32,6 @@ pinned-tzdb = []
 [dev-dependencies]
 bagholder-book = { path = ".", features = ["pinned-tzdb"] }
 tempfile = "3"
+
+[lints]
+workspace = true

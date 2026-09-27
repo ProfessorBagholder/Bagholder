@@ -160,7 +160,9 @@ pub fn replace_if_changed(conn: &Connection, watch: &str, params: &[&dyn rusqlit
             Ok(false)
         }
         Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK TO replace_if_changed; RELEASE replace_if_changed");
+            // a savepoint that cannot be undone leaves the connection mid-write:
+            // that failure is the one said
+            conn.execute_batch("ROLLBACK TO replace_if_changed; RELEASE replace_if_changed")?;
             Err(e)
         }
     }

@@ -101,10 +101,10 @@ Every part:
 - [x] **Timers:** every wait in the server is in `TIMED_WAITS` with its reason; the test finds each form, fed a violation of each.
 
 **B, failures shown**
-- [ ] **The scan:** no discarded error outside tests and the listed exceptions, in every crate and in `web/src`; fed a violation of each form.
-- [ ] **Each surveyed site** has a test that makes its operation fail (a store that will not open, a write refused, a read that errors) and sees the failure on the wire in the right health entry, not an empty answer or `ok:true`.
-- [ ] **Shown where the old app shows it:** each failure the survey found reaches the header's status line or the request's answer while it lasts and leaves it on the next good read (a test per site).
-- [ ] **Page calls:** every call site handles its failure (the type checker refuses an unhandled one); browser test for the watchlist change failing.
+- [x] **The scan:** no discarded error outside tests and the listed exceptions, in every crate and in `web/src`; fed a violation of each form.
+- [x] **Each surveyed site** has a test that makes its operation fail (a store that will not open, a write refused, a read that errors) and sees the failure on the wire in the right health entry, not an empty answer or `ok:true`.
+- [x] **Shown where the old app shows it:** each failure the survey found reaches the header's status line or the request's answer while it lasts and leaves it on the next good read (a test per site).
+- [x] **Page calls:** every call site handles its failure (the type checker refuses an unhandled one); browser test for the watchlist change failing.
 
 ## Surfaces to check beyond the diff
 
@@ -160,6 +160,24 @@ Commands and what they showed (2026-09-26):
 - `cd web && npx playwright test`: 273 passed, among them the heatmap element tests on a driven stream (a watched and a held quote each touch only their tile and block; a whole resend is seen, so the check can fail) and the News card asking for its next rows at its end.
 - Rendered on the Rust scratch server on a copy of the owner's data (orders dry): the earlier store's 13 watched rows carried in the same order, and its 12 tiles; tiles, watchlist, heatmap and news drawn from their own documents; tile figures as Yahoo states them (`GC 4,321.20 +23.20 (+0.54%)`), every watched listing quoted (the two CSE listings and the coin after the fixes above); each heatmap block the sum of its tiles to the cent; Sectors the twelve names. At 1200, 1340, 1440 and 1680 px from a fresh load: no sideways scroll, no card clipped, every heatmap tile inside its box.
 - The notifier applet test could not run here (the sandbox refuses `osacompile`); A2 changes nothing in the notifier.
+
+### B, failures shown (branch `stage-5-b-failures-shown`, 2026-09-26)
+
+How it is held:
+
+- **The compiler refuses the three forms.** `rust/Cargo.toml` `[workspace.lints.clippy]` denies `let_underscore_must_use` (a `Result` dropped with `let _ =`), `unused_result_ok` (`.ok();`) and `disallowed_methods` with `Result::unwrap_or_default` (`rust/clippy.toml`); clippy's other lints are not held. Clippy knows the types, so an `Option`'s default is not caught for a `Result`'s. CI runs `cargo clippy --workspace --lib --bins` (tests keep their own business with results). `server/src/tests_lints.rs` runs clippy on `crates/lint-fixture`, a violation of each form, and expects each refused by name, so the lints being off fails the suite.
+- **The scan holds the two forms clippy has no lint for**: an `if let Ok` on an I/O call (a pool's `.get()`, `.open()`, `connect(`, `std::fs::`, `try_wait()`, `File::`, `read_dir(`) with no `else`, and a `_ = ..;` statement, fed each form and what handles its failure; none stands outside tests.
+- **The page**: `web/src/lib/api.ts` answers `Answer<T>`, the route's answer or `{ok: false, error}`, and no field is readable before `ok` is checked (a `@ts-expect-error` line in `api.test.ts` proves the checker refuses it); `web/src/no_dropped_failures.test.ts` refuses, with TypeScript's own parser, an empty `catch`, a failure handler that does nothing and an API call dropped as a statement, fed 15 violating and 8 accepted forms.
+
+What changed, 265 sites in the Rust crates and every page call: a store write that fails fails its operation; a read that fails is a failure, never an empty list or a default; stored JSON that does not parse is the store's failure; a source's answer that does not read is that source's failure and is no longer stored as an empty record; a background pass says its failure through the feeds' registry (`feed_failed`, gone at `feed_answered`), in the header's error line; a request answers it. Found beside the survey and fixed with it: the old store's meta reads (`get_meta`, the moved markers, the relabel stamps) read every error as the default; a told mark and the notice it marks are now kept in one transaction; the folder an earlier version watched was taken again at every start after it was let go (now cleared once taken); a distribution notice sent without its figures said so only in the log; `engine/ledger.rs` closing a lot at expiry dropped its failure (the holding is now marked with the gap, as the other closes are); a short-interest source down was said once a listing (now once for every listing it stopped). No `#[expect]` stands in the server; in the lower crates, nine, each with its reason (a helper process's kill and wait, a refused order event already stored with its refusal, the local model's listener set once).
+
+Out of reach of a test here, said plainly: the market crate's `refresh.rs` and its earlier-store quote path are not called by the server (the boundary test keeps them out), so their failures are held by the market crate's own tests only; the exposure write the server's worker threads make is tested at the market crate, the server test making the store read fail instead; the SQLite busy and checkpoint handling, a CA bundle that does not load, a name that does not resolve, and `search.rs`'s pool are changed without a test that can provoke them.
+
+Commands and what they showed (2026-09-26):
+
+- `cd rust && RUSTFLAGS="-D warnings" cargo test -q --workspace`: 1,365 passed, 0 failed, 3 ignored (on master with #286); `cargo clippy --workspace --lib --bins`: nothing reported. New: `tests_lints` (3), `tests_failures` (11: a book that will not open, a read answered not emptied, a saved login unreadable never signed out, notifications unrecordable, settings unreadable, the update check, the rollback, the watched folder twice, a distribution notice, one sentence a source), `tests_failures_lower` (4: a chart's daily read, an archive pass, exposures, short interest), `market/tests/failures.rs` (8), `store/tests/stored_feeds.rs` (5), and tests beside `notify`, `following`, `broker_reads`, `login`, `main`, `exposure`, `shorts`, `ws`, `wealthsimple`.
+- `cd web && npm run check`: 0 errors; `npx vitest run`: 140 passed; `npx playwright test`: 276 passed, among them `failures.spec.ts` (a watchlist add, a remove and a tiles change the server refuses, each said in the header and the row back to the server's).
+- The release build on a copy of the owner's data: the stored rows all read (no stored JSON refused); the header's error line named only the sources this sandbox does not reach, which is how it found the one-sentence-a-listing problem above.
 
 ## Handoff
 

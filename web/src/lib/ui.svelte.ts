@@ -111,11 +111,11 @@ export function syncNow(): void {
     s.syncStep = 'Syncing…'
   }
   call('POST /api/sync').then((r) => {
-    if (r && r.ok) return
+    if (r.ok) return
     const cur = status.data
     if (cur) {
       cur.syncing = false
-      cur.error = (r && (r.error as string)) || 'Sync failed.'
+      cur.error = r.error
     }
   })
 }
@@ -125,14 +125,15 @@ export function refreshSession(): void {
   ui.busy = 'refresh'
   call('POST /api/refresh').then((r) => {
     ui.busy = ''
-    flash(r && r.ok ? 'Session refreshed' : (r && (r.error as string)) || 'Refresh failed', r && r.ok ? 'ok' : 'err')
+    if (r.ok) flash('Session refreshed')
+    else flash(r.error, 'err')
   })
 }
 
 /** Install the release on offer. Its progress reaches the header as the status changes. */
 export function updateNow(): void {
   call('POST /api/update').then((r) => {
-    if (!r || !r.ok) flash((r && (r.error as string)) || 'Update failed.', 'err')
+    if (!r.ok) flash(r.error, 'err')
   })
 }
 
@@ -156,8 +157,8 @@ export function connect(): void {
   if (s) s.error = ''
   call('POST /api/login/start').then((res) => {
     if (!ui.connecting) return // cancelled meanwhile
-    if (!res || !res.ok) {
-      endConnect((res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.')
+    if (!res.ok) {
+      endConnect(res.error)
       return
     }
     if (status.data?.loginView) ui.loginView = true
@@ -192,11 +193,16 @@ export function cancelConnect(): void {
   endConnect('')
   const cur = status.data
   if (cur) cur.error = ''
-  call('POST /api/login/cancel')
+  // the header goes back to its line at once; a cancel the server refused is said there
+  call('POST /api/login/cancel').then((r) => {
+    if (!r.ok) flash('Could not cancel the sign-in: ' + r.error, 'err')
+  })
 }
 // One login input event (click/key/wheel/text), forwarded to the streamed browser.
 export function loginInput(ev: LoginInput): void {
-  call('POST /api/login/input', { body: ev })
+  call('POST /api/login/input', { body: ev }).then((r) => {
+    if (!r.ok) flash('The sign-in window did not take that: ' + r.error, 'err')
+  })
 }
 
 export function disconnect(): void {
@@ -205,7 +211,10 @@ export function disconnect(): void {
 }
 export function disconnectNow(): void {
   ui.confirm = ''
-  call('POST /api/disconnect')
+  // the header says the session is gone when the server's status does; a refusal is said there meanwhile
+  call('POST /api/disconnect').then((r) => {
+    if (!r.ok) flash('Could not disconnect: ' + r.error, 'err')
+  })
 }
 
 /** The kinds of data Clear data offers, in the order its dialog lists them. */
@@ -232,7 +241,7 @@ export async function clearDataNow(): Promise<void> {
   const r = await call('POST /api/data/clear', { body: { kinds: ui.clearKinds } })
   ui.busy = ''
   if (!r.ok) {
-    ui.clearError = r.error || 'Could not clear it.'
+    ui.clearError = r.error
     return
   }
   ui.confirm = ''
@@ -273,7 +282,7 @@ export async function saveTrade(): Promise<void> {
   const r = await call('POST /api/entries', { body })
   ui.busy = ''
   if (!r.ok) {
-    f.error = r.error || 'Could not save it.'
+    f.error = r.error
     return
   }
   ui.modal = ''
@@ -315,7 +324,7 @@ async function importFiles(list: FileList | null): Promise<void> {
       continue
     }
     const r = await call('POST /api/import', { body: { name: file.name, text, account: ui.importAccount } })
-    if (r.ok === false || typeof r.rows !== 'number') report.files.push({ file: file.name, error: r.error || 'Import failed' })
+    if (!r.ok) report.files.push({ file: file.name, error: r.error })
     else report.files.push({ file: file.name, report: r })
   }
   ui.busy = ''
@@ -329,7 +338,7 @@ export function openFolder(): void {
   ui.folderPath = ''
   ui.importAccount = ''
   call('GET /api/watch').then((w) => {
-    if (w.ok === false) ui.folderError = w.error || 'Could not read the watched folder.'
+    if (!w.ok) ui.folderError = w.error
     else {
       ui.watch = w
       // the folder watched fills the boxes, unless the person has typed or chosen already
@@ -340,7 +349,7 @@ export function openFolder(): void {
 }
 function watched(w: Awaited<ReturnType<typeof call<'GET /api/watch'>>>): void {
   ui.busy = ''
-  if (w.ok === false) ui.folderError = w.error || 'Could not watch that folder.'
+  if (!w.ok) ui.folderError = w.error
   else {
     ui.folderError = ''
     ui.watch = w
@@ -358,7 +367,7 @@ export function scanNotice(w: WatchStatus): string | null {
 }
 function scanned(w: Awaited<ReturnType<typeof call<'POST /api/watch/scan'>>>): void {
   watched(w)
-  const notice = w.ok === false ? null : scanNotice(w)
+  const notice = w.ok ? scanNotice(w) : null
   if (notice) flash(notice)
 }
 export function watchFolder(): void {
@@ -384,7 +393,7 @@ export async function exportCsv(): Promise<void> {
   // every trade under the filters applied, in the list's order: the list on screen shows only as far as scrolled
   const s = sort.trades
   const m = await call('GET /api/figures/trades', { query: { filters: JSON.stringify(applied.filters), sort: s.key, dir: s.dir } })
-  if (!m.ok && m.error) {
+  if (!m.ok) {
     flash('Could not export the trades: ' + m.error, 'err')
     return
   }

@@ -60,6 +60,13 @@ jobs:
           RUSTFLAGS: "-D warnings"
         run: cargo test --workspace
         working-directory: rust
+      # no failure discarded outside tests: the workspace's clippy lints (Cargo.toml),
+      # the tests' own code left out, where dropping a result is the test's business
+      - name: No discarded failure
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: cargo clippy --workspace --lib --bins
+        working-directory: rust
 
   # The same suite on a Mac, and the test a sandboxed local run cannot hold: the notification
   # applet, built with osacompile, which needs Apple Events (#[ignore]d with that reason, so it

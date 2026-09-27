@@ -38,7 +38,7 @@
   })
   function pickIndex(ix: string) {
     fearIndex = ix
-    try { localStorage.setItem('bh2.fear', ix) } catch { /* ignore */ }
+    try { localStorage.setItem('bh2.fear', ix) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
 
   // nothing held yet: `Reading…` until the server has sent the meter and while its

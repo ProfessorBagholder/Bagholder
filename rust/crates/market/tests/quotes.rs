@@ -76,14 +76,14 @@ fn test_a_listing_with_no_bars_is_not_asked_again_until_the_next_top_up() {
     bagholder_store::schema::init_schema(&conn).unwrap();
     let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares")];
     let now = ny(16, 12, 0);
-    let due = |at: f64| history::archive_intraday_due(&conn, &recs, "2026-09-16", at).iter().map(|t| (t.0, t.1.clone())).collect::<Vec<_>>();
+    let due = |at: f64| history::archive_intraday_due(&conn, &recs, "2026-09-16", at).unwrap().iter().map(|t| (t.0, t.1.clone())).collect::<Vec<_>>();
     assert_eq!(due(now), vec![(0, "QMET".to_string())], "never asked: first in line");
-    assert_eq!(history::archive_next_due_secs(&conn, &recs, "2026-09-16", now), Some(0.0));
-    history::record_intraday_miss(&conn, "QMET", "1h", "2026-09-16T16:00:00Z"); // asked, and the source had nothing
+    assert_eq!(history::archive_next_due_secs(&conn, &recs, "2026-09-16", now).unwrap(), Some(0.0));
+    history::record_intraday_miss(&conn, "QMET", "1h", "2026-09-16T16:00:00Z").unwrap(); // asked, and the source had nothing
     assert_eq!(due(now), vec![], "a miss is a read");
-    assert_eq!(history::archive_next_due_secs(&conn, &recs, "2026-09-16", now), Some(history::ARCHIVE_TOPUP_HOURS * 3600.0));
+    assert_eq!(history::archive_next_due_secs(&conn, &recs, "2026-09-16", now).unwrap(), Some(history::ARCHIVE_TOPUP_HOURS * 3600.0));
     assert_eq!(due(now + 21.0 * 3600.0), vec![(1, "QMET".to_string())], "due again with the others' top-up");
-    assert_eq!(history::archive_next_due_secs(&conn, &[], "2026-09-16", now), None, "nothing archived: only the book can make work");
+    assert_eq!(history::archive_next_due_secs(&conn, &[], "2026-09-16", now).unwrap(), None, "nothing archived: only the book can make work");
 }
 
 /// An option contract's chart is its underlying's, in the contract's currency or

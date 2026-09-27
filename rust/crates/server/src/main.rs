@@ -40,42 +40,42 @@ use std::path::{Path, PathBuf};
 use app::log;
 
 const PORTS: [u16; 3] = [8765, 8766, 8767];
-fn home_dir() -> PathBuf {
-    let env = std::env::var("BAGHOLDER_HOME").unwrap_or_default();
+fn home_dir() -> Result<PathBuf, String> {
+    let env = app::env_text("BAGHOLDER_HOME")?.unwrap_or_default();
     if !env.trim().is_empty() {
-        return PathBuf::from(env.trim());
+        return Ok(PathBuf::from(env.trim()));
     }
     let base = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into());
-    Path::new(&base).join(".bagholder-rust")
+    Ok(Path::new(&base).join(".bagholder-rust"))
 }
 
 /// Where the page and its assets are: beside the executable, or in a checkout
 /// the executable was built in, or the working folder.
-fn root_dir() -> PathBuf {
-    let env = std::env::var("BAGHOLDER_ROOT").unwrap_or_default();
+fn root_dir() -> Result<PathBuf, String> {
+    let env = app::env_text("BAGHOLDER_ROOT")?.unwrap_or_default();
     if !env.trim().is_empty() {
-        return PathBuf::from(env.trim());
+        return Ok(PathBuf::from(env.trim()));
     }
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         for d in dir.ancestors().take(4) {
             if d.join("ledger.html").is_file() {
-                return d.to_path_buf();
+                return Ok(d.to_path_buf());
             }
         }
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    Ok(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 // --------------------------------------------------------------------------
 // start
 // --------------------------------------------------------------------------
 
-fn port_choices() -> Vec<u16> {
-    let env = std::env::var("BAGHOLDER_PORT").unwrap_or_default();
-    match env.trim().parse::<u16>() {
+fn port_choices() -> Result<Vec<u16>, String> {
+    let env = app::env_text("BAGHOLDER_PORT")?.unwrap_or_default();
+    Ok(match env.trim().parse::<u16>() {
         Ok(p) if p >= 1024 && env.trim().bytes().all(|c| c.is_ascii_digit()) => vec![p],
         _ => PORTS.to_vec(),
-    }
+    })
 }
 
 fn open_browser(url: &str) {
@@ -86,19 +86,35 @@ fn open_browser(url: &str) {
     } else {
         ("xdg-open", vec![url])
     };
-    let _ = std::process::Command::new(cmd.0).args(&cmd.1).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+    // the address is printed above whatever happens here: a browser that will not open is said beside it
+    if let Err(e) = std::process::Command::new(cmd.0).args(&cmd.1).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+        eprintln!("The browser could not be opened ({e}): open {url} yourself.");
+    }
 }
 
 fn serve() -> i32 {
-    let home = home_dir();
-    let _ = std::fs::create_dir_all(&home);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
-    }
-    let bind_host = { let b = std::env::var("BAGHOLDER_BIND").unwrap_or_default().trim().to_string(); if b.is_empty() { "127.0.0.1".to_string() } else { b } };
-    let a = app::App::new(home, root_dir(), bind_host.clone());
+    // what the environment says, and the data folder made the app's alone: each
+    // refused stops the server here, saying why
+    let started = (|| -> Result<_, String> {
+        let home = home_dir()?;
+        std::fs::create_dir_all(&home).map_err(|e| format!("the data folder {} could not be made: {e}", home.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("the data folder {} could not be kept private: {e}", home.display()))?;
+        }
+        let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
+        let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
+        Ok((home, root_dir()?, bind_host, port_choices()?))
+    })();
+    let (home, root, bind_host, ports) = match started {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("bagholder: {e}"));
+            return 1;
+        }
+    };
+    let a = app::App::new(home, root, bind_host.clone());
     // an update the supervisor rolled back is said in the header by the server it started
     update::recall_failure(&a);
     // the local model keeps its file in this app's data folder, and is off until told so
@@ -166,7 +182,7 @@ fn serve() -> i32 {
     };
     let mut bound = None;
     let mut last_err = String::new();
-    for port in port_choices() {
+    for &port in &ports {
         match runtime.block_on(tokio::net::TcpListener::bind((bind_host.as_str(), port))) {
             Ok(listener) => {
                 bound = Some((listener, port));
@@ -178,7 +194,7 @@ fn serve() -> i32 {
     let (listener, port) = match bound {
         Some(b) => b,
         None => {
-            let ports: Vec<String> = port_choices().iter().map(|p| p.to_string()).collect();
+            let ports: Vec<String> = ports.iter().map(|p| p.to_string()).collect();
             eprintln!("Could not bind {}:{} ({})", bind_host, ports.join("-"), last_err);
             return 1;
         }
@@ -212,7 +228,7 @@ fn serve() -> i32 {
     let url = format!("http://127.0.0.1:{}", port);
     println!("Bagholder  {}", url);
     // a second instance run for verification must not open anyone's browser
-    if std::env::var("BAGHOLDER_NO_BROWSER").unwrap_or_default().trim().is_empty() {
+    if !app::env_on("BAGHOLDER_NO_BROWSER") {
         open_browser(&url);
     }
 
@@ -278,7 +294,13 @@ fn main() {
         // the supervisor exists to restart an updated server; a copy that never updates runs plain
         std::process::exit(serve());
     }
-    std::process::exit(update::supervise(&home_dir(), update::UPDATE_HEALTHY_SEC));
+    match home_dir() {
+        Ok(home) => std::process::exit(update::supervise(&home, update::UPDATE_HEALTHY_SEC)),
+        Err(e) => {
+            log(&format!("bagholder: {e}"));
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -305,11 +327,26 @@ mod tests {
         let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var("BAGHOLDER_HOME").ok();
         std::env::remove_var("BAGHOLDER_HOME");
-        let home = crate::home_dir();
+        let home = crate::home_dir().unwrap();
         if let Some(v) = previous {
             std::env::set_var("BAGHOLDER_HOME", v);
         }
         assert_eq!(home.file_name().unwrap(), ".bagholder-rust");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_bagholder_home_that_is_not_text_is_refused_not_read_as_unset() {
+        use std::os::unix::ffi::OsStrExt;
+        let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("BAGHOLDER_HOME");
+        std::env::set_var("BAGHOLDER_HOME", std::ffi::OsStr::from_bytes(b"/tmp/\xff"));
+        let home = crate::home_dir();
+        match previous {
+            Some(v) => std::env::set_var("BAGHOLDER_HOME", v),
+            None => std::env::remove_var("BAGHOLDER_HOME"),
+        }
+        assert!(home.unwrap_err().contains("BAGHOLDER_HOME"));
     }
 
     #[test]
@@ -318,7 +355,7 @@ mod tests {
         let previous = std::env::var("BAGHOLDER_HOME").ok();
         let d = std::env::temp_dir().join(format!("bh-home-{}-elsewhere", std::process::id()));
         std::env::set_var("BAGHOLDER_HOME", &d);
-        let home = crate::home_dir();
+        let home = crate::home_dir().unwrap();
         match previous {
             Some(v) => std::env::set_var("BAGHOLDER_HOME", v),
             None => std::env::remove_var("BAGHOLDER_HOME"),
@@ -453,4 +490,10 @@ mod tests_routes_golden;
 #[cfg(test)]
 mod tests_boundary;
 #[cfg(test)]
+mod tests_lints;
+#[cfg(test)]
 mod tests_universes;
+#[cfg(test)]
+mod tests_failures;
+#[cfg(test)]
+mod tests_failures_lower;

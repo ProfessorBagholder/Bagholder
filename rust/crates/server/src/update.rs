@@ -38,7 +38,29 @@ pub fn image_page() -> String {
 
 /// `BAGHOLDER_NO_UPDATE`: a copy updated some other way (the container).
 pub fn updates_off() -> bool {
-    !std::env::var("BAGHOLDER_NO_UPDATE").unwrap_or_default().trim().is_empty()
+    crate::app::env_on("BAGHOLDER_NO_UPDATE")
+}
+
+/// The header's entry for the update check's own record.
+const UPDATE_CHECK: &str = "update-check";
+
+/// A file of the update's own removed: one already gone is removed; any other
+/// refusal is the error.
+fn remove_left(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{} could not be removed: {e}", path.display())),
+    }
+}
+
+/// A folder of the update's own removed, as `remove_left` removes a file.
+fn remove_left_dir(path: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{} could not be removed: {e}", path.display())),
+    }
 }
 
 /// The platform this binary was built for, as the release names its archive.
@@ -149,7 +171,8 @@ fn fetch_release() -> Option<GithubRelease> {
 }
 
 /// The latest release against APP_VERSION, the
-/// record stored in meta. Never fails.
+/// record stored in meta. Never fails: a record that could not be kept is said
+/// in the header until one is.
 pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
     let mut record = UpdateRecord { checked_at: now_iso(), ok: false, latest: String::new(), url: format!("{}/releases/latest", repo_url()), update_available: false, assets: None };
     let rel = fetch_release();
@@ -165,31 +188,32 @@ pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
             record.update_available = available;
             record.assets = release_assets(&rel);
             if available {
-                if let Ok(c) = app.open() {
-                    crate::notify::emit(
-                        app,
-                        &c,
-                        "updates",
-                        &format!("update:{}", tag),
-                        &format!("Bagholder {} is available", tag),
-                        if updates_off() { "Pull the new image." } else { "Update from the header." },
-                        None,
-                    );
-                }
+                // a notice that could not be recorded is said in the header until one is
+                crate::notify::tell(
+                    app,
+                    "updates",
+                    &format!("update:{}", tag),
+                    &format!("Bagholder {} is available", tag),
+                    if updates_off() { "Pull the new image." } else { "Update from the header." },
+                    None,
+                );
             }
         }
     }
-    if let Ok(c) = app.open() {
-        let _ = bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap()));
+    let kept = app.open().and_then(|c| bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap())));
+    match kept {
+        Ok(()) => crate::feeds::feed_answered(app, UPDATE_CHECK),
+        Err(e) => crate::feeds::feed_failed(app, UPDATE_CHECK, format!("The update check could not be kept: {e}")),
     }
     record
 }
 
-/// The last check's record, default when none.
-pub fn update_status(app: &Arc<App>) -> UpdateRecord {
-    let raw = app.open().ok().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "").ok()).unwrap_or_default();
-    if raw.is_empty() { return UpdateRecord::default(); }
-    serde_json::from_str(&raw).unwrap_or_default()
+/// The last check's record, default when none has been kept; one that cannot be
+/// read is the error.
+pub fn update_status(app: &Arc<App>) -> Result<UpdateRecord, String> {
+    let raw = app.open().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "")).map_err(|e| format!("The update check could not be read: {e}"))?;
+    if raw.is_empty() { return Ok(UpdateRecord::default()); }
+    serde_json::from_str(&raw).map_err(|e| format!("The update check could not be read: {e}"))
 }
 
 /// This platform's archive in the release `tag`: `bagholder-vX.Y.Z-rust-<target>.tar.gz`
@@ -255,15 +279,7 @@ pub fn git_update_ready(app: &Arc<App>) -> (bool, String) {
     (true, String::new())
 }
 
-pub fn can_update(app: &Arc<App>, rec: Option<&UpdateRecord>) -> bool {
-    let owned;
-    let rec = match rec {
-        Some(r) => r,
-        None => {
-            owned = update_status(app);
-            &owned
-        }
-    };
+pub fn can_update(app: &Arc<App>, rec: &UpdateRecord) -> bool {
     if !rec.update_available || updates_off() {
         return false;
     }
@@ -288,22 +304,25 @@ fn rel_name(p: &Path, root: &Path) -> Option<String> {
     Some(rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/"))
 }
 
-fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
-    for e in entries.flatten() {
-        let p = e.path();
-        let meta = match std::fs::symlink_metadata(&p) { Ok(m) => m, Err(_) => continue };
+/// The regular files under `dir`, by their names relative to `root`; a folder or
+/// an entry that cannot be read is the error, never a file left out.
+fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{} could not be read: {e}", dir.display()))?;
+    for e in entries {
+        let p = e.map_err(|e| format!("{} could not be read: {e}", dir.display()))?.path();
+        let meta = std::fs::symlink_metadata(&p).map_err(|e| format!("{} could not be read: {e}", p.display()))?;
         if meta.file_type().is_symlink() {
             // a link could point anywhere: only regular files are installed
-            let _ = std::fs::remove_file(&p);
+            remove_left(&p)?;
         } else if meta.is_dir() {
-            walk(&p, root, out);
+            walk(&p, root, out)?;
         } else if meta.is_file() {
             if let Some(n) = rel_name(&p, root) {
                 out.push(n);
             }
         }
     }
+    Ok(())
 }
 
 /// The archive's regular files into `staging`,
@@ -327,7 +346,7 @@ fn extract_release(archive: &Path, staging: &Path) -> Result<Vec<String>, String
         return Err(format!("release archive could not be unpacked: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let mut written = Vec::new();
-    walk(staging, staging, &mut written);
+    walk(staging, staging, &mut written)?;
     written.sort();
     if written.is_empty() {
         return Err("release archive is empty".into());
@@ -345,7 +364,7 @@ fn check_binary(staging: &Path, names: &[String], tag: &str) -> Result<(), Strin
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755));
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("the new version could not be made runnable: {e}"))?;
     }
     let mut child = Command::new(&exe)
         .arg("--version")
@@ -361,9 +380,11 @@ fn check_binary(staging: &Path, names: &[String], tag: &str) -> Result<(), Strin
             Ok(Some(_)) => break,
             Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(100)),
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("the new version did not answer --version".into());
+                // one that has exited is killed without error: any refusal is said with the rest
+                return Err(match child.kill().and_then(|()| child.wait()) {
+                    Ok(_) => "the new version did not answer --version".into(),
+                    Err(e) => format!("the new version did not answer --version, and could not be stopped: {e}"),
+                });
             }
         }
     }
@@ -392,7 +413,11 @@ fn put_in_place(src: &Path, dest: &Path, copy: bool) -> std::io::Result<()> {
     }
     if cfg!(windows) && dest.exists() {
         let old = dest.with_file_name(format!("{}.old", dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
-        let _ = std::fs::remove_file(&old);
+        match std::fs::remove_file(&old) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
         std::fs::rename(dest, &old)?;
     }
     std::fs::rename(&tmp, dest)
@@ -428,8 +453,10 @@ fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) ->
     for name in names {
         if let Err(e) = put_in_place(&staging.join(name), &dir.join(name), false) {
             // a replace failed part way: every file goes back to its previous copy
-            rollback(app);
-            return Err(e.to_string());
+            return Err(match rollback(app) {
+                Ok(_) => e.to_string(),
+                Err(back) => format!("{e}; and the previous version could not be put back: {back}"),
+            });
         }
     }
     write_pending(home, &Pending { tag: tag.to_string(), git: None })
@@ -457,10 +484,11 @@ pub(crate) fn write_pending(home: &Path, p: &Pending) -> Result<(), String> {
     std::fs::write(home.join("update-pending"), text).map_err(|e| e.to_string())
 }
 
-/// The marker as written; an earlier build wrote the bare tag.
-fn read_pending(home: &Path) -> Pending {
-    let text = std::fs::read_to_string(home.join("update-pending")).unwrap_or_default();
-    serde_json::from_str(&text).unwrap_or_else(|_| Pending { tag: text.trim().to_string(), git: None })
+/// The marker as written; an earlier build wrote the bare tag. A marker that
+/// cannot be read is the error.
+fn read_pending(home: &Path) -> Result<Pending, String> {
+    let text = std::fs::read_to_string(home.join("update-pending")).map_err(|e| format!("the update's marker could not be read: {e}"))?;
+    Ok(serde_json::from_str(&text).unwrap_or_else(|_| Pending { tag: text.trim().to_string(), git: None }))
 }
 
 /// Where a failed update is written for the server the supervisor starts next,
@@ -471,50 +499,69 @@ const FAILED_FILE: &str = "update-failed";
 /// the restarted server is the one that can say it.
 pub fn recall_failure(app: &Arc<App>) {
     let path = app.home.join(FAILED_FILE);
-    let Ok(text) = std::fs::read_to_string(&path) else { return };
-    let _ = std::fs::remove_file(&path);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            app.state.lock().unwrap().update_error = format!("What the last update came to could not be read: {e}");
+            return;
+        }
+    };
+    // said once: a failure left that cannot be taken away would be said again at every start
+    let taken = remove_left(&path);
     let text = text.trim();
-    if !text.is_empty() {
-        app.state.lock().unwrap().update_error = text.to_string();
+    let said = match taken {
+        Ok(()) => text.to_string(),
+        Err(e) => format!("{text} {e}").trim().to_string(),
+    };
+    if !said.is_empty() {
+        app.state.lock().unwrap().update_error = said;
     }
 }
 
 /// The previous copies put back.
-pub fn rollback(app: &Arc<App>) -> bool {
+pub fn rollback(app: &Arc<App>) -> Result<bool, String> {
     rollback_in(&app.home, &app_dir(app))
 }
 
 /// The version before a failed update put back: a git checkout's commit first
 /// (the page and sources are the checkout's), then the kept executables.
-/// True when the previous executables are in place again.
-fn restore_previous(home: &Path, dir: &Path, pending: &Pending) -> bool {
+/// True when the previous executables are in place again, false when none were
+/// kept; a part that could not be put back is the error, every other part put
+/// back all the same.
+fn restore_previous(home: &Path, dir: &Path, pending: &Pending) -> Result<bool, String> {
+    let mut failed = vec![];
     if let Some(g) = &pending.git {
         // the checkout named, whatever repository the environment points at
         let reset = Command::new("git").args(["reset", "--hard", &g.commit]).current_dir(&g.root).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").stdin(Stdio::null()).output();
         match reset {
             Ok(o) if o.status.success() => {}
-            Ok(o) => log(&format!("bagholder update: the checkout could not go back to {}: {}", g.commit, String::from_utf8_lossy(&o.stderr).trim())),
-            Err(e) => log(&format!("bagholder update: the checkout could not go back to {}: {}", g.commit, e)),
+            Ok(o) => failed.push(format!("the checkout could not go back to {}: {}", g.commit, String::from_utf8_lossy(&o.stderr).trim())),
+            Err(e) => failed.push(format!("the checkout could not go back to {}: {}", g.commit, e)),
         }
     }
-    rollback_in(home, dir)
+    let back = rollback_in(home, dir);
+    if let Err(e) = &back {
+        failed.push(e.clone());
+    }
+    if failed.is_empty() { back } else { Err(failed.join("; ")) }
 }
 
-fn rollback_in(home: &Path, dir: &Path) -> bool {
-    if bagholder_store::guard_home(home).is_err() {
-        return false;
-    }
+fn rollback_in(home: &Path, dir: &Path) -> Result<bool, String> {
+    bagholder_store::guard_home(home)?;
     let previous = home.join("previous");
     if !previous.exists() {
-        return false;
+        return Ok(false);
     }
     let mut names = Vec::new();
-    walk(&previous, &previous, &mut names);
-    for name in names {
-        let _ = put_in_place(&previous.join(&name), &dir.join(&name), true);
+    walk(&previous, &previous, &mut names)?;
+    // every file is put back that can be; the kept copies stay while any could not be
+    let failed: Vec<String> = names.iter().filter_map(|name| put_in_place(&previous.join(name), &dir.join(name), true).err().map(|e| format!("{name} could not be put back: {e}"))).collect();
+    if !failed.is_empty() {
+        return Err(failed.join("; "));
     }
-    let _ = std::fs::remove_dir_all(&previous);
-    true
+    remove_left_dir(&previous)?;
+    Ok(true)
 }
 
 /// Finish the response in flight, then stop
@@ -557,10 +604,15 @@ fn install_release(app: &Arc<App>, tag: &str, rec: &UpdateRecord) -> Result<(), 
     set_updating(app, &format!("Installing {}…", tag));
     let names = extract_release(&archive, &staging)?;
     check_binary(&staging, &names, tag)?;
+    // the download is done with before anything is put in place
+    remove_left(&archive)?;
+    remove_left(&sha_file)?;
     install_files(app, &staging, &names, tag)?;
-    let _ = std::fs::remove_dir_all(&staging);
-    let _ = std::fs::remove_file(&archive);
-    let _ = std::fs::remove_file(&sha_file);
+    // the install's renames have emptied it; the next install removes it first and fails if it cannot
+    match remove_left_dir(&staging) {
+        Ok(()) => {}
+        Err(_left) => {}
+    }
     Ok(())
 }
 
@@ -570,7 +622,7 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
     if !ok {
         return Err(why);
     }
-    let before = git(app, &["rev-parse", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let before = git(app, &["rev-parse", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).map_err(|e| format!("git could not name the current commit: {e}"))?;
     if before.is_empty() {
         return Err("git could not name the current commit".into());
     }
@@ -589,12 +641,19 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
     set_updating(app, &format!("Building {}…", tag));
     let built = Command::new("cargo").args(["build", "--release", "--bins"]).current_dir(cargo_dir(app)).stdin(Stdio::null()).output();
     if !built.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-        let _ = git(app, &["reset", "--hard", &before]);
+        let mut back = vec![];
+        match git(app, &["reset", "--hard", &before]) {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => back.push(format!("the checkout could not go back to {before}: {}", String::from_utf8_lossy(&o.stderr).trim())),
+            Err(e) => back.push(format!("the checkout could not go back to {before}: {e}")),
+        }
         // a build that failed part way may have linked one executable already
-        rollback(app);
+        if let Err(e) = rollback(app) {
+            back.push(e);
+        }
         let msg = built.map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_else(|e| e.to_string());
         let last = msg.trim().lines().last().unwrap_or("").chars().take(200).collect::<String>();
-        return Err(format!("the new version did not build: {}", last));
+        return Err(if back.is_empty() { format!("the new version did not build: {}", last) } else { format!("the new version did not build: {}; and the previous version could not be put back: {}", last, back.join("; ")) });
     }
     write_pending(&app.home, &Pending { tag: tag.to_string(), git: Some(GitRestore { root: app.root.clone(), commit: before }) })
 }
@@ -631,7 +690,10 @@ pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
     if updates_off() {
         return OkOr::err(UPDATES_OFF_MESSAGE);
     }
-    let rec = update_status(app);
+    let rec = match update_status(app) {
+        Ok(r) => r,
+        Err(e) => return OkOr::err(e),
+    };
     {
         let mut st = app.state.lock().unwrap();
         if !st.updating.is_empty() {
@@ -644,7 +706,7 @@ pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
             return OkOr::err("No update to install.");
         }
         drop(st);
-        if !can_update(app, Some(&rec)) {
+        if !can_update(app, &rec) {
             let why = if update_mode(app) == "git" { git_update_ready(app).1 } else { "This release has no downloadable archive.".to_string() };
             return OkOr::err(why);
         }
@@ -714,9 +776,12 @@ pub(crate) fn supervise_child(home: &Path, dir: &Path, healthy_sec: u64, command
                 Err(_) => break None,
             }
             if started.elapsed() >= Duration::from_secs(healthy_sec) {
-                // alive past the window: the update took
-                let _ = std::fs::remove_file(&marker);
-                let _ = std::fs::remove_dir_all(home.join("previous"));
+                // alive past the window: the update took. A marker left would have the
+                // next crash in a window roll a good version back: the supervisor has no
+                // header, so its console is where that is said
+                if let Err(e) = remove_left(&marker).and_then(|()| remove_left_dir(&home.join("previous"))) {
+                    log(&format!("bagholder update: the update took, but what it kept could not be cleared: {e}"));
+                }
                 pending = false;
                 break child.wait().ok();
             }
@@ -728,15 +793,27 @@ pub(crate) fn supervise_child(home: &Path, dir: &Path, healthy_sec: u64, command
         }
         if pending && code != 0 {
             let update = read_pending(home);
-            let _ = std::fs::remove_file(&marker);
-            let back = restore_previous(home, dir, &update);
-            let what = if update.tag.is_empty() { "the new version".to_string() } else { update.tag.clone() };
-            let _ = std::fs::write(home.join(FAILED_FILE), format!("Update failed: {} did not start.", what));
-            if back {
+            // the marker goes, so the version put back is not taken for the update
+            let cleared = remove_left(&marker);
+            let what = match &update {
+                Ok(u) if !u.tag.is_empty() => u.tag.clone(),
+                _ => "the new version".to_string(),
+            };
+            let back = update.and_then(|u| restore_previous(home, dir, &u));
+            let said = match (&back, &cleared) {
+                (Ok(_), Ok(())) => format!("Update failed: {} did not start.", what),
+                (Err(e), _) => format!("Update failed: {} did not start, and the previous version could not be put back: {}.", what, e),
+                (Ok(_), Err(e)) => format!("Update failed: {} did not start. {}.", what, e),
+            };
+            // the server started next says it in the header; the supervisor's console is all that is left when it cannot be written
+            if let Err(e) = std::fs::write(home.join(FAILED_FILE), &said) {
+                log(&format!("bagholder update: {said} (and this could not be left for the server to say: {e})"));
+            }
+            if back == Ok(true) {
                 log(&format!("bagholder update: {} did not start; the previous version is back", what));
                 continue;
             }
-            log(&format!("bagholder update: {} did not start, and no previous version was kept to go back to", what));
+            log(&format!("bagholder update: {said}"));
         }
         return code;
     }
@@ -744,11 +821,16 @@ pub(crate) fn supervise_child(home: &Path, dir: &Path, healthy_sec: u64, command
 
 /// At most hourly.
 pub fn check_for_update_if_due(app: &Arc<App>) -> UpdateRecord {
-    let rec = update_status(app);
-    if let Some(last) = parse_instant(&rec.checked_at) {
-        if now_unix() - last < UPDATE_CHECK_HOURS * 3600.0 {
-            return rec;
+    match update_status(app) {
+        Ok(rec) => {
+            if let Some(last) = parse_instant(&rec.checked_at) {
+                if now_unix() - last < UPDATE_CHECK_HOURS * 3600.0 {
+                    return rec;
+                }
+            }
         }
+        // a record that cannot be read is said until one is kept: the check is made again
+        Err(e) => crate::feeds::feed_failed(app, UPDATE_CHECK, e),
     }
     check_for_update(app)
 }

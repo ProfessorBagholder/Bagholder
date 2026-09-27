@@ -9,6 +9,7 @@
 // moves with it.
 
 import { lookup } from './api'
+import { flash } from './ui.svelte'
 import { bareSymbol } from './sym'
 import { localDay } from './fmt'
 import type { Dec } from './dec'
@@ -92,7 +93,9 @@ export async function loadListing(id: string, held: (positionId: string) => void
   if (!isListingId(id)) return
   const l = entry(id)
   const d = await listings.read({ query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name } }, { key: id })
-  if (!d.ok || 'error' in d) {
+  if (!d.ok) {
+    // said in the header; the page shows the listing without executions rather than waiting for ever
+    flash('Could not read ' + l.symbol + ': ' + d.error, 'err')
     l.fills = []
     return
   }

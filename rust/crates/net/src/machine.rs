@@ -44,14 +44,14 @@ pub fn net() -> &'static Net {
 
 /// For the readers not yet behind the source contract (stage 5): wait for this
 /// caller's turn at `host`, `gap` after the last, on the process's limiter and
-/// the machine's clock.
-pub fn turn(host: &str, gap: Duration) {
+/// the machine's clock. A host another reader was refused by is resting, and
+/// this caller is told so rather than asking it anyway.
+pub fn turn(host: &str, gap: Duration) -> Result<(), crate::limiter::Resting> {
     let l = global();
     if l.pace(host).gap < gap {
         l.configure(host, Pace { gap, ..l.pace(host) });
     }
-    // a host these callers pace is never marked resting by them
-    let _ = l.turn(host, &SystemClock);
+    l.turn(host, &SystemClock)
 }
 
 /// For the same readers: `host` refused a request just now.

@@ -430,25 +430,25 @@ pub fn fetch_cboe_option_chain(root: &str) -> OptionChain {
 /// The close of the last completed UTC day on the
 /// pair's Coinbase market, in the pair's currency -- the pair's own market
 /// when Coinbase has one, else the USD market converted at the day's Bank of
-/// Canada rate. Remembered per day.
-pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<f64> {
+/// Canada rate. Remembered per day; a request or a store that fails is the failure.
+pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Result<Option<f64>, crate::history::Failed> {
     let pair = pair.trim().to_uppercase();
     let meta_key = format!("coinbase_prev:{}", pair);
-    let v = bagholder_store::tables::get_meta(conn, &meta_key, "").unwrap_or_default();
+    let v = bagholder_store::tables::get_meta(conn, &meta_key, "")?;
     if let Some(rest) = v.strip_prefix(&format!("{}@", today)) {
-        return bagholder_model::textrules::parse_float(rest);
+        return Ok(bagholder_model::textrules::parse_float(rest));
     }
     let (base, ccy) = match pair.split_once('-') { Some((b, c)) => (b.to_string(), c.to_string()), None => (pair.clone(), String::new()) };
     let products = if ccy == "USD" { vec![pair.clone()] } else { vec![pair.clone(), format!("{}-USD", base)] };
     let mut prev: Option<f64> = None;
     for product in products {
-        if crate::history::coinbase_market(conn, &product, today).is_empty() {
+        if crate::history::coinbase_market(conn, &product, today)?.is_empty() {
             continue;
         }
         let now = now_unix as i64;
-        let bars = crate::history::fetch_coinbase_candles(&product, 86400, now - 4 * 86400, now);
+        let bars = crate::history::fetch_coinbase_candles(&product, 86400, now - 4 * 86400, now)?;
         let quoted = product.rsplit('-').next().unwrap_or("").to_string();
-        let bars = crate::history::in_position_currency(conn, &bars, &quoted, &ccy);
+        let bars = crate::history::in_position_currency(conn, &bars, &quoted, &ccy)?;
         let done: Vec<&bagholder_store::bars::TimeBar> = bars
             .iter()
             .filter(|b| {
@@ -463,10 +463,10 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
     }
     if let Some(p) = prev {
         if p != 0.0 {
-            let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("{}@{}", today, float_repr(p)));
+            bagholder_store::tables::set_meta(conn, &meta_key, &format!("{}@{}", today, float_repr(p)))?;
         }
     }
-    prev.filter(|p| *p != 0.0)
+    Ok(prev.filter(|p| *p != 0.0))
 }
 
 /// A float as its shortest round-trip text, which is the shortest text that reads back as
@@ -491,13 +491,13 @@ pub fn float_repr(x: f64) -> String {
 
 /// The spot price, with the day's change against
 /// the previous UTC day's close when Coinbase has a market to take it from.
-pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<SourceQuote> {
+pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Result<Option<SourceQuote>, crate::history::Failed> {
     let url = COINBASE_URL.replace("{}", pair);
-    let rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
-    Some(match coinbase_prev_close(conn, pair, today, now_unix) {
+    let Some(rec) = parse_coinbase_rec(&get_text(&url, &[])?, pair) else { return Ok(None) };
+    Ok(Some(match coinbase_prev_close(conn, pair, today, now_unix)? {
         Some(prev) => with_prev_close(rec, prev),
         None => rec,
-    })
+    }))
 }
 
 /// A spot price with its day's change against the previous close.
@@ -519,29 +519,30 @@ pub fn occ_root(code: &str) -> String {
 }
 
 /// One quote from the named source. A chain is shared
-/// across the calls for one option root.
+/// across the calls for one option root. What TMX's and Coinbase's reads fail
+/// on, or the store beside them, is the failure.
 pub fn fetch_for(
     conn: &rusqlite::Connection,
     source: &str,
     key: &str,
     today: &str,
     chains: &mut std::collections::HashMap<String, OptionChain>,
-) -> Option<SourceQuote> {
-    match source {
-        "tmx" => tmx::fetch_tmx_quote(conn, key, today),
+) -> Result<Option<SourceQuote>, String> {
+    Ok(match source {
+        "tmx" => tmx::fetch_tmx_quote(conn, key, today).map_err(|e| e.to_string())?,
         "cboe_ca" => fetch_cboe_ca_quote(key),
         "coinbase" => {
             let (_, now_unix, _) = crate::clock_now();
-            fetch_coinbase_spot(conn, key, today, now_unix)
+            fetch_coinbase_spot(conn, key, today, now_unix).map_err(|e| e.to_string())?
         }
         "yahoo_quote" => fetch_yahoo_quote(key),
         "cboe_options" => {
             let root = occ_root(key);
             let chain = chains.entry(root.clone()).or_insert_with(|| fetch_cboe_option_chain(&root));
-            option_mark(chain.get(key)?)
+            chain.get(key).and_then(option_mark)
         }
         _ => None,
-    }
+    })
 }
 
 pub fn refresh_quotes(
@@ -550,13 +551,13 @@ pub fn refresh_quotes(
     today: &str,
     now_unix: f64,
     now_stamp: &str,
-) -> rusqlite::Result<usize> {
+) -> Result<usize, String> {
     let mut done = 0usize;
     let mut chains = std::collections::HashMap::new();
-    for (sym, source, key) in quote_symbols_needing_refresh(conn, symbols, now_unix, QUOTE_REFRESH_MINUTES)? {
-        if let Some(rec) = fetch_for(conn, &source, &key, today, &mut chains) {
+    for (sym, source, key) in quote_symbols_needing_refresh(conn, symbols, now_unix, QUOTE_REFRESH_MINUTES).map_err(|e| e.to_string())? {
+        if let Some(rec) = fetch_for(conn, &source, &key, today, &mut chains)? {
             if rec.quote.price.is_some() {
-                crate::market::upsert_quote(conn, &sym, &rec.quote, &source, now_stamp)?;
+                crate::market::upsert_quote(conn, &sym, &rec.quote, &source, now_stamp).map_err(|e| e.to_string())?;
                 done += 1;
             }
         }
@@ -615,20 +616,23 @@ pub const PEEK_SECONDS: u64 = 60;
 
 /// A listing's price and day change for a glance, from
 /// the source a watched listing uses, not stored, remembered for a minute.
-pub fn peek_quote(conn: &rusqlite::Connection, rec: &Listing, today: &str) -> Option<Glance> {
+pub fn peek_quote(conn: &rusqlite::Connection, rec: &Listing, today: &str) -> Result<Option<Glance>, String> {
     static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Glance)>>> = std::sync::OnceLock::new();
-    let (source, key) = quote_source(rec)?;
+    let Some((source, key)) = quote_source(rec) else { return Ok(None) };
     let k = format!("{}@{}", rec.symbol.clone().trim().to_uppercase(), rec.exchange.clone().trim().to_uppercase());
     let cache = PEEK.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     if let Some((at, q)) = cache.lock().unwrap().get(&k) {
         if at.elapsed() < Duration::from_secs(PEEK_SECONDS) {
-            return Some(*q);
+            return Ok(Some(*q));
         }
     }
     let mut chains = std::collections::HashMap::new();
-    let q = fetch_for(conn, &source, &key, today, &mut chains)?.quote;
-    q.price?;
+    let Some(got) = fetch_for(conn, &source, &key, today, &mut chains)? else { return Ok(None) };
+    let q = got.quote;
+    if q.price.is_none() {
+        return Ok(None);
+    }
     let out = Glance { price: q.price, price_change: q.price_change, percent_change: q.percent_change };
     cache.lock().unwrap().insert(k, (Instant::now(), out));
-    Some(out)
+    Ok(Some(out))
 }

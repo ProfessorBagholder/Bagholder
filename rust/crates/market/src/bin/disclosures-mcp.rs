@@ -134,10 +134,15 @@ fn required(v: Option<String>, k: &str) -> Result<String, Fail> {
     v.ok_or_else(|| Fail::Other(format!("KeyError: '{}'", k)))
 }
 
+/// Arguments that are not the tool's: the call answers why, never runs on defaults.
+fn bad_args(e: serde_json::Error) -> Fail {
+    Fail::Other(format!("TypeError: {e}"))
+}
+
 fn call(name: &str, args: &Value) -> Result<Value, Fail> {
     match name {
         "disclosures_list" => {
-            let a: ListArgs = serde_json::from_value(args.clone()).unwrap_or_default();
+            let a: ListArgs = serde_json::from_value(args.clone()).map_err(bad_args)?;
             let symbol = required(a.symbol, "symbol")?;
             let limit = match a.limit {
                 None => 100,
@@ -146,7 +151,7 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
             Ok(serde_json::to_value(disclosures::fetch(&symbol, &a.meta.name, &a.meta.exchange, &a.meta.currency, limit.max(1) as usize, "")).unwrap())
         }
         "disclosures_document" => {
-            let a: DocArgs = serde_json::from_value(args.clone()).unwrap_or_default();
+            let a: DocArgs = serde_json::from_value(args.clone()).map_err(bad_args)?;
             let symbol = required(a.symbol, "symbol")?;
             let id = required(a.id, "id")?;
             let result = disclosures::fetch(&symbol, &a.meta.name, &a.meta.exchange, &a.meta.currency, 200, "");
@@ -167,7 +172,7 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
             Ok(json!({"path": dest, "contentType": ct, "bytes": data.len()}))
         }
         "sedar_resolve_profile" => {
-            let a: SedarArgs = serde_json::from_value(args.clone()).unwrap_or_default();
+            let a: SedarArgs = serde_json::from_value(args.clone()).map_err(bad_args)?;
             let query = required(a.query, "query")?;
             if !sedar::available() {
                 return Ok(json!({"error": "SEDAR+ needs the bagholder-browser helper beside this program"}));
@@ -200,7 +205,7 @@ fn handle(msg: &Value) -> Option<Value> {
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
             let args = params.get("arguments").filter(|a| a.is_object()).cloned().unwrap_or(json!({}));
             let result = match call(&name, &args) {
-                Ok(payload) => json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&payload).unwrap_or_default()}]}),
+                Ok(payload) => json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&payload).expect("a JSON value always serializes")}]}),
                 Err(Fail::Source(m)) | Err(Fail::Other(m)) => json!({"content": [{"type": "text", "text": json!({"error": m}).to_string()}], "isError": true}),
             };
             Some(json!({"jsonrpc": "2.0", "id": mid, "result": result}))
@@ -277,7 +282,8 @@ mod tests {
     }
 }
 
-fn main() {
+/// A client that stopped reading ends the server with the error.
+fn main() -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -288,8 +294,9 @@ fn main() {
         }
         let msg: Value = match serde_json::from_str(line) { Ok(m) => m, Err(_) => continue };
         if let Some(resp) = handle(&msg) {
-            let _ = writeln!(out, "{}", resp);
-            let _ = out.flush();
+            writeln!(out, "{}", resp)?;
+            out.flush()?;
         }
     }
+    Ok(())
 }

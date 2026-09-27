@@ -34,3 +34,6 @@ tempfile = "3"
 [[bin]]
 name = "demo-book"
 path = "src/bin/demo_book.rs"
+
+[lints]
+workspace = true

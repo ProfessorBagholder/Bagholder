@@ -4,6 +4,7 @@
 import type { Trade, ShortsPayload } from '../model'
 import { listingTicker } from './chart'
 import { lookup, type Answer } from '../api'
+import { flash } from '../ui.svelte'
 import type { ShortsAnswer } from '../generated/markets'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -48,12 +49,14 @@ export async function ensureShorts(t: Trade): Promise<void> {
   if (shortsStore[key] && shownFrom.get(key) === d) return
   shownFrom.set(key, d)
   shortsStore[key] = Object.assign({ at: Date.now() }, d.ok ? structuredClone(d) : { ok: false }) as ShortsRec
+  if (!d.ok) flash('Could not read short interest for ' + sym + ': ' + d.error, 'err')
   // the run of past reports comes free with a US listing's answer; a Canadian one is a
   // file per reporting date, asked for once the figures are on screen
   if ('covered' in d && d.covered && !(d.shorts?.series || []).length) {
     const more = await trends.read({ query: { ...q, trend: true } }, { key })
     const rec = shortsStore[key]
-    if ('covered' in more && more.covered && rec?.shorts) rec.shorts.series = more.shorts?.series || []
+    if (!more.ok) flash('Could not read the short-interest trend for ' + sym + ': ' + more.error, 'err')
+    else if ('covered' in more && more.covered && rec?.shorts) rec.shorts.series = more.shorts?.series || []
   }
 }
 

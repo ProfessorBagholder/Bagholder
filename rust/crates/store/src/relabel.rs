@@ -5,7 +5,7 @@
 //! beyond this: these are the labels the whole model reads a row's meaning
 //! from, and they are corrected in place once, not re-derived on every read.
 
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, OptionalExtension, Result};
 
 pub const OPTION_RELABEL_META: &str = "option_relabel_rows_v1";
 pub const OPTION_UNIT_PRICE_SCALE_META: &str = "option_unit_price_scale_v1";
@@ -28,7 +28,7 @@ pub fn relabel_when_rows_changed(conn: &Connection) -> Result<bool> {
     let key = format!("{}|{}", n, m.unwrap_or_else(|| "None".into()));
     let stamped: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = ?", [OPTION_RELABEL_META], |r| r.get(0))
-        .ok();
+        .optional()?;
     if stamped.as_deref() == Some(key.as_str()) {
         return Ok(false);
     }
@@ -146,7 +146,7 @@ pub fn ensure(conn: &Connection) -> Result<()> {
     relabel_when_rows_changed(conn)?;
     let stamped: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = ?", [OPTION_UNIT_PRICE_SCALE_META], |r| r.get(0))
-        .ok();
+        .optional()?;
     if stamped.is_none() {
         scale_option_unit_prices(conn)?;
         conn.execute(

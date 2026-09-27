@@ -38,23 +38,37 @@ pub struct EventsQuery {
 /// nobody is looking any more.
 pub async fn events(axum::extract::State(state): axum::extract::State<AppState>, Params(q): Params<EventsQuery>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let app = state.app;
+    // what the stream could not do as it opened: said to the page, which says it
+    // and states what it shows again
+    let mut refused: Vec<String> = vec![];
     if let Some(zone) = q.zone {
         // the zone of the browser in use: kept, and "today" follows it
         let a = app.clone();
-        let _ = blocking(move || {
-            if let Some(f) = a.figures.get() {
-                if let Err(e) = f.state_zone(&zone, bagholder_core::jiff::Timestamp::now()) {
-                    crate::app::log(&format!("bagholder: the zone the page stated ({zone}) was not taken: {e}"));
-                }
-            }
+        let taken = blocking(move || match a.figures.get() {
+            Some(f) => f.state_zone(&zone, bagholder_core::jiff::Timestamp::now()).map(|_| ()).map_err(|e| format!("the zone the page stated ({zone}) was not taken: {e}")),
+            None => Ok(()),
         })
         .await;
+        match taken {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => refused.push(e),
+            Err(_) => refused.push("the zone the page stated was not taken: the work stopped short".into()),
+        }
     }
     // the hello names the book, read off the runtime's own threads
     let a = app.clone();
-    let book = blocking(move || events::book_id(&a)).await.unwrap_or_default();
+    let book = match blocking(move || events::book_id(&a)).await {
+        Ok(b) => b,
+        Err(_) => {
+            refused.push("the book's id could not be read: the work stopped short".into());
+            String::new()
+        }
+    };
     let feed = Feed::open(app.clone());
     let mut first = vec![feed.hello(&book)];
+    for error in refused {
+        first.push(("refused", serde_json::json!({"doc": "", "error": error})));
+    }
     // what the page shows as it connects: its first message carries them
     if let Some(raw) = q.docs {
         let docs: Map<String, Value> = match serde_json::from_str(&raw) {
@@ -65,7 +79,15 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
                 Map::new()
             }
         };
-        let have: Map<String, Value> = q.have.and_then(|h| serde_json::from_str(&h).ok()).unwrap_or_default();
+        let have: Map<String, Value> = match q.have.as_deref().map(serde_json::from_str) {
+            None => Map::new(),
+            Some(Ok(h)) => h,
+            Some(Err(e)) => {
+                // what the page holds unread: each subscription is sent whole, and the page is told
+                first.push(("refused", serde_json::json!({"doc": "", "error": format!("what the page holds could not be read: {e}")})));
+                Map::new()
+            }
+        };
         let wanted = docs
             .into_iter()
             .map(|(k, params)| {
@@ -75,7 +97,10 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
             .collect();
         let a = app.clone();
         let id = feed.id();
-        let _ = blocking(move || a.events.watch(&a, id, wanted)).await;
+        // the stream was opened just above, so it is there to watch for: only the work stopping short fails
+        if blocking(move || a.events.watch(&a, id, wanted)).await.is_err() {
+            first.push(("refused", serde_json::json!({"doc": "", "error": "what the page shows was not taken: the work stopped short"})));
+        }
     }
     let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {
     let value = app.clone();

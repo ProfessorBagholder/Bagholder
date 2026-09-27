@@ -239,7 +239,7 @@ export async function orderEditSave(id: string) {
   panel.busy = 'orders'; e.error = ''
   const r = await call('POST /api/order/modify', { body: { id, quantity, limitPrice } })
   panel.busy = ''
-  if (!r || !r.ok) { if (panel.orderEdit) panel.orderEdit.error = (r && r.error) || 'Could not change the order.'; return }
+  if (!r.ok) { if (panel.orderEdit) panel.orderEdit.error = r.error; return }
   panel.orderEdit = null
   flash('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice ?? o.limitPrice }), 'ok', 10000)
 }
@@ -264,7 +264,7 @@ export async function bracketEditSave(id: string) {
   panel.busy = 'orders'; e.error = ''
   for (const body of calls) {
     const r = await call('POST /api/bracket/adjust', { body })
-    if (!r || !r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = (r && r.error) || 'Could not change the bracket.'; return }
+    if (!r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = r.error; return }
   }
   panel.busy = ''; panel.bracketEdit = null
   flash('Bracket changed · ' + symText(b.symbol), 'ok', 10000)
@@ -276,7 +276,7 @@ export async function bracketRemove(id: string, leg: string) {
   panel.busy = 'orders'
   const r = await call('POST /api/bracket/adjust', { body: { id, leg, price: null, trail: null, remove: true } })
   panel.busy = ''
-  if (!r || !r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = (r && r.error) || 'Could not remove the leg.'; return }
+  if (!r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = r.error; return }
   panel.bracketEdit = null
   flash((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + symText(b.symbol), 'ok', 10000)
 }
@@ -284,12 +284,14 @@ export async function bracketRemove(id: string, leg: string) {
 export async function cancelOrderNow(id: string) {
   const o = orderById(id)
   const r = await call('POST /api/order/cancel', { body: { id } })
-  flash(r && r.ok ? 'Cancel sent · ' + (o ? orderLine(o) : '') : (r && r.error) || 'Could not cancel the order.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
+  if (r.ok) flash('Cancel sent · ' + (o ? orderLine(o) : ''), 'ok', 10000)
+  else flash(r.error, 'err', 6000)
 }
 export async function cancelBracketNow(id: string) {
   const b = bracketById(id)
   const r = await call('POST /api/bracket/cancel', { body: { id } })
-  flash(r && r.ok ? 'Bracket cancelled · ' + (b ? symText(b.symbol) : '') : (r && r.error) || 'Could not cancel the bracket.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
+  if (r.ok) flash('Bracket cancelled · ' + (b ? symText(b.symbol) : ''), 'ok', 10000)
+  else flash(r.error, 'err', 6000)
 }
 
 export { draftStore }

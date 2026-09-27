@@ -93,7 +93,7 @@ impl MarketContext {
                         let b = &k.built;
                         let news = std::sync::OnceLock::new();
                         if let Some(n) = b.news.get() {
-                            let _ = news.set(n.clone());
+                            news.set(n.clone()).expect("a cell just made is empty");
                         }
                         k.built = Arc::new(Built { base: b.base.clone(), following: b.following.clone(), news, filed: Mutex::new(Default::default()) });
                         k.filed = filed;

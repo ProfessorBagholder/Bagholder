@@ -56,19 +56,19 @@ fn insert_local(conn: &Connection, row: Value) {
 fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let _g = guard();
     let conn = app_ref().open().unwrap();
-    let v0 = crate::status::answer(&app()).data_version;
+    let v0 = crate::status::answer(&app()).unwrap().data_version;
     assert!(!v0.is_empty());
     let price = 4.75 + (app::now_unix() % 1000.0) / 1e4;
     bagholder_store::market::upsert_quote(&conn, "RDDY", &bagholder_store::market::QuoteRecord { price: Some(price), ..Default::default() }, "tmx", &app::now_iso()).unwrap();
-    let v1 = crate::status::answer(&app()).data_version;
+    let v1 = crate::status::answer(&app()).unwrap().data_version;
     assert_ne!(v0, v1);
     bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2026-09-30".into(), pay_date: "2026-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
-    let v2 = crate::status::answer(&app()).data_version;
+    let v2 = crate::status::answer(&app()).unwrap().data_version;
     // the shared home may already hold this row: then a second, later one moves it
     if v1 == v2 {
         bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2099-09-30".into(), pay_date: "2099-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
     }
-    assert_ne!(v1, crate::status::answer(&app()).data_version);
+    assert_ne!(v1, crate::status::answer(&app()).unwrap().data_version);
     let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
     let _ = conn.execute("DELETE FROM distributions WHERE symbol = 'RDDY'", []);
 }
@@ -78,7 +78,7 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
 #[test]
 fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight() {
     let _g = guard();
-    let v = crate::status::answer(&app()).data_version;
+    let v = crate::status::answer(&app()).unwrap().data_version;
     assert!(v.ends_with(&format!("|{}", bagholder_model::clock::today_local())), "{}", v);
 }
 
@@ -96,11 +96,11 @@ fn test_port_can_be_chosen_for_a_second_instance() {
     let _g = guard();
     let saved = std::env::var("BAGHOLDER_PORT").ok();
     std::env::set_var("BAGHOLDER_PORT", "8799");
-    assert_eq!(crate::port_choices(), vec![8799]);
+    assert_eq!(crate::port_choices().unwrap(), vec![8799]);
     std::env::set_var("BAGHOLDER_PORT", "80");
-    assert_eq!(crate::port_choices(), crate::PORTS.to_vec(), "a privileged or nonsense port is ignored");
+    assert_eq!(crate::port_choices().unwrap(), crate::PORTS.to_vec(), "a privileged or nonsense port is ignored");
     std::env::remove_var("BAGHOLDER_PORT");
-    assert_eq!(crate::port_choices(), crate::PORTS.to_vec());
+    assert_eq!(crate::port_choices().unwrap(), crate::PORTS.to_vec());
     if let Some(p) = saved {
         std::env::set_var("BAGHOLDER_PORT", p);
     }
@@ -140,7 +140,7 @@ impl Drop for UpdateFakes {
 
 fn set_checked_at(secs_ago: f64) {
     let c = app_ref().open().unwrap();
-    let mut rec = update::update_status(&app());
+    let mut rec = update::update_status(&app()).unwrap();
     rec.checked_at = app::stamp_of((app::now_unix() - secs_ago) as i64);
     bagholder_store::tables::set_meta(&c, "update_check", &serde_json::to_string(&rec).unwrap()).unwrap();
 }
@@ -208,7 +208,7 @@ fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_backgro
     bagholder_store::market::mark_history_fetched(&conn, "DLYQ", &from, "2020-01-02T00:00:00Z").unwrap();
     let q = crate::feeds::HistoryQuery::parse(&format!("symbol=DLYQ&exchange=TSX&currency=CAD&kind=Shares&from={from}&to={today}&tf=1d"));
     let inst = bagholder_market::history::chart_instrument(&q.read().0);
-    assert!(bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now), "the stored copy is due a read");
+    assert!(bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now).unwrap(), "the stored copy is due a read");
 
     let crate::feeds::HistoryAnswer::Ok(h) = crate::feeds::history_payload(&app, &q) else { panic!("a known timeframe is answered") };
     let days: Vec<String> = match &h.bars {
@@ -225,7 +225,7 @@ fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_backgro
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     // a read that found nothing (offline here) is not asked again at the next open
-    assert!(!bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now));
+    assert!(!bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now).unwrap());
     let crate::feeds::HistoryAnswer::Ok(again) = crate::feeds::history_payload(&app, &q) else { panic!() };
     assert!(!again.pending, "nothing is under way after a miss");
 }
@@ -352,12 +352,12 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
     let readers = Readers { wire: &wire, extra: &extra };
     // a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
     bagholder_store::tables::set_meta(&c, "tmx_form:QIMC", "@:CNX").unwrap();
-    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "QIMC", "", "", &readers, &|_, _, _| None)).unwrap();
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "QIMC", "", "", &readers, &|_, _, _| Ok(None))).unwrap();
     assert_eq!((out["source"].as_str().unwrap(), seen.lock().unwrap().1.clone()), ("tmx", Some("QIMC:CNX".to_string())));
     *seen.lock().unwrap() = (vec![], None);
     // TMX cannot place it: Nasdaq, whose items name the symbols they belong to
     bagholder_store::tables::set_meta(&c, "tmx_form:KO", &format!("none@{}", today)).unwrap();
-    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "KO", "", "", &readers, &|_, _, _| None)).unwrap();
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "KO", "", "", &readers, &|_, _, _| Ok(None))).unwrap();
     assert_eq!((out["source"].as_str().unwrap(), out["exchange"].as_str().unwrap(), seen.lock().unwrap().1.is_some()), ("nasdaq", "NASDAQ", false));
 }
 
@@ -380,7 +380,7 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
         Ok(Some(vec![]))
     };
     let listing = |_: &Connection, _: &str, _: &str| {
-        Some(bagholder_model::wire::SymbolMatch { symbol: "SXHI".into(), name: "Ninepoint SpaceX HighShares ETF".into(), exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() })
+        Ok(Some(bagholder_model::wire::SymbolMatch { symbol: "SXHI".into(), name: "Ninepoint SpaceX HighShares ETF".into(), exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() }))
     };
     let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing)).unwrap();
     assert_eq!(out["exchange"], "TSX");

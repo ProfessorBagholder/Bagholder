@@ -126,12 +126,12 @@ fn test_download_refuses_a_host_off_the_allowlist() {
     let _g = guard();
     let saved = std::env::var("BAGHOLDER_LLAMAFILE_URL").ok();
     std::env::set_var("BAGHOLDER_LLAMAFILE_URL", "https://evil.example.com/x.llamafile");
-    let ok = localmodel::download(&scratch("download").join("m"));
+    let got = localmodel::download(&scratch("download").join("m"));
     match saved {
         Some(v) => std::env::set_var("BAGHOLDER_LLAMAFILE_URL", v),
         None => std::env::remove_var("BAGHOLDER_LLAMAFILE_URL"),
     }
-    assert!(!ok);
+    assert!(got.is_err());
 }
 
 // --- ChatTest

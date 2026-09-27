@@ -22,3 +22,6 @@ jiff = "0.2.37"
 
 [dev-dependencies]
 jiff = "0.2.37"
+
+[lints]
+workspace = true

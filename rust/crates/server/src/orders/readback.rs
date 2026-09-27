@@ -415,7 +415,11 @@ pub fn refresh_orders(app: &Arc<App>) -> RefreshOrdersAnswer {
         Ok(b) => b,
         Err(e) => return skipped(&format!("the book could not be opened: {e}")),
     };
-    let Some(sess) = ticket_session(app) else { return skipped("no session") };
+    let sess = match ticket_session(app) {
+        Ok(s) => s,
+        Err(e) if e == super::tools::NOT_CONNECTED => return skipped("no session"),
+        Err(e) => return skipped(&e),
+    };
     let now = Timestamp::now();
     let (mut read, mut failed) = (0i64, 0i64);
     match book.orders_in_flight() {

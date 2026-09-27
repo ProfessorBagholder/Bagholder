@@ -377,8 +377,9 @@ pub fn option_mark(row: &OptionRow) -> Option<SourceQuote> {
 
 /// `[time, low, high, open, close, volume]`
 /// rows, oldest first.
-pub fn parse_coinbase_candles(text: &str) -> Vec<TimeBar> {
-    let rows: Vec<Value> = serde_json::from_str(if text.is_empty() { "[]" } else { text }).unwrap_or_default();
+/// An answer that is not a list of rows does not read, and is the source's failure.
+pub fn parse_coinbase_candles(text: &str) -> Result<Vec<TimeBar>, serde_json::Error> {
+    let rows: Vec<Value> = serde_json::from_str(if text.is_empty() { "[]" } else { text })?;
     let mut out: BTreeMap<i64, TimeBar> = BTreeMap::new();
     for r in rows {
         let a = match r.as_array() { Some(a) if a.len() >= 6 => a.clone(), _ => continue };
@@ -390,5 +391,5 @@ pub fn parse_coinbase_candles(text: &str) -> Vec<TimeBar> {
             out.insert(t, TimeBar { time: t, px: Ohlcv { open: Some(op), high: Some(hi), low: Some(lo), close: cl, volume: Some(vol) } });
         }
     }
-    out.into_values().collect()
+    Ok(out.into_values().collect())
 }

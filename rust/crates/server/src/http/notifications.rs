@@ -41,7 +41,7 @@ async fn settings(State(state): State<AppState>, Body(patch): Body<notify::Notif
 async fn test(State(state): State<AppState>) -> Api<notify::NotifyTestAnswer> {
     let app = state.app.clone();
     with_store(&state, move |conn| {
-        let row = notify::test_notification(&app, conn);
+        let row = notify::test_notification(&app, conn)?;
         Ok(notify::NotifyTestAnswer { ok: row.is_some(), id: row.map(|r| r.id).unwrap_or(0) })
     })
     .await

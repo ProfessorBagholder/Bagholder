@@ -30,7 +30,7 @@ pub const LOGIN_VIEW_SIZE: (u32, u32) = (960, 1000);
 const NO_BROWSER: &str = "Install Chrome, Brave, Edge, or another Chromium browser. Passkey login has to happen on Wealthsimple’s site.";
 
 pub fn login_view() -> bool {
-    !std::env::var("BAGHOLDER_LOGIN_VIEW").unwrap_or_default().trim().is_empty()
+    crate::app::env_on("BAGHOLDER_LOGIN_VIEW")
 }
 
 fn which(name: &str) -> Option<String> {
@@ -43,11 +43,12 @@ fn is_file(p: &str) -> bool {
 }
 
 /// A Chromium-family browser capable of the DevTools
-/// login flow.
-pub fn find_chrome() -> String {
-    let explicit = std::env::var("BAGHOLDER_CHROME").unwrap_or_default().trim().to_string();
+/// login flow, empty where there is none; a `BAGHOLDER_CHROME` that is not
+/// text is refused.
+pub fn find_chrome() -> Result<String, String> {
+    let explicit = crate::app::env_text("BAGHOLDER_CHROME")?.unwrap_or_default().trim().to_string();
     if is_file(&explicit) {
-        return explicit;
+        return Ok(explicit);
     }
     let mac = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -57,18 +58,19 @@ pub fn find_chrome() -> String {
     if cfg!(target_os = "macos") {
         for p in mac {
             if is_file(p) {
-                return p.into();
+                return Ok(p.into());
             }
         }
     }
     for n in ["google-chrome", "google-chrome-stable", "brave-browser", "brave-browser-stable", "brave", "chromium", "chromium-browser", "microsoft-edge", "msedge", "chrome"] {
         if let Some(p) = which(n) {
-            return p;
+            return Ok(p);
         }
     }
     let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());
     let pf86 = std::env::var("PROGRAMFILES(X86)").unwrap_or_else(|_| r"C:\Program Files (x86)".into());
-    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    // a folder looked in where the system names one; unset, it is not looked in
+    let local = std::env::var("LOCALAPPDATA").ok();
     let join = |a: &str, parts: &[&str]| -> String {
         let mut p = std::path::PathBuf::from(a);
         for x in parts {
@@ -77,16 +79,16 @@ pub fn find_chrome() -> String {
         p.to_string_lossy().into_owned()
     };
     let mut extras: Vec<String> = mac.iter().map(|s| s.to_string()).collect();
-    for base in [&pf, &pf86, &local] {
+    for base in [Some(&pf), Some(&pf86), local.as_ref()].into_iter().flatten() {
         extras.push(join(base, &["Google", "Chrome", "Application", "chrome.exe"]));
     }
-    for base in [&pf, &pf86, &local] {
+    for base in [Some(&pf), Some(&pf86), local.as_ref()].into_iter().flatten() {
         extras.push(join(base, &["BraveSoftware", "Brave-Browser", "Application", "brave.exe"]));
     }
     for base in [&pf, &pf86] {
         extras.push(join(base, &["Microsoft", "Edge", "Application", "msedge.exe"]));
     }
-    extras.into_iter().find(|p| is_file(p)).unwrap_or_default()
+    Ok(extras.into_iter().find(|p| is_file(p)).unwrap_or_default())
 }
 
 fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<String> {
@@ -390,7 +392,11 @@ impl Ws {
     }
 
     pub fn close(mut self) {
-        let _ = self.send_frame(0x8, &[]);
+        match self.send_frame(0x8, &[]) {
+            Ok(()) => {}
+            // the socket is gone already: there is nothing left to close
+            Err(_gone) => {}
+        }
     }
 }
 
@@ -449,7 +455,9 @@ fn cookies_from_document_cookie(text: &str) -> Vec<Value> {
         .collect()
 }
 
-pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<crate::session::Capture> {
+/// The login the cookies carry, `None` while none carries an access token;
+/// one carrying a token in a form that cannot be read is an error.
+pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Result<Option<crate::session::Capture>, String> {
     let mut oauth: Option<Value> = None;
     let mut wssdi = String::new();
     for c in cookies {
@@ -466,20 +474,23 @@ pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<cra
             }
         }
     }
-    let oauth = oauth.filter(|o| crate::app::truthy(o.get("access_token")))?;
-    let mut capture: crate::session::Capture = serde_json::from_value(oauth).unwrap_or_default();
+    let Some(oauth) = oauth.filter(|o| crate::app::truthy(o.get("access_token"))) else { return Ok(None) };
+    let mut capture: crate::session::Capture = serde_json::from_value(oauth).map_err(|e| format!("the session cookie could not be read: {e}"))?;
     if !wssdi.is_empty() {
         capture.wssdi = wssdi;
     }
-    Some(capture)
+    Ok(Some(capture))
 }
 
 fn cookie_list(msg: Option<Value>) -> Vec<Value> {
     msg.and_then(|m| m.get("result").filter(|r| r.is_object()).and_then(|r| r.get("cookies")).and_then(|c| c.as_array()).cloned()).unwrap_or_default()
 }
 
-fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Option<crate::session::Capture> {
-    let mut ws = Ws::connect(ws_url, CAPTURE_CALL).ok()?;
+/// The login a window's target carries: `None` from a target not reached or
+/// carrying none yet (the window is looked at again), an error where one
+/// carries a login that cannot be read.
+fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Result<Option<crate::session::Capture>, String> {
+    let Ok(mut ws) = Ws::connect(ws_url, CAPTURE_CALL) else { return Ok(None) };
     let with_ua = |mut capture: crate::session::Capture, ua: &str| {
         if !ua.is_empty() {
             capture.user_agent = ua.to_string();
@@ -487,38 +498,38 @@ fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Option<crate::session::C
         capture
     };
     let ua = ws.call("Browser.getVersion", None, CAPTURE_CALL).and_then(|v| v.get("result").map(|r| f(r, "userAgent").trim().to_string())).unwrap_or_default();
-    if !ua.is_empty() {
-        app.ws_home().save_user_agent(&ua);
+    if let Err(e) = app.ws_home().save_user_agent(&ua) {
+        app.state.lock().unwrap().error = format!("Could not save the browser user agent: {e}");
     }
     ws.call("Network.enable", None, CAPTURE_CALL);
     let mut cookies = cookie_list(ws.call("Network.getAllCookies", None, CAPTURE_CALL));
-    if let Some(b) = tokens_from_cookie_list(app, &cookies) {
+    if let Some(b) = tokens_from_cookie_list(app, &cookies)? {
         ws.close();
-        return Some(with_ua(b, &ua));
+        return Ok(Some(with_ua(b, &ua)));
     }
     let extra = cookie_list(ws.call("Storage.getCookies", None, CAPTURE_CALL));
     cookies.extend(extra);
-    if let Some(b) = tokens_from_cookie_list(app, &cookies) {
+    if let Some(b) = tokens_from_cookie_list(app, &cookies)? {
         ws.close();
-        return Some(with_ua(b, &ua));
+        return Ok(Some(with_ua(b, &ua)));
     }
     let ev = ws.call("Runtime.evaluate", Some(json!({"expression": "document.cookie", "returnByValue": true})), CAPTURE_CALL);
     let val = ev.and_then(|e| e.get("result").and_then(|r| r.get("result")).map(|r| f(r, "value"))).unwrap_or_default();
     ws.close();
-    tokens_from_cookie_list(app, &cookies_from_document_cookie(&val)).map(|b| with_ua(b, &ua))
+    Ok(tokens_from_cookie_list(app, &cookies_from_document_cookie(&val))?.map(|b| with_ua(b, &ua)))
 }
 
-fn try_capture(app: &Arc<App>, port: u16) -> Option<crate::session::Capture> {
+fn try_capture(app: &Arc<App>, port: u16) -> Result<Option<crate::session::Capture>, String> {
     let targets = cdp_list(port, Duration::from_secs(1));
     let (pages, others): (Vec<CdpTarget>, Vec<CdpTarget>) = targets.into_iter().filter(|t| !t.web_socket_debugger_url.is_empty()).partition(|t| t.kind == "page");
     for t in pages.into_iter().chain(others) {
-        if let Some(body) = cookies_from_target(app, &t.web_socket_debugger_url) {
+        if let Some(body) = cookies_from_target(app, &t.web_socket_debugger_url)? {
             if !body.access_token.is_empty() {
-                return Some(body);
+                return Ok(Some(body));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 fn attempt_is(app: &Arc<App>, attempt: i64) -> bool {
@@ -535,7 +546,21 @@ fn capture_loop(app: &Arc<App>, pid: u32, attempt: i64) {
         if !capturing(app) {
             return;
         }
-        let body = if !cdp_pages(DEBUG_PORT).is_empty() { try_capture(app, DEBUG_PORT) } else { None };
+        let body = if !cdp_pages(DEBUG_PORT).is_empty() {
+            match try_capture(app, DEBUG_PORT) {
+                Ok(b) => b,
+                Err(e) => {
+                    // said in the header while the window is watched on: the person may sign in again
+                    let mut st = app.state.lock().unwrap();
+                    if st.capturing && st.login_attempt == attempt {
+                        st.error = format!("The session in the Chrome window could not be taken: {e}");
+                    }
+                    None
+                }
+            }
+        } else {
+            None
+        };
         if let Some(capture) = body {
             let rt = capture.refresh_token.clone();
             if attempt_is(app, attempt) && Some(rt.clone()) != refused {
@@ -619,8 +644,11 @@ fn browser_ws() -> Option<String> {
 fn wait_child(child: &mut Child, d: Duration) -> bool {
     let until = Instant::now() + d;
     while Instant::now() < until {
-        if let Ok(Some(_)) = child.try_wait() {
-            return true;
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            // it cannot be told whether it ended: it is ended the hard way, which says if that fails
+            Err(_) => return false,
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -645,14 +673,20 @@ pub fn close_login_browser(app: &Arc<App>, only: Option<u32>) {
     }
     let mut child = match child.take() { Some(c) => c, None => return };
     if let Some(u) = browser_ws() {
-        if let Ok(mut ws) = Ws::connect(&u, Duration::from_secs(5)) {
-            ws.call("Browser.close", None, Duration::from_secs(8));
-            ws.close();
+        match Ws::connect(&u, Duration::from_secs(5)) {
+            Ok(mut ws) => {
+                ws.call("Browser.close", None, Duration::from_secs(8));
+                ws.close();
+            }
+            // not reached to be asked: it is ended the hard way below
+            Err(_) => {}
         }
     }
     if !wait_child(&mut child, Duration::from_secs(5)) {
-        let _ = child.kill();
-        let _ = child.wait();
+        // a process that has already exited is killed without error; any other refusal is said
+        if let Err(e) = child.kill().and_then(|()| child.wait().map(|_| ())) {
+            app.state.lock().unwrap().error = format!("The sign-in window could not be closed: {e}");
+        }
     }
 }
 
@@ -1054,11 +1088,15 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
     log("bagholder login: connect requested");
     if browser_alive(app) {
         if let Some(u) = browser_ws() {
-            if let Ok(mut ws) = Ws::connect(&u, Duration::from_secs(5)) {
-                if let Some(p) = cdp_pages(DEBUG_PORT).first() {
-                    ws.call("Target.activateTarget", Some(json!({"targetId": p.id})), Duration::from_secs(8));
+            match Ws::connect(&u, Duration::from_secs(5)) {
+                Ok(mut ws) => {
+                    if let Some(p) = cdp_pages(DEBUG_PORT).first() {
+                        ws.call("Target.activateTarget", Some(json!({"targetId": p.id})), Duration::from_secs(8));
+                    }
+                    ws.close();
                 }
-                ws.close();
+                // the window is up and watched as it is; only raising it did not happen
+                Err(_) => {}
             }
         }
         let (already, pid, attempt) = {
@@ -1079,24 +1117,35 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
         return StartLoginAnswer::reused();
     }
     close_login_browser(app, None);
-    let chrome = find_chrome();
+    let chrome = match find_chrome() {
+        Ok(c) => c,
+        Err(e) => return StartLoginAnswer::err(e),
+    };
     if chrome.is_empty() {
         return StartLoginAnswer::err(NO_BROWSER);
     }
     let profile = app.home.join("chrome");
-    let _ = std::fs::create_dir_all(&profile);
+    if let Err(e) = std::fs::create_dir_all(&profile) {
+        return StartLoginAnswer::err(format!("The sign-in window's profile folder could not be made: {e}"));
+    }
     if login_view() {
         // a container's profile outlives the container: the lock a previous one
         // left names a host that no longer exists, and Chromium would refuse the
         // profile as in use elsewhere
         for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
-            let _ = std::fs::remove_file(profile.join(name));
+            match std::fs::remove_file(profile.join(name)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return StartLoginAnswer::err(format!("The sign-in window's profile could not be freed ({name}): {e}")),
+            }
         }
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700));
+        if let Err(e) = std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700)) {
+            return StartLoginAnswer::err(format!("The sign-in window's profile folder could not be kept private: {e}"));
+        }
     }
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={}", profile.to_string_lossy()),
@@ -1213,7 +1262,7 @@ mod tests {
             cookie(DEVICE_COOKIE, "device-1"),
             cookie("unrelated", "plain text"),
         ];
-        let capture = tokens_from_cookie_list(&app(), &cookies).expect("an access token was captured");
+        let capture = tokens_from_cookie_list(&app(), &cookies).unwrap().expect("an access token was captured");
         assert_eq!((capture.access_token.as_str(), capture.refresh_token.as_str(), capture.client_id.as_str(), capture.wssdi.as_str()), ("a1", "r1", "c1", "device-1"), "the named OAuth cookie wins over the first one found");
     }
 
@@ -1221,15 +1270,22 @@ mod tests {
     fn test_tokens_from_cookie_list_falls_back_to_the_first_cookie_carrying_a_token() {
         let _g = guard();
         let cookies = vec![cookie("other", r#"{"access_token": "a0"}"#)];
-        assert_eq!(tokens_from_cookie_list(&app(), &cookies).unwrap().access_token, "a0");
+        assert_eq!(tokens_from_cookie_list(&app(), &cookies).unwrap().unwrap().access_token, "a0");
     }
 
     #[test]
     fn test_tokens_from_cookie_list_is_nothing_without_a_truthy_access_token() {
         let _g = guard();
-        assert!(tokens_from_cookie_list(&app(), &[]).is_none());
-        assert!(tokens_from_cookie_list(&app(), &[cookie("x", r#"{"access_token": ""}"#)]).is_none());
-        assert!(tokens_from_cookie_list(&app(), &[cookie("x", "not json")]).is_none());
+        assert!(tokens_from_cookie_list(&app(), &[]).unwrap().is_none());
+        assert!(tokens_from_cookie_list(&app(), &[cookie("x", r#"{"access_token": ""}"#)]).unwrap().is_none());
+        assert!(tokens_from_cookie_list(&app(), &[cookie("x", "not json")]).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_a_cookie_carrying_a_token_in_a_form_that_cannot_be_read_is_an_error_not_an_empty_login() {
+        let _g = guard();
+        let e = tokens_from_cookie_list(&app(), &[cookie(OAUTH_COOKIE, r#"{"access_token": "a1", "expires_at": true}"#)]).unwrap_err();
+        assert!(e.contains("could not be read"), "{e}");
     }
 }
 

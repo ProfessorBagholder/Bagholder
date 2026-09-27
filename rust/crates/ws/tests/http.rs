@@ -26,10 +26,10 @@ fn sess(over: serde_json::Value) -> Session {
 fn test_session_client_id_is_written_to_disk() {
     let fx = fixture(unused());
     let s = sess(json!({"client_id": FAKE_CLIENT_ID}));
-    let found = fx.client().client_id_for(&s);
+    let found = fx.client().client_id_for(&s).unwrap();
     assert_eq!(found, FAKE_CLIENT_ID);
     assert!(fx.home.client_id_path().exists());
-    assert_eq!(fx.home.cached_client_id(), FAKE_CLIENT_ID);
+    assert_eq!(fx.home.cached_client_id().unwrap(), FAKE_CLIENT_ID);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn test_refresh_session_without_client_id_does_not_scrape_or_post() {
 #[test]
 fn test_refresh_session_uses_cached_client_id_file() {
     let fx = fixture(Box::new(|_| ok_json(json!({"access_token": "tok", "expires_in": 3600}))));
-    fx.home.save_client_id(FAKE_CLIENT_ID);
+    fx.home.save_client_id(FAKE_CLIENT_ID).unwrap();
     let mut s = sess(json!({"refresh_token": "r"}));
     let res = fx.client().refresh_session(&mut s, true);
     assert_eq!(res, Ok(()));
@@ -131,3 +131,36 @@ fn test_http_json_reads_gzip_json() {
     assert!(data.get("_http_status").is_none());
 }
 
+
+/// No cached id is nothing cached; a cached id that cannot be read is the
+/// failure, never an empty id.
+#[test]
+fn test_a_cached_id_that_cannot_be_read_is_the_failure() {
+    let fx = fixture(unused());
+    assert_eq!(fx.home.cached_client_id().unwrap(), "");
+    std::fs::create_dir_all(fx.home.client_id_path()).unwrap();
+    assert!(fx.home.cached_client_id().is_err());
+    let res = fx.client().refresh_session(&mut sess(json!({"refresh_token": "r"})), false);
+    assert!(res.unwrap_err().contains("Could not read the cached Wealthsimple client id"));
+    assert!(fx.requests().is_empty(), "nothing is posted without the id");
+}
+
+/// Signing out with no login file is signed out; a login that cannot be
+/// removed is said.
+#[test]
+fn test_a_login_that_cannot_be_removed_is_said() {
+    let fx = fixture(unused());
+    fx.home.delete_session().unwrap();
+    std::fs::create_dir_all(fx.home.session_path().join("held")).unwrap();
+    assert!(fx.home.delete_session().is_err());
+}
+
+/// `/token/info` answering in a form that does not read is a failed read, never
+/// an empty identity.
+#[test]
+fn test_token_info_that_does_not_read_is_not_ok() {
+    let fx = fixture(Box::new(|_| ok_json(json!(["not", "an", "object"]))));
+    let info = fx.client().token_info(&sess(json!({"access_token": "a"})));
+    assert!(!info.is_ok());
+    assert!(info.error.unwrap().as_str().unwrap().contains("does not read"));
+}

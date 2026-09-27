@@ -192,67 +192,85 @@ impl Home {
     /// private temporary file renamed over the old one, so a crash cannot
     /// leave half a session behind.
     pub fn save_session(&self, sess: &Session) -> std::io::Result<()> {
-        let body = serde_json::to_string_pretty(sess).unwrap_or_default();
+        let body = serde_json::to_string_pretty(sess).expect("a session is plain fields and string-keyed maps");
         atomic_write(&self.session_path(), body.as_bytes(), 0o600)
     }
 
     /// The login only. The stored
-    /// activity rows stay.
-    pub fn delete_session(&self) {
-        let _ = std::fs::remove_file(self.session_path());
+    /// activity rows stay. No session file is already that.
+    pub fn delete_session(&self) -> std::io::Result<()> {
         *REFUSED.lock().unwrap() = None;
+        match std::fs::remove_file(self.session_path()) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
     }
 
-    pub fn cached_client_id(&self) -> String {
-        std::fs::read_to_string(self.client_id_path()).unwrap_or_default().trim().to_string()
+    /// The cached client id; none cached is empty, a file that cannot be read is
+    /// the failure.
+    pub fn cached_client_id(&self) -> std::io::Result<String> {
+        cached(&self.client_id_path())
     }
 
-    pub fn save_client_id(&self, cid: &str) {
-        let _ = atomic_write(&self.client_id_path(), cid.as_bytes(), 0o600);
+    pub fn save_client_id(&self, cid: &str) -> std::io::Result<()> {
+        atomic_write(&self.client_id_path(), cid.as_bytes(), 0o600)
     }
 
     /// The session's own, else the file.
-    pub fn cached_user_agent(&self) -> String {
+    pub fn cached_user_agent(&self) -> std::io::Result<String> {
         if let Some(s) = self.load_session() {
             if !s.user_agent.trim().is_empty() {
-                return s.user_agent.trim().to_string();
+                return Ok(s.user_agent.trim().to_string());
             }
         }
-        std::fs::read_to_string(self.user_agent_path()).unwrap_or_default().trim().to_string()
+        cached(&self.user_agent_path())
     }
 
-    pub fn save_user_agent(&self, ua: &str) {
-        if !ua.is_empty() {
-            let _ = atomic_write(&self.user_agent_path(), ua.as_bytes(), 0o600);
+    pub fn save_user_agent(&self, ua: &str) -> std::io::Result<()> {
+        if ua.is_empty() {
+            return Ok(());
         }
+        atomic_write(&self.user_agent_path(), ua.as_bytes(), 0o600)
     }
 }
 
+/// A cached value's file, trimmed: no file is nothing cached.
+fn cached(path: &Path) -> std::io::Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => Ok(t.trim().to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The login's files are the person's alone: one that cannot be made so is not written.
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) {
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) {}
+fn set_mode(_path: &Path, _mode: u32) -> std::io::Result<()> {
+    Ok(())
+}
 
 fn atomic_write(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         // the session, client id and user agent: never a test's to write
         bagholder_store::guard_home(dir).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         std::fs::create_dir_all(dir)?;
-        set_mode(dir, 0o700);
+        set_mode(dir, 0o700)?;
     }
     let tmp = path.with_extension("tmp");
     {
         let mut f = std::fs::File::create(&tmp)?;
-        set_mode(&tmp, mode);
+        set_mode(&tmp, mode)?;
         f.write_all(data)?;
         f.sync_all()?;
     }
     std::fs::rename(&tmp, path)?;
-    set_mode(path, mode);
+    set_mode(path, mode)?;
     Ok(())
 }
 
@@ -396,6 +414,10 @@ pub fn client_id_from_token_info(info: &TokenInfo) -> String {
     info.application.as_ref().map(|a| a.uid.trim().to_string()).unwrap_or_default()
 }
 
+fn ua_failed(e: std::io::Error) -> String {
+    format!("Could not read the cached browser user agent: {e}")
+}
+
 fn headers_for(sess: &Session, extra: &[(&str, String)], ua: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![("Accept".into(), "application/json".into())];
     if !ua.is_empty() {
@@ -425,7 +447,7 @@ pub fn http_json(method: &str, url: &str, body: Option<&Value>, headers: &[(Stri
 /// reach the host at all is `transport`.
 pub fn http_json_timeout(method: &str, url: &str, body: Option<&Value>, headers: &[(String, String)], timeout_sec: u64) -> Value {
     let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    let payload = body.map(|b| serde_json::to_vec(b).unwrap_or_default());
+    let payload = body.map(|b| serde_json::to_vec(b).expect("a JSON value always serializes"));
     if payload.is_some() {
         hdrs.retain(|(k, _)| !k.eq_ignore_ascii_case("Content-Type"));
         hdrs.push(("Content-Type", "application/json"));
@@ -481,12 +503,12 @@ impl std::fmt::Display for CallError {
 }
 
 impl<'a> Client<'a> {
-    /// The session's own, else the cached one.
-    pub fn client_id_for(&self, sess: &Session) -> String {
+    /// The session's own (kept as the cached one), else the cached one.
+    pub fn client_id_for(&self, sess: &Session) -> std::io::Result<String> {
         let cid = sess.client_id.trim().to_string();
         if !cid.is_empty() {
-            self.home.save_client_id(&cid);
-            return cid;
+            self.home.save_client_id(&cid)?;
+            return Ok(cid);
         }
         self.home.cached_client_id()
     }
@@ -517,21 +539,23 @@ impl<'a> Client<'a> {
             return Err(REFUSED_LOGIN_MESSAGE.into());
         }
 
-        let cid = self.client_id_for(sess);
+        let cid = self.client_id_for(sess).map_err(|e| format!("Could not read the cached Wealthsimple client id: {e}"))?;
         if cid.is_empty() {
             return Err("session has no client id".into());
         }
         let body = json!({"grant_type": "refresh_token", "refresh_token": rt, "client_id": cid});
+        let ua = self.home.cached_user_agent().map_err(ua_failed)?;
         let headers = headers_for(
             sess,
             &[
                 ("x-wealthsimple-client", WS_CLIENT.to_string()),
                 ("x-ws-profile", "invest".to_string()),
             ],
-            &self.home.cached_user_agent(),
+            &ua,
         );
         let data = http_json("POST", &format!("{}/token", oauth_url()), Some(&body), &headers);
-        let reply: TokenReply = serde_json::from_value(data).unwrap_or_default();
+        // a grant reply that does not read is the grant failing, never an empty one
+        let reply: TokenReply = serde_json::from_value(data).map_err(|e| format!("Wealthsimple's token reply does not read: {e}"))?;
         if reply.access_token.is_empty() {
             if oauth_error_code(&reply) == "invalid_grant" {
                 *REFUSED.lock().unwrap() = Some(rt);
@@ -559,22 +583,32 @@ impl<'a> Client<'a> {
         if token.is_empty() {
             return TokenInfo { empty: true, ..Default::default() };
         }
+        // what could not be read or asked is said as the answer's error: the info is then not ok
+        let failed = |why: String| TokenInfo { error: Some(Value::String(why)), ..Default::default() };
+        let ua = match self.home.cached_user_agent() {
+            Ok(ua) => ua,
+            Err(e) => return failed(ua_failed(e)),
+        };
         let headers = headers_for(
             sess,
             &[
                 ("Authorization", format!("Bearer {}", token)),
                 ("x-wealthsimple-client", WS_CLIENT.to_string()),
             ],
-            &self.home.cached_user_agent(),
+            &ua,
         );
         let data = http_json("GET", &format!("{}/token/info", oauth_url()), None, &headers);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
             Some(401) | Some(403) => TokenInfo { empty: true, ..Default::default() },
             _ => {
                 let empty = data.as_object().map(|m| m.is_empty()).unwrap_or(true);
-                let mut info: TokenInfo = serde_json::from_value(data).unwrap_or_default();
-                info.empty = empty;
-                info
+                match serde_json::from_value::<TokenInfo>(data) {
+                    Ok(mut info) => {
+                        info.empty = empty;
+                        info
+                    }
+                    Err(e) => failed(format!("Wealthsimple's token info does not read: {e}")),
+                }
             }
         }
     }
@@ -593,7 +627,8 @@ impl<'a> Client<'a> {
             ("Referer", "https://my.wealthsimple.com/app/trade".to_string()),
         ];
         extra.retain(|(k, v)| !(*k == "Authorization" && v == "Bearer "));
-        let headers = headers_for(sess, &extra, &self.home.cached_user_agent());
+        let ua = self.home.cached_user_agent().map_err(|e| CallError::Failed(ua_failed(e)))?;
+        let headers = headers_for(sess, &extra, &ua);
 
         let q = match query {
             Some(q) => q.to_string(),
@@ -666,12 +701,17 @@ impl Client<'_> {
             ("Origin", "https://my.wealthsimple.com".to_string()),
             ("Referer", "https://my.wealthsimple.com/app/trade".to_string()),
         ];
-        let headers = headers_for(sess, &extra, &self.home.cached_user_agent());
+        // nothing is sent without the user agent: the order is not placed
+        let ua = match self.home.cached_user_agent() {
+            Ok(ua) => ua,
+            Err(e) => return Mutation::Refused(ua_failed(e)),
+        };
+        let headers = headers_for(sess, &extra, &ua);
         let Some(q) = crate::queries::query(operation) else {
             return Mutation::Refused(format!("unknown operation {operation}"));
         };
         let body = json!({"operationName": operation, "query": q, "variables": variables});
-        let payload = serde_json::to_vec(&body).unwrap_or_default();
+        let payload = serde_json::to_vec(&body).expect("a JSON value always serializes");
         let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !k.eq_ignore_ascii_case("Content-Type")).collect();
         hdrs.push(("Content-Type", "application/json"));
         let resp = match bagholder_net::client::request_once("POST", &graphql_url(), &hdrs, Some(&payload), Duration::from_secs(90)) {

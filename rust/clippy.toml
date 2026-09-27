@@ -1,0 +1,4 @@
+# Read by `cargo clippy` (see `[workspace.lints.clippy]` in Cargo.toml).
+disallowed-methods = [
+  { path = "core::result::Result::unwrap_or_default", reason = "a failure read as a default: handle the error, or say why with #[expect]" },
+]

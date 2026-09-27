@@ -97,7 +97,7 @@ fn set_classify(table: HashMap<String, ShareClass>) {
 }
 
 fn lookthrough(c: &Ctx, rows: &[Holding]) -> ExposureRecord {
-    exposure::lookthrough(c, rows, 0, &mut Vec::new())
+    exposure::lookthrough(c, rows, 0, &mut Vec::new()).unwrap()
 }
 
 fn holding(ticker: &str, name: &str, weight: f64, sector: &str, country: &str, exchange: &str, currency: &str, fund: bool) -> Holding {
@@ -111,7 +111,7 @@ fn answers() -> Value {
     let (rows, as_of) = exposure::parse_ishares_csv(ISHARES_CSV);
     out.insert("parse_ishares_csv".into(), json!({"asOf": as_of, "rows": cell(&rows)}));
 
-    let (sectors, holdings) = exposure::parse_evolve_page(EVOLVE_HTML);
+    let (sectors, holdings) = exposure::parse_evolve_page(EVOLVE_HTML).unwrap();
     out.insert("parse_evolve_page".into(), json!({"sectors": cell(&sectors), "holdings": cell(&holdings)}));
 
     let (rows, rf) = exposure::parse_harvest_tables(&html_tables(HARVEST_TABLE_HTML));
@@ -127,10 +127,10 @@ fn answers() -> Value {
         "holdings": [{"symbol": "AAPL", "holdingName": "Apple Inc", "holdingPercent": {"raw": 0.07}}, {"symbol": "RY.TO", "holdingName": "Royal Bank of Canada", "holdingPercent": {"raw": 0.03}}],
         "sectorWeightings": [{"realestate": {"raw": 0.02}}, {"technology": {"raw": 0.30}}, {"financial_services": {"raw": 0.20}}],
     }}]}});
-    let (sectors, holdings) = exposure::parse_yahoo_summary(&yahoo_data);
+    let (sectors, holdings) = exposure::parse_yahoo_summary(&yahoo_data).unwrap();
     out.insert("parse_yahoo_summary".into(), json!({"sectors": cell(&sectors), "holdings": cell(&holdings)}));
     out.insert("parse_yahoo_summary_empty".into(), {
-        let (sectors, holdings) = exposure::parse_yahoo_summary(&json!({}));
+        let (sectors, holdings) = exposure::parse_yahoo_summary(&json!({})).unwrap();
         json!({"sectors": cell(&sectors), "holdings": cell(&holdings)})
     });
 
@@ -154,12 +154,12 @@ fn answers() -> Value {
             "PLTR:US" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir Technologies Inc.".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Nasdaq Global Select".into() }),
             _ => None,
         })));
-        out.insert("classify_share_cdr_retry".into(), cell(&exposure::classify_share(&ctx(&conn), "PLTR", "", "")));
+        out.insert("classify_share_cdr_retry".into(), cell(&exposure::classify_share(&ctx(&conn), "PLTR", "", "").unwrap()));
     }
     {
         let conn = db();
         // no TMX record and not a US-shaped symbol: nothing is guessed
-        out.insert("classify_share_nothing_found".into(), cell(&exposure::classify_share(&ctx(&conn), "ZZZ", "CSE", "CAD")));
+        out.insert("classify_share_nothing_found".into(), cell(&exposure::classify_share(&ctx(&conn), "ZZZ", "CSE", "CAD").unwrap()));
     }
 
     // --- share_exposure, cached by ticker and venue --------------------------
@@ -167,7 +167,7 @@ fn answers() -> Value {
         let conn = db();
         set_classify(classified());
         let c = ctx(&conn);
-        let rec = exposure::share_exposure(&c, "RY", "TSX", "CAD");
+        let rec = exposure::share_exposure(&c, "RY", "TSX", "CAD").unwrap();
         out.insert("share_exposure_ry".into(), cell(&rec));
         // read back from the cache it just wrote, under the same key
         let cached = bagholder_store::feeds::exposure_record(&conn, "share:RY:").unwrap();
@@ -205,7 +205,7 @@ fn answers() -> Value {
             _ => None,
         })));
         let c = ctx(&conn);
-        let rec = exposure::fund_exposure(&c, "OUTER", "Test Outer ETF", "TSX", 0, &mut Vec::new()).unwrap();
+        let rec = exposure::fund_exposure(&c, "OUTER", "Test Outer ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
         out.insert("fund_exposure_fund_of_funds".into(), cell(&rec));
         let inner = bagholder_store::feeds::exposure_record(&conn, "fund:INNER").unwrap().unwrap();
         out.insert("fund_exposure_inner_fund_kept".into(), drop_fetched_at(cell(&inner)));
@@ -221,14 +221,14 @@ fn answers() -> Value {
             holdings: vec![holding("RY", "", 100.0, "", "", "TSX", "CAD", false)],
             source: "Yahoo Finance".into(), as_of: String::new(),
         })))));
-        let rec = exposure::fund_exposure(&ctx(&conn), "ZZZ", "Someone Else Global Equity ETF", "TSX", 0, &mut Vec::new()).unwrap();
+        let rec = exposure::fund_exposure(&ctx(&conn), "ZZZ", "Someone Else Global Equity ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
         out.insert("fund_exposure_yahoo_fallback".into(), cell(&rec));
     }
     {
         let conn = db();
-        hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Err("down".into()))));
+        hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(None))));
         let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
-        let rec = exposure::refresh_security(&ctx(&conn), &sec);
+        let rec = exposure::refresh_security(&ctx(&conn), &sec).unwrap();
         out.insert("refresh_security_fund_no_source".into(), cell(&rec));
         out.insert("refresh_security_fund_no_source_stored".into(), drop_fetched_at(cell(&bagholder_store::feeds::exposure_record(&conn, "sec-s-1").unwrap().unwrap())));
     }
@@ -239,9 +239,9 @@ fn answers() -> Value {
         set_classify(classified());
         let c = ctx(&conn);
         let sec = Security { id: "sec-s-ry".into(), symbol: "RY".into(), name: "Royal Bank of Canada".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
-        let rec = exposure::refresh_security(&c, &sec);
+        let rec = exposure::refresh_security(&c, &sec).unwrap();
         out.insert("refresh_security_share".into(), cell(&rec));
-        out.insert("stale_ids".into(), cell(&exposure::stale(&c, &["sec-s-ry".to_string(), "sec-s-none".to_string()])));
+        out.insert("stale_ids".into(), cell(&exposure::stale(&c, &["sec-s-ry".to_string(), "sec-s-none".to_string()]).unwrap()));
     }
 
     // --- a fund named without a ticker: resolved, then looked through ------

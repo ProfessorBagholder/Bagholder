@@ -21,6 +21,7 @@
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
   import { call } from '../api'
+  import { flash } from '../ui.svelte'
   import { searchSymbols } from '../api'
   import { atEnd } from '../actions/atEnd'
   import { tickerKey, bookListing, directoryListing, type Chip } from './newsChip'
@@ -102,12 +103,12 @@
   function pickScope(v: string) {
     newsChip(null)
     scope = v
-    try { localStorage.setItem('bh2.news', v) } catch { /* ignore */ }
+    try { localStorage.setItem('bh2.news', v) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
   function pickKind(v: string) {
     kindChosen = null
     kind = v === 'disc' || v === 'releases' ? v : 'stories'
-    try { localStorage.setItem('bh2.newsKind', kind) } catch { /* ignore */ }
+    try { localStorage.setItem('bh2.newsKind', kind) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
 
   const heldSym = (s: string) => (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === s)
@@ -186,7 +187,11 @@
     reading = only.symbol
     call('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
       reading = ''
-      if (r && r.ok && r.exchange && sym === only) sym = { ...only, exchange: String(r.exchange).toUpperCase() }
+      if (!r.ok) {
+        flash('Could not read the news for ' + only.symbol + ': ' + r.error, 'err')
+        return
+      }
+      if (r.exchange && sym === only) sym = { ...only, exchange: String(r.exchange).toUpperCase() }
       // the items it read reach the card as rows of its list
     })
   })

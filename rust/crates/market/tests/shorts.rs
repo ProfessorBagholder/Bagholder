@@ -175,28 +175,44 @@ fn test_a_whole_market_file_is_read_once_and_used_for_every_listing() {
         calls.set(calls.get() + 1);
         Ok(US_FILE.to_string())
     };
-    let first = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, get)).unwrap();
-    let second = shorts::us_volume_with("A", || shorts::us_volume_file_with(TODAY, get)).unwrap();
+    let first = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, get)).unwrap().unwrap();
+    let second = shorts::us_volume_with("A", || shorts::us_volume_file_with(TODAY, get)).unwrap().unwrap();
     assert_eq!(calls.get(), 1);
     assert_eq!(first.volume_of, "2026-09-15");
     approx(first.volume_pct.unwrap(), 2250985.897562 / 3542062.253804 * 100.0);
     assert_eq!(second.volume_span, VolumeSpan::Day);
 }
 
+/// The read that finds the file down says so; what was already read is kept for
+/// the reads after it.
 #[test]
 fn test_a_file_that_will_not_answer_keeps_what_was_already_read() {
     let _g = serial();
-    shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Ok(US_FILE.to_string())));
+    shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Ok(US_FILE.to_string()))).unwrap();
     shorts::age_file("us_volume", shorts::FILE_HOURS * 3600 + 1);
-    let kept = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Err("down".to_string()))).unwrap();
+    let failed = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Err("FINRA: HTTP 503".to_string())));
+    assert_eq!(failed, Err("FINRA: HTTP 503".to_string()));
+    let kept = shorts::us_volume_with("GME", || panic!("read again")).unwrap().unwrap();
     assert_eq!(kept.short_volume, Some(2250985.897562));
+}
+
+/// A date with no file yet is the next date's turn; a failure is said only when
+/// no date answered.
+#[test]
+fn test_a_date_not_yet_published_is_passed_over_and_none_answering_is_the_failure() {
+    let _g = serial();
+    let newest = std::cell::Cell::new(true);
+    let got = shorts::us_volume_file_with(TODAY, |_| if newest.replace(false) { Err("FINRA: HTTP 404".into()) } else { Ok(US_FILE.to_string()) });
+    assert!(got.unwrap().is_some());
+    assert_eq!(shorts::us_volume_file_with(TODAY, |_| Err("FINRA: HTTP 503".into())), Err("FINRA: HTTP 503".to_string()));
+    assert_eq!(shorts::us_volume_file_with(TODAY, |_| Ok(String::new())), Ok(None), "files that answer with no rows are no failure");
 }
 
 /// `for_listing` for a Canadian listing on fixed files.
 fn ca_listing(c: &rusqlite::Connection, sym: &str, exchange: &str, trend: bool) -> bagholder_store::feeds::Shorts {
-    let position = shorts::ca_position_with(sym, exchange, TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
-    let volume = shorts::ca_volume_with(sym, exchange, || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None);
-    shorts::finish(c, position, volume, sym, exchange, trend, ShortMarket::Ca, |_| vec![], |_| None)
+    let position = shorts::ca_position_with(sym, exchange, TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))).unwrap();
+    let volume = shorts::ca_volume_with(sym, exchange, || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| Ok(None)).unwrap();
+    shorts::finish(c, position, volume, sym, exchange, trend, ShortMarket::Ca, |_| Ok(vec![]), |_| Ok(None)).unwrap()
 }
 
 #[test]
@@ -224,15 +240,15 @@ fn test_a_listing_filed_under_another_venue_is_not_read_as_this_one() {
 #[test]
 fn test_nothing_is_read_for_an_instrument_no_one_reports() {
     let c = conn();
-    assert_eq!(shorts::for_listing(&c, "BTC", "Crypto", "USD", TODAY, false, ""), None);
+    assert_eq!(shorts::for_listing(&c, "BTC", "Crypto", "USD", TODAY, false, ""), Ok(None));
 }
 
 #[test]
 fn test_days_to_cover_uses_the_volume_of_the_listings_own_market() {
     let c = conn();
     let us = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: Some(56990026.0), average_volume: Some(5864237.0), ..Default::default() };
-    assert_eq!(shorts::average_volume(&c, &us), Some(5864237.0));
-    assert_eq!(shorts::days_to_cover(&c, &us), Some(9.7));
+    assert_eq!(shorts::average_volume(&c, &us).unwrap(), Some(5864237.0));
+    assert_eq!(shorts::days_to_cover(&c, &us).unwrap(), Some(9.7));
 }
 
 #[test]
@@ -244,20 +260,20 @@ fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
     let ca = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(2667164.0), total_volume: Some(5000000.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
     assert_eq!(days, 5);
-    approx(shorts::average_volume(&c, &ca).unwrap(), 5000000.0 / days as f64);
+    approx(shorts::average_volume(&c, &ca).unwrap().unwrap(), 5000000.0 / days as f64);
     // no calendar stored: nothing is guessed
-    assert_eq!(shorts::average_volume(&conn(), &ca), None);
+    assert_eq!(shorts::average_volume(&conn(), &ca).unwrap(), None);
 }
 
 #[test]
 fn test_no_position_or_no_volume_leaves_days_to_cover_unsaid() {
     let c = conn();
     let a = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: None, average_volume: Some(10.0), ..Default::default() };
-    assert_eq!(shorts::days_to_cover(&c, &a), None);
+    assert_eq!(shorts::days_to_cover(&c, &a).unwrap(), None);
     let b = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: Some(10.0), average_volume: None, ..Default::default() };
-    assert_eq!(shorts::days_to_cover(&c, &b), None);
+    assert_eq!(shorts::days_to_cover(&c, &b).unwrap(), None);
     let d = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, total_volume: None, volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
-    assert_eq!(shorts::average_volume(&c, &d), None);
+    assert_eq!(shorts::average_volume(&c, &d).unwrap(), None);
 }
 
 // --- SeriesTest ----------------------------------------------------------------
@@ -292,21 +308,21 @@ fn test_the_canadian_run_reads_one_file_per_reporting_date() {
         };
         Ok(vec![vec![json!(""), json!("QNC"), json!("TSXV"), json!(shares), json!(0.0)]])
     };
-    let series = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |d| rows_on(grids(d)));
+    let series = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |d| Ok(rows_on(grids(d)))).unwrap();
     let got: Vec<(String, f64)> = series.iter().map(|p| (p.date.clone(), p.shares)).collect();
     assert_eq!(got, vec![("2026-07-31".to_string(), 100.0), ("2026-08-15".to_string(), 200.0), ("2026-08-31".to_string(), 300.0)]);
 }
 
 #[test]
 fn test_a_report_after_the_one_on_show_is_not_drawn() {
-    let s = shorts::ca_series_with("QNC", "TSX-V", "2026-07-31", TODAY, shorts::SERIES, |_| rows_on(Err("none".into())));
+    let s = shorts::ca_series_with("QNC", "TSX-V", "2026-07-31", TODAY, shorts::SERIES, |_| Ok(rows_on(Err("none".into())))).unwrap();
     assert!(s.is_empty());
 }
 
 #[test]
 fn test_a_listing_on_another_venue_is_not_drawn_into_this_ones_run() {
     let grid = || Ok(vec![vec![json!(""), json!("QNC"), json!("CSE"), json!(300.0), json!(0.0)]]);
-    let s = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |_| rows_on(grid()));
+    let s = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |_| Ok(rows_on(grid()))).unwrap();
     assert!(s.is_empty());
 }
 
@@ -315,8 +331,8 @@ fn test_the_canadian_run_is_only_read_when_it_is_asked_for() {
     let _g = serial();
     let c = conn();
     let asked = Cell::new(false);
-    let position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
-    let quiet = shorts::finish(&c, position, None, "QNC", "TSX-V", false, ShortMarket::Ca, |_| { asked.set(true); vec![] }, |_| None);
+    let position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))).unwrap();
+    let quiet = shorts::finish(&c, position, None, "QNC", "TSX-V", false, ShortMarket::Ca, |_| { asked.set(true); Ok(vec![]) }, |_| Ok(None)).unwrap();
     assert!(quiet.series.is_none());
     assert!(!asked.get());
 }
@@ -337,15 +353,15 @@ impl Yahoo {
     fn new(answers: Vec<(&'static str, String, u16)>) -> Self {
         Yahoo { answers, asked: RefCell::new(vec![]) }
     }
-    fn get(&self, form: &str) -> Option<(u16, String)> {
+    fn get(&self, form: &str) -> Result<(u16, String), String> {
         let url = shorts::YAHOO_STATS_URL.replacen("{}", form, 1).replacen("{}", "abc", 1);
         self.asked.borrow_mut().push(url.clone());
         for (mark, payload, status) in &self.answers {
             if url.contains(mark) {
-                return Some((*status, payload.clone()));
+                return Ok((*status, payload.clone()));
             }
         }
-        Some((404, "{}".to_string()))
+        Ok((404, "{}".to_string()))
     }
     fn asked_with(&self, mark: &str) -> usize {
         self.asked.borrow().iter().filter(|u| u.contains(mark)).count()
@@ -353,7 +369,7 @@ impl Yahoo {
 }
 
 fn float(y: &Yahoo, sym: &str, ex: &str, ccy: &str, name: &str) -> Option<f64> {
-    shorts::float_shares_with(sym, ex, ccy, name, true, |f| y.get(f), || true, || {}, |_, _| None)
+    shorts::float_shares_with(sym, ex, ccy, name, true, |f| y.get(f), || true, || {}, |_, _| Ok(None)).unwrap()
 }
 
 #[test]
@@ -390,15 +406,15 @@ fn test_it_is_read_once_and_kept() {
 #[test]
 fn test_without_the_browser_client_the_float_is_simply_unknown() {
     let _g = serial();
-    let got = shorts::float_shares_with("GME", "NYSE", "USD", "", false, |_| panic!("asked"), || true, || {}, |_, _| None);
-    assert_eq!(got, None);
+    let got = shorts::float_shares_with("GME", "NYSE", "USD", "", false, |_| panic!("asked"), || true, || {}, |_, _| Ok(None));
+    assert_eq!(got, Ok(None));
 }
 
 #[test]
 fn test_the_position_is_measured_against_the_float() {
     let c = conn();
     let position = Position { shares: Some(100.0), as_of: "2026-08-31".into(), ..Position::default() };
-    let out = shorts::finish(&c, position, None, "GME", "NYSE", false, ShortMarket::Us, |_| vec![], |_| Some(400.0));
+    let out = shorts::finish(&c, position, None, "GME", "NYSE", false, ShortMarket::Us, |_| Ok(vec![]), |_| Ok(Some(400.0))).unwrap();
     assert_eq!(out.float, Some(400.0));
     assert_eq!(out.of_float, Some(25.0));
 }
@@ -411,7 +427,7 @@ fn test_a_company_with_no_float_published_is_never_given_its_share_count() {
     let answer = json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": null, "sharesOutstanding": {"raw": 500.0}}}]}}).to_string();
     let y = Yahoo::new(vec![("QNC", answer, 200)]);
     let got = shorts::float_shares_with("QNC", "TSX-V", "CAD", "Quantum eMotion Corp", true, |f| y.get(f), || true, || {}, |_, _| panic!("asked for units"));
-    assert_eq!(got, None);
+    assert_eq!(got, Ok(None));
 }
 
 #[test]
@@ -419,8 +435,8 @@ fn test_a_fund_falls_back_to_the_units_the_exchange_publishes() {
     let _g = serial();
     let answer = json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": null, "sharesOutstanding": null}}]}}).to_string();
     let y = Yahoo::new(vec![("RDDY", answer, 200)]);
-    let got = shorts::float_shares_with("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF", true, |f| y.get(f), || true, || {}, |_, _| Some(20075000.0));
-    assert_eq!(got, Some(20075000.0));
+    let got = shorts::float_shares_with("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF", true, |f| y.get(f), || true, || {}, |_, _| Ok(Some(20075000.0)));
+    assert_eq!(got, Ok(Some(20075000.0)));
 }
 
 #[test]
@@ -448,12 +464,13 @@ fn searched(exchange: &str, name: &str) -> (bagholder_store::feeds::Shorts, Vec<
     rows.insert("SHOP".to_string(), CaPositionRow { venue: "TSX".into(), shares: 7573829.0, change: Some(41206.0), name: "SHOPIFY INC. CL 'A' SV".into() });
     let position = shorts::ca_position_from("2026-08-31", &rows, "SHOP", exchange, TODAY);
     let seen = RefCell::new(vec![]);
-    let out = shorts::finish(&c, position, None, "SHOP", exchange, false, ShortMarket::Ca, |_| vec![], |issuer| {
+    let out = shorts::finish(&c, position, None, "SHOP", exchange, false, ShortMarket::Ca, |_| Ok(vec![]), |issuer| {
         // for_listing hands the book's own name over the report's
         let nm = if name.trim().is_empty() { issuer } else { name.trim() };
         seen.borrow_mut().push(nm.to_string());
-        Some(1000000.0)
-    });
+        Ok(Some(1000000.0))
+    })
+    .unwrap();
     (out, seen.into_inner())
 }
 
@@ -489,7 +506,7 @@ fn test_the_count_is_the_capitalisation_over_the_price_for_the_venues_own_funds(
     let calls = Cell::new(0);
     // TMX carries no count for these
     let units = |sym: &str| {
-        shorts::fund_units_with(sym, "CBOE CANADA", "CAD", |_| None, |s| shorts::cboe_units_with(s, || { calls.set(calls.get() + 1); Some(directory()) }))
+        shorts::fund_units_with(sym, "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || { calls.set(calls.get() + 1); Ok(directory()) })).unwrap()
     };
     assert_eq!(units("HBIX"), Some(6900000.0));
     assert_eq!(units("BCBN"), None, "a company's shares in issue are not its float");
@@ -500,14 +517,14 @@ fn test_the_count_is_the_capitalisation_over_the_price_for_the_venues_own_funds(
 
 #[test]
 fn test_a_listing_on_another_venue_never_takes_a_count_from_this_one() {
-    let got = shorts::fund_units_with("HBIX", "TSX", "CAD", |_| Some(0.0), |_| panic!("asked anyway"));
-    assert_eq!(got, None);
+    let got = shorts::fund_units_with("HBIX", "TSX", "CAD", |_| Ok(Some(0.0)), |_| panic!("asked anyway"));
+    assert_eq!(got, Ok(None));
 }
 
 #[test]
 fn test_the_venue_is_asked_only_where_tmx_has_no_count() {
-    let got = shorts::fund_units_with("XYZ", "CBOE CANADA", "CAD", |_| Some(4200.0), |_| panic!("asked anyway"));
-    assert_eq!(got, Some(4200.0));
+    let got = shorts::fund_units_with("XYZ", "CBOE CANADA", "CAD", |_| Ok(Some(4200.0)), |_| panic!("asked anyway"));
+    assert_eq!(got, Ok(Some(4200.0)));
 }
 
 // --- FloatCacheTest ------------------------------------------------------------
@@ -548,7 +565,7 @@ fn test_each_lookup_takes_its_turn_and_leaves_the_next_slot() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(1.0)), 200)]);
     let turns = Cell::new(0);
-    shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || { turns.set(turns.get() + 1); true }, || {}, |_, _| None);
+    shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || { turns.set(turns.get() + 1); true }, || {}, |_, _| Ok(None)).unwrap();
     assert_eq!(turns.get(), 1, "the lookup takes Yahoo's turn");
 }
 
@@ -556,8 +573,8 @@ fn test_each_lookup_takes_its_turn_and_leaves_the_next_slot() {
 fn test_nothing_is_asked_while_a_backoff_stands() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(1.0)), 200)]);
-    let got = shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || false, || {}, |_, _| None);
-    assert_eq!(got, None);
+    let got = shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || false, || {}, |_, _| Ok(None));
+    assert_eq!(got, Ok(None));
     assert_eq!(y.asked_with("quoteSummary"), 0);
 }
 
@@ -566,8 +583,8 @@ fn test_a_refusal_starts_the_backoff_the_whole_app_honours() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", "{}".into(), 429)]);
     let backed = Cell::new(false);
-    let got = shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || true, || backed.set(true), |_, _| None);
-    assert_eq!(got, None);
+    let got = shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || true, || backed.set(true), |_, _| Ok(None));
+    assert_eq!(got, Ok(None));
     assert!(backed.get());
 }
 
@@ -595,7 +612,7 @@ fn test_a_canadian_listing_with_no_currency_keeps_its_own_suffixes() {
 fn test_a_record_read_on_the_spot_names_its_listing() {
     let c = conn();
     let position = Position { shares: Some(1.0), as_of: "2026-08-31".into(), ..Position::default() };
-    let out = shorts::finish(&c, position, None, "RKLB", "NASDAQ", false, ShortMarket::Us, |_| vec![], |_| None);
+    let out = shorts::finish(&c, position, None, "RKLB", "NASDAQ", false, ShortMarket::Us, |_| Ok(vec![]), |_| Ok(None)).unwrap();
     assert_eq!(out.exchange, "NASDAQ");
 }
 
@@ -609,7 +626,7 @@ fn warm(rows: HashMap<String, CaVolumeRow>) {
 fn test_a_listing_the_report_omits_reads_as_none_of_its_trading() {
     let _g = serial();
     warm(HashMap::new());
-    let out = shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| Some(1519546.0)).unwrap();
+    let out = shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| Ok(Some(1519546.0))).unwrap().unwrap();
     assert_eq!(out.short_volume, Some(0.0));
     assert_eq!(out.volume_pct, Some(0.0));
     assert_eq!(out.total_volume, Some(1519546.0));
@@ -619,7 +636,7 @@ fn test_a_listing_the_report_omits_reads_as_none_of_its_trading() {
 fn test_a_listing_the_report_omits_and_the_exchange_has_no_volume_for_says_nothing() {
     let _g = serial();
     warm(HashMap::new());
-    assert_eq!(shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| None), None);
+    assert_eq!(shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| Ok(None)), Ok(None));
 }
 
 #[test]
@@ -628,7 +645,7 @@ fn test_a_listing_the_report_carries_is_read_from_the_report() {
     let mut rows = HashMap::new();
     rows.insert("QNC".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1197633.0, volume_pct: Some(21.319), total_volume: Some(5617679.0) });
     warm(rows);
-    let out = shorts::ca_volume_with("QNC", "TSX-V", || panic!("read again"), |_| panic!("asked the exchange anyway")).unwrap();
+    let out = shorts::ca_volume_with("QNC", "TSX-V", || panic!("read again"), |_| panic!("asked the exchange anyway")).unwrap().unwrap();
     assert_eq!(out.volume_pct, Some(21.319));
 }
 
@@ -640,7 +657,7 @@ fn test_days_to_cover_follows_from_what_the_exchange_says_was_traded() {
     let rec = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(17873.0), total_volume: Some(1519546.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
     assert!(days > 0);
-    approx(shorts::average_volume(&c, &rec).unwrap(), 1519546.0 / days as f64);
-    assert!(shorts::days_to_cover(&c, &rec).is_some());
+    approx(shorts::average_volume(&c, &rec).unwrap().unwrap(), 1519546.0 / days as f64);
+    assert!(shorts::days_to_cover(&c, &rec).unwrap().is_some());
 }
 

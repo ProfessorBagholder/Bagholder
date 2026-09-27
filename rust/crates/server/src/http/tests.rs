@@ -236,7 +236,7 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let bell = first.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell arrives whole once");
     assert_eq!((bell.0, &bell.1["data"]), ("snapshot", &json!({"rows": [], "unread": 0})));
 
-    let row = crate::notify::emit(&app(), &conn, "fills", "order:9:filled", "Order filled · QNC", "Bought 5 at 1.75", None).expect("fills are on");
+    let row = crate::notify::emit(&app(), &conn, "fills", "order:9:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap().expect("fills are on");
     let next = feed.step(&crate::status::status);
     let change = next.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell is told");
     assert_eq!(change.0, "patch");

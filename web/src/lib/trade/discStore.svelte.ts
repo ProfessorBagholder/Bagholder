@@ -79,7 +79,7 @@ export async function refreshDisclosures(sym: string, t: { name?: string; exchan
   delete discRereadError[sym]
   try {
     const a = await call('GET /api/filings', { query: { symbol: sym, name: t?.name ?? '', exchange: t?.exchange ?? '', currency: t?.currency ?? '', refresh: true } })
-    if (!a.ok) discRereadError[sym] = 'Could not read disclosures' + (a.error ? ': ' + a.error : '.')
+    if (!a.ok) discRereadError[sym] = 'Could not read disclosures: ' + a.error
   } finally {
     delete discRereading[sym]
   }

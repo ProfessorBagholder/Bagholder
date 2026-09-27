@@ -5,7 +5,7 @@
 //! table created by an earlier version keeps its columns, because
 //! `CREATE TABLE IF NOT EXISTS` adds none.
 
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, OptionalExtension, Result};
 use std::collections::HashSet;
 
 /// `SCHEMA_VERSION`.
@@ -65,7 +65,7 @@ pub fn figures_moved(conn: &Connection) -> Result<bool> {
     if !table_exists(conn, "meta")? {
         return Ok(false);
     }
-    let v: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = ?", [FIGURES_MOVED_META], |r| r.get(0)).ok();
+    let v: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = ?", [FIGURES_MOVED_META], |r| r.get(0)).optional()?;
     Ok(v.is_some_and(|v| !v.is_empty()))
 }
 
@@ -95,7 +95,7 @@ pub fn orders_moved(conn: &Connection) -> Result<bool> {
     if !table_exists(conn, "meta")? {
         return Ok(false);
     }
-    let v: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = ?", [ORDERS_MOVED_META], |r| r.get(0)).ok();
+    let v: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = ?", [ORDERS_MOVED_META], |r| r.get(0)).optional()?;
     Ok(v.is_some_and(|v| !v.is_empty()))
 }
 
@@ -300,9 +300,10 @@ fn migrate_spy_meta(conn: &Connection) -> Result<()> {
     }
     let raw: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = 'spy_by_date'", [], |r| r.get(0))
-        .ok();
+        .optional()?;
     let raw = match raw { Some(r) => r, None => return Ok(()) };
-    let parsed: serde_json::Value = match serde_json::from_str(&raw) { Ok(v) => v, Err(_) => return Ok(()) };
+    // the stored text not reading is the store's failure, never nothing to carry
+    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
     let map = match parsed.as_object() { Some(m) => m, None => return Ok(()) };
     for (day, val) in map {
         if let Some(px) = val.as_f64() {

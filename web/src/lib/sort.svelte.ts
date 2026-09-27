@@ -37,7 +37,7 @@ function load(): Record<string, SortState> {
       return kept
     }
   } catch {
-    /* ignore */
+    /* nothing kept, or kept in a shape this page cannot read: the defaults stand */
   }
   return { ...DEFAULTS }
 }
@@ -60,7 +60,7 @@ export function toggleSort(table: string, key: string): void {
   try {
     localStorage.setItem('bh2.sort', JSON.stringify(sort))
   } catch {
-    /* ignore */
+    /* the browser keeps nothing: the choice holds for this visit */
   }
 }
 

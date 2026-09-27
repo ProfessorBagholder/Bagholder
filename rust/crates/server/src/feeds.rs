@@ -54,6 +54,9 @@ pub struct FeedsState {
     /// reads rather than reaching the source.
     #[cfg(test)]
     pub(crate) record_reads: AtomicI64,
+    /// The failure a test tells the issuer's record to answer with.
+    #[cfg(test)]
+    pub(crate) record_fails: Mutex<Option<String>>,
     /// Listings the running short-interest sweep has still to read.
     shorts_left: AtomicI64,
 }
@@ -79,24 +82,101 @@ pub(crate) fn feed_answered(app: &Arc<App>, feed: &str) {
 }
 
 /// The feeds failing now, one sentence each, in a steady order: part of the header's error line.
+/// A listing's short interest failing is kept by listing, and said once for every
+/// listing the same failure stopped: a source that is down is one sentence, not one
+/// a listing.
 pub fn feed_failures(app: &Arc<App>) -> Vec<String> {
-    app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
+    let failing = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = Vec::new();
+    let mut shorts: Vec<(String, Vec<&str>)> = Vec::new();
+    for (feed, why) in failing.iter() {
+        match feed.strip_prefix(SHORTS_OF) {
+            Some(symbol) => match shorts.iter_mut().find(|(w, _)| w == why) {
+                Some((_, symbols)) => symbols.push(symbol),
+                None => shorts.push((why.clone(), vec![symbol])),
+            },
+            None => out.push(why.clone()),
+        }
+    }
+    out.extend(shorts.into_iter().map(|(why, symbols)| format!("The short interest of {} could not be read: {why}", symbols.join(", "))));
+    out
 }
 
-fn conn(app: &Arc<App>) -> Option<bagholder_store::pool::Pooled<'_>> {
-    app.open().ok()
+/// The header's entry for a listing's short interest, before its symbol.
+const SHORTS_OF: &str = "shorts:";
+
+/// The header's entry for the book itself: a pass that could not open it says
+/// so there until the next open succeeds.
+const BOOK: &str = "book";
+/// The header's entry for the market's context the earlier readers are given.
+const CONTEXT: &str = "context";
+/// The header's entry for the notification settings the sweeps read.
+const NOTICE_SETTINGS: &str = "notify-settings";
+/// The header's entries for the disclosures: the sweep and each listing's
+/// refresh; the stored lists pages are sent; the reading of documents.
+const DISCLOSURES: &str = "disclosures";
+const DISCLOSURES_STORED: &str = "disclosures-stored";
+const DISCLOSURES_READING: &str = "disclosures-reading";
+/// The header's entry for the press releases a wire answered with.
+const RELEASES: &str = "releases";
+/// The header's entry for the exposure records' pass.
+const EXPOSURE: &str = "exposure";
+/// The header's entry for the short selling held, as the table reads it.
+const SHORTS: &str = "shorts";
+
+/// `feed`'s outcome said: its failure until it next succeeds.
+fn went<T>(app: &Arc<App>, feed: &str, r: Result<T, String>) -> Option<T> {
+    match r {
+        Ok(v) => {
+            feed_answered(app, feed);
+            Some(v)
+        }
+        Err(why) => {
+            feed_failed(app, feed, why);
+            None
+        }
+    }
+}
+
+/// The book, on loan from the pool; one that will not open is said in the header
+/// (`BOOK`) until one does.
+fn conn(app: &Arc<App>) -> Result<bagholder_store::pool::Pooled<'_>, String> {
+    let c = app.open().map_err(|e| format!("The book could not be opened: {e}"));
+    if let Err(why) = &c {
+        feed_failed(app, BOOK, why.clone());
+    } else {
+        feed_answered(app, BOOK);
+    }
+    c
 }
 
 /// A connection of the caller's own, not the pool's: for work that hands it to
-/// threads it starts itself and keeps it for the length of a pass.
-fn own_conn(app: &Arc<App>) -> Option<Connection> {
-    bagholder_store::connect(&app.home).ok()
+/// threads it starts itself and keeps it for the length of a pass. Said as
+/// `conn` is.
+fn own_conn(app: &Arc<App>) -> Result<Connection, String> {
+    let c = bagholder_store::connect(&app.home).map_err(|e| format!("The book could not be opened: {e}"));
+    went(app, BOOK, c.as_ref().map(|_| ()).map_err(String::clone));
+    c
 }
 
-/// The market's context the earlier readers are given (stage 5 moves them).
-fn base(app: &Arc<App>) -> Option<Arc<bagholder_model::context::MarketBase>> {
-    app.market_base().ok()
+/// The market's context the earlier readers are given (stage 5 moves them): none
+/// before the figures are built (no page has stated its zone yet), which is no
+/// failure; one that cannot be read is said in the header until it can.
+fn base(app: &Arc<App>) -> Result<Option<Arc<bagholder_model::context::MarketBase>>, String> {
+    if !app.figures.get().is_some_and(|f| f.read(|_| ()).is_some()) {
+        return Ok(None);
+    }
+    let b = app.market_base().map_err(|e| format!("The book's listings could not be read: {e}"));
+    went(app, CONTEXT, b.as_ref().map(|_| ()).map_err(String::clone));
+    b.map(Some)
 }
+
+/// The notification settings a sweep reads: settings that cannot be read are said
+/// in the header, and a sweep reading them does nothing until they can.
+fn notice_settings<T>(app: &Arc<App>, r: rusqlite::Result<T>) -> Option<T> {
+    went(app, NOTICE_SETTINGS, r.map_err(|e| format!("The notification settings could not be read: {e}")))
+}
+
 
 fn today() -> String {
     bagholder_market::clock_now().0
@@ -123,12 +203,13 @@ enum ExposureJob {
 /// The exposure record of every held security
 /// that has none or an old one, four at a time, each shown as it lands.
 pub fn refresh_exposures(app: &Arc<App>) {
-    let c = match conn(app) { Some(c) => c, None => return };
-    let b = match base(app) { Some(b) => b, None => return };
+    // the book not opening and its listings not read are said by `conn` and `base`
+    let Ok(c) = conn(app) else { return };
+    let Ok(Some(b)) = base(app) else { return };
     let secs: HashMap<String, Security> = match crate::market_context::securities(app) {
         Ok(v) => v.into_iter().filter(|s| !s.id.is_empty()).map(|s| (s.id.clone(), s)).collect(),
         Err(e) => {
-            log(&format!("bagholder exposure: the book's securities could not be read: {e}"));
+            feed_failed(app, EXPOSURE, format!("The exposure records could not be brought up to date: the book's securities could not be read: {e}"));
             return;
         }
     };
@@ -137,7 +218,12 @@ pub fn refresh_exposures(app: &Arc<App>) {
     held.sort();
     let (today_s, _, _) = bagholder_market::clock_now();
     let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s.clone() };
-    let mut todo: Vec<String> = exposure::stale(&ctx, &held).into_iter().filter(|sid| secs.contains_key(sid)).collect();
+    let exposure_failed = |e: String| feed_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
+    let stale = |ids: &[String]| exposure::stale(&ctx, ids);
+    let mut todo: Vec<String> = match stale(&held) {
+        Ok(t) => t.into_iter().filter(|sid| secs.contains_key(sid)).collect(),
+        Err(e) => return exposure_failed(e),
+    };
     todo.sort_by_key(|sid| if exposure::is_fund(&secs[sid].name) { 1 } else { 0 });
     let mut unders: Vec<(String, String)> = b
         .positions
@@ -148,33 +234,43 @@ pub fn refresh_exposures(app: &Arc<App>) {
         .into_iter()
         .collect();
     unders.sort();
-    let unders: Vec<(String, String)> = unders
-        .into_iter()
-        .filter(|(u, cc)| !exposure::stale(&ctx, &[format!("{}{}:{}", exposure::SHARE_KEY, u, tmx_form("", cc).unwrap_or(""))]).is_empty())
-        .collect();
-    let watched: Vec<(String, String, String)> = b
-        .watchlist
-        .iter()
-        .filter(|w| instruments::find(&w.symbol, &w.exchange).is_none() && w.exchange.to_uppercase() != "CRYPTO")
-        .map(|w| (w.symbol.clone(), w.exchange.clone(), w.currency.clone()))
-        .filter(|(sy, e, cc)| !exposure::stale(&ctx, &[bagholder_model::symbols_of::watch_exposure_key(sy, e, cc)]).is_empty())
-        .collect();
+    let mut stale_unders = Vec::new();
+    for (u, cc) in unders {
+        match stale(&[format!("{}{}:{}", exposure::SHARE_KEY, u, tmx_form("", &cc).unwrap_or(""))]) {
+            Ok(s) if s.is_empty() => {}
+            Ok(_) => stale_unders.push((u, cc)),
+            Err(e) => return exposure_failed(e),
+        }
+    }
+    let unders = stale_unders;
+    let mut watched: Vec<(String, String, String)> = Vec::new();
+    for w in b.watchlist.iter().filter(|w| instruments::find(&w.symbol, &w.exchange).is_none() && w.exchange.to_uppercase() != "CRYPTO") {
+        match stale(&[bagholder_model::symbols_of::watch_exposure_key(&w.symbol, &w.exchange, &w.currency)]) {
+            Ok(s) if s.is_empty() => {}
+            Ok(_) => watched.push((w.symbol.clone(), w.exchange.clone(), w.currency.clone())),
+            Err(e) => return exposure_failed(e),
+        }
+    }
 
     let mut jobs: Vec<ExposureJob> = todo.iter().map(|sid| ExposureJob::Sec(secs[sid].clone())).collect();
     jobs.extend(unders.into_iter().map(|(u, cc)| ExposureJob::Under(u, cc)));
     jobs.extend(watched.into_iter().map(|(sy, e, cc)| ExposureJob::Watch(sy, e, cc)));
     drop(ctx);
     if jobs.is_empty() {
+        feed_answered(app, EXPOSURE);
         return;
     }
     let queue = Arc::new(Mutex::new(jobs.into_iter().collect::<std::collections::VecDeque<_>>()));
+    // what each record's read failed on, said together once the pass is over
+    let failures: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let mut handles = Vec::new();
     for _ in 0..EXPOSURE_WORKERS {
         let queue = queue.clone();
+        let failures = failures.clone();
         let today_s = today_s.clone();
         let app = app.clone();
         let h = std::thread::Builder::new().name("bagholder-exposure".into()).spawn(move || {
-            let c = match conn(&app) { Some(c) => c, None => return };
+            let Ok(c) = conn(&app) else { return }; // said in the header by `conn`
             let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s };
             loop {
                 let job = match queue.lock().unwrap().pop_front() { Some(j) => j, None => return };
@@ -183,7 +279,13 @@ pub fn refresh_exposures(app: &Arc<App>) {
                 }
                 let line = match job {
                     ExposureJob::Sec(sec) => {
-                        let rec = exposure::refresh_security(&ctx, &sec);
+                        let rec = match exposure::refresh_security(&ctx, &sec) {
+                            Ok(rec) => rec,
+                            Err(e) => {
+                                failures.lock().unwrap_or_else(|p| p.into_inner()).push(e);
+                                continue;
+                            }
+                        };
                         format!(
                             "bagholder exposure: {} {}: {} ({}% covered){}",
                             sec.symbol,
@@ -193,26 +295,36 @@ pub fn refresh_exposures(app: &Arc<App>) {
                             if rec.error.is_empty() { String::new() } else { format!(": {}", rec.error) }
                         )
                     }
-                    ExposureJob::Watch(sym, ex, ccy) => {
-                        exposure::share_exposure(&ctx, &sym, &ex, &ccy);
-                        format!("bagholder exposure: {} (watched) classified", sym)
-                    }
-                    ExposureJob::Under(under, ccy) => {
-                        exposure::share_exposure(&ctx, &under, "", &ccy);
-                        format!("bagholder exposure: {} (an option's underlying) classified", under)
-                    }
+                    ExposureJob::Watch(sym, ex, ccy) => match exposure::share_exposure(&ctx, &sym, &ex, &ccy) {
+                        Ok(_) => format!("bagholder exposure: {} (watched) classified", sym),
+                        Err(e) => {
+                            failures.lock().unwrap_or_else(|p| p.into_inner()).push(format!("{sym}: {e}"));
+                            continue;
+                        }
+                    },
+                    ExposureJob::Under(under, ccy) => match exposure::share_exposure(&ctx, &under, "", &ccy) {
+                        Ok(_) => format!("bagholder exposure: {} (an option's underlying) classified", under),
+                        Err(e) => {
+                            failures.lock().unwrap_or_else(|p| p.into_inner()).push(format!("{under}: {e}"));
+                            continue;
+                        }
+                    },
                 };
                 log(&line);
                 // each record shows as soon as it lands
             }
         });
-        if let Ok(h) = h {
-            handles.push(h);
-        }
+        // a thread the system will not start is what `std::thread::spawn` panics on too
+        handles.push(h.expect("the system could not start a thread"));
     }
-    for h in handles {
-        let _ = h.join();
+    let stopped = handles.into_iter().map(|h| h.join()).filter(Result::is_err).count();
+    let mut failures = std::mem::take(&mut *failures.lock().unwrap_or_else(|p| p.into_inner()));
+    // a source not asked because the app is offline answered nothing, and failed nothing
+    failures.retain(|f| !bagholder_net::client::is_offline_refusal(f));
+    if stopped > 0 {
+        failures.push(format!("{stopped} of the readers stopped short"));
     }
+    went(app, EXPOSURE, if failures.is_empty() { Ok(()) } else { Err(format!("The exposure records could not be brought up to date: {}", failures.join("; "))) });
 }
 
 /// Soon after start and every half hour.
@@ -220,7 +332,8 @@ pub fn exposure_loop(app: Arc<App>) {
     // What a fund holds changes over months. The records are looked over shortly after
     // start, then when the set of listings they are kept for changes (a trade, a
     // watchlist row), and otherwise a few times a day -- not every half hour for ever.
-    let listed = || conn(&app).and_then(|c| bagholder_store::gens::all(&c).ok()).map(|g| bagholder_store::gens::key(&g, &["activities", "watchlist", "securities"])).unwrap_or_default();
+    // a read that fails is its own value: a failing book is looked at again when it answers
+    let listed = || conn(&app).and_then(|c| bagholder_store::gens::all(&c).map_err(|e| e.to_string())).map(|g| bagholder_store::gens::key(&g, &["activities", "watchlist", "securities"]));
     if app.wait(Duration::from_secs(EXPOSURE_FIRST_SEC)) {
         return;
     }
@@ -248,16 +361,17 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
     let (symbol, exchange, currency) = (tmx_symbol(&n.symbol), n.exchange.clone(), n.currency.clone());
     let a = app.clone();
     spawn("watch-sector", move || {
-        if let Some(c) = conn(&a) {
-            let ctx = exposure::Ctx { conn: &c, pool: a.store(), today: today() };
-            exposure::share_exposure(&ctx, &symbol, &exchange, &currency);
+        let Ok(c) = conn(&a) else { return }; // said in the header by `conn`
+        let ctx = exposure::Ctx { conn: &c, pool: a.store(), today: today() };
+        if let Err(e) = exposure::share_exposure(&ctx, &symbol, &exchange, &currency) {
+            feed_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
         }
     });
 }
 
 /// Forget the news read for a listing no longer watched.
 pub fn forget_news(app: &Arc<App>, symbol: &str, exchange: &str) -> Result<(), String> {
-    let c = conn(app).ok_or("the store could not be opened")?;
+    let c = conn(app)?;
     sf::forget_news(&c, &tmx_symbol(symbol), exchange).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -272,7 +386,8 @@ pub fn forget_news(app: &Arc<App>, symbol: &str, exchange: &str) -> Result<(), S
 /// for.
 pub fn news_listings(app: &Arc<App>) -> Vec<news::Listing> {
     let mut out = vec![news::Listing { symbol: news::MARKET.0.to_string(), exchange: news::MARKET.1.to_string(), currency: news::MARKET.2.to_string(), name: String::new() }];
-    let b = match base(app) { Some(b) => b, None => return out };
+    // the book's listings not read are said by `base`: the market feed is read still
+    let Ok(Some(b)) = base(app) else { return out };
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for p in b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares) {
         let key = (tmx_symbol(&p.symbol), p.exchange.to_uppercase());
@@ -328,8 +443,9 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
             app.feeds.news_left.lock().unwrap().remove(&key(l));
             app.events.signal();
         };
-        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[NewsItem], ids: &[String]| note_wire_releases(app, c, sym, ex, rows, ids);
-        let got = news::refresh(&|| own_conn(app), &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
+        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[NewsItem], ids: &[String]| note_wire_releases_said(app, c, sym, ex, rows, ids);
+        // a connection that will not open is said in the header by `own_conn`
+        let got = news::refresh(&|| own_conn(app).ok(), &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
         app.feeds.news_left.lock().unwrap().clear();
         app.events.signal();
         match got {
@@ -350,7 +466,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
 /// document), or a Releases notification set is on and must hear of a release
 /// whoever is looking. A page open on another tab is not owed it.
 pub(crate) fn news_wanted(app: &Arc<App>) -> bool {
-    app.events.watched("news") || conn(app).map_or(false, |c| crate::notify::any_release_scope(&c))
+    app.events.watched("news") || conn(app).is_ok_and(|c| notice_settings(app, crate::notify::any_release_scope(&c)).unwrap_or(false))
 }
 
 /// While someone is owed the news: at once when they come to be (a page starting to
@@ -396,7 +512,7 @@ impl NewsSymbolAnswer {
 }
 
 pub fn news_symbol_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str) -> NewsSymbolAnswer {
-    news_symbol_payload_with(app, symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today))
+    news_symbol_payload_with(app, symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today).map_err(|e| e.to_string()))
 }
 
 pub fn news_symbol_payload_with(
@@ -405,13 +521,16 @@ pub fn news_symbol_payload_with(
     exchange: &str,
     currency: &str,
     readers: &news::Readers,
-    listing_of: &dyn Fn(&Connection, &str, &str) -> Option<bagholder_model::wire::SymbolMatch>,
+    listing_of: &dyn Fn(&Connection, &str, &str) -> Result<Option<bagholder_model::wire::SymbolMatch>, String>,
 ) -> NewsSymbolAnswer {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
         return NewsSymbolAnswer::err("symbol required");
     }
-    let c = match conn(app) { Some(c) => c, None => return NewsSymbolAnswer::err("the wire did not answer") };
+    let c = match conn(app) {
+        Ok(c) => c,
+        Err(e) => return NewsSymbolAnswer::err(e),
+    };
     let (today_s, now, _) = bagholder_market::clock_now();
     let clock = news::Clock { today: today_s.clone(), now: now as i64 };
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
@@ -431,7 +550,10 @@ pub fn news_symbol_payload_with(
     }
     let mut listing = None;
     if ex.is_empty() || (name.is_empty() && !matches!(tmx_form(&ex, &ccy), None | Some(":US"))) {
-        listing = listing_of(&c, &sym, &today_s);
+        listing = match listing_of(&c, &sym, &today_s) {
+            Ok(l) => l,
+            Err(e) => return NewsSymbolAnswer::err(format!("{sym} could not be placed: {e}")),
+        };
     }
     if let Some(l) = &listing {
         if name.is_empty() && l.name.to_uppercase() != sym {
@@ -443,7 +565,10 @@ pub fn news_symbol_payload_with(
         }
     }
     if ex.is_empty() {
-        let form = bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today_s);
+        let form = match bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today_s) {
+            Ok(f) => f,
+            Err(e) => return NewsSymbolAnswer::err(format!("{sym} could not be placed: {e}")),
+        };
         if !form.is_empty() && !form.ends_with(":US") {
             if ccy.is_empty() {
                 ccy = "CAD".into();
@@ -458,7 +583,9 @@ pub fn news_symbol_payload_with(
         Err(_) => return NewsSymbolAnswer::err("the wire did not answer"),
     };
     let rows = match rows { Some(r) => r, None => return NewsSymbolAnswer::err("the wire did not answer") };
-    let _ = sf::trim_news(&c, news::KEEP);
+    if let Err(e) = sf::trim_news(&c, news::KEEP) {
+        return NewsSymbolAnswer::err(format!("The news could not be kept to its limit: {e}"));
+    }
     NewsSymbolAnswer::Ok { ok: true, count: rows.len(), source: src.as_str().to_string(), exchange: ex }
 }
 
@@ -497,15 +624,15 @@ pub fn meta_of(secs: &[Security], symbol: &str) -> (String, String, String) {
     (sym, String::new(), String::new())
 }
 
-pub fn filings_stale(c: &Connection, symbol: &str, hours: Option<f64>) -> bool {
-    let when = sf::filings_fetched_for(c, symbol).unwrap_or_default();
+pub fn filings_stale(c: &Connection, symbol: &str, hours: Option<f64>) -> Result<bool, String> {
+    let when = sf::filings_fetched_for(c, symbol).map_err(|e| e.to_string())?;
     if when.is_empty() {
-        return true;
+        return Ok(true);
     }
-    match parse_instant(&when) {
+    Ok(match parse_instant(&when) {
         Some(then) => now_unix() - then > hours.unwrap_or(FILINGS_STALE_HOURS) * 3600.0,
         None => true,
-    }
+    })
 }
 
 fn can_name_documents() -> bool {
@@ -520,20 +647,20 @@ fn can_name_documents() -> bool {
 }
 
 /// A bounded hold on what cannot be named yet.
-fn naming_held(c: &Connection, holding: bool) -> bool {
+fn naming_held(c: &Connection, holding: bool) -> Result<bool, String> {
     if !holding {
-        let _ = set_meta(c, FILINGS_HOLD_KEY, "");
-        return false;
+        set_meta(c, FILINGS_HOLD_KEY, "").map_err(|e| e.to_string())?;
+        return Ok(false);
     }
-    let since = get_meta(c, FILINGS_HOLD_KEY, "").unwrap_or_default();
+    let since = get_meta(c, FILINGS_HOLD_KEY, "").map_err(|e| e.to_string())?;
     if since.is_empty() {
-        let _ = set_meta(c, FILINGS_HOLD_KEY, &now_iso());
-        return true;
+        set_meta(c, FILINGS_HOLD_KEY, &now_iso()).map_err(|e| e.to_string())?;
+        return Ok(true);
     }
-    match parse_instant(&since) {
+    Ok(match parse_instant(&since) {
         Some(then) => now_unix() - then <= FILINGS_HOLD_MAX_MIN * 60.0,
         None => true,
-    }
+    })
 }
 
 /// What makes a filing itself.
@@ -567,16 +694,13 @@ pub struct FilingSymbol {
     pub currency: String,
 }
 
-/// The tickers to watch for filings.
-pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymbol> {
+/// The tickers to watch for filings; the book's listings not read is an error.
+pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Result<Vec<FilingSymbol>, String> {
     let has = |k: &str| scopes.iter().any(|x| x == k);
     let mut rows: Vec<FilingCandidate> = Vec::new();
     let mut b = None;
     if has("held") || has("all") {
-        match app.market_base() {
-            Ok(x) => b = Some(x),
-            Err(e) => log(&format!("bagholder disclosures: the book not read for the sweep: {}", e)),
-        }
+        b = base(app)?;
     }
     if let Some(b) = &b {
         rows.extend(bagholder_model::symbols_of::held_symbols(b).iter().map(|l| FilingCandidate {
@@ -601,8 +725,9 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymb
         }
     }
     if has("watched") || has("all") {
-        if let Some(b) = base(app) {
-            rows.extend(b.watchlist.iter().map(|w| FilingCandidate {
+        {
+            let watchlist = base(app)?.map(|b| b.watchlist.clone()).unwrap_or_default();
+            rows.extend(watchlist.iter().map(|w| FilingCandidate {
                 symbol: w.symbol.clone(),
                 exchange: w.exchange.clone(),
                 currency: w.currency.clone(),
@@ -624,82 +749,107 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymb
         seen.insert(sym.clone());
         out.push(FilingSymbol { symbol: sym, name: r.name, exchange: r.exchange, currency: r.currency });
     }
-    out
+    Ok(out)
 }
 
 /// While a Disclosures or Releases set is on, each
 /// chosen ticker not read within half an hour is read again and what is new is
-/// told. Returns how many tickers had something new.
+/// told. Returns how many tickers had something new; a read or a write of the
+/// store that fails fails the sweep, which is said in the header until the
+/// next one succeeds.
 pub fn sweep_filings(app: &Arc<App>) -> usize {
-    let c = match conn(app) { Some(c) => c, None => return 0 };
-    let scopes = notify::disclosure_scopes(&c);
-    let rel_scopes = notify::release_scopes(&c);
+    let Ok(c) = conn(app) else { return 0 }; // said in the header by `conn`
+    went(app, DISCLOSURES, sweep_filings_in(app, &c).map_err(|e| format!("The disclosures could not be swept: {e}"))).unwrap_or(0)
+}
+
+fn sweep_filings_in(app: &Arc<App>, c: &Connection) -> Result<usize, String> {
+    let scopes = notify::disclosure_scopes(&c).map_err(|e| e.to_string())?;
+    let rel_scopes = notify::release_scopes(&c).map_err(|e| e.to_string())?;
     if scopes.is_empty() && rel_scopes.is_empty() {
-        return 0;
+        return Ok(0);
     }
     let mut told = 0;
-    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(app, &scopes).iter().map(|i| i.symbol.clone()).collect() };
-    let hold = !disc_syms.is_empty() && naming_held(&c, !can_name_documents());
+    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(app, &scopes)?.iter().map(|i| i.symbol.clone()).collect() };
+    let hold = !disc_syms.is_empty() && naming_held(&c, !can_name_documents())?;
     let mut both: Vec<String> = scopes.clone();
     for r in &rel_scopes {
         if !both.contains(r) {
             both.push(r.clone());
         }
     }
-    for inst in known_filing_symbols(app, &both) {
+    for inst in known_filing_symbols(app, &both)? {
         let sym = inst.symbol.clone();
-        if !filings_stale(&c, &sym, Some(FILINGS_SWEEP_AGE_MIN / 60.0)) {
+        if !filings_stale(&c, &sym, Some(FILINGS_SWEEP_AGE_MIN / 60.0))? {
             continue;
         }
         if hold && disc_syms.contains(&sym) {
             continue;
         }
-        let before: HashSet<[String; 5]> = sf::filings_for(&c, &sym).unwrap_or_default().iter().map(filing_mark).collect();
+        let before: HashSet<[String; 5]> = sf::filings_for(&c, &sym).map_err(|e| e.to_string())?.iter().map(filing_mark).collect();
         let name = inst.name.clone();
-        let wrote = refresh_filings(app, &sym, if name.is_empty() { None } else { Some(&name) }, Some(&inst.exchange), Some(&inst.currency));
+        let wrote = refresh_filings(app, &sym, if name.is_empty() { None } else { Some(&name) }, Some(&inst.exchange), Some(&inst.currency))?;
         if wrote < 0 {
             continue;
         }
         let mut by_source: Vec<(Regulator, Vec<Filing>)> = Vec::new();
-        for r in sf::filings_for(&c, &sym).unwrap_or_default() {
+        for r in sf::filings_for(&c, &sym).map_err(|e| e.to_string())? {
             let src = r.doc.source;
             match by_source.iter_mut().find(|(k, _)| *k == src) {
                 Some((_, v)) => v.push(r),
                 None => by_source.push((src, vec![r])),
             }
         }
+        // what each source shows now, read first; its marks are kept below with what is told of it
         let mut new: Vec<Filing> = Vec::new();
+        let mut marks: Vec<(String, Vec<String>, Option<(String, String)>)> = Vec::new();
         for (src, rows) in &by_source {
             let scope = format!("filings:{}:{}", sym, src.as_str());
             let events: Vec<String> = rows.iter().map(|r| filing_mark(r).join("|")).collect();
-            let met = sf::events_told(&c, &scope, &events).unwrap_or_default();
-            new.extend(notify::fresh_since(&c, &scope, rows, |r| r.doc.date.clone(), |r| filing_mark(r).join("|"), |r| {
+            let met = sf::events_told(c, &scope, &events).map_err(|e| e.to_string())?;
+            let fresh = notify::fresh_in(c, &scope, rows, |r| r.doc.date.clone(), |r| filing_mark(r).join("|"), |r| {
                 before.contains(&filing_mark(r)) || met.contains(&filing_mark(r).join("|"))
-            }));
-            let _ = sf::mark_told(&c, &scope, &events, &now_iso());
-        }
-        if new.is_empty() {
-            continue;
+            }).map_err(|e| e.to_string())?;
+            new.extend(fresh.items);
+            marks.push((scope, events, fresh.mark));
         }
         let rel: Vec<Filing> = new.iter().filter(|r| is_news_release(r)).cloned().collect();
         let rest: Vec<Filing> = new.iter().filter(|r| !is_news_release(r)).cloned().collect();
-        let mut said = false;
-        if !rel.is_empty() && in_release_scope(app, &c, &sym, Some(&rel_scopes)) && !sf::has_wire_release(&c, &sym).unwrap_or(false) {
+        let mut notices: Vec<(&str, String, String, String, sf::NotificationExtra)> = Vec::new();
+        if !rel.is_empty() && in_release_scope(app, c, &sym, Some(&rel_scopes))? && !sf::has_wire_release(c, &sym).map_err(|e| e.to_string())? {
             let (t, bd) = release_notice(app, &sym, &rel);
-            said = notify::emit(app, &c, "releases", &release_key(&sym, &rel), &t, &bd, Some(notice_extra(&sym, None, &rel))).is_some() || said;
+            notices.push(("releases", release_key(&sym, &rel), t, bd, notice_extra(&sym, None, &rel)));
         }
         if !rest.is_empty() && disc_syms.contains(&sym) {
             let (t, bd) = filings_notice(app, &sym, &rest);
-            let mut marks: Vec<String> = rest.iter().map(|r| filing_mark(r).join("/")).collect();
-            marks.sort();
-            let digest = sha1_hex12(&marks.join("|"));
-            said = notify::emit(app, &c, "disclosures", &format!("filings:{}:{}", sym, digest), &t, &bd, Some(notice_extra(&sym, None, &rest))).is_some() || said;
+            let mut marked: Vec<String> = rest.iter().map(|r| filing_mark(r).join("/")).collect();
+            marked.sort();
+            let digest = sha1_hex12(&marked.join("|"));
+            notices.push(("disclosures", format!("filings:{}:{}", sym, digest), t, bd, notice_extra(&sym, None, &rest)));
         }
-        if said {
+        // the marks and the notices kept together: a mark not kept would tell these
+        // again, a notice not kept would never tell them; either fails the sweep and
+        // leaves both as they were
+        let now = now_iso();
+        let rows = bagholder_store::atomically(c, || {
+            for (scope, events, mark) in &marks {
+                notify::keep_mark(c, mark)?;
+                sf::mark_told(c, scope, events, &now)?;
+            }
+            let mut rows = vec![];
+            for (kind, key, t, bd, extra) in &notices {
+                rows.extend(notify::record(c, kind, key, t, bd, Some(extra.clone()))?);
+            }
+            Ok(rows)
+        })
+        .map_err(|e| format!("what is new in {sym}'s disclosures could not be told: {e}"))?;
+        for row in &rows {
+            notify::announce(app, row);
+        }
+        if !rows.is_empty() {
             told += 1;
         }
     }
-    told
+    Ok(told)
 }
 
 fn feed_scope(key: &str) -> Vec<String> {
@@ -736,20 +886,23 @@ pub struct FilingsFeed {
 }
 
 /// The stored disclosures of every ticker in a set,
-/// newest first.
+/// newest first. The store failing is said in the header until it answers.
 pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> FilingsFeed {
     let key = { let k = scope.trim().to_lowercase(); if k.is_empty() { "all".to_string() } else { k } };
-    let c = match conn(app) {
-        Some(c) => c,
-        None => return FilingsFeed { ok: true, scope: key, filings: vec![], reading: false },
-    };
-    let mut rows: Vec<FeedFiling> = Vec::new();
-    for inst in known_filing_symbols(app, &feed_scope(&key)) {
-        let sym = inst.symbol.clone();
-        for r in fresh_filings(&c, &sym) {
-            rows.push(FeedFiling { filing: r, symbol: sym.clone(), exchange: inst.exchange.clone() });
+    let read = || -> Result<Vec<FeedFiling>, String> {
+        let c = conn(app)?;
+        let mut rows: Vec<FeedFiling> = Vec::new();
+        for inst in known_filing_symbols(app, &feed_scope(&key))? {
+            let sym = inst.symbol.clone();
+            for r in fresh_filings(&c, &sym)? {
+                rows.push(FeedFiling { filing: r, symbol: sym.clone(), exchange: inst.exchange.clone() });
+            }
         }
-    }
+        Ok(rows)
+    };
+    let Some(mut rows) = went(app, DISCLOSURES_STORED, read().map_err(|e| format!("The disclosures held could not be read: {e}"))) else {
+        return FilingsFeed { ok: true, scope: key, filings: vec![], reading: false };
+    };
     rows.sort_by(|a, b| b.filing.doc.date.cmp(&a.filing.doc.date));
     rows.truncate(limit.max(1) as usize);
     FilingsFeed { ok: true, scope: key, filings: rows, reading: enrich::summary_available() }
@@ -761,10 +914,10 @@ pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> FilingsFeed {
 /// name gives it, and nothing written: a title is read by the disclosures'
 /// own reading.
 pub fn filed_releases(app: &Arc<App>, scope: &str, chip: Option<(&str, &str)>) -> Result<Vec<crate::wire::news::FiledRelease>, String> {
-    let c = conn(app).ok_or("the store could not be opened")?;
+    let c = conn(app)?;
     let listings: Vec<(String, String)> = match chip {
         Some((symbol, exchange)) => vec![(symbol.trim().to_uppercase(), exchange.to_string())],
-        None => known_filing_symbols(app, &feed_scope(scope)).into_iter().map(|f| (f.symbol, f.exchange)).collect(),
+        None => known_filing_symbols(app, &feed_scope(scope))?.into_iter().map(|f| (f.symbol, f.exchange)).collect(),
     };
     let reading = enrich::summary_available();
     let mut out = Vec::new();
@@ -804,39 +957,34 @@ pub fn is_news_release(filing: &Filing) -> bool {
     RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&filing.doc.form)
 }
 
-pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Option<&[String]>) -> bool {
+pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Option<&[String]>) -> Result<bool, String> {
     let owned;
     let scopes = match scopes {
         Some(x) => x,
         None => {
-            owned = notify::release_scopes(c);
+            owned = notify::release_scopes(c).map_err(|e| e.to_string())?;
             &owned
         }
     };
     if scopes.is_empty() {
-        return false;
+        return Ok(false);
     }
     if scopes.iter().any(|x| x == "all") {
-        return true;
+        return Ok(true);
     }
     let sym = sym.trim().to_uppercase();
     let same = |x: &str| {
         let t = tmx_symbol(x);
         (if t.is_empty() { x.to_string() } else { t }).trim().to_uppercase() == sym
     };
-    if scopes.iter().any(|x| x == "held") {
-        if let Some(b) = base(app) {
-            if b.positions.iter().any(|p| same(&p.symbol)) {
-                return true;
-            }
-        }
+    let Some(b) = base(app)? else { return Ok(false) };
+    if scopes.iter().any(|x| x == "held") && b.positions.iter().any(|p| same(&p.symbol)) {
+        return Ok(true);
     }
     if scopes.iter().any(|x| x == "watched") {
-        if let Some(b) = base(app) {
-            return b.watchlist.iter().any(|w| same(&w.symbol));
-        }
+        return Ok(b.watchlist.iter().any(|w| same(&w.symbol)));
     }
-    false
+    Ok(false)
 }
 
 /// What a notice is told of: a wire's item or a filed document.
@@ -950,22 +1098,13 @@ pub fn stamp_day(iso: &str) -> String {
 pub fn distribution_detail(app: &Arc<App>, sym: &str) -> String {
     let Some(f) = app.figures.get() else { return String::new() };
     // the release is the announcement; the record it comes from carries the figures, and it
-    // is read now rather than when it is next due, so the notice is not a day behind it
-    let read = read_record_for_notice(app, f, sym);
-    let read = match read {
-        Ok(ids) => ids,
-        Err(e) => {
-            log(&format!("bagholder notify: {sym}'s declared distributions could not be read again: {e}"));
-            return String::new();
-        }
-    };
-    match f.book() {
-        Ok(book) => distribution_detail_in(&book, &read),
-        Err(e) => {
-            log(&format!("bagholder notify: the book could not be read for {sym}'s distributions: {e}"));
-            String::new()
-        }
-    }
+    // is read now rather than when it is next due, so the notice is not a day behind it.
+    // A notice that goes out without its figures says why in the header, until the next
+    // one has them.
+    let detail = read_record_for_notice(app, f, sym)
+        .map_err(|e| format!("{sym}'s declared distributions could not be read again: {e}"))
+        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {sym}'s distributions: {e}")).and_then(|book| distribution_detail_in(&book, &read)));
+    went(app, "distributions", detail).unwrap_or_default()
 }
 
 /// The payers held under `sym`, their records read again.
@@ -979,6 +1118,9 @@ fn read_record_for_notice(app: &Arc<App>, f: &crate::figures::Figures, sym: &str
 #[cfg(test)]
 fn read_record_for_notice(app: &Arc<App>, f: &crate::figures::Figures, sym: &str) -> Result<Vec<bagholder_core::InstrumentId>, String> {
     app.feeds.record_reads.fetch_add(1, Ordering::SeqCst);
+    if let Some(why) = app.feeds.record_fails.lock().unwrap().clone() {
+        return Err(why);
+    }
     let book = f.book()?;
     let mut out = vec![];
     for i in book.instruments().map_err(|e| e.to_string())? {
@@ -1012,19 +1154,16 @@ fn frequency_word(per_year: u32) -> String {
 /// The payer's own declared record, as the book keeps it: the newest declaration
 /// of the instruments given (the one listing a symbol names), its frequency where
 /// one is stated, and the amount it replaces when that differs.
-pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId]) -> String {
-    let [id] = instruments else { return String::new() };
+pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId]) -> Result<String, String> {
+    let [id] = instruments else { return Ok(String::new()) };
     let (declared, frequencies) = match (book.declared(), book.frequencies()) {
         (Ok(d), Ok(f)) => (d, f),
-        (Err(e), _) | (_, Err(e)) => {
-            log(&format!("bagholder notify: the declared distributions could not be read: {e}"));
-            return String::new();
-        }
+        (Err(e), _) | (_, Err(e)) => return Err(format!("The declared distributions could not be read: {e}")),
     };
-    let Some(read) = declared.get(id) else { return String::new() };
+    let Some(read) = declared.get(id) else { return Ok(String::new()) };
     let mut items: Vec<&bagholder_book::facts::DeclaredRow> = read.items.iter().collect();
     items.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
-    let Some(latest) = items.first() else { return String::new() };
+    let Some(latest) = items.first() else { return Ok(String::new()) };
     let mut out = format!("{} a share", per_unit(&latest.amount));
     if let Some(f) = frequencies.get(id) {
         out += &format!(", {}", frequency_word(f.per_year));
@@ -1038,7 +1177,7 @@ pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[baghol
             out += &format!(" · was {}", per_unit(&was.amount));
         }
     }
-    out
+    Ok(out)
 }
 
 /// When the newest of these happened, as its source dates it.
@@ -1114,12 +1253,15 @@ fn release_key<T: Notable>(sym: &str, rows: &[T]) -> String {
 
 /// The press releases a wire answered with that
 /// are newer than any it showed for the listing.
-pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) {
-    let scopes = notify::release_scopes(c);
+///
+/// A read or a write of the store that fails is the error: a mark not kept
+/// would tell the same release twice.
+pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) -> Result<(), String> {
+    let scopes = notify::release_scopes(c).map_err(|e| e.to_string())?;
     let t = tmx_symbol(symbol);
     let sym = (if t.is_empty() { symbol.to_string() } else { t }).trim().to_uppercase();
-    if scopes.is_empty() || !in_release_scope(app, c, &sym, Some(&scopes)) {
-        return;
+    if scopes.is_empty() || !in_release_scope(app, c, &sym, Some(&scopes))? {
+        return Ok(());
     }
     let rel: Vec<NewsItem> = rows.iter().filter(|r| r.is_release()).cloned().collect();
     // An event is told once. The stream keeps what it has met, by what the thing is rather than by
@@ -1129,16 +1271,33 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
     // not, so the back catalogue a first read brings can never ring later.
     let scope = format!("news:{}", sf::news_key(symbol, exchange));
     let events: Vec<String> = rel.iter().map(release_event).collect();
-    let met = sf::events_told(c, &scope, &events).unwrap_or_default();
-    let fresh = notify::fresh_since(c, &scope, &rel, |r: &NewsItem| r.published_at.clone(), |r: &NewsItem| r.id.clone(), |r: &NewsItem| {
+    let met = sf::events_told(c, &scope, &events).map_err(|e| e.to_string())?;
+    let fresh = notify::fresh_in(c, &scope, &rel, |r: &NewsItem| r.published_at.clone(), |r: &NewsItem| r.id.clone(), |r: &NewsItem| {
         !new_ids.contains(&r.id) || met.contains(&release_event(r))
-    });
-    let _ = sf::mark_told(c, &scope, &events, &now_iso());
-    if fresh.is_empty() {
-        return;
+    }).map_err(|e| e.to_string())?;
+    // the notice is worded first (it may read the issuer's record); then the marks and
+    // the notice are kept together, so a failure of either leaves the release to tell again
+    let notice = if fresh.items.is_empty() { None } else { Some((release_key(&sym, &fresh.items), release_notice(app, &sym, &fresh.items), notice_extra(&sym, Some(exchange), &fresh.items))) };
+    let now = now_iso();
+    let row = bagholder_store::atomically(c, || {
+        notify::keep_mark(c, &fresh.mark)?;
+        sf::mark_told(c, &scope, &events, &now)?;
+        match &notice {
+            Some((key, (title, body), extra)) => notify::record(c, "releases", key, title, body, Some(extra.clone())),
+            None => Ok(None),
+        }
+    })
+    .map_err(|e| format!("what is new of {sym} could not be told: {e}"))?;
+    if let Some(row) = &row {
+        notify::announce(app, row);
     }
-    let (title, body) = release_notice(app, &sym, &fresh);
-    notify::emit(app, c, "releases", &release_key(&sym, &fresh), &title, &body, Some(notice_extra(&sym, Some(exchange), &fresh)));
+    Ok(())
+}
+
+/// `note_wire_releases` from the news pass: a failure is said in the header until
+/// a wire's releases are next noted.
+pub(crate) fn note_wire_releases_said(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) {
+    went(app, RELEASES, note_wire_releases(app, c, symbol, exchange, rows, new_ids).map_err(|e| format!("The press releases could not be told: {e}")));
 }
 
 /// `New disclosure · QNC` and what was filed.
@@ -1229,7 +1388,12 @@ pub fn form_name(code: &str) -> String {
 /// in front of it, so a refusal is ordinary and a retry often works; the page
 /// says that in words, names the document, and retries on a click.
 pub fn document_error_page(app: &Arc<App>, symbol: &str, doc_id: &str, why: &str) -> String {
-    let row = conn(app).and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).ok().flatten());
+    // the document's record names it; one that cannot be read is said beside the source's refusal
+    let (row, why) = match conn(app).and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).map_err(|e| e.to_string())) {
+        Ok(row) => (row, why.to_string()),
+        Err(e) => (None, format!("{} The document's record could not be read: {e}", if why.is_empty() { "The source did not answer." } else { why })),
+    };
+    let why = why.as_str();
     let name = row.as_ref().map(|r| {
         let s = r.subject.trim();
         if !s.is_empty() { s.to_string() } else if !r.doc.title.trim().is_empty() { r.doc.title.trim().to_string() } else { r.doc.form.trim().to_string() }
@@ -1281,7 +1445,11 @@ pub fn filings_sweep_loop(app: Arc<App>) {
     // The regulators publish no feed to subscribe to, so telling someone of a new
     // filing means asking; but only while they have asked to be told. With no
     // Disclosures or Releases set on, this waits for one to be switched on.
-    let wanted = || conn(&app).map_or(false, |c| !notify::disclosure_scopes(&c).is_empty() || !notify::release_scopes(&c).is_empty());
+    let wanted = || {
+        conn(&app).is_ok_and(|c| {
+            notice_settings(&app, notify::disclosure_scopes(&c).and_then(|d| Ok(!d.is_empty() || !notify::release_scopes(&c)?.is_empty()))).unwrap_or(false)
+        })
+    };
     while app.events.park_until(&app, wanted) {
         sweep_filings(&app);
         if app.wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
@@ -1316,7 +1484,19 @@ pub fn disclosure_read_loop(app: Arc<App>) {
         // under it) is passed over until the loop is woken again, so it neither
         // holds the others back nor is fetched over and over
         let mut passed: HashSet<(String, String)> = HashSet::new();
-        while read_one_unread(&app, &mut passed) {
+        loop {
+            match read_one_unread(&app, &mut passed) {
+                Ok(None) => break,
+                // a document that could not be read is said in the header until one is, and passed over
+                Ok(Some(read)) => {
+                    went(&app, DISCLOSURES_READING, read);
+                }
+                // the store failing is said the same way, and the loop waits for a change rather than asking again
+                Err(e) => {
+                    feed_failed(&app, DISCLOSURES_READING, format!("The documents could not be read: {e}"));
+                    break;
+                }
+            }
             if app.wait(Duration::from_secs(READ_GAP_SEC)) {
                 return;
             }
@@ -1332,10 +1512,12 @@ static FILINGS_STORED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 /// The newest stored filing a reading could still add to, read: the listing on
 /// screen first, then everything else. False when there is none left to try.
-fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(String, String)>) -> bool {
+fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(String, String)>) -> Result<Option<Result<(), String>>, String> {
     let open = app.feeds.looking_at.lock().unwrap().clone();
-    if !open.is_empty() && read_one_of(app, &open, passed) {
-        return true;
+    if !open.is_empty() {
+        if let Some(read) = read_one_of(app, &open, passed)? {
+            return Ok(Some(read));
+        }
     }
     read_one_of(app, "", passed)
 }
@@ -1343,11 +1525,12 @@ fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(String, String)>) -> bo
 /// One document of `only`, or of every followed listing when it is empty, that a
 /// reading could still add to (`wants_reading`): one never read, and one holding a
 /// title without its sentence or the other way round. True when there was one to
-/// try; one the read moved nothing on is added to `passed`.
-fn read_one_of(app: &Arc<App>, only: &str, passed: &mut HashSet<(String, String)>) -> bool {
-    let c = match conn(app) { Some(c) => c, None => return false };
+/// try, with how its read went; one the read moved nothing on, or whose read
+/// failed, is added to `passed`. The store failing is the error.
+fn read_one_of(app: &Arc<App>, only: &str, passed: &mut HashSet<(String, String)>) -> Result<Option<Result<(), String>>, String> {
+    let c = conn(app)?;
     let list: Vec<String> = if only.is_empty() {
-        known_filing_symbols(app, &["held".to_string(), "watched".to_string()]).into_iter().map(|i| i.symbol).collect()
+        known_filing_symbols(app, &["held".to_string(), "watched".to_string()])?.into_iter().map(|i| i.symbol).collect()
     } else {
         vec![only.to_string()]
     };
@@ -1355,11 +1538,11 @@ fn read_one_of(app: &Arc<App>, only: &str, passed: &mut HashSet<(String, String)
 }
 
 /// `read_one_of` on one connection, for the listings given, with the readers given.
-fn read_one_in(c: &Connection, symbols: &[String], passed: &mut HashSet<(String, String)>, readers: &dyn Readers) -> bool {
+fn read_one_in(c: &Connection, symbols: &[String], passed: &mut HashSet<(String, String)>, readers: &dyn Readers) -> Result<Option<Result<(), String>>, String> {
     let mut best: Option<(String, String, Filing)> = None;   // date, symbol, row
     for sym in symbols {
         let sym = sym.trim().to_uppercase();
-        for r in sf::filings_for(c, &sym).unwrap_or_default() {
+        for r in sf::filings_for(c, &sym).map_err(|e| e.to_string())? {
             if !wants_reading(&r) || passed.contains(&(sym.clone(), r.doc.id.clone())) {
                 continue;
             }
@@ -1369,9 +1552,12 @@ fn read_one_in(c: &Connection, symbols: &[String], passed: &mut HashSet<(String,
             }
         }
     }
-    let (_, sym, before) = match best { Some(b) => b, None => return false };
-    let _ = filings_enrich_in(c, &sym, &before.doc.id, readers);
-    let after = sf::filing(c, &sym, &before.doc.id).ok().flatten();
+    let (_, sym, before) = match best { Some(b) => b, None => return Ok(None) };
+    if let Err(e) = filings_enrich_in(c, &sym, &before.doc.id, readers) {
+        passed.insert((sym.clone(), before.doc.id.clone()));
+        return Ok(Some(Err(format!("{sym}'s document {} could not be read: {e}", before.doc.id))));
+    }
+    let after = sf::filing(c, &sym, &before.doc.id).map_err(|e| e.to_string())?;
     let moved = after.as_ref().map_or(false, |a| {
         (&a.subject, &a.summary, a.enrich_version, a.enrich_final, a.enrich_reads)
             != (&before.subject, &before.summary, before.enrich_version, before.enrich_final, before.enrich_reads)
@@ -1379,7 +1565,7 @@ fn read_one_in(c: &Connection, symbols: &[String], passed: &mut HashSet<(String,
     if !moved {
         passed.insert((sym, before.doc.id));
     }
-    true
+    Ok(Some(Ok(())))
 }
 
 /// Two reads that could have answered bound a document's reading: what they
@@ -1396,14 +1582,14 @@ pub fn wants_reading(r: &Filing) -> bool {
 
 /// One symbol's disclosures from every covering
 /// source, stored per source. The total written, or -1 when no source could be
-/// reached.
-pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> i64 {
+/// reached; the store failing is the error.
+pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> Result<i64, String> {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return 0;
+        return Ok(0);
     }
-    app.single_flight(&format!("filings:{}", sym), 0, || {
-        let c = match conn(app) { Some(c) => c, None => return -1 };
+    app.single_flight(&format!("filings:{}", sym), Ok(0), || {
+        let c = conn(app)?;
         refresh_filings_in(app, &c, &sym, name, exchange, currency, &|s, n, e, cy, p| disclosures::fetch(s, n, e, cy, 200, p))
     })
 }
@@ -1413,7 +1599,7 @@ pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchang
 pub type FetchFilings<'a> = &'a dyn Fn(&str, &str, &str, &str, &str) -> Gathered;
 
 /// `refresh_filings` on one connection with the gathering given.
-pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>, fetch_filings: FetchFilings) -> i64 {
+pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>, fetch_filings: FetchFilings) -> Result<i64, String> {
     {
         let c = c;
         let sym = sym.to_string();
@@ -1423,7 +1609,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Optio
         }
         let exchange_ = exchange.map(|x| x.to_string()).unwrap_or(ex);
         let currency_ = currency.map(|x| x.to_string()).unwrap_or(cur);
-        let known = sf::sedar_profile(c, &sym).unwrap_or_default();
+        let known = sf::sedar_profile(c, &sym).map_err(|e| e.to_string())?;
         let result = fetch_filings(&sym, &iname, &exchange_, &currency_, &known);
         let mut total = 0i64;
         let mut any_reached = false;
@@ -1435,7 +1621,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Optio
             }
             by_source.entry(it.source).or_default().push(it);
         }
-        let held: HashSet<Regulator> = sf::filings_for(c, &sym).unwrap_or_default().iter().map(|r| r.doc.source).collect();
+        let held: HashSet<Regulator> = sf::filings_for(c, &sym).map_err(|e| e.to_string())?.iter().map(|r| r.doc.source).collect();
         let now = now_iso();
         let sources = result.sources;
         for (src, status) in &sources {
@@ -1448,14 +1634,15 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Optio
                 continue;
             }
             if status.matched || status.available {
-                total += sf::replace_filings(c, &sym, *src, &rows, &now).unwrap_or(0) as i64;
+                total += sf::replace_filings(c, &sym, *src, &rows, &now).map_err(|e| format!("{sym}'s {} filings could not be stored: {e}", src.as_str()))? as i64;
             }
         }
-        let _ = sf::mark_filings_fetched(c, &sym, &profile_no, &now);
+        sf::mark_filings_fetched(c, &sym, &profile_no, &now).map_err(|e| e.to_string())?;
         FILINGS_STORED.fetch_add(1, Ordering::SeqCst);
         app.events.signal(); // the reading loop has something to look at
-        let _ = set_meta(c, &format!("filings_sources:{}", sym), &serde_json::to_string(&sources).unwrap_or_default());
-        if any_reached { total } else { -1 }
+        let outcomes = serde_json::to_string(&sources).expect("each regulator's outcome, keyed by its name, always serializes");
+        set_meta(c, &format!("filings_sources:{}", sym), &outcomes).map_err(|e| e.to_string())?;
+        Ok(if any_reached { total } else { -1 })
     }
 }
 
@@ -1472,9 +1659,15 @@ pub struct SourceStatus {
 /// `#[derive(Diff)]` compares a map field as the model's own `BTreeMap<String,
 /// V>`, so a source's status lives under its regulator's own JSON key
 /// (`"SEDAR+"`, `"SEC"`) rather than under `Regulator` itself.
-fn source_status(c: &Connection, sym: &str) -> BTreeMap<String, SourceStatus> {
-    let stored: BTreeMap<Regulator, SourceOutcome> = serde_json::from_str(&get_meta(c, &format!("filings_sources:{}", sym), "").unwrap_or_default()).unwrap_or_default();
-    let have: HashSet<Regulator> = sf::filings_for(c, sym).unwrap_or_default().iter().map(|r| r.doc.source).collect();
+fn source_status(c: &Connection, sym: &str) -> Result<BTreeMap<String, SourceStatus>, String> {
+    // none stored before a first refresh; stored text that does not parse is an error
+    let raw = get_meta(c, &format!("filings_sources:{}", sym), "").map_err(|e| e.to_string())?;
+    let stored: BTreeMap<Regulator, SourceOutcome> = if raw.is_empty() {
+        BTreeMap::new()
+    } else {
+        serde_json::from_str(&raw).map_err(|e| format!("what {sym}'s sources last answered could not be read: {e}"))?
+    };
+    let have: HashSet<Regulator> = sf::filings_for(c, sym).map_err(|e| e.to_string())?.iter().map(|r| r.doc.source).collect();
     let mut out = BTreeMap::new();
     for (source, dep) in [(Regulator::Sedar, sedar::available()), (Regulator::Sec, edgar::available())] {
         let st = stored.get(&source);
@@ -1492,7 +1685,7 @@ fn source_status(c: &Connection, sym: &str) -> BTreeMap<String, SourceStatus> {
             error,
         });
     }
-    out
+    Ok(out)
 }
 
 /// The stored disclosures, refreshed first when
@@ -1510,7 +1703,10 @@ pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option
     if sym.is_empty() {
         return FilingsAnswer::Refused(OkOr::err("symbol required"));
     }
-    let c = match conn(app) { Some(c) => c, None => return FilingsAnswer::Refused(OkOr::err("store unavailable")) };
+    let c = match conn(app) {
+        Ok(c) => c,
+        Err(e) => return FilingsAnswer::Refused(OkOr::err(e)),
+    };
     match filings_payload_in(app, &c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency)) {
         Ok(p) => FilingsAnswer::Ok(p),
         Err(e) => FilingsAnswer::Refused(OkOr::err(e)),
@@ -1557,20 +1753,20 @@ pub struct FilingsDoc {
 /// them the one being read now.
 pub fn filings_stored(app: &Arc<App>, symbol: &str) -> Result<FilingsDoc, String> {
     let sym = symbol.trim().to_uppercase();
-    let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
+    let c = conn(app)?;
     let reading = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
-    let fetched_at = sf::filings_fetched_for(&c, &sym).unwrap_or_default();
+    let fetched_at = sf::filings_fetched_for(&c, &sym).map_err(|e| e.to_string())?;
     Ok(FilingsDoc {
         ok: true,
         symbol: sym.clone(),
         available: disclosures::available(),
-        sources: source_status(&c, &sym),
+        sources: source_status(&c, &sym)?,
         categories: disclosures::CATEGORIES.iter().map(|s| s.to_string()).collect(),
         ever_read: !fetched_at.is_empty(),
         fetched_at,
         summary_status: enrich::summary_status().to_string(),
         reading,
-        filings: fresh_filings(&c, &sym),
+        filings: fresh_filings(&c, &sym)?,
     })
 }
 
@@ -1586,19 +1782,24 @@ pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, e
         app.single_flight(&format!("filings-shown:{}", sym), (), || {
             *app.feeds.looking_at.lock().unwrap() = sym.clone();
             fn opt(s: &str) -> Option<&str> { if s.is_empty() { None } else { Some(s) } }
-            if conn(&app).map_or(false, |c| filings_stale(&c, &sym, None)) {
-                refresh_filings(&app, &sym, opt(&name), opt(&exchange), opt(&currency));
-            }
+            // the list brought up to date: a store that fails is said in the header until it answers
+            let refreshed = conn(&app).and_then(|c| filings_stale(&c, &sym, None)).and_then(|stale| {
+                if stale { refresh_filings(&app, &sym, opt(&name), opt(&exchange), opt(&currency)).map(|_| ()) } else { Ok(()) }
+            });
+            went(&app, DISCLOSURES, refreshed.map_err(|e| format!("{sym}'s disclosures could not be brought up to date: {e}")));
             let mut tried: HashSet<String> = HashSet::new();
             while app.events.watched(&doc) && !app.stopping() {
-                let c = match conn(&app) { Some(c) => c, None => break };
-                let mut left: Vec<Filing> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
+                let left = conn(&app).and_then(|c| sf::filings_for(&c, &sym).map_err(|e| e.to_string()));
+                let Some(left) = went(&app, DISCLOSURES_STORED, left.map_err(|e| format!("The disclosures held could not be read: {e}"))) else { break };
+                let mut left: Vec<Filing> = left.into_iter()
                     .filter(|r| wants_reading(r) && !tried.contains(&r.doc.id))
                     .collect();
                 left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
                 let Some(next) = left.first().map(|r| r.doc.id.clone()) else { break };
                 set_reading(&app, &sym, left.iter().map(|r| r.doc.id.clone()).collect());
-                let _ = filings_enrich(&app, &sym, &next); // waits for the local model itself when one is coming up
+                // waits for the local model itself when one is coming up; a document that
+                // could not be read is said in the header until one is
+                went(&app, DISCLOSURES_READING, filings_enrich_result(&app, &sym, &next).map_err(|e| format!("{sym}'s document {next} could not be read: {e}")));
                 tried.insert(next);
                 if app.wait(Duration::from_millis(150)) { // a person's pace at the source
                     break;
@@ -1627,7 +1828,7 @@ pub struct FilingsPayload {
 }
 
 /// `filings_payload` on one connection with the refresh given.
-pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> i64) -> Result<FilingsPayload, String> {
+pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> Result<i64, String>) -> Result<FilingsPayload, String> {
     let sym = sym.trim().to_uppercase();
     if sym.is_empty() {
         return Err("symbol required".to_string());
@@ -1635,27 +1836,27 @@ pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bo
     *app.feeds.looking_at.lock().unwrap() = sym.clone();
     let c = c;
     let mut wrote: Option<i64> = None;
-    if refresh || filings_stale(c, &sym, None) {
-        wrote = Some(refresh_filings());
+    if refresh || filings_stale(c, &sym, None)? {
+        wrote = Some(refresh_filings()?);
     }
     Ok(FilingsPayload {
         ok: true,
         available: disclosures::available(),
-        sources: source_status(c, &sym),
+        sources: source_status(c, &sym)?,
         categories: disclosures::CATEGORIES.iter().map(|s| s.to_string()).collect(),
-        profile_no: sf::sedar_profile(c, &sym).unwrap_or_default(),
-        fetched_at: sf::filings_fetched_for(c, &sym).unwrap_or_default(),
+        profile_no: sf::sedar_profile(c, &sym).map_err(|e| e.to_string())?,
+        fetched_at: sf::filings_fetched_for(c, &sym).map_err(|e| e.to_string())?,
         refreshed: wrote.map(|w| w > 0).unwrap_or(false),
         source_unavailable: wrote == Some(-1),
-        filings: fresh_filings(c, &sym),
+        filings: fresh_filings(c, &sym)?,
         symbol: sym,
     })
 }
 
 /// Rows read by an older logic blanked, categories
 /// re-derived.
-fn fresh_filings(c: &Connection, sym: &str) -> Vec<Filing> {
-    let mut rows = sf::filings_for(c, sym).unwrap_or_default();
+fn fresh_filings(c: &Connection, sym: &str) -> Result<Vec<Filing>, String> {
+    let mut rows = sf::filings_for(c, sym).map_err(|e| e.to_string())?;
     for r in rows.iter_mut() {
         if r.enrich_version.unwrap_or(0) < ENRICH_VERSION {
             r.subject = String::new();
@@ -1666,22 +1867,22 @@ fn fresh_filings(c: &Connection, sym: &str) -> Vec<Filing> {
         // without being fetched, so only the rest wait on a reading
         if r.subject.is_empty() {
             if let Some(t) = disclosures::quick_title(&r.doc) {
-                let _ = sf::set_filing_enrichment(c, sym, &r.doc.id, Some(&t), None, None, None, &now_iso());
+                sf::set_filing_enrichment(c, sym, &r.doc.id, Some(&t), None, None, None, &now_iso()).map_err(|e| e.to_string())?;
                 r.subject = t;
             }
         }
     }
-    rows
+    Ok(rows)
 }
 
 /// (bytes, content type), or the error.
 pub fn filings_document(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String), String> {
     let sym = symbol.trim().to_uppercase();
-    let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
-    let mut row = sf::filing(&c, &sym, doc_id).ok().flatten();
+    let c = conn(app)?;
+    let mut row = sf::filing(&c, &sym, doc_id).map_err(|e| e.to_string())?;
     if row.is_none() {
-        refresh_filings(app, &sym, None, None, None);
-        row = sf::filing(&c, &sym, doc_id).ok().flatten();
+        refresh_filings(app, &sym, None, None, None)?;
+        row = sf::filing(&c, &sym, doc_id).map_err(|e| e.to_string())?;
     }
     let row = row.ok_or_else(|| format!("no such document for {}", sym))?;
     let (data, ct) = disclosures::document(&row.doc).map_err(|e| e.to_string())?;
@@ -1693,7 +1894,7 @@ pub fn filings_document(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<(V
 
 /// `filings_enrich` on the app's own connection, typed.
 fn filings_enrich_result(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<Enriched, String> {
-    let c = conn(app).ok_or_else(|| "no such document".to_string())?;
+    let c = conn(app)?;
     filings_enrich_in(&c, symbol, doc_id, &LiveReaders)
 }
 
@@ -1751,7 +1952,7 @@ pub struct Enriched {
 /// only once a model is up (SPEC §4 Disclosures).
 pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Readers) -> Result<Enriched, String> {
     let sym = symbol.trim().to_uppercase();
-    let row = sf::filing(c, &sym, doc_id).ok().flatten().ok_or_else(|| "no such document".to_string())?;
+    let row = sf::filing(c, &sym, doc_id).map_err(|e| e.to_string())?.ok_or_else(|| "no such document".to_string())?;
     let mut subject = row.subject.clone();
     let mut summary = row.summary.clone();
     let mut model = r.summary_available();
@@ -1773,9 +1974,10 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
     // No model to write the sentence: what was found is kept under the current
     // logic's stamp, so the row waits for a model rather than being fetched again,
     // and the read is not counted against the document.
-    let waits = |subject: &str, summary: &str| {
-        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(subject), Some(summary), Some(ENRICH_VERSION), Some(false), &now);
-        let _ = sf::set_filing_reads(c, &sym, doc_id, reads);
+    let waits = |subject: &str, summary: &str| -> Result<(), String> {
+        sf::set_filing_enrichment(c, &sym, doc_id, Some(subject), Some(summary), Some(ENRICH_VERSION), Some(false), &now).map_err(|e| e.to_string())?;
+        sf::set_filing_reads(c, &sym, doc_id, reads).map_err(|e| e.to_string())?;
+        Ok(())
     };
     if !fresh {
         // only the first read under the current logic replaces both halves
@@ -1789,19 +1991,19 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
         let (sj, sm) = (exact.subject.clone(), exact.summary.clone());
         if !sj.is_empty() && subject.is_empty() {
             subject = sj.clone();
-            let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), None, None, None, &now);
+            sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), None, None, None, &now).map_err(|e| e.to_string())?;
         }
         if !sm.is_empty() {
-            let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&sj), Some(&sm), Some(ENRICH_VERSION), None, &now);
+            sf::set_filing_enrichment(c, &sym, doc_id, Some(&sj), Some(&sm), Some(ENRICH_VERSION), None, &now).map_err(|e| e.to_string())?;
             return Ok(answer(&sj, &sm, model));
         }
         if exact.final_ {
             // a named document: nothing a reading would add
-            let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(""), Some(ENRICH_VERSION), Some(true), &now);
+            sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(""), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
             return Ok(answer(&subject, "", model));
         }
         if !model {
-            waits(&subject, &summary);
+            waits(&subject, &summary)?;
             return Ok(answer(&subject, &summary, model));
         }
     }
@@ -1819,7 +2021,7 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
     let new_subject = info.subject.clone();
     let got_summary = info.summary.clone();
     if info.final_ {
-        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&new_subject), Some(&got_summary), Some(ENRICH_VERSION), Some(true), &now);
+        sf::set_filing_enrichment(c, &sym, doc_id, Some(&new_subject), Some(&got_summary), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
         return Ok(answer(&new_subject, &got_summary, model));
     }
     if model && new_subject.is_empty() && got_summary.is_empty() && subject.is_empty() && summary.is_empty() {
@@ -1828,7 +2030,7 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
         // is and never read again
         let named = disclosures::quick_title(&row.doc).unwrap_or_else(|| row.doc.form.clone());
         let named: String = named.chars().take(90).collect();
-        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&named), Some(""), Some(ENRICH_VERSION), Some(true), &now);
+        sf::set_filing_enrichment(c, &sym, doc_id, Some(&named), Some(""), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
         return Ok(answer(&named, "", model));
     }
     // reading again fills what is missing and never empties what is there
@@ -1842,10 +2044,10 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
         // a read that could have answered: two of them settle the row
         let reads = reads + 1;
         let settled = (subject.is_empty() || summary.is_empty()) && reads >= ENRICH_READS;
-        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(&summary), Some(ENRICH_VERSION), Some(settled), &now);
-        let _ = sf::set_filing_reads(c, &sym, doc_id, reads);
+        sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(&summary), Some(ENRICH_VERSION), Some(settled), &now).map_err(|e| e.to_string())?;
+        sf::set_filing_reads(c, &sym, doc_id, reads).map_err(|e| e.to_string())?;
     } else {
-        waits(&subject, &summary);
+        waits(&subject, &summary)?;
     }
     Ok(answer(&subject, &summary, r.summary_available()))
 }
@@ -1874,7 +2076,7 @@ fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf:
     let rec = got.map(|gauge| StoredGauge { gauge, fetched_at: now_iso(), read_version: FEAR_VERSION });
     let feed = format!("fear:{which}");
     let rec = rec.and_then(|rec| {
-        let c = conn(app).ok_or_else(|| "The store could not be opened to keep the Fear & Greed reading.".to_string())?;
+        let c = conn(app)?;
         sf::save_gauge(&c, &which, &rec.gauge, &rec.fetched_at, FEAR_VERSION).map_err(|e| format!("The Fear & Greed reading could not be kept: {e}"))?;
         Ok(rec)
     });
@@ -1930,12 +2132,16 @@ pub fn fear_payload(app: &Arc<App>, index: &str) -> Result<FearDoc, String> {
     if !fear::INDEXES.contains(&which.as_str()) {
         return Err("no such index".into());
     }
-    if let Some(held) = conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()) {
+    let held = sf::gauge(&*conn(app)?, &which).map_err(|e| format!("The Fear & Greed reading held could not be read: {e}"))?;
+    if let Some(held) = held {
         if fear_stale(&held) {
             let w = which.clone();
             let a = app.clone();
             app.kick(&format!("fear:{}", which), move || {
-                let _ = read_fear(&a, &w); // a failure is said in the header
+                match read_fear(&a, &w) {
+                    Ok(_) => {}
+                    Err(_said) => {} // said in the header by `read_fear` until the index next answers
+                }
             });
         }
         return Ok(FearDoc { ok: true, gauge: Some(held), reading: fear_in_flight(app, &which) });
@@ -1946,9 +2152,23 @@ pub fn fear_payload(app: &Arc<App>, index: &str) -> Result<FearDoc, String> {
 
 /// The meter as it is held, never waiting on its publisher: what a page showing it is
 /// sent (`docs`).
+///
+/// A reading held that cannot be read is said in the header (under the index's
+/// own entry, until it next answers) and the meter is sent with none.
 pub fn fear_stored(app: &Arc<App>, index: &str) -> FearDoc {
     let which = index.trim().to_lowercase();
-    FearDoc { ok: true, gauge: conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()), reading: fear_in_flight(app, &which) }
+    FearDoc { ok: true, gauge: fear_held(app, &which), reading: fear_in_flight(app, &which) }
+}
+
+/// The reading held for `which`; one that cannot be read is said in the header.
+fn fear_held(app: &Arc<App>, which: &str) -> Option<StoredGauge> {
+    match conn(app).and_then(|c| sf::gauge(&c, which).map_err(|e| format!("The Fear & Greed reading held could not be read: {e}"))) {
+        Ok(held) => held,
+        Err(why) => {
+            feed_failed(app, &format!("fear:{which}"), why);
+            None
+        }
+    }
 }
 
 fn fear_in_flight(app: &Arc<App>, which: &str) -> bool {
@@ -1966,9 +2186,12 @@ pub fn fear_shown(app: Arc<App>, doc: String, index: String) {
     spawn("bagholder-fear-shown", move || {
         app.single_flight(&doc.clone(), (), || {
             while app.events.watched(&doc) && !app.stopping() {
-                let held = conn(&app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
+                let held = fear_held(&app, &which);
                 if held.as_ref().map_or(true, fear_stale) {
-                    let _ = read_fear(&app, &which); // a failure is said in the header
+                    match read_fear(&app, &which) {
+                        Ok(_) => {}
+                        Err(_said) => {} // said in the header by `read_fear` until the index next answers
+                    }
                 }
                 if app.wait(Duration::from_secs(FEAR_STALE_MIN as u64 * 60)) {
                     return;
@@ -1997,16 +2220,39 @@ fn shorts_stale(rec: &StoredShorts) -> bool {
 }
 
 /// One listing's short selling from its regulator,
-/// kept. `None` for a market where no one publishes it.
-pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Option<StoredShorts> {
+/// kept. `None` for a market where no one publishes it; the store failing is
+/// the error. A source failing is said in the header until the listing's next
+/// read goes through, and the record kept stands.
+pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Result<Option<StoredShorts>, String> {
     let c = conn(app)?;
-    let mut rec = shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name)?;
+    let feed = format!("{SHORTS_OF}{}", symbol.trim().to_uppercase());
+    let mut rec = match shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name) {
+        Ok(Some(rec)) => {
+            feed_answered(app, &feed);
+            rec
+        }
+        Ok(None) => {
+            feed_answered(app, &feed);
+            return Ok(None);
+        }
+        Err(e) => {
+            // said with every other listing the same failure stopped (`feed_failures`)
+            feed_failed(app, &feed, e.to_string());
+            return Ok(None);
+        }
+    };
     if rec.exchange.is_empty() {
         rec.exchange = exchange.to_string();
     }
     let stored = StoredShorts { shorts: rec, fetched_at: now_iso(), read_version: SHORTS_VERSION };
-    let _ = sf::save_shorts(&c, &stored.shorts, &stored.fetched_at, SHORTS_VERSION);
-    Some(stored)
+    sf::save_shorts(&c, &stored.shorts, &stored.fetched_at, SHORTS_VERSION).map_err(|e| format!("{symbol}'s short selling could not be kept: {e}"))?;
+    Ok(Some(stored))
+}
+
+/// `read_shorts` from work that answers nobody: a failure is said in the header,
+/// under the listing's own entry, until its next read succeeds.
+fn read_shorts_said(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Option<StoredShorts> {
+    went(app, &format!("shorts-store:{}|{}", symbol, exchange), read_shorts(app, symbol, exchange, currency, trend, name)).flatten()
 }
 
 /// One report of the position sold short.
@@ -2147,7 +2393,7 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
     if sym.is_empty() {
         return Err("symbol required".to_string());
     }
-    let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
+    let c = conn(app)?;
     let meta = instrument_meta(app, &sym);
     let listed_as = if meta.0 == sym { String::new() } else { meta.0.clone() };
     let mut ex = exchange.unwrap_or("").trim().to_string();
@@ -2158,7 +2404,7 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
             ccy = meta.2.clone();
         }
         if ex.is_empty() {
-            let form = bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today());
+            let form = bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today()).map_err(|e| format!("{sym} could not be placed: {e}"))?;
             if !form.is_empty() && !form.ends_with(":US") {
                 let tail = if form.contains(':') { form.rsplit(':').next().unwrap_or("") } else { "" };
                 ex = match tail { "CNX" => "CSE", "AQL" => "Cboe Canada", _ => "" }.to_string();
@@ -2174,19 +2420,19 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
     if shorts::market_of(&sym, &ex, &ccy).is_none() {
         return Ok(ShortsPayload { ok: true, covered: false, shorts: None });
     }
-    if let Some(held) = sf::shorts_for(&c, &sym, &ex).ok().flatten() {
+    if let Some(held) = sf::shorts_for(&c, &sym, &ex).map_err(|e| format!("{sym}'s short selling held could not be read: {e}"))? {
         if !trend || held.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
             if shorts_stale(&held) {
                 let (s2, e2, c2, n2) = (sym.clone(), ex.clone(), ccy.clone(), listed_as.clone());
                 let a = app.clone();
                 app.kick(&format!("shorts:{}|{}", sym, ex), move || {
-                    read_shorts(&a, &s2, &e2, &c2, true, &n2);
+                    read_shorts_said(&a, &s2, &e2, &c2, true, &n2);
                 });
             }
             return Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&held)?) });
         }
     }
-    match read_shorts(app, &sym, &ex, &ccy, trend, &listed_as) {
+    match read_shorts(app, &sym, &ex, &ccy, trend, &listed_as)? {
         Some(rec) => Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&rec)?) }),
         None => Ok(ShortsPayload { ok: true, covered: false, shorts: None }),
     }
@@ -2221,7 +2467,8 @@ pub struct ShortsFeed {
 /// selling, each marked held or watched.
 pub fn shorts_feed(app: &Arc<App>) -> ShortsFeed {
     let reading = app.feeds.shorts_left.load(Ordering::SeqCst) > 0;
-    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return ShortsFeed { ok: true, rows: vec![], reading } };
+    // the book not opening and its listings not read are said in the header by `conn` and `base`
+    let (c, b) = match (conn(app), base(app)) { (Ok(c), Ok(Some(b))) => (c, b), _ => return ShortsFeed { ok: true, rows: vec![], reading } };
     // what the feed says of a listing: its name, its venue, and the holding it opens
     struct Known {
         name: String,
@@ -2237,7 +2484,15 @@ pub fn shorts_feed(app: &Arc<App>) -> ShortsFeed {
         watched.insert((tmx_symbol(&w.symbol).to_uppercase(), w.exchange.to_uppercase()), Known { name: w.name.clone(), exchange: w.exchange.clone(), position_id: None });
     }
     let mut rows = Vec::new();
-    for mut r in sf::all_shorts(&c).unwrap_or_default() {
+    let mut failed = vec![];
+    let held_rows = match sf::all_shorts(&c) {
+        Ok(r) => r,
+        Err(e) => {
+            feed_failed(app, SHORTS, format!("The short selling held could not be read: {e}"));
+            return ShortsFeed { ok: true, rows: vec![], reading };
+        }
+    };
+    for mut r in held_rows {
         let key = (r.shorts.symbol.clone(), r.shorts.exchange.clone());
         let source = match held.get(&key).or_else(|| watched.get(&key)) { Some(x) => x, None => continue };
         if r.shorts.shares.is_none() {
@@ -2247,9 +2502,11 @@ pub fn shorts_feed(app: &Arc<App>) -> ShortsFeed {
         r.shorts.exchange = if source.exchange.is_empty() { key.1.clone() } else { source.exchange.clone() };
         match ShortsView::of(&r) {
             Ok(v) => rows.push(ShortsFeedRow { position_id: source.position_id.clone(), held: held.contains_key(&key), watched: watched.contains_key(&key), shorts: v }),
-            Err(e) => feed_failed(app, "shorts", e),
+            Err(e) => failed.push(e),
         }
     }
+    // said until a read of them all succeeds
+    went(app, SHORTS, if failed.is_empty() { Ok(()) } else { Err(failed.join(" ")) });
     ShortsFeed { ok: true, rows, reading: app.feeds.shorts_left.load(Ordering::SeqCst) > 0 }
 }
 
@@ -2305,7 +2562,11 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
     if sym.is_empty() {
         return ListingAnswer::err("symbol required");
     }
-    let Some(b) = base(app) else { return ListingAnswer::err("store unavailable") };
+    let b = match base(app) {
+        Ok(Some(b)) => b,
+        Ok(None) => return ListingAnswer::err("no page has stated its zone yet"),
+        Err(e) => return ListingAnswer::err(e),
+    };
     let Some(f) = app.figures.get() else { return ListingAnswer::err("the figures are not open") };
     let names = match f.names() {
         Ok(n) => n,
@@ -2407,7 +2668,7 @@ pub fn listing_payload_in(
 /// The shares held and the listings watched whose
 /// short selling is published.
 pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, String, String)> {
-    let b = match base(app) { Some(b) => b, None => return vec![] };
+    let Ok(Some(b)) = base(app) else { return vec![] }; // a failure is said in the header by `base`
     let mut rows: Vec<(&str, &str, &str, &str)> = Vec::new();
     if scope == "holdings" || scope == "all" {
         rows.extend(b.positions.iter().map(|p| (p.symbol.as_str(), p.exchange.as_str(), p.currency.as_str(), p.name.as_str())));
@@ -2432,10 +2693,11 @@ pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, Stri
 /// Keep every held and watched listing's short
 /// selling stored and current.
 pub fn sweep_shorts(app: &Arc<App>) -> usize {
-    let c = match conn(app) { Some(c) => c, None => return 0 };
+    let Ok(c) = conn(app) else { return 0 }; // said in the header by `conn`
     let mut due = Vec::new();
     for (sym, ex, ccy, name) in shorts_listings(app, "all") {
-        let held = sf::shorts_for(&c, &sym, &ex).ok().flatten();
+        // a row held that cannot be read is read again from its source, and the store's failure said until it answers
+        let held = went(app, &format!("shorts-store:{}|{}", sym, ex), sf::shorts_for(&c, &sym, &ex).map_err(|e| format!("{sym}'s short selling held could not be read: {e}"))).flatten();
         let fresh = held.as_ref().map(|h| h.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) && !shorts_stale(h)).unwrap_or(false);
         if !fresh {
             due.push((sym, ex, ccy, name));
@@ -2453,7 +2715,7 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
     }
     let _reset = Reset(app);
     for (sym, ex, ccy, name) in due {
-        if read_shorts(app, &sym, &ex, &ccy, true, &name).is_some() {
+        if read_shorts_said(app, &sym, &ex, &ccy, true, &name).is_some() {
             done += 1;
         }
         app.feeds.shorts_left.fetch_sub(1, Ordering::SeqCst);
@@ -2526,9 +2788,10 @@ pub fn universe_due_in(now: f64, read_at: &[Option<f64>], asked: Option<f64>) ->
 }
 
 fn source_due_in(app: &Arc<App>, source: UniverseSource) -> f64 {
+    // a universe whose rows' age cannot be read is due: the read that follows says what fails
     let read_at: Vec<Option<f64>> = match conn(app) {
-        Some(c) => source.keys().iter().map(|k| sf::universe_read_at(&c, k).ok().flatten().as_deref().and_then(parse_instant)).collect(),
-        None => source.keys().iter().map(|_| None).collect(),
+        Ok(c) => source.keys().iter().map(|k| sf::universe_read_at(&c, k).ok().flatten().as_deref().and_then(parse_instant)).collect(),
+        Err(_) => source.keys().iter().map(|_| None).collect(),
     };
     let asked = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner()).asked.get(&source).copied();
     universe_due_in(now_unix(), &read_at, asked)
@@ -2566,7 +2829,7 @@ fn read_universes(app: &Arc<App>, source: UniverseSource) {
         reads.asked.insert(source, now);
     }
     let outcome = fetch_universes(app, source).and_then(|answered| {
-        let c = conn(app).ok_or_else(|| "The database could not be opened.".to_string())?;
+        let c = conn(app)?;
         let now = now_iso();
         for (key, rows) in answered {
             sf::replace_universe(&c, key, &rows, &now).map_err(|e| format!("The {} universe could not be stored: {e}", key))?;
@@ -2624,13 +2887,25 @@ pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
 /// A few instruments per call.
 pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String> {
     app.single_flight("archive", vec![], || {
-        let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return vec![] };
+        // the book not opening and its listings not read are said in the header by `conn` and `base`
+        let (c, b) = match (conn(app), base(app)) { (Ok(c), Ok(Some(b))) => (c, b), _ => return vec![] };
         let recs = bagholder_model::symbols_of::intraday_archive_symbols(&b);
         let limit = limit.map(|l| l.max(1)).unwrap_or(history::ARCHIVE_BATCH);
         let (today_s, now, stamp) = bagholder_market::clock_now();
-        let mut out = history::archive_daily(&c, &recs, &today_s, now, &stamp, limit);
-        out.extend(history::archive_intraday(&c, &recs, &today_s, now, &stamp, limit));
-        out
+        let worked = history::archive_daily(&c, &recs, &today_s, now, &stamp, limit).and_then(|mut out| {
+            out.extend(history::archive_intraday(&c, &recs, &today_s, now, &stamp, limit)?);
+            Ok(out)
+        });
+        match worked {
+            Ok(out) => {
+                feed_answered(app, "archive");
+                out
+            }
+            Err(e) => {
+                feed_failed(app, "archive", format!("The price bars could not be archived: {e}"));
+                vec![]
+            }
+        }
     })
 }
 
@@ -2677,12 +2952,19 @@ pub fn archive_loop(app: Arc<App>) {
             // Nothing is due. The next top-up falls due at a known moment (a stored
             // read passing its age), and new work can otherwise only come from the
             // book gaining a listing: wait for whichever is first.
-            let listings = || base(&app).map(|b| bagholder_model::symbols_of::intraday_archive_symbols(&b));
+            let listings = || base(&app).ok().flatten().map(|b| bagholder_model::symbols_of::intraday_archive_symbols(&b));
             let was = listings();
             let due = match (conn(&app), was.as_ref()) {
-                (Some(c), Some(recs)) => {
+                (Ok(c), Some(recs)) => {
                     let (today_s, now, _) = bagholder_market::clock_now();
-                    history::archive_next_due_secs(&c, recs, &today_s, now)
+                    match history::archive_next_due_secs(&c, recs, &today_s, now) {
+                        Ok(due) => due,
+                        Err(e) => {
+                            // said until a pass reads the store again, which the book changing starts
+                            feed_failed(&app, "archive", format!("The price bars could not be archived: {e}"));
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -2714,15 +2996,24 @@ pub fn market_loop(app: Arc<App>) {
 
 pub const WATCH_SCAN_SEC: u64 = 10 * 60;
 
-pub fn watch_loop(app: Arc<App>) {
-    // the folder an earlier version watched is watched again
-    if let (Some(f), Some(c)) = (app.figures.get(), conn(&app)) {
-        if let Ok(old) = bagholder_store::csvimport::watch_folder(&c) {
-            if let Err(e) = crate::csv_import::adopt(f, &old, bagholder_core::jiff::Timestamp::now()) {
-                crate::app::log(&format!("bagholder: the folder watched before: {e}"));
-            }
+/// The folder an earlier version watched, watched again, once: taken from the old
+/// store, it is cleared there, so a folder no longer watched is not taken again at
+/// the next start. A failure is said in the header.
+pub(crate) fn carry_watch_folder(app: &Arc<App>) {
+    let Some(f) = app.figures.get() else { return };
+    let carried = conn(app).and_then(|c| {
+        let old = bagholder_store::csvimport::watch_folder(&c).map_err(|e| e.to_string())?;
+        crate::csv_import::adopt(f, &old, bagholder_core::jiff::Timestamp::now())?;
+        if !old.is_empty() {
+            set_meta(&c, bagholder_store::csvimport::WATCH_META, "").map_err(|e| e.to_string())?;
         }
-    }
+        Ok(())
+    });
+    went(app, "watch-folder", carried.map_err(|e| format!("The folder watched before could not be watched again: {e}")));
+}
+
+pub fn watch_loop(app: Arc<App>) {
+    carry_watch_folder(&app);
     // Only while a folder is watched and the figures are built; until then, this
     // waits for them. The folder itself is looked at on a period: the standard
     // library has no file-system notification (docs/architecture.md, "Timers that remain").
@@ -2789,7 +3080,14 @@ pub fn history_pending(app: &Arc<App>, q: &HistoryQuery) -> bool {
         return history::daily_pending(&inst);
     }
     let (today_s, now, _) = bagholder_market::clock_now();
-    conn(app).map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
+    conn(app).is_ok_and(|c| match history::intraday_ready(&c, &inst, &tf, &start, &today_s, now) {
+        Ok(ready) => !ready,
+        // nothing is being read that could be waited for: the failure is said
+        Err(e) => {
+            feed_failed(app, "bars", format!("The bars could not be read: {e}"));
+            false
+        }
+    })
 }
 
 /// A chart's question: the listing, the span and the timeframe. The page asks
@@ -2850,6 +3148,15 @@ pub enum HistoryAnswer {
     Refused(OkOr),
 }
 
+/// A background read of a chart's bars ended: a store that failed it is said in
+/// the header until a read goes through.
+fn bars_read(app: &Arc<App>, read: Result<(), String>) {
+    match read {
+        Ok(()) => feed_answered(app, "bars"),
+        Err(e) => feed_failed(app, "bars", e),
+    }
+}
+
 pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let (rec, start, end, tf) = q.read();
     if rec.symbol.is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
@@ -2858,29 +3165,54 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let inst = history::chart_instrument(&rec);
     let src = history::history_source(&inst);
     let (today_s, now, stamp) = bagholder_market::clock_now();
-    let c = conn(app);
-    let available: Vec<&'static str> = c.as_ref().map(|c| history::offered_timeframes(c, &inst, &start, &today_s, now)).unwrap_or_default();
+    let c = match conn(app) {
+        Ok(c) => c,
+        Err(e) => return HistoryAnswer::Refused(OkOr::err(e)),
+    };
+    let c = &c;
+    let available: Vec<&'static str> = match history::offered_timeframes(c, &inst, &start, &today_s, now) {
+        Ok(a) => a,
+        Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
+    };
     let mut pending = false;
-    let bars: ChartBars = match &c {
-        None => ChartBars::default(),
-        Some(c) => {
+    let bars: ChartBars = {
+        {
             if !(src.is_some() && available.contains(&tf.as_str())) {
                 ChartBars::default()
-            } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) && !history::intraday_ready(c, &inst, &tf, &start, &today_s, now) {
-                history::ensure_intraday_in_background(app.store(), inst.clone(), tf.clone(), start.clone(), end.clone());
+            } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf)
+                && !match history::intraday_ready(c, &inst, &tf, &start, &today_s, now) {
+                    Ok(ready) => ready,
+                    Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
+                }
+            {
+                let told = app.clone();
+                history::ensure_intraday_in_background(app.store(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| bars_read(&told, read));
                 pending = true;
                 ChartBars::default()
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
-                history::ensure_bars(c, &inst, &tf, &start, &end, &today_s, now, &stamp).unwrap_or_default()
+                match history::ensure_bars(c, &inst, &tf, &start, &end, &today_s, now, &stamp) {
+                    Ok(b) => b,
+                    Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
+                }
             } else {
                 // a day's bars are answered as stored, never after a read of the sources: a
                 // read that is due runs in the background and the page is told when it ends
-                if history::daily_due(c, &inst, &start, &end, &today_s, now) {
+                let due = match history::daily_due(c, &inst, &start, &end, &today_s, now) {
+                    Ok(due) => due,
+                    Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
+                };
+                if due {
                     let signal = app.clone();
-                    history::ensure_daily_in_background(app.store(), inst.clone(), start.clone(), move || signal.events.signal());
+                    history::ensure_daily_in_background(app.store(), inst.clone(), start.clone(), move |read| {
+                        bars_read(&signal, read);
+                        signal.events.signal();
+                    });
                 }
                 pending = history::daily_pending(&inst);
-                let daily = history::stored_daily(c, &inst, &start, &end).unwrap_or_default();
+                let daily = match history::stored_daily(c, &inst, &start, &end) {
+                    Ok(d) => d,
+                    Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars held could not be read: {e}"))),
+                };
                 ChartBars::Days(if tf == "1d" { daily } else { history::aggregate_daily(&daily, &tf) })
             }
         }
@@ -3036,9 +3368,9 @@ mod tests {
     #[test]
     fn test_stale_until_a_fetch_then_fresh_within_a_day() {
         let c = store();
-        assert!(filings_stale(&c, "SHOP", None));
+        assert!(filings_stale(&c, "SHOP", None).unwrap());
         sf::mark_filings_fetched(&c, "SHOP", "", &now_iso()).unwrap();
-        assert!(!filings_stale(&c, "SHOP", None));
+        assert!(!filings_stale(&c, "SHOP", None).unwrap());
     }
 
     #[test]
@@ -3046,7 +3378,7 @@ mod tests {
         let c = store();
         let old = crate::app::stamp_of(now_unix() as i64 - 25 * 3600);
         sf::mark_filings_fetched(&c, "SHOP", "", &old).unwrap();
-        assert!(filings_stale(&c, "SHOP", None));
+        assert!(filings_stale(&c, "SHOP", None).unwrap());
     }
 
     #[test]
@@ -3391,10 +3723,10 @@ mod tests {
         run(&c, false, ("A title", ""), false);
         let r = fake(true, ("A title", "The sentence."), false);
         let mut passed = HashSet::new();
-        assert!(read_one_in(&c, &["QNC".to_string()], &mut passed, &r));
+        assert_eq!(read_one_in(&c, &["QNC".to_string()], &mut passed, &r), Ok(Some(Ok(()))));
         assert_eq!(r.reads.get(), 1);
         assert_eq!(halves(&c), pair("A title", "The sentence."));
-        assert!(!read_one_in(&c, &["QNC".to_string()], &mut passed, &r), "nothing is left to read");
+        assert_eq!(read_one_in(&c, &["QNC".to_string()], &mut passed, &r), Ok(None), "nothing is left to read");
     }
 
     #[test]
@@ -3404,7 +3736,7 @@ mod tests {
         let r = fake(false, ("A title", ""), false);
         let mut passed = HashSet::new();
         let mut tries = 0;
-        while read_one_in(&c, &["QNC".to_string()], &mut passed, &r) {
+        while read_one_in(&c, &["QNC".to_string()], &mut passed, &r).unwrap().is_some() {
             tries += 1;
             assert!(tries < 5, "a row a read cannot move is passed over, not read in a loop");
         }

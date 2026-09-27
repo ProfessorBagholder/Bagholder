@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { get, lookup, post, query, searchSymbols } from './api'
+import { call, get, lookup, post, query, searchSymbols } from './api'
 
 const sources = import.meta.glob('/src/**/*.{ts,svelte}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
 
@@ -62,6 +62,29 @@ describe('the one way to the server', () => {
     expect(await get('/api/filings')).toEqual({ ok: false, error: 'symbol required' })
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
     expect(await get('/api/status')).toEqual({ ok: false, error: 'TypeError: Failed to fetch' })
+  })
+
+  it('reads an answer strictly: a refusal without a reason, a failed status and an unreadable body are failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false }), { status: 500, statusText: 'Internal Server Error' })))
+    expect(await get('/api/status')).toEqual({ ok: false, error: 'Bagholder answered 500 Internal Server Error without a reason.' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ path: '/x' }), { status: 404, statusText: 'Not Found' })))
+    expect(await get('/api/watch')).toEqual({ ok: false, error: 'Bagholder answered 404 Not Found without a reason.' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>busy</html>', { status: 502, statusText: 'Bad Gateway' })))
+    expect(await get('/api/status')).toEqual({ ok: false, error: 'Bagholder answered 502 Bad Gateway.' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('[1,2]')))
+    expect(await get('/api/status')).toEqual({ ok: false, error: 'Bagholder answered in a form this page cannot read.' })
+    // an answer that carries no `ok` of its own (a route's plain state) is the route's answer
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ path: '/in', account: '' }))))
+    expect(await get('/api/watch')).toEqual({ ok: true, path: '/in', account: '' })
+  })
+
+  it('lets no field of an answer be read before its failure is met', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, id: 'w1' }))))
+    const r = await call('POST /api/watchlist/add', { body: { symbol: 'QNC', exchange: 'TSXV', name: '', currency: 'CAD' } })
+    // @ts-expect-error -- a failure has no id: the type checker refuses this read until `ok` is checked
+    expect(r.id).toBe('w1')
+    if (!r.ok) throw new Error(r.error)
+    expect(r.id).toBe('w1')
   })
 
   it('asks for a listing once, and does not remember a lookup that failed', async () => {

@@ -37,7 +37,7 @@
           : { entry: 'return-of-capital', distribution: event.transaction, perUnit: text(perUnit) },
     })
     busy = false
-    if (!r.ok) error = r.error ?? ''
+    if (!r.ok) error = r.error
   }
 </script>
 

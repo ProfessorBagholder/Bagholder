@@ -9,6 +9,7 @@
   import { signedPct } from './util'
   import { digits, sign, type Dec } from '../dec'
   import { call } from '../api'
+  import { flash } from '../ui.svelte'
   import { focusOnMount } from '../actions/focus'
   import { escapable } from '../escape'
 
@@ -48,7 +49,10 @@
   async function postTiles(next: MarketTile[]) {
     order = next.slice()
     const r = await call('POST /api/tiles/set', { body: { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) } })
-    if (!r || !r.ok) order = null // refused: back to what the server has
+    if (r.ok) return
+    // refused: said in the header, and the row back to what the server has
+    flash('Could not save the tiles: ' + r.error, 'err')
+    order = null
   }
   // The saved row reaches the page as a change to the tiles, and each tile's price as
   // a change to that tile when the server has read it. The optimistic order steps
@@ -70,7 +74,7 @@
       : tiles.concat([{ id: '', symbol: inst.symbol, exchange: inst.exchange, label: inst.label, name: inst.name, kind: inst.kind, last: null, change: null, percentChange: null, decimals: 2, pricedAsRate: false, rate: null, rateChange: null }])
     if (!has && next.length > TILES_ROW && !tilesOpen) {
       tilesOpen = true
-      try { localStorage.setItem('bh2.tilesOpen', '1') } catch { /* ignore */ }
+      try { localStorage.setItem('bh2.tilesOpen', '1') } catch { /* the browser keeps nothing: the choice holds for this visit */ }
     }
     if (next.length >= TILES_MAX) tileAdd = false
     postTiles(next)
@@ -78,7 +82,7 @@
   function tilesMore() {
     tilesOpen = !tilesOpen
     if (!tilesOpen) tileAdd = false
-    try { localStorage.setItem('bh2.tilesOpen', tilesOpen ? '1' : '0') } catch { /* ignore */ }
+    try { localStorage.setItem('bh2.tilesOpen', tilesOpen ? '1' : '0') } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
   function openPicker() {
     tileAdd = !tileAdd

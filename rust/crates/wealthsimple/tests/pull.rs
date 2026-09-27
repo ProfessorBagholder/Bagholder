@@ -367,3 +367,14 @@ fn a_read_that_would_remove_a_final_row_older_than_the_rows_read_again_removes_n
     assert!(second.suspect.iter().any(|(_, w)| w.contains("anon-final-9") && w.contains("older than the rows read again")), "{:?}", second.suspect);
     assert_eq!(state(&book, "wealthsimple", "anon-pending-2"), RecordState::Live);
 }
+
+/// A capture whose reply lacks the list its operation carries does not read:
+/// the replay says which file, never a pull that found nothing there.
+#[test]
+fn a_capture_reply_missing_its_list_is_refused_with_its_file() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("positions@acct@2026-09-16.json"), r#"{"data": {"identity": {}}}"#).unwrap();
+    let err = Replay::read(d.path()).err().expect("a reply without its accounts list is refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("positions@acct@2026-09-16.json"), "{err}");
+}

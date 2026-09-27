@@ -330,7 +330,12 @@ fn sweep(app: &Arc<App>, book: &Book, now: Timestamp) -> Result<(), String> {
             continue;
         }
         log(&format!("bagholder bracket: {} for {} rests at Wealthsimple with no bracket holding it; cancelled", o.request.id, o.request.symbol));
-        let _ = gate::cancel(app, book, &o.request.id, &Asker::Engine, now)?;
+        match gate::cancel(app, book, &o.request.id, &Asker::Engine, now)? {
+            Ok(_) => {}
+            // dry orders send nothing, an order no longer resting has nothing to cancel, and a
+            // capped minute is asked again on the next sweep; a cancel is never held in flight
+            Err(Held::Dry | Held::NotNow(_) | Held::Capped | Held::InFlight) => {}
+        }
     }
     Ok(())
 }
@@ -345,7 +350,14 @@ fn quotes_for(app: &Arc<App>, live: &[StoredBracket], now: Timestamp) -> HashMap
         quote_problem(app, None);
         return out;
     }
-    let Some(sess) = ticket_session(app) else { return out };
+    let sess = match ticket_session(app) {
+        Ok(s) => s,
+        Err(e) => {
+            // no one signed in is said by the connection; a login that cannot be read is said here
+            quote_problem(app, if e == super::tools::NOT_CONNECTED { None } else { Some(e) });
+            return out;
+        }
+    };
     match super::fetch_quotes(app, &sess, &ids) {
         Ok(q) => {
             let mut problems = Vec::new();

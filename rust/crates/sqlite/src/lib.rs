@@ -33,7 +33,13 @@ pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn
     // rather than refusing: the next open finds it converted.
     let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
     if !mode.eq_ignore_ascii_case("wal") {
-        let _ = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0));
+        match conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0)) {
+            Ok(_) => {}
+            // busy right then: opened as it is, as said above
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {}
+            Err(e) => return Err(e),
+        }
     }
     conn.pragma_update(None, "synchronous", "FULL")?;
     // every connection is made here, so every commit in the process is heard: no

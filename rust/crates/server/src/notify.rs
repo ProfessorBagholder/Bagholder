@@ -253,36 +253,38 @@ pub struct NotifyStatus {
     pub unread: i64,
 }
 
-/// Every kind off until it is turned on from the menu.
+/// Every kind off until it is turned on from the menu. Settings stored in a
+/// form that cannot be read are an error, never every kind off.
 pub fn settings(conn: &Connection) -> Result<NotifySettings> {
     let raw = bagholder_store::tables::get_meta(conn, SETTINGS_KEY, "")?;
-    Ok(serde_json::from_str(if raw.is_empty() { "{}" } else { &raw }).unwrap_or_default())
+    serde_json::from_str(if raw.is_empty() { "{}" } else { &raw })
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, format!("the notification settings could not be read: {e}").into()))
 }
 
 /// Whether any Releases notification set is on.
-pub fn any_release_scope(conn: &Connection) -> bool {
-    !scopes(conn, &RELEASE_SCOPES, "releases").is_empty()
+pub fn any_release_scope(conn: &Connection) -> Result<bool> {
+    Ok(!scopes(conn, &RELEASE_SCOPES, "releases")?.is_empty())
 }
 
-fn scopes(conn: &Connection, keys: &[&str], prefix: &str) -> Vec<String> {
-    let on = settings(conn).unwrap_or_default();
-    keys.iter().filter(|k| on.get(k)).map(|k| k[prefix.len()..].to_lowercase()).collect()
+fn scopes(conn: &Connection, keys: &[&str], prefix: &str) -> Result<Vec<String>> {
+    let on = settings(conn)?;
+    Ok(keys.iter().filter(|k| on.get(k)).map(|k| k[prefix.len()..].to_lowercase()).collect())
 }
 
-pub fn disclosure_scopes(conn: &Connection) -> Vec<String> {
+pub fn disclosure_scopes(conn: &Connection) -> Result<Vec<String>> {
     scopes(conn, &DISCLOSURE_SCOPES, "disclosures")
 }
 
-pub fn release_scopes(conn: &Connection) -> Vec<String> {
+pub fn release_scopes(conn: &Connection) -> Result<Vec<String>> {
     scopes(conn, &RELEASE_SCOPES, "releases")
 }
 
-pub fn kind_on(conn: &Connection, kind: &str) -> bool {
-    match kind {
-        "disclosures" => !disclosure_scopes(conn).is_empty(),
-        "releases" => !release_scopes(conn).is_empty(),
-        k => settings(conn).map(|s| s.get(k)).unwrap_or(false),
-    }
+pub fn kind_on(conn: &Connection, kind: &str) -> Result<bool> {
+    Ok(match kind {
+        "disclosures" => !disclosure_scopes(conn)?.is_empty(),
+        "releases" => !release_scopes(conn)?.is_empty(),
+        k => settings(conn)?.get(k),
+    })
 }
 
 pub fn set_settings(conn: &Connection, patch: &NotifySettingsPatch) -> Result<NotifySettings> {
@@ -368,7 +370,8 @@ pub fn native_channel() -> String {
     if let Some(c) = test_hooks::CHANNEL.lock().unwrap().clone() {
         return c;
     }
-    let mode = std::env::var(MODE_ENV).unwrap_or_default();
+    // unset is the system's own channel; a mode that is not text names none of the modes
+    let mode = std::env::var(MODE_ENV).ok().unwrap_or_default();
     let display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false) || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
     channel_for(&mode, std::env::consts::OS, &|n| which(n).is_some(), display)
 }
@@ -418,14 +421,47 @@ fn heartbeat() -> Duration {
 /// showed at that moment. A stream met for the first time shows nothing and
 /// its mark is set from it; after that it shows what is newer than the mark,
 /// and what shares the mark's moment without having been shown.
-pub fn fresh_since<T: Clone, A, I, S>(conn: &Connection, stream: &str, items: &[T], at: A, ident: I, seen: S) -> Vec<T>
+///
+/// A mark that cannot be read or written is an error: a stream read as never
+/// met would show nothing, and a mark not kept would show the same items again.
+/// (The app keeps the mark with what it tells: `fresh_in` and `keep_mark`.)
+#[cfg(test)]
+pub fn fresh_since<T: Clone, A, I, S>(conn: &Connection, stream: &str, items: &[T], at: A, ident: I, seen: S) -> Result<Vec<T>>
+where
+    A: Fn(&T) -> String,
+    I: Fn(&T) -> String,
+    S: Fn(&T) -> bool,
+{
+    let fresh = fresh_in(conn, stream, items, at, ident, seen)?;
+    keep_mark(conn, &fresh.mark)?;
+    Ok(fresh.items)
+}
+
+/// What a stream shows now, and the mark that showing it leaves: read only, so
+/// the mark is kept (`keep_mark`) in the same transaction as what is told of
+/// the items, and a notice that fails leaves them to show again.
+pub struct Fresh<T> {
+    pub items: Vec<T>,
+    pub mark: Option<(String, String)>,
+}
+
+/// Keep the mark `fresh_in` left, if it left one.
+pub fn keep_mark(conn: &Connection, mark: &Option<(String, String)>) -> Result<()> {
+    match mark {
+        Some((key, value)) => bagholder_store::tables::set_meta(conn, key, value),
+        None => Ok(()),
+    }
+}
+
+/// `fresh_since`, reading only.
+pub fn fresh_in<T: Clone, A, I, S>(conn: &Connection, stream: &str, items: &[T], at: A, ident: I, seen: S) -> Result<Fresh<T>>
 where
     A: Fn(&T) -> String,
     I: Fn(&T) -> String,
     S: Fn(&T) -> bool,
 {
     let key = format!("{}{}", WATERMARK, stream);
-    let raw = bagholder_store::tables::get_meta(conn, &key, "").unwrap_or_default();
+    let raw = bagholder_store::tables::get_meta(conn, &key, "")?;
     let (mark, shown_raw) = match raw.split_once('|') { Some((a, b)) => (a.to_string(), b.to_string()), None => (raw.clone(), String::new()) };
     let shown: Vec<String> = shown_raw.split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
     let stamped: Vec<(String, String, &T)> = items.iter().map(|i| (at(i), ident(i), i)).collect();
@@ -437,23 +473,18 @@ where
         }
         at_top.sort();
         at_top.dedup();
-        let _ = bagholder_store::tables::set_meta(conn, &key, &format!("{}|{}", top, at_top.join(",")));
+        Some((key.clone(), format!("{}|{}", top, at_top.join(","))))
     };
     if raw.is_empty() {
-        if !newest.is_empty() {
-            remember(&newest);
-        }
-        return vec![];
+        return Ok(Fresh { items: vec![], mark: if newest.is_empty() { None } else { remember(&newest) } });
     }
     let out: Vec<T> = stamped
         .iter()
         .filter(|(w, i, v)| (*w > mark || (*w == mark && !shown.contains(i))) && !seen(v))
         .map(|(_, _, v)| (*v).clone())
         .collect();
-    if !out.is_empty() || newest > mark {
-        remember(if newest > mark { &newest } else { &mark });
-    }
-    out
+    let kept = if !out.is_empty() || newest > mark { remember(if newest > mark { &newest } else { &mark }) } else { None };
+    Ok(Fresh { items: out, mark: kept })
 }
 
 /// The id a stream item is known by when no other is given.
@@ -485,15 +516,45 @@ impl NotifyState {
 }
 
 /// One notification, if its kind is on and this key has not
-/// been told before.
-pub fn emit(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Option<bagholder_store::feeds::Notification> {
-    if !KINDS.contains(&kind) || !kind_on(conn, kind) {
-        return None;
+/// been told before. The store refusing the read or the row is an error.
+pub fn emit(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+    let row = record(conn, kind, key, title, body, extra)?;
+    if let Some(row) = &row {
+        announce(app, row);
     }
-    post(app, conn, kind, key, title, body, extra)
+    Ok(row)
 }
 
-pub fn test_notification(app: &Arc<App>, conn: &Connection) -> Option<bagholder_store::feeds::Notification> {
+/// `emit`'s row kept and nothing more: for a notice told in one transaction with
+/// what marks it told, and announced (`announce`) once that commits.
+pub fn record(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+    if !KINDS.contains(&kind) || !kind_on(conn, kind)? {
+        return Ok(None);
+    }
+    store_row(conn, kind, key, title, body, extra)
+}
+
+/// `emit` from work that answers nobody (a pass, a loop, an order's watch):
+/// a notice that could not be recorded is said in the header until the next
+/// one is.
+pub fn tell(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Option<bagholder_store::feeds::Notification> {
+    let told = app.open().and_then(|conn| emit(app, &conn, kind, key, title, body, extra));
+    match told {
+        Ok(row) => {
+            crate::feeds::feed_answered(app, NOTICES);
+            row
+        }
+        Err(e) => {
+            crate::feeds::feed_failed(app, NOTICES, format!("A notification could not be recorded: {e}"));
+            None
+        }
+    }
+}
+
+/// The header's entry for the notices: recording them, and reading them for the bell.
+pub(crate) const NOTICES: &str = "notifications";
+
+pub fn test_notification(app: &Arc<App>, conn: &Connection) -> Result<Option<bagholder_store::feeds::Notification>> {
     let stamp = {
         let now = crate::app::now_unix();
         let micros = ((now.fract()) * 1_000_000.0) as i64;
@@ -502,15 +563,28 @@ pub fn test_notification(app: &Arc<App>, conn: &Connection) -> Option<bagholder_
     post(app, conn, "test", &format!("test:{}", stamp), APP_NAME, "Notifications reach you here.", None)
 }
 
-fn post(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Option<bagholder_store::feeds::Notification> {
-    let channel = native_channel();
+fn post(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+    let row = store_row(conn, kind, key, title, body, extra)?;
+    if let Some(row) = &row {
+        announce(app, row);
+    }
+    Ok(row)
+}
+
+/// A notice's row, kept once under its key.
+fn store_row(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
     // posted from here, the row is the server's own to show: seen from the start
-    let row = bagholder_store::feeds::add_notification(conn, kind, key, title, body, extra.as_ref(), !channel.is_empty(), &now_iso()).ok()??;
+    bagholder_store::feeds::add_notification(conn, kind, key, title, body, extra.as_ref(), !native_channel().is_empty(), &now_iso())
+}
+
+/// A kept notice shown: through the system where it has a channel, and to every
+/// page's stream.
+pub fn announce(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
+    let channel = native_channel();
     if !channel.is_empty() {
         enqueue(app.clone(), row.title.clone(), row.body.clone(), channel);
     }
     app.notify.wake_streams();
-    Some(row)
 }
 
 fn enqueue(app: Arc<App>, title: String, body: String, chan: String) {
@@ -529,8 +603,16 @@ fn enqueue(app: Arc<App>, title: String, body: String, chan: String) {
         });
         Mutex::new(tx)
     });
-    let _ = tx.lock().unwrap().send((title, body, chan));
+    // the thread ends only with the app, whose sender this is: a send it refuses
+    // means the thread died, and the system's notifications with it
+    match tx.lock().unwrap().send((title, body, chan)) {
+        Ok(()) => crate::feeds::feed_answered(&app, SYSTEM_NOTICES),
+        Err(_) => crate::feeds::feed_failed(&app, SYSTEM_NOTICES, "The system's notifications stopped: the thread that shows them ended".into()),
+    }
 }
+
+/// The header's entry for showing notices through the system.
+const SYSTEM_NOTICES: &str = "notifications-system";
 
 /// Post one notification through the system.
 pub fn deliver(app: &App, channel: &str, title: &str, body: &str) -> bool {
@@ -565,13 +647,17 @@ pub fn mac_app_path(app: &App) -> PathBuf {
     app.home.join(format!("{}.app", APP_NAME))
 }
 
-fn mac_stamp(app: &App) -> String {
+/// What the applet is built from: its script and the icon, where there is one; an
+/// icon there that cannot be read is the error.
+fn mac_stamp(app: &App) -> std::io::Result<String> {
     let mut h = openssl::sha::Sha1::new();
     h.update(mac_script(app).as_bytes());
-    if let Ok(b) = std::fs::read(icon(app)) {
-        h.update(&b);
+    match std::fs::read(icon(app)) {
+        Ok(b) => h.update(&b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
-    h.finish().iter().map(|b| format!("{:02x}", b)).collect()
+    Ok(h.finish().iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 fn run(cmd: &str, args: &[&str]) -> bool {
@@ -583,7 +669,13 @@ fn run(cmd: &str, args: &[&str]) -> bool {
 pub fn mac_app(app: &App) -> Option<PathBuf> {
     let appdir = mac_app_path(app);
     let stamp_file = appdir.join("Contents/Resources/bagholder.stamp");
-    let want = mac_stamp(app);
+    let want = match mac_stamp(app) {
+        Ok(w) => w,
+        Err(e) => {
+            log(&format!("bagholder notify: the notifier app's icon could not be read: {}", e));
+            return None;
+        }
+    };
     if appdir.join("Contents/MacOS/applet").exists() && std::fs::read_to_string(&stamp_file).ok().as_deref() == Some(want.as_str()) {
         return Some(appdir);
     }
@@ -639,8 +731,12 @@ fn mac_build(app: &App, appdir: &Path, stamp: &str) -> std::io::Result<Option<Pa
         std::fs::rename(&built, appdir)?;
         Ok(Some(appdir.to_path_buf()))
     })();
-    let _ = std::fs::remove_dir_all(&work);
-    result
+    // the working folder goes whatever the build came to; one that cannot be removed fails the build
+    match std::fs::remove_dir_all(&work) {
+        Ok(()) => result,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => result,
+        Err(e) => result.and(Err(e)),
+    }
 }
 
 fn mac_icon(app: &App, work: &Path) -> Option<PathBuf> {
@@ -771,23 +867,45 @@ fn linux_command(app: &App, title: &str, body: &str) -> Command {
 /// each once, with a comment between them every heartbeat. `write` answers
 /// false when the reader has gone.
 pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut write: W) {
+    // a read that fails is said in the header until one succeeds: the stream reads
+    // on, and never takes a failed read for no new rows without saying so
+    let read = |f: &dyn Fn(&Connection) -> Result<Vec<bagholder_store::feeds::Notification>>| -> Vec<bagholder_store::feeds::Notification> {
+        match app.open().and_then(|c| f(&c)) {
+            Ok(rows) => {
+                crate::feeds::feed_answered(app, NOTICES);
+                rows
+            }
+            Err(e) => {
+                crate::feeds::feed_failed(app, NOTICES, format!("The notifications could not be read: {e}"));
+                vec![]
+            }
+        }
+    };
     let mut last = match after {
         Some(a) => a,
-        None => app.open().ok().and_then(|c| bagholder_store::feeds::latest_notification_id(&c).ok()).unwrap_or(0),
+        None => match app.open().and_then(|c| bagholder_store::feeds::latest_notification_id(&c)) {
+            Ok(id) => id,
+            Err(e) => {
+                crate::feeds::feed_failed(app, NOTICES, format!("The notifications could not be read: {e}"));
+                return;
+            }
+        },
     };
     if !write(": bagholder\n\n") {
         return;
     }
     while !app.stopping() {
-        let rows = app.open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
+        let rows = read(&|c| bagholder_store::feeds::list_notifications(c, last, "", false, 50, false));
         if rows.is_empty() {
             let (m, c) = &app.notify.bell;
             let g = m.lock().unwrap();
-            let _ = c.wait_timeout(g, heartbeat());
+            // woken by a notice or the heartbeat: either way the rows are read again
+            let (g, _timed_out) = c.wait_timeout(g, heartbeat()).unwrap_or_else(|e| e.into_inner());
+            drop(g);
             if app.stopping() {
                 return;
             }
-            let rows = app.open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
+            let rows = read(&|c| bagholder_store::feeds::list_notifications(c, last, "", false, 50, false));
             if rows.is_empty() {
                 if !write(": ping\n\n") {
                     return;
@@ -916,17 +1034,17 @@ mod tests {
     #[test]
     fn test_a_kind_that_is_off_is_not_told_and_a_key_is_told_once() {
         let (_g, app, conn) = setup();
-        assert!(emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).is_none());
+        assert!(emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap().is_none());
         set(&conn, json!({"fills": true}));
-        let row = v(&emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap());
+        let row = v(&emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap().unwrap());
         assert_eq!((f(&row, "kind"), f(&row, "title"), f(&row, "body"), f(&row, "seenAt"), f(&row, "readAt")), ("fills".into(), "Order filled · QNC".into(), "Bought 5 at 1.75".into(), String::new(), String::new()));
-        assert!(emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "again", None).is_none(), "the same event is never told twice");
-        assert!(emit(&app, &conn, "bogus", "x", "t", "b", None).is_none(), "an unknown kind is nothing");
-        assert!(emit(&app, &conn, "disclosures", "f1", "t", "b", None).is_none(), "no set of tickers chosen");
+        assert!(emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "again", None).unwrap().is_none(), "the same event is never told twice");
+        assert!(emit(&app, &conn, "bogus", "x", "t", "b", None).unwrap().is_none(), "an unknown kind is nothing");
+        assert!(emit(&app, &conn, "disclosures", "f1", "t", "b", None).unwrap().is_none(), "no set of tickers chosen");
         set(&conn, json!({"disclosuresWatched": true}));
-        assert_eq!(disclosure_scopes(&conn), vec!["watched".to_string()]);
-        assert!(emit(&app, &conn, "disclosures", "f1", "t", "b", None).is_some(), "any set on: the kind is told");
-        assert!(idn(&test_notification(&app, &conn).unwrap()) > id(&row), "the test goes out whatever the kinds say");
+        assert_eq!(disclosure_scopes(&conn).unwrap(), vec!["watched".to_string()]);
+        assert!(emit(&app, &conn, "disclosures", "f1", "t", "b", None).unwrap().is_some(), "any set on: the kind is told");
+        assert!(idn(&test_notification(&app, &conn).unwrap().unwrap()) > id(&row), "the test goes out whatever the kinds say");
         assert_eq!(list(&conn).len(), 3);
     }
 
@@ -934,12 +1052,12 @@ mod tests {
     fn test_seen_rows_are_not_listed_again_and_the_oldest_are_pruned() {
         let (_g, app, conn) = setup();
         set(&conn, json!({"fills": true}));
-        let ids: Vec<i64> = (0..3).map(|i| idn(&emit(&app, &conn, "fills", &format!("k{}", i), "t", "b", None).unwrap())).collect();
+        let ids: Vec<i64> = (0..3).map(|i| idn(&emit(&app, &conn, "fills", &format!("k{}", i), "t", "b", None).unwrap().unwrap())).collect();
         assert_eq!(st::mark_notifications_seen(&conn, &[ids[0]], &now_iso()).unwrap(), 1);
         assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap().iter().map(idn).collect::<Vec<_>>(), ids[1..]);
         assert_eq!(st::list_notifications(&conn, ids[1], "", false, 1000, false).unwrap().iter().map(idn).collect::<Vec<_>>(), ids[2..]);
         // NOTIFICATIONS_KEPT is a constant of the store crate and cannot be lowered here: four rows stay
-        emit(&app, &conn, "fills", "k9", "t", "b", None);
+        emit(&app, &conn, "fills", "k9", "t", "b", None).unwrap();
         let newest: Vec<String> = st::list_notifications(&conn, 0, "", false, 1000, true).unwrap().iter().map(|r| r.key.clone()).collect();
         assert_eq!(newest, ["k9", "k2", "k1", "k0"], "the history reads newest first");
         assert_eq!(st::unread_notifications(&conn).unwrap(), 4);
@@ -988,12 +1106,12 @@ mod tests {
         let (_g, app, conn) = setup();
         *test_hooks::HEARTBEAT_MS.lock().unwrap() = Some(50);
         set(&conn, json!({"fills": true}));
-        let old = idn(&emit(&app, &conn, "fills", "old", "Old", "b", None).unwrap());
+        let old = idn(&emit(&app, &conn, "fills", "old", "Old", "b", None).unwrap().unwrap());
         st::mark_notifications_seen(&conn, &[old], &now_iso()).unwrap();
-        let first = idn(&emit(&app, &conn, "fills", "first", "First", "b", None).unwrap());
+        let first = idn(&emit(&app, &conn, "fills", "first", "First", "b", None).unwrap().unwrap());
         let rx = open_stream(&app, Some(old), 2);
         let (hello, row1, ping) = (next(&rx), next(&rx), next(&rx));
-        let second = idn(&emit(&app, &conn, "fills", "second", "Second", "b", None).unwrap());
+        let second = idn(&emit(&app, &conn, "fills", "second", "Second", "b", None).unwrap().unwrap());
         let row2 = next_row(&rx);
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the reader gone: the stream ends");
         assert_eq!(hello, ": bagholder\n\n");
@@ -1005,7 +1123,7 @@ mod tests {
         *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
         let rx = open_stream(&app, None, 1);
         assert_eq!((next(&rx), next(&rx)), (": bagholder\n\n".to_string(), ": ping\n\n".to_string()), "no id: only what is made after the stream opens");
-        let third = idn(&emit(&app, &conn, "fills", "third", "Third", "b", None).unwrap());
+        let third = idn(&emit(&app, &conn, "fills", "third", "Third", "b", None).unwrap().unwrap());
         let chunk = next_row(&rx);
         assert!(chunk.starts_with(&format!("id: {}\n", third)) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
     }
@@ -1033,7 +1151,7 @@ mod tests {
         set(&conn, json!({"fills": true}));
         *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
         *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
-        let row = emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap();
+        let row = emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap().unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while std::time::Instant::now() < deadline && test_hooks::DELIVERED.lock().unwrap().as_ref().unwrap().is_empty() {
             std::thread::sleep(Duration::from_millis(20));
@@ -1085,7 +1203,7 @@ mod tests {
         assert_eq!(mac_app(&app), Some(appdir.clone()));
         assert_eq!(std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap(), mtime, "already built: not built again");
         *app.port.lock().unwrap() = 8800;
-        assert_ne!(mac_stamp(&app), stamp, "a new address means a new applet");
+        assert_ne!(mac_stamp(&app).unwrap(), stamp, "a new address means a new applet");
     }
 
     #[test]
@@ -1109,7 +1227,7 @@ mod tests {
     fn test_a_stream_met_for_the_first_time_shows_nothing_and_never_shows_its_past() {
         let (_g, _app, conn) = setup();
         let at = |i: &Value| f(i, "at");
-        let fresh = |s: &str, items: &[Value]| -> Vec<String> { fresh_since(&conn, s, items, at, default_ident, |_| false).iter().map(|i| f(i, "id")).collect() };
+        let fresh = |s: &str, items: &[Value]| -> Vec<String> { fresh_since(&conn, s, items, at, default_ident, |_| false).unwrap().iter().map(|i| f(i, "id")).collect() };
         let held = vec![json!({"id": "a", "at": "2026-05-01"}), json!({"id": "b", "at": "2026-06-01"})];
         assert!(fresh("s1", &held).is_empty(), "met for the first time: nothing");
         assert_eq!(bagholder_store::tables::get_meta(&conn, "notify_seen:s1", "").unwrap(), "2026-06-01|b");
@@ -1223,13 +1341,13 @@ mod tests {
             source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
             published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::Tmx,
         };
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[first.clone()], &["tmx:7".to_string()]);   // the first read is history
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[first.clone()], &["tmx:7".to_string()]).unwrap();   // the first read is history
         let second = bagholder_store::feeds::NewsItem {
             id: "tmx:8".into(), headline: "Harvest ETFs Announces September 2026 Distributions".into(),
             source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
             published_at: "2026-09-15T14:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::Tmx,
         };
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[first, second], &["tmx:8".to_string()]);
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[first, second], &["tmx:8".to_string()]).unwrap();
         let rows = posted(&app);
         assert_eq!(rows.len(), 1);
         let body = f(&rows[0], "body");
@@ -1348,7 +1466,7 @@ mod tests {
         let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
         let first = wire_release("tmx:1", head, "u1", "2026-09-14T11:30:00Z");
         let note = |rows: &[bagholder_store::feeds::NewsItem], new: &[&str]| {
-            crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>())
+            crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>()).unwrap()
         };
         note(&[older.clone()], &["tmx:0"]);                       // the listing's first read: history
         note(&[older.clone(), first.clone()], &["tmx:1"]);
@@ -1369,10 +1487,10 @@ mod tests {
         let (_g, app, c) = setup();
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         let old: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &old, &old.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &old, &old.iter().map(|r| r.id.clone()).collect::<Vec<_>>()).unwrap();
         // every one of them comes back under another source's ids, dated later, as a search's results shift
         let again: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("gnews:{}", i), &format!("Release number {}", i), "u", &format!("2026-09-{:02}T07:00:00Z", 10 + i))).collect();
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &again, &again.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &again, &again.iter().map(|r| r.id.clone()).collect::<Vec<_>>()).unwrap();
         assert!(posted(&app).is_empty(), "history stays history, whatever id it returns under");
     }
 
@@ -1387,14 +1505,39 @@ mod tests {
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         let head = "Harvest ETFs Announces August 2026 Distributions";
         let a = wire_release("tmx:1", head, "u1", "2026-08-24T11:30:00Z");
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a.clone()], &["tmx:1".to_string()]);   // the first read: history
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a.clone()], &["tmx:1".to_string()]).unwrap();   // the first read: history
         let b = wire_release("gnews:2", head, "u2", "2026-08-31T07:00:00Z");
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a.clone(), b.clone()], &["gnews:2".to_string()]);
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a.clone(), b.clone()], &["gnews:2".to_string()]).unwrap();
         assert!(posted(&app).is_empty(), "the same release under another id: history, not news");
         let fresh = wire_release("tmx:3", "Harvest ETFs Announces September 2026 Distributions", "u3", "2026-09-15T11:30:00Z");
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a, b, fresh], &["tmx:3".to_string()]);
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a, b, fresh], &["tmx:3".to_string()]).unwrap();
         assert_eq!(posted(&app).iter().map(|r| f(r, "title")).collect::<Vec<_>>(), vec!["Press release · RDDY"]);
         assert_eq!(f(&posted(&app)[0]["extra"], "at"), "2026-09-15T11:30:00Z");
+    }
+
+    #[test]
+    fn test_a_told_mark_that_cannot_be_kept_tells_nothing_and_is_said_until_it_can() {
+        // The mark that a release was told and the notice itself are kept together: a mark
+        // refused leaves no notice and no mark, so the release is told once when it can be.
+        let (_g, app, c) = setup();
+        set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
+        let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
+        let first = wire_release("tmx:1", "Harvest ETFs Announces September 2026 Distributions", "u1", "2026-09-14T11:30:00Z");
+        let note = |rows: &[bagholder_store::feeds::NewsItem], new: &[&str]| {
+            crate::feeds::note_wire_releases_said(&app, &c, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>())
+        };
+        note(&[older.clone()], &["tmx:0"]); // the listing's first read: history
+        c.execute_batch("CREATE TRIGGER refuse_told BEFORE INSERT ON told BEGIN SELECT RAISE(ABORT, 'the mark was refused'); END").unwrap();
+        note(&[older.clone(), first.clone()], &["tmx:1"]);
+        assert!(posted(&app).is_empty(), "nothing is told while its mark cannot be kept");
+        let said = crate::status::status(&app).error;
+        assert!(said.contains("The press releases could not be told") && said.contains("the mark was refused"), "{said}");
+        c.execute_batch("DROP TRIGGER refuse_told").unwrap();
+        note(&[older.clone(), first.clone()], &["tmx:1"]);
+        assert_eq!(posted(&app).iter().map(|r| f(r, "title")).collect::<Vec<_>>(), vec!["Press release · RDDY"], "told once, now that it is marked");
+        assert!(!crate::status::status(&app).error.contains("press releases"), "the next good read takes the failure away");
+        note(&[older, first], &["tmx:1"]);
+        assert_eq!(posted(&app).len(), 1, "and never again");
     }
 
     #[test]

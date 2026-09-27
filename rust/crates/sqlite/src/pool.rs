@@ -102,7 +102,9 @@ impl Pool {
             // SQLite leaves the log of a moved file on close, and the next connection
             // would read those commits into the file now at the path
             if let Some(stale) = idle.iter().find(|k| k.file != now) {
-                let _ = stale.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+                // a log left behind would be read into the file now at the path: the
+                // connection is not handed out over it
+                stale.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
             }
             idle.retain(|k| k.file == now);
             idle.pop()

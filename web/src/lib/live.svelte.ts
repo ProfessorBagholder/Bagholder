@@ -245,7 +245,7 @@ function sayWanted(): void {
     saidFor = streamId
     said = now
     post('/api/events/watch', { id: streamId, docs, have }).then((r) => {
-      if (!r.ok) conn.error = 'Bagholder did not take what this page shows: ' + (r.error || 'no answer')
+      if (!r.ok) conn.error = 'Bagholder did not take what this page shows: ' + r.error
     })
   })
 }
@@ -317,7 +317,7 @@ export async function connect(): Promise<void> {
   streamId = 0
   const seen = numbering(() => {
     if (streamId) post('/api/events/resync', { id: streamId }).then((r) => {
-      if (!r.ok) conn.error = 'Bagholder did not send this page what it missed: ' + (r.error || 'no answer')
+      if (!r.ok) conn.error = 'Bagholder did not send this page what it missed: ' + r.error
     })
   })
   es.addEventListener('hello', (e) => {
@@ -391,7 +391,7 @@ export async function connect(): Promise<void> {
 export function resyncAll(): void {
   if (!streamId) return
   post('/api/events/resync', { id: streamId }).then((r) => {
-    if (!r.ok) conn.error = 'Bagholder did not send this page its state again: ' + (r.error || 'no answer')
+    if (!r.ok) conn.error = 'Bagholder did not send this page its state again: ' + r.error
   })
 }
 
