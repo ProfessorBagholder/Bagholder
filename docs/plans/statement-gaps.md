@@ -30,8 +30,8 @@ It read the same activity feed and had the same gap: neither withdrawal is in it
 
 ## Open questions
 
-1. **The request's values.** Objective: ask exactly what Wealthsimple's page asks. What is known: the query text (captured, identical to ours), `statementType` (the page's code), and that the account id is the account's own. Two direct requests with `period` `2025-06-01` were refused (`UNPROCESSABLE_ENTITY`). What settles it: the Variables of the owner's captured request, one paste. Guessing formats again is not the best course.
-2. **The chequing account's row for an arriving withdrawal.** Objective: book the arriving side from Wealthsimple's own row, not infer it. What is known: its statement reads `Transfer in` for $35,650.00 on 2025-06-26. What settles it: the first read of that account's June 2025 statement, printed before anything is booked (a step of the build, below).
+1. **The request's values: settled 2026-09-27.** The page sends `accountId` (the account's own id, `lira-…`), `period` (the month's first day, `2025-06-01`) and `statementType` (`brokerage_monthly_statement` or `cash_monthly_statement`), captured from the page by the owner. The same values sent with the pull client's headers were refused (`UNPROCESSABLE_ENTITY`); replayed with the page's own request they answer. So a header the page adds and the client does not is still unknown. Objective: send what the page sends. What settles it: the page's header names, captured the same way, before the adapter is written. Guessing header values is not the best course.
+2. **The chequing account's row for an arriving withdrawal: settled 2026-09-27.** 💰Cash, June 2025: `2025-06-26 TRFIN Transfer in 35650.0`, balance 171.69 → 35,821.69. Retirement, January 2026: `2026-01-12 WHTFED −15985.71`, then `WD Withdrawal −37300.0`, balance to 1.17 (Wealthsimple's balance for the account today). Codes seen in these three statements: `SELL`, `WHTFED`, `WD`, `TRFIN`, `TRFOUT`, `TRFOUTTF`, `AFT_IN`. The file import knows neither `TRFOUTTF`, `AFT_IN` nor `WHTFED`.
 3. **How statement dates relate to feed dates.** Objective: match every row one-to-one. What is known: the statement dates the sale 2025-06-26 and states `(executed at 2025-06-25)`, the feed's day for it. What settles it: the build's first step reconciles every statement row of every month of the owner's accounts and lists any row that matched none or several. The rule below is fixed only once that list holds nothing but the known gaps.
 
 ## Approach
@@ -75,4 +75,4 @@ To be filled when built.
 
 ## Handoff
 
-Blocked on open question 1: the Variables of the owner's captured `FetchMonthlyStatementWithTransactions` request.
+Blocked on the gate's verdict, and on open question 1's last part (the header the page adds).
