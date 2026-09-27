@@ -127,9 +127,12 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                 let noted = cboe_ca::ask(ctx.net, &symbol);
                 ctx.record_detail(&cboe_ca::source(), cboe_ca::HOST, DataKind::Quote, Some(id), &noted, &symbol)?;
                 // Cboe Canada quotes its listings in their own currency; a listing with no
-                // trade this session has no live quote, and is marked at its stored close
-                if let Outcome::Answered(cboe_ca::CboeAnswer::Traded(q)) = noted.outcome {
-                    keep(ctx, id, cboe_ca::source(), Money::new(q.price, l.currency), q.change, q.change_pct, q.at, std::time::Duration::ZERO)?;
+                // trade this session (a weekend, or before the first trade) stands at the
+                // previous session's close, which Cboe states: that is its price now
+                match noted.outcome {
+                    Outcome::Answered(cboe_ca::CboeAnswer::Traded(q)) => keep(ctx, id, cboe_ca::source(), Money::new(q.price, l.currency), q.change, q.change_pct, q.at, std::time::Duration::ZERO)?,
+                    Outcome::Answered(cboe_ca::CboeAnswer::NoTradeYet { prev_close }) => keep(ctx, id, cboe_ca::source(), Money::new(prev_close, l.currency), None, None, ctx.now, std::time::Duration::ZERO)?,
+                    _ => {}
                 }
             }
             Some(Market::UnitedStates) => {

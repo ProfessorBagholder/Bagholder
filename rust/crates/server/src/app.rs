@@ -143,6 +143,10 @@ pub struct App {
 
 impl App {
     pub fn new(home: PathBuf, root: PathBuf, bind_host: String) -> Arc<App> {
+        // a test's app never reaches beyond this machine, whether or not the test
+        // said so (`tests_common::home` sets the process offline and dry)
+        #[cfg(test)]
+        crate::tests_common::home();
         App::with_net(home, root, bind_host, bagholder_net::Net::new(Arc::new(bagholder_net::SystemClock), bagholder_net::machine::shared()))
     }
 

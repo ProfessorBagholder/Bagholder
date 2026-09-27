@@ -280,3 +280,20 @@ fn a_contract_with_no_quote_and_no_trade_is_at_its_previous_close_with_its_day_c
     assert_eq!(*recorded.asked.lock().unwrap(), vec![url("BBAI")]);
     assert!(outcomes(&w).iter().any(|o| o.0 == Some(id(4)) && o.1 == OutcomeKind::NotCarried && o.2.contains("CAD")));
 }
+
+/// A contract the book names by its OCC symbol as the broker writes it, the root
+/// padded with a space (`BBAI 260925P00000500`), is the one Cboe's chain writes
+/// without (`BBAI260925P00000500`).
+#[test]
+fn a_contract_named_by_its_padded_occ_symbol_is_found_in_a_chain_that_writes_it_unpadded() {
+    let w = world(&[1, 2]);
+    let recorded = Arc::new(common::Recorded::new().with(&url("BBAI"), 200, "cboe-options", "chain-BBAI.json"));
+    let mut one_space = contract(1, "BBAI", date(2026, 9, 25), "0.5", OptionRight::Put);
+    one_space.occ = Some("BBAI 260925P00000500".into());
+    let mut standard = contract(2, "BBAI", date(2028, 1, 21), "10", OptionRight::Call);
+    standard.occ = Some("BBAI  280121C00010000".into());
+    run(&w, &recorded, "2026-09-23T03:00:00Z", &[one_space, standard]);
+    let got: BTreeMap<InstrumentId, _> = w.cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
+    assert_eq!(got[&id(1)].price, usd("0.00999999977648258"));
+    assert!(got.contains_key(&id(2)), "{:?}", outcomes(&w));
+}

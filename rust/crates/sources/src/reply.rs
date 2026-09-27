@@ -119,6 +119,15 @@ impl<'a> Node<'a> {
         }
     }
 
+    /// A decimal written as text by a source that writes more digits than a
+    /// decimal holds: rounded once to fit (`Dec::parse_to_fit`).
+    pub fn as_dec_text_to_fit(&self) -> Read<Dec> {
+        match self.value {
+            Value::String(t) => Dec::parse_to_fit(t).map_err(|e| self.mismatch(format!("{t:?} is not a decimal: {e}"))),
+            v => Err(self.mismatch(format!("expected a decimal written as text, found {}", v.kind()))),
+        }
+    }
+
     /// A whole number.
     pub fn as_int(&self) -> Read<i64> {
         match self.value {
@@ -178,6 +187,10 @@ impl<'a> Node<'a> {
 
     pub fn dec_text(&self, key: &str) -> Read<Dec> {
         self.field(key)?.as_dec_text()
+    }
+
+    pub fn dec_text_to_fit(&self, key: &str) -> Read<Dec> {
+        self.field(key)?.as_dec_text_to_fit()
     }
 
     pub fn int(&self, key: &str) -> Read<i64> {

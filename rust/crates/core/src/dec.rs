@@ -118,6 +118,34 @@ impl Dec {
         Decimal::from_str_exact(s).map(Dec).map_err(|_| DecError::Overflow)
     }
 
+    /// `parse`, for a source that writes more fractional digits than a `Dec`
+    /// holds: the value rounded once, half to even, at the last place that fits,
+    /// from the digits as written (a tie only when every digit after it is zero).
+    /// A value `parse` reads is read the same; malformed text is still refused.
+    pub fn parse_to_fit(s: &str) -> Result<Dec, DecError> {
+        match Dec::parse(s) {
+            Err(DecError::Overflow) => {}
+            other => return other,
+        }
+        let negative = s.starts_with('-');
+        let body = s.strip_prefix('-').unwrap_or(s);
+        let Some((whole, frac)) = body.split_once('.') else { return Err(DecError::Overflow) };
+        for kept in (0..frac.len()).rev() {
+            let text = if kept == 0 { whole.to_string() } else { format!("{whole}.{}", &frac[..kept]) };
+            let Ok(v) = Dec::parse(&text) else { continue };
+            let rest = &frac.as_bytes()[kept..];
+            let last_odd = text.as_bytes().last().is_some_and(|d| (d - b'0') % 2 == 1);
+            let up = match rest[0] {
+                b'6'..=b'9' => true,
+                b'5' => rest[1..].iter().any(|d| *d != b'0') || last_odd,
+                _ => false,
+            };
+            let v = if up { v.checked_add(Dec(Decimal::new(1, kept as u32)))? } else { v };
+            return Ok(if negative { Dec(-v.0) } else { v });
+        }
+        Err(DecError::Overflow)
+    }
+
     /// The canonical text: no trailing zeros after the point, no point on a whole
     /// number, never `-0`. What is stored and what is sent.
     pub fn to_text(self) -> String {
@@ -523,6 +551,20 @@ mod tests {
         // a sum whose places no longer fit is refused, not rounded
         assert_eq!(d("9999999999999999999999999999").checked_add(d("0.1")), Err(DecError::Inexact));
         assert_eq!(d("9999999999999999999999999999").checked_sub(d("0.1")), Err(DecError::Inexact));
+    }
+
+    #[test]
+    fn a_value_written_past_what_fits_is_rounded_once_and_one_that_fits_is_read_as_written() {
+        // FTM-CAD's spot as Coinbase wrote it
+        assert_eq!(Dec::parse_to_fit("0.0525887671191176285963240811464972").unwrap(), d("0.0525887671191176285963240811"));
+        assert_eq!(Dec::parse_to_fit("0.0525887671191176285963240811564972").unwrap(), d("0.0525887671191176285963240812"));
+        // a tie goes to the even digit, and a tie is only a tie when nothing follows it
+        assert_eq!(Dec::parse_to_fit("0.12345678901234567890123456785").unwrap(), d("0.1234567890123456789012345678"));
+        assert_eq!(Dec::parse_to_fit("0.12345678901234567890123456775").unwrap(), d("0.1234567890123456789012345678"));
+        assert_eq!(Dec::parse_to_fit("0.123456789012345678901234567850001").unwrap(), d("0.1234567890123456789012345679"));
+        assert_eq!(Dec::parse_to_fit("-0.0525887671191176285963240811564972").unwrap(), d("-0.0525887671191176285963240812"));
+        assert_eq!(Dec::parse_to_fit("84432.51").unwrap(), d("84432.51"));
+        assert!(Dec::parse_to_fit("1e5").is_err() && Dec::parse_to_fit("abc").is_err());
     }
 
     #[test]

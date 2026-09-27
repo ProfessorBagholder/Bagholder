@@ -332,3 +332,23 @@ fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_yahoo_s
     // 84432.51 up 0.515%: from 83999.91046113, up 432.59953887 (not 3.49 from 84429.016)
     assert_eq!((got[&id(16)].price, got[&id(16)].change, got[&id(16)].change_pct), (Money::new(dec("84432.51"), Currency::USD), Some(dec("432.59953887")), Some(dec("0.515"))));
 }
+
+/// A Cboe Canada listing with no trade this session (a weekend) stands at the
+/// previous session's close Cboe states, with no change: its price now, as the
+/// earlier app showed it, never a blank.
+#[test]
+fn a_cboe_canada_listing_with_no_trade_yet_stands_at_its_previous_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-26T22:30:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(2), InstrumentKind::Security.as_str(), Currency::CAD.as_str());
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(common::Recorded::new().with("https://www-api.cboe.com/ca/equities/securities-1/HBIX/quote/", 200, "cboe-canada", "quote-HBIX-no-trade-this-session.json"));
+    let net = common::net(&recorded, "2026-09-26T22:30:00Z");
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    quotes::read_quotes(&ctx, &[listing(2, InstrumentKind::Security, Currency::CAD, "HBIX", Some("NEOE"))]).unwrap();
+    let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
+    let q = &got[&id(2)];
+    assert_eq!((q.price, q.change, q.change_pct, q.quoted_at), (Money::new(dec("7.24"), Currency::CAD), None, None, at));
+}

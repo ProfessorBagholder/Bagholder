@@ -762,7 +762,9 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         None => Ok(None),
         Some(dc) => {
             let now = money_sum(quoted.iter().filter_map(|(i, _)| signed_market(&positions[*i]).ok()));
-            let before = crate::gap::both(now, dc.total.clone(), |n, d| Ok(n.checked_sub(d)?));
+            // a sum made to fit (`money_sum`) can carry the full 28 digits, so the
+            // difference is made to fit too
+            let before = crate::gap::both(now, dc.total.clone(), |n, d| Ok(n.add_to_fit(d.neg())?));
             ratio_of(&dc.total, &before)
         }
     };

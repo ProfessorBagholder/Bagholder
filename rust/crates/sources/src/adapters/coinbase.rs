@@ -74,7 +74,9 @@ pub fn parse_spot(v: &Value, base: &str, currency: Currency, date: Option<&str>,
         if b != base || c != currency.as_str() {
             return Ok(Err(format!("the spot price answered is {b}-{c}, not {base}-{}", currency.as_str())));
         }
-        let price = d.dec_text("amount")?;
+        // Coinbase writes a coin worth little to more digits than a decimal holds
+        // (FTM-CAD to 34): the price, rounded once to fit, is the same price
+        let price = d.dec_text_to_fit("amount")?;
         if price <= Dec::ZERO {
             return Ok(Err(format!("{base}-{c}'s spot price is {price}")));
         }
