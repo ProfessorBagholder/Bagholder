@@ -146,9 +146,20 @@ fn test_hashed_files_are_kept_for_good_and_the_page_is_always_asked_for_again() 
         let (code, _, _) = send(from_the_page(Method::GET, "/assets/../../Cargo.toml", None)).await;
         assert_eq!(code, StatusCode::NOT_FOUND, "nothing outside the page's own folder");
         let (code, headers, _) = send(from_the_page(Method::GET, "/", None)).await;
-        assert_eq!(code, StatusCode::OK, "the built page, or the legacy one where it has not been built");
-        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
-        assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+        if super::assets::built_page(&app().root) {
+            assert_eq!(code, StatusCode::OK, "the built page");
+            assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+            assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+        } else {
+            assert_eq!(code, StatusCode::NOT_FOUND, "a checkout where the page has not been built has none to serve");
+        }
+        // the icon, from the built page or the page's sources
+        let (code, _, _) = send(from_the_page(Method::GET, "/favicon.png", None)).await;
+        assert_eq!(code, StatusCode::OK);
+        for gone in ["/v2", "/ledger.html", "/lightweight-charts.js"] {
+            let (code, _, _) = send(from_the_page(Method::GET, gone, None)).await;
+            assert_eq!(code, StatusCode::NOT_FOUND, "{gone}");
+        }
         // a hashed file, where the page has been built
         let dist = app().root.join("web/dist/assets");
         if let Some(name) = std::fs::read_dir(dist).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()) {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Disclosures card, a faithful port of ledger.html's disclosuresCardHtml:
+  // The Disclosures card, a faithful port of the old page's disclosuresCardHtml:
   // a filings table narrowed by category (mseg) and source (chip), sorted by
   // column, with each row's title and summary read in the background. Columns and
   // controls appear only when they carry more than one value.

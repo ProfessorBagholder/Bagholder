@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Short interest, a faithful port of ledger.html's shortsSectionHtml and its
+  // Short interest, a faithful port of the old page's shortsSectionHtml and its
   // four building blocks (shortsVolumeCardHtml, shortsFloatCardHtml,
   // shortsRingCard, shortsHistoryHtml). Two ring cards side by side, then the
   // history line chart. Nothing is drawn where the regulator does not cover the

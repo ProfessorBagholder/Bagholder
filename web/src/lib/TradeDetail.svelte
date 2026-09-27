@@ -1,7 +1,7 @@
 <script lang="ts">
   import { positions, book } from './subs.svelte'
   // The trade / holding / listing detail — the largest screen. A faithful port of
-  // ledger.html's tradeDetailHtml + listingDetailHtml: the header card (symbol,
+  // the old page's tradeDetailHtml + listingDetailHtml: the header card (symbol,
   // name·exchange, ticket buttons, the big P&L or a listing's price), the
   // timeframe pills + candlestick chart with the executions marked, a two-column
   // grid of the facts + executions table and the thesis / grade / tags card, then

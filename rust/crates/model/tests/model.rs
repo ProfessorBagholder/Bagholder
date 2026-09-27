@@ -129,7 +129,7 @@ fn strs(v: &[&str]) -> Vec<String> {
 }
 
 // --------------------------------------------------------------------------
-// FifoPortTest: scenarios ported one-for-one from the ledger.html engine tests
+// FifoPortTest: scenarios ported one-for-one from the old page's engine tests
 // --------------------------------------------------------------------------
 
 #[test]
@@ -321,7 +321,7 @@ fn test_stkdis_name_change_nets_to_zero() {
         opt(json!({"id": "in", "category": "trade", "activityType": "STKDIS", "activitySubType": "BUY", "rawType": "CORPORATE_ACTION", "quantity": 100, "transactionDate": "2026-02-01", "symbol": "NEW", "currency": "CAD"})),
         sell("s", "NEW", 100, 3, "2026-03-01"),
     ]);
-    // Parity with ledger.html: the +N leg opens NEW at $0 and the sell
+    // Parity with the old page: the +N leg opens NEW at $0 and the sell
     // closes it; the OLD lot is only reused when NEW runs out of lots.
     assert!(r.unmatched.is_empty());
     assert_eq!(r.closed.len(), 1);
@@ -1301,8 +1301,8 @@ fn test_declared_record_beats_own_history_and_tracks_schedule_change() {
 // --------------------------------------------------------------------------
 
 #[test]
-fn test_group_id_matches_ledger_html() {
-    // ledger.html: FNV-1a over "\n".join(sorted keys), "g_" + hex + "_" + n
+fn test_group_id_matches_the_old_page() {
+    // the old page: FNV-1a over "\n".join(sorted keys), "g_" + hex + "_" + n
     assert_eq!(group_id_for_keys(&strs(&["b|s|100.00000000"])), group_id_for_keys(&strs(&["b|s|100.00000000"])));
     assert!(group_id_for_keys(&strs(&["a", "b"])).ends_with("_2"));
     assert_eq!(group_id_for_keys(&strs(&["a", "b"])), group_id_for_keys(&strs(&["b", "a"])));

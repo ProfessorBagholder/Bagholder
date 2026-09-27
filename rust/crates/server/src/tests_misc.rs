@@ -72,8 +72,8 @@ fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight()
 #[test]
 fn test_page_and_server_agree_on_the_protocol_stamp() {
     let _g = guard();
-    let page = std::fs::read_to_string(crate::feeds::ledger_path(&app())).unwrap();
-    let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&page).expect("PROTOCOL on the page");
+    let page = std::fs::read_to_string(app().root.join("web/src/lib/protocol.ts")).unwrap();
+    let m = regex::Regex::new(r"export const PROTOCOL = '([^']+)'").unwrap().captures(&page).expect("PROTOCOL on the page");
     assert_eq!(&m[1], app::PROTOCOL);
     assert_eq!(crate::status::status(&app()).protocol, app::PROTOCOL);
 }
@@ -242,7 +242,7 @@ fn test_a_row_moves_both_and_the_same_row_read_again_moves_neither() {
 // InAppUpdateTest
 // ---------------------------------------------------------------------------
 
-/// The Rust release names its archive `-rust-<target>`, beside the Python app's `-web.zip`.
+/// The Rust release names its archive `-rust-<target>`; any other asset on the release is not this copy's.
 #[test]
 fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
     let rel = |names: &[String]| update::GithubRelease {
@@ -373,7 +373,7 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
 #[test]
 fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root() {
     let _g = guard();
-    assert!(app().root.join("ledger.html").is_file(), "the root is the repository's");
+    assert!(app().root.join("rust/Cargo.toml").is_file(), "the root is the repository's");
     assert_eq!(update::cargo_dir(&app()), app().root.join("rust"));
     assert!(update::cargo_dir(&app()).join("Cargo.toml").is_file());
 }
@@ -543,4 +543,55 @@ fn test_a_test_app_never_turns_the_local_model_on() {
     assert!(folder.as_ref().map_or(true, |f| f.starts_with(&home)), "the model folder {:?} is outside {:?}", folder, home);
     assert_eq!(folder, None, "only the running server turns the model on");
     assert_eq!(bagholder_market::localmodel::status(), "off", "nothing detected, downloaded or started");
+}
+
+/// A checkout's update builds the page of the pulled commit before the server
+/// that carries it; a page that does not build, or no npm to build it, fails the
+/// update before the server is built (and `pull` puts the previous commit back).
+#[cfg(unix)]
+#[test]
+fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let (root, bin, log) = (t.path().join("checkout"), t.path().join("bin"), t.path().join("calls"));
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::create_dir_all(root.join("rust")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{}").unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    // each records its name, its folder and its arguments; one named in `fail` fails, saying so
+    let stand_in = |name: &str| {
+        let p = bin.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\necho \"{name} $(basename \"$(pwd -P)\") $*\" >> '{}'\nif grep -qx \"{name} $*\" '{}' 2>/dev/null; then echo \"{name} broke\" >&2; exit 1; fi\n", log.display(), t.path().join("fail").display())).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    stand_in("npm");
+    stand_in("cargo");
+    let find = |cmd: &str| Some(bin.join(cmd)).filter(|p| p.is_file());
+    let calls = || -> Vec<String> {
+        let c = std::fs::read_to_string(&log).map(|t| t.lines().map(String::from).collect()).unwrap_or_else(|_| vec![]);
+        std::fs::remove_file(&log).ok();
+        c
+    };
+    let fail = |what: &str| std::fs::write(t.path().join("fail"), what).unwrap();
+
+    update::build_checkout(&root, &root.join("rust"), &find).unwrap();
+    assert_eq!(calls(), ["npm web ci", "npm web run build", "cargo rust build --release --bins"], "the page, then the server that carries it");
+
+    fail("npm ci");
+    assert_eq!(update::build_checkout(&root, &root.join("rust"), &find), Err("the page did not build: npm ci failed: npm broke".to_string()));
+    assert_eq!(calls(), ["npm web ci"], "nothing built after a step that failed");
+
+    fail("npm run build");
+    assert_eq!(update::build_checkout(&root, &root.join("rust"), &find), Err("the page did not build: npm run build failed: npm broke".to_string()));
+    assert_eq!(calls(), ["npm web ci", "npm web run build"]);
+
+    fail("cargo build --release --bins");
+    assert_eq!(update::build_checkout(&root, &root.join("rust"), &find), Err("the new version did not build: cargo broke".to_string()));
+    assert_eq!(calls().len(), 3);
+
+    // no npm: the update fails saying so, and no server is built with a page of another commit
+    std::fs::remove_file(bin.join("npm")).unwrap();
+    let why = update::build_checkout(&root, &root.join("rust"), &find).unwrap_err();
+    assert!(why.contains("npm is not on the PATH"), "{why}");
+    assert!(calls().is_empty());
 }

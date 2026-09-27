@@ -12,9 +12,7 @@ docs
 tests
 *.md
 **/__pycache__
-python/tests
-python/tools
-python/screenshots
+python
 rust/target
 web/node_modules
 web/dist

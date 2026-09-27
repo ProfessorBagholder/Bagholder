@@ -1,4 +1,4 @@
-// Trade-chart data helpers, ported from ledger.html (chartSpan, loadHistory,
+// Trade-chart data helpers, ported from the old page (chartSpan, loadHistory,
 // chartTfFor/autoTf, chartColors, fillMarkers, listingTicker/underlyingOf,
 // localTime and the TIMEFRAMES/step tables). Pure functions + two caches, kept
 // out of the component so the `use:tradeChart` action and the component share

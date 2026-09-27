@@ -56,8 +56,25 @@ fn url(app: &App) -> String {
     format!("http://127.0.0.1:{}/", *app.port.lock().unwrap())
 }
 
+/// The icon a notification is shown with: the page's own (`favicon.png`, in the
+/// binary or the checkout), kept in the data folder for the system to read, and
+/// written again whenever the page's differs. With no page icon there is none.
 fn icon(app: &App) -> PathBuf {
-    app.root.join("favicon.png")
+    let at = app.home.join("icon.png");
+    if let Some(data) = crate::http::assets::unhashed(&app.root, "favicon.png") {
+        if std::fs::read(&at).ok().as_deref() != Some(&data[..]) {
+            let tmp = app.home.join(format!("icon.png.{}", crate::app::uuid4()));
+            if let Err(e) = std::fs::write(&tmp, &data).and_then(|()| std::fs::rename(&tmp, &at)) {
+                // a notification still goes out, without the icon; what was left of the write is said with it
+                let left = match std::fs::remove_file(&tmp) {
+                    Err(r) if r.kind() != std::io::ErrorKind::NotFound => format!("; and {} could not be removed: {r}", tmp.display()),
+                    _ => String::new(),
+                };
+                log(&format!("bagholder notify: the icon could not be written to {}: {e}{left}", at.display()));
+            }
+        }
+    }
+    at
 }
 
 /// A JSON value that reads as a plain boolean, or as `false` for anything
@@ -1251,6 +1268,33 @@ mod tests {
         assert_eq!([&a[..2], &a[a.len() - 2..]].concat(), ["notify-send", "--app-name=Bagholder", "T", "B"]);
         assert!(a[2].starts_with("--icon="));
         assert!(!deliver(&app, "", "T", "B"));
+    }
+
+    /// The icon is the page's own, found in a release (the binary's page), in the
+    /// container (the page beside it) and in a checkout (its sources), with no
+    /// other file at the root.
+    #[test]
+    fn test_the_notification_icon_is_the_pages_own() {
+        let page_icon = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/public/favicon.png")).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        for root in [PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), elsewhere.path().to_path_buf()] {
+            let home = tempfile::tempdir().unwrap();
+            let app = App::new(home.path().to_path_buf(), root.clone(), "127.0.0.1".into());
+            let embedded = crate::http::assets::unhashed(&root, "favicon.png");
+            let at = icon(&app);
+            assert_eq!(at, home.path().join("icon.png"));
+            match embedded {
+                // the page's copy is written for the system to read, and again when it differs
+                Some(data) => {
+                    assert_eq!(data, page_icon, "the built page carries web/public's icon");
+                    assert_eq!(std::fs::read(&at).unwrap(), page_icon);
+                    std::fs::write(&at, b"another").unwrap();
+                    assert_eq!(std::fs::read(icon(&app)).unwrap(), page_icon);
+                }
+                // a binary built without the page, away from any checkout: no icon, and no file said to be one
+                None => assert!(!at.exists()),
+            }
+        }
     }
 
     #[test]

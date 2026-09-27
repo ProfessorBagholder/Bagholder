@@ -1,4 +1,4 @@
-// Small formatters the Markets screen shares, ported verbatim from ledger.html
+// Small formatters the Markets screen shares, ported verbatim from the old page
 // so every figure matches the reference page. Kept local to markets/ to avoid
 // touching the shared fmt module.
 

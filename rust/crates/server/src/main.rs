@@ -50,21 +50,25 @@ fn home_dir() -> Result<PathBuf, String> {
     Ok(Path::new(&base).join(".bagholder-rust"))
 }
 
-/// Where the page and its assets are: beside the executable, or in a checkout
-/// the executable was built in, or the working folder.
+/// Where this copy is: the checkout the executable was built in (the folder
+/// holding `rust/Cargo.toml`), else the executable's own folder (a release or the
+/// container, with the page beside it or in the binary), else the working folder.
 fn root_dir() -> Result<PathBuf, String> {
     let env = app::env_text("BAGHOLDER_ROOT")?.unwrap_or_default();
     if !env.trim().is_empty() {
         return Ok(PathBuf::from(env.trim()));
     }
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).and_then(|p| p.parent().map(|d| d.to_path_buf())) {
-        for d in dir.ancestors().take(4) {
-            if d.join("ledger.html").is_file() {
-                return Ok(d.to_path_buf());
-            }
-        }
-    }
-    Ok(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    let exe = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+    Ok(match exe.as_deref().and_then(Path::parent) {
+        Some(dir) => checkout_of(dir).unwrap_or_else(|| dir.to_path_buf()),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    })
+}
+
+/// The checkout an executable in `dir` was built in: `rust/target/<profile>/`
+/// (or `rust/target/<target>/<profile>/`) under the folder holding `rust/Cargo.toml`.
+fn checkout_of(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors().take(5).find(|d| d.join("rust/Cargo.toml").is_file()).map(Path::to_path_buf)
 }
 
 // --------------------------------------------------------------------------
@@ -115,6 +119,17 @@ fn serve() -> i32 {
             return 1;
         }
     };
+    // a first start with nothing of its own takes the Python app's database, which the start then imports
+    if let Some(python) = legacy_import::python_home(|k| std::env::var_os(k)) {
+        match legacy_import::adopt_python_database(&home, &python) {
+            Ok(Some(from)) => log(&format!("bagholder: a copy of the Python app's database {} is this app's first", from.display())),
+            Ok(None) => {}
+            Err(e) => {
+                log(&format!("bagholder: {e}"));
+                return 1;
+            }
+        }
+    }
     let a = app::App::new(home, root, bind_host.clone());
     // an update the supervisor rolled back is said in the header by the server it started
     update::recall_failure(&a);
@@ -283,19 +298,13 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    //! The page, the package contents and the protocol check.
-    use std::path::PathBuf;
+    //! The data folder, the root, the protocol, the image and the launcher.
+    use std::path::{Path, PathBuf};
 
-    /// The repository root: the shared page and data, with this workspace in rust/.
+    /// The repository root, with this workspace in rust/.
     fn root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
     }
-
-    fn page() -> String {
-        std::fs::read_to_string(root().join("ledger.html")).unwrap()
-    }
-
-    const SHIPPED: [&str; 3] = ["ledger.html", "lightweight-charts.js", "favicon.png"];
 
     /// Where the Rust build keeps its data: ~/.bagholder-rust, or wherever BAGHOLDER_HOME says.
     static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -341,106 +350,181 @@ mod tests {
         assert_eq!(home, d);
     }
 
+    /// A server built in a checkout finds the checkout by its workspace; anywhere
+    /// else (a release, the container) there is none, and its own folder is the root.
     #[test]
-    fn test_every_script_on_the_page_parses() {
-        let node = std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("node")).find(|p| p.is_file()));
-        let Some(node) = node else {
-            eprintln!("skipped: node is needed to parse the page's script");
-            return;
-        };
-        let html = page();
-        let scripts: Vec<&str> = regex::Regex::new(r"(?s)<script>(.*?)</script>").unwrap().captures_iter(&html).map(|c| c.get(1).unwrap().as_str()).collect();
-        assert!(!scripts.is_empty(), "the page carries its script inline");
-        for (i, js) in scripts.iter().enumerate() {
-            let path = std::env::temp_dir().join(format!("bagholder-page-{}-{}.js", std::process::id(), i));
-            std::fs::write(&path, js).unwrap();
-            let r = std::process::Command::new(&node).arg("--check").arg(&path).output().unwrap();
-            let _ = std::fs::remove_file(&path);
-            assert!(r.status.success(), "script {} does not parse:\n{}", i, String::from_utf8_lossy(&r.stderr).chars().take(2000).collect::<String>());
+    fn test_the_root_is_the_checkout_the_server_was_built_in() {
+        let root = root().canonicalize().unwrap();
+        for built in ["rust/target/release", "rust/target/debug", "rust/target/aarch64-apple-darwin/release"] {
+            assert_eq!(crate::checkout_of(&root.join(built)), Some(root.clone()), "{built}");
         }
-    }
-
-    #[test]
-    fn test_no_title_attribute_anywhere_on_the_page() {
-        let found: Vec<String> = regex::Regex::new(r#" title=\\?["']"#).unwrap().find_iter(&page()).map(|m| m.as_str().to_string()).collect();
-        assert_eq!(found, Vec::<String>::new(), "nothing on the page gets a browser tooltip");
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert_eq!(crate::checkout_of(elsewhere.path()), None);
     }
 
     #[test]
     fn test_protocol_matches_page() {
-        let html = page();
-        let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&html).expect("the page names its protocol");
-        assert_eq!(&m[1], crate::app::PROTOCOL);
         // status::payload()["protocol"] is app::PROTOCOL by construction
-        // and the Svelte page's
         let ts = std::fs::read_to_string(root().join("web/src/lib/protocol.ts")).unwrap();
         let m = regex::Regex::new(r"export const PROTOCOL = '([^']+)'").unwrap().captures(&ts).expect("the page names its protocol");
         assert_eq!(&m[1], crate::app::PROTOCOL);
     }
 
     #[test]
-    fn test_the_image_carries_the_page_and_its_chart_library() {
+    fn test_the_image_builds_this_workspace_and_the_page_from_the_repository_root() {
         let docker = std::fs::read_to_string(root().join("rust/Dockerfile")).unwrap();
-        let copy = regex::Regex::new(r"^COPY\s+(.*?)\s+\./\s*$").unwrap();
-        let copied: Vec<String> = docker.lines().filter_map(|l| copy.captures(l.trim()).map(|c| c[1].to_string())).flat_map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
-        assert!(!copied.is_empty(), "the Dockerfile copies the app in");
-        for needed in SHIPPED {
-            assert!(copied.iter().any(|c| c == needed), "{} is served by the app", needed);
+        for line in [
+            "COPY rust/rust-toolchain.toml rust/Cargo.toml rust/Cargo.lock ./",
+            "COPY rust/crates crates",
+            "COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint",
+            "COPY web/package.json web/package-lock.json ./",
+            "COPY --from=web /web/dist ./web/dist",
+        ] {
+            assert!(docker.lines().any(|l| l.trim() == line), "rust/Dockerfile: {}", line);
         }
     }
 
     #[test]
     fn test_nothing_the_image_needs_is_kept_out_of_it() {
         let ignored: Vec<String> = std::fs::read_to_string(root().join(".dockerignore")).unwrap().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
-        for needed in SHIPPED.iter().copied().chain(["rust", "rust/crates", "rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml", "rust/docker-entrypoint.sh"]) {
+        for needed in ["rust", "rust/crates", "rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml", "rust/docker-entrypoint.sh", "web", "web/src", "web/public", "web/package.json", "web/package-lock.json"] {
             assert!(!ignored.iter().any(|i| i == needed), "{} kept out of the image", needed);
         }
     }
 
+    // --- the launcher: `python3 bagholder.py` -------------------------------------------
+
     #[test]
-    fn test_the_release_archive_carries_the_page_and_its_assets() {
-        let out = match std::process::Command::new("git").arg("-C").arg(root()).arg("ls-files").output() {
-            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
-            _ => {
-                eprintln!("skipped: not a git checkout");
-                return;
+    fn test_the_launcher_is_one_file_in_both_places() {
+        // the owner starts `bagholder.py` at the root; a Python copy's supervisor restarts `python/bagholder.py`
+        assert_eq!(std::fs::read(root().join("bagholder.py")).unwrap(), std::fs::read(root().join("python/bagholder.py")).unwrap());
+    }
+
+    #[cfg(unix)]
+    mod launcher {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        fn python3() -> PathBuf {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            std::env::split_paths(&path).map(|d| d.join("python3")).find(|p| p.is_file()).expect("python3 on the PATH: the launcher is a Python file")
+        }
+
+        /// A made-up checkout: the workspace's manifest and the launcher in both places.
+        fn checkout() -> tempfile::TempDir {
+            let t = tempfile::tempdir().unwrap();
+            let p = t.path();
+            std::fs::create_dir_all(p.join("rust")).unwrap();
+            std::fs::write(p.join("rust/Cargo.toml"), "").unwrap();
+            std::fs::create_dir_all(p.join("python")).unwrap();
+            std::fs::create_dir_all(p.join("bin")).unwrap();
+            std::fs::copy(root().join("bagholder.py"), p.join("bagholder.py")).unwrap();
+            std::fs::copy(root().join("python/bagholder.py"), p.join("python/bagholder.py")).unwrap();
+            t
+        }
+
+        /// A program that writes its parent's id, its folder, one variable of its
+        /// environment and its arguments, a line each, to `out` (appending).
+        fn stand_in(at: &Path, out: &Path) {
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, format!("#!/bin/sh\n{{ echo \"$PPID\"; pwd -P; echo \"$BAGHOLDER_PROBE\"; for a in \"$@\"; do echo \"$a\"; done; echo ==; }} >> '{}'\n", out.display())).unwrap();
+            std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        fn launch(dir: &Path, file: &str) -> std::process::Output {
+            Command::new(python3()).arg(dir.join(file)).arg("--version").current_dir(std::env::temp_dir()).env("PATH", dir.join("bin")).env("BAGHOLDER_PROBE", "passed through").output().unwrap()
+        }
+
+        fn calls(out: &Path) -> Vec<Vec<String>> {
+            let text = std::fs::read_to_string(out).unwrap_or_default();
+            text.split("==\n").filter(|c| !c.is_empty()).map(|c| c.lines().map(String::from).collect()).collect()
+        }
+
+        fn real(p: &Path) -> String {
+            p.canonicalize().unwrap().to_string_lossy().into_owned()
+        }
+
+        #[test]
+        fn test_with_no_cargo_the_built_server_takes_the_launchers_place() {
+            for file in ["bagholder.py", "python/bagholder.py"] {
+                let t = checkout();
+                let out = t.path().join("calls");
+                stand_in(&t.path().join("rust/target/release/bagholder"), &out);
+                let r = launch(t.path(), file);
+                assert!(r.status.success(), "{file}: {}", String::from_utf8_lossy(&r.stderr));
+                // the server's parent is whatever started the launcher: the launcher's process became the server
+                assert_eq!(calls(&out), vec![vec![std::process::id().to_string(), real(t.path()), "passed through".into(), "--version".into()]], "{file}");
             }
-        };
-        let tracked: Vec<&str> = out.lines().collect();
-        for needed in SHIPPED {
-            assert!(tracked.contains(&needed), "{} untracked: the release archive would not carry it", needed);
         }
-    }
 
-    #[test]
-    fn test_the_image_builds_this_workspace_from_the_repository_root() {
-        let docker = std::fs::read_to_string(root().join("rust/Dockerfile")).unwrap();
-        for line in ["COPY rust/rust-toolchain.toml rust/Cargo.toml rust/Cargo.lock ./", "COPY rust/crates crates", "COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint"] {
-            assert!(docker.lines().any(|l| l.trim() == line), "rust/Dockerfile: {}", line);
+        #[test]
+        fn test_with_cargo_the_checkout_is_built_and_run_in_its_workspace() {
+            let t = checkout();
+            let out = t.path().join("calls");
+            stand_in(&t.path().join("bin/cargo"), &out);
+            // a server built earlier is not what runs: the checkout's sources may be newer
+            stand_in(&t.path().join("rust/target/release/bagholder"), &t.path().join("stale"));
+            std::fs::create_dir_all(t.path().join("web/dist")).unwrap();
+            std::fs::write(t.path().join("web/dist/index.html"), "").unwrap();
+            let r = launch(t.path(), "python/bagholder.py");
+            assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+            let cwd = real(&t.path().join("rust"));
+            assert_eq!(calls(&out), vec![vec![std::process::id().to_string(), cwd, "passed through".into(), "run".into(), "--release".into(), "--bin".into(), "bagholder".into(), "--".into(), "--version".into()]]);
+            assert!(!t.path().join("stale").exists());
         }
-    }
 
-    #[test]
-    fn test_the_python_app_carries_the_same_version_and_protocol() {
-        // both desktop apps are one product version and speak one protocol with the page
-        let Ok(py) = std::fs::read_to_string(root().join("python/bagholder.py")) else {
-            eprintln!("skipped: no python/ beside rust/");
-            return;
-        };
-        let version = regex::Regex::new(r#"(?m)^APP_VERSION = "([^"]+)""#).unwrap().captures(&py).expect("APP_VERSION in python/bagholder.py");
-        let protocol = regex::Regex::new(r#"(?m)^PROTOCOL = "([^"]+)""#).unwrap().captures(&py).expect("PROTOCOL in python/bagholder.py");
-        assert_eq!(&version[1], crate::app::APP_VERSION);
-        assert_eq!(&protocol[1], crate::app::PROTOCOL);
-    }
-
-    #[test]
-    fn test_the_server_serves_what_ships_from_its_root() {
-        // the legacy page and its files are read from the root at request time
-        for needed in SHIPPED {
-            assert!(root().join(needed).is_file(), "{} beside the workspace", needed);
+        #[test]
+        fn test_a_page_not_yet_built_is_built_before_the_server() {
+            let t = checkout();
+            let npm_out = t.path().join("npm-calls");
+            let out = t.path().join("calls");
+            stand_in(&t.path().join("bin/npm"), &npm_out);
+            stand_in(&t.path().join("bin/cargo"), &out);
+            std::fs::create_dir_all(t.path().join("web")).unwrap();
+            let r = launch(t.path(), "bagholder.py");
+            assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+            let web = real(&t.path().join("web"));
+            let npm: Vec<Vec<String>> = calls(&npm_out).into_iter().map(|c| c[1..].to_vec()).collect();
+            assert_eq!(npm, vec![vec![web.clone(), "passed through".into(), "ci".into()], vec![web, "passed through".into(), "run".into(), "build".into()]]);
+            assert_eq!(calls(&out).len(), 1, "then the server");
         }
-        let src = include_str!("http/assets.rs");
-        assert!(src.contains("\"lightweight-charts.js\"") && src.contains("\"favicon.png\"") && src.contains("feeds::ledger_path("));
+
+        /// A built page older than any of the page's sources is built again; one
+        /// newer than all of them is not.
+        #[test]
+        fn test_a_page_older_than_its_sources_is_built_again() {
+            let at = |p: &Path, secs: u64| std::fs::File::options().write(true).open(p).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)).unwrap();
+            for source in ["src/lib/deep/x.ts", "public/favicon.png", "index.html", "package.json", "package-lock.json", "vite.config.ts"] {
+                let t = checkout();
+                let web = t.path().join("web");
+                let npm_out = t.path().join("npm-calls");
+                stand_in(&t.path().join("bin/npm"), &npm_out);
+                stand_in(&t.path().join("bin/cargo"), &t.path().join("calls"));
+                std::fs::create_dir_all(web.join("dist")).unwrap();
+                std::fs::write(web.join("dist/index.html"), "").unwrap();
+                std::fs::create_dir_all(web.join(source).parent().unwrap()).unwrap();
+                std::fs::write(web.join(source), "").unwrap();
+                // the build newer than the source: nothing to build
+                at(&web.join(source), 1_000);
+                at(&web.join("dist/index.html"), 2_000);
+                assert!(launch(t.path(), "bagholder.py").status.success());
+                assert!(calls(&npm_out).is_empty(), "{source}: current");
+                // the source changed after the build
+                at(&web.join(source), 3_000);
+                assert!(launch(t.path(), "bagholder.py").status.success());
+                assert_eq!(calls(&npm_out).len(), 2, "{source}: npm ci and npm run build");
+            }
+        }
+
+        #[test]
+        fn test_with_neither_it_says_what_to_run_and_fails() {
+            let t = checkout();
+            let r = launch(t.path(), "python/bagholder.py");
+            assert_eq!(r.status.code(), Some(1));
+            let said = String::from_utf8_lossy(&r.stderr);
+            assert!(said.contains("cargo run --release --bin bagholder") && said.contains("npm ci && npm run build"), "{said}");
+        }
     }
 }
 

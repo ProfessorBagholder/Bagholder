@@ -31,7 +31,7 @@
 
   const active = $derived(picker !== 'fields' ? FIELDS.find((x) => x.key === picker) ?? null : null)
 
-  // ---- close on click outside the popover + its funnel (no scrim, as ledger.html) ----
+  // ---- close on click outside the popover + its funnel (no scrim, as the old page) ----
   let popEl = $state<HTMLDivElement | undefined>()
   function onPointerDown(e: PointerEvent) {
     const wrap = popEl?.parentElement // the position:relative div holding funnel + pop
@@ -51,7 +51,7 @@
   // ---- external symbol search ----
   // When the typed text matches nothing in the book, the reference page looks the
   // ticker up at Yahoo (never at Wealthsimple) and lists what it finds. The lookup
-  // is scheduled imperatively from the input handler (extSchedule, like ledger.html)
+  // is scheduled imperatively from the input handler (extSchedule, like the old page)
   // — deterministic per keystroke — and the results land in flat $state tagged with
   // the query they belong to, so the rows derived tracks them and shows the matches.
   let extResults = $state<{ q: string; rows: SymRow[] }>({ q: '', rows: [] })

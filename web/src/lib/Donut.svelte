@@ -1,7 +1,7 @@
 <script lang="ts">
   // One donut for Allocation, Sectors, Regions and the Cashflow pie: the slices,
   // the centre reading the label and total (or a hovered slice), and the legend
-  // as an aligned grid. Ported from ledger.html donutPieces/donutHover, with the
+  // as an aligned grid. Ported from the old page's donutPieces/donutHover, with the
   // hover expressed as reactive state instead of DOM mutation.
   import { money0, pctPlain, qty } from './fmt'
   import { symText } from './sym'

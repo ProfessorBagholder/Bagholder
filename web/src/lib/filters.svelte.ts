@@ -62,7 +62,7 @@ export function resetFilters(): void {
 
 // ---------------------------------------------------------------------------
 // Field metadata, the date/summary words, the active-filter chips.
-// Ported verbatim from ledger.html: FIELDS, PRESETS, dateLabel(), listSummary(),
+// Ported verbatim from the old page: FIELDS, PRESETS, dateLabel(), listSummary(),
 // rangeSummary(), chips(). Kept here (not in FilterPopover) so the popover and the
 // tab-bar chips share one definition and neither redefines the other.
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ export interface Chip {
 }
 
 // The active filters, in the order the tab bar shows them: the date, the free-text
-// search, then each list/range field that has a value. Matches ledger.html chips().
+// search, then each list/range field that has a value. Matches the old page's chips().
 export function chips(options: Options | null | undefined): Chip[] {
   const out: Chip[] = []
   if (dateLabel() !== 'All time') out.push({ field: 'Date', value: dateLabel(), key: 'date' })
@@ -170,7 +170,7 @@ export function chips(options: Options | null | undefined): Chip[] {
 }
 
 // Clear one filter, addressed by its chip/field key. Mutation only — the caller
-// reloads the model (setFilters({}) / loadModel()), as ledger.html clearField did
+// reloads the model (setFilters({}) / loadModel()), as the old page's clearField did
 // via setFilters. Kept import-free of state.svelte to avoid a cycle.
 export function clearField(key: string): void {
   const f = filters

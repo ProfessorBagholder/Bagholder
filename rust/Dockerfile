@@ -30,7 +30,6 @@ RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
 WORKDIR /app
 COPY --from=build /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/disclosures-mcp /src/target/release/sedar ./
-COPY ledger.html lightweight-charts.js favicon.png ./
 COPY --from=web /web/dist ./web/dist
 
 RUN mkdir -p /data

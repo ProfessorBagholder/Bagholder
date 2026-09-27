@@ -1,6 +1,6 @@
 import { abs, absBelow, digits, sign, waits, type Dec, type Fig, type Waits } from './dec'
 
-// Presentation formatting, ported verbatim from ledger.html's utilities so the
+// Presentation formatting, ported verbatim from the old page's utilities so the
 // Svelte build formats every figure exactly as the reference page does. The
 // server sends raw numbers; the client formats them. No money math here.
 //

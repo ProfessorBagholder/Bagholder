@@ -1,6 +1,6 @@
 import { cmp as decCmp, waits, type Dec, type Fig } from './dec'
 import { limits, FIRST_ROWS } from './subs.svelte'
-// Sort state per table and the shared row sorter, ported from ledger.html
+// Sort state per table and the shared row sorter, ported from the old page
 // (state.sort + sortRows + the 'sort' action). Reactive $state so a header click
 // re-sorts only the table that reads it.
 
