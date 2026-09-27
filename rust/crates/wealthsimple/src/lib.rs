@@ -9,3 +9,4 @@ pub mod read;
 pub mod record;
 pub mod replay;
 pub mod session;
+pub mod statement;

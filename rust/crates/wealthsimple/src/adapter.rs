@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_book::mapping::Mapping;
-use bagholder_broker::{AccountStated, Activity, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, Units};
+use bagholder_broker::{AccountStated, Activity, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, StatementRead, StatementRow, Units};
 use bagholder_core::json::Value;
 use bagholder_book::mapping::InstrumentDraft;
 use bagholder_core::instrument::Reference;
@@ -42,6 +42,10 @@ pub trait Source {
     fn buying_power(&mut self, account: &str) -> Answer<Value>;
     /// An account's `historicalDaily` nodes from `from`.
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>>;
+    /// An account's `monthlyStatement` for the month starting `month`, of a
+    /// statement type (`cash_monthly_statement`, `brokerage_monthly_statement`);
+    /// None where Wealthsimple answers none for it.
+    fn statement(&mut self, account: &str, month: jiff::civil::Date, kind: &str) -> Answer<Option<Value>>;
     /// How many requests have been sent.
     fn requests(&self) -> usize;
 }
@@ -58,6 +62,12 @@ pub struct Wealthsimple<S: Source> {
     /// The credit card accounts, by key, and the currency each is held in:
     /// their balance is stated apart from the others'.
     cards: BTreeMap<String, Currency>,
+    /// The statement type each account's monthly statement is issued as, by
+    /// its type: a spending account's is a cash statement; a card's and a line
+    /// of credit's are not in the book.
+    statement_types: BTreeMap<String, &'static str>,
+    /// Each account's own currency: a cash statement's rows are in it.
+    currencies: BTreeMap<String, Currency>,
     /// The first failure met while putting a record together.
     failed: Option<Failure>,
 }
@@ -68,7 +78,7 @@ fn mismatch(m: Mismatch) -> Failure {
 
 impl<S: Source> Wealthsimple<S> {
     pub fn new(source: S) -> Wealthsimple<S> {
-        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), failed: None }
+        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), statement_types: BTreeMap::new(), currencies: BTreeMap::new(), failed: None }
     }
 
     fn day_of(&self, row: &Value) -> Option<jiff::civil::Date> {
@@ -300,9 +310,23 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         let stated = crate::read::accounts(&nodes).map_err(mismatch)?;
         for n in &nodes {
             let n = Node::root(n);
+            let id = n.text("id").map_err(mismatch)?.to_string();
             if n.text("unifiedAccountType").map_err(mismatch)? == "CREDIT_CARD" {
                 let currency = Currency::parse(n.text("currency").map_err(mismatch)?).map_err(|e| Failure::Mismatch(e.to_string()))?;
-                self.cards.insert(n.text("id").map_err(mismatch)?.to_string(), currency);
+                self.cards.insert(id.clone(), currency);
+            }
+            let kind = match bagholder_book::import::wealthsimple_account_type(n.text("unifiedAccountType").map_err(mismatch)?) {
+                bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Spending, .. } => Some(crate::statement::CASH),
+                bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::CreditCard | bagholder_core::account::AccountKind::LineOfCredit, .. } => None,
+                _ => Some(crate::statement::BROKERAGE),
+            };
+            if let Some(k) = kind {
+                self.statement_types.insert(id.clone(), k);
+            }
+            if let Ok(Some(c)) = n.opt_text("currency") {
+                if let Ok(c) = Currency::parse(c) {
+                    self.currencies.insert(id, c);
+                }
             }
         }
         Ok(stated)
@@ -460,6 +484,26 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
                 (r.clone(), crate::mapping::draft_of(&Value::Object(records), &r.value, day).map_err(Failure::Mismatch))
             })
             .collect()
+    }
+    fn statement(&mut self, account: &str, month: jiff::civil::Date) -> Answer<StatementRead> {
+        let kind = *self.statement_types.get(account).ok_or_else(|| Failure::Refused(format!("{account} is of a kind Wealthsimple issues no monthly statement for")))?;
+        match self.source.statement(account, month, kind)? {
+            None => Ok(StatementRead::NotIssued),
+            Some(payload) => {
+                let rows = self.statement_rows(account, &payload)?;
+                Ok(StatementRead::Issued { payload, rows })
+            }
+        }
+    }
+    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
+        let currency = *self.currencies.get(account).ok_or_else(|| Failure::Mismatch(format!("{account}: no currency stated for the account a statement is of")))?;
+        crate::statement::rows(payload, currency).map_err(|m| Failure::Mismatch(format!("FetchMonthlyStatementWithTransactions: {m}")))
+    }
+    fn statement_mapping(&self) -> Option<&dyn Mapping> {
+        Some(&crate::statement::StatementMapping)
+    }
+    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
+        Some((crate::statement::key(account, month, position), crate::statement::payload(account, month, position, row)))
     }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>> {
         let nodes = self.source.history(account, from)?;

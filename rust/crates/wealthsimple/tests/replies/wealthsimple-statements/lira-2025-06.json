@@ -1,0 +1,83 @@
+{
+  "data": {
+    "monthlyStatement": {
+      "id": "123abc",
+      "statementType": "brokerage_monthly_statement",
+      "data": {
+        "__typename": "BrokerageMonthlyStatementObject",
+        "custodianAccountId": "123abc",
+        "currentTransactions": [
+          {
+            "transactionDate": "2025-06-26",
+            "transactionType": "SELL",
+            "description": "VFV - Vanguard S&P 500 Index ETF: Sold 343.0000 shares (executed at 2025-06-25)",
+            "cashMovement": "50952.65",
+            "balance": "50952.67",
+            "unit": "$CAD",
+            "__typename": "BrokerageMonthlyStatementTransactions"
+          },
+          {
+            "transactionDate": "2025-06-26",
+            "transactionType": "WHTFED",
+            "description": "Federal withholding tax (executed at 2025-06-26)",
+            "cashMovement": "-15278.57",
+            "balance": "35674.1",
+            "unit": "$CAD",
+            "__typename": "BrokerageMonthlyStatementTransactions"
+          },
+          {
+            "transactionDate": "2025-06-26",
+            "transactionType": "WD",
+            "description": "Withdrawal (executed at 2025-06-26)",
+            "cashMovement": "-35650.0",
+            "balance": "24.1",
+            "unit": "$CAD",
+            "__typename": "BrokerageMonthlyStatementTransactions"
+          }
+        ],
+        "isMultiCurrency": true,
+        "activitiesPerCurrency": [
+          {
+            "currency": "CAD",
+            "currentTransactions": [
+              {
+                "transactionDate": "2025-06-26",
+                "transactionType": "SELL",
+                "description": "VFV - Vanguard S&P 500 Index ETF: Sold 343.0000 shares (executed at 2025-06-25)",
+                "cashMovement": "50952.65",
+                "balance": "50952.67",
+                "unit": "$CAD",
+                "__typename": "BrokerageMonthlyStatementTransactions"
+              },
+              {
+                "transactionDate": "2025-06-26",
+                "transactionType": "WHTFED",
+                "description": "Federal withholding tax (executed at 2025-06-26)",
+                "cashMovement": "-15278.57",
+                "balance": "35674.1",
+                "unit": "$CAD",
+                "__typename": "BrokerageMonthlyStatementTransactions"
+              },
+              {
+                "transactionDate": "2025-06-26",
+                "transactionType": "WD",
+                "description": "Withdrawal (executed at 2025-06-26)",
+                "cashMovement": "-35650.0",
+                "balance": "24.1",
+                "unit": "$CAD",
+                "__typename": "BrokerageMonthlyStatementTransactions"
+              }
+            ],
+            "__typename": "BrokerageMonthlyStatementActivitiesPerCurrency"
+          },
+          {
+            "currency": "USD",
+            "currentTransactions": [],
+            "__typename": "BrokerageMonthlyStatementActivitiesPerCurrency"
+          }
+        ]
+      },
+      "__typename": "Statement"
+    }
+  }
+}

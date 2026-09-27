@@ -1,0 +1,579 @@
+//! The movements Wealthsimple's activity feed leaves out, read from its monthly
+//! statements (`docs/plans/statement-gaps.md`): the reply read exactly, the
+//! request sent as the Documents page sends it, and the reconciliation that
+//! books only what the feed lacks, month by month, as bank reconciliation does.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
+
+use bagholder_book::mapping::{Draft, InstrumentDraft, MapContext, Mapped, Mapping};
+use bagholder_book::records::Incoming;
+use bagholder_book::Book;
+use bagholder_broker::statements::{run, Done};
+use bagholder_broker::{AccountStated, Activity, Answer, BookMoves, BrokerAdapter, DayValue, Failure, Row, StatementRead, StatementRow, Units};
+use bagholder_core::account::{AccountRef, AccountStatus};
+use bagholder_core::instrument::Reference;
+use bagholder_core::json::{self, Value};
+use bagholder_core::record::RecordState;
+use bagholder_core::transaction::Kind;
+use bagholder_core::{AccountId, Broker, ConnectionId, Currency, Dec, Leg, Money, SourceName};
+use bagholder_net::{Ask, Limiter, ManualClock, Net, NetError, Transport};
+use bagholder_wealthsimple::statement;
+
+fn dec(s: &str) -> Dec {
+    Dec::parse(s).unwrap()
+}
+
+fn day(s: &str) -> jiff::civil::Date {
+    s.parse().unwrap()
+}
+
+fn at(s: &str) -> jiff::Timestamp {
+    s.parse().unwrap()
+}
+
+fn ws() -> Broker {
+    Broker::named("wealthsimple")
+}
+
+// -- the reply ---------------------------------------------------------------
+
+fn recorded(name: &str) -> Value {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple-statements").join(name)).unwrap();
+    let v = json::parse(&text).unwrap();
+    bagholder_sources::reply::Node::root(&v).obj("data").unwrap().obj("monthlyStatement").unwrap().value().clone()
+}
+
+#[test]
+fn the_recorded_june_statement_reads_every_row_exactly_per_currency() {
+    let rows = statement::rows(&recorded("lira-2025-06.json"), Currency::CAD).unwrap();
+    let got: Vec<(jiff::civil::Date, Option<jiff::civil::Date>, &str, Currency, Dec, Dec)> = rows.iter().map(|r| (r.day, r.executed, r.code.as_str(), r.currency, r.cash, r.balance)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (day("2025-06-26"), Some(day("2025-06-25")), "SELL", Currency::CAD, dec("50952.65"), dec("50952.67")),
+            (day("2025-06-26"), Some(day("2025-06-26")), "WHTFED", Currency::CAD, dec("-15278.57"), dec("35674.1")),
+            (day("2025-06-26"), Some(day("2025-06-26")), "WD", Currency::CAD, dec("-35650.0"), dec("24.1")),
+        ],
+        "the CAD list read, the USD list empty, the duplicate top-level list not read twice"
+    );
+}
+
+#[test]
+fn a_row_in_one_currency_s_list_stated_in_another_is_not_read_as_either() {
+    let mut v = recorded("lira-2025-06.json");
+    let text = v.canonical().replacen("\"$CAD\"", "\"$USD\"", 3);
+    v = json::parse(&text).unwrap();
+    let err = statement::rows(&v, Currency::CAD).unwrap_err();
+    assert!(err.to_string().contains("USD"), "{err}");
+}
+
+/// A cash statement in the document's shape, of these rows.
+fn cash_statement(rows: &[(&str, &str, &str, &str, &str)]) -> Value {
+    let list: Vec<String> = rows.iter().map(|(d, code, desc, cash, bal)| format!(r#"{{"transactionDate":"{d}","transactionType":"{code}","description":"{desc}","cashMovement":"{cash}","balance":"{bal}","__typename":"CashMonthlyStatementTransactions"}}"#)).collect();
+    json::parse(&format!(r#"{{"id":"s","statementType":"cash_monthly_statement","data":{{"__typename":"CashMonthlyStatementObject","custodianAccountId":"c","currentTransactions":[{}]}},"__typename":"Statement"}}"#, list.join(","))).unwrap()
+}
+
+/// A brokerage statement in the document's shape, of these CAD rows.
+fn brokerage_statement(rows: &[(&str, &str, &str, &str, &str)]) -> Value {
+    let list: Vec<String> = rows.iter().map(|(d, code, desc, cash, bal)| format!(r#"{{"transactionDate":"{d}","transactionType":"{code}","description":"{desc}","cashMovement":"{cash}","balance":"{bal}","unit":"$CAD","__typename":"BrokerageMonthlyStatementTransactions"}}"#)).collect();
+    let l = list.join(",");
+    json::parse(&format!(
+        r#"{{"id":"s","statementType":"brokerage_monthly_statement","data":{{"__typename":"BrokerageMonthlyStatementObject","custodianAccountId":"b","isMultiCurrency":true,"currentTransactions":[{l}],"activitiesPerCurrency":[{{"currency":"CAD","currentTransactions":[{l}],"__typename":"x"}},{{"currency":"USD","currentTransactions":[],"__typename":"x"}}]}},"__typename":"Statement"}}"#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_cash_statement_s_rows_are_in_the_account_s_own_currency() {
+    let v = cash_statement(&[("2025-06-26", "TRFIN", "Transfer in", "35650.0", "35821.69")]);
+    let rows = statement::rows(&v, Currency::parse("USD").unwrap()).unwrap();
+    assert_eq!((rows[0].currency.as_str(), rows[0].executed, rows[0].book_day()), ("USD", None, day("2025-06-26")));
+}
+
+#[test]
+fn a_booked_row_is_its_code_s_kind_on_the_day_the_statement_states_never_through_a_zone() {
+    let row = &statement::rows(&recorded("lira-2025-06.json"), Currency::CAD).unwrap()[2];
+    let payload = statement::payload("lira-1", day("2025-06-01"), 2, row).canonical();
+    let m = statement::StatementMapping.map(&ctx(), &payload);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!((m.legs[0].kind, m.legs[0].trade_date, m.legs[0].cash), (Kind::Withdrawal, day("2025-06-26"), Some(Money::new(dec("-35650.0"), Currency::CAD))));
+    // a code the table does not place, and a trade, are problems and never booked as a movement
+    for code in ["XYZ", "SELL"] {
+        let r = StatementRow { code: code.into(), ..row.clone() };
+        let m = statement::StatementMapping.map(&ctx(), &statement::payload("lira-1", day("2025-06-01"), 2, &r).canonical());
+        assert!(m.problems.iter().any(|p| p.detail.contains(code)), "{code}: {:?}", m.problems);
+        assert_eq!(m.legs[0].kind, Kind::Unclassified);
+    }
+}
+
+fn ctx() -> MapContext<'static> {
+    static ZONES: std::sync::OnceLock<bagholder_book::zones::Zones> = std::sync::OnceLock::new();
+    MapContext { connection: None, record: bagholder_core::RecordId::parse("01923e6a-7b1c-7def-8123-456789abcdef").unwrap(), zones: ZONES.get_or_init(bagholder_book::zones::Zones::new) }
+}
+
+// -- the request ----------------------------------------------------------------
+
+#[derive(Default)]
+struct Seen {
+    asks: Mutex<Vec<Vec<(String, String)>>>,
+}
+
+struct Recording(Arc<Seen>, String);
+
+impl Transport for Recording {
+    fn answer(&self, ask: &Ask) -> Result<bagholder_net::Answer, NetError> {
+        self.0.asks.lock().unwrap().push(ask.headers.iter().map(|(k, v)| (k.to_lowercase(), v.to_string())).collect());
+        Ok((200, ask.url.to_string(), vec![], self.1.clone().into_bytes()))
+    }
+}
+
+fn client_with(session: &str) -> (Arc<Seen>, Net, tempfile::TempDir) {
+    let seen = Arc::new(Seen::default());
+    let body = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple-statements/lira-2025-06.json")).unwrap();
+    let net = Net::answered_by(Arc::new(ManualClock::at(at("2026-09-24T12:00:00Z"))), Arc::new(Limiter::new()), Box::new(Recording(seen.clone(), body)));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("session.json"), session).unwrap();
+    (seen, net, dir)
+}
+
+#[test]
+fn the_statement_is_asked_as_the_documents_page_asks_it() {
+    use bagholder_wealthsimple::adapter::Source;
+    let (seen, net, dir) = client_with(r#"{"access_token":"a1","refresh_token":"r1","client_id":"c","identity_canonical_id":"identity-1","expires_at":"2026-09-24T13:00:00Z","wssdi":"device-1"}"#);
+    let mut client = bagholder_wealthsimple::client::Client::new(&net, bagholder_wealthsimple::session::SessionFile { path: dir.path().join("session.json") });
+    let got = client.statement("lira-1", day("2025-06-01"), statement::BROKERAGE).unwrap().expect("issued");
+    assert_eq!(statement::rows(&got, Currency::CAD).unwrap().len(), 3);
+    let asks = seen.asks.lock().unwrap();
+    let h: BTreeMap<&str, &str> = asks[0].iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    for (k, v) in [
+        ("x-ws-operation-name", "FetchMonthlyStatementWithTransactions"),
+        ("x-ws-operation-hash", "d5950e5b8d4b7b49a8fe02d68d3d5f7d33d3b7bd555a95db3089fff3dd4d917a"),
+        ("x-ws-device-id", "device-1"),
+        ("x-ws-page", "page-docs"),
+        ("x-web-version", "0.3.671473"),
+        ("x-ws-identity-id", "identity-1"),
+    ] {
+        assert_eq!(h.get(k).copied(), Some(v), "{k}");
+    }
+}
+
+#[test]
+fn a_sign_in_that_kept_no_device_id_is_refused_naming_the_request_and_asks_nothing() {
+    use bagholder_wealthsimple::adapter::Source;
+    let (seen, net, dir) = client_with(r#"{"access_token":"a1","refresh_token":"r1","client_id":"c","identity_canonical_id":"identity-1","expires_at":"2026-09-24T13:00:00Z"}"#);
+    let mut client = bagholder_wealthsimple::client::Client::new(&net, bagholder_wealthsimple::session::SessionFile { path: dir.path().join("session.json") });
+    match client.statement("lira-1", day("2025-06-01"), statement::BROKERAGE) {
+        Err(Failure::Refused(w)) => assert!(w.contains("FetchMonthlyStatementWithTransactions") && w.contains("device id"), "{w}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(seen.asks.lock().unwrap().is_empty());
+}
+
+// -- reconciliation ----------------------------------------------------------------
+
+/// A feed row: one cash movement, as the activity feed states it.
+struct Feed;
+
+impl Mapping for Feed {
+    fn source(&self) -> SourceName {
+        SourceName::named("wealthsimple")
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn map(&self, _ctx: &MapContext, payload: &str) -> Mapped {
+        cash_leg(payload)
+    }
+}
+
+/// A row of a statement file the person imported.
+struct File;
+
+impl Mapping for File {
+    fn source(&self) -> SourceName {
+        bagholder_broker::csv::source()
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn map(&self, _ctx: &MapContext, payload: &str) -> Mapped {
+        cash_leg(payload)
+    }
+}
+
+fn cash_leg(payload: &str) -> Mapped {
+    let v = json::parse(payload).unwrap();
+    let n = bagholder_sources::reply::Node::root(&v);
+    Mapped {
+        legs: vec![Draft {
+            leg: Leg::named("cash"),
+            account: AccountRef::new(ws(), n.text("account").unwrap().to_string()),
+            occurred_at: None,
+            trade_date: n.day("day").unwrap(),
+            settle_date: None,
+            kind: Kind::parse(n.text("kind").unwrap()).unwrap(),
+            effect: None,
+            instrument: None,
+            quantity: None,
+            price: None,
+            cash: Some(Money::new(dec(n.text("cash").unwrap()), Currency::CAD)),
+            fee: None,
+            fx_rate: None,
+            paid_on: None,
+            value: None,
+        }],
+        problems: vec![],
+        adjustments: vec![],
+    }
+}
+
+/// The broker, for the statements alone: each account's months, and what was asked.
+struct Statements {
+    months: BTreeMap<(String, jiff::civil::Date), Option<Value>>,
+    refuse: BTreeSet<(String, jiff::civil::Date)>,
+    asked: Vec<String>,
+}
+
+impl BrokerAdapter for Statements {
+    fn broker(&self) -> Broker {
+        ws()
+    }
+    fn mapping(&self) -> &dyn Mapping {
+        &Feed
+    }
+    fn accounts(&mut self) -> Answer<Vec<AccountStated>> {
+        unreachable!()
+    }
+    fn activity(&mut self, _: &str, _: Option<jiff::civil::Date>) -> Answer<Activity> {
+        unreachable!()
+    }
+    fn record(&mut self, _: &Row, _: &mut dyn BookMoves) -> Answer<Value> {
+        unreachable!()
+    }
+    fn holds(&self, _: &Value, _: &Row) -> bool {
+        unreachable!()
+    }
+    fn reads_positions(&self, _: &Value) -> bool {
+        unreachable!()
+    }
+    fn unsettled(&self, _: &Value) -> Option<(String, Option<jiff::civil::Date>)> {
+        unreachable!()
+    }
+    fn placed(&self, _: &Value) -> Option<(String, jiff::civil::Date)> {
+        unreachable!()
+    }
+    fn day(&self, _: jiff::Timestamp) -> jiff::civil::Date {
+        unreachable!()
+    }
+    fn cash(&mut self, _: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>> {
+        unreachable!()
+    }
+    fn buying_power(&mut self, _: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>> {
+        unreachable!()
+    }
+    fn units(&mut self, _: &str, _: jiff::civil::Date) -> Answer<Vec<Units>> {
+        unreachable!()
+    }
+    fn instruments(&mut self, _: &[Reference], _: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)> {
+        unreachable!()
+    }
+    fn history(&mut self, _: &str, _: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>> {
+        unreachable!()
+    }
+    fn statement(&mut self, account: &str, month: jiff::civil::Date) -> Answer<StatementRead> {
+        self.asked.push(format!("{account} {month}"));
+        if self.refuse.contains(&(account.to_string(), month)) {
+            return Err(Failure::Refused("UNPROCESSABLE_ENTITY".into()));
+        }
+        match self.months.get(&(account.to_string(), month)) {
+            Some(Some(v)) => Ok(StatementRead::Issued { payload: v.clone(), rows: self.statement_rows(account, v)? }),
+            Some(None) | None => Ok(StatementRead::NotIssued),
+        }
+    }
+    fn statement_rows(&self, _account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
+        statement::rows(payload, Currency::CAD).map_err(|m| Failure::Mismatch(m.to_string()))
+    }
+    fn statement_mapping(&self) -> Option<&dyn Mapping> {
+        Some(&statement::StatementMapping)
+    }
+    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
+        Some((statement::key(account, month, position), statement::payload(account, month, position, row)))
+    }
+}
+
+/// A book of two accounts, a LIRA and a chequing account, and the broker's statements.
+struct World {
+    _dir: tempfile::TempDir,
+    book: Book,
+    conn: ConnectionId,
+    lira: AccountId,
+    cash: AccountId,
+    broker: Statements,
+    n: usize,
+    /// The broker's accounts behind the book's LIRA.
+    lira_keys: Vec<String>,
+    /// Each of the broker's accounts' cash as it states it now.
+    cash_now: BTreeMap<String, BTreeMap<Currency, Dec>>,
+}
+
+const NOW: &str = "2025-07-15T16:00:00Z";
+
+impl World {
+    fn new() -> World {
+        let dir = tempfile::tempdir().unwrap();
+        let (book, _) = Book::open_in(dir.path(), "test", at(NOW)).unwrap();
+        let conn = book.add_connection(&ws(), "Wealthsimple", at(NOW)).unwrap();
+        let lira = book.add_account(conn, &[AccountRef::new(ws(), "lira-1")], &bagholder_book::import::wealthsimple_account_type("SELF_DIRECTED_LIRA"), AccountStatus::Open, None, at(NOW)).unwrap();
+        let cash = book.add_account(conn, &[AccountRef::new(ws(), "cash-1")], &bagholder_book::import::wealthsimple_account_type("CASH"), AccountStatus::Open, None, at(NOW)).unwrap();
+        World { _dir: dir, book, conn, lira, cash, broker: Statements { months: BTreeMap::new(), refuse: BTreeSet::new(), asked: vec![] }, n: 0, lira_keys: vec!["lira-1".into()], cash_now: BTreeMap::new() }
+    }
+
+    fn row(&mut self, mapping: &dyn Mapping, account: &str, d: &str, kind: &str, cash: &str) -> bagholder_core::RecordId {
+        self.n += 1;
+        let payload = format!(r#"{{"account":"{account}","cash":"{cash}","day":"{d}","kind":"{kind}"}}"#);
+        self.book.store(mapping, &Incoming { connection: Some(self.conn), source_key: &format!("row-{}", self.n), payload: &payload, refs: vec![] }, at(NOW)).unwrap().record
+    }
+
+    fn feed(&mut self, account: &str, d: &str, kind: &str, cash: &str) -> bagholder_core::RecordId {
+        self.row(&Feed, account, d, kind, cash)
+    }
+
+    /// The broker states the account's cash, each statement a second after the one before.
+    fn states(&mut self, account: AccountId, cash: &str) {
+        self.n += 1;
+        let when = at(NOW).checked_sub(jiff::Span::new().seconds(1000 - self.n as i64)).unwrap();
+        let read = self.book.broker_read(self.conn, "cash", when).unwrap();
+        self.book.store_cash(account, when, &[(Currency::CAD, dec(cash))].into_iter().collect(), &read).unwrap();
+    }
+
+    fn month(&mut self, account: &str, m: &str, v: Option<Value>) {
+        self.broker.months.insert((account.to_string(), day(m)), v);
+    }
+
+    fn run(&mut self, failures: &mut Vec<(String, Failure)>) -> Done {
+        self.broker.asked.clear();
+        let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, self.lira_keys.clone()), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
+        run(&self.book, &mut self.broker, self.conn, &keys, &self.cash_now, day("2025-07-15"), at(NOW), &mut |_| {}, failures).unwrap()
+    }
+
+    fn book_cash(&self, account: AccountId) -> Dec {
+        self.book.transactions().unwrap().iter().filter(|t| t.account == account).filter_map(|t| t.cash).fold(Dec::ZERO, |a, c| a.checked_add(c.amount).unwrap())
+    }
+}
+
+/// The owner's June 2025: the feed has the LIRA's sale and its withholding tax
+/// but not the withdrawal, and nothing of its arrival in the chequing account.
+fn owners_june() -> World {
+    let mut w = World::new();
+    // May: each account's opening, in the feed and on May's statements
+    w.feed("lira-1", "2025-05-20", "deposit", "0.02");
+    w.feed("cash-1", "2025-05-20", "deposit", "171.69");
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-20", "CONT", "Contribution", "0.02", "0.02")])));
+    w.month("cash-1", "2025-05-01", Some(cash_statement(&[("2025-05-20", "AFT_IN", "Direct deposit", "171.69", "171.69")])));
+    // June: the sale executed on the 25th and settled on the 26th, the tax, and the
+    // withdrawal and its arrival, which only the statements state
+    w.feed("lira-1", "2025-06-25", "sell", "50952.65");
+    w.feed("lira-1", "2025-06-26", "withholding-tax", "-15278.57");
+    w.month("lira-1", "2025-06-01", Some(recorded("lira-2025-06.json")));
+    w.month("cash-1", "2025-06-01", Some(cash_statement(&[("2025-06-26", "TRFIN", "Transfer in", "35650.0", "35821.69")])));
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "24.10");
+    w.states(cash, "35821.69");
+    w
+}
+
+#[test]
+fn the_withdrawal_only_the_statements_state_is_booked_once_on_both_sides_and_joined() {
+    let mut w = owners_june();
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.joined, done.unreconciled.len()), (2, 1, 0), "{done:?}");
+    // the sale settled on the 26th matched the feed's row executed on the 25th: not booked again
+    assert_eq!(w.book_cash(w.lira), dec("24.10"));
+    assert_eq!(w.book_cash(w.cash), dec("35821.69"));
+    // each account back to its base month, May, and no further
+    let asked: BTreeSet<&str> = w.broker.asked.iter().map(String::as_str).collect();
+    assert_eq!(asked, ["lira-1 2025-06-01", "cash-1 2025-06-01", "lira-1 2025-05-01", "cash-1 2025-05-01"].into_iter().collect());
+    assert_eq!(w.broker.asked.len(), 4);
+    let links = w.book.transfer_links().unwrap();
+    assert_eq!(links.len(), 1);
+    // a month read is kept: the next pull, with the cash now agreeing, asks nothing
+    let done = w.run(&mut failures);
+    assert_eq!((done.read, done.booked), (0, 0));
+}
+
+#[test]
+fn a_persistent_difference_is_read_once_and_the_next_pull_asks_nothing() {
+    let mut w = owners_june();
+    // a movement in July, not in any statement yet: the cash still disagrees
+    w.feed("cash-1", "2025-07-02", "deposit", "5");
+    let a = w.cash;
+    w.states(a, "35821.69");
+    let mut failures = vec![];
+    let first = w.run(&mut failures);
+    assert!(first.read > 0);
+    let second = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(w.broker.asked, Vec::<String>::new(), "every month read is kept");
+    assert_eq!(second.booked, 0);
+}
+
+#[test]
+fn an_account_that_agrees_reads_no_statement() {
+    let mut w = World::new();
+    w.feed("lira-1", "2025-05-20", "deposit", "10");
+    let a = w.lira;
+    w.states(a, "10");
+    let a = w.cash;
+    w.states(a, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert_eq!((done.read, done.booked), (0, 0));
+    assert!(w.broker.asked.is_empty());
+}
+
+#[test]
+fn a_sale_executed_on_a_month_s_last_session_and_settled_in_the_next_is_outstanding_not_a_difference() {
+    let mut w = World::new();
+    w.feed("lira-1", "2025-04-10", "deposit", "100");
+    w.month("lira-1", "2025-04-01", Some(brokerage_statement(&[("2025-04-10", "CONT", "Contribution", "100", "100")])));
+    // sold on Friday 30 May, settled Monday 2 June: May's statement lacks it
+    w.feed("lira-1", "2025-05-30", "sell", "50");
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[])));
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-02", "SELL", "X: Sold 1 share (executed at 2025-05-30)", "50", "150"), ("2025-06-20", "WD", "Withdrawal (executed at 2025-06-20)", "-150", "0")])));
+    let a = w.lira;
+    w.states(a, "0");
+    let a = w.cash;
+    w.states(a, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (1, 0), "{done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("0"));
+}
+
+/// June as the owner's, with a fee only the statement states besides: the
+/// LIRA's cash disagrees whatever the feed says of the withdrawal.
+fn with_a_fee(w: &mut World) {
+    w.month(
+        "lira-1",
+        "2025-06-01",
+        Some(brokerage_statement(&[
+            ("2025-06-26", "SELL", "VFV - Vanguard S&P 500 Index ETF: Sold 343.0000 shares (executed at 2025-06-25)", "50952.65", "50952.67"),
+            ("2025-06-26", "WHTFED", "Federal withholding tax (executed at 2025-06-26)", "-15278.57", "35674.1"),
+            ("2025-06-26", "WD", "Withdrawal (executed at 2025-06-26)", "-35650.0", "24.1"),
+            ("2025-06-30", "FEE", "Account fee", "-5", "19.1"),
+        ])),
+    );
+    let a = w.lira;
+    w.states(a, "19.10");
+}
+
+#[test]
+fn a_movement_the_feed_states_a_day_apart_is_never_booked_twice_and_its_month_is_named() {
+    let mut w = owners_june();
+    with_a_fee(&mut w);
+    // the feed's withdrawal, dated a day after the statement's
+    w.feed("lira-1", "2025-06-27", "withdrawal", "-35650.0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    let u = done.unreconciled.iter().find(|u| u.account == w.lira).expect("the LIRA's June is named");
+    assert_eq!((u.month, u.statement, u.book), (day("2025-06-01"), Some(dec("19.1")), dec("-35630.90")));
+    assert_eq!(w.book_cash(w.lira), dec("24.10"), "the feed's withdrawal counted once; nothing of June booked, the fee included");
+    assert_eq!(w.book_cash(w.cash), dec("35821.69"), "the chequing account's June reconciles on its own");
+}
+
+#[test]
+fn a_move_the_statement_codes_as_a_withdrawal_and_the_feed_as_a_transfer_matches() {
+    let mut w = owners_june();
+    w.feed("lira-1", "2025-06-26", "transfer-out", "-35650.0");
+    w.feed("cash-1", "2025-06-26", "transfer-in", "35650.0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (0, 0), "{done:?}");
+}
+
+#[test]
+fn a_movement_in_the_statement_and_an_imported_file_is_booked_once_the_file_s_row_giving_way() {
+    let mut w = owners_june();
+    with_a_fee(&mut w);
+    let file_row = w.row(&File, "lira-1", "2025-06-26", "withdrawal", "-35650.0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    // the fee and the chequing account's arrival booked; the withdrawal booked in the file row's place
+    assert_eq!((done.booked, done.joined, done.unreconciled.len()), (3, 1, 0), "{done:?}");
+    assert_eq!(w.book.record(file_row).unwrap().state, RecordState::Superseded);
+    assert_eq!(w.book_cash(w.lira), dec("19.10"));
+}
+
+#[test]
+fn a_month_not_issued_yet_is_its_own_state_and_the_month_before_is_the_newest() {
+    let mut w = owners_june();
+    // today is in August: July has ended, and its statement is not issued yet
+    w.month("lira-1", "2025-07-01", None);
+    w.month("cash-1", "2025-07-01", None);
+    let keys: BTreeMap<AccountId, Vec<String>> = [(w.lira, vec!["lira-1".to_string()]), (w.cash, vec!["cash-1".to_string()])].into_iter().collect();
+    let mut failures = vec![];
+    let done = run(&w.book, &mut w.broker, w.conn, &keys, &BTreeMap::new(), day("2025-08-03"), at("2025-08-03T16:00:00Z"), &mut |_| {}, &mut failures).unwrap();
+    assert!(failures.is_empty(), "not issued is not a failure: {failures:?}");
+    assert_eq!(done.booked, 2);
+    // July is asked again next time, since it may be issued by then; it is not kept as none
+    assert!(w.book.monthly_statements(w.conn, "lira-1").unwrap().iter().all(|(m, _)| *m != day("2025-07-01")));
+}
+
+#[test]
+fn a_refused_statement_is_a_failure_naming_the_account_and_month_and_books_nothing() {
+    let mut w = owners_june();
+    w.broker.refuse.insert(("lira-1".into(), day("2025-06-01")));
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.iter().any(|(part, f)| part == "statement:lira-1:2025-06-01" && f.to_string().contains("UNPROCESSABLE_ENTITY")), "{failures:?}");
+    assert_eq!(w.book_cash(w.lira), dec("35674.10"), "nothing booked for the LIRA");
+    assert!(done.unreconciled.iter().all(|u| u.account != w.lira));
+}
+
+#[test]
+fn a_trade_only_the_statement_states_is_not_booked_and_its_month_is_named() {
+    let mut w = owners_june();
+    // the feed lacks the sale too
+    let mut w2 = World::new();
+    std::mem::swap(&mut w.broker, &mut w2.broker);
+    w2.feed("lira-1", "2025-05-20", "deposit", "0.02");
+    w2.feed("cash-1", "2025-05-20", "deposit", "171.69");
+    w2.feed("lira-1", "2025-06-26", "withholding-tax", "-15278.57");
+    let a = w2.lira;
+    w2.states(a, "24.10");
+    let a = w2.cash;
+    w2.states(a, "35821.69");
+    let mut failures = vec![];
+    let done = w2.run(&mut failures);
+    let u = done.unreconciled.iter().find(|u| u.account == w2.lira).expect("named");
+    assert!(u.why.as_deref().is_some_and(|w| w.contains("sell")), "{u:?}");
+    assert_eq!(w2.book_cash(w2.lira), dec("-15278.55"), "nothing of June booked in the LIRA");
+}
+
+#[test]
+fn a_second_broker_account_behind_the_book_s_with_no_statement_holds_what_the_broker_states_it_holds_now() {
+    // the LIRA is two of the broker's accounts, joined: one merged into the other long ago, with no statement
+    let mut w = owners_june();
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
+    w.lira_keys.push("lira-old".into());
+    w.cash_now.insert("lira-old".into(), BTreeMap::new());
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (2, 0), "{done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("24.10"));
+    // where the broker states nothing of it at all, its balance is not taken to be anything
+    let mut w = owners_june();
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
+    w.lira_keys.push("lira-old".into());
+    let done = w.run(&mut failures);
+    assert_eq!(done.booked, 1, "only the chequing account's arrival: {done:?}");
+    assert!(done.unreconciled.iter().any(|u| u.account == w.lira && u.statement.is_none()), "{done:?}");
+}

@@ -134,7 +134,7 @@ pub fn status(app: &Arc<App>) -> Status {
 /// failure is said in the header until that source succeeds). Empty when
 /// nothing is failing; one failure met by two readers is said once.
 pub fn failures(st: &app::State, sources: &[String]) -> String {
-    let own = [st.error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str()];
+    let own = [st.error.as_str(), st.statement_error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str()];
     let mut said: Vec<String> = vec![];
     for s in own.into_iter().chain(sources.iter().map(String::as_str)).map(str::trim).filter(|e| !e.is_empty()).map(sentence) {
         if !said.contains(&s) {
@@ -187,6 +187,26 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
         }
     }
     out
+}
+
+/// Each month whose statement the book does not reconcile with, one sentence
+/// each (`docs/plans/statement-gaps.md`): nothing of that month on is booked
+/// from the statements until it does.
+pub fn unreconciled(e: &bagholder_engine::Engine, list: &[bagholder_broker::statements::Unreconciled]) -> Vec<String> {
+    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let inputs = e.inputs();
+    list.iter()
+        .map(|u| {
+            let (broker, account) = (broker_label(inputs, u.account), in_account(inputs, u.account));
+            let month = format!("{} {}", MONTHS[(u.month.month() - 1) as usize], u.month.year());
+            let what = match (&u.why, u.statement) {
+                (Some(why), _) => format!("{broker}'s {month} statement: {why}"),
+                (None, Some(s)) => format!("{broker}'s {month} statement closes at {}, the book at {}", money(s), money(u.book)),
+                (None, None) => format!("{broker}'s {month} statement states no closing balance for every account behind it"),
+            };
+            format!("{} cash in {account}: {what}; nothing from that month on is booked from the statements.", u.currency)
+        })
+        .collect()
 }
 
 /// What took the units out, as a sentence opens with it.
@@ -433,6 +453,29 @@ mod tests {
         assert!(signals.has_changed().unwrap());
         let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
         assert!(sent.contains("\"error\"") && !sent.contains(&said), "{sent}");
+    }
+
+    #[test]
+    fn a_month_that_does_not_reconcile_is_one_sentence_naming_the_account_month_and_both_balances_and_stands_in_the_header() {
+        let (_h, app) = pulled();
+        let f = app.figures.get().unwrap();
+        let account = f.read(|e| *e.inputs().ledger.accounts.keys().next().unwrap()).unwrap();
+        let u = |statement: Option<&str>, why: Option<&str>| bagholder_broker::statements::Unreconciled {
+            account,
+            month: "2025-06-01".parse().unwrap(),
+            currency: bagholder_core::Currency::CAD,
+            statement: statement.map(|s| bagholder_core::Dec::parse(s).unwrap()),
+            book: bagholder_core::Dec::parse("-35630.9").unwrap(),
+            why: why.map(str::to_string),
+        };
+        let said = f.read(|e| super::unreconciled(e, &[u(Some("19.1"), None), u(None, None), u(Some("1"), Some("a sell only the statement states, which is not booked from it"))])).unwrap();
+        let name = f.read(|e| super::in_account(e.inputs(), account)).unwrap();
+        assert_eq!(said[0], format!("CAD cash in {name}: Wealthsimple's June 2025 statement closes at $19.10, the book at \u{2212}$35,630.90; nothing from that month on is booked from the statements."));
+        assert!(said[1].contains("states no closing balance for every account behind it"), "{}", said[1]);
+        assert!(said[2].contains("a sell only the statement states"), "{}", said[2]);
+        // it stands in the header's line with every other failure
+        app.state.lock().unwrap().statement_error = said[0].clone();
+        assert!(error(&app).contains(&said[0]), "{}", error(&app));
     }
 
     /// An app on the recorded month's book, its figures built.

@@ -142,6 +142,7 @@ A broker is a source with more to it. Each broker adapter provides:
 
 - **Connection.** Signing in from the person's own device (the page, wherever it is open), keeping the session fresh, knowing when it has lapsed. The server never needs a screen of its own.
 - **The pull.** Accounts, balances, positions as the broker states them, its net value history, activity, turned into source records and reconciled.
+- **Monthly statements**, where the broker issues them (`statement`, `statement_rows`, `statement_mapping`, `statement_record`): an account's statement for a month, kept whole as it came and read once, from which the movements its activity feed leaves out are booked after the month reconciles (`bagholder_broker::statements`, `SPEC.md` §2, Movements the activity feed leaves out). A broker that issues none answers so.
 - **Capabilities**, declared: order types per instrument, whether it holds stop orders, whether it modifies in place and what, time-in-force rules, how long it keeps a resting order, **whether it rejects a duplicate client order id**, session rules.
 - **Execution**: place, modify, cancel, read one order back, list open orders; every request and reply recorded.
 

@@ -324,6 +324,7 @@ fn step_text(s: &Step) -> String {
         // in whole percents, so a long pull changes the header a hundred times at most
         Step::Recording { done, of } => format!("Saving transactions… {}%", if *of == 0 { 100 } else { done * 100 / of }),
         Step::Balances => "Fetching balances…".into(),
+        Step::Statements => "Fetching statements…".into(),
         Step::Holdings { account, n, of } => format!("Fetching holdings for {account} ({n} of {of})…"),
         Step::History { account, n, of } => format!("Fetching equity history for {account} ({n} of {of})…"),
     }
@@ -387,6 +388,12 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     let applied = f.record_changed(now);
     end_steps(app);
     applied?;
+    // each month whose statement the book does not reconcile with, said in the header
+    let unreconciled = f.read(|e| crate::status::unreconciled(e, &report.statements.unreconciled)).unwrap_or_default();
+    app.state.lock().unwrap().statement_error = unreconciled.join(" ");
+    if report.statements.read > 0 || report.statements.booked > 0 {
+        log(&format!("bagholder: statements: {} read, {} movements the activity feed left out booked, {} moves between accounts joined", report.statements.read, report.statements.booked, report.statements.joined));
+    }
     // a file's row the broker's own row now reports is linked to it
     let linking = crate::csv_import::link(f, now)?;
     if !linking.linked.is_empty() || !linking.ambiguous.is_empty() {

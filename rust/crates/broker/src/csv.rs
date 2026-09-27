@@ -399,9 +399,7 @@ fn described_units(description: &str) -> Option<(bool, Dec)> {
 /// `(executed at YYYY-MM-DD)`: the day a fill was made, where the statement
 /// files it under its settlement.
 fn executed_at(description: &str) -> Result<Option<jiff::civil::Date>, Problem> {
-    let Some((_, after)) = description.split_once("(executed at ") else { return Ok(None) };
-    let v = after.split(')').next().unwrap_or("");
-    day("executed-at day", v.trim()).map(Some)
+    crate::codes::executed_at(description).map_err(unreadable)
 }
 
 /// Wealthsimple's statement export: a transaction code, and a description that
@@ -425,17 +423,9 @@ fn statement(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         paid_on: None,
         problems: vec![],
     };
-    let kind = match code.as_str() {
-        "BUY" => Kind::Buy,
-        "SELL" => Kind::Sell,
-        "DIV" => Kind::Dividend,
-        "INT" => Kind::Interest,
-        "FEE" => Kind::Fee,
-        "CONT" => Kind::Deposit,
-        "WD" => Kind::Withdrawal,
-        "TRFIN" => Kind::TransferIn,
-        "TRFOUT" => Kind::TransferOut,
-        _ => {
+    let kind = match crate::codes::kind(&code) {
+        Some(k) => k,
+        None => {
             out.problems.push(Problem::new("unclassified", format!("a row of transaction code {code:?}, which is not placed")));
             return Ok(out);
         }
@@ -745,6 +735,16 @@ mod tests {
         assert_eq!(s.problems[0].code, "sign-against-kind");
         let s = state(Layout::Statement, &cells(&[("date", "2024-02-03"), ("transaction", "BUY"), ("description", "AAPL: something"), ("amount", "5")])).unwrap();
         assert_eq!(s.problems[0].code, "quantity-not-stated");
+    }
+
+    #[test]
+    fn a_statement_file_places_a_code_as_the_statements_the_sync_reads_do() {
+        for (code, kind, amount) in [("WHTFED", Kind::WithholdingTax, "-15985.71"), ("TRFOUTTF", Kind::TransferOut, "-50.0"), ("AFT_IN", Kind::Deposit, "57.81"), ("WD", Kind::Withdrawal, "-37300.0")] {
+            let s = state(Layout::Statement, &cells(&[("date", "2026-01-12"), ("transaction", code), ("description", "x"), ("amount", amount)])).unwrap();
+            assert!(s.problems.is_empty(), "{code}: {:?}", s.problems);
+            assert_eq!((s.kind, s.cash), (kind, Some(Dec::parse(amount).unwrap())), "{code}");
+            assert_eq!(Some(s.kind), crate::codes::kind(code), "{code}: one table for both");
+        }
     }
 
     fn payload(layout: Layout, c: BTreeMap<String, String>, instrument: Option<Named>) -> String {

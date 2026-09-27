@@ -1,0 +1,58 @@
+query FetchMonthlyStatementWithTransactions($accountId: String!, $period: String!, $statementType: StatementType!) {
+  monthlyStatement(
+    accountId: $accountId
+    period: $period
+    statementType: $statementType
+  ) {
+    ...MonthlyStatementWithTransactions
+    __typename
+  }
+}
+
+fragment MonthlyStatementWithTransactions on Statement {
+  id
+  statementType
+  data {
+    __typename
+    ... on CashMonthlyStatementObject {
+      custodianAccountId
+      currentTransactions {
+        transactionDate
+        transactionType
+        description
+        cashMovement
+        balance
+        __typename
+      }
+      __typename
+    }
+    ... on BrokerageMonthlyStatementObject {
+      custodianAccountId
+      isMultiCurrency
+      currentTransactions {
+        transactionDate
+        transactionType
+        description
+        cashMovement
+        balance
+        unit
+        __typename
+      }
+      activitiesPerCurrency {
+        currency
+        currentTransactions {
+          transactionDate
+          transactionType
+          description
+          cashMovement
+          balance
+          unit
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+  }
+  __typename
+}
