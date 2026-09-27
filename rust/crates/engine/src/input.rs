@@ -288,6 +288,10 @@ pub struct Market {
     /// Each benchmark's tracker, per benchmark key (`SP500`, `TSX`, `TX60`).
     pub benchmarks: BTreeMap<String, BenchmarkSeries>,
     pub brokers: BTreeMap<AccountId, BrokerAccount>,
+    /// The ex-dividend date each listing's quote states (TMX's), where it states
+    /// one: the Ex-Div of a payer no declared record serves (`SPEC.md` §5,
+    /// Cashflow Positions).
+    pub ex_dividends: BTreeMap<InstrumentId, Date>,
 }
 
 /// When the engine is asked, and where the person is.

@@ -10,7 +10,11 @@
 //! **Quotes.** A halted listing is answered with a null price: TMX states it has
 //! no price now, and the price read last stands. The schedule the quote states
 //! (`dividendFrequency`) is read for the payer's record alone: a word this reader
-//! does not know is that record's mismatch, and leaves the price standing.
+//! does not know is that record's mismatch, and leaves the price standing. The
+//! ex-dividend date the quote states (`exDividendDate`, written
+//! `2026-08-14 00:00:00.0`, and `""` where TMX states none) is the Ex-Div of a
+//! payer no declared record serves (`SPEC.md` §5, Cashflow Positions); a form
+//! this reader does not know is its mismatch, and leaves the price standing too.
 //!
 //! **Distributions.** TMX states each distribution's ex-date and amount per
 //! unit, and its record, pay and declaration dates where it has them. It does
@@ -35,7 +39,7 @@ pub const HOST: &str = "app-money.tmx.com";
 const URL: &str = "https://app-money.tmx.com/graphql";
 const HEADERS: [(&str, &str); 5] = [("Content-Type", "application/json"), ("locale", "en"), ("Origin", "https://money.tmx.com"), ("Referer", "https://money.tmx.com/"), ("User-Agent", "Mozilla/5.0")];
 
-const QUOTE: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName exchangeCode price priceChange percentChange prevClose currency datetime dividendFrequency } }";
+const QUOTE: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName exchangeCode price priceChange percentChange prevClose currency datetime dividendFrequency exDividendDate } }";
 const DIVIDENDS: &str = "query getDividendsForSymbol($symbol: String!, $page: Int, $batch: Int) { dividends: getDividendsForSymbol(symbol: $symbol, page: $page, batch: $batch) { dividends { exDate recordDate payableDate declarationDate amount currency } } }";
 /// Rows per page of distributions; a full page means another is asked.
 const BATCH: usize = 100;
@@ -73,6 +77,25 @@ pub struct TmxQuote {
     /// How often the listing pays, where TMX states it; a word this reader does
     /// not know, the mismatch naming it.
     pub per_year: Result<Option<u32>, Mismatch>,
+    /// The ex-dividend date TMX reports on the quote, where it states one; a
+    /// form this reader does not know, the mismatch naming it.
+    pub ex_dividend: Result<Option<Date>, Mismatch>,
+}
+
+/// TMX's ex-dividend date on a quote: `""` where it states none, else a day at
+/// midnight written `YYYY-MM-DD 00:00:00.0`; anything else is not a form this
+/// reader knows.
+fn ex_dividend(q: &Node) -> Result<Option<Date>, Mismatch> {
+    let n = q.field("exDividendDate")?;
+    let text = n.as_text()?;
+    if text.is_empty() {
+        return Ok(None);
+    }
+    match text.strip_suffix(" 00:00:00.0").map(crate::reply::day_from) {
+        Some(Ok(d)) => Ok(Some(d)),
+        Some(Err(why)) => Err(n.mismatch(why)),
+        None => Err(n.mismatch(format!("{text:?} is not a day written YYYY-MM-DD 00:00:00.0"))),
+    }
 }
 
 /// A distribution as TMX lists it.
@@ -192,6 +215,7 @@ fn read_quote(root: &Node, form: &str) -> Result<Result<TmxQuote, String>, Misma
         currency,
         datetime,
         per_year,
+        ex_dividend: ex_dividend(&q),
     }))
 }
 

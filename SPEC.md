@@ -160,6 +160,7 @@ The server tells the page what changed; the page never polls. It keeps one conne
 | Position Price, Market, P&L, Allocation; Cashflow Market and Current yield | Live quote | One minute for shares, ETFs and crypto; for a US-listed option, while it is on screen, as Cboe's delayed chain allows |
 | Cashflow Distribution, Projected, Yield on cost, Current yield | Declared record from TMX | A day, from a week before a distribution is due by the payer's stated schedule until it is listed; a week where no source states one (§1) |
 | Cashflow Ex-Div, Pay Day, where the company's record lists nothing still to be paid | TMX's record beside it | At once, then a day from a week before the next distribution is due by the payer's stated schedule until TMX lists it; a week where no source states one |
+| Cashflow Ex-Div, Pay Day, for a payer with no declared record | The ex-date on TMX's quote; the last payment received | With the live quote; the next sync for the payment |
 
 Every instrument Wealthsimple offers has a live price source. TMX Money carries a Cboe Canada listing's declared record under the `:AQL` symbol form (the former NEO exchange), which the app asks for; its price still comes from Cboe's own feed, never from TMX's delayed quote.
 

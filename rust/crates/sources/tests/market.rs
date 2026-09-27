@@ -115,9 +115,11 @@ fn quote(name: &str, form: &str) -> Outcome<tmx::TmxQuote> {
 }
 
 #[test]
-fn a_tmx_quote_states_its_venue_and_schedule() {
+fn a_tmx_quote_states_its_venue_schedule_and_ex_dividend_date() {
     let Outcome::Answered(q) = quote("quote-QCN.json", "QCN") else { panic!() };
-    assert_eq!((q.price, q.change, q.currency, q.per_year), (Some(dec("218.31")), Some(dec("-3.48")), Currency::CAD, Ok(Some(4))));
+    assert_eq!((q.price, q.change, q.currency, q.per_year), (Some(dec("218.44")), Some(dec("0.08")), Currency::CAD, Ok(Some(4))));
+    // the ex-dividend date, written `2026-09-21 00:00:00.0`
+    assert_eq!(q.ex_dividend, Ok(Some(date(2026, 9, 21))));
     assert_eq!(q.exchange_name, "Toronto Stock Exchange");
     assert!(bagholder_sources::venue::tmx_venue_matches("", &q.exchange_name));
     assert_eq!(quote("quote-ZZZQX-unknown.json", "ZZZQX").kind(), OutcomeKind::NotCarried);
@@ -128,14 +130,23 @@ fn a_tmx_quote_states_its_venue_and_schedule() {
     // a CSE listing, which TMX names by the form asked
     let Outcome::Answered(q) = quote("quote-QIMC-CNX.json", "QIMC:CNX") else { panic!("a CSE listing's own quote") };
     assert_eq!((q.price, q.change, q.currency, q.exchange_name.as_str()), (Some(dec("0.56")), Some(dec("-0.01")), Currency::CAD, "Canadian Securities Exchange"));
+    // a listing that pays nothing: TMX states its ex-dividend date as ""
+    assert_eq!(q.ex_dividend, Ok(None));
+    let Outcome::Answered(q) = quote("quote-FBTC.json", "FBTC") else { panic!() };
+    assert_eq!((q.per_year, q.ex_dividend), (Ok(None), Ok(None)));
     // a halted listing: TMX states no price now, which is an answer, not a failure
     let Outcome::Answered(q) = quote("edited-quote-ENB-price-null.json", "ENB") else { panic!("a null price is TMX's answer") };
-    assert_eq!((q.price, q.per_year), (None, Ok(Some(4))));
+    assert_eq!((q.price, q.per_year, q.ex_dividend), (None, Ok(Some(4)), Ok(Some(date(2026, 8, 14)))));
     // a schedule word the reader does not know: the quote stands, and the schedule
     // is the mismatch naming it, for the payer's record to refuse
     let Outcome::Answered(q) = quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB") else { panic!("the price stands") };
-    assert_eq!(q.price, Some(dec("67.47")));
+    assert_eq!(q.price, Some(dec("66.13")));
     assert!(matches!(q.per_year, Err(m) if m.why.contains("Fortnightly") && m.path == "data.getQuoteBySymbol.dividendFrequency"));
+    // an ex-dividend date in a form the reader does not know: the quote stands,
+    // and the date is the mismatch naming it
+    let Outcome::Answered(q) = quote("wrong-shape-quote-ENB-ex-dividend-unknown.json", "ENB") else { panic!("the price stands") };
+    assert_eq!((q.price, q.per_year), (Some(dec("66.13")), Ok(Some(4))));
+    assert!(matches!(q.ex_dividend, Err(m) if m.why.contains("2026-08-14T00:00:00-04:00") && m.path == "data.getQuoteBySymbol.exDividendDate"));
     assert!(matches!(quote("wrong-meaning-quote-ENB-another-symbol.json", "ENB"), Outcome::Meaning(w) if w.contains("TRP")));
 }
 

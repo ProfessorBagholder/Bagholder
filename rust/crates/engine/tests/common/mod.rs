@@ -281,6 +281,10 @@ pub fn build(case: &Value) -> Built {
         };
         market.quotes.insert(id, Quote { price: Money::new(dec(s(&q, "price").unwrap()), currency), change: s(&q, "change").map(dec), change_pct: None, at: None, source });
     }
+    // the ex-dividend date a listing's quote states: {instrument: day}
+    for (i, d) in obj(case, "ex_dividends") {
+        market.ex_dividends.insert(ids.instrument(&i), day(d.as_str().unwrap()));
+    }
     for (i, days) in obj(case, "closes") {
         let id = ids.instrument(&i);
         let currency = ledger.instruments[&id].instrument.currency;

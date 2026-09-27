@@ -403,5 +403,162 @@
     }
    ]
   }
+ },
+ {
+  "name": "Ex-Div and Pay Day without a record: the ex-date TMX reports on the quote, and the date of the last payment received",
+  "spec": "SPEC.md §5 Cashflow Positions: Ex-Div and Pay Day",
+  "working": [
+   "Ex-Div: 'From the fund's declared record ... Without a record, the ex-date TMX reports on the quote.' Pay Day: 'The pay date of that same distribution; without a record, the date of the last payment received.' ex_dividends is the ex-date TMX reports on each listing's quote. Today 2026-09-26.",
+   "X: no declared record: the quote's ex-date, 2026-10-30; the last payment received in any account, t7 in B on 2026-08-31 (A's last is t5, 2026-07-31).",
+   "Y: its declared record lists ex 2026-09-29 paid 2026-10-06, still to be paid: 2026-09-29 / 2026-10-06; the quote's ex-date 2026-03-13 is not used, as the record serves it.",
+   "Z: no declared record and the quote states no ex-date: no Ex-Div; the last payment received, t9 on 2026-06-30."
+  ],
+  "today": "2026-09-26",
+  "accounts": [
+   {
+    "id": "A"
+   },
+   {
+    "id": "B"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "Y"
+   },
+   {
+    "id": "Z"
+   }
+  ],
+  "declared": {
+   "Y": [
+    {
+     "ex": "2026-08-28",
+     "pay": "2026-09-04",
+     "amount": "0.10"
+    },
+    {
+     "ex": "2026-09-29",
+     "pay": "2026-10-06",
+     "amount": "0.10"
+    }
+   ]
+  },
+  "frequencies": {
+   "Y": 12
+  },
+  "ex_dividends": {
+   "X": "2026-10-30",
+   "Y": "2026-03-13"
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-06-01",
+    "at": "2026-06-01T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t2",
+    "account": "B",
+    "day": "2026-06-01",
+    "at": "2026-06-01T15:01:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "50",
+    "cash": "-500"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-06-01",
+    "at": "2026-06-01T15:02:00Z",
+    "kind": "buy",
+    "instrument": "Y",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-06-01",
+    "at": "2026-06-01T15:03:00Z",
+    "kind": "buy",
+    "instrument": "Z",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2026-07-31",
+    "at": "2026-07-31T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "30"
+   },
+   {
+    "id": "t6",
+    "account": "B",
+    "day": "2026-07-31",
+    "at": "2026-07-31T11:01:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "15"
+   },
+   {
+    "id": "t7",
+    "account": "B",
+    "day": "2026-08-31",
+    "at": "2026-08-31T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "15"
+   },
+   {
+    "id": "t8",
+    "account": "A",
+    "day": "2026-09-04",
+    "at": "2026-09-04T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "Y",
+    "cash": "10"
+   },
+   {
+    "id": "t9",
+    "account": "A",
+    "day": "2026-06-30",
+    "at": "2026-06-30T11:00:00Z",
+    "kind": "dividend",
+    "instrument": "Z",
+    "cash": "25"
+   }
+  ],
+  "expect": {
+   "payers": [
+    {
+     "instrument": "X",
+     "next_ex": "2026-10-30",
+     "next_pay": "2026-08-31"
+    },
+    {
+     "instrument": "Y",
+     "next_ex": "2026-09-29",
+     "next_pay": "2026-10-06"
+    },
+    {
+     "instrument": "Z",
+     "next_ex": null,
+     "next_pay": "2026-06-30"
+    }
+   ]
+  }
  }
 ]

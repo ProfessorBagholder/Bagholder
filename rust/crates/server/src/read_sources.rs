@@ -40,8 +40,8 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// The market as the cache holds it: its quotes, its closes and the benchmarks'
-/// trackers.
+/// The market as the cache holds it: its quotes with the ex-dividend dates they
+/// state, its closes and the benchmarks' trackers.
 pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, String> {
     let mut m = Market::default();
     let instruments: BTreeMap<InstrumentId, (InstrumentKind, Currency)> = book.instruments().map_err(err)?.into_iter().map(|i| (i.id, (i.kind, i.currency))).collect();
@@ -54,6 +54,7 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
         m.quotes.insert(q.instrument, Quote { price: q.price, change: q.change, change_pct: q.change_pct, at: Some(q.quoted_at), source });
     }
     m.closes = cache.closes().map_err(err)?;
+    m.ex_dividends = cache.ex_dividends().map_err(err)?;
     for (b, s) in cache.benchmark_series().map_err(err)? {
         m.benchmarks.insert(b.key().to_string(), BenchmarkSeries { currency: b.tracker().1, closes: s.closes, dividends: s.dividends, splits: s.splits });
     }

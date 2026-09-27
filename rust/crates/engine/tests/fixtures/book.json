@@ -27,6 +27,7 @@
     {"id": "t5", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
     {"id": "v1", "account": "B", "day": "2026-02-20", "at": "2026-02-20T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "10"},
     {"id": "v2", "account": "B", "day": "2026-03-20", "at": "2026-03-20T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "10"},
+    {"id": "v3", "account": "A", "day": "2026-03-31", "at": "2026-03-31T11:00:00Z", "kind": "dividend", "instrument": "U", "cash": "5"},
     {"id": "k1", "account": "C", "day": "2026-01-15", "at": "2026-01-15T15:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "0.5"},
     {"id": "k2", "account": "C", "day": "2026-02-15", "at": "2026-02-15T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "0.5", "cash": "-30000"}
   ]

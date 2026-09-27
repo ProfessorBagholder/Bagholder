@@ -29,6 +29,7 @@ fn kind(c: &Change) -> &'static str {
         Change::Declared(..) => "declared",
         Change::Frequency(..) => "frequency",
         Change::Quote(..) => "quote",
+        Change::ExDividend(..) => "ex-dividend",
         Change::Closes(..) => "closes",
         Change::Benchmark(..) => "benchmark",
         Change::Broker(..) => "broker",
@@ -36,7 +37,7 @@ fn kind(c: &Change) -> &'static str {
     }
 }
 
-const KINDS: [&str; 13] = ["ledger", "trades", "groups", "journal", "adjustments", "rates", "declared", "frequency", "quote", "closes", "benchmark", "broker", "clock"];
+const KINDS: [&str; 14] = ["ledger", "trades", "groups", "journal", "adjustments", "rates", "declared", "frequency", "quote", "ex-dividend", "closes", "benchmark", "broker", "clock"];
 
 /// The inputs as they are after a change: written here, apart from the engine,
 /// so the test does not grade the engine by its own reading of a change.
@@ -71,6 +72,12 @@ fn changed(inputs: &Inputs, c: &Change) -> Inputs {
             match q {
                 Some(q) => i.market.quotes.insert(k, q),
                 None => i.market.quotes.remove(&k),
+            };
+        }
+        Change::ExDividend(k, d) => {
+            match d {
+                Some(d) => i.market.ex_dividends.insert(k, d),
+                None => i.market.ex_dividends.remove(&k),
             };
         }
         Change::Closes(k, c) => {
@@ -138,7 +145,6 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     // a close of the fund, which no contract is written on
     let mut closes = i.market.closes.get(&f).cloned().unwrap_or_default();
     closes.insert(day("2026-04-18"), Money::new(d("10.4"), Currency::CAD));
-    let _ = u;
     let broker = BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1100"))]), net_value_now: Some(d("3100")), as_of: Some("2026-04-20T16:00:00Z".parse().unwrap()), ..BrokerAccount::default() };
     let clock = bagholder_engine::input::Clock { today: day("2026-04-21"), now: "2026-04-21T22:00:00Z".parse().unwrap(), ..i.clock.clone() };
     let mut benchmark = i.market.benchmarks.get("SP500").cloned().unwrap_or(bagholder_engine::input::BenchmarkSeries { currency: Currency::USD, closes: BTreeMap::new(), dividends: BTreeMap::new(), splits: BTreeMap::new() });
@@ -153,6 +159,8 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
         Change::Declared(f, Some(declared)),
         Change::Frequency(f, Some(Sourced { value: 4, source: SourceName::named("tmx") })),
         Change::Quote(x, Some(quote)),
+        // U has paid and has no declared record: its quote's ex-date is its Ex-Div
+        Change::ExDividend(u, Some(day("2026-05-15"))),
         Change::Closes(f, closes),
         Change::Benchmark("SP500".into(), Some(benchmark)),
         Change::Broker(a, Some(broker)),
@@ -210,7 +218,7 @@ fn the_record_as_a_whole_and_each_benchmark_are_reported_when_they_move() {
             "ledger" => assert!(book.is_some_and(|f| f.contains("activity")), "{k}: {:?}", moved.0),
             "clock" => assert!(book.is_some_and(|f| f.contains("today")), "{k}: {:?}", moved.0),
             "benchmark" => assert!(moved.0.contains_key(&Entity::Benchmark("SP500".into())), "{k}: {:?}", moved.0),
-            "quote" | "journal" | "groups" | "declared" | "frequency" => assert!(book.is_none(), "{k} moved the record as a whole: {:?}", moved.0),
+            "quote" | "ex-dividend" | "journal" | "groups" | "declared" | "frequency" => assert!(book.is_none(), "{k} moved the record as a whole: {:?}", moved.0),
             _ => {}
         }
     }

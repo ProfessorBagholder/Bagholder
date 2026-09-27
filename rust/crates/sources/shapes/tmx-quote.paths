@@ -4,6 +4,7 @@ data.getQuoteBySymbol
 data.getQuoteBySymbol.currency
 data.getQuoteBySymbol.datetime
 data.getQuoteBySymbol.dividendFrequency
+data.getQuoteBySymbol.exDividendDate
 data.getQuoteBySymbol.exchangeCode
 data.getQuoteBySymbol.exchangeName
 data.getQuoteBySymbol.name

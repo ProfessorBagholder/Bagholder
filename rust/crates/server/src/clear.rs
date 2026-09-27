@@ -52,6 +52,7 @@ pub enum Place {
 /// Every table of the market cache.
 pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("quotes", Place::Of(Kind::Market)),
+    ("quoted_ex_dividends", Place::Of(Kind::Market)),
     ("daily_closes", Place::Of(Kind::Market)),
     ("benchmark_closes", Place::Of(Kind::Market)),
     ("benchmark_events", Place::Of(Kind::Market)),
@@ -321,6 +322,7 @@ mod tests {
         let cur = f.read(|e| e.inputs().ledger.instruments[&held].instrument.currency).unwrap();
         let px = bagholder_core::Dec::parse("10").unwrap();
         cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: held, source: src.clone(), price: bagholder_core::Money::new(px, cur), change: None, change_pct: None, quoted_at: t, allowance: Default::default(), received_at: t }).unwrap();
+        cache.store_ex_dividend(held, &bagholder_core::SourceName::named("tmx"), Some(day), t).unwrap();
         cache.store_closes(held, &[(day, px)], cur, &src, t).unwrap();
         let spx = bagholder_sources::contract::Benchmark::Sp500;
         cache.store_benchmark_closes(spx, &[(day, px)], &src, t).unwrap();

@@ -313,14 +313,13 @@ fn run(path: &Path) -> Vec<String> {
                     _ => c.fail(format!("{}: expected {v}, got {:?}", w("per_year"), p.per_year)),
                 }
             }
-            if let Some(v) = s(&want, "next_ex") {
-                if p.next_ex != Some(day(v)) {
-                    c.fail(format!("{}: expected {v}, got {:?}", w("next_ex"), p.next_ex));
-                }
-            }
-            if let Some(v) = s(&want, "next_pay") {
-                if p.next_pay != Some(day(v)) {
-                    c.fail(format!("{}: expected {v}, got {:?}", w("next_pay"), p.next_pay));
+            // a day, or null where there is none
+            for (key, got) in [("next_ex", p.next_ex), ("next_pay", p.next_pay)] {
+                if let Some(v) = want.get(key) {
+                    let expected = if v.is_null() { None } else { Some(day(v.as_str().unwrap())) };
+                    if got != expected {
+                        c.fail(format!("{}: expected {v}, got {got:?}", w(key)));
+                    }
                 }
             }
         }
