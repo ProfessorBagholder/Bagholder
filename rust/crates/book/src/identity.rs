@@ -6,7 +6,9 @@
 //! or a connection-scoped one within its connection), never by a bare symbol.
 //! When a record's references name two different instruments, or a reference is
 //! already another instrument's, nothing is merged and nothing is picked: the
-//! record gets a problem.
+//! record gets a problem. The one join is a source's own: an id it states
+//! retired by a corporate action and the id it trades the same listing under
+//! now are one instrument (`Book::join_successions`).
 
 use rusqlite::{params, OptionalExtension};
 
@@ -15,7 +17,7 @@ use bagholder_core::instrument::{Instrument, InstrumentKind, Issuer, Name, Optio
 use bagholder_core::record::Problem;
 use bagholder_core::{AccountId, Broker, ConnectionId, InstrumentId, IssuerId, SourceName, TransactionId};
 
-use crate::mapping::{InstrumentDraft, NameDraft};
+use crate::mapping::{InstrumentDraft, NameDraft, StandingDraft};
 use crate::text::{self, at as at_text, day};
 use crate::{new_uuid, Book, BookError, Result};
 
@@ -419,6 +421,9 @@ impl Book {
         if let (Some(name), Some(seen_by)) = (&draft.name, seen_by) {
             self.record_sighting(id, name, seen_by)?;
         }
+        if let Some(s) = &draft.standing {
+            self.note_standing(draft, s)?;
+        }
         if let Some(opt) = &draft.option {
             let (underlying, more) = self.resolve_instrument_from(&opt.underlying, source, seen_by, at)?;
             notes.extend(more);
@@ -459,6 +464,160 @@ impl Book {
             }
         }
         Ok((Ok(id), notes))
+    }
+
+    /// Keep what a source states of one of its own ids, with the listing it
+    /// named as it said so.
+    fn note_standing(&self, draft: &InstrumentDraft, s: &StandingDraft) -> Result<()> {
+        let (symbol, venue_mic) = match &draft.name {
+            Some(n) => (Some(n.symbol.as_str()), n.venue_mic.as_deref()),
+            None => (None, None),
+        };
+        self.conn().execute(
+            "INSERT INTO security_standings(scheme, value, standing, kind, currency, symbol, venue_mic) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(scheme, value, standing) DO UPDATE SET kind = excluded.kind, currency = excluded.currency, symbol = excluded.symbol, venue_mic = excluded.venue_mic",
+            params![s.of.scheme.to_text(), s.of.value, s.standing.as_str(), draft.kind.as_str(), draft.currency.as_str(), symbol, venue_mic],
+        )?;
+        Ok(())
+    }
+
+    /// Make one instrument of each id a source states it retired by a corporate
+    /// action and the id it now trades the same listing under
+    /// (`docs/architecture.md` §5, "Matching across sources"). The successor is
+    /// the one id of the same source stated live, never stated retired, with
+    /// the retired id's symbol, venue and currency; with none or several, or
+    /// where a corporate event row gives up the retired id's units (a
+    /// consolidation, a split, a change of code states its own succession),
+    /// they stay two. Nothing is joined on a symbol alone: the source's own
+    /// word that the id was retired is what joins them. Returns each join, the
+    /// instrument kept (the one first seen) and the one folded into it.
+    pub fn join_successions(&self) -> Result<Vec<(InstrumentId, InstrumentId)>> {
+        self.atomically(|| {
+            let retired: Vec<(String, String, String, String, String, String)> = {
+                let mut stmt = self.conn().prepare(
+                    "SELECT scheme, value, kind, currency, symbol, venue_mic FROM security_standings
+                     WHERE standing = 'retired-by-event' AND symbol IS NOT NULL AND venue_mic IS NOT NULL ORDER BY scheme, value",
+                )?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
+            let mut joined = Vec::new();
+            for (scheme, value, kind, currency, symbol, venue_mic) in retired {
+                let successors: Vec<String> = {
+                    let mut stmt = self.conn().prepare_cached(
+                        "SELECT s.value FROM security_standings s
+                         WHERE s.scheme = ? AND s.standing = 'live' AND s.kind = ? AND s.currency = ? AND s.symbol = ? AND s.venue_mic = ? AND s.value <> ?
+                           AND NOT EXISTS (SELECT 1 FROM security_standings r WHERE r.scheme = s.scheme AND r.value = s.value AND r.standing = 'retired-by-event')
+                         ORDER BY s.value",
+                    )?;
+                    let rows = stmt.query_map(params![scheme, kind, currency, symbol, venue_mic, value], |r| r.get(0))?;
+                    rows.collect::<rusqlite::Result<_>>()?
+                };
+                let [successor] = successors.as_slice() else { continue };
+                let scheme = text::parsed("security_standings", "scheme", &scheme, RefScheme::parse)?;
+                let Some(old) = self.instrument_by_ref(&Reference::new(scheme.clone(), value))? else { continue };
+                let Some(new) = self.instrument_by_ref(&Reference::new(scheme, successor.clone()))? else { continue };
+                if old == new || self.event_gives_up(old)? {
+                    continue;
+                }
+                let (a, b) = (self.instrument(old)?, self.instrument(new)?);
+                if a.kind != b.kind || a.currency != b.currency {
+                    continue;
+                }
+                let keep: String = self.conn().query_row(
+                    "SELECT id FROM instruments WHERE id IN (?, ?) ORDER BY created_at, rowid LIMIT 1",
+                    params![old.to_string(), new.to_string()],
+                    |r| r.get(0),
+                )?;
+                let keep = text::parsed("instruments", "id", &keep, InstrumentId::parse)?;
+                let gone = if keep == old { new } else { old };
+                self.fold_instrument(keep, gone)?;
+                joined.push((keep, gone));
+            }
+            Ok(joined)
+        })
+    }
+
+    /// Whether a corporate event row gives up units of the instrument: its
+    /// succession is then what that row states.
+    fn event_gives_up(&self, id: InstrumentId) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM transactions WHERE instrument_id = ? AND kind = 'corporate-event' AND quantity LIKE '-%')",
+            [id.to_string()],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Fold `gone` into `keep`: every reference, sighting, transaction, trade
+    /// anchor, fact, statement line and choice of the person's that names
+    /// `gone` names `keep`, and `gone` is no more. Where both have a row that
+    /// can be only one's (a watch, a tile, a named listing), `keep`'s stands;
+    /// one statement's units of both are added up.
+    fn fold_instrument(&self, keep: InstrumentId, gone: InstrumentId) -> Result<()> {
+        let (k, g) = (keep.to_string(), gone.to_string());
+        let c = self.conn();
+        c.execute("UPDATE instrument_refs SET instrument_id = ?1 WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("INSERT OR IGNORE INTO instrument_routes(instrument_id, scheme, value) SELECT ?1, scheme, value FROM instrument_routes WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("DELETE FROM instrument_routes WHERE instrument_id = ?", [&g])?;
+        c.execute("UPDATE instrument_sightings SET instrument_id = ?1 WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("UPDATE OR IGNORE option_terms SET instrument_id = ?1 WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("DELETE FROM option_terms WHERE instrument_id = ?", [&g])?;
+        c.execute("UPDATE option_terms SET underlying_id = ?1 WHERE underlying_id = ?2", params![k, g])?;
+        c.execute("UPDATE transactions SET instrument_id = ?1 WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("UPDATE trades SET anchor_instrument = ?1 WHERE anchor_instrument = ?2", params![k, g])?;
+        c.execute("UPDATE declared_reads SET instrument_id = ?1 WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("UPDATE OR IGNORE stated_frequencies SET instrument_id = ?1 WHERE instrument_id = ?2", params![k, g])?;
+        c.execute("DELETE FROM stated_frequencies WHERE instrument_id = ?", [&g])?;
+        c.execute("UPDATE adjustment_legs SET from_instrument = ?1 WHERE from_instrument = ?2", params![k, g])?;
+        c.execute("UPDATE adjustment_legs SET to_instrument = ?1 WHERE to_instrument = ?2", params![k, g])?;
+        // a statement that states both: one holding, its units added up; a book
+        // value is kept only where both state one in one currency
+        type Line = (String, String, Option<String>, Option<String>);
+        let lines: Vec<Line> = {
+            let mut stmt = c.prepare("SELECT statement_id, quantity, book_value, book_value_currency FROM statement_units WHERE instrument_id = ?")?;
+            let rows = stmt.query_map([&g], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (statement, quantity, value, value_currency) in lines {
+            let theirs: Option<Line> = c
+                .query_row(
+                    "SELECT statement_id, quantity, book_value, book_value_currency FROM statement_units WHERE statement_id = ? AND instrument_id = ?",
+                    params![statement, k],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional()?;
+            match theirs {
+                None => {
+                    c.execute("UPDATE statement_units SET instrument_id = ? WHERE statement_id = ? AND instrument_id = ?", params![k, statement, g])?;
+                }
+                Some((_, q, v, vc)) => {
+                    let add = |a: &str, b: &str| -> Result<String> {
+                        let (a, b) = (text::dec("statement_units", "quantity", a)?, text::dec("statement_units", "quantity", b)?);
+                        Ok(a.checked_add(b).map_err(|e| BookError::Refused(format!("a statement's units too large to add: {e}")))?.to_text())
+                    };
+                    let quantity = add(&q, &quantity)?;
+                    let (value, value_currency) = match (v, vc, value, value_currency) {
+                        (Some(a), Some(ac), Some(b), Some(bc)) if ac == bc => (Some(add(&a, &b)?), Some(ac)),
+                        _ => (None, None),
+                    };
+                    c.execute(
+                        "UPDATE statement_units SET quantity = ?, book_value = ?, book_value_currency = ? WHERE statement_id = ? AND instrument_id = ?",
+                        params![quantity, value, value_currency, statement, k],
+                    )?;
+                    c.execute("DELETE FROM statement_units WHERE statement_id = ? AND instrument_id = ?", params![statement, g])?;
+                }
+            }
+        }
+        for table in ["watched", "tiles", "listings_named"] {
+            c.execute(&format!("UPDATE OR IGNORE {table} SET instrument_id = ?1 WHERE instrument_id = ?2"), params![k, g])?;
+            c.execute(&format!("DELETE FROM {table} WHERE instrument_id = ?"), [&g])?;
+        }
+        c.execute(
+            "UPDATE instruments SET issuer_id = (SELECT issuer_id FROM instruments WHERE id = ?2) WHERE id = ?1 AND issuer_id IS NULL",
+            params![k, g],
+        )?;
+        c.execute("DELETE FROM instruments WHERE id = ?", [&g])?;
+        Ok(())
     }
 
     /// Note that a record's leg called the instrument this, on its day.

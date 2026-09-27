@@ -108,6 +108,16 @@ fn instrument(v: &Value) -> InstrumentDraft {
             right: OptionRight::parse(o["right"].as_str().unwrap()).unwrap(),
             multiplier: o.get("multiplier").and_then(Value::as_str).map(d),
         }),
+        // `"standing": "retired-by-event"`: the standing of the first reference
+        standing: v.get("standing").and_then(Value::as_str).map(|s| bagholder_book::mapping::StandingDraft {
+            of: Reference::new(RefScheme::parse(v["refs"][0][0].as_str().unwrap()).unwrap(), v["refs"][0][1].as_str().unwrap()),
+            standing: match s {
+                "live" => bagholder_book::mapping::Standing::Live,
+                "retired-by-event" => bagholder_book::mapping::Standing::RetiredByEvent,
+                "delisted" => bagholder_book::mapping::Standing::Delisted,
+                other => panic!("no standing {other}"),
+            },
+        }),
     }
 }
 

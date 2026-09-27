@@ -38,7 +38,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bagholder_book::mapping::{AdjustmentDraft, AdjustmentLegDraft, Draft, InstrumentDraft, MapContext, Mapped, Mapping, NameDraft, OptionDraft};
+use bagholder_book::mapping::{AdjustmentDraft, AdjustmentLegDraft, Draft, InstrumentDraft, MapContext, Mapped, Mapping, NameDraft, OptionDraft, Standing, StandingDraft};
 use bagholder_core::account::AccountRef;
 use bagholder_core::instrument::{InstrumentKind, OptionRight, RefScheme, Reference};
 use bagholder_core::json::{self, Value};
@@ -72,8 +72,10 @@ impl Mapping for WealthsimpleMapping {
     /// 3: a row's day is Toronto's, where Wealthsimple states its days.
     /// 4: a coin moved in keeps the value Wealthsimple states it arrived at.
     /// 5: a stated value of zero is kept as one.
+    /// 6: a security's standing is kept, so an id retired by a corporate action
+    /// and the id its listing trades under now are one instrument.
     fn version(&self) -> u32 {
-        5
+        6
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -400,7 +402,18 @@ fn instrument(root: &Node, id: &str, seen: jiff::civil::Date) -> Result<Instrume
     } else {
         None
     };
-    Ok(InstrumentDraft { refs, kind, currency, name, option })
+    // what Wealthsimple states of the id: traded under, retired by a corporate
+    // action (the listing then trades under another id, `Book::join_successions`)
+    // or delisted; a coin's is not stated
+    let standing = match s.opt_text("status")? {
+        None => None,
+        Some("TRADING") => Some(Standing::Live),
+        Some("CORPORATE_ACTION") => Some(Standing::RetiredByEvent),
+        Some("DELISTED") => Some(Standing::Delisted),
+        Some(other) => return Err(s.field("status")?.mismatch(format!("expected TRADING, CORPORATE_ACTION or DELISTED, found {other:?}")).into()),
+    };
+    let standing = standing.map(|standing| StandingDraft { of: refs[0].clone(), standing });
+    Ok(InstrumentDraft { refs, kind, currency, name, option, standing })
 }
 
 /// A multi-leg order: each leg as its order states it. The row's amount is its

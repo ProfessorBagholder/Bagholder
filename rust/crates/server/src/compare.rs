@@ -18,7 +18,6 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use bagholder_book::import::mapping::ImportMapping;
 use bagholder_book::Book;
 use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::journal::Opening;
@@ -244,7 +243,15 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     let view = bagholder_model::view::build_view(&base, None);
 
     let (book, _) = Book::open_in(book_dir, crate::app::APP_VERSION, at).map_err(err)?;
-    let changes = book.rederive(&ImportMapping, at).map_err(err)?;
+    // the book as the app opens it: every source's records derived under its
+    // mapping's version (`figures::Figures::open`)
+    let mut changes = bagholder_book::records::Changes::default();
+    for m in crate::figures::mappings() {
+        let c = book.rederive(m, at).map_err(err)?;
+        changes.added.extend(c.added);
+        changes.changed.extend(c.changed);
+        changes.removed.extend(c.removed);
+    }
     let mut ledger = engine_inputs::ledger(&book)?;
     let mut facts = engine_inputs::facts(&book)?;
     let from_book = matches!(from, FactsFrom::Book { .. });
@@ -312,7 +319,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
         false => writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes; no benchmark (the old store's are price-only levels).").expect("writing to a String cannot fail"),
         true => writeln!(out, "Compared on {today}. Rates, declared distributions and stated frequencies from the book; quotes, closes and the benchmarks' trackers from the market cache, as the readers wrote them.").expect("writing to a String cannot fail"),
     };
-    writeln!(out, "Re-derived with the import mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).expect("writing to a String cannot fail");
+    writeln!(out, "Re-derived under each source's mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).expect("writing to a String cannot fail");
     let mut changed_kinds: BTreeMap<String, usize> = BTreeMap::new();
     for id in &changes.changed {
         if let Some(t) = engine_inputs_transaction(&book, id)? {

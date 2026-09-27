@@ -425,7 +425,7 @@ fn instrument(ctx: &MapContext, p: &ImportedRow, kind: InstrumentKind, row_curre
         }
         _ => None,
     };
-    Some(InstrumentDraft { refs, kind, currency, name, option })
+    Some(InstrumentDraft { refs, kind, currency, name, option, standing: None })
 }
 
 /// An option's terms, from the name the earlier app printed from Wealthsimple's
@@ -468,6 +468,7 @@ fn option_draft(p: &ImportedRow, symbol: &str, currency: Currency, seen: jiff::c
             seen,
         }),
         option: None,
+        standing: None,
     };
     let (_, expiry, strike, right) = terms;
     Some(OptionDraft { underlying: Box::new(underlying), expiry, strike, right, multiplier: None })

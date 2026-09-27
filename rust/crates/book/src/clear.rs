@@ -104,6 +104,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("instrument_refs", Holds::Named),
     ("instrument_routes", Holds::Named),
     ("option_terms", Holds::Named),
+    ("security_standings", Holds::Named),
     ("issuers", Holds::Named),
     ("settings", Holds::Settings),
     ("schema_migrations", Holds::Schema),
@@ -234,6 +235,8 @@ impl Book {
         }
         c.execute_batch(
             "DROP TABLE IF EXISTS temp.unnamed;
+             DELETE FROM security_standings WHERE NOT EXISTS
+                (SELECT 1 FROM instrument_refs r WHERE r.scheme = security_standings.scheme AND r.value = security_standings.value);
              DELETE FROM issuers WHERE id NOT IN (SELECT issuer_id FROM instruments WHERE issuer_id IS NOT NULL);
              CREATE TEMP TABLE unnamed_accounts AS SELECT id FROM accounts WHERE
                 id NOT IN (SELECT account_id FROM transactions)

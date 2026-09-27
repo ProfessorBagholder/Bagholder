@@ -131,6 +131,7 @@ impl Named {
                     currency,
                     name: Some(NameDraft { symbol: c.underlying_symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
                     option: None,
+                    standing: None,
                 }),
                 expiry: c.expiry.parse().map_err(|e: jiff::Error| e.to_string())?,
                 strike: Dec::parse(&c.strike).map_err(|e| e.to_string())?,
@@ -145,6 +146,7 @@ impl Named {
             currency,
             name: Some(NameDraft { symbol: self.symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
             option,
+            standing: None,
         })
     }
 }

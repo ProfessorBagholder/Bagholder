@@ -86,6 +86,7 @@ impl Mapping for FillMapping {
                     currency,
                     name: Some(NameDraft { symbol: p.symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
                     option: None,
+                    standing: None,
                 }),
                 quantity: Some(q),
                 price: Some(Money::new(Dec::parse(&p.price).map_err(|e| e.to_string())?, currency)),
