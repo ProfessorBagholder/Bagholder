@@ -311,6 +311,10 @@ struct World {
     cash: AccountId,
     broker: Statements,
     n: usize,
+    /// The broker's accounts behind the book's LIRA.
+    lira_keys: Vec<String>,
+    /// Each of the broker's accounts' cash as it states it now.
+    cash_now: BTreeMap<String, BTreeMap<Currency, Dec>>,
 }
 
 const NOW: &str = "2025-07-15T16:00:00Z";
@@ -322,7 +326,7 @@ impl World {
         let conn = book.add_connection(&ws(), "Wealthsimple", at(NOW)).unwrap();
         let lira = book.add_account(conn, &[AccountRef::new(ws(), "lira-1")], &bagholder_book::import::wealthsimple_account_type("SELF_DIRECTED_LIRA"), AccountStatus::Open, None, at(NOW)).unwrap();
         let cash = book.add_account(conn, &[AccountRef::new(ws(), "cash-1")], &bagholder_book::import::wealthsimple_account_type("CASH"), AccountStatus::Open, None, at(NOW)).unwrap();
-        World { _dir: dir, book, conn, lira, cash, broker: Statements { months: BTreeMap::new(), refuse: BTreeSet::new(), asked: vec![] }, n: 0 }
+        World { _dir: dir, book, conn, lira, cash, broker: Statements { months: BTreeMap::new(), refuse: BTreeSet::new(), asked: vec![] }, n: 0, lira_keys: vec!["lira-1".into()], cash_now: BTreeMap::new() }
     }
 
     fn row(&mut self, mapping: &dyn Mapping, account: &str, d: &str, kind: &str, cash: &str) -> bagholder_core::RecordId {
@@ -349,8 +353,8 @@ impl World {
 
     fn run(&mut self, failures: &mut Vec<(String, Failure)>) -> Done {
         self.broker.asked.clear();
-        let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, vec!["lira-1".to_string()]), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
-        run(&self.book, &mut self.broker, self.conn, &keys, day("2025-07-15"), at(NOW), &mut |_| {}, failures).unwrap()
+        let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, self.lira_keys.clone()), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
+        run(&self.book, &mut self.broker, self.conn, &keys, &self.cash_now, day("2025-07-15"), at(NOW), &mut |_| {}, failures).unwrap()
     }
 
     fn book_cash(&self, account: AccountId) -> Dec {
@@ -515,7 +519,7 @@ fn a_month_not_issued_yet_is_its_own_state_and_the_month_before_is_the_newest() 
     w.month("cash-1", "2025-07-01", None);
     let keys: BTreeMap<AccountId, Vec<String>> = [(w.lira, vec!["lira-1".to_string()]), (w.cash, vec!["cash-1".to_string()])].into_iter().collect();
     let mut failures = vec![];
-    let done = run(&w.book, &mut w.broker, w.conn, &keys, day("2025-08-03"), at("2025-08-03T16:00:00Z"), &mut |_| {}, &mut failures).unwrap();
+    let done = run(&w.book, &mut w.broker, w.conn, &keys, &BTreeMap::new(), day("2025-08-03"), at("2025-08-03T16:00:00Z"), &mut |_| {}, &mut failures).unwrap();
     assert!(failures.is_empty(), "not issued is not a failure: {failures:?}");
     assert_eq!(done.booked, 2);
     // July is asked again next time, since it may be issued by then; it is not kept as none
@@ -551,4 +555,25 @@ fn a_trade_only_the_statement_states_is_not_booked_and_its_month_is_named() {
     let u = done.unreconciled.iter().find(|u| u.account == w2.lira).expect("named");
     assert!(u.why.as_deref().is_some_and(|w| w.contains("sell")), "{u:?}");
     assert_eq!(w2.book_cash(w2.lira), dec("-15278.55"), "nothing of June booked in the LIRA");
+}
+
+#[test]
+fn a_second_broker_account_behind_the_book_s_with_no_statement_holds_what_the_broker_states_it_holds_now() {
+    // the LIRA is two of the broker's accounts, joined: one merged into the other long ago, with no statement
+    let mut w = owners_june();
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
+    w.lira_keys.push("lira-old".into());
+    w.cash_now.insert("lira-old".into(), BTreeMap::new());
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (2, 0), "{done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("24.10"));
+    // where the broker states nothing of it at all, its balance is not taken to be anything
+    let mut w = owners_june();
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-old")).unwrap();
+    w.lira_keys.push("lira-old".into());
+    let done = w.run(&mut failures);
+    assert_eq!(done.booked, 1, "only the chequing account's arrival: {done:?}");
+    assert!(done.unreconciled.iter().any(|u| u.account == w.lira && u.statement.is_none()), "{done:?}");
 }

@@ -75,9 +75,10 @@ fn previous(m: jiff::civil::Date) -> Option<jiff::civil::Date> {
 
 /// Read what is needed and book what the feed left out, for each account
 /// whose cash disagrees with what the broker states. `keys_of` names the
-/// broker's open accounts behind each of the book's.
+/// broker's open accounts behind each of the book's; `cash_now`, each one's
+/// cash as the broker states it now.
 #[allow(clippy::too_many_arguments)]
-pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(crate::Step), failures: &mut Vec<(String, Failure)>) -> Result<Done> {
+pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, cash_now: &BTreeMap<String, BTreeMap<Currency, Dec>>, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(crate::Step), failures: &mut Vec<(String, Failure)>) -> Result<Done> {
     let mut done = Done::default();
     let Some(mapping_source) = adapter.statement_mapping().map(|m| m.source()) else { return Ok(done) };
     let txs = book.transactions()?;
@@ -118,11 +119,17 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         // the oldest month statements were read back to
         let mut oldest = newest;
         'walk: loop {
-            let mut issued = true;
+            // a month is issued where any of the broker's accounts behind the
+            // book's has a statement for it: one merged into another, or opened
+            // later, has none, and its rows are none
+            let mut issued = false;
             for k in keys {
                 let known = kept[k].get(&m).cloned();
                 let answer = match known {
-                    Some(Some(_)) => continue,
+                    Some(Some(_)) => {
+                        issued = true;
+                        continue;
+                    }
                     Some(None) => StatementRead::NotIssued,
                     None => {
                         if done.read == 0 {
@@ -144,6 +151,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                         let read = book.broker_read(connection, &format!("statement:{k}"), now)?;
                         book.keep_monthly_statement(connection, k, m, &payload.canonical(), &read)?;
                         kept.get_mut(k).expect("each key has its months").insert(m, Some(rows));
+                        issued = true;
                     }
                     StatementRead::NotIssued => {
                         // a month before the newest completed one that is not
@@ -153,7 +161,6 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                             book.keep_monthly_statement(connection, k, m, "null", &read)?;
                             kept.get_mut(k).expect("each key has its months").insert(m, None);
                         }
-                        issued = false;
                     }
                 }
             }
@@ -174,7 +181,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             // every currency that disagrees needs its base month
             let months: Vec<jiff::civil::Date> = months_between(m, top);
             for (c, b) in base.iter_mut() {
-                if b.is_none() && reconcile(*c, &months, keys, &kept, &own).is_base(m) {
+                if b.is_none() && reconcile(*c, &months, keys, &kept, cash_now, &own).is_base(m) {
                     *b = Some(m);
                 }
             }
@@ -197,12 +204,12 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         for (currency, b) in base {
             let Some(b) = b else {
                 // no month read back to the account's first reconciles: nothing is booked
-                let r = reconcile(currency, &months_between(oldest, top), keys, &kept, &own);
+                let r = reconcile(currency, &months_between(oldest, top), keys, &kept, cash_now, &own);
                 let (statement, book_side) = r.closings(top);
                 done.unreconciled.push(Unreconciled { account: *account, month: top, currency, statement, book: book_side, why: Some("no month read back to the account's first reconciles".into()) });
                 continue;
             };
-            let r = reconcile(currency, &months_between(b, top), keys, &kept, &own);
+            let r = reconcile(currency, &months_between(b, top), keys, &kept, cash_now, &own);
             let forward = r.forward(b, top);
             // the months that reconcile: from the base to the month before any that does not
             let proven = |m: jiff::civil::Date| m >= b && forward.stopped.as_ref().is_none_or(|s| m < s.month);
@@ -351,7 +358,7 @@ impl Reconciled {
 
 /// Match one currency's statement rows over `months` to the account's book
 /// transactions and work out each month's closing on both sides.
-fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, own: &[&Transaction]) -> Reconciled {
+fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, cash_now: &BTreeMap<String, BTreeMap<Currency, Dec>>, own: &[&Transaction]) -> Reconciled {
     // the rows in this currency, each by its place
     let mut rows: Vec<(Place, &StatementRow)> = vec![];
     for k in keys {
@@ -401,7 +408,7 @@ fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], 
             unmatched.entry(place.1).or_default().push((place.clone(), r.cash, crate::codes::kind(&r.code)));
         }
     }
-    Reconciled { closing: closings(currency, months, keys, kept), book, unmatched, file_rows, months: months.to_vec() }
+    Reconciled { closing: closings(currency, months, keys, kept, cash_now), book, unmatched, file_rows, months: months.to_vec() }
 }
 
 fn source_of(t: &Transaction) -> SourceName {
@@ -410,9 +417,10 @@ fn source_of(t: &Transaction) -> SourceName {
 
 /// Each month's closing balance in `currency`, summed over the broker's
 /// accounts: a month with rows closes at its last row's balance; one without
-/// carries the month before's closing, or the next month's opening; an account
-/// no month read states a balance for leaves the sum unstated.
-fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>) -> BTreeMap<jiff::civil::Date, Option<Dec>> {
+/// carries the month before's closing, or the next month's opening. An account
+/// with no row in any month read moved nothing through them: its balance is
+/// the cash the broker states it holds now, and unstated where it states none.
+fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, cash_now: &BTreeMap<String, BTreeMap<Currency, Dec>>) -> BTreeMap<jiff::civil::Date, Option<Dec>> {
     let mut sums: BTreeMap<jiff::civil::Date, Option<Dec>> = months.iter().map(|m| (*m, Some(Dec::ZERO))).collect();
     for k in keys {
         // each month's (opening, closing) where it has rows in this currency
@@ -424,8 +432,9 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
                 Some((*m, (first.balance.checked_sub(first.cash).ok(), last.balance)))
             })
             .collect();
+        let still = if known.is_empty() { cash_now.get(k).map(|c| c.get(&currency).copied().unwrap_or(Dec::ZERO)) } else { None };
         for m in months {
-            let closing = known.get(m).map(|(_, c)| Some(*c)).or_else(|| known.range(..*m).next_back().map(|(_, (_, c))| Some(*c))).or_else(|| known.range(*m..).next().map(|(_, (o, _))| *o)).flatten();
+            let closing = known.get(m).map(|(_, c)| Some(*c)).or_else(|| known.range(..*m).next_back().map(|(_, (_, c))| Some(*c))).or_else(|| known.range(*m..).next().map(|(_, (o, _))| *o)).flatten().or(still);
             let s = sums.get_mut(m).expect("each month is summed");
             *s = match (*s, closing) {
                 (Some(a), Some(b)) => a.checked_add(b).ok(),
