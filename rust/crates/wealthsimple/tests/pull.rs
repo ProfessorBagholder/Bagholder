@@ -73,9 +73,9 @@ fn a_pull_says_each_step_as_it_goes_every_account_by_name_and_counted() {
         })
         .collect();
     kinds.dedup();
-    // the recorded month is part of a longer history, so its account's cash
-    // disagrees with the broker's and its statements are asked for
-    assert_eq!(kinds, ["accounts", "activity", "recording", "balances", "statements", "holdings", "history"]);
+    // the recorded month's activity begins after the newest month a statement
+    // covers: no statement is read for it
+    assert_eq!(kinds, ["accounts", "activity", "recording", "balances", "holdings", "history"]);
     // each counted run goes 1..=of, every account named as the screens name it
     for pick in [0u8, 1, 2] {
         let run: Vec<(String, usize, usize)> = steps
@@ -116,10 +116,7 @@ fn a_pull_with_nothing_new_asks_only_the_accounts_their_activity_and_their_cash(
     let (second, asked) = once(&book, &dir(), "2025-11-19T21:00:00Z");
     assert!(second.failures.is_empty(), "{:?}", second.failures);
     assert_eq!((second.records_new, second.records_revised), (0, 0));
-    // the account's cash still disagrees (the recording is one month of a
-    // longer history): the newest completed month's statement, not issued
-    // yet in this recording, is asked again, and nothing else
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "statement anon-tfsa-1 2025-10-01 brokerage_monthly_statement"]);
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances"]);
 }
 
 #[test]
@@ -138,7 +135,7 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     let (third, asked) = once(&book, later.path(), "2025-11-19T22:00:00Z");
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "statement anon-tfsa-1 2025-10-01 brokerage_monthly_statement"]);
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances"]);
 }
 
 /// The accounts list's edges in an accounts reply.
