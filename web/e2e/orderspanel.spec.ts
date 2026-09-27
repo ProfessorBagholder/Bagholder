@@ -72,6 +72,20 @@ test('the header names the pending count in the ink\'s tint, matching the panel'
   await expect(cards).toHaveCount(5) // o-1, o-2 (stop), o-3 (partial), o-7 (a waiting bracket's entry), and the armed bracket
 })
 
+test('a symbol filter leaves the panel and its badge whole: a filter set to review trades never hides a live order', async ({ page, request }) => {
+  await openPanel(page, request)
+  const cards = page.locator('#odBody .od-card')
+  await expect(cards).toHaveCount(5)
+  await page.keyboard.press('ControlOrMeta+k')
+  const held = (await modelDoc(request)).positions.find((p: { kind: string }) => p.kind === 'Shares')
+  await page.keyboard.type(held.symbol)
+  await page.keyboard.press('Shift+Enter')
+  await expect(page.locator('.chip')).toContainText(held.symbol)
+  await page.keyboard.press('Escape')
+  await expect(cards).toHaveCount(5)
+  await expect(page.locator('button[aria-label="Orders"] .od-badge')).toHaveText('5')
+})
+
 test('←/→ move between Pending, Filled and Cancelled, and the heading follows', async ({ page, request }) => {
   await openPanel(page, request)
   await expect(page.locator('.od-seg.on')).toHaveText('Pending')

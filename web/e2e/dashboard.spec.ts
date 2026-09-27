@@ -19,7 +19,6 @@ interface DashModel {
     series: { d: string; v: string }[]
     drawdown: { pct: number | null; abs: string | null; at: string | null }
     annualized: { rate: number | null; count: number }
-    skippedFilters: string[]
     pnl: { series: { d: string; v: string }[]; leftOut: number; gaps: string[] }
   }
   trades: Trade[]
@@ -138,7 +137,6 @@ test('the equity curve opens on P&L, a running total that reaches below zero, an
   await openWithStatus(page, request, {}, '', (m) => {
     m.equity.pnl = { series: [{ d: '2026-01-05', v: '-400' }, { d: '2026-02-10', v: '250.5' }, { d: '2026-03-15', v: '1200' }], leftOut: 2, gaps: [] }
     m.equity.series = [{ d: '2026-01-05', v: '10000' }, { d: '2026-03-15', v: '12000' }]
-    m.equity.skippedFilters = ['date', 'symbol']
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })

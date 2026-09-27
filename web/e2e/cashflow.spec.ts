@@ -3,7 +3,6 @@ import { ready, openWithStatus, figures, money, money0, signedMoney, pctPlain, q
 
 // SPEC §6, Cashflow: the six tiles, the monthly bar chart with its hover tip,
 // the Cashflow Positions table, the Allocation donut and Distribution history.
-// `e2e/pages.spec.ts` already covers the "skipped filters" note; not repeated here.
 // Figures are checked against the figures document (GET /api/figures), formatted
 // from its exact decimal text the way SPEC.md §3 defines.
 
