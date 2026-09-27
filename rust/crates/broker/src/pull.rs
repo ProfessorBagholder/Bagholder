@@ -308,6 +308,9 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
             book.store_units(*id, as_of, &lines, &read, now)?;
         }
     }
+    // an id the broker now states retired by a corporate action, and the id its
+    // listing trades under now, over every row and holding read so far
+    book.join_successions()?;
     let mut days_of: BTreeMap<AccountId, BTreeMap<jiff::civil::Date, (bagholder_core::Money, bagholder_core::Money)>> = BTreeMap::new();
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
     // an account whose days are stated up to the last full day has none new

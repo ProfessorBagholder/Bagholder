@@ -391,6 +391,8 @@ impl Book {
                 let (payload, _) = self.latest_revision(record)?;
                 changes.extend(self.derive(record, connection, &payload, mapping, at)?);
             }
+            // what the records now state of the source's ids, over all of them
+            self.join_successions()?;
             Ok(changes)
         })
     }

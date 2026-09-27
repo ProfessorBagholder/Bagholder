@@ -106,6 +106,39 @@ pub struct InstrumentDraft {
     pub currency: Currency,
     pub name: Option<NameDraft>,
     pub option: Option<OptionDraft>,
+    /// Where the source states whether its own id for the instrument is still
+    /// the one it trades under.
+    pub standing: Option<StandingDraft>,
+}
+
+/// What a source states of one of its own ids: still traded under, retired by
+/// a corporate action, or delisted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StandingDraft {
+    /// The source's own id the standing is of (a broker's security id).
+    pub of: Reference,
+    pub standing: Standing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standing {
+    /// Traded under this id.
+    Live,
+    /// Retired by a corporate action: where no event row states what became of
+    /// it, the listing continues under the source's live id of the same symbol,
+    /// venue and currency (`Book::join_successions`).
+    RetiredByEvent,
+    Delisted,
+}
+
+impl Standing {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Standing::Live => "live",
+            Standing::RetiredByEvent => "retired-by-event",
+            Standing::Delisted => "delisted",
+        }
+    }
 }
 
 /// What a record calls an instrument, on the record's day.

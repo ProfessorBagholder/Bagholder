@@ -90,7 +90,7 @@ impl Mapping for BrokerRow {
                 settle_date: None,
                 kind: Kind::Buy,
                 effect: None,
-                instrument: Some(bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(Broker::named("wealthsimple")), "sec-1")], kind: InstrumentKind::Security, currency: usd, name: None, option: None }),
+                instrument: Some(bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(Broker::named("wealthsimple")), "sec-1")], kind: InstrumentKind::Security, currency: usd, name: None, option: None, standing: None }),
                 quantity: Some(d("10")),
                 price: None,
                 cash: Some(Money::new(d("-1012.5"), usd)),
