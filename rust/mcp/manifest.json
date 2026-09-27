@@ -22,7 +22,7 @@
     },
     {
       "name": "disclosures_document",
-      "description": "Download one filing to a local file."
+      "description": "Download one filing into the filings folder of Bagholder's data folder."
     },
     {
       "name": "sedar_resolve_profile",
