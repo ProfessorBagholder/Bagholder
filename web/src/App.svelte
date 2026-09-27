@@ -19,7 +19,7 @@
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import LoginView from './lib/LoginView.svelte'
-  import { cancelConnect, followConnect, loginInput, updateNow } from './lib/ui.svelte'
+  import { cancelConnect, flash, followConnect, loginInput, updateNow } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
@@ -206,6 +206,15 @@
     })
   })
 
+  /** The header's error, whole, to the clipboard. */
+  function copyError(): void {
+    const text = status?.error ?? ''
+    navigator.clipboard.writeText(text).then(
+      () => flash('Error copied'),
+      (e) => flash('The error could not be copied: ' + (e instanceof Error ? e.message : String(e)), 'err'),
+    )
+  }
+
   function syncLine(): string {
     const s = status
     if (!s) return ''
@@ -336,7 +345,8 @@
       {/if}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;min-width:0">
-      <span id="syncline" style="font-size:12px;color:var(--ink55);min-width:0;text-align:right">
+      <!-- one line whatever it says: text past the room it has is cut, and read whole in the tip -->
+      <span id="syncline" style="font-size:12px;color:var(--ink55);min-width:0;flex:1 1 auto;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right">
         {#if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
         {:else if status?.updating}<span class="spin"></span>{status.updating}
         {:else if status?.updateError}<span class="status-err">{status.updateError}</span>
@@ -348,6 +358,12 @@
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>
+      {#if status?.error && !showingEmpty}
+        <!-- the whole error, whatever the line had room for -->
+        <button class="heat-ghost" aria-label="Copy error" style="color:var(--neg)" onclick={copyError}>
+          <svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.copy} /></svg>
+        </button>
+      {/if}
       <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative;flex:none" onclick={() => (ui.ordersOpen = true)}>
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.receipt} /></svg>
         {#if status?.openOrders}<span class="od-badge quiet">{status.openOrders}</span>{/if}

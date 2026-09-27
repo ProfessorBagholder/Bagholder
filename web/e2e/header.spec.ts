@@ -85,11 +85,12 @@ test('refreshing the session says so while it runs', async ({ page, request }) =
   await expect(page.locator('#syncline')).toHaveText('Session refreshed')
 })
 
-// SPEC §4, the header: a sync error takes the sync status in full, whatever its
-// length, and the header holds it at every width the page is laid out for.
-test('a sync error is shown whole in the header, which it never overflows', async ({ page, request }) => {
+// SPEC §4, the header: a sync error takes the sync status on one line whatever its
+// length, cut with an ellipsis past its room and read whole on hover, so the header keeps
+// its height and holds it at every width the page is laid out for.
+test('a sync error keeps the header to one line, cut past its room and read whole on hover', async ({ page, request }) => {
   const sentence = 'The account named in this answer could not be read, and the figure stored before it stays until a read answers.'
-  for (const error of [sentence.slice(0, 61), sentence, (sentence + ' ').repeat(4).trim()]) {
+  for (const error of [sentence.slice(0, 61), sentence, (sentence + ' ').repeat(12).trim()]) {
     for (const width of [1200, 1340, 1440, 1680]) {
       await page.setViewportSize({ width, height: 800 })
       await openWithStatus(page, request, { connected: true, error })
@@ -97,19 +98,38 @@ test('a sync error is shown whole in the header, which it never overflows', asyn
       await expect(line.locator('.status-err')).toHaveText(error)
       const fit = await page.evaluate(() => {
         const hdr = document.getElementById('hdr')!
-        const line = document.getElementById('syncline')!.getBoundingClientRect()
+        const el = document.getElementById('syncline')!
+        const line = el.getBoundingClientRect()
         const brand = hdr.firstElementChild!.getBoundingClientRect()
-        const buttons = [...hdr.querySelectorAll('button[aria-label]')].map((b) => b.getBoundingClientRect())
+        const buttons = [...hdr.querySelectorAll('button[aria-label]:not([aria-label="Copy error"])')].map((b) => b.getBoundingClientRect())
+        const copy = hdr.querySelector('button[aria-label="Copy error"]')!.getBoundingClientRect()
         return {
+          copyBeside: copy.left >= line.right && copy.right <= buttons[0].left,
           hdrFits: hdr.scrollWidth <= hdr.clientWidth,
           pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+          // one line: no taller than the line height of its text
+          oneLine: line.height <= parseFloat(getComputedStyle(el).lineHeight || '16') + 1 || line.height <= 20,
+          headerHeld: hdr.getBoundingClientRect().height <= buttons[0].height + 40,
           clearOfBrand: line.left >= brand.right,
           clearOfButtons: buttons.every((b) => line.right <= b.left || line.left >= b.right),
           // every header button at its own size, none squeezed by the text
           buttonsShown: buttons.every((b) => b.width === buttons[0].width && b.height === buttons[0].height && b.right <= window.innerWidth),
         }
       })
-      expect(fit, `${error.length} characters at ${width} px`).toEqual({ hdrFits: true, pageFits: true, clearOfBrand: true, clearOfButtons: true, buttonsShown: true })
+      expect(fit, `${error.length} characters at ${width} px`).toEqual({ copyBeside: true, hdrFits: true, pageFits: true, oneLine: true, headerHeld: true, clearOfBrand: true, clearOfButtons: true, buttonsShown: true })
     }
   }
+})
+
+test('a sync error cut in the header is read whole in the page\'s own tip on hover', async ({ page, request }) => {
+  const error = ('The account named in this answer could not be read, and the figure stored before it stays until a read answers. ').repeat(6).trim()
+  await page.setViewportSize({ width: 1340, height: 800 })
+  await openWithStatus(page, request, { connected: true, error })
+  await page.locator('#syncline').hover()
+  await expect(page.locator('#cutTip .tv')).toHaveText(error)
+  // and copied whole with the icon beside it
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.getByRole('button', { name: 'Copy error' }).click()
+  await expect(page.locator('#syncline')).toHaveText('Error copied')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(error)
 })
