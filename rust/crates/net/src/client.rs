@@ -383,7 +383,9 @@ fn read_exact_n(conn: &mut Conn, n: usize, out: &mut Vec<u8>) -> Result<(), Erro
         let want = left.min(chunk.len());
         let got = conn.read(&mut chunk[..want]).map_err(transport)?;
         if got == 0 {
-            break;
+            // the host closed with the body short of what it announced: a reply cut
+            // off, never a whole one
+            return Err(Error::Transport(format!("connection closed {} bytes before the end of the body", left)));
         }
         out.extend_from_slice(&chunk[..got]);
         left -= got;
@@ -404,29 +406,44 @@ fn read_to_close(conn: &mut Conn, out: &mut Vec<u8>) {
     }
 }
 
+/// One line of a chunked body, its CRLF included; the host closing first is a
+/// reply cut off.
+fn read_line(conn: &mut Conn) -> Result<Vec<u8>, Error> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = conn.read(&mut byte).map_err(transport)?;
+        if n == 0 {
+            return Err(Error::Transport("connection closed before the end of the chunked body".into()));
+        }
+        line.push(byte[0]);
+        if line.ends_with(b"\r\n") {
+            return Ok(line);
+        }
+        if line.len() > 64 * 1024 {
+            return Err(Error::Transport("chunk line too long".into()));
+        }
+    }
+}
+
+/// A chunked body (RFC 9112 §7.1), read to its end: the chunks, the last one of
+/// size zero, then any trailer fields and the empty line that closes the body.
+/// That line has to be read too, or it stays on a kept connection and the next
+/// reply read there starts with it: an empty status line.
 fn read_chunked(conn: &mut Conn, out: &mut Vec<u8>) -> Result<(), Error> {
     loop {
-        let mut line = Vec::new();
-        let mut byte = [0u8; 1];
-        loop {
-            let n = conn.read(&mut byte).map_err(transport)?;
-            if n == 0 {
-                return Ok(());
-            }
-            line.push(byte[0]);
-            if line.ends_with(b"\r\n") {
-                break;
-            }
-        }
+        let line = read_line(conn)?;
         let text = String::from_utf8_lossy(&line);
         let size_hex = text.trim().split(';').next().unwrap_or("").trim().to_string();
-        let size = usize::from_str_radix(&size_hex, 16).unwrap_or(0);
+        let size = usize::from_str_radix(&size_hex, 16).map_err(|_| Error::Transport(format!("bad chunk size {size_hex:?}")))?;
         if size == 0 {
+            while read_line(conn)? != b"\r\n" {}
             return Ok(());
         }
         read_exact_n(conn, size, out)?;
-        let mut crlf = Vec::with_capacity(2);
-        read_exact_n(conn, 2, &mut crlf)?;
+        if read_line(conn)? != b"\r\n" {
+            return Err(Error::Transport("a chunk longer than its stated size".into()));
+        }
     }
 }
 
@@ -578,7 +595,9 @@ fn send(
         let head;
         let mut attempt = 0;
         loop {
-            let pooled = if once {
+            // the second attempt is always on a fresh connection: another kept one
+            // could have been closed by the host too
+            let pooled = if once || attempt > 0 {
                 None
             } else {
                 let mut p = pool().lock().unwrap();
