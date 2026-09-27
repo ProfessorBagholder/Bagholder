@@ -128,6 +128,15 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
     for l in &quoting {
         f.price_changed(l.id)?;
     }
+    // the option contracts held, while a page shows a holding's price: their chains
+    // are asked when Cboe's copy has moved on (`options::chain_due`), a contract
+    // shown for the first time at once
+    if app.events.showing(&PRICED) {
+        bagholder_sources::options::read(&ctx, &needs.contracts).map_err(|e| e.to_string())?;
+        for c in &needs.contracts {
+            f.price_changed(c.id)?;
+        }
+    }
     next_due(&ctx, &needs, &zone, !quoting.is_empty(), now).map(Some)
 }
 
@@ -338,6 +347,39 @@ mod tests {
             assert_eq!(ids(&demand(&app, &book, &held).unwrap()), want, "the Markets tab: the holdings and what is followed");
         }
         assert!(demand(&app, &book, &held).unwrap().is_empty(), "the page closed: nothing quoted");
+    }
+
+    /// The option contracts held are priced from their chains by the app's own
+    /// pass while a page shows a holding's price, and not asked for with no page.
+    #[test]
+    fn held_contracts_are_read_while_a_page_shows_a_holding_s_price() {
+        use crate::events::{Feed, Want};
+        crate::tests_common::home(); // offline: the chain is asked for and nothing leaves the machine
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        app.set_figures(f);
+        let f = app.figures.get().unwrap();
+        // a contract entered by hand, held today
+        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ 15JAN27 12.00 CALL".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "BUY".into(), quantity: "2".into(), price: "0.40".into(), fee: String::new() };
+        crate::entries::enter(f, &req, now).unwrap();
+        let book = f.book().unwrap();
+        let n = f.read(|e| e.needs()).unwrap();
+        let contracts = crate::read_sources::needs_of(&book, &n, now.to_zoned(TimeZone::get("America/Toronto").unwrap()).date()).unwrap().contracts;
+        assert!(!contracts.is_empty(), "the test book holds an option contract");
+        let asked = || -> usize {
+            let cache = f.cache().unwrap();
+            contracts.iter().map(|c| cache.reads(&format!("chain:{}", c.underlying), bagholder_sources::contract::DataKind::Quote).unwrap().len()).sum()
+        };
+        pass(&app, f, now).unwrap();
+        assert_eq!(asked(), 0, "no page: no chain asked for");
+        let feed = Feed::open(app.clone());
+        assert!(app.events.watch(&app, feed.id(), [("positions".to_string(), Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
+        pass(&app, f, now).unwrap();
+        assert!(asked() > 0, "a page showing the holdings: the chain of each held contract is asked for");
     }
 
     fn t(s: &str) -> Timestamp {

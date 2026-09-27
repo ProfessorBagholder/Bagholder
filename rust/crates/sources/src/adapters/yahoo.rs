@@ -172,22 +172,13 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
     if price <= Dec::ZERO {
         return Ok(Err(format!("{symbol}'s price is {price}")));
     }
-    // A coin trades around the clock: Yahoo's percent is its change over the last
-    // day, while its `chartPreviousClose` is the price where today's UTC day began,
-    // not that percent's base. The day's change is measured from the base Yahoo's
-    // own percent states: the price over one plus the percent.
+    // A coin trades around the clock, and its day is the UTC day (`SPEC.md` §2,
+    // Coinbase: the day's change is against the close of the last completed UTC
+    // day). Yahoo's `chartPreviousClose` for a coin is that close, where today's UTC
+    // day began, while its stated percent runs over a rolling 24 hours: the change
+    // and its percent are both taken from the close.
     let coin = meta.text("instrumentType").is_ok_and(|t| t == "CRYPTOCURRENCY");
-    let previous_close = match (coin, stated_pct) {
-        (true, Some(pct)) => {
-            // the percent's base, as `quotes::percent_of` writes a hundred percent
-            let base = Dec::new(100, 0).ok().and_then(|hundred| hundred.checked_add(pct).and_then(|d| price.checked_mul(hundred)?.div_rounded(d, 8, bagholder_core::Rounding::HalfEven)).ok());
-            match base {
-                Some(b) if b > Dec::ZERO => Some(b),
-                _ => return Ok(Err(format!("{symbol}'s change of {pct}% has no base"))),
-            }
-        }
-        _ => previous_close,
-    };
+    let stated_pct = if coin { None } else { stated_pct };
     // a chart that states no percent: the change over the previous close
     let change_pct = stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p)));
 

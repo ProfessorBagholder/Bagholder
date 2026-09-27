@@ -76,7 +76,11 @@ pub fn chain_due(held: Option<&ChainRead>, now: Timestamp, bank: &TimeZone) -> b
 /// The contract in the chain, or why it cannot be told.
 fn find<'a>(chain: &'a Chain, c: &ContractNeed, symbol: &str) -> std::result::Result<&'a ChainContract, Outcome<()>> {
     if let Some(occ) = &c.occ {
-        return chain.contracts.iter().find(|k| &k.occ == occ).ok_or_else(|| Outcome::NotCarried(format!("{occ} is not in {symbol}'s chain of {}", chain.session)));
+        // the OCC standard pads the root with spaces (`QNC   261120C00003000`, or one
+        // space as the broker writes it); Cboe's chains write it with none
+        let key = |s: &str| s.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        let want = key(occ);
+        return chain.contracts.iter().find(|k| key(&k.occ) == want).ok_or_else(|| Outcome::NotCarried(format!("{occ} is not in {symbol}'s chain of {}", chain.session)));
     }
     let terms = format!("{symbol} {} {} {}", c.expiry, c.strike, c.right.as_str());
     if let Some(on) = c.event_on {
