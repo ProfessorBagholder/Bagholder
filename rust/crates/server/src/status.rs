@@ -209,6 +209,23 @@ pub fn unreconciled(e: &bagholder_engine::Engine, list: &[bagholder_broker::stat
         .collect()
 }
 
+/// Each account's movements the activity feed states and no statement lists,
+/// one sentence per account and currency: how many, what they come to, and the
+/// first one's day. They stay in the book as the feed states them.
+pub fn feed_only(e: &bagholder_engine::Engine, list: &[bagholder_broker::statements::FeedOnly]) -> Vec<String> {
+    let inputs = e.inputs();
+    list.iter()
+        .map(|f| {
+            let total = f.rows.iter().try_fold(bagholder_core::Dec::ZERO, |a, (_, v)| a.checked_add(*v).ok());
+            let first = f.rows.iter().map(|(d, _)| *d).min().map(|d| d.to_string()).unwrap_or_default();
+            let n = f.rows.len();
+            let what = if n == 1 { "1 movement".to_string() } else { format!("{n} movements") };
+            let sum = total.map(|t| format!(", {} in all,", money(t))).unwrap_or_default();
+            format!("{} cash in {}: the activity feed has {what}{sum} that no {} statement lists, the first on {first}.", f.currency, in_account(inputs, f.account), broker_label(inputs, f.account))
+        })
+        .collect()
+}
+
 /// What took the units out, as a sentence opens with it.
 fn kind_phrase(k: bagholder_core::transaction::Kind) -> &'static str {
     use bagholder_core::transaction::Kind;
@@ -473,6 +490,10 @@ mod tests {
         assert_eq!(said[0], format!("CAD cash in {name}: Wealthsimple's June 2025 statement closes at $19.10, the book at \u{2212}$35,630.90; nothing from that month on is booked from the statements."));
         assert!(said[1].contains("states no closing balance for every account behind it"), "{}", said[1]);
         assert!(said[2].contains("a sell only the statement states"), "{}", said[2]);
+        // what the feed states that no statement lists: one sentence, a count and a total
+        let f_only = bagholder_broker::statements::FeedOnly { account, currency: bagholder_core::Currency::parse("USD").unwrap(), rows: vec![("2025-01-15".parse().unwrap(), bagholder_core::Dec::parse("2.06").unwrap()), ("2026-01-07".parse().unwrap(), bagholder_core::Dec::parse("12.87").unwrap())] };
+        let said_f = f.read(|e| super::feed_only(e, &[f_only])).unwrap();
+        assert_eq!(said_f[0], format!("USD cash in {name}: the activity feed has 2 movements, $14.93 in all, that no Wealthsimple statement lists, the first on 2025-01-15."));
         // it stands in the header's line with every other failure
         app.state.lock().unwrap().statement_error = said[0].clone();
         assert!(error(&app).contains(&said[0]), "{}", error(&app));

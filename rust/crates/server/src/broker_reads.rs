@@ -389,7 +389,7 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     end_steps(app);
     applied?;
     // each month whose statement the book does not reconcile with, said in the header
-    let unreconciled = f.read(|e| crate::status::unreconciled(e, &report.statements.unreconciled)).unwrap_or_default();
+    let unreconciled = f.read(|e| [crate::status::unreconciled(e, &report.statements.unreconciled), crate::status::feed_only(e, &report.statements.feed_only)].concat()).unwrap_or_default();
     app.state.lock().unwrap().statement_error = unreconciled.join(" ");
     if report.statements.read > 0 || report.statements.booked > 0 {
         log(&format!("bagholder: statements: {} read, {} movements the activity feed left out booked, {} moves between accounts joined", report.statements.read, report.statements.booked, report.statements.joined));

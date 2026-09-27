@@ -37,6 +37,10 @@ pub fn kind(code: &str) -> Option<Kind> {
         "AFT_OUT" | "EFTOUT" | "OBP_OUT" | "E_TRFOUT" | "P2P_SENT" => Kind::Withdrawal,
         // `Cash back - Credit card`, `Giveaway received`: as the feed places a cashback and a promotion
         "CASHBACK" | "GIVEAWAY" => Kind::Cashback,
+        // `Referral bonus (2024-03-04)`: as the feed places a promotion
+        "REFER" => Kind::Cashback,
+        // `Cash correction (executed at 2024-03-14)`: the broker's own charge or refund of a cent
+        "CORRECTION" => Kind::Fee,
         // `Reimbursement received`: as the feed places a reimbursement of a fee
         "REIMB" => Kind::Fee,
         // `Margin Interest Charges for …`
@@ -81,6 +85,8 @@ mod tests {
             ("BUYTOOPEN", Kind::Buy),
             ("SELLTOCLOSE", Kind::Sell),
             ("FPLINT", Kind::Interest),
+            ("REFER", Kind::Cashback),
+            ("CORRECTION", Kind::Fee),
             ("NRT", Kind::WithholdingTax),
             ("WHTFED", Kind::WithholdingTax),
             ("SELL", Kind::Sell),

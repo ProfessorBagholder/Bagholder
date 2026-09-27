@@ -55,6 +55,19 @@ pub struct Done {
     /// The two sides of a move between the person's own accounts joined.
     pub joined: usize,
     pub unreconciled: Vec<Unreconciled>,
+    /// Movements the activity feed states that no statement lists, per account
+    /// and currency: set aside from the reconciliation, kept in the book as the
+    /// feed states them, and said.
+    pub feed_only: Vec<FeedOnly>,
+}
+
+/// An account's movements in one currency that the feed states and no
+/// statement read lists, by day and amount.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeedOnly {
+    pub account: AccountId,
+    pub currency: Currency,
+    pub rows: Vec<(jiff::civil::Date, Dec)>,
 }
 
 /// A row's place: the broker's account, the month, and its place among the
@@ -91,6 +104,11 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         }
         let own: Vec<&Transaction> = txs.iter().filter(|t| t.account == *account).collect();
         let Some(first) = own.iter().map(|t| month_of(t.trade_date)).min() else { continue };
+        // its activity begins after the newest month a statement could cover:
+        // the difference lies where no statement is issued yet
+        if first > newest {
+            continue;
+        }
         // the months kept, and those read now, per broker account: a month
         // the broker answered it has not issued is kept as none
         let mut kept: BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>> = BTreeMap::new();
@@ -211,6 +229,12 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             };
             let r = reconcile(currency, &months_between(b, top), keys, &kept, closed, &own);
             let forward = r.forward(b, top);
+            // said only for the months proven: past a month that does not
+            // reconcile, a row unmatched may be one the statement states otherwise
+            let proven_rows: Vec<(jiff::civil::Date, Dec)> = r.feed_only.iter().copied().filter(|(d, _)| forward.stopped.as_ref().is_none_or(|s| *d < s.month)).collect();
+            if !proven_rows.is_empty() {
+                done.feed_only.push(FeedOnly { account: *account, currency, rows: proven_rows });
+            }
             // the months that reconcile: from the base to the month before any that does not
             let proven = |m: jiff::civil::Date| m >= b && forward.stopped.as_ref().is_none_or(|s| m < s.month);
             let mut places = forward.book.clone();
@@ -279,6 +303,8 @@ struct Reconciled {
     months: Vec<jiff::civil::Date>,
     /// Each month's statement closing, where every broker account states one.
     closing: BTreeMap<jiff::civil::Date, Option<Dec>>,
+    /// Each month's rows added up: what the statement says moved in it.
+    moved: BTreeMap<jiff::civil::Date, Option<Dec>>,
     /// Each month's book closing, each matched transaction on its row's day;
     /// none where the sum is too large to hold.
     book: BTreeMap<jiff::civil::Date, Option<Dec>>,
@@ -287,6 +313,9 @@ struct Reconciled {
     /// Rows matched to a transaction of an imported statement file: booked in
     /// its place, since the broker's statement comes before a file.
     file_rows: BTreeMap<Place, RecordId>,
+    /// The book's transactions in the months read that no row matched, by day
+    /// and amount: set aside from the book's side.
+    feed_only: Vec<(jiff::civil::Date, Dec)>,
 }
 
 /// Where the forward walk stopped: the month, both closings, and why.
@@ -312,13 +341,22 @@ impl Reconciled {
     }
 
     /// From the base month forward: each month's unmatched rows are booked
-    /// when the month then reconciles; the first that does not stops it.
+    /// when the month then reconciles; the first that does not stops it. The
+    /// statement's side runs from the base month's closing by the rows each
+    /// month lists: a statement can open a month off where it closed the one
+    /// before with no row for it (the owner's crypto account, December 2023,
+    /// a cent), and nothing the statement does not list is booked.
     fn forward(&self, base: jiff::civil::Date, top: jiff::civil::Date) -> Forward {
         let mut out = Forward { book: vec![], stopped: None };
         let mut pending = Dec::ZERO;
+        let mut expected = self.closing.get(&base).copied().flatten();
         for m in self.months.iter().copied().filter(|m| *m > base && *m <= top) {
+            expected = match (expected, self.moved.get(&m).copied().flatten()) {
+                (Some(e), Some(v)) => e.checked_add(v).ok(),
+                _ => None,
+            };
             let rows = self.unmatched.get(&m).cloned().unwrap_or_default();
-            let stop = |why: Option<String>, book: Dec| Stop { month: m, statement: self.closing.get(&m).copied().flatten(), book, why };
+            let stop = |why: Option<String>, book: Dec| Stop { month: m, statement: expected, book, why };
             // a trade only the statement states is the feed's to state, with its units and price
             if let Some((_, _, k)) = rows.iter().find(|(_, _, k)| !matches!(k, Some(k) if !matches!(k, Kind::Buy | Kind::Sell))) {
                 let what = match k {
@@ -345,7 +383,7 @@ impl Reconciled {
                     return out;
                 }
             };
-            if self.closing.get(&m).copied().flatten() != Some(book_with) {
+            if expected != Some(book_with) {
                 out.stopped = Some(stop(None, book_with));
                 return out;
             }
@@ -386,15 +424,21 @@ fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], 
     }
     let matched_tx: BTreeSet<usize> = matched.iter().map(|(_, t)| *t).collect();
     let top = months.last().copied();
+    // an unmatched fill of the newest month may settle in the next and be on its
+    // statement: outstanding, not counted until that is issued. Cash moved is
+    // dated alike on both sides, so it is never outstanding.
+    let outstanding = |i: usize, t: &Transaction| !matched_tx.contains(&i) && matches!(t.kind, Kind::Buy | Kind::Sell) && Some(month_of(t.trade_date)) == top;
+    // any other transaction of the months read that no row matched is one the
+    // feed states and the statement does not list: set aside, and said
+    let first_day = months.first().copied();
+    let set_aside: BTreeSet<usize> = txs.iter().enumerate().filter(|(i, t)| !matched_tx.contains(i) && !outstanding(*i, t) && first_day.is_some_and(|f| t.trade_date >= f) && top.is_some_and(|m| t.trade_date <= month_end(m))).map(|(i, _)| i).collect();
+    let feed_only = set_aside.iter().map(|i| (txs[*i].trade_date, txs[*i].cash.expect("filtered to cash").amount)).collect();
     let mut book = BTreeMap::new();
     for m in months {
         let end = month_end(*m);
         let mut total = Some(Dec::ZERO);
         for (i, t) in txs.iter().enumerate() {
-            // an unmatched fill of the newest month may settle in the next and be
-            // on its statement: outstanding, not counted until that is issued.
-            // Cash moved is dated alike on both sides, so it is never outstanding.
-            if !matched_tx.contains(&i) && matches!(t.kind, Kind::Buy | Kind::Sell) && Some(month_of(t.trade_date)) == top && Some(*m) == top {
+            if set_aside.contains(&i) || (outstanding(i, t) && Some(*m) == top) {
                 continue;
             }
             if day_of[i] <= end {
@@ -409,7 +453,21 @@ fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], 
             unmatched.entry(place.1).or_default().push((place.clone(), r.cash, crate::codes::kind(&r.code)));
         }
     }
-    Reconciled { closing: closings(currency, months, keys, kept, closed), book, unmatched, file_rows, months: months.to_vec() }
+    let moved = months
+        .iter()
+        .map(|m| {
+            let mut total = Some(Dec::ZERO);
+            for k in keys {
+                if let Some(Some(list)) = kept[k].get(m) {
+                    for r in list.iter().filter(|r| r.currency == currency) {
+                        total = total.and_then(|t| t.checked_add(r.cash).ok());
+                    }
+                }
+            }
+            (*m, total)
+        })
+        .collect();
+    Reconciled { closing: closings(currency, months, keys, kept, closed), moved, feed_only, book, unmatched, file_rows, months: months.to_vec() }
 }
 
 fn source_of(t: &Transaction) -> SourceName {
@@ -454,6 +512,10 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
 /// statements (September 2023 to August 2026, 1,028 pairs) 840 posted the
 /// same day, 156 a day later and 32 two to six days later; none earlier.
 pub const POSTS_WITHIN_DAYS: i64 = 7;
+
+/// Days within which a row and a transaction of the same amount left over from
+/// the posting window are still one movement posted late.
+pub const LATE_WITHIN_DAYS: i64 = 31;
 
 /// A month's opening and closing balance from its rows' running balance. The
 /// statement lists a day's rows in an order its running balance need not
@@ -501,15 +563,27 @@ fn chain_ends(rows: &[&StatementRow]) -> (Option<Dec>, Option<Dec>) {
 /// agrees, and one of the broker's before an imported file's, so the kind only
 /// breaks a tie and the broker's own rows come before a file's.
 fn match_rows(rows: &[(Place, &StatementRow)], txs: &[&Transaction]) -> Vec<(usize, usize)> {
-    let lag = |r: &StatementRow, t: &Transaction| (r.book_day() - t.trade_date).get_days() as i64;
-    let fits = |r: &StatementRow, t: &Transaction| t.cash.is_some_and(|c| c.amount == r.cash) && (0..=POSTS_WITHIN_DAYS).contains(&lag(r, t));
+    // days from the transaction's to the row's: its own date, or the day it states
+    // it was executed, whichever is nearer and not before the transaction's (a
+    // coin's row can be dated a day before the execution it states, the owner's
+    // February 2024: `2024-02-29 … (executed at 2024-03-01)`)
+    let lag = |r: &StatementRow, t: &Transaction| {
+        [Some(r.day), r.executed].into_iter().flatten().map(|d| (d - t.trade_date).get_days() as i64).filter(|l| *l >= 0).min().unwrap_or(i64::MAX)
+    };
+    // what is left over is paired either way within a month: a row dated before
+    // the feed's day is the same movement too, never one to book beside it
+    let apart = |r: &StatementRow, t: &Transaction| [Some(r.day), r.executed].into_iter().flatten().map(|d| (d - t.trade_date).get_days().abs() as i64).min().unwrap_or(i64::MAX);
+    let fits = |r: &StatementRow, t: &Transaction| t.cash.is_some_and(|c| c.amount == r.cash) && apart(r, t) <= LATE_WITHIN_DAYS;
     let kind_agrees = |r: &StatementRow, t: &Transaction| crate::codes::kind(&r.code) == Some(t.kind);
     let broker = |t: &Transaction| source_of(t) != crate::csv::source();
     let edges: Vec<Vec<usize>> = rows.iter().map(|(_, r)| (0..txs.len()).filter(|&t| fits(r, txs[t])).collect()).collect();
     let mut tx_of: Vec<Option<usize>> = vec![None; txs.len()];
     let mut row_to: Vec<Option<usize>> = vec![None; rows.len()];
-    for days in 0..=POSTS_WITHIN_DAYS {
-        let near = |r: usize, t: usize| lag(rows[r].1, txs[t]) <= days;
+    // the nearest day first, each day of the posting window, then what is left
+    // over paired within a month: a movement can post later still (the owner's
+    // March 2024: nine to eleven days)
+    for days in (0..=POSTS_WITHIN_DAYS).chain([LATE_WITHIN_DAYS]) {
+        let near = |r: usize, t: usize| if days <= POSTS_WITHIN_DAYS { lag(rows[r].1, txs[t]) <= days } else { apart(rows[r].1, txs[t]) <= days };
         let phases: [&dyn Fn(usize, usize) -> bool; 4] = [
             &|r, t| near(r, t) && kind_agrees(rows[r].1, txs[t]) && broker(txs[t]),
             &|r, t| near(r, t) && broker(txs[t]),
