@@ -318,6 +318,11 @@ fn run(path: &Path) -> Vec<String> {
                     c.fail(format!("{}: expected {v}, got {:?}", w("next_ex"), p.next_ex));
                 }
             }
+            if let Some(v) = s(&want, "next_pay") {
+                if p.next_pay != Some(day(v)) {
+                    c.fail(format!("{}: expected {v}, got {:?}", w("next_pay"), p.next_pay));
+                }
+            }
         }
         for want in arr(&expect, "rates") {
             let currency = ccy(s(&want, "currency").unwrap());
@@ -439,6 +444,25 @@ fn run(path: &Path) -> Vec<String> {
                 }
             }
         }
+        if let Some(want) = expect.get("income_holdings").and_then(Value::as_array) {
+            // exactly these income holdings, as account/instrument
+            let sc = e.scope(&Filters::default());
+            let mut want: Vec<(String, String)> = want.iter().map(|h| (s(h, "account").unwrap().to_string(), s(h, "instrument").unwrap().to_string())).collect();
+            let mut got: Vec<(String, String)> = sc
+                .cashflow
+                .holdings
+                .iter()
+                .map(|h| {
+                    let p = &f.positions[h.position];
+                    (b.ids.account_name(p.account), b.ids.instrument_name(p.instrument))
+                })
+                .collect();
+            want.sort();
+            got.sort();
+            if want != got {
+                c.fail(format!("income holdings: expected {want:?}, got {got:?}"));
+            }
+        }
         for want in arr(&expect, "income") {
             let sc = e.scope(&Filters::default());
             let account = b.ids.account(s(&want, "account").unwrap());
@@ -449,6 +473,9 @@ fn run(path: &Path) -> Vec<String> {
             };
             if let Some(v) = want.get("all_time") {
                 c.money("income all time", v, &h.all_time.total);
+            }
+            if let Some(v) = want.get("ytd") {
+                c.money("income ytd", v, &h.ytd.total);
             }
             if let Some(v) = want.get("trailing_year") {
                 c.money("income trailing year", v, &h.trailing_year.total);

@@ -65,19 +65,11 @@ pub fn facts(book: &Book) -> Result<Facts, String> {
         .map_err(err)?
         .into_iter()
         .map(|(i, r)| {
-            let items = r
-                .items
-                .into_iter()
-                .map(|d| Declared {
-                    ex_date: d.ex_date,
-                    record_date: d.record_date,
-                    pay_date: d.pay_date,
-                    amount: d.amount,
-                    reinvested: d.reinvested,
-                    form: d.form,
-                })
-                .collect();
-            (i, DeclaredRead { read_at: r.read_at, source: r.source, items })
+            let rows = |items: Vec<bagholder_book::facts::DeclaredRow>| -> Vec<Declared> {
+                items.into_iter().map(|d| Declared { ex_date: d.ex_date, record_date: d.record_date, pay_date: d.pay_date, amount: d.amount, reinvested: d.reinvested, form: d.form }).collect()
+            };
+            let market = r.market.map(|m| rows(m.items)).unwrap_or_default();
+            (i, DeclaredRead { read_at: r.read_at, source: r.source, items: rows(r.items), market })
         })
         .collect();
     let frequencies = book.frequencies().map_err(err)?.into_iter().map(|(i, f)| (i, Sourced { value: f.per_year, source: f.source })).collect();

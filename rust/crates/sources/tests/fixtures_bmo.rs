@@ -116,7 +116,7 @@ fn with(name: &str) -> common::Recorded {
 
 #[test]
 fn zea_is_stored_whole_with_its_stated_schedule_and_its_parts() {
-    let ran = run_payer(with("fund-ZEA.json"), &zea(), BMO);
+    let ran = run_payer(with("fund-ZEA.json").with_market_record("ZEA"), &zea(), BMO);
     assert_eq!(ran.outcome().0, OutcomeKind::Answered);
     let (source, items) = ran.declared().unwrap();
     assert_eq!((source.as_str(), items.len()), ("bmo", 50));

@@ -257,8 +257,13 @@ fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, quoting: bool, now: Times
     let declared = ctx.book.declared().map_err(|e| e.to_string())?;
     let frequencies = ctx.book.frequencies().map_err(|e| e.to_string())?;
     for p in &needs.payers {
-        if payers::adapter_for(p).is_some() {
-            at.push(payers::run::next_due(declared.get(&p.listing.id), frequencies.get(&p.listing.id), now, bank));
+        if let Some(adapter) = payers::adapter_for(p) {
+            let (read, frequency) = (declared.get(&p.listing.id), frequencies.get(&p.listing.id));
+            at.push(payers::run::next_due(read, frequency, now, bank));
+            // the market's record beside a company's, read for the next distribution
+            if let Some(read) = read.filter(|r| r.source == adapter.source() && payers::run::beside_record_for(p, adapter.as_ref()).is_some()) {
+                at.extend(payers::run::market_next_due(read, frequency, now, bank));
+            }
         }
     }
     if quoting {

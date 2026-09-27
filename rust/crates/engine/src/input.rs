@@ -147,6 +147,10 @@ pub struct DeclaredRead {
     pub read_at: Timestamp,
     pub source: SourceName,
     pub items: Vec<Declared>,
+    /// The market's record beside a company's, as last read: what it lists
+    /// after the company's latest distribution is the next one still to be paid
+    /// while the company's publication has not listed it (`SPEC.md` §5, Ex-Div).
+    pub market: Vec<Declared>,
 }
 
 pub use bagholder_core::adjustment::{Adjustment, AdjustmentLeg};

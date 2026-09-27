@@ -159,6 +159,7 @@ The server tells the page what changed; the page never polls. It keeps one conne
 | Annualized returns vs the index, drawdown | NAV from sync; the index's tracker from Yahoo Finance, converted with BoC rates | Sync for NAV; the session after it settles for the index |
 | Position Price, Market, P&L, Allocation; Cashflow Market and Current yield | Live quote | One minute for shares, ETFs and crypto; for a US-listed option, while it is on screen, as Cboe's delayed chain allows |
 | Cashflow Distribution, Projected, Yield on cost, Current yield | Declared record from TMX | A day, from a week before a distribution is due by the payer's stated schedule until it is listed; a week where no source states one (§1) |
+| Cashflow Ex-Div, Pay Day, where the company's record lists nothing still to be paid | TMX's record beside it | At once, then a day from a week before the next distribution is due by the payer's stated schedule until TMX lists it; a week where no source states one |
 
 Every instrument Wealthsimple offers has a live price source. TMX Money carries a Cboe Canada listing's declared record under the `:AQL` symbol form (the former NEO exchange), which the app asks for; its price still comes from Cboe's own feed, never from TMX's delayed quote.
 
@@ -312,7 +313,7 @@ Six tiles in the style of the dashboard tiles, CAD, dividends in scope. The Marg
 
 **Cashflow.** One bar per month from the first payment to the current month (or to the end of the date filter), CAD, an empty bar for a month with nothing paid yet, six axis labels. The month's distributions in the accent colour, with the month's margin interest (the Interest charge rows in scope, CAD) drawn over it from the same baseline at the same width in the negative colour, so the accent left showing above it is the net; in a month where the interest exceeds the distributions the negative colour rises above the accent. The scale fits the taller of the two. The title row carries the legend at the right. Hover shows the month, Distributions, Margin interest (with a minus sign) and Net cashflow (signed, coloured).
 
-**Cashflow Positions.** One row per open long position in a dividend-paying symbol, per account, largest YTD first until a header is clicked:
+**Cashflow Positions.** One row per open long position in a dividend-paying symbol (one the book has been paid a dividend on, in any account, or whose declared record lists a distribution of an amount per unit above zero), per account, largest YTD first until a header is clicked:
 
 | Column | Definition |
 |---|---|
@@ -322,9 +323,9 @@ Six tiles in the style of the dashboard tiles, CAD, dividends in scope. The Marg
 | Book | Book value |
 | Market | Market value of that position |
 | Distribution | Per-unit amount from the rate above |
-| YTD | CAD received from this symbol this calendar year |
-| All time | CAD received from this symbol ever |
-| Ex-Div | The ex-date of the next distribution still to be paid, whether or not it has gone ex; when nothing is left to pay, of the last known one. From the fund's declared record (TSX, TSX-V, CSE and Cboe Canada listings all have one on TMX); without a record, the ex-date TMX reports on the quote. A date before today is shown muted |
+| YTD | CAD received from this symbol this calendar year, in every account in scope, whichever holds it now |
+| All time | CAD received from this symbol ever, in every account in scope, whichever holds it now |
+| Ex-Div | The ex-date of the next distribution still to be paid, whether or not it has gone ex; when nothing is left to pay, of the last known one. From the fund's declared record (TSX, TSX-V, CSE and Cboe Canada listings all have one on TMX). Where that record is its company's publication and lists nothing still to be paid, the exchange's record (TMX) is read beside it: a company lists a declaration on its own page days after the exchange lists it, which is the day it is made, so the next distribution TMX lists after the company's latest is the one still to be paid; the rate and the schedule stay the company's. Without a record, the ex-date TMX reports on the quote. A date before today is shown muted |
 | Pay Day | The pay date of that same distribution; without a record, the date of the last payment received. A date before today is shown muted; the pay day itself is not |
 | Projected | Expected monthly income: annual income ÷ 12 |
 | Yield on cost | Per-unit amount × payments per year ÷ average cost |

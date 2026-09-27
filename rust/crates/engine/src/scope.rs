@@ -878,17 +878,23 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
         tiles.push(paid_tile(PaidLabel::LastTwelveMonths, ix, n));
     }
 
-    // the income holdings: each open long position in a paying instrument
+    // the income holdings: each open long position in a dividend-paying
+    // instrument, one that has paid the book a dividend in any account, or whose
+    // declared record lists a distribution of an amount above zero. A holding with a record
+    // that lists none (a listing that has never paid) is not one.
+    let mut payers: BTreeSet<InstrumentId> = rows.iter().filter(|r| r.kind == Payment::Dividend).filter_map(|r| r.instrument).collect();
+    payers.extend(inputs.facts.declared.iter().filter(|(_, r)| r.items.iter().any(|d| d.amount.amount.is_positive())).map(|(i, _)| *i));
     let for_yoc: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| r.kind == Payment::Dividend && in_accounts(&r.account)).map(|(i, _)| i).collect();
     let trailing_from = today.checked_sub(365.days()).unwrap_or(Date::MIN);
     let holdings: Vec<IncomeHolding> = positions
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.direction == Direction::Long && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
+        .filter(|(_, p)| p.direction == Direction::Long && payers.contains(&p.instrument) && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
         .filter_map(|(pi, p)| rates.get(&p.instrument).map(|r| (pi, p, r.clone())))
         .map(|(pi, p, rate)| {
-            // what this holding paid: its instrument, into its own account
-            let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && rows[*i].account == p.account && keep(&rows[*i])));
+            // what the symbol paid: its instrument, into every account in scope,
+            // whichever holds it now (SPEC.md §5, Cashflow Positions)
+            let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && keep(&rows[*i])));
             let annual: Fig<Money> = crate::gap::both(rate.annual_per_unit(), p.qty.clone(), |a, q| Ok(a.times(q)?));
             // a payout in another currency than the holding's is taken at the
             // latest rate, as any live figure is
@@ -912,7 +918,10 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     let rated: Vec<&IncomeHolding> = holdings.iter().filter(|h| h.projected_per_month_cad.is_ok()).collect();
     let book = money_sum(rated.iter().filter_map(|h| positions[h.position].book_cad.as_ref().ok().copied()));
     let per_month = money_sum(rated.iter().filter_map(|h| h.projected_per_month_cad.as_ref().ok().copied()));
-    let earned: Fig<Money> = rated.iter().try_fold(Money::zero(Currency::CAD), |a, h| Ok(a.add_to_fit(h.trailing_year.total.clone()?)?));
+    // what the rated symbols paid in the trailing year, each symbol once however
+    // many accounts hold it
+    let rated_instruments: BTreeSet<InstrumentId> = rated.iter().map(|h| h.rate.instrument).collect();
+    let earned: Fig<Money> = partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].day > trailing_from && rows[*i].instrument.is_some_and(|x| rated_instruments.contains(&x)))).total;
     let annual_total: Fig<Money> = per_month.clone().and_then(|m| Ok(m.times(Dec::from_int(12))?));
     tiles.push(CashTile::Yield { yield_on_cost: ratio_of(&annual_total, &book), projected_per_month: per_month, earned, book, left_out: holdings.len() - rated.len() });
 

@@ -109,6 +109,7 @@ fn read(at: &str, items: &[Date]) -> DeclaredReadRow {
         read_at: t(at),
         source: SourceName::named("ninepoint"),
         items: items.iter().map(|d| DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: *d, record_date: None, pay_date: None, amount: Money::new(dec("0.1"), Currency::CAD), reinvested: None }).collect(),
+        market: None,
     }
 }
 
@@ -286,4 +287,116 @@ fn a_payer_is_next_due_at_the_first_instant_its_rule_holds() {
     }
     // never read: due now
     assert_eq!(run::next_due(None, None, now, &eastern()), now);
+}
+
+fn market_read(at: &str, items: &[(Date, Date)]) -> bagholder_book::facts::MarketReadRow {
+    bagholder_book::facts::MarketReadRow {
+        read_at: t(at),
+        source: SourceName::named("tmx"),
+        items: items.iter().map(|(ex, pay)| DeclaredRow { form: bagholder_core::distribution::Form::Unstated, ex_date: *ex, record_date: None, pay_date: Some(*pay), amount: Money::new(dec("0.1"), Currency::CAD), reinvested: None }).collect(),
+    }
+}
+
+fn paid_on(at: &str, items: &[(Date, Date)]) -> DeclaredReadRow {
+    DeclaredReadRow {
+        read_at: t(at),
+        source: SourceName::named("harvest"),
+        items: items.iter().map(|(ex, pay)| DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: *ex, record_date: None, pay_date: Some(*pay), amount: Money::new(dec("0.1"), Currency::CAD), reinvested: None }).collect(),
+        market: None,
+    }
+}
+
+#[test]
+fn the_markets_record_is_read_beside_a_companys_only_while_the_companys_lists_nothing_to_pay() {
+    let z = eastern();
+    let now = t("2026-09-26T16:00:00Z");
+    // the company's record lists the distribution still to be paid: nothing beside it is read
+    let listed = paid_on("2026-09-26T04:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4)), (date(2026, 9, 29), date(2026, 10, 6))]);
+    assert!(!run::market_due(&listed, Some(&freq(12)), now, &z));
+    assert_eq!(run::market_next_due(&listed, Some(&freq(12)), now, &z), None);
+    // its latest was paid: the market's record, never read, is read now
+    let mut paid = paid_on("2026-09-26T04:00:00Z", &[(date(2026, 7, 31), date(2026, 8, 6)), (date(2026, 8, 31), date(2026, 9, 4))]);
+    assert!(run::market_due(&paid, Some(&freq(12)), now, &z));
+    // the market's record lists the next after the company's latest: not read again until it is paid
+    paid.market = Some(market_read("2026-09-26T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4)), (date(2026, 9, 29), date(2026, 10, 6))]));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), None);
+    // the market's record lists nothing after the company's latest either: read
+    // again once a day from a week before the next is due by the stated schedule
+    // (latest ex 2026-08-31, monthly: due about 2026-09-30, looked for from 2026-09-23)
+    paid.market = Some(market_read("2026-09-26T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
+    assert!(!run::market_due(&paid, Some(&freq(12)), now, &z), "read today already");
+    assert!(run::market_due(&paid, Some(&freq(12)), t("2026-09-27T16:00:00Z"), &z));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), Some(t("2026-09-27T04:00:00Z")));
+    // before the window opens, not before it
+    let early = t("2026-09-10T16:00:00Z");
+    paid.market = Some(market_read("2026-09-08T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
+    assert!(!run::market_due(&paid, Some(&freq(12)), early, &z));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), early, &z), Some(t("2026-09-23T04:00:00Z")));
+    // no schedule stated: once a week
+    assert_eq!(run::market_next_due(&paid, None, early, &z), Some(t("2026-09-15T05:00:00Z")));
+}
+
+#[test]
+fn a_companys_record_listing_nothing_to_pay_has_the_exchanges_record_read_beside_it() {
+    // Harvest's page for RDDY as of 2026-09-23 lists the distribution paid
+    // 2026-09-04 and none after; TMX lists the one Harvest declared on
+    // 2026-09-23, going ex 2026-09-29 and paid 2026-10-06
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-26T16:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(common::Recorded::new().with("https://harvestportfolios.com/etf/rddy/", 200, "harvest", "page-rddy.html").with_market_record("RDDY"));
+    let net = common::net(&recorded, "2026-09-26T16:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let needs = [payer(1, "RDDY", "XTSE", Currency::CAD, "Harvest Portfolios Group Inc. - Harvest Reddit Enhanced High Income Shares ETF")];
+    run::read(&ctx, &needs).unwrap();
+    let read = book.declared().unwrap().remove(&id(1)).unwrap();
+    // the rate and the schedule stay the company's
+    assert_eq!(read.source.as_str(), "harvest");
+    assert_eq!(read.items.iter().map(|r| r.ex_date).max(), Some(date(2026, 8, 31)));
+    assert_eq!(book.frequencies().unwrap()[&id(1)].source.as_str(), "harvest");
+    let beside = read.market.expect("the exchange's record beside the company's");
+    assert_eq!(beside.source.as_str(), "tmx");
+    let next = beside.items.iter().find(|r| r.ex_date == date(2026, 9, 29)).expect("the declared distribution");
+    assert_eq!((next.pay_date, next.amount.amount), (Some(date(2026, 10, 6)), dec("0.15")));
+    // the same moment again: neither record is due
+    let asked = recorded.asked.lock().unwrap().len();
+    run::read(&ctx, &needs).unwrap();
+    assert_eq!(recorded.asked.lock().unwrap().len(), asked);
+}
+
+#[test]
+fn the_exchanges_record_beside_passes_over_rows_of_no_cash_and_rests_apart_from_the_company() {
+    // VEQT: Vanguard Canada's record (read 2026-09-24) lists its year-end
+    // distribution, paid 2026-01-07, and none after; TMX lists that ex-date twice,
+    // the cash row and a row of 0, which is not a distribution paying cash
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-26T16:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let vg = SourceName::named("vanguard-canada");
+    let row = |ex: Date, pay: Date, cash: &str| DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: ex, record_date: Some(ex), pay_date: Some(pay), amount: Money::new(dec(cash), Currency::CAD), reinvested: None };
+    book.store_declared(id(1), &[row(date(2024, 12, 30), date(2025, 1, 7), "0.712997"), row(date(2025, 12, 30), date(2026, 1, 7), "0.76018")], &vg, t("2026-09-24T04:00:00Z")).unwrap();
+    book.store_frequency(id(1), 1, &vg, None, t("2026-09-24T04:00:00Z")).unwrap();
+    // the company's own site failed a minute ago: it rests, and the market's record is read all the same
+    let recorded = Arc::new(common::Recorded::new().with_market_record("VEQT"));
+    let net = common::net(&recorded, "2026-09-26T16:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let failed = bagholder_sources::outcome::Noted::<()> { outcome: Outcome::Unreachable("could not be reached".into()), shape_change: None };
+    ctx.record(&vg, "www.vanguard.ca", DataKind::Distributions, Some(id(1)), &failed).unwrap();
+    ctx.attempted(&id(1).to_string(), DataKind::Distributions, &vg, OutcomeKind::Unreachable).unwrap();
+    let needs = [payer(1, "VEQT", "XTSE", Currency::CAD, "Vanguard All-Equity ETF Portfolio - ETF")];
+    run::read(&ctx, &needs).unwrap();
+    assert!(recorded.asked.lock().unwrap().iter().all(|u| u.starts_with("https://app-money.tmx.com/")), "only TMX asked: {:?}", recorded.asked.lock().unwrap());
+    let read = book.declared().unwrap().remove(&id(1)).unwrap();
+    assert_eq!(read.source.as_str(), "vanguard-canada");
+    let beside = read.market.expect("the exchange's record, its rows of no cash passed over");
+    assert!(beside.items.iter().all(|r| r.amount.amount.is_positive()));
+    assert_eq!(beside.items.iter().filter(|r| r.ex_date == date(2025, 12, 30)).count(), 1);
+    let tmx = cache.outcomes(&SourceName::named("tmx")).unwrap();
+    assert!(tmx.iter().any(|o| o.kind == DataKind::Distributions && o.outcome == OutcomeKind::Answered), "{tmx:?}");
 }

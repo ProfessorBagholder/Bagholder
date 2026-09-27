@@ -151,7 +151,7 @@ fn a_monthly_series_is_stored_from_every_release_of_the_window() {
 
 #[test]
 fn an_annual_payer_is_stored_with_its_reinvested_capital_gain() {
-    let ran = run_payer(replies("funds-trimmed.json", None), &series("FBTC"), FD);
+    let ran = run_payer(replies("funds-trimmed.json", None).with_market_record("FBTC"), &series("FBTC"), FD);
     assert_eq!(ran.outcome().0, OutcomeKind::Answered);
     let (_, items) = ran.declared().unwrap();
     assert_eq!(items, vec![stored(date(2025, 12, 29), Some(date(2025, 12, 29)), Some(date(2025, 12, 31)), "0", Currency::CAD, Some("0.84031"))]);

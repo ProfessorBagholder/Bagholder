@@ -142,9 +142,9 @@
     "expect": {"trades": [{"opened_by": "t1", "pnl": "150.00"}]}
   },
   {
-    "name": "a holding's income is what was paid into its own account",
-    "spec": "SPEC.md §4 Cashflow Positions: one row per open long position per account; YTD and All time received from it",
-    "working": ["X held in A and in B; 100 paid into each: each holding's all-time income is 100, not 200"],
+    "name": "each holding's income is its symbol's, paid into every account in scope",
+    "spec": "SPEC.md §5 Cashflow Positions: one row per open long position per account; YTD and All time are CAD received from this symbol, in every account in scope, whichever holds it now",
+    "working": ["X held in A and in B; 100 paid into each: each holding's all-time income is the symbol's, 100 + 100 = 200"],
     "today": "2026-06-01",
     "accounts": [{"id": "A"}, {"id": "B"}],
     "instruments": [{"id": "X"}],
@@ -154,7 +154,7 @@
       {"id": "a2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "qty": "10", "cash": "100"},
       {"id": "b2", "account": "B", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "qty": "10", "cash": "100"}
     ],
-    "expect": {"income": [{"account": "A", "instrument": "X", "all_time": "100.00", "trailing_year": "100.00"}, {"account": "B", "instrument": "X", "all_time": "100.00"}]}
+    "expect": {"income": [{"account": "A", "instrument": "X", "all_time": "200.00", "trailing_year": "200.00"}, {"account": "B", "instrument": "X", "all_time": "200.00"}]}
   },
   {
     "name": "a read taken before a day's 16:30 does not show that day unpublished",

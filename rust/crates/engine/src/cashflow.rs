@@ -235,11 +235,18 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTre
             (None, Some(_)) => (Err(Gaps::of(Gap::ScheduleUnstated(i))), None),
             (None, None) => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
-        // the next distribution still to be paid, whether or not it has gone ex
-        let due = |d: &&&crate::input::Declared| d.pay_date.unwrap_or(d.ex_date);
-        let mut all: Vec<_> = cash.iter().collect();
+        // the next distribution still to be paid, whether or not it has gone ex:
+        // the payer's record's; where it lists none, the market's record beside
+        // it (a company's publication lists a declaration days after the
+        // exchange does), counting only what it lists after the payer's latest;
+        // else the payer's last
+        let due = |d: &&crate::input::Declared| d.pay_date.unwrap_or(d.ex_date);
+        let mut all: Vec<&crate::input::Declared> = cash.to_vec();
         all.sort_by_key(|d| (due(d), d.ex_date));
-        let next = all.iter().find(|d| due(d) >= today).or(all.last());
+        let latest_listed = all.iter().map(|d| d.ex_date).max();
+        let mut announced: Vec<&crate::input::Declared> = read.map(|r| r.market.iter().filter(|d| d.amount.amount.is_positive() && latest_listed.is_none_or(|l| d.ex_date > l)).collect()).unwrap_or_default();
+        announced.sort_by_key(|d| (due(d), d.ex_date));
+        let next = all.iter().find(|d| due(d) >= today).or_else(|| announced.iter().find(|d| due(d) >= today)).or(all.last());
         let (next_ex, next_pay) = match next {
             Some(d) => (Some(d.ex_date), d.pay_date),
             None => (None, payments.iter().map(|r| r.day).max()),
