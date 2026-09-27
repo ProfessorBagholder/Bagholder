@@ -424,17 +424,19 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
     let mut sums: BTreeMap<jiff::civil::Date, Option<Dec>> = months.iter().map(|m| (*m, Some(Dec::ZERO))).collect();
     for k in keys {
         // each month's (opening, closing) where it has rows in this currency
-        let known: BTreeMap<jiff::civil::Date, (Option<Dec>, Dec)> = months
+        let known: BTreeMap<jiff::civil::Date, (Option<Dec>, Option<Dec>)> = months
             .iter()
             .filter_map(|m| {
                 let rows: Vec<&StatementRow> = kept[k].get(m)?.as_ref()?.iter().filter(|r| r.currency == currency).collect();
-                let (first, last) = (rows.first()?, rows.last()?);
-                Some((*m, (first.balance.checked_sub(first.cash).ok(), last.balance)))
+                if rows.is_empty() {
+                    return None;
+                }
+                Some((*m, chain_ends(&rows)))
             })
             .collect();
         let still = if known.is_empty() { cash_now.get(k).map(|c| c.get(&currency).copied().unwrap_or(Dec::ZERO)) } else { None };
         for m in months {
-            let closing = known.get(m).map(|(_, c)| Some(*c)).or_else(|| known.range(..*m).next_back().map(|(_, (_, c))| Some(*c))).or_else(|| known.range(*m..).next().map(|(_, (o, _))| *o)).flatten().or(still);
+            let closing = known.get(m).map(|(_, c)| *c).or_else(|| known.range(..*m).next_back().map(|(_, (_, c))| *c)).or_else(|| known.range(*m..).next().map(|(_, (o, _))| *o)).flatten().or(still);
             let s = sums.get_mut(m).expect("each month is summed");
             *s = match (*s, closing) {
                 (Some(a), Some(b)) => a.checked_add(b).ok(),
@@ -445,28 +447,79 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
     sums
 }
 
-/// Match rows to transactions one-to-one: same signed amount, on the row's
-/// day or the day it states it was executed. Edges whose kinds agree, and
-/// transactions not from an imported file, are taken first, so the kind only
+/// Days after the feed's day a statement may date a movement: it dates one on
+/// the day it posted, the feed on the day it was made. On the owner's
+/// statements (September 2023 to August 2026, 1,028 pairs) 840 posted the
+/// same day, 156 a day later and 32 two to six days later; none earlier.
+pub const POSTS_WITHIN_DAYS: i64 = 7;
+
+/// A month's opening and closing balance from its rows' running balance. The
+/// statement lists a day's rows in an order its running balance need not
+/// follow (the owner's July 2024: the last row listed is not the month's
+/// close), so the ends are found from the chain itself: the closing is the one
+/// balance after a row that is no row's balance before, the opening the one
+/// balance before a row that is no row's balance after. None where the rows do
+/// not make one chain.
+fn chain_ends(rows: &[&StatementRow]) -> (Option<Dec>, Option<Dec>) {
+    let mut after: Vec<Dec> = rows.iter().map(|r| r.balance).collect();
+    let mut before: Vec<Dec> = Vec::new();
+    for r in rows {
+        match r.balance.checked_sub(r.cash) {
+            Ok(b) => before.push(b),
+            Err(_) => return (None, None),
+        }
+    }
+    // take away each balance that is both some row's after and another's before
+    let mut i = 0;
+    while i < after.len() {
+        match before.iter().position(|b| *b == after[i]) {
+            Some(j) => {
+                before.remove(j);
+                after.remove(i);
+            }
+            None => i += 1,
+        }
+    }
+    match (before.as_slice(), after.as_slice()) {
+        ([o], [c]) => (Some(*o), Some(*c)),
+        // every balance both before one row and after another: the month ends
+        // where it began, and the first row's balance before it is both
+        ([], []) => {
+            let o = rows[0].balance.checked_sub(rows[0].cash).ok();
+            (o, o)
+        }
+        _ => (None, None),
+    }
+}
+
+/// Match rows to transactions one-to-one: the same signed amount, the row
+/// dated on the transaction's day or up to `POSTS_WITHIN_DAYS` after it (the
+/// row's day being the day it states it was executed, where it states one).
+/// The nearest day is taken first; among as near, a transaction whose kind
+/// agrees, and one of the broker's before an imported file's, so the kind only
 /// breaks a tie and the broker's own rows come before a file's.
 fn match_rows(rows: &[(Place, &StatementRow)], txs: &[&Transaction]) -> Vec<(usize, usize)> {
-    let fits = |r: &StatementRow, t: &Transaction| t.cash.is_some_and(|c| c.amount == r.cash) && (t.trade_date == r.day || Some(t.trade_date) == r.executed);
+    let lag = |r: &StatementRow, t: &Transaction| (r.book_day() - t.trade_date).get_days() as i64;
+    let fits = |r: &StatementRow, t: &Transaction| t.cash.is_some_and(|c| c.amount == r.cash) && (0..=POSTS_WITHIN_DAYS).contains(&lag(r, t));
     let kind_agrees = |r: &StatementRow, t: &Transaction| crate::codes::kind(&r.code) == Some(t.kind);
     let broker = |t: &Transaction| source_of(t) != crate::csv::source();
     let edges: Vec<Vec<usize>> = rows.iter().map(|(_, r)| (0..txs.len()).filter(|&t| fits(r, txs[t])).collect()).collect();
     let mut tx_of: Vec<Option<usize>> = vec![None; txs.len()];
     let mut row_to: Vec<Option<usize>> = vec![None; rows.len()];
-    let phases: [&dyn Fn(usize, usize) -> bool; 4] = [
-        &|r, t| kind_agrees(rows[r].1, txs[t]) && broker(txs[t]),
-        &|_, t| broker(txs[t]),
-        &|r, t| kind_agrees(rows[r].1, txs[t]),
-        &|_, _| true,
-    ];
-    for allowed in phases {
-        for r in 0..rows.len() {
-            if row_to[r].is_none() {
-                let mut seen = vec![false; txs.len()];
-                augment(r, &edges, allowed, &mut seen, &mut tx_of, &mut row_to);
+    for days in 0..=POSTS_WITHIN_DAYS {
+        let near = |r: usize, t: usize| lag(rows[r].1, txs[t]) <= days;
+        let phases: [&dyn Fn(usize, usize) -> bool; 4] = [
+            &|r, t| near(r, t) && kind_agrees(rows[r].1, txs[t]) && broker(txs[t]),
+            &|r, t| near(r, t) && broker(txs[t]),
+            &|r, t| near(r, t) && kind_agrees(rows[r].1, txs[t]),
+            &|r, t| near(r, t),
+        ];
+        for allowed in phases {
+            for r in 0..rows.len() {
+                if row_to[r].is_none() {
+                    let mut seen = vec![false; txs.len()];
+                    augment(r, &edges, allowed, &mut seen, &mut tx_of, &mut row_to);
+                }
             }
         }
     }

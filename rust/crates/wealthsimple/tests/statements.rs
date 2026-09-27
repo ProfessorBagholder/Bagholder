@@ -60,12 +60,11 @@ fn the_recorded_june_statement_reads_every_row_exactly_per_currency() {
 }
 
 #[test]
-fn a_row_in_one_currency_s_list_stated_in_another_is_not_read_as_either() {
-    let mut v = recorded("lira-2025-06.json");
-    let text = v.canonical().replacen("\"$CAD\"", "\"$USD\"", 3);
-    v = json::parse(&text).unwrap();
-    let err = statement::rows(&v, Currency::CAD).unwrap_err();
-    assert!(err.to_string().contains("USD"), "{err}");
+fn a_row_s_unit_names_what_it_moved_and_its_cash_is_in_its_list_s_currency() {
+    // the owner's August 2026 LIRA: a fill's unit is the listing's symbol (`CH`), a coin's its ticker
+    let text = recorded("lira-2025-06.json").canonical().replacen("\"$CAD\"", "\"CH\"", 1);
+    let rows = statement::rows(&json::parse(&text).unwrap(), Currency::CAD).unwrap();
+    assert_eq!((rows[0].currency, rows[0].cash), (Currency::CAD, dec("50952.65")));
 }
 
 /// A cash statement in the document's shape, of these rows.
@@ -576,4 +575,49 @@ fn a_second_broker_account_behind_the_book_s_with_no_statement_holds_what_the_br
     let done = w.run(&mut failures);
     assert_eq!(done.booked, 1, "only the chequing account's arrival: {done:?}");
     assert!(done.unreconciled.iter().any(|u| u.account == w.lira && u.statement.is_none()), "{done:?}");
+}
+
+#[test]
+fn a_month_s_closing_is_where_its_running_balance_ends_whatever_order_its_rows_are_listed_in() {
+    // the owner's July 2024 shape: the day's rows listed out of their running order,
+    // the last one listed not the month's close
+    let mut w = World::new();
+    w.feed("lira-1", "2025-05-20", "deposit", "100");
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-20", "CONT", "Deposit", "100", "100")])));
+    w.feed("lira-1", "2025-06-10", "deposit", "50");
+    w.feed("lira-1", "2025-06-10", "withdrawal", "-30");
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-10", "EFTOUT", "Withdrawal", "-30", "120"), ("2025-06-10", "EFT", "Deposit", "50", "150"), ("2025-06-20", "FEE", "Fee", "-5", "115")].iter().rev().cloned().collect::<Vec<_>>())));
+    let a = w.lira;
+    w.states(a, "115");
+    let a = w.cash;
+    w.states(a, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (1, 0), "the fee booked, June reconciled: {done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("115"));
+}
+
+#[test]
+fn a_statement_dates_a_movement_on_the_day_it_posted_up_to_a_week_after_the_feed_s_day() {
+    for (posted, matches) in [("2025-06-10", true), ("2025-06-11", true), ("2025-06-17", true), ("2025-06-18", false), ("2025-06-09", false)] {
+        let mut w = World::new();
+        w.feed("lira-1", "2025-05-20", "deposit", "100");
+        w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-20", "CONT", "Deposit", "100", "100")])));
+        // made on the 10th in the feed, a fee only the statement states besides
+        w.feed("lira-1", "2025-06-10", "withdrawal", "-40");
+        w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[(posted, "OBP_OUT", "Online bill payment", "-40", "60"), ("2025-06-25", "FEE", "Fee", "-5", "55")])));
+        let a = w.lira;
+        w.states(a, "55");
+        let a = w.cash;
+        w.states(a, "0");
+        let mut failures = vec![];
+        let done = w.run(&mut failures);
+        if matches {
+            assert_eq!((done.booked, done.unreconciled.len()), (1, 0), "posted {posted}: {done:?}");
+            assert_eq!(w.book_cash(w.lira), dec("55"), "posted {posted}");
+        } else {
+            assert_eq!(done.booked, 0, "posted {posted}: the payment not matched, so June does not reconcile and nothing is booked: {done:?}");
+        }
+    }
 }
