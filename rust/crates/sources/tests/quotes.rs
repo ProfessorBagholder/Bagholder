@@ -303,10 +303,11 @@ fn an_unknown_schedule_word_fails_the_payers_record_and_not_the_price() {
 
 /// Yahoo names a pair against the US dollar both ways and answers under either:
 /// asked for `CAD=X`, it can answer as `USDCAD=X`. That is the same pair, quoted.
-/// A coin's day change is measured from the base of Yahoo's own percent, since
-/// its `chartPreviousClose` is where today's UTC day began.
+/// A coin's day is the UTC day: its change and percent are both from Yahoo's
+/// `chartPreviousClose`, where today's UTC day began, never Yahoo's percent over a
+/// rolling 24 hours (as the original app showed it: `+9 (+0.01%)`).
 #[test]
-fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_yahoo_s_own() {
+fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_over_its_utc_day() {
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-27T03:00:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
@@ -329,8 +330,8 @@ fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_yahoo_s
     quotes::read_quotes(&ctx, &[pair, coin]).unwrap();
     let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
     assert_eq!(got[&id(14)].price, Money::new(dec("1.4141"), Currency::CAD), "USDCAD=X is CAD=X");
-    // 84432.51 up 0.515%: from 83999.91046113, up 432.59953887 (not 3.49 from 84429.016)
-    assert_eq!((got[&id(16)].price, got[&id(16)].change, got[&id(16)].change_pct), (Money::new(dec("84432.51"), Currency::USD), Some(dec("432.59953887")), Some(dec("0.515"))));
+    // 84432.51 from the UTC day's 84429.016: up 3.494, 0.0041% (Yahoo's 0.515% is over 24 hours)
+    assert_eq!((got[&id(16)].price, got[&id(16)].change, got[&id(16)].change_pct), (Money::new(dec("84432.51"), Currency::USD), Some(dec("3.494")), Some(dec("0.0041"))));
 }
 
 /// A Cboe Canada listing with no trade this session (a weekend) stands at the
