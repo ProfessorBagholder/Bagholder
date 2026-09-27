@@ -75,7 +75,7 @@ A filter reads, on each page, the value that page shows. So the plan's holding f
 
 ## Not blocking: a plan of its own
 
-The floor is 1 % of the all-time peak, so it erases real years as an account grows.
+The floor is 1 % of the all-time peak, so it erases real years as an account grows. It came from the old app (the plan cites `model.py` 1821, 1960, 3019). It was carried into `SPEC.md` and the engine without the check `CLAUDE.md` requires.
 - **Scenario:**
   - An account held $500 through 2019. It reaches $60,000 in 2026.
   - The floor becomes $600, so 2019 never clears it.
