@@ -431,3 +431,61 @@ fn a_coin_moved_in_keeps_the_value_wealthsimple_states_it_arrived_at() {
         assert_eq!(leg.cash, None, "no cash moved");
     }
 }
+
+/// An asset movement's record as the pull puts it together, its destination side.
+fn asset_movement_record() -> Value {
+    let mut r = replay(&fixtures());
+    let rows = r.source.rows.clone();
+    let accounts: std::collections::BTreeSet<String> = rows.iter().map(|x| Node::root(x).text("accountId").unwrap().to_string()).collect();
+    for a in accounts {
+        bagholder_broker::BrokerAdapter::activity(&mut r, &a, None).unwrap();
+    }
+    let row = rows.iter().find(|x| text(x, "type") == Some("ASSET_MOVEMENT") && text(x, "subType") == Some("DESTINATION") && text(x, "unifiedStatus") == Some("COMPLETED")).unwrap();
+    let row = bagholder_wealthsimple::adapter::row_of(row, day_of(row)).unwrap();
+    bagholder_broker::BrokerAdapter::record(&mut r, &row, &mut Moves::default()).unwrap()
+}
+
+/// The record with the other account's positions before the move left out, as
+/// a pull keeps it when Wealthsimple does not answer them (a closed account's).
+fn without_other_side_before(v: &mut Value) -> (String, String) {
+    let own = Node::root(v).obj("activity").unwrap().text("accountId").unwrap().to_string();
+    let mut kept = (String::new(), String::new());
+    edit(v, "positions", |p| {
+        let Value::Array(list) = p else { panic!() };
+        let other_days: Vec<String> = list.iter().filter(|x| Node::root(x).text("account").unwrap() != own).map(|x| Node::root(x).text("day").unwrap().to_string()).collect();
+        let first = other_days.iter().min().expect("the other account's positions").clone();
+        list.retain(|x| !(Node::root(x).text("account").unwrap() != own && Node::root(x).text("day").unwrap() == first));
+        let own_days: Vec<String> = list.iter().filter(|x| Node::root(x).text("account").unwrap() == own).map(|x| Node::root(x).text("day").unwrap().to_string()).collect();
+        kept = (own.clone(), own_days.into_iter().max().expect("the account's own positions"));
+    });
+    kept
+}
+
+#[test]
+fn a_move_whose_other_side_s_positions_are_not_kept_is_its_stated_cash_where_its_own_show_no_holdings_moving() {
+    let mut v = asset_movement_record();
+    let amount = dec(Node::root(&v).obj("activity").unwrap().text("amount").unwrap());
+    without_other_side_before(&mut v);
+    let m = map_payload(&v);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.legs.len(), 1);
+    assert_eq!((m.legs[0].kind, cash_of(&m).map(|c| c.amount)), (Kind::TransferIn, Some(amount)));
+}
+
+#[test]
+fn a_move_whose_other_side_s_positions_are_not_kept_and_whose_own_show_holdings_arriving_is_unstated() {
+    let mut v = asset_movement_record();
+    let (own, after) = without_other_side_before(&mut v);
+    // a holding arriving in the account across the move, which the book did not move
+    edit(&mut v, "positions", |p| {
+        let Value::Array(list) = p else { panic!() };
+        let at = list.iter_mut().find(|x| Node::root(x).text("account").unwrap() == own && Node::root(x).text("day").unwrap() == after).unwrap();
+        edit(at, "nodes", |n| {
+            let Value::Array(nodes) = n else { panic!() };
+            nodes.push(json::parse(r#"{"security":{"id":"sec-s-arrived"},"quantity":"10"}"#).unwrap());
+        });
+    });
+    let m = map_payload(&v);
+    assert_eq!(m.problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), vec!["moved-holdings-unstated"]);
+    assert_eq!(cash_of(&m), None);
+}
