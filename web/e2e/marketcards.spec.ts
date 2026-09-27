@@ -59,8 +59,7 @@ test.describe('Market tiles', () => {
     await page.keyboard.press('Escape')
     await expect(page.getByLabel('Search instruments')).toHaveCount(0)
     // no tile was left behind
-    const after = (await figures(request)).markets.tiles as { symbol: string }[]
-    expect(after.map((t) => t.symbol).sort()).toEqual(freed.map((t) => t.symbol).sort())
+    await expect.poll(async () => ((await figures(request)).markets.tiles as { symbol: string }[]).map((t) => t.symbol).sort()).toEqual(freed.map((t) => t.symbol).sort())
     await restore()
   })
 
