@@ -265,10 +265,21 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     report.statements = crate::statements::run(book, adapter, connection, &statement_keys, &closed, today, now, step, &mut report.failures)?;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
-    // units already stated as of that day are not asked again
+    // units already stated as of that day are not asked again, unless one
+    // held goes by no name yet: its description is read with them
     let mut holdings = Vec::new();
     for (id, ks) in &keys_of {
-        if !book.stated(*id)?.units.is_some_and(|(d, _)| d == as_of) {
+        let current = match book.stated(*id)?.units {
+            Some((d, lines)) if d == as_of => {
+                let mut named = true;
+                for i in lines.keys() {
+                    named &= book.current_name(*i)?.is_some() || book.option_terms(*i)?.is_some();
+                }
+                named
+            }
+            _ => false,
+        };
+        if !current {
             holdings.push((id, ks));
         }
     }
@@ -282,11 +293,16 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
             match adapter.units(k, as_of) {
                 Ok(units) => {
                     // a holding no row names (a token migrated, a gift): its
-                    // instrument from the broker's own description, read
-                    // together, so the check shows it beside what the book holds
+                    // instrument, and the name it goes by, from the broker's own
+                    // description, read together, so the check shows it beside
+                    // what the book holds and it is priced like any other
                     let mut unnamed = Vec::new();
                     for u in &units {
-                        if book.instrument_by_ref(&u.instrument)?.is_none() {
+                        let named = match book.instrument_by_ref(&u.instrument)? {
+                            Some(i) => book.current_name(i)?.is_some() || book.option_terms(i)?.is_some(),
+                            None => false,
+                        };
+                        if !named {
                             unnamed.push(u.instrument.clone());
                         }
                     }

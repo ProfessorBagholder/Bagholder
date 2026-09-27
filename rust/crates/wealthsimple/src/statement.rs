@@ -99,6 +99,60 @@ pub fn key(account: &str, month: jiff::civil::Date, position: usize) -> String {
     format!("{account}|{month}|{position}")
 }
 
+/// A gap booked (`statements::Gap`): the account, the currency, the month
+/// before and its closing, the month and its opening, as the statements state them.
+pub fn gap_payload(g: &bagholder_broker::statements::Gap) -> Value {
+    let text = |s: &str| Value::String(s.to_string());
+    Value::Object(
+        [
+            ("kind", text(OPENING)),
+            ("account", text(&g.account)),
+            ("currency", text(g.currency.as_str())),
+            ("from", text(&g.from.to_string())),
+            ("closing", text(&g.closing.to_text())),
+            ("month", text(&g.month.to_string())),
+            ("opening", text(&g.opening.to_text())),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
+    )
+}
+
+/// One per account, currency and month.
+pub fn gap_key(g: &bagholder_broker::statements::Gap) -> String {
+    format!("{}|{}|opening|{}", g.account, g.month, g.currency.as_str())
+}
+
+/// A conversion's side paid read from the stated cash (`statements::Paid`):
+/// the conversion, its day, the side paid, and the stated cash it is read from.
+pub fn paid_payload(p: &bagholder_broker::statements::Paid) -> Value {
+    let text = |s: &str| Value::String(s.to_string());
+    Value::Object(
+        [
+            ("kind", text(PAID)),
+            ("account", text(&p.account)),
+            ("conversion", text(&p.conversion)),
+            ("day", text(&p.day.to_string())),
+            ("currency", text(p.currency.as_str())),
+            ("cashMovement", text(&p.cash.to_text())),
+            ("stated", text(&p.stated.to_text())),
+            ("statedAt", text(&p.stated_at.to_string())),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
+    )
+}
+
+/// One per conversion: a later reading of the stated cash revises it.
+pub fn paid_key(p: &bagholder_broker::statements::Paid) -> String {
+    format!("{}|paid|{}", p.account, p.conversion)
+}
+
+const OPENING: &str = "opening";
+const PAID: &str = "conversion-paid";
+
 pub struct StatementMapping;
 
 impl Mapping for StatementMapping {
@@ -124,6 +178,45 @@ fn map_row(v: &Value) -> Result<Mapped, Mismatch> {
     let n = Node::root(v);
     let c = n.field("currency")?;
     let currency = Currency::parse(c.as_text()?).map_err(|e| c.mismatch(e.to_string()))?;
+    let draft = |leg: &str, day: jiff::civil::Date, kind: Kind, cash: bagholder_core::Dec| -> Result<Mapped, Mismatch> {
+        Ok(Mapped {
+            legs: vec![Draft {
+                leg: Leg::parse(leg).expect("a leg name written in the code"),
+                account: AccountRef::new(crate::mapping::broker(), n.text("account")?.to_string()),
+                occurred_at: None,
+                trade_date: day,
+                settle_date: None,
+                kind,
+                effect: None,
+                instrument: None,
+                quantity: None,
+                price: None,
+                cash: Some(Money::new(cash, currency)),
+                fee: None,
+                fx_rate: None,
+                paid_on: None,
+                value: None,
+            }],
+            problems: vec![],
+            adjustments: vec![],
+        })
+    };
+    // a row as the statement stated it has no kind; a record kept beside the rows names its own
+    let kind = match n.field("kind") {
+        Ok(k) => Some(k.as_text()?),
+        Err(_) => None,
+    };
+    match kind {
+        None => {}
+        // the balance moved as the broker's own cash correction does (`CORRECTION`), on the month's first day
+        Some(OPENING) => {
+            let (closing, opening) = (n.dec_text("closing")?, n.dec_text("opening")?);
+            let moved = opening.checked_sub(closing).map_err(|e| n.field("opening").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+            return draft(bagholder_broker::statements::gap_leg().as_str(), n.day("month")?, Kind::Fee, moved);
+        }
+        Some(PAID) => return draft(bagholder_broker::statements::paid_leg().as_str(), n.day("day")?, Kind::CurrencyConversion, n.dec_text("cashMovement")?),
+        Some(other) => return Err(n.field("kind")?.mismatch(format!("a record of a kind not kept: {other:?}"))),
+    }
     let row = row(&n, currency)?;
     let draft = Draft {
         leg: Leg::parse("trade").expect("a leg name written in the code"),

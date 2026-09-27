@@ -401,6 +401,20 @@ impl Book {
                 _ => out.push(Name { symbol, venue_mic, venue_name, name, first_seen: seen, last_seen: seen, source }),
             }
         }
+        if out.is_empty() && self.listing_named(id)?.is_none() {
+            // neither a record nor the person's pick names it: what a source's own
+            // description of it does, its own first
+            let sql = format!(
+                "SELECT symbol, venue_mic, venue_name, name, day, source FROM instruments_described WHERE instrument_id IN {} ORDER BY instrument_id = ?1 DESC, day DESC, instrument_id LIMIT 1",
+                group_sql("?1")
+            );
+            let found: Option<Row> = self.conn().query_row(&sql, [head.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).optional()?;
+            if let Some((symbol, venue_mic, venue_name, name, day_text, source)) = found {
+                let seen = text::date("instruments_described", "day", &day_text)?;
+                let source = text::parsed("instruments_described", "source", &source, SourceName::parse)?;
+                out.push(Name { symbol, venue_mic, venue_name, name, first_seen: seen, last_seen: seen, source });
+            }
+        }
         Ok(out)
     }
 
@@ -459,6 +473,17 @@ impl Book {
     pub fn instrument_stated(&self, draft: &InstrumentDraft, source: &SourceName, at: jiff::Timestamp) -> Result<std::result::Result<InstrumentId, Problem>> {
         self.atomically(|| {
             let found = self.resolve_instrument_from(draft, source, None, None, at)?.0;
+            // the name the source's description gives it, which names it where no
+            // record does; a contract is named by its terms, and the name its
+            // description carries is its underlying's
+            if let (Ok(id), Some(n), None) = (&found, &draft.name, &draft.option) {
+                self.conn().execute(
+                    "INSERT INTO instruments_described(instrument_id, source, symbol, venue_mic, venue_name, name, day) VALUES (?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(instrument_id) DO UPDATE SET source = excluded.source, symbol = excluded.symbol, venue_mic = excluded.venue_mic,
+                        venue_name = excluded.venue_name, name = excluded.name, day = excluded.day",
+                    params![id.to_string(), source.as_str(), n.symbol, n.venue_mic, n.venue_name, n.name, day(n.seen)],
+                )?;
+            }
             self.settle_successions()?;
             Ok(found)
         })

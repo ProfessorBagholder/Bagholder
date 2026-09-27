@@ -538,6 +538,24 @@ fn securities_answered_write_each_instrument_and_a_contract_s_terms() {
 }
 
 #[test]
+fn a_holding_no_row_names_goes_by_the_name_its_security_record_gives_it() {
+    let p = pulled(Op::Securities, &[body("wealthsimple-pull/edited-securities.json")]);
+    assert!(p.report.failures.is_empty(), "{:?}", p.report.failures);
+    let (_, lines) = p.stated().units.expect("the units stated");
+    // every holding is named: a contract by its terms, any other by its records,
+    // or where none names it, by the broker's description of it
+    let unnamed: Vec<_> = lines.keys().filter(|i| p.book.current_name(**i).unwrap().is_none() && p.book.option_terms(**i).unwrap().is_none()).collect();
+    assert!(unnamed.is_empty(), "held with no name: {unnamed:?}");
+    let in_rows: std::collections::BTreeSet<_> = p.book.transactions().unwrap().into_iter().filter_map(|t| t.instrument).collect();
+    let described: Vec<_> = lines.keys().filter(|i| !in_rows.contains(*i) && p.book.option_terms(**i).unwrap().is_none()).collect();
+    assert!(!described.is_empty(), "the reply holds shares no row names");
+    assert!(described.iter().all(|i| p.book.names(**i).unwrap().len() == 1), "each named once, by its description");
+    // a contract's description carries its underlying's name, which is not its own
+    let contract = contract_in(&p).expect("the contract");
+    assert_eq!(p.book.names(contract).unwrap(), vec![]);
+}
+
+#[test]
 fn securities_answered_empty_leave_every_row_waiting_on_its_security_and_the_units_unstated() {
     let empty = edited("edited-empty-securities.json");
     let p = pulled(Op::Securities, &[empty.clone(), empty]);

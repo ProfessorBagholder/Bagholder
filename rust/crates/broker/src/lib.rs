@@ -260,4 +260,16 @@ pub trait BrokerAdapter {
         let _ = (account, month, position, row);
         None
     }
+    /// A month's statement opening off where the statement before closed, with
+    /// no row for the difference, booked: the key and the record.
+    fn statement_gap_record(&self, gap: &crate::statements::Gap) -> Option<(String, Value)> {
+        let _ = gap;
+        None
+    }
+    /// The side paid of a conversion whose record states only the side
+    /// received, as the broker's stated cash shows it: the key and the record.
+    fn conversion_paid_record(&self, paid: &crate::statements::Paid) -> Option<(String, Value)> {
+        let _ = paid;
+        None
+    }
 }
