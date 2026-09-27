@@ -284,8 +284,10 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
                             }
                         }
                     }
+                    // each line kept on the instrument the broker's id names
+                    // itself, so a succession parted later leaves it there
                     for u in units {
-                        match book.instrument_by_ref(&u.instrument)? {
+                        match book.own_instrument(&u.instrument)? {
                             Some(i) => {
                                 let e = sum.entry(i).or_insert(Dec::ZERO);
                                 *e = add(*e, u.quantity)?;
@@ -310,7 +312,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     }
     // an id the broker now states retired by a corporate action, and the id its
     // listing trades under now, over every row and holding read so far
-    book.join_successions()?;
+    book.settle_successions()?;
     let mut days_of: BTreeMap<AccountId, BTreeMap<jiff::civil::Date, (bagholder_core::Money, bagholder_core::Money)>> = BTreeMap::new();
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
     // an account whose days are stated up to the last full day has none new
@@ -504,7 +506,8 @@ fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::Sour
     }
     let mut instrument_ref: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::instrument::Reference>> = BTreeMap::new();
     let mut by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec)>> = BTreeMap::new();
-    for t in book.transactions()? {
+    // each move under the broker's own id for what it moved
+    for t in book.transactions_as_named()? {
         if skip.contains(&t.id.record) || t.kind == Kind::Unclassified {
             continue;
         }
@@ -514,7 +517,7 @@ fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::Sour
             let r = match instrument_ref.get(&i) {
                 Some(r) => r.clone(),
                 None => {
-                    let r = book.instrument_refs(i)?.into_iter().find(|r| matches!(&r.scheme, RefScheme::BrokerSecurity(b) if b == broker));
+                    let r = book.own_refs(i)?.into_iter().find(|r| matches!(&r.scheme, RefScheme::BrokerSecurity(b) if b == broker));
                     instrument_ref.insert(i, r.clone());
                     r
                 }

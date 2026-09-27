@@ -292,6 +292,18 @@ mod tests {
         let day: bagholder_core::jiff::civil::Date = "2025-11-18".parse().unwrap();
         book.store_rates(usd, &[(day, bagholder_core::Dec::parse("1.4").unwrap())], (day, day), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
         book.set_setting("watch.folder", Some("/somewhere"), t).unwrap();
+        // a succession the broker states: an id it retired by a corporate action,
+        // and the id its listing trades under now
+        {
+            use bagholder_book::mapping::{InstrumentDraft, NameDraft, Standing, StandingDraft};
+            use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
+            for (id, standing) in [("sec-s-retired", Standing::RetiredByEvent), ("sec-s-live", Standing::Live)] {
+                let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), id);
+                let name = NameDraft { symbol: "ZZCH".into(), venue_mic: Some("XTSX".into()), venue_name: None, name: None, seen: day };
+                let draft = InstrumentDraft { refs: vec![r.clone()], kind: InstrumentKind::Security, currency: bagholder_core::Currency::CAD, name: Some(name), option: None, standing: Some(StandingDraft { of: r, standing }) };
+                book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), t).unwrap().unwrap();
+            }
+        }
         // what the person follows: the default tiles, and a listing watched under the name picked for it
         crate::following::ensure(app).unwrap();
         let shop = crate::following::Named { symbol: "SHOP".into(), exchange: "TSX".into(), name: "Shopify Inc.".into(), ..Default::default() };

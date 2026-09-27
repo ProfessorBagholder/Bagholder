@@ -498,6 +498,8 @@ pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 5] {
 /// mapping's version moves exactly when what it makes of a stored row changes,
 /// so the rows already stored follow it, not only the ones read after.
 fn rederive_all(book: &Book, at: Timestamp) -> Result<(), String> {
+    // instruments an earlier build merged for a succession, put apart once
+    book.repair_merged_successions(&mappings(), at).map_err(|e| format!("the instruments an earlier build merged could not be put apart: {e}"))?;
     for m in mappings() {
         let changes = book.rederive(m, at).map_err(|e| format!("{}'s records could not be derived again: {e}", m.source()))?;
         if !changes.is_empty() {

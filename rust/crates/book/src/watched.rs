@@ -50,20 +50,30 @@ pub struct Watched {
 }
 
 impl Book {
-    /// The instrument `draft` is: the one found, else the one its identifying
-    /// references name, else a new one with them. A kind or currency other than
+    /// The instrument `draft` is: the one its identifying references name
+    /// themselves (`Book::own_instrument`), else the one found, else a new one
+    /// with them; kept as named, so a succession parting two instruments again
+    /// leaves the choice on the listing picked. A kind or currency other than
     /// the instrument's, or references naming two instruments, is refused.
     fn listing(&self, draft: &ListingDraft, at: jiff::Timestamp) -> Result<InstrumentId> {
-        let mut named: Option<InstrumentId> = draft.found;
+        let mut named: Option<InstrumentId> = None;
         for r in draft.refs.iter().filter(|r| r.identifies()) {
-            if let Some(id) = self.instrument_by_ref(r)? {
+            if let Some(id) = self.own_instrument(r)? {
                 match named {
-                    Some(n) if n != id => {
+                    Some(n) if self.canonical(n)? != self.canonical(id)? => {
                         return Err(BookError::Refused(format!("{} {} names another instrument than {}", r.scheme, r.value, draft.name.symbol)));
                     }
-                    _ => named = Some(id),
+                    Some(_) => {}
+                    None => named = Some(id),
                 }
             }
+        }
+        match (named, draft.found) {
+            (Some(n), Some(f)) if self.canonical(n)? != self.canonical(f)? => {
+                return Err(BookError::Refused(format!("{}'s references name another instrument than {f}", draft.name.symbol)));
+            }
+            (None, found) => named = found,
+            _ => {}
         }
         let id = match named {
             Some(id) => {
@@ -86,7 +96,7 @@ impl Book {
             }
         };
         for r in &draft.refs {
-            if self.instrument_by_ref(r)?.is_none() {
+            if self.own_instrument(r)?.is_none() {
                 self.add_instrument_ref(id, r)?;
             }
         }
@@ -102,13 +112,17 @@ impl Book {
         Ok(id)
     }
 
-    /// What the person picked an instrument as, where no record names it.
+    /// What the person picked an instrument as, where no record names it: its
+    /// own pick, else one of an instrument read as one with it.
     pub fn listing_named(&self, id: InstrumentId) -> Result<Option<ListingName>> {
+        let head = self.canonical(id)?;
+        let sql = format!(
+            "SELECT symbol, venue_mic, venue_name, name FROM listings_named WHERE instrument_id IN {} ORDER BY instrument_id = ?1 DESC, named_at, instrument_id LIMIT 1",
+            crate::identity::group_sql("?1")
+        );
         Ok(self
             .conn()
-            .query_row("SELECT symbol, venue_mic, venue_name, name FROM listings_named WHERE instrument_id = ?", [id.to_string()], |r| {
-                Ok(ListingName { symbol: r.get(0)?, venue_mic: r.get(1)?, venue_name: r.get(2)?, name: r.get(3)? })
-            })
+            .query_row(&sql, [head.to_string()], |r| Ok(ListingName { symbol: r.get(0)?, venue_mic: r.get(1)?, venue_name: r.get(2)?, name: r.get(3)? }))
             .optional()?)
     }
 
@@ -129,27 +143,36 @@ impl Book {
     pub fn watched(&self) -> Result<Vec<Watched>> {
         let mut stmt = self.conn().prepare_cached("SELECT instrument_id, added_at FROM watched ORDER BY added_at DESC, rowid DESC")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let mut out = Vec::new();
+        let joined = self.joined()?;
+        let mut out: Vec<Watched> = Vec::new();
         for row in rows {
             let (id, added) = row?;
-            out.push(Watched { instrument: text::parsed("watched", "instrument_id", &id, InstrumentId::parse)?, added_at: text::instant("watched", "added_at", &added)? });
+            let id = text::parsed("watched", "instrument_id", &id, InstrumentId::parse)?;
+            // instruments read as one are one watched listing, from its newest add
+            let instrument = joined.get(&id).copied().unwrap_or(id);
+            if !out.iter().any(|w| w.instrument == instrument) {
+                out.push(Watched { instrument, added_at: text::instant("watched", "added_at", &added)? });
+            }
         }
         Ok(out)
     }
 
-    /// Follow `draft`'s listing from `at`: its instrument. One already followed
-    /// keeps when it was added.
+    /// Follow `draft`'s listing from `at`: its instrument, as the book reads it.
+    /// One already followed keeps when it was added.
     pub fn watch(&self, draft: &ListingDraft, at: jiff::Timestamp) -> Result<InstrumentId> {
         self.atomically(|| {
             let id = self.listing(draft, at)?;
             self.conn().execute("INSERT OR IGNORE INTO watched(instrument_id, added_at) VALUES (?, ?)", params![id.to_string(), at_text(at)])?;
-            Ok(id)
+            self.canonical(id)
         })
     }
 
-    /// Stop following an instrument; whether it was followed.
+    /// Stop following an instrument (and every one read as one with it);
+    /// whether it was followed.
     pub fn unwatch(&self, id: InstrumentId) -> Result<bool> {
-        Ok(self.conn().execute("DELETE FROM watched WHERE instrument_id = ?", [id.to_string()])? > 0)
+        let head = self.canonical(id)?;
+        let sql = format!("DELETE FROM watched WHERE instrument_id IN {}", crate::identity::group_sql("?1"));
+        Ok(self.conn().execute(&sql, [head.to_string()])? > 0)
     }
 
     // ------------------------------------------------------------------
@@ -161,28 +184,39 @@ impl Book {
         if self.setting(TILES_CHOSEN)?.is_none() {
             return Ok(None);
         }
+        let joined = self.joined()?;
         let mut stmt = self.conn().prepare_cached("SELECT instrument_id FROM tiles ORDER BY position")?;
         let ids = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        Ok(Some(ids.map(|s| text::parsed("tiles", "instrument_id", &s?, InstrumentId::parse)).collect::<Result<_>>()?))
+        // each as the book reads it; instruments read as one are one tile, where it first stands
+        let mut out: Vec<InstrumentId> = Vec::new();
+        for s in ids {
+            let id = text::parsed("tiles", "instrument_id", &s?, InstrumentId::parse)?;
+            let id = joined.get(&id).copied().unwrap_or(id);
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        Ok(Some(out))
     }
 
     /// The tile row is `drafts`, in their order: their instruments.
     pub fn set_tiles(&self, drafts: &[ListingDraft], at: jiff::Timestamp) -> Result<Vec<InstrumentId>> {
         self.atomically(|| {
-            let mut ids: Vec<InstrumentId> = Vec::new();
+            let mut ids: Vec<(InstrumentId, InstrumentId)> = Vec::new();
             for d in drafts {
                 let id = self.listing(d, at)?;
-                if ids.contains(&id) {
+                let read = self.canonical(id)?;
+                if ids.iter().any(|(_, r)| *r == read) {
                     return Err(BookError::Refused(format!("{} is on the tile row twice", d.name.symbol)));
                 }
-                ids.push(id);
+                ids.push((id, read));
             }
             self.conn().execute("DELETE FROM tiles", [])?;
-            for (i, id) in ids.iter().enumerate() {
+            for (i, (id, _)) in ids.iter().enumerate() {
                 self.conn().execute("INSERT INTO tiles(instrument_id, position) VALUES (?, ?)", params![id.to_string(), i as i64])?;
             }
             self.set_setting(TILES_CHOSEN, Some("true"), at)?;
-            Ok(ids)
+            Ok(ids.into_iter().map(|(_, read)| read).collect())
         })
     }
 

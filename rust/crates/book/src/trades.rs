@@ -45,7 +45,7 @@ impl Book {
             let id = TradeId::from_uuid(new_uuid(at));
             self.conn().execute(
                 "INSERT INTO trades(id, anchor_record, anchor_leg, anchor_instrument, legacy_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                params![id.to_string(), opening.transaction.record.to_string(), opening.transaction.leg.as_str(), opening.instrument.to_string(), legacy_key, at_text(at)],
+                params![id.to_string(), opening.transaction.record.to_string(), opening.transaction.leg.as_str(), self.own_anchor(opening)?.to_string(), legacy_key, at_text(at)],
             )?;
             Ok(id)
         })
@@ -59,6 +59,7 @@ impl Book {
         let Some(t) = self.transaction(tx)? else {
             return Err(BookError::Refused(format!("no transaction {tx} to open a trade on")));
         };
+        let opening = &Opening { transaction: tx.clone(), instrument: self.canonical(opening.instrument)? };
         // a corporate event opens what an adjustment on it says it moved: a
         // spin-off's child, a stock dividend on a marker stating no units
         let adjusted = t.kind == Kind::CorporateEvent && self.adjustment_moves(tx, opening.instrument)?;
@@ -161,19 +162,50 @@ impl Book {
         }
         self.conn().execute(
             "UPDATE trades SET anchor_record = ?, anchor_leg = ?, anchor_instrument = ?, orphaned_reason = NULL WHERE id = ?",
-            params![to.transaction.record.to_string(), to.transaction.leg.as_str(), to.instrument.to_string(), trade.to_string()],
+            params![to.transaction.record.to_string(), to.transaction.leg.as_str(), self.own_anchor(to)?.to_string(), trade.to_string()],
         )?;
         Ok(())
     }
 
     /// The anchor moved to the counterpart transaction; the instrument it opened
-    /// is the same.
-    pub(crate) fn move_anchor(&self, trade: TradeId, to: &TransactionId) -> Result<()> {
+    /// is the same, `instrument` as the counterpart names it.
+    pub(crate) fn move_anchor(&self, trade: TradeId, to: &TransactionId, instrument: InstrumentId) -> Result<()> {
+        let instrument = self.own_anchor(&Opening { transaction: to.clone(), instrument: self.canonical(instrument)? })?;
         self.conn().execute(
-            "UPDATE trades SET anchor_record = ?, anchor_leg = ?, orphaned_reason = NULL WHERE id = ?",
-            params![to.record.to_string(), to.leg.as_str(), trade.to_string()],
+            "UPDATE trades SET anchor_record = ?, anchor_leg = ?, anchor_instrument = ?, orphaned_reason = NULL WHERE id = ?",
+            params![to.record.to_string(), to.leg.as_str(), instrument.to_string(), trade.to_string()],
         )?;
         Ok(())
+    }
+
+    /// The instrument an opening is kept against: of those its transaction names
+    /// itself (its own instrument, the underlying its contract delivers, what an
+    /// adjustment on it moves), the one the book reads as the opening's. A
+    /// succession joining or parting instruments then leaves the anchor on the
+    /// instrument its record names.
+    fn own_anchor(&self, opening: &Opening) -> Result<InstrumentId> {
+        let wanted = self.canonical(opening.instrument)?;
+        for i in self.opening_instruments(&opening.transaction)? {
+            if self.canonical(i)? == wanted {
+                return Ok(i);
+            }
+        }
+        Ok(opening.instrument)
+    }
+
+    /// The instruments a transaction can open a position of, as its record names
+    /// them: its own, the underlying its contract delivers, and each an
+    /// adjustment on it moves units into.
+    pub(crate) fn opening_instruments(&self, tx: &TransactionId) -> Result<Vec<InstrumentId>> {
+        let mut out = Vec::new();
+        if let Some(i) = self.own_transaction(tx)?.and_then(|t| t.instrument) {
+            out.push(i);
+            if let Some(terms) = self.own_option_terms(i)? {
+                out.push(terms.underlying);
+            }
+        }
+        out.extend(self.adjustment_targets(tx)?);
+        Ok(out)
     }
 
     /// Put an orphaned trade back on the round trip opened by `to`, its id and
@@ -221,17 +253,19 @@ impl Book {
         Ok(())
     }
 
-    /// The trade anchored on `opening`, if any.
+    /// The trade anchored on `opening`, if any: on its transaction, and on an
+    /// instrument the book reads as the opening's.
     pub fn trade_on(&self, opening: &Opening) -> Result<Option<TradeId>> {
-        let found: Option<String> = self
-            .conn()
-            .query_row(
-                "SELECT id FROM trades WHERE anchor_record = ? AND anchor_leg = ? AND anchor_instrument = ?",
-                params![opening.transaction.record.to_string(), opening.transaction.leg.as_str(), opening.instrument.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        found.map(|s| text::parsed("trades", "id", &s, TradeId::parse)).transpose()
+        let wanted = self.canonical(opening.instrument)?;
+        let mut stmt = self.conn().prepare_cached("SELECT id, anchor_instrument FROM trades WHERE anchor_record = ? AND anchor_leg = ? ORDER BY created_at, rowid")?;
+        let rows = stmt.query_map(params![opening.transaction.record.to_string(), opening.transaction.leg.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (id, instrument) = row?;
+            if self.canonical(text::parsed("trades", "anchor_instrument", &instrument, InstrumentId::parse)?)? == wanted {
+                return text::parsed("trades", "id", &id, TradeId::parse).map(Some);
+            }
+        }
+        Ok(None)
     }
 
     pub fn trade_by_legacy_key(&self, key: &str) -> Result<Option<TradeId>> {
@@ -247,8 +281,12 @@ impl Book {
         self.trades_where("", [])
     }
 
+    /// Trades, each anchored on the instrument the book reads its anchor as.
     fn trades_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Trade>> {
-        let sql = format!("SELECT id, anchor_record, anchor_leg, anchor_instrument, orphaned_reason, legacy_key FROM trades {filter} ORDER BY created_at, rowid");
+        let sql = format!(
+            "SELECT id, anchor_record, anchor_leg, COALESCE(j.into_id, anchor_instrument), orphaned_reason, legacy_key
+             FROM trades LEFT JOIN instrument_joins j ON j.instrument_id = trades.anchor_instrument {filter} ORDER BY trades.created_at, trades.rowid"
+        );
         let mut stmt = self.conn().prepare_cached(&sql)?;
         type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
         let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })?;

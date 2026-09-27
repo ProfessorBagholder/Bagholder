@@ -326,36 +326,39 @@ impl Book {
         Ok(items)
     }
 
-    /// The newest read of each fund's declared record.
+    /// The newest read of each fund's declared record: of the instruments read
+    /// as one (`Book::settle_successions`), the newest of theirs.
     ///
     /// Beside each, the newest read of the market's record, unless the payer's
     /// record is that same source's (the company stopped carrying the payer and
     /// the market's record became its record).
     pub fn declared(&self) -> Result<BTreeMap<InstrumentId, DeclaredReadRow>> {
-        let newest = |role: &str| -> Result<Vec<(i64, InstrumentId, SourceName, jiff::Timestamp)>> {
+        let joined = self.joined()?;
+        // the newest read in `role` of each instrument as the book reads it
+        let newest = |role: &str| -> Result<BTreeMap<InstrumentId, (i64, SourceName, jiff::Timestamp)>> {
             let mut stmt = self.conn().prepare_cached(
                 "SELECT r.id, r.instrument_id, r.source, r.read_at FROM declared_reads r
                  WHERE r.id = (SELECT id FROM declared_reads x WHERE x.instrument_id = r.instrument_id AND x.role = ?1 ORDER BY x.read_at DESC, x.id DESC LIMIT 1)",
             )?;
             let reads = stmt.query_map([role], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            reads
-                .into_iter()
-                .map(|(id, instrument, source, read_at)| {
-                    Ok((
-                        id,
-                        text::parsed("declared_reads", "instrument_id", &instrument, InstrumentId::parse)?,
-                        text::parsed("declared_reads", "source", &source, SourceName::parse)?,
-                        read_at.parse().map_err(|_| text::corrupt("declared_reads", "read_at", &read_at, "not an instant"))?,
-                    ))
-                })
-                .collect()
+            let mut out: BTreeMap<InstrumentId, (i64, SourceName, jiff::Timestamp)> = BTreeMap::new();
+            for (id, instrument, source, read_at) in reads {
+                let instrument = text::parsed("declared_reads", "instrument_id", &instrument, InstrumentId::parse)?;
+                let instrument = joined.get(&instrument).copied().unwrap_or(instrument);
+                let read_at: jiff::Timestamp = read_at.parse().map_err(|_| text::corrupt("declared_reads", "read_at", &read_at, "not an instant"))?;
+                if out.get(&instrument).is_some_and(|(held, _, at)| (*at, *held) > (read_at, id)) {
+                    continue;
+                }
+                out.insert(instrument, (id, text::parsed("declared_reads", "source", &source, SourceName::parse)?, read_at));
+            }
+            Ok(out)
         };
         let mut market: BTreeMap<InstrumentId, MarketReadRow> = BTreeMap::new();
-        for (id, instrument, source, read_at) in newest("market")? {
+        for (instrument, (id, source, read_at)) in newest("market")? {
             market.insert(instrument, MarketReadRow { read_at, source, items: self.declared_rows(id)? });
         }
         let mut out = BTreeMap::new();
-        for (id, instrument, source, read_at) in newest("payer")? {
+        for (instrument, (id, source, read_at)) in newest("payer")? {
             let items = self.declared_rows(id)?;
             // the market's record stands beside a company's record only
             let beside = market.remove(&instrument).filter(|m| m.source != source);
@@ -378,15 +381,18 @@ impl Book {
         })
     }
 
-    /// The newest stated frequency of each instrument.
+    /// The newest stated frequency of each instrument: of the instruments read
+    /// as one, the newest of theirs.
     pub fn frequencies(&self) -> Result<BTreeMap<InstrumentId, StatedFrequency>> {
-        let mut stmt = self.conn().prepare_cached("SELECT instrument_id, per_year, source, stated_at FROM stated_frequencies ORDER BY instrument_id, received_at")?;
+        let joined = self.joined()?;
+        let mut stmt = self.conn().prepare_cached("SELECT instrument_id, per_year, source, stated_at FROM stated_frequencies ORDER BY received_at, instrument_id")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?)))?;
         let mut out = BTreeMap::new();
         for row in rows {
             let (i, n, source, stated) = row?;
+            let i = text::parsed("stated_frequencies", "instrument_id", &i, InstrumentId::parse)?;
             out.insert(
-                text::parsed("stated_frequencies", "instrument_id", &i, InstrumentId::parse)?,
+                joined.get(&i).copied().unwrap_or(i),
                 StatedFrequency {
                     per_year: u32::try_from(n).map_err(|_| text::corrupt("stated_frequencies", "per_year", &n.to_string(), "not a count"))?,
                     source: text::parsed("stated_frequencies", "source", &source, SourceName::parse)?,
@@ -405,7 +411,7 @@ impl Book {
     fn adjustment_instrument(&self, refs: &[Reference]) -> Result<std::result::Result<InstrumentId, Problem>> {
         let mut found: Option<InstrumentId> = None;
         for r in refs.iter().filter(|r| r.identifies()) {
-            if let Some(i) = self.instrument_by_ref(r)? {
+            if let Some(i) = self.own_instrument(r)? {
                 match found {
                     Some(f) if f != i => return Ok(Err(Problem::new("adjustment-instrument-conflict", format!("its references name two instruments, {f} and {i}")))),
                     _ => found = Some(i),
@@ -491,16 +497,28 @@ impl Book {
         Ok(out)
     }
 
-    /// Whether a live adjustment on `tx` moves units into `instrument`.
+    /// Whether a live adjustment on `tx` moves units into `instrument`, as the
+    /// book reads it.
     pub(crate) fn adjustment_moves(&self, tx: &TransactionId, instrument: InstrumentId) -> Result<bool> {
-        let n: i64 = self.conn().query_row(
-            "SELECT COUNT(*) FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg
+        let wanted = self.canonical(instrument)?;
+        for i in self.adjustment_targets(tx)? {
+            if self.canonical(i)? == wanted {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The instruments live adjustments on `tx` move units into, as their
+    /// records name them.
+    pub(crate) fn adjustment_targets(&self, tx: &TransactionId) -> Result<Vec<InstrumentId>> {
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT DISTINCT l.to_instrument FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg
              JOIN source_records s ON s.id = a.record_id
-             WHERE s.state = 'live' AND a.applies_record = ? AND a.applies_leg = ? AND l.to_instrument = ?",
-            params![tx.record.to_string(), tx.leg.as_str(), instrument.to_string()],
-            |r| r.get(0),
+             WHERE s.state = 'live' AND a.applies_record = ? AND a.applies_leg = ? AND l.to_instrument IS NOT NULL ORDER BY l.to_instrument",
         )?;
-        Ok(n > 0)
+        let rows = stmt.query_map(params![tx.record.to_string(), tx.leg.as_str()], |r| r.get::<_, String>(0))?;
+        rows.map(|s| text::parsed("adjustment_legs", "to_instrument", &s?, InstrumentId::parse)).collect()
     }
 
     /// Report on an adjustment's own record that the transaction it explains is
@@ -517,8 +535,10 @@ impl Book {
         Ok(())
     }
 
-    /// Every adjustment of a live record.
+    /// Every adjustment of a live record, its instruments as the book reads them.
     pub fn adjustments(&self) -> Result<Vec<Adjustment>> {
+        let joined = self.joined()?;
+        let read = |i: InstrumentId| joined.get(&i).copied().unwrap_or(i);
         let mut stmt = self.conn().prepare_cached(
             "SELECT a.record_id, a.leg, a.applies_record, a.applies_leg, s.source FROM adjustments a JOIN source_records s ON s.id = a.record_id
              WHERE s.state = 'live' ORDER BY s.first_received_at, a.record_id, a.leg",
@@ -546,8 +566,8 @@ impl Book {
                     }
                 };
                 legs.push(AdjustmentLeg {
-                    from: from.map(|i| text::parsed("adjustment_legs", "from_instrument", &i, InstrumentId::parse)).transpose()?,
-                    to: to.map(|i| text::parsed("adjustment_legs", "to_instrument", &i, InstrumentId::parse)).transpose()?,
+                    from: from.map(|i| text::parsed("adjustment_legs", "from_instrument", &i, InstrumentId::parse)).transpose()?.map(read),
+                    to: to.map(|i| text::parsed("adjustment_legs", "to_instrument", &i, InstrumentId::parse)).transpose()?.map(read),
                     units_per_unit: units.map(|d| parse_dec("adjustment_legs", "units_per_unit", &d)).transpose()?,
                     cost_share: share.map(|d| parse_dec("adjustment_legs", "cost_share", &d)).transpose()?,
                     cash_per_unit: money(cash, cash_cur, "cash_per_unit")?,

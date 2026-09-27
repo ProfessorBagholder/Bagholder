@@ -405,7 +405,7 @@ fn instrument(root: &Node, id: &str, seen: jiff::civil::Date) -> Result<Instrume
         None
     };
     // what Wealthsimple states of the id: traded under, retired by a corporate
-    // action (the listing then trades under another id, `Book::join_successions`)
+    // action (the listing then trades under another id, `Book::settle_successions`)
     // or delisted; a coin's is not stated
     let standing = match s.opt_text("status")? {
         None => None,

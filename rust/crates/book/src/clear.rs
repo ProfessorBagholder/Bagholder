@@ -105,6 +105,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("instrument_routes", Holds::Named),
     ("option_terms", Holds::Named),
     ("security_standings", Holds::Named),
+    ("instrument_joins", Holds::Named),
     ("issuers", Holds::Named),
     ("settings", Holds::Settings),
     ("schema_migrations", Holds::Schema),
@@ -194,8 +195,10 @@ impl Book {
                      DELETE FROM notifications; DELETE FROM told; DELETE FROM settings WHERE key LIKE 'notify.%';",
                 )?;
             }
-            self.clear_unnamed()
-
+            self.clear_unnamed()?;
+            // what the records left state of their ids
+            self.settle_successions()?;
+            Ok(())
         })
     }
 
@@ -226,7 +229,8 @@ impl Book {
                 break;
             }
             c.execute_batch(
-                "DELETE FROM option_terms WHERE instrument_id IN (SELECT id FROM temp.unnamed);
+                "DELETE FROM instrument_joins WHERE instrument_id IN (SELECT id FROM temp.unnamed) OR into_id IN (SELECT id FROM temp.unnamed);
+                 DELETE FROM option_terms WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM listings_named WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instrument_refs WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instrument_routes WHERE instrument_id IN (SELECT id FROM temp.unnamed);
