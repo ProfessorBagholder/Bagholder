@@ -85,6 +85,11 @@ pub fn fact_needs(inputs: &Inputs, matched: &Matched) -> FactNeeds {
             n.first_day = Some(n.first_day.map_or(*d, |f| f.min(*d)));
         }
     }
+    // each coin the broker states an account holds: its price values a
+    // difference from the book's units (dust, `crate::dust`)
+    for b in inputs.market.brokers.values() {
+        n.held.extend(b.held.iter().filter(|(i, q)| !q.is_zero() && kind(i) == Some(InstrumentKind::Crypto)).map(|(i, _)| *i));
+    }
     // each holding: its currency converted from its first day held (its lots'
     // cost and value in CAD), quoted while held today, a security's payer read,
     // and a contract held into its expiry decided by its underlying's close that day

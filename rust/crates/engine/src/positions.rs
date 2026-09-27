@@ -104,6 +104,12 @@ pub fn mark_of(inputs: &Inputs, instrument: InstrumentId, kind: InstrumentKind, 
     Err(Gaps::of(Gap::PriceUnknown(instrument)))
 }
 
+/// The instrument's price now, as a holding of it is marked; none where none is known.
+pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
+    let info = inputs.ledger.instruments.get(&instrument)?;
+    mark_of(inputs, instrument, info.instrument.kind, info.instrument.currency).ok().map(|m| m.price)
+}
+
 fn lot_sum(currency: Currency, lots: &[Lot]) -> Fig<Money> {
     let mut total = Money::zero(currency);
     let mut gaps = Gaps::none();

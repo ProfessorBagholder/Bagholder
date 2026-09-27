@@ -257,3 +257,24 @@ test('Sectors and Regions read the span the positions cover, excluding Not class
   await expect(centres.nth(0).locator('.tab')).toHaveText(String(secCount))
   await expect(centres.nth(1).locator('.tab')).toHaveText(String(regCount))
 })
+
+// SPEC §2 Trade: a coin is flat once what is left of it is dust, worth less than the
+// smallest coin order the broker takes. The demo book sells its DOGE down to 0.04
+// (a cent at its last price) and the broker still states those units.
+test('a coin sold down to dust is no holding, its trade is closed, and the broker stating the dust is no disagreement', async ({ page, request }) => {
+  const m = await figures(request)
+  expect((m.positions as Position[]).some((p) => p.symbol === 'DOGE')).toBe(false)
+  const doge = (m.trades as { symbol: string; status: string }[]).filter((t) => t.symbol === 'DOGE')
+  expect(doge).toHaveLength(1)
+  expect(doge[0].status).toBe('closed')
+  await page.goto('/#portfolio')
+  await ready(page)
+  await expect(page.locator('#page tbody tr').first()).toBeVisible()
+  await expect(page.locator('#page tbody tr').filter({ has: page.locator('td:first-child', { hasText: /^DOGE$/ }) })).toHaveCount(0)
+  await expect(page.locator('#syncline')).not.toContainText('DOGE')
+  await page.goto('/#trades')
+  await ready(page)
+  const row = page.locator('#page tbody tr', { hasText: 'DOGE' })
+  await expect(row).toHaveCount(1)
+  await expect(row.locator('td').nth(1)).not.toHaveText('Open')
+})

@@ -38,7 +38,7 @@ const ACCOUNTS: [(&str, &str, &str, &str); 4] = [
 ];
 
 /// symbol, name, exchange, mic, currency
-const LISTINGS: [(&str, &str, &str, &str, &str); 22] = [
+const LISTINGS: [(&str, &str, &str, &str, &str); 23] = [
     ("XEQT", "iShares Core Equity ETF Portfolio", "TSX", "XTSE", "CAD"),
     ("VFV", "Vanguard S&P 500 Index ETF", "TSX", "XTSE", "CAD"),
     ("ENB", "Enbridge Inc.", "TSX", "XTSE", "CAD"),
@@ -61,6 +61,7 @@ const LISTINGS: [(&str, &str, &str, &str, &str); 22] = [
     ("BTC", "Bitcoin", "", "", "CAD"),
     ("ETH", "Ether", "", "", "CAD"),
     ("SOL", "Solana", "", "", "CAD"),
+    ("DOGE", "Dogecoin", "", "", "CAD"),
 ];
 
 /// Net liquidation value per account at the snapshot: positions plus cash, less margin.
@@ -308,6 +309,8 @@ fn build() -> Book {
     b.crypto("cbuy", "2024-02-26", "BTC", f(0.25), i(58200)); b.crypto("cbuy", "2024-08-05", "BTC", f(0.15), i(82500)); b.crypto("csell", "2024-12-16", "BTC", f(0.20), i(132400));
     let eth = b.crypto("cbuy", "2024-03-11", "ETH", i(3), i(4150)); b.crypto("csell", "2025-04-02", "ETH", i(3), i(3480));
     b.crypto("cbuy", "2024-11-11", "SOL", i(40), i(195));
+    // sold down to dust: 0.04 left, worth a cent, under the smallest order the broker takes
+    b.crypto("cbuy", "2025-01-06", "DOGE", i(1000), f(0.25)); b.crypto("csell", "2025-03-10", "DOGE", f(999.96), f(0.25));
     let (mut y, mut m) = (2024i64, 12u32);
     while fmt(y, m, 5).as_str() <= TODAY {
         b.crypto("reward", &fmt(y, m, 5), "SOL", f(0.22), i(200 + (m as i64 * 7) % 60));

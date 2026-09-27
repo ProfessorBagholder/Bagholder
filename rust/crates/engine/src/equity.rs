@@ -148,6 +148,16 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
             let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
             for i in instruments {
                 let (o, br) = (matched.units_on(*account, i, as_of), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
+                // a coin's difference worth less than the broker's smallest order,
+                // at its price now (else the last a fill of it stated), is dust,
+                // never a disagreement
+                if let Ok(own) = &o {
+                    let price = crate::positions::current_price(inputs, i).or_else(|| matched.last_price.get(&i).copied());
+                    let dust = own.checked_sub(br).ok().is_some_and(|diff| price.is_some_and(|p| crate::dust::is_dust(inputs, *account, i, diff, p, today)));
+                    if dust {
+                        continue;
+                    }
+                }
                 if o != Ok(br) {
                     differences.push(Difference::Units { instrument: i, own: o, broker: br, pending: units_pending });
                 }

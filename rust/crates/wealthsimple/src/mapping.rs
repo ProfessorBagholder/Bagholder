@@ -61,6 +61,13 @@ pub fn broker() -> Broker {
     Broker::named("wealthsimple")
 }
 
+/// The smallest coin order Wealthsimple takes: "The minimum amount required to
+/// buy crypto is $1.00" (help.wealthsimple.com/hc/en-ca/articles/1500002199881,
+/// read 2026-09-27). A coin amount worth less is dust (`SPEC.md` §2, Dust).
+pub fn coin_minimum() -> Money {
+    Money::new(Dec::from_int(1), Currency::CAD)
+}
+
 pub struct WealthsimpleMapping;
 
 impl Mapping for WealthsimpleMapping {

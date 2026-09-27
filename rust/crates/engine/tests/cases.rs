@@ -621,7 +621,8 @@ fn run(path: &Path) -> Vec<String> {
 /// key; a closed round trip whose fills net to no units, all in its currency,
 /// has its fills' cash as its P&L (the parts of every fill add up to it); a
 /// holding moved by nothing but its own trades and transfers holds what its
-/// transactions add up to.
+/// transactions add up to, less its dust written off and with its dust taken
+/// beyond what it held.
 fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
     use bagholder_core::transaction::Kind;
     use bagholder_engine::ledger::Flag;
@@ -682,7 +683,9 @@ fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
         if moved || !own.iter().all(|x| matches!(x.kind, Kind::Buy | Kind::Sell | Kind::StakingReward | Kind::TransferIn | Kind::TransferOut) && x.quantity.is_some() && !linked.contains(&x.id)) {
             continue;
         }
-        let sum = own.iter().try_fold(Dec::ZERO, |a, x| a.checked_add(x.quantity.unwrap())).unwrap();
+        // less what was written off as dust, and with what was taken beyond as dust
+        let dust = f.matched.dust.iter().filter(|d| d.account == *account && d.instrument == *instrument).try_fold(Dec::ZERO, |a, d| if d.beyond { a.checked_add(d.qty) } else { a.checked_sub(d.qty) }).unwrap();
+        let sum = own.iter().try_fold(dust, |a, x| a.checked_add(x.quantity.unwrap())).unwrap();
         let held = f.matched.units_on(*account, *instrument, today);
         if held != Ok(sum) {
             c.fail(format!("invariant: {account} holds {held:?} {instrument} against its transactions' {}", sum.to_text()));
@@ -761,8 +764,12 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
                         }
                     }
                 }
-                // every instrument held today is quoted, and nothing else
-                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_ok_and(|q| q.is_zero())).map(|(_, x)| *x).collect();
+                // every instrument held today is quoted, and every coin the broker
+                // states an account holds (its price values a difference as dust),
+                // and nothing else
+                let coin = |x: &InstrumentId| b.inputs.ledger.instruments.get(x).is_some_and(|i| i.instrument.kind == bagholder_core::instrument::InstrumentKind::Crypto);
+                let stated = b.inputs.market.brokers.values().flat_map(|a| a.held.iter()).filter(|(x, q)| !q.is_zero() && coin(x)).map(|(x, _)| *x);
+                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_ok_and(|q| q.is_zero())).map(|(_, x)| *x).chain(stated).collect();
                 seen += 1;
                 if needs.held != held {
                     failures.push(format!("{name}: held today {held:?}, the needs name {:?}", needs.held));
