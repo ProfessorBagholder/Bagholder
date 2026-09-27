@@ -87,13 +87,12 @@ From the unpacked archive (`bagholder.exe` on Windows):
 ./bagholder
 ```
 
-or from a clone:
+or from a clone, with Rust and Node.js installed, build the page and then run the server:
 
 ```
-python3 bagholder.py
+cd web && npm ci && npm run build
+cd ../rust && cargo run --release --bin bagholder
 ```
-
-which builds the page when it is not built from the checkout's sources, then builds what changed and starts the server (`cargo run --release --bin bagholder` in `rust/`).
 
 The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
 
@@ -120,11 +119,7 @@ Every copy checks GitHub for the latest release when it starts and once an hour.
   git pull
   ```
 
-  then start it again:
-
-  ```
-  python3 bagholder.py
-  ```
+  then build the page and start the server again, as under Run.
 - **Docker:** the container has no update button. The header shows `vX.Y.Z image available` with a link to the release, and the update is the pull above:
 
   ```

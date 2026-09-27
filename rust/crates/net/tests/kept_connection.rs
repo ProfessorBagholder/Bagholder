@@ -120,3 +120,60 @@ fn test_a_request_that_must_reach_its_host_at_most_once_never_takes_a_kept_conne
     assert_eq!(client::request_once("POST", &url, &[], Some(b"{}"), Duration::from_secs(5)).unwrap().body, b"ok");
     assert_eq!((opens.load(Ordering::SeqCst), requests.load(Ordering::SeqCst)), (2, 2), "a fresh connection, one request, no retry on the stale one");
 }
+
+/// A server answering every request on a connection with `reply`, as many as come.
+fn serve_raw(reply: &'static str) -> (String, Arc<AtomicUsize>) {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let o = opens.clone();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let s = match s { Ok(s) => s, Err(_) => return };
+            o.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut w = s.try_clone().unwrap();
+                let mut r = BufReader::new(s);
+                while read_request(&mut r) {
+                    if w.write_all(reply.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{}/x", port), opens)
+}
+
+#[test]
+fn test_a_chunked_reply_is_read_to_its_last_line_and_its_connection_reads_the_next_one() {
+    // two chunks, the last-chunk, a trailer field and the empty line that ends the body
+    let (url, opens) = serve_raw("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n3;x=y\r\n!!!\r\n0\r\nX-Trailer: t\r\n\r\n");
+    for _ in 0..3 {
+        let r = client::request("GET", &url, &[], None, Duration::from_secs(5)).unwrap();
+        assert_eq!(r.body, b"ok!!!");
+    }
+    assert_eq!(opens.load(Ordering::SeqCst), 1, "the kept connection holds nothing of the last reply: the next one reads there");
+}
+
+#[test]
+fn test_a_reply_cut_off_before_its_end_is_an_error_not_a_shorter_body() {
+    // the body announced as 10 bytes, 2 sent, then the connection closed
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().take(2) {
+            let s = s.unwrap();
+            let mut w = s.try_clone().unwrap();
+            let mut r = BufReader::new(s);
+            if read_request(&mut r) {
+                let _ = w.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nok");
+            }
+        }
+    });
+    let e = client::request("GET", &format!("http://127.0.0.1:{}/x", port), &[], None, Duration::from_secs(5)).err().expect("a cut-off reply is an error");
+    assert!(e.to_string().contains("before the end of the body"), "{e}");
+    // a chunked body cut off the same way
+    let (url, _) = serve_raw("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nok");
+    assert!(client::request("GET", &url, &[], None, Duration::from_secs(5)).is_err());
+}
