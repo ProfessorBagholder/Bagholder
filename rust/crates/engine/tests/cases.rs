@@ -19,7 +19,9 @@ use serde_json::Value;
 use bagholder_core::{Dec, InstrumentId, Money, Rounding, TradeId};
 use bagholder_engine::gap::{Fig, Gaps};
 use bagholder_engine::ledger::{Direction, TripKey};
-use bagholder_engine::scope::{Dates, Filters, Preset};
+use bagholder_core::instrument::InstrumentKind;
+use bagholder_core::journal::Grade;
+use bagholder_engine::scope::{Bound, Dates, Filters, Outcome, Preset};
 use bagholder_engine::trades::TradeKey;
 use bagholder_engine::Engine;
 use common::*;
@@ -349,6 +351,53 @@ fn run(path: &Path) -> Vec<String> {
                 benchmark: s(k, "benchmark").unwrap_or("SP500").to_string(),
                 ..filters
             };
+            // "filters": every other filter, by its SPEC.md §5 name
+            let filters = match k.get("filters") {
+                None => filters,
+                Some(x) => {
+                    let list = |key: &str| arr(x, key).into_iter().collect::<Vec<Value>>();
+                    let bound = |key: &str| {
+                        x.get(key).map(|v| match (s(v, "above"), s(v, "below")) {
+                            (Some(a), None) => Bound::Above(dec(a)),
+                            (None, Some(b)) => Bound::Below(dec(b)),
+                            _ => panic!("a range is {{\"above\"}} or {{\"below\"}}"),
+                        })
+                    };
+                    Filters {
+                        dates: match x.get("years") {
+                            Some(ys) => Dates::Years(ys.as_array().unwrap().iter().map(|y| y.as_i64().unwrap() as i16).collect()),
+                            None => filters.dates,
+                        },
+                        instruments: list("symbols").iter().map(|i| b.ids.instrument(i.as_str().unwrap())).collect(),
+                        grades: list("grades").iter().map(|g| g.as_str().map(|g| Grade::parse(g).unwrap())).collect(),
+                        tags: list("tags").iter().map(|t| t.as_str().unwrap().to_string()).collect(),
+                        kinds: list("kinds").iter().map(|t| InstrumentKind::parse(t.as_str().unwrap()).unwrap()).collect(),
+                        venues: list("exchanges").iter().map(|t| t.as_str().unwrap().to_string()).collect(),
+                        sides: list("sides")
+                            .iter()
+                            .map(|t| match t.as_str().unwrap() {
+                                "long" => Direction::Long,
+                                "short" => Direction::Short,
+                                other => panic!("no side {other}"),
+                            })
+                            .collect(),
+                        outcomes: list("results")
+                            .iter()
+                            .map(|t| match t.as_str().unwrap() {
+                                "win" => Outcome::Win,
+                                "loss" => Outcome::Loss,
+                                "breakeven" => Outcome::Breakeven,
+                                other => panic!("no result {other}"),
+                            })
+                            .collect(),
+                        price: bound("price"),
+                        hold: bound("hold"),
+                        pnl: bound("pnl"),
+                        qty: bound("qty"),
+                        ..filters
+                    }
+                }
+            };
             let sc = scoped(filters);
             if let Some(v) = k.get("realized") {
                 c.money("kpi realized", v, &sc.kpi.realized);
@@ -415,6 +464,58 @@ fn run(path: &Path) -> Vec<String> {
             }
             if let Some(v) = k.get("dividends") {
                 c.money("cashflow all-time dividends", v, &sc.cashflow.total.total);
+            }
+            // the holdings in scope, as account/instrument
+            if let Some(v) = k.get("positions") {
+                let mut got: Vec<String> = sc.portfolio.positions.iter().map(|i| format!("{}/{}", b.ids.account_name(f.positions[*i].account), b.ids.instrument_name(f.positions[*i].instrument))).collect();
+                let mut want_p: Vec<String> = v.as_array().expect("positions: a list").iter().map(|x| x.as_str().unwrap().to_string()).collect();
+                got.sort();
+                want_p.sort();
+                if got != want_p {
+                    c.fail(format!("positions in scope: expected {want_p:?}, got {got:?}"));
+                }
+            }
+            // the cashflow rows in scope, every kind, by transaction label
+            if let Some(v) = k.get("cashflow_rows") {
+                let mut got: Vec<String> = sc.cashflow.rows.iter().chain(&sc.cashflow.other).filter_map(|i| tx.iter().find(|(_, id)| **id == f.cash[*i].id).map(|(l, _)| l.clone())).collect();
+                let mut want_r: Vec<String> = v.as_array().expect("cashflow_rows: a list").iter().map(|x| x.as_str().unwrap().to_string()).collect();
+                got.sort();
+                want_r.sort();
+                if got != want_r {
+                    c.fail(format!("cashflow rows in scope: expected {want_r:?}, got {got:?}"));
+                }
+            }
+            if let Some(v) = k.get("income_holdings") {
+                let mut got: Vec<String> = sc.cashflow.holdings.iter().map(|h| format!("{}/{}", b.ids.account_name(f.positions[h.position].account), b.ids.instrument_name(f.positions[h.position].instrument))).collect();
+                let mut want_h: Vec<String> = v.as_array().expect("income_holdings: a list").iter().map(|x| x.as_str().unwrap().to_string()).collect();
+                got.sort();
+                want_h.sort();
+                if got != want_h {
+                    c.fail(format!("income holdings in scope: expected {want_h:?}, got {got:?}"));
+                }
+            }
+            if let Some(v) = k.get("margin_used_pct") {
+                c.ratio_fig("portfolio margin used %", v, &sc.portfolio.margin_used_pct);
+            }
+            // the value series' first and last day, or null for none
+            for (key, got) in [("series_first", sc.equity.series.first().map(|d| d.day)), ("series_last", sc.equity.series.last().map(|d| d.day))] {
+                if let Some(v) = k.get(key) {
+                    let expected = if v.is_null() { None } else { Some(day(v.as_str().unwrap())) };
+                    if got != expected {
+                        c.fail(format!("{key}: expected {v}, got {got:?}"));
+                    }
+                }
+            }
+            if let Some(v) = k.get("annualized") {
+                c.ratio("annualized", v, sc.equity.annualized.rate);
+            }
+            // exactly these years, where the case says so
+            if let Some(v) = k.get("year_list") {
+                let got: Vec<i64> = sc.equity.years.iter().map(|y| y.year as i64).collect();
+                let want_y: Vec<i64> = v.as_array().unwrap().iter().map(|y| y.as_i64().unwrap()).collect();
+                if got != want_y {
+                    c.fail(format!("years: expected {want_y:?}, got {got:?}"));
+                }
             }
             for y in arr(k, "years") {
                 let year = y.get("year").and_then(Value::as_i64).unwrap() as i16;

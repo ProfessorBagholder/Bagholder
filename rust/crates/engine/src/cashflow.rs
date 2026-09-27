@@ -147,6 +147,43 @@ enum Found {
 /// Business days a paid distribution takes to post after its pay date, at most.
 const POSTS_WITHIN: i64 = 2;
 
+/// The last day a distribution paid on `pay` posts by: `POSTS_WITHIN` business
+/// days after it.
+pub(crate) fn posted_by(pay: Date) -> Option<Date> {
+    let mut day = pay;
+    let mut left = POSTS_WITHIN;
+    while left > 0 {
+        day = day.tomorrow().ok()?;
+        if !matches!(day.weekday(), bagholder_core::jiff::civil::Weekday::Saturday | bagholder_core::jiff::civil::Weekday::Sunday) {
+            left -= 1;
+        }
+    }
+    Some(day)
+}
+
+/// The ex-date of the declared distribution a payment is for: the one the
+/// payer's record lists whose pay date the payment posted on or within
+/// `POSTS_WITHIN` business days of; the market's record beside it only where
+/// the payer's lists none. None where no listed distribution matches, or where
+/// those that match name different ex-dates.
+pub fn entitled_ex(inputs: &Inputs, r: &CashRow) -> Option<Date> {
+    let read = inputs.facts.declared.get(&r.instrument?)?;
+    let matching = |list: &[crate::input::Declared]| -> Vec<Date> {
+        let mut exes: Vec<Date> = list.iter().filter(|d| d.pay_date.is_some_and(|p| p <= r.day && posted_by(p).is_some_and(|by| r.day <= by))).map(|d| d.ex_date).collect();
+        exes.sort();
+        exes.dedup();
+        exes
+    };
+    let mut exes = matching(&read.items);
+    if exes.is_empty() {
+        exes = matching(&read.market);
+    }
+    match exes.as_slice() {
+        [ex] => Some(*ex),
+        _ => None,
+    }
+}
+
 /// The form of a distribution its source lists without saying (`SPEC.md` §2,
 /// Distribution rate): cash where a dividend was paid on the instrument between
 /// its ex-date and the next; units where none had posted two business days after
@@ -157,17 +194,7 @@ fn found_form(d: &crate::input::Declared, next_ex: Option<Date>, paid: &[&CashRo
     if paid.iter().any(|r| r.day >= d.ex_date && next_ex.is_none_or(|n| r.day < n)) {
         return Found::Cash;
     }
-    let posted_by = d.pay_date.and_then(|p| {
-        let mut day = p;
-        let mut left = POSTS_WITHIN;
-        while left > 0 {
-            day = day.tomorrow().ok()?;
-            if !matches!(day.weekday(), bagholder_core::jiff::civil::Weekday::Saturday | bagholder_core::jiff::civil::Weekday::Sunday) {
-                left -= 1;
-            }
-        }
-        Some(day)
-    });
+    let posted_by = d.pay_date.and_then(posted_by);
     match posted_by {
         Some(by) if held_on_ex && today > by => Found::Units,
         _ => Found::NotYet,

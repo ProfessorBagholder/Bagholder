@@ -257,11 +257,14 @@ function sayWanted(): void {
  * Returns what stops it.
  */
 export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, changed?: () => void): () => void {
-  wanted.set(key, { params, holder: holder as Holder<unknown>, changed })
+  // this watch's own entry: a later watch of the key into the same slot (the
+  // filters changed) replaces it, and stopping this one then leaves that alone
+  const entry = { params, holder: holder as Holder<unknown>, changed }
+  wanted.set(key, entry)
   if (holder.data == null) {
     // drawn at once from what was kept, before the server answers
     const p = load(book, key, params).then((k) => {
-      if (k && holder.data == null && wanted.get(key)?.holder === holder) {
+      if (k && holder.data == null && wanted.get(key) === entry) {
         holder.data = k.data as T
         holder.v = k.v
         changed?.()
@@ -272,7 +275,7 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   }
   sayWanted()
   return () => {
-    if (wanted.get(key)?.holder === holder) {
+    if (wanted.get(key) === entry) {
       wanted.delete(key)
       sayWanted()
     }

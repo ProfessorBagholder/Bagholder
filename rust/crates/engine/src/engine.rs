@@ -269,7 +269,7 @@ impl Engine {
 
     /// The cashflow's part of `filters`' scope, over the holdings' part.
     pub fn cashflow(&self, filters: &Filters, portfolio: &crate::scope::Portfolio) -> crate::scope::Cashflow {
-        crate::scope::cashflow_in_scope(filters, &self.inputs, &self.positions, &self.cash, &self.payers, portfolio)
+        crate::scope::cashflow_in_scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, portfolio)
     }
 
     /// Whether a close of this instrument can decide a contract's expiry.

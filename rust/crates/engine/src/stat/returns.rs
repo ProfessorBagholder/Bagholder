@@ -83,8 +83,11 @@ pub fn combine(values: &BTreeMap<Date, Vec<(Dec, Option<Dec>)>>, accounts: &[&[(
         .collect()
 }
 
-fn peak(series: &[Day]) -> f64 {
-    series.iter().map(|d| d.value).fold(0.0, f64::max)
+/// The pre-history floor: a balance under 1 % of the series' peak. Always
+/// taken from the whole history in scope, never from a date range, so a year's
+/// return never changes with the range chosen.
+pub fn floor(series: &[Day]) -> f64 {
+    series.iter().map(|d| d.value).fold(0.0, f64::max) * 0.01
 }
 
 /// The index over the same span: its last level on or before the end over its
@@ -95,29 +98,28 @@ pub fn benchmark_return(levels: &BTreeMap<Date, f64>, from: Date, to: Date) -> O
     (start != 0.0).then(|| end / start - 1.0)
 }
 
-/// Every calendar year of the series, newest last. A balance under 1 % of the
-/// series' peak is pre-history: a year that never clears it is left out, and a
-/// year that first clears it part way through is measured from that first day.
-pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<Date, f64>>) -> Vec<YearReturn> {
-    let floor = peak(series) * 0.01;
+/// Every calendar year of the series that `span` keeps, newest last, each over
+/// the calendar days `span` gives it (the whole year, or the part of it inside
+/// a date range). A balance under `floor` is pre-history: a year that never
+/// clears it is left out, and a year that first clears it part way through is
+/// measured from that first day.
+pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<Date, f64>>, floor: f64, span: impl Fn(i16) -> Option<(Date, Date)>) -> Vec<YearReturn> {
     let mut years: Vec<i16> = series.iter().map(|d| d.day.year()).collect();
     years.dedup();
     let mut out = Vec::new();
     for y in years {
-        let in_year: Vec<&Day> = series.iter().filter(|d| d.day.year() == y).collect();
+        let Some((first, last)) = span(y) else { continue };
+        let to = last.min(today);
+        let in_year: Vec<&Day> = series.iter().filter(|d| first <= d.day && d.day <= to).collect();
         if in_year.iter().all(|d| d.value < floor) {
             continue;
         }
-        let jan1 = Date::new(y, 1, 1).ok();
-        let dec31 = Date::new(y, 12, 31).ok();
-        let (Some(jan1), Some(dec31)) = (jan1, dec31) else { continue };
-        let to = dec31.min(today);
-        // the year opens on the last day of the year before, if it cleared the floor
-        let before = series.iter().rev().find(|d| d.day < jan1).filter(|d| d.value > floor);
+        // the span opens on the last day before it, if that cleared the floor
+        let before = series.iter().rev().find(|d| d.day < first).filter(|d| d.value > floor);
         // `base` is the day the year's return is measured over: the last value
         // before it, or its own first point clear of the floor
         let (from, start_day, base) = match before {
-            Some(b) => (jan1, None, b.day),
+            Some(b) => (first, None, b.day),
             None => match in_year.iter().find(|d| d.value > floor) {
                 Some(d) => (d.day, Some(d.day), d.day),
                 None => continue,
@@ -126,7 +128,7 @@ pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<D
         let mut factor = 1.0;
         let mut any = false;
         let mut flow = Some(0.0);
-        for d in in_year.iter().filter(|d| d.day <= to && start_day.is_none_or(|s| d.day > s)) {
+        for d in in_year.iter().filter(|d| start_day.is_none_or(|s| d.day > s)) {
             if let Some(r) = d.ret {
                 factor *= 1.0 + r;
                 any = true;
@@ -179,12 +181,11 @@ pub fn annualized(years: &[YearReturn]) -> Annualized {
 }
 
 /// The deepest fall of the index chained from the daily returns, over the days
-/// that clear the pre-history floor.
-pub fn drawdown(series: &[Day]) -> Drawdown {
+/// that clear the pre-history floor, the peak taken from the first day given.
+pub fn drawdown(series: &[Day], floor: f64) -> Drawdown {
     if series.is_empty() {
         return Drawdown { pct: None, abs: None, at: None, peak_at: None };
     }
-    let floor = peak(series) * 0.01;
     let mut idx = 1.0;
     let mut peak_idx = 0.0;
     let mut peak_at = None;
@@ -221,6 +222,10 @@ mod tests {
 
     use super::*;
 
+    fn whole(y: i16) -> Option<(Date, Date)> {
+        Some((date(y, 1, 1), date(y, 12, 31)))
+    }
+
     fn day(d: Date, value: f64, ret: Option<f64>) -> Day {
         Day { day: d, value, exact: None, ret, flow: Some(0.0) }
     }
@@ -229,7 +234,7 @@ mod tests {
     fn a_span_under_a_year_is_its_return_not_annualized() {
         // two months at +15 %: 15 %, never compounded up to a year's (+131 %)
         let series = [day(date(2026, 7, 1), 100.0, None), day(date(2026, 8, 31), 115.0, Some(0.15))];
-        let years = yearly_returns(&series, date(2026, 8, 31), None);
+        let years = yearly_returns(&series, date(2026, 8, 31), None, floor(&series), whole);
         let a = annualized(&years);
         assert!((a.rate.unwrap() - 0.15).abs() < 1e-12, "{:?}", a.rate);
     }
@@ -243,9 +248,29 @@ mod tests {
             v *= 1.1;
             series.push(day(date(y, 12, 31), v, Some(0.1)));
         }
-        let years = yearly_returns(&series, date(2025, 12, 31), None);
+        let years = yearly_returns(&series, date(2025, 12, 31), None, floor(&series), whole);
         assert_eq!(years.iter().map(|y| y.days).collect::<Vec<_>>(), vec![365, 365, 365, 366, 365]);
         let a = annualized(&years);
         assert!((a.rate.unwrap() - 0.10).abs() < 5e-5, "{:?}", a.rate);
+    }
+
+    #[test]
+    fn a_span_cut_by_a_range_is_measured_from_the_last_value_before_it_and_the_floor_is_the_whole_historys() {
+        // 2025: 100 → 110 on Jul 1 → 121 on Dec 31; a range from Jul 1 counts
+        // the move on Jul 1 and after, from Jun 30's value
+        let series = [day(date(2025, 6, 30), 100.0, Some(0.0)), day(date(2025, 7, 1), 110.0, Some(0.10)), day(date(2025, 12, 31), 121.0, Some(0.10))];
+        let from_july = |y: i16| (y == 2025).then(|| (date(2025, 7, 1), date(2025, 12, 31)));
+        let years = yearly_returns(&series, date(2026, 1, 5), None, floor(&series), from_july);
+        assert_eq!(years.len(), 1);
+        assert!((years[0].r - 0.21).abs() < 1e-12, "{:?}", years[0].r);
+        assert_eq!((years[0].from, years[0].days), (date(2025, 7, 1), 184));
+
+        // a small year the whole history's floor leaves out stays out under a
+        // range that holds nothing larger
+        let series = [day(date(2019, 6, 1), 5.0, None), day(date(2019, 12, 31), 6.0, Some(0.2)), day(date(2026, 1, 2), 60_000.0, Some(0.0))];
+        let only_2019 = |y: i16| (y == 2019).then(|| (date(2019, 1, 1), date(2019, 12, 31)));
+        let f = floor(&series);
+        assert!(yearly_returns(&series, date(2026, 1, 5), None, f, only_2019).is_empty());
+        assert_eq!(drawdown(&series[..2], f).at, None, "under the floor, no fall is measured");
     }
 }

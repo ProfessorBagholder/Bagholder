@@ -129,10 +129,6 @@ series: Array<Point>, drawdown: Drawdown, annualized: Annualized,
  */
 gaps: Array<string>, 
 /**
- * The filters set that the value series does not read.
- */
-skippedFilters: Array<string>, 
-/**
  * The realized P&L in scope, a running total by day.
  */
 pnl: PnlCurve, };
@@ -236,11 +232,7 @@ export type Cashflow = { tiles: Array<CashflowTile>, months: Array<CashflowMonth
 /**
  * Projected income a month in CAD, by holding, as the pie draws it.
  */
-income: Array<Slice>, incomeTotal: Partial, rows: Array<CashflowRow>, 
-/**
- * The filters in force that the cashflow does not read.
- */
-skippedFilters: Array<string>, };
+income: Array<Slice>, incomeTotal: Partial, rows: Array<CashflowRow>, };
 
 export type Waiting = { 
 /**

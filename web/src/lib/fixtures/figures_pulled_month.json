@@ -8650,7 +8650,6 @@
         "count": 3
       },
       "gaps": [],
-      "skippedFilters": [],
       "pnl": {
         "series": [],
         "leftOut": 0,
@@ -9777,8 +9776,7 @@
           "amount": "0.17",
           "currency": "USD"
         }
-      ],
-      "skippedFilters": []
+      ]
     },
     "rowsTotal": 3
   }

@@ -496,7 +496,6 @@ pub fn dashboard_doc(engine: &Engine, filters: &Filters) -> DashboardDoc {
         drawdown: Drawdown { pct: e.drawdown.pct, abs: e.drawdown.abs.and_then(bagholder_engine::stat::returns::cents).map(Dec), at: e.drawdown.at.map(|d| d.to_string()) },
         annualized: Annualized { rate: e.annualized.rate, count: e.annualized.count },
         gaps: equity_gaps,
-        skipped_filters: e.unread_filters.iter().map(|s| s.to_string()).collect(),
         pnl: {
             let c = &d.pnl_curve;
             let mut gaps: Vec<String> = vec![];
@@ -664,7 +663,7 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
             currency: r.amount.currency.as_str().into(),
         })
         .collect();
-    Cashflow { tiles, months, holdings, income, income_total, rows, skipped_filters: c.unread_filters.iter().map(|s| s.to_string()).collect() }
+    Cashflow { tiles, months, holdings, income, income_total, rows }
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or

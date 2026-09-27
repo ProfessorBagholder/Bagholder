@@ -206,8 +206,6 @@ pub struct Equity {
     pub annualized: Annualized,
     /// What the series waits on.
     pub gaps: Vec<String>,
-    /// The filters set that the value series does not read.
-    pub skipped_filters: Vec<String>,
     /// The realized P&L in scope, a running total by day.
     pub pnl: PnlCurve,
 }
@@ -445,8 +443,6 @@ pub struct Cashflow {
     pub income: Vec<Slice>,
     pub income_total: Partial,
     pub rows: Vec<CashflowRow>,
-    /// The filters in force that the cashflow does not read.
-    pub skipped_filters: Vec<String>,
 }
 
 // --------------------------------------------------------------------------

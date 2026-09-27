@@ -1,0 +1,3481 @@
+[
+  {
+    "name": "a Result filter keeps closed trades only: an open trade with no sale and one partly sold at no gain are not breakevens",
+    "spec": "SPEC.md §5 Filters: 'Result is a closed trade's: an open trade has none, so on the Dashboard and the Trades list a Result filter keeps closed trades only'; §4 Dashboard tiles",
+    "working": [
+      "CAD book, no fees, today 2026-03-01.",
+      "X: 10 bought for 100 on 01-05, never sold: an OPEN trade with no sale, realized 0.00 (§2 Trade: '0.00 before a first sale').",
+      "Z: 10 bought for 100, sold for 100 on 01-20: CLOSED, P&L 0.00, a breakeven.",
+      "W: 10 bought for 100, sold for 150 on 01-21: CLOSED, P&L +50.00, a win.",
+      "Y: 10 bought for 200 (20/unit), 4 sold for 80 on 02-02 against cost 4 × 20 = 80: P&L 0.00 realized, 6 still held: an OPEN trade.",
+      "Result = breakeven: X and Y have no Result (open), so only Z is kept. Trades in scope: z1.",
+      "Closed-trade statistics over Z: count 1, wins 0, losses 0, breakeven 1.",
+      "Realized P&L over the trades in scope: Z's 0 = 0.00."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      },
+      {
+        "id": "Y"
+      },
+      {
+        "id": "Z"
+      },
+      {
+        "id": "W"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "x1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "y1",
+        "account": "A",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Y",
+        "qty": "10",
+        "cash": "-200"
+      },
+      {
+        "id": "y2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "Y",
+        "qty": "-4",
+        "cash": "80"
+      },
+      {
+        "id": "z1",
+        "account": "A",
+        "day": "2026-01-07",
+        "at": "2026-01-07T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Z",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "z2",
+        "account": "A",
+        "day": "2026-01-20",
+        "at": "2026-01-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "Z",
+        "qty": "-10",
+        "cash": "100"
+      },
+      {
+        "id": "w1",
+        "account": "A",
+        "day": "2026-01-08",
+        "at": "2026-01-08T15:00:00Z",
+        "kind": "buy",
+        "instrument": "W",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "w2",
+        "account": "A",
+        "day": "2026-01-21",
+        "at": "2026-01-21T15:00:00Z",
+        "kind": "sell",
+        "instrument": "W",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "results": [
+            "breakeven"
+          ]
+        },
+        "trades": [
+          "z1"
+        ],
+        "count": 1,
+        "wins": 0,
+        "losses": 0,
+        "breakeven": 1,
+        "realized": "0.00"
+      }
+    }
+  },
+  {
+    "name": "a Result filter keeps closed trades only: an open trade partly sold at a gain is not a win",
+    "spec": "SPEC.md §5 Filters: 'Result is a closed trade's: an open trade has none, so ... a Result filter keeps closed trades only'; §4 Dashboard tiles",
+    "working": [
+      "CAD book, no fees, today 2026-03-01.",
+      "X: 10 bought for 100 on 01-05, never sold: an OPEN trade with no sale, realized 0.00 (§2 Trade: '0.00 before a first sale').",
+      "Z: 10 bought for 100, sold for 100 on 01-20: CLOSED, P&L 0.00, a breakeven.",
+      "W: 10 bought for 100, sold for 150 on 01-21: CLOSED, P&L +50.00, a win.",
+      "Y: 10 bought for 200 (20/unit), 4 sold for 100 on 02-02 against cost 80: +20.00 realized, 6 still held: an OPEN trade.",
+      "Result = win: Y has realized +20 but is open, so it has no Result and is not kept; X is open too. Only W is kept. Trades in scope: w1.",
+      "Closed-trade statistics over W: count 1, wins 1, losses 0, breakeven 0.",
+      "Realized P&L over the trades in scope: W's 50.00 (Y's partial +20 is not in scope)."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      },
+      {
+        "id": "Y"
+      },
+      {
+        "id": "Z"
+      },
+      {
+        "id": "W"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "x1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "y1",
+        "account": "A",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Y",
+        "qty": "10",
+        "cash": "-200"
+      },
+      {
+        "id": "y2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "Y",
+        "qty": "-4",
+        "cash": "100"
+      },
+      {
+        "id": "z1",
+        "account": "A",
+        "day": "2026-01-07",
+        "at": "2026-01-07T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Z",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "z2",
+        "account": "A",
+        "day": "2026-01-20",
+        "at": "2026-01-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "Z",
+        "qty": "-10",
+        "cash": "100"
+      },
+      {
+        "id": "w1",
+        "account": "A",
+        "day": "2026-01-08",
+        "at": "2026-01-08T15:00:00Z",
+        "kind": "buy",
+        "instrument": "W",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "w2",
+        "account": "A",
+        "day": "2026-01-21",
+        "at": "2026-01-21T15:00:00Z",
+        "kind": "sell",
+        "instrument": "W",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "results": [
+            "win"
+          ]
+        },
+        "trades": [
+          "w1"
+        ],
+        "count": 1,
+        "wins": 1,
+        "losses": 0,
+        "breakeven": 0,
+        "realized": "50.00"
+      }
+    }
+  },
+  {
+    "name": "a holding answers Tag by the journal it shares with its trade",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Grade and Tag by the journal it shares with its trade'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Tag swing: P (TP) and R (TR) carry it."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "swing"
+          ]
+        },
+        "positions": [
+          "A/P",
+          "A/R"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers Grade by the journal it shares with its trade, ungraded included",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Grade and Tag by the journal it shares with its trade'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Grade B or ungraded: Q is B; R's entry has no grade; S and U have no entry, so no grade. P (A) is left out."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "grades": [
+            "B",
+            null
+          ]
+        },
+        "positions": [
+          "A/Q",
+          "A/R",
+          "A/S",
+          "A/U"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers Side by its direction",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Side by its direction'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Side short: only R is short."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "sides": [
+            "short"
+          ]
+        },
+        "positions": [
+          "A/R"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers Result by the sign of its unrealized P&L",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Result by the sign of its unrealized P&L'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Result win (unrealized above zero): P +20, R +100 (a short gaining as the price falls), U +40 USD. Q is −500 (loss), S is 0 (breakeven)."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "results": [
+            "win"
+          ]
+        },
+        "positions": [
+          "A/P",
+          "A/R",
+          "A/U"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers Price by its average cost",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Price by its average cost'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Price above 40, by avg cost: P 10, Q 50, R 30, S 200, U 5 (USD): Q and S. (By quote Q 45 and S 200 as well, but P's 12 and R's 25 stay below either way; the rule read is avg cost.)"
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "price": {
+            "above": "40"
+          }
+        },
+        "positions": [
+          "A/Q",
+          "A/S"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers Hold by its days held",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Hold by its days held'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Hold below 20 days: P 58, Q 10, R 27, S 3, U 26: Q and S."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "hold": {
+            "below": "20"
+          }
+        },
+        "positions": [
+          "A/Q",
+          "A/S"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers P&L by its unrealized P&L in its own currency",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'P&L by its unrealized P&L in its own currency'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "P&L above 50, own currency: P 20, Q −500, R 100, S 0, U 40 USD: R only. U would pass at 56 CAD; in its own currency it is 40 and is left out."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "pnl": {
+            "above": "50"
+          }
+        },
+        "positions": [
+          "A/R"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a holding answers Qty by its units",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'Qty by its units'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Qty above 50: P 10, Q 100, R 20, S 5, U 10: Q only."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "qty": {
+            "above": "50"
+          }
+        },
+        "positions": [
+          "A/Q"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a date range ending in the past keeps the holdings held at some time in it",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'the dates when it was held at some time in them, still valued today'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Range 2026-02-01..2026-02-20: P (since 01-02), Q (from 02-19), R (from 02-02), U (from 02-03) were held in it; S was bought 02-26, after it, and is left out."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "from": "2026-02-01",
+        "to": "2026-02-20",
+        "positions": [
+          "A/P",
+          "A/Q",
+          "A/R",
+          "A/U"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a date range ending today narrows no holding",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'so a range ending today narrows nothing'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "Range 2026-02-27..2026-03-01 (today): every holding is held today, so every one is in it."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "from": "2026-02-27",
+        "to": "2026-03-01",
+        "positions": [
+          "A/P",
+          "A/Q",
+          "A/R",
+          "A/S",
+          "A/U"
+        ]
+      }
+    }
+  },
+  {
+    "name": "the year to date narrows no holding",
+    "spec": "SPEC.md §5 Filters: 'A holding ... answers every filter by its own row' — 'so a range ending today narrows nothing'",
+    "working": [
+      "One margin account A, today 2026-03-01 (Sunday). Holdings (§2 Position: Avg = Book ÷ qty; P&L = Market − Book long, Book − Market short; Hold = qty-weighted days since each lot opened):",
+      "P: long 10 bought 2026-01-02 for 100: avg 10, quote 12, market 120, unrealized +20 CAD, held 58 days. Journal (trade TP): grade A, tag swing.",
+      "Q: long 100 bought 2026-02-19 for 5,000: avg 50, quote 45, market 4,500, unrealized −500 CAD, held 10 days. Journal (TQ): grade B, tag core.",
+      "R: short 20 sold to open 2026-02-02 for 600: avg 30, quote 25, market 500, unrealized 600 − 500 = +100 CAD, held 27 days, 20 units. Journal (TR): no grade, tag swing.",
+      "S: long 5 bought 2026-02-26 for 1,000: avg 200, quote 200, unrealized 0, held 3 days. No journal entry.",
+      "U (USD): long 10 bought 2026-02-03 for 50 USD: avg 5 USD, quote 9 USD, unrealized +40 USD (56 CAD at 1.40), held 26 days. No journal entry.",
+      "YTD 2026-01-01..today: every holding is held today."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "Q"
+      },
+      {
+        "id": "R"
+      },
+      {
+        "id": "S"
+      },
+      {
+        "id": "U",
+        "currency": "USD"
+      }
+    ],
+    "rates": {
+      "USD": {
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.40",
+        "2026-02-27": "1.40"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-02-02",
+          "2026-02-27"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "quotes": {
+      "P": {
+        "price": "12"
+      },
+      "Q": {
+        "price": "45"
+      },
+      "R": {
+        "price": "25"
+      },
+      "S": {
+        "price": "200"
+      },
+      "U": {
+        "price": "9"
+      }
+    },
+    "transactions": [
+      {
+        "id": "p1",
+        "account": "A",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "q1",
+        "account": "A",
+        "day": "2026-02-19",
+        "at": "2026-02-19T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Q",
+        "qty": "100",
+        "cash": "-5000"
+      },
+      {
+        "id": "r1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "R",
+        "qty": "-20",
+        "cash": "600",
+        "effect": "open"
+      },
+      {
+        "id": "s1",
+        "account": "A",
+        "day": "2026-02-26",
+        "at": "2026-02-26T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "5",
+        "cash": "-1000"
+      },
+      {
+        "id": "u1",
+        "account": "A",
+        "day": "2026-02-03",
+        "at": "2026-02-03T15:00:00Z",
+        "kind": "buy",
+        "instrument": "U",
+        "qty": "10",
+        "cash": "-50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TP",
+        "opened_by": "p1",
+        "instrument": "P"
+      },
+      {
+        "id": "TQ",
+        "opened_by": "q1",
+        "instrument": "Q"
+      },
+      {
+        "id": "TR",
+        "opened_by": "r1",
+        "instrument": "R"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TP",
+        "grade": "A",
+        "tags": [
+          "swing"
+        ]
+      },
+      {
+        "trade": "TQ",
+        "grade": "B",
+        "tags": [
+          "core"
+        ]
+      },
+      {
+        "trade": "TR",
+        "tags": [
+          "swing"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "preset": "ytd",
+        "positions": [
+          "A/P",
+          "A/Q",
+          "A/R",
+          "A/S",
+          "A/U"
+        ]
+      }
+    }
+  },
+  {
+    "name": "Margin used % under a tag filter stays over the market value of every holding in the accounts in scope",
+    "spec": "SPEC.md §6 Portfolio, Margin used: 'Its share of the market value of every holding in the accounts in scope, whatever else is filtered: an account figure is never divided by a filtered sum'; §5 'A ratio's two sides share one scope'",
+    "working": [
+      "Margin account M: 80,000 deposited, 950 G and 50 H bought at 100 (100,000); the broker states CAD cash −20,000.",
+      "Quotes 100: G market 95,000, H 5,000; every holding in M: 100,000.",
+      "Tag small keeps H's holding only (its trade's journal): positions M/H; the Allocation total (market value in scope) 5,000.00.",
+      "Margin used: the negative cash of the accounts in scope, 20,000, an account figure; its share is over every holding in M, whatever else is filtered: 20,000 ÷ 100,000 = 0.2 (never 20,000 ÷ 5,000 = 4)."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "M",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "G"
+      },
+      {
+        "id": "H"
+      }
+    ],
+    "quotes": {
+      "G": {
+        "price": "100"
+      },
+      "H": {
+        "price": "100"
+      }
+    },
+    "transactions": [
+      {
+        "id": "m0",
+        "account": "M",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "deposit",
+        "cash": "80000"
+      },
+      {
+        "id": "m1",
+        "account": "M",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "G",
+        "qty": "950",
+        "cash": "-95000"
+      },
+      {
+        "id": "m2",
+        "account": "M",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "H",
+        "qty": "50",
+        "cash": "-5000"
+      }
+    ],
+    "brokers": {
+      "M": {
+        "cash": {
+          "CAD": "-20000"
+        }
+      }
+    },
+    "trades": [
+      {
+        "id": "TH",
+        "opened_by": "m2",
+        "instrument": "H"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TH",
+        "tags": [
+          "small"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "small"
+          ]
+        },
+        "positions": [
+          "M/H"
+        ],
+        "market_value": "5000.00",
+        "margin_used_pct": 0.2
+      }
+    }
+  },
+  {
+    "name": "a payment held through its ex-date and sold before its pay date is the sold round trip's, kept under its tag",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'",
+    "working": [
+      "D's declared record: ex 2026-03-13 (Fri), pay 2026-03-31, 0.50 a unit.",
+      "Round trip T1: 100 D bought 03-02, all sold 03-20 (after the ex-date, before the pay date). Journal: grade A, tag first.",
+      "dv: 50 paid 2026-03-31, on the pay date: it is for the 03-13 distribution; the round trip open at the close of 03-12 (the session before the ex-date) is T1.",
+      "Tag first: T1 carries it, so dv is kept."
+    ],
+    "today": "2026-04-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "D": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "D",
+        "qty": "-100",
+        "cash": "1100"
+      },
+      {
+        "id": "dv",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "d1",
+        "instrument": "D"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "grade": "A",
+        "tags": [
+          "first"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "first"
+          ]
+        },
+        "cashflow_rows": [
+          "dv"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a payment held through its ex-date and sold before its pay date answers Side by the sold round trip",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'",
+    "working": [
+      "D's declared record: ex 2026-03-13 (Fri), pay 2026-03-31, 0.50 a unit.",
+      "Round trip T1: 100 D bought 03-02, all sold 03-20 (after the ex-date, before the pay date). Journal: grade A, tag first.",
+      "dv: 50 paid 2026-03-31, on the pay date: it is for the 03-13 distribution; the round trip open at the close of 03-12 (the session before the ex-date) is T1.",
+      "Side long: T1 is long, so dv is kept."
+    ],
+    "today": "2026-04-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "D": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "D",
+        "qty": "-100",
+        "cash": "1100"
+      },
+      {
+        "id": "dv",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "d1",
+        "instrument": "D"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "grade": "A",
+        "tags": [
+          "first"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "sides": [
+            "long"
+          ]
+        },
+        "cashflow_rows": [
+          "dv"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a payment sold and bought back before its pay date belongs to the first round trip, not the new one",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'",
+    "working": [
+      "D's declared record: ex 2026-03-13 (Fri), pay 2026-03-31, 0.50 a unit.",
+      "Round trip T1: 100 D bought 03-02, all sold 03-20 (after the ex-date, before the pay date). Journal: grade A, tag first.",
+      "dv: 50 paid 2026-03-31, on the pay date: it is for the 03-13 distribution; the round trip open at the close of 03-12 (the session before the ex-date) is T1.",
+      "T2: 100 D bought back 03-25, after the ex-date and before the pay date, still held. Journal: grade B, tag second.",
+      "dv is T1's (open at the close of 03-12); T2 opened after the ex-date and is entitled to nothing, though it holds D on the pay date.",
+      "Income holdings (§5: they follow Grade, Tag and Side): the one open long position A/D is T2's round trip; D is a dividend-paying symbol (paid dv; declared 0.50 above zero).",
+      "Tag second: dv is not T2's, so no payment is kept; the holding A/D (T2's journal) is kept."
+    ],
+    "today": "2026-04-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "D": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "D",
+        "qty": "-100",
+        "cash": "1100"
+      },
+      {
+        "id": "dv",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "50"
+      },
+      {
+        "id": "d3",
+        "account": "A",
+        "day": "2026-03-25",
+        "at": "2026-03-25T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1050"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "d1",
+        "instrument": "D"
+      },
+      {
+        "id": "T2",
+        "opened_by": "d3",
+        "instrument": "D"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "grade": "A",
+        "tags": [
+          "first"
+        ]
+      },
+      {
+        "trade": "T2",
+        "grade": "B",
+        "tags": [
+          "second"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "second"
+          ]
+        },
+        "cashflow_rows": [],
+        "income_holdings": [
+          "A/D"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a payment sold and bought back before its pay date answers Grade by the first round trip",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'",
+    "working": [
+      "D's declared record: ex 2026-03-13 (Fri), pay 2026-03-31, 0.50 a unit.",
+      "Round trip T1: 100 D bought 03-02, all sold 03-20 (after the ex-date, before the pay date). Journal: grade A, tag first.",
+      "dv: 50 paid 2026-03-31, on the pay date: it is for the 03-13 distribution; the round trip open at the close of 03-12 (the session before the ex-date) is T1.",
+      "T2: 100 D bought back 03-25, after the ex-date and before the pay date, still held. Journal: grade B, tag second.",
+      "dv is T1's (open at the close of 03-12); T2 opened after the ex-date and is entitled to nothing, though it holds D on the pay date.",
+      "Income holdings (§5: they follow Grade, Tag and Side): the one open long position A/D is T2's round trip; D is a dividend-paying symbol (paid dv; declared 0.50 above zero).",
+      "Grade A: dv is T1's (grade A), kept; the holding A/D is T2's (grade B), left out."
+    ],
+    "today": "2026-04-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "D": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "d2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "D",
+        "qty": "-100",
+        "cash": "1100"
+      },
+      {
+        "id": "dv",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "50"
+      },
+      {
+        "id": "d3",
+        "account": "A",
+        "day": "2026-03-25",
+        "at": "2026-03-25T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1050"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "d1",
+        "instrument": "D"
+      },
+      {
+        "id": "T2",
+        "opened_by": "d3",
+        "instrument": "D"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "grade": "A",
+        "tags": [
+          "first"
+        ]
+      },
+      {
+        "trade": "T2",
+        "grade": "B",
+        "tags": [
+          "second"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "grades": [
+            "A"
+          ]
+        },
+        "cashflow_rows": [
+          "dv"
+        ],
+        "income_holdings": []
+      }
+    }
+  },
+  {
+    "name": "a payment matching no declared distribution is left out under a tag filter",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'; 'A payment no declared distribution matches ... is never placed by its pay date: it is left out under Grade, Tag or Side'",
+    "working": [
+      "D's declared record lists one distribution: ex 2026-03-13, pay 2026-03-31.",
+      "T1: 100 D bought 03-02, held throughout; tag x.",
+      "dv1: 50 posted 03-31, the pay date: T1's. dv2: 20 posted 05-15: no declared distribution's pay date is on or up to two business days before it, so it matches none.",
+      "Tag x: dv1 kept (T1's); dv2 left out, never placed by its date though T1 held D then."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "D": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "dv1",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "50"
+      },
+      {
+        "id": "dv2",
+        "account": "A",
+        "day": "2026-05-15",
+        "at": "2026-05-15T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "20"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "d1",
+        "instrument": "D"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "tags": [
+          "x"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "x"
+          ]
+        },
+        "cashflow_rows": [
+          "dv1"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a payment matching no declared distribution is kept with no filter",
+    "spec": "SPEC.md §5 Filters: a filter narrows only what it can describe; with none set every payment counts",
+    "working": [
+      "D's declared record lists one distribution: ex 2026-03-13, pay 2026-03-31.",
+      "T1: 100 D bought 03-02, held throughout; tag x.",
+      "dv1: 50 posted 03-31, the pay date: T1's. dv2: 20 posted 05-15: no declared distribution's pay date is on or up to two business days before it, so it matches none.",
+      "No filter: both payments are rows: dv1 and dv2."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "D": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "dv1",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "50"
+      },
+      {
+        "id": "dv2",
+        "account": "A",
+        "day": "2026-05-15",
+        "at": "2026-05-15T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "20"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "d1",
+        "instrument": "D"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "tags": [
+          "x"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "cashflow_rows": [
+          "dv1",
+          "dv2"
+        ]
+      }
+    }
+  },
+  {
+    "name": "the market's record places a payment the payer's own record lists no distribution for",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'",
+    "working": [
+      "E's own (company) record lists only ex 2026-01-15 / pay 2026-01-30; the market's record beside it lists ex 2026-03-13 / pay 2026-03-31.",
+      "T1: 100 E bought 03-02, sold 03-20 (tag first). T2: bought back 03-25, held (tag second).",
+      "dv: 50 posted 03-31. The payer's record lists no distribution paid on or up to two business days before 03-31, so the market's is read: ex 03-13, and the round trip open at the close of 03-12 is T1.",
+      "Tag first: dv kept."
+    ],
+    "today": "2026-04-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "E",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "E": [
+        {
+          "ex": "2026-01-15",
+          "pay": "2026-01-30",
+          "amount": "0.40"
+        }
+      ]
+    },
+    "market_declared": {
+      "E": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-31",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "e1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "E",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "e2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T15:00:00Z",
+        "kind": "sell",
+        "instrument": "E",
+        "qty": "-100",
+        "cash": "1100"
+      },
+      {
+        "id": "e3",
+        "account": "A",
+        "day": "2026-03-25",
+        "at": "2026-03-25T15:00:00Z",
+        "kind": "buy",
+        "instrument": "E",
+        "qty": "100",
+        "cash": "-1050"
+      },
+      {
+        "id": "dv",
+        "account": "A",
+        "day": "2026-03-31",
+        "at": "2026-03-31T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "E",
+        "cash": "50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "T1",
+        "opened_by": "e1",
+        "instrument": "E"
+      },
+      {
+        "id": "T2",
+        "opened_by": "e3",
+        "instrument": "E"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "T1",
+        "tags": [
+          "first"
+        ]
+      },
+      {
+        "trade": "T2",
+        "tags": [
+          "second"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "first"
+          ]
+        },
+        "cashflow_rows": [
+          "dv"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a payment posted two business days after the pay date matches its distribution, three does not",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Grade, Tag and Side by the round trip entitled to it: the one open at the close of the session before the ex-date of the declared distribution it is for ..., that distribution being the one whose pay date the payment posted on or within two business days after, from the payer's record or, where that lists none, the market's record beside it'",
+    "working": [
+      "F's record: ex 2026-03-13, pay 2026-03-20 (Friday). A and B each hold 100 F from 03-02, round trips TA and TB, both tagged lag.",
+      "Business days after Fri 03-20: Mon 03-23 (1), Tue 03-24 (2), Wed 03-25 (3); no holiday between.",
+      "dvA posted Tue 03-24, two business days after: matches the 03-20 distribution, TA's; kept under tag lag.",
+      "dvB posted Wed 03-25, three business days after: matches no distribution, left out under tag lag though TB carries it."
+    ],
+    "today": "2026-04-15",
+    "accounts": [
+      {
+        "id": "A"
+      },
+      {
+        "id": "B"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "F",
+        "venue": "TSX"
+      }
+    ],
+    "declared": {
+      "F": [
+        {
+          "ex": "2026-03-13",
+          "pay": "2026-03-20",
+          "amount": "0.50"
+        }
+      ]
+    },
+    "transactions": [
+      {
+        "id": "a1",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "F",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "b1",
+        "account": "B",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "F",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "dvA",
+        "account": "A",
+        "day": "2026-03-24",
+        "at": "2026-03-24T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "F",
+        "cash": "50"
+      },
+      {
+        "id": "dvB",
+        "account": "B",
+        "day": "2026-03-25",
+        "at": "2026-03-25T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "F",
+        "cash": "50"
+      }
+    ],
+    "trades": [
+      {
+        "id": "TA",
+        "opened_by": "a1",
+        "instrument": "F"
+      },
+      {
+        "id": "TB",
+        "opened_by": "b1",
+        "instrument": "F"
+      }
+    ],
+    "journal": [
+      {
+        "trade": "TA",
+        "tags": [
+          "lag"
+        ]
+      },
+      {
+        "trade": "TB",
+        "tags": [
+          "lag"
+        ]
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "tags": [
+            "lag"
+          ]
+        },
+        "cashflow_rows": [
+          "dvA"
+        ]
+      }
+    }
+  },
+  {
+    "name": "Kind narrows payments by their instrument, and a payment on no instrument is left out under it",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Symbol, Kind and Exchange by its instrument'; 'a payment on no instrument (interest on cash, a margin charge) is left out under any instrument filter'",
+    "working": [
+      "D (security, TSX) and N (security, NYSE), both held; dvD 30 and dvN 20 paid 02-02; i1: 5 interest on cash, on no instrument.",
+      "Kind Shares (security): dvD and dvN kept; i1 has no instrument, left out."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      },
+      {
+        "id": "N",
+        "venue": "NYSE"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "n1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "N",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "dvD",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "30"
+      },
+      {
+        "id": "dvN",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "N",
+        "cash": "20"
+      },
+      {
+        "id": "i1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "interest",
+        "cash": "5"
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "kinds": [
+            "security"
+          ]
+        },
+        "cashflow_rows": [
+          "dvD",
+          "dvN"
+        ]
+      }
+    }
+  },
+  {
+    "name": "Exchange narrows payments by their instrument's venue, and a payment on no instrument is left out under it",
+    "spec": "SPEC.md §5 Filters: 'A payment ... answers ... Symbol, Kind and Exchange by its instrument'; 'a payment on no instrument (interest on cash, a margin charge) is left out under any instrument filter'",
+    "working": [
+      "D (security, TSX) and N (security, NYSE), both held; dvD 30 and dvN 20 paid 02-02; i1: 5 interest on cash, on no instrument.",
+      "Exchange TSX: dvD kept; dvN (NYSE) and i1 (no instrument) left out."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "venue": "TSX"
+      },
+      {
+        "id": "N",
+        "venue": "NYSE"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "d1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "n1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "N",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "dvD",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "D",
+        "cash": "30"
+      },
+      {
+        "id": "dvN",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "dividend",
+        "instrument": "N",
+        "cash": "20"
+      },
+      {
+        "id": "i1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "interest",
+        "cash": "5"
+      }
+    ],
+    "expect": {
+      "kpi": {
+        "filters": {
+          "exchanges": [
+            "TSX"
+          ]
+        },
+        "cashflow_rows": [
+          "dvD"
+        ]
+      }
+    }
+  },
+  {
+    "name": "over a date range cutting a year: the series inside it, the year measured from the range's first day, the drawdown's peak from its first day",
+    "spec": "SPEC.md §2 Equity and returns: Yearly return ('from the date filter's first day where that falls inside it, over the value of the last stated day before it, to ... the date filter's last day'), Max drawdown ('over the days the date filter keeps, the peak taken from the first of them'), Avg annualized; §5 'The accounts' value, its returns and its drawdown follow Account and the date range'",
+    "working": [
+      "One account A. Stated values (net deposits): 2023-06-01 1,800 (1,800); 2023-12-29 1,900 (1,800); 2024-06-03 151,900 (151,800: 150,000 deposited that day); 2024-12-31 167,090; 2025-02-14 200,000; 2025-03-14 180,000; 03-17 189,000; 04-15 170,100; 05-15 187,110; 06-30 196,465.50; 08-01 150,000; no money moved after 2024-06-03.",
+      "Whole-history peak 200,000 (2025-02-14): the pre-history floor is 1 % of it, 2,000, whatever dates are chosen (§2 Yearly return).",
+      "Range 2025-03-15 (Saturday) .. 2025-06-30. The series shown: the stated days in it, first 2025-03-17, last 2025-06-30 (08-01 is past it).",
+      "2025 is measured from 2025-03-15 over the last stated day before it, 03-14's 180,000: daily returns 189,000/180,000 = 1.05; 170,100/189,000 = 0.9; 187,110/170,100 = 1.1; 196,465.50/187,110 = 1.05; chained 1.05 × 0.9 × 1.1 × 1.05 − 1 = 0.091475. Only 2025 is shown.",
+      "Drawdown: flow-adjusted index over the days kept, 03-17 1.05, 04-15 0.945, 05-15 1.0395, 06-30 1.091475; peak from the first of them, 1.05 on 03-17; trough 0.945 on 04-15: 0.945 ÷ 1.05 − 1 = −0.1. (A peak from before the range, 200,000 on 02-14, would give 170,100 ÷ 200,000 − 1 = −0.1495; 08-01's fall is past the range.)",
+      "Avg annualized: one year used, counted from 03-14 (the day it is measured over) to 06-30, 108 days: under a year, so the return over the span, 0.091475 (and 108 ≥ 30 days, not skipped)."
+    ],
+    "today": "2025-08-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "brokers": {
+      "A": {
+        "net_value": {
+          "2023-06-01": "1800",
+          "2023-12-29": "1900",
+          "2024-06-03": "151900",
+          "2024-12-31": "167090",
+          "2025-02-14": "200000",
+          "2025-03-14": "180000",
+          "2025-03-17": "189000",
+          "2025-04-15": "170100",
+          "2025-05-15": "187110",
+          "2025-06-30": "196465.50",
+          "2025-08-01": "150000"
+        },
+        "net_deposits": {
+          "2023-06-01": "1800",
+          "2023-12-29": "1800",
+          "2024-06-03": "151800",
+          "2024-12-31": "151800",
+          "2025-02-14": "151800",
+          "2025-03-14": "151800",
+          "2025-03-17": "151800",
+          "2025-04-15": "151800",
+          "2025-05-15": "151800",
+          "2025-06-30": "151800",
+          "2025-08-01": "151800"
+        }
+      }
+    },
+    "expect": {
+      "kpi": {
+        "from": "2025-03-15",
+        "to": "2025-06-30",
+        "series_first": "2025-03-17",
+        "series_last": "2025-06-30",
+        "year_list": [
+          2025
+        ],
+        "years": [
+          {
+            "year": 2025,
+            "r": 0.091475,
+            "from": "2025-03-15"
+          }
+        ],
+        "drawdown": -0.1,
+        "drawdown_at": "2025-04-15",
+        "annualized": 0.091475
+      }
+    }
+  },
+  {
+    "name": "over a date range holding only small balances and a first deposit: the pre-history floor comes from the whole history",
+    "spec": "SPEC.md §2 Equity and returns: Yearly return ('A balance under 1 % of the all-time peak of the accounts in scope, taken over their whole history whatever dates are chosen, is pre-history: a year that never clears it is not shown, and a year in which the account first clears it part way through is measured from that first point'); Max drawdown ('days under the pre-history floor are passed over'); Avg annualized",
+    "working": [
+      "One account A. Stated values (net deposits): 2023-06-01 1,800 (1,800); 2023-12-29 1,900 (1,800); 2024-06-03 151,900 (151,800: 150,000 deposited that day); 2024-12-31 167,090; 2025-02-14 200,000; 2025-03-14 180,000; 03-17 189,000; 04-15 170,100; 05-15 187,110; 06-30 196,465.50; 08-01 150,000; no money moved after 2024-06-03.",
+      "Whole-history peak 200,000 (2025-02-14): the pre-history floor is 1 % of it, 2,000, whatever dates are chosen (§2 Yearly return).",
+      "Range 2023-01-01 .. 2024-12-31. The series shown: first 2023-06-01, last 2024-12-31.",
+      "2023: 1,800 and 1,900, both under 2,000: never clears the floor, not shown. (A floor from the range's own peak, 167,090, would be 1,670.90, which 2023 clears: that reading is wrong.)",
+      "2024: first clears the floor on 2024-06-03 at 151,900 (the day of the 150,000 deposit), so it is measured from that point: 167,090 ÷ 151,900 − 1 = 15,190 ÷ 151,900 = 0.1, the deposit never read as a return. Year list [2024].",
+      "Drawdown: the days clear of the floor in range, 06-03 and 12-31, rise: 0.",
+      "Avg annualized: 2024 alone, counted from 06-03 to 12-31, 211 days: under a year, the return over the span, 0.1."
+    ],
+    "today": "2025-08-15",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "brokers": {
+      "A": {
+        "net_value": {
+          "2023-06-01": "1800",
+          "2023-12-29": "1900",
+          "2024-06-03": "151900",
+          "2024-12-31": "167090",
+          "2025-02-14": "200000",
+          "2025-03-14": "180000",
+          "2025-03-17": "189000",
+          "2025-04-15": "170100",
+          "2025-05-15": "187110",
+          "2025-06-30": "196465.50",
+          "2025-08-01": "150000"
+        },
+        "net_deposits": {
+          "2023-06-01": "1800",
+          "2023-12-29": "1800",
+          "2024-06-03": "151800",
+          "2024-12-31": "151800",
+          "2025-02-14": "151800",
+          "2025-03-14": "151800",
+          "2025-03-17": "151800",
+          "2025-04-15": "151800",
+          "2025-05-15": "151800",
+          "2025-06-30": "151800",
+          "2025-08-01": "151800"
+        }
+      }
+    },
+    "expect": {
+      "kpi": {
+        "from": "2023-01-01",
+        "to": "2024-12-31",
+        "series_first": "2023-06-01",
+        "series_last": "2024-12-31",
+        "year_list": [
+          2024
+        ],
+        "years": [
+          {
+            "year": 2024,
+            "r": 0.1,
+            "from": "2024-06-03"
+          }
+        ],
+        "drawdown": 0,
+        "annualized": 0.1
+      }
+    }
+  }
+]

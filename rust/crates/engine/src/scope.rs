@@ -9,7 +9,7 @@ use bagholder_core::account::{AccountKind, AccountStatus, AccountType};
 use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::ToSpan;
-use bagholder_core::journal::Grade;
+use bagholder_core::journal::{Grade, JournalEntry};
 use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money};
 
 use crate::cashflow::{CashRow, PayerRate, Payment};
@@ -21,7 +21,7 @@ use crate::ledger::Direction;
 use crate::positions::PositionFig;
 use crate::stat::returns::{self, Annualized, Day, Drawdown, YearReturn};
 use crate::stat::{count_ratio, money_ratio, Ratio};
-use crate::trades::{TradeFig, TradeKey};
+use crate::trades::{TradeFig, TradeKey, TradeStatus};
 
 /// Which side of its bound a range keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,44 +137,6 @@ impl Filters {
             _ => true,
         }
     }
-
-    /// The filters in force the Cashflow tab does not read.
-    /// The filters set that an account's value does not read: all but the account.
-    pub fn unread_by_value(&self) -> Vec<&'static str> {
-        let dates = match &self.dates {
-            Dates::All => false,
-            Dates::Years(ys) => !ys.is_empty(),
-            _ => true,
-        };
-        let mut out = vec![];
-        if dates {
-            out.push("date");
-        }
-        if !self.instruments.is_empty() || !self.search.trim().is_empty() {
-            out.push("symbol");
-        }
-        out.extend(self.unread_by_cashflow());
-        out
-    }
-
-    pub fn unread_by_cashflow(&self) -> Vec<&'static str> {
-        [
-            ("grade", !self.grades.is_empty()),
-            ("tag", !self.tags.is_empty()),
-            ("kind", !self.kinds.is_empty()),
-            ("exchange", !self.venues.is_empty()),
-            ("side", !self.sides.is_empty()),
-            ("result", !self.outcomes.is_empty()),
-            ("price", self.price.is_some()),
-            ("hold", self.hold.is_some()),
-            ("pnl", self.pnl.is_some()),
-            ("qty", self.qty.is_some()),
-        ]
-        .into_iter()
-        .filter(|(_, on)| *on)
-        .map(|(n, _)| n)
-        .collect()
-    }
 }
 
 /// An instrument's underlying where it has one, else itself.
@@ -206,8 +168,16 @@ fn chosen(f: &Filters, inputs: &Inputs, instruments: &[InstrumentId]) -> bool {
     f.instruments.is_empty() || instruments.iter().any(|i| f.instruments.contains(i) || f.instruments.contains(&underlying_of(inputs, *i)))
 }
 
+/// A closed trade's result; an open trade has none, since its closed-trade
+/// figures count once it has closed (decision 2026-09-24).
 fn outcome(t: &TradeFig) -> Option<Outcome> {
-    let p = t.pnl_cad.as_ref().ok()?;
+    if t.status == TradeStatus::Open {
+        return None;
+    }
+    sign_of(t.pnl_cad.as_ref().ok()?)
+}
+
+fn sign_of(p: &Money) -> Option<Outcome> {
     Some(if p.amount.is_positive() {
         Outcome::Win
     } else if p.amount.is_negative() {
@@ -215,6 +185,33 @@ fn outcome(t: &TradeFig) -> Option<Outcome> {
     } else {
         Outcome::Breakeven
     })
+}
+
+/// Whether a range keeps a value; a value not stated is never kept by one.
+fn bound_keeps(b: Option<Bound>, v: Option<Dec>) -> bool {
+    match (b, v) {
+        (None, _) => true,
+        (Some(b), Some(v)) => b.keeps(v),
+        (Some(_), None) => false,
+    }
+}
+
+/// The grade, tag and side filters, over a journal and a direction.
+fn journal_matches(f: &Filters, journal: &JournalEntry, direction: Direction) -> bool {
+    if !f.grades.is_empty() && !f.grades.contains(&journal.grade) {
+        return false;
+    }
+    if !f.tags.is_empty() {
+        let tagged = if journal.tags.is_empty() { f.tags.contains("") } else { journal.tags.iter().any(|x| f.tags.contains(x)) };
+        if !tagged {
+            return false;
+        }
+    }
+    f.sides.is_empty() || f.sides.contains(&direction)
+}
+
+fn reads_journal(f: &Filters) -> bool {
+    !f.grades.is_empty() || !f.tags.is_empty() || !f.sides.is_empty()
 }
 
 pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
@@ -225,14 +222,8 @@ pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
     if !chosen(f, inputs, &t.instruments) || !searched(inputs, &t.instruments, &f.search) {
         return false;
     }
-    if !f.grades.is_empty() && !f.grades.contains(&t.journal.grade) {
+    if !journal_matches(f, &t.journal, t.direction) {
         return false;
-    }
-    if !f.tags.is_empty() {
-        let tagged = if t.journal.tags.is_empty() { f.tags.contains("") } else { t.journal.tags.iter().any(|x| f.tags.contains(x)) };
-        if !tagged {
-            return false;
-        }
     }
     if !f.kinds.is_empty() && !f.kinds.contains(&t.kind) {
         return false;
@@ -240,21 +231,13 @@ pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
     if !f.venues.is_empty() && !venue_of(inputs, t.instrument).is_some_and(|v| f.venues.contains(&v)) {
         return false;
     }
-    if !f.sides.is_empty() && !f.sides.contains(&t.direction) {
-        return false;
-    }
     if !f.outcomes.is_empty() && !outcome(t).is_some_and(|o| f.outcomes.contains(&o)) {
         return false;
     }
-    let bound = |b: Option<Bound>, v: Option<Dec>| match (b, v) {
-        (None, _) => true,
-        (Some(b), Some(v)) => b.keeps(v),
-        (Some(_), None) => false,
-    };
-    if !bound(f.price, t.entry.as_ref().ok().copied())
-        || !bound(f.hold, Some(Dec::from_int(t.hold_days)))
-        || !bound(f.pnl, t.pnl_cad.as_ref().ok().map(|m| m.amount))
-        || !bound(f.qty, t.qty.as_ref().ok().copied())
+    if !bound_keeps(f.price, t.entry.as_ref().ok().copied())
+        || !bound_keeps(f.hold, Some(Dec::from_int(t.hold_days)))
+        || !bound_keeps(f.pnl, t.pnl_cad.as_ref().ok().map(|m| m.amount))
+        || !bound_keeps(f.qty, t.qty.as_ref().ok().copied())
     {
         return false;
     }
@@ -268,12 +251,30 @@ fn closed_in(f: &Filters, today: Date, t: &TradeFig) -> bool {
     t.closed_on.is_some_and(|d| f.in_dates(today, d))
 }
 
-pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
+/// The filters a holding's account and instrument answer.
+fn holding_instrument_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
     (f.accounts.is_empty() || f.accounts.contains(&p.account))
         && chosen(f, inputs, &[p.instrument])
         && searched(inputs, &[p.instrument], &f.search)
         && (f.kinds.is_empty() || f.kinds.contains(&p.kind))
         && (f.venues.is_empty() || venue_of(inputs, p.instrument).is_some_and(|v| f.venues.contains(&v)))
+}
+
+/// Every filter a holding has, each reading the value its own row shows: its
+/// direction; the journal it shares with its trade; its result by the sign of
+/// its unrealized P&L; Price by its average cost, Hold by its days held, P&L by
+/// its unrealized P&L, Qty by its units; and the dates when it was held at some
+/// time in them, so a range ending today narrows nothing.
+pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
+    let today = inputs.clock.today;
+    holding_instrument_matches(f, inputs, p)
+        && journal_matches(f, &p.journal, p.direction)
+        && (f.outcomes.is_empty() || p.unrealized.as_ref().ok().and_then(sign_of).is_some_and(|o| f.outcomes.contains(&o)))
+        && bound_keeps(f.price, p.avg.as_ref().ok().copied())
+        && bound_keeps(f.hold, p.held_days.as_ref().ok().map(|d| Dec::from_int(*d)))
+        && bound_keeps(f.pnl, p.unrealized.as_ref().ok().map(|m| m.amount))
+        && bound_keeps(f.qty, p.qty.as_ref().ok().copied())
+        && f.overlaps(today, p.opened_on, today)
 }
 
 /// A sum of the stated members, and how many were left out. The sum is the
@@ -446,7 +447,6 @@ pub struct Cashflow {
     pub total: Partial,
     pub interest: Partial,
     pub withholding: Partial,
-    pub unread_filters: Vec<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -457,8 +457,6 @@ pub struct EquityBlock {
     pub years: Vec<YearReturn>,
     pub annualized: Annualized,
     pub drawdown: Drawdown,
-    /// The filters set that the value series does not read: it follows the accounts alone.
-    pub unread_filters: Vec<&'static str>,
 }
 
 /// The realized P&L in scope, as a running total by the day each part was
@@ -659,8 +657,9 @@ pub fn portfolio_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig
 }
 
 /// The cashflow's part of a filter set, over the holdings' part.
-pub fn cashflow_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig], cash_rows: &[CashRow], rates: &BTreeMap<InstrumentId, PayerRate>, portfolio: &Portfolio) -> Cashflow {
-    cashflow(f, inputs, positions, cash_rows, rates, portfolio)
+#[allow(clippy::too_many_arguments)]
+pub fn cashflow_in_scope(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig], cash_rows: &[CashRow], rates: &BTreeMap<InstrumentId, PayerRate>, portfolio: &Portfolio) -> Cashflow {
+    cashflow(f, inputs, trades, positions, cash_rows, rates, portfolio)
 }
 
 /// Everything one filter set produces.
@@ -677,7 +676,7 @@ pub fn scope(
 ) -> Scoped {
     let d = dashboard(f, inputs, trades, equity, benchmarks);
     let portfolio = portfolio(f, inputs, positions);
-    let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
+    let cashflow = cashflow(f, inputs, trades, positions, cash_rows, rates, &portfolio);
     Scoped {
         trades: trades_in_scope(f, inputs, trades),
         kpi: d.kpi,
@@ -714,6 +713,9 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let unrealized = Partial::of(&unreal);
 
     let accounts = open_accounts_in_scope(f, inputs);
+    // an account figure is never divided by a filtered sum: margin used is over
+    // the market value of every holding in the accounts in scope
+    let accounts_market = Partial::of(&positions.iter().filter(|p| f.accounts.is_empty() || f.accounts.contains(&p.account)).map(signed_market).collect::<Vec<_>>());
     let mut navs = Vec::new();
     let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
@@ -781,7 +783,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
     Portfolio {
         unrealized_pct: ratio_of(&unrealized.total, &cost_basis.total),
-        margin_used_pct: ratio_of(&margin_used, &market_value.total),
+        margin_used_pct: ratio_of(&margin_used, &accounts_market.total),
         cash_pct: match &net_value {
             Some(n) => ratio_of(&cash, n),
             None => Ok(None),
@@ -809,15 +811,37 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     }
 }
 
-fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[CashRow], rates: &BTreeMap<InstrumentId, PayerRate>, portfolio: &Portfolio) -> Cashflow {
+#[allow(clippy::too_many_arguments)]
+fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig], rows: &[CashRow], rates: &BTreeMap<InstrumentId, PayerRate>, portfolio: &Portfolio) -> Cashflow {
     let today = inputs.clock.today;
     let live = |m: Money| live_to_cad(&inputs.facts.rates, &inputs.clock, m);
     let in_accounts = |a: &AccountId| f.accounts.is_empty() || f.accounts.contains(a);
+    // the symbol, search, kind and exchange filters, over a payment's instrument;
+    // a payment on none (interest on cash) answers none of them
     let in_instruments = |i: Option<InstrumentId>| match i {
-        Some(i) => chosen(f, inputs, &[i]) && searched(inputs, &[i], &f.search),
-        None => f.instruments.is_empty() && f.search.is_empty(),
+        Some(i) => {
+            chosen(f, inputs, &[i])
+                && searched(inputs, &[i], &f.search)
+                && (f.kinds.is_empty() || inputs.ledger.instruments.get(&i).is_some_and(|x| f.kinds.contains(&x.instrument.kind)))
+                && (f.venues.is_empty() || venue_of(inputs, i).is_some_and(|v| f.venues.contains(&v)))
+        }
+        None => f.instruments.is_empty() && f.search.is_empty() && f.kinds.is_empty() && f.venues.is_empty(),
     };
-    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| in_accounts(&r.account) && in_instruments(r.instrument) && f.in_dates(today, r.day)).map(|(i, _)| i).collect();
+    // the grade, tag and side filters, over the round trip entitled to the
+    // payment: the one open at the close of the session before the ex-date of
+    // the declared distribution it is for (holding at the record date, which the
+    // ex-date equals under T+1). A trip that opened before the ex-date and had
+    // not closed before it held at that close: fills fall in sessions. A payment
+    // no declared distribution matches is never placed by its pay date: it
+    // answers no such filter.
+    let entitled = |r: &CashRow| -> bool {
+        if !reads_journal(f) {
+            return true;
+        }
+        let (Some(i), Some(ex)) = (r.instrument, crate::cashflow::entitled_ex(inputs, r)) else { return false };
+        trades.iter().any(|t| t.account == r.account && t.instruments.contains(&i) && t.opened_on < ex && t.closed_on.is_none_or(|c| c >= ex) && journal_matches(f, &t.journal, t.direction))
+    };
+    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| in_accounts(&r.account) && in_instruments(r.instrument) && f.in_dates(today, r.day) && entitled(r)).map(|(i, _)| i).collect();
     let dividends: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind == Payment::Dividend).collect();
     let other: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind != Payment::Dividend).collect();
     let partial = |ix: &mut dyn Iterator<Item = usize>| -> Partial {
@@ -889,7 +913,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     let holdings: Vec<IncomeHolding> = positions
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.direction == Direction::Long && payers.contains(&p.instrument) && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
+        .filter(|(_, p)| p.direction == Direction::Long && payers.contains(&p.instrument) && in_accounts(&p.account) && in_instruments(Some(p.instrument)) && journal_matches(f, &p.journal, p.direction))
         .filter_map(|(pi, p)| rates.get(&p.instrument).map(|r| (pi, p, r.clone())))
         .map(|(pi, p, rate)| {
             // what the symbol paid: its instrument, into every account in scope,
@@ -934,7 +958,6 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
         holdings,
         rows: dividends,
         other,
-        unread_filters: f.unread_by_cashflow(),
     }
 }
 
@@ -948,9 +971,13 @@ fn in_currency_live(inputs: &Inputs, amount: Money, currency: Currency) -> Fig<M
     Ok(Money::new(cad.amount.div_rounded(per_unit, crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven)?, currency))
 }
 
-/// The equity series of the accounts in scope, and what it says. A day is in
-/// the series when every account in scope that has begun has a value that day;
-/// its return is the value-weighted return of the accounts that formed one.
+/// The equity series of the accounts in scope over the dates chosen, and what it
+/// says. A day is in the series when every account in scope that has begun has
+/// a value that day; its return is the value-weighted return of the accounts
+/// that formed one. The series is built over the whole history (a return needs
+/// the day before, and the pre-history floor is the whole history's), then the
+/// curve, the drawdown and the years are taken over the dates chosen, a year cut
+/// by a range over its days inside it.
 fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>, today: Date) -> EquityBlock {
     let accounts: Vec<&AccountEquity> = equity.values().filter(|e| f.accounts.is_empty() || f.accounts.contains(&e.account)).collect();
     // each day's accounts' values and flows, summed in the statistics' own arithmetic
@@ -963,14 +990,30 @@ fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchm
     let begun = |d: Date| accounts.iter().filter(|e| e.points.first().is_some_and(|p| p.day <= d)).count();
     let complete: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = values.into_iter().filter(|(d, v)| v.len() == begun(*d)).collect();
     let per_account: Vec<&[(Date, Ratio, Dec)]> = accounts.iter().map(|e| e.returns.as_slice()).collect();
-    let series = returns::combine(&complete, &per_account);
+    let whole = returns::combine(&complete, &per_account);
+    let floor = returns::floor(&whole);
     let benchmark = benchmarks.get(&f.benchmark);
-    let years = returns::yearly_returns(&series, today, benchmark);
+    let years = returns::yearly_returns(&whole, today, benchmark, floor, |y| year_span(f, today, y));
+    let series: Vec<Day> = whole.into_iter().filter(|d| f.in_dates(today, d.day)).collect();
     let mut gaps = Gaps::none();
     for e in &accounts {
         gaps.merge(&e.gaps);
     }
-    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series, gaps, unread_filters: f.unread_by_value() }
+    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series, floor), years, series, gaps }
+}
+
+/// The calendar days of year `y` the dates chosen keep, first and last; none
+/// when they keep none of it.
+fn year_span(f: &Filters, today: Date, y: i16) -> Option<(Date, Date)> {
+    let (jan1, dec31) = (Date::new(y, 1, 1).ok()?, Date::new(y, 12, 31).ok()?);
+    if let Some((lo, hi)) = f.bounds(today) {
+        let (first, last) = (jan1.max(lo), dec31.min(hi));
+        return (first <= last).then_some((first, last));
+    }
+    match &f.dates {
+        Dates::Years(ys) if !ys.is_empty() => ys.contains(&y).then_some((jan1, dec31)),
+        _ => Some((jan1, dec31)),
+    }
 }
 
 /// The running total of the realized parts by their days.
@@ -1017,20 +1060,6 @@ mod tests {
         let parts = [part("2025-01-02", Ok(cad(HUGE))), part("2025-01-03", Ok(cad(HUGE))), part("2025-01-04", Ok(cad("1")))];
         let c = pnl_curve(&parts.iter().collect::<Vec<_>>());
         assert!(c.days[0].1.is_ok() && c.days[1].1.is_err() && c.days[2].1.is_err(), "{:?}", c.days);
-    }
-
-    #[test]
-    fn the_value_series_names_every_filter_set_but_the_account() {
-        let mut f = Filters::default();
-        assert!(f.unread_by_value().is_empty());
-        f.accounts.insert(AccountId::parse("01900000-0000-7000-8000-000000000001").unwrap());
-        assert!(f.unread_by_value().is_empty(), "the account is read");
-        f.dates = Dates::Years([2024].into());
-        f.search = "abc".into();
-        f.tags.insert("x".into());
-        assert_eq!(f.unread_by_value(), vec!["date", "symbol", "tag"]);
-        f.dates = Dates::Years(BTreeSet::new());
-        assert_eq!(f.unread_by_value(), vec!["symbol", "tag"], "no year chosen is no date filter");
     }
 
     #[test]
