@@ -34,7 +34,6 @@ fn tools() -> Value {
     let doc_props = json!({
         "symbol": {"type": "string", "description": "The ticker the item belongs to."},
         "id": {"type": "string", "description": "The item's id from disclosures_list (e.g. 'sec:0001-…' or 'sedar:drm:…')."},
-        "dest": {"type": "string", "description": "Where to save the file. Defaults to a temp file named after the id."},
     });
     json!([
         {
@@ -119,8 +118,6 @@ struct DocArgs {
     id: Option<String>,
     #[serde(flatten)]
     meta: Meta,
-    #[serde(deserialize_with = "lenient_text")]
-    dest: String,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -128,6 +125,23 @@ struct DocArgs {
 struct SedarArgs {
     #[serde(deserialize_with = "lenient_required")]
     query: Option<String>,
+}
+
+/// Where filings are saved: `filings` in the app's data folder (`BAGHOLDER_HOME`,
+/// else `~/.bagholder-rust`, as the server has it).
+fn filings_dir() -> std::path::PathBuf {
+    let home = std::env::var("BAGHOLDER_HOME").ok().filter(|h| !h.trim().is_empty()).map(|h| std::path::PathBuf::from(h.trim()));
+    let home = home.unwrap_or_else(|| std::path::Path::new(&std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into())).join(".bagholder-rust"));
+    home.join("filings")
+}
+
+/// A file name made from the item's id, its letters and digits alone (so it can
+/// name no other folder), and its content type's extension.
+fn file_name(id: &str, content_type: &str) -> String {
+    let base: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let base = if base.is_empty() { "filing".to_string() } else { base };
+    let ext = if content_type.contains("pdf") { ".pdf" } else if content_type.contains("html") { ".html" } else { ".bin" };
+    base + ext
 }
 
 fn required(v: Option<String>, k: &str) -> Result<String, Fail> {
@@ -161,15 +175,11 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
                 None => return Ok(json!({"error": format!("no item {} for {}", disclosures::repr_quoted(&id), symbol)})),
             };
             let (data, ct) = disclosures::document(&row)?;
-            let mut dest = a.dest;
-            if dest.is_empty() {
-                let base: String = id.chars().filter(|c| c.is_alphanumeric()).collect();
-                let base = if base.is_empty() { "filing".to_string() } else { base };
-                let ext = if ct.contains("pdf") { ".pdf" } else if ct.contains("html") { ".html" } else { ".bin" };
-                dest = std::env::temp_dir().join(base + ext).to_string_lossy().into_owned();
-            }
-            std::fs::write(&dest, &data).map_err(|e| Fail::Other(format!("OSError: {}", e)))?;
-            Ok(json!({"path": dest, "contentType": ct, "bytes": data.len()}))
+            // filing text is written by outsiders: it goes only into the app's own
+            // folder, under a name made here, never to a path a caller names
+            let dest = filings_dir().join(file_name(&id, &ct));
+            std::fs::create_dir_all(filings_dir()).and_then(|_| std::fs::write(&dest, &data)).map_err(|e| Fail::Other(format!("OSError: {}", e)))?;
+            Ok(json!({"path": dest.to_string_lossy(), "contentType": ct, "bytes": data.len()}))
         }
         "sedar_resolve_profile" => {
             let a: SedarArgs = serde_json::from_value(args.clone()).map_err(bad_args)?;
@@ -279,6 +289,16 @@ mod tests {
         let out = handle(&msg).unwrap();
         let text = out["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("SEDAR+ needs"));
+    }
+
+    #[test]
+    fn a_filing_is_named_here_from_its_id_and_never_names_another_folder() {
+        assert_eq!(file_name("sec:0001-23/../../etc", "application/pdf"), "sec000123etc.pdf");
+        assert_eq!(file_name("../..", "text/html"), "filing.html");
+        assert!(!file_name("a/b\\c", "x").contains(['/', '\\']));
+        let listed = tools();
+        let doc = listed.as_array().unwrap().iter().find(|t| t["name"] == "disclosures_document").unwrap();
+        assert!(doc["inputSchema"]["properties"].get("dest").is_none(), "no caller names where a filing goes");
     }
 }
 

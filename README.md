@@ -96,6 +96,44 @@ cd ../rust && cargo run --release --bin bagholder
 
 The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
 
+### Starting at login
+
+Bagholder sets nothing up to start itself; each platform's own means does it. Use the full path to the `bagholder` you unpacked (an update replaces the files in place, so the path stays right). `BAGHOLDER_NO_BROWSER=1` keeps it from opening a browser tab at every login.
+
+**macOS**: save this as `~/Library/LaunchAgents/com.bagholder.plist`, then `launchctl load ~/Library/LaunchAgents/com.bagholder.plist`:
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.bagholder</string>
+  <key>ProgramArguments</key><array><string>/path/to/bagholder</string></array>
+  <key>EnvironmentVariables</key><dict><key>BAGHOLDER_NO_BROWSER</key><string>1</string></dict>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+```
+
+**Linux** (systemd): save this as `~/.config/systemd/user/bagholder.service`, then `systemctl --user enable --now bagholder`:
+
+```
+[Unit]
+Description=Bagholder
+
+[Service]
+ExecStart=/path/to/bagholder
+Environment=BAGHOLDER_NO_BROWSER=1
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+**Windows**: in a Command Prompt, `schtasks /create /tn Bagholder /sc onlogon /tr "C:\path\to\bagholder.exe"` (Task Scheduler runs it at every sign-in; set `BAGHOLDER_NO_BROWSER` to `1` in your user environment variables to keep the browser closed).
+
+The Docker copy restarts with Docker itself (`restart: unless-stopped` in `docker-compose.yml`).
+
 ## Docker
 
 For a copy that runs in the background on a machine you keep on. Nothing is needed on the host but Docker: the image carries Chromium for the sign-in, and the database and the login live in `./data` beside the compose file.
