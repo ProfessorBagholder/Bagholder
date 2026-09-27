@@ -20,3 +20,4 @@ Read from any checkout without switching branches:
 | 09 | [Verdict on the stage 3c plan: Go with changes](09-stage-3c-verdict.md) | Current |
 | 10 | [Verdict on the stage 5 plan: Go with changes](10-stage-5-verdict.md) | Current |
 | 11 | [Verdict on the statement-gaps plan: Go with changes](11-statement-gaps-verdict.md) | Current |
+| 12 | [Verdict on the filters-everywhere plan: Go with changes](12-filters-everywhere-verdict.md) | Current |
