@@ -300,3 +300,35 @@ fn an_unknown_schedule_word_fails_the_payers_record_and_not_the_price() {
     let noted = bagholder_sources::payers::exchange::TmxRecord.read(&net, &need, t(at));
     assert!(matches!(noted.outcome, Outcome::Mismatch(m) if m.why.contains("Fortnightly")));
 }
+
+/// Yahoo names a pair against the US dollar both ways and answers under either:
+/// asked for `CAD=X`, it can answer as `USDCAD=X`. That is the same pair, quoted.
+/// A coin's day change is measured from the base of Yahoo's own percent, since
+/// its `chartPreviousClose` is where today's UTC day began.
+#[test]
+fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_yahoo_s_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-27T03:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(14), InstrumentKind::CurrencyPair.as_str(), Currency::CAD.as_str());
+    common::instrument_in_book(&dir.path().join("book.db"), id(16), InstrumentKind::CurrencyPair.as_str(), Currency::USD.as_str());
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let chart = |code: &str| format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?range=1d&interval=1d", code.replace('=', "%3D"));
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with(&chart("CAD=X"), 200, "yahoo", "USDCAD=X-range-1d.json")
+            .with(&chart("BTC-USD"), 200, "yahoo", "BTC-USD-range-1d.json"),
+    );
+    let net = common::net(&recorded, "2026-09-27T03:00:00Z");
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let mut pair = listing(14, InstrumentKind::CurrencyPair, Currency::CAD, "USDCAD", None);
+    pair.routes.insert(RefScheme::Yahoo, vec!["CAD=X".to_string()]);
+    let mut coin = listing(16, InstrumentKind::CurrencyPair, Currency::USD, "BTCUSD", None);
+    coin.routes.insert(RefScheme::Yahoo, vec!["BTC-USD".to_string()]);
+    quotes::read_quotes(&ctx, &[pair, coin]).unwrap();
+    let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
+    assert_eq!(got[&id(14)].price, Money::new(dec("1.4141"), Currency::CAD), "USDCAD=X is CAD=X");
+    // 84432.51 up 0.515%: from 83999.91046113, up 432.59953887 (not 3.49 from 84429.016)
+    assert_eq!((got[&id(16)].price, got[&id(16)].change, got[&id(16)].change_pct), (Money::new(dec("84432.51"), Currency::USD), Some(dec("432.59953887")), Some(dec("0.515"))));
+}

@@ -83,6 +83,19 @@ pub struct Chart {
     pub previous_close: Option<Dec>,
 }
 
+/// Whether Yahoo's `answered` symbol is the `asked` one. Yahoo names a pair against
+/// the US dollar both ways, `CAD=X` and `USDCAD=X`, and answers under either.
+fn same_symbol(answered: &str, asked: &str) -> bool {
+    let full = |s: &str| {
+        let s = s.to_ascii_uppercase();
+        match s.strip_suffix("=X") {
+            Some(c) if c.len() == 3 => format!("USD{c}=X"),
+            _ => s,
+        }
+    };
+    full(answered) == full(asked)
+}
+
 fn instant(n: i64, path: &str) -> Result<Timestamp, Mismatch> {
     Timestamp::from_second(n).map_err(|_| Mismatch { path: path.into(), why: format!("{n} is not an instant") })
 }
@@ -125,7 +138,7 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
     };
     let meta = r.obj("meta")?;
     let answered = meta.text("symbol")?;
-    if !answered.eq_ignore_ascii_case(symbol) {
+    if !same_symbol(answered, symbol) {
         return Ok(Err(format!("the chart is {answered}'s, not {symbol}'s")));
     }
     let currency = match Currency::parse(meta.text("currency")?) {
@@ -159,6 +172,22 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
     if price <= Dec::ZERO {
         return Ok(Err(format!("{symbol}'s price is {price}")));
     }
+    // A coin trades around the clock: Yahoo's percent is its change over the last
+    // day, while its `chartPreviousClose` is the price where today's UTC day began,
+    // not that percent's base. The day's change is measured from the base Yahoo's
+    // own percent states: the price over one plus the percent.
+    let coin = meta.text("instrumentType").is_ok_and(|t| t == "CRYPTOCURRENCY");
+    let previous_close = match (coin, stated_pct) {
+        (true, Some(pct)) => {
+            // the percent's base, as `quotes::percent_of` writes a hundred percent
+            let base = Dec::new(100, 0).ok().and_then(|hundred| hundred.checked_add(pct).and_then(|d| price.checked_mul(hundred)?.div_rounded(d, 8, bagholder_core::Rounding::HalfEven)).ok());
+            match base {
+                Some(b) if b > Dec::ZERO => Some(b),
+                _ => return Ok(Err(format!("{symbol}'s change of {pct}% has no base"))),
+            }
+        }
+        _ => previous_close,
+    };
     // a chart that states no percent: the change over the previous close
     let change_pct = stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p)));
 
