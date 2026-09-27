@@ -34,13 +34,9 @@ pub fn rows(node: &Value, currency: Currency) -> Result<Vec<StatementRow>, Misma
             for per in data.list("activitiesPerCurrency")? {
                 let c = per.field("currency")?;
                 let currency = Currency::parse(c.as_text()?).map_err(|e| c.mismatch(e.to_string()))?;
+                // a row's cash is in its list's currency; its `unit` names what it
+                // moved (`$CAD` for cash, a symbol for units), not its currency
                 for r in per.list("currentTransactions")? {
-                    let stated = r.field("unit")?;
-                    // a row's unit (`$CAD`) says the currency it is in: one that
-                    // disagrees with its list is not read as either
-                    if stated.as_text()?.trim_start_matches('$') != currency.as_str() {
-                        return Err(stated.mismatch(format!("a row in {currency}'s list stated in {:?}", stated.as_text()?)));
-                    }
                     out.push(row(&r, currency)?);
                 }
             }
