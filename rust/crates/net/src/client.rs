@@ -63,18 +63,22 @@ fn ca_file() -> Option<String> {
     paths.into_iter().find(|p| std::path::Path::new(p).is_file())
 }
 
-fn connector() -> &'static SslConnector {
-    static C: OnceLock<SslConnector> = OnceLock::new();
+/// The one TLS connector, or why it could not be made: a CA bundle found but
+/// not loadable leaves nothing to trust, and every TLS request says so.
+fn connector() -> Result<&'static SslConnector, Error> {
+    static C: OnceLock<Result<SslConnector, String>> = OnceLock::new();
     C.get_or_init(|| {
         let mut b = SslConnector::builder(SslMethod::tls_client()).expect("openssl");
         if let Some(ca) = ca_file() {
-            let _ = b.set_ca_file(ca);
+            b.set_ca_file(&ca).map_err(|e| format!("cannot load the CA bundle {ca}: {e}"))?;
         }
         // HTTP/1.1 only: this client speaks nothing else, and a host that
         // negotiated h2 would then answer in a framing it cannot read.
-        let _ = b.set_alpn_protos(b"\x08http/1.1");
-        b.build()
+        b.set_alpn_protos(b"\x08http/1.1").expect("a well-formed protocol list is accepted");
+        Ok(b.build())
     })
+    .as_ref()
+    .map_err(|e| Error::Transport(e.clone()))
 }
 
 struct Url {
@@ -136,7 +140,8 @@ fn pool() -> &'static Mutex<HashMap<String, Vec<Conn>>> {
 
 fn tcp_to(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Error> {
     use std::net::ToSocketAddrs;
-    let addrs: Vec<std::net::SocketAddr> = (host, port).to_socket_addrs().map(|a| a.collect()).unwrap_or_default();
+    let addrs: Vec<std::net::SocketAddr> =
+        (host, port).to_socket_addrs().map_err(|e| Error::Transport(format!("cannot resolve {host}: {e}")))?.collect();
     if addrs.is_empty() {
         return Err(Error::Transport(format!("cannot resolve {host}")));
     }
@@ -159,7 +164,7 @@ fn tcp_to(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Error> 
     };
     tcp.set_read_timeout(Some(timeout)).map_err(transport)?;
     tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
-    tcp.set_nodelay(true).ok();
+    tcp.set_nodelay(true).map_err(transport)?;
     Ok(tcp)
 }
 
@@ -176,7 +181,7 @@ fn open(u: &Url, timeout: Duration) -> Result<Conn, Error> {
         }
         None => tcp_to(&u.host, u.port, timeout)?,
     };
-    let s = connector().connect(&u.host, tcp).map_err(|e| Error::Transport(e.to_string()))?;
+    let s = connector()?.connect(&u.host, tcp).map_err(|e| Error::Transport(e.to_string()))?;
     Ok(Conn::Tls(Box::new(s)))
 }
 
@@ -420,8 +425,8 @@ fn read_chunked(conn: &mut Conn, out: &mut Vec<u8>) -> Result<(), Error> {
             return Ok(());
         }
         read_exact_n(conn, size, out)?;
-        let mut crlf = [0u8; 2];
-        let _ = conn.read(&mut crlf);
+        let mut crlf = Vec::with_capacity(2);
+        read_exact_n(conn, 2, &mut crlf)?;
     }
 }
 
@@ -460,7 +465,7 @@ static OUTBOUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 /// client whose requests share one path names what each asks for beside it.
 pub fn logging_requests() -> bool {
     static LOGGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *LOGGED.get_or_init(|| !std::env::var("BAGHOLDER_LOG_REQUESTS").unwrap_or_default().trim().is_empty())
+    *LOGGED.get_or_init(|| std::env::var_os("BAGHOLDER_LOG_REQUESTS").is_some_and(|v| !v.to_string_lossy().trim().is_empty()))
 }
 
 /// How many requests this process has tried to send off the machine.
@@ -481,7 +486,7 @@ pub fn is_offline_refusal(detail: &str) -> bool {
 /// Whether the process was told to stay off the network (`BAGHOLDER_OFFLINE`).
 pub fn offline() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| !std::env::var("BAGHOLDER_OFFLINE").unwrap_or_default().trim().is_empty())
+    *OFF.get_or_init(|| std::env::var_os("BAGHOLDER_OFFLINE").is_some_and(|v| !v.to_string_lossy().trim().is_empty()))
 }
 
 /// One request, following redirects, with the connection given back when the

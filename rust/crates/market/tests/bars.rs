@@ -107,7 +107,7 @@ fn fx() -> BTreeMap<String, f64> {
 
 fn answers() -> Value {
     let daily = parse::parse_tmx_history(&tmx_daily());
-    let candles = parse::parse_coinbase_candles(&coinbase_hourly());
+    let candles = parse::parse_coinbase_candles(&coinbase_hourly()).unwrap();
     let y_hourly = quotes::parse_yahoo_chart(&yahoo_hourly());
     let y_daily = quotes::parse_yahoo_chart(&yahoo_daily());
     let minutes = history::parse_tmx_minutes(&tmx_minutes());

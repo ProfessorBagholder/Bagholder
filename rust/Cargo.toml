@@ -1,11 +1,22 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/engine", "crates/book", "crates/sqlite", "crates/model", "crates/store", "crates/market", "crates/ws", "crates/server", "crates/browser", "crates/diff", "crates/diff-derive", "crates/sources", "crates/net", "crates/wealthsimple", "crates/broker"]
+members = ["crates/core", "crates/engine", "crates/book", "crates/sqlite", "crates/model", "crates/store", "crates/market", "crates/ws", "crates/server", "crates/browser", "crates/diff", "crates/diff-derive", "crates/sources", "crates/net", "crates/wealthsimple", "crates/broker", "crates/lint-fixture"]
 
 [workspace.package]
 version = "1.47.0"
 edition = "2021"
 rust-version = "1.98"
+
+# A failure is never discarded outside tests (docs/plans/stage-5-interface-and-running.md,
+# B): a `Result` dropped with `let _ =`, turned into nothing with `.ok();`, or read as a
+# default with `unwrap_or_default()` is refused; a site that must drop one says why with
+# `#[expect(..., reason = "...")]`. Clippy's other lints are not held here.
+# `crates/server/src/tests_lints.rs` runs clippy on a violation of each form.
+[workspace.lints.clippy]
+all = { level = "allow", priority = -1 }
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+disallowed_methods = "deny"
 
 [profile.release]
 # the toolchain's objcopy is not installed with the minimal profile

@@ -202,7 +202,11 @@ impl App {
     pub fn set_figures(&self, f: crate::figures::Figures) {
         let events = self.events.clone();
         f.hear(Arc::new(move || events.signal_from(crate::events::Source::Cache)));
-        let _ = self.figures.set(f);
+        match self.figures.set(f) {
+            Ok(()) => {}
+            // a second call leaves the first, as said: the path already held stays
+            Err(_second) => {}
+        }
     }
 
     pub fn ws_home(&self) -> bagholder_ws::session::Home {
@@ -227,7 +231,8 @@ impl App {
     pub fn wait(&self, d: Duration) -> bool {
         let (m, c) = &self.stop_bell;
         let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = c.wait_timeout_while(g, d, |_| !self.stopping());
+        // woken by the stop or by the time running out: either way the answer is whether it stopped
+        let (_g, _timed_out) = c.wait_timeout_while(g, d, |_| !self.stopping()).unwrap_or_else(|e| e.into_inner());
         self.stopping()
     }
 
@@ -315,7 +320,8 @@ fn cooldown(name: &str) -> Duration {
 }
 
 pub fn spawn<F: FnOnce() + Send + 'static>(name: &str, f: F) {
-    let _ = std::thread::Builder::new().name(name.to_string()).spawn(f);
+    // a thread the system will not start is what `std::thread::spawn` panics on too
+    std::thread::Builder::new().name(name.to_string()).spawn(f).expect("the system could not start a thread");
 }
 
 pub fn now_unix() -> f64 {
@@ -360,6 +366,21 @@ pub fn truthy(v: Option<&Value>) -> bool {
         Some(Value::Array(a)) => !a.is_empty(),
         Some(Value::Object(m)) => !m.is_empty(),
     }
+}
+
+/// An environment variable the app reads: unset is `None`, the default by
+/// design; a value that is not text is refused, for the caller to say.
+pub fn env_text(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is set to something that is not text")),
+    }
+}
+
+/// A switch in the environment: set to anything but blanks, it is on.
+pub fn env_on(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|v| !v.to_string_lossy().trim().is_empty())
 }
 
 pub fn log(line: &str) {

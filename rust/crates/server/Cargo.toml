@@ -58,3 +58,6 @@ bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 bagholder-ws = { path = "../ws", features = ["standin"] }
 # a database of its own for the model cache tests, as the store's tests have
 tempfile = "3"
+
+[lints]
+workspace = true

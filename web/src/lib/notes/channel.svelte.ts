@@ -5,7 +5,8 @@
 
 import { status } from '../subs.svelte'
 import { call } from '../api'
-import { ui } from '../ui.svelte'
+import { flash, ui } from '../ui.svelte'
+import { resyncAll } from '../live.svelte'
 import { panel } from '../orders/orders.svelte'
 import { goSub } from '../router.svelte'
 import { rememberListing } from '../listing.svelte'
@@ -51,11 +52,16 @@ function ask(): Promise<boolean> {
   })
 }
 
-// shown at once; the server's own account of its settings follows on the stream
+// shown at once; the server's own account of its settings follows on the stream, and
+// a change it refused is said in the header, the switches put back as the server has them
 function save(patch: Record<string, boolean>): void {
   const cur = status.data?.notify
   if (cur) Object.assign(cur, patch)
-  void call('POST /api/notifications/settings', { body: patch })
+  call('POST /api/notifications/settings', { body: patch }).then((r) => {
+    if (r.ok) return
+    flash('Could not save the notification settings: ' + r.error, 'err')
+    resyncAll()
+  })
 }
 
 export async function notifyToggle(kind: string): Promise<void> {
@@ -72,7 +78,9 @@ export async function notifyTest(): Promise<void> {
   const c = channel()
   if (c === 'unavailable' || c === 'denied') return
   if (c === 'default' && !(await ask())) return
-  void call('POST /api/notifications/test')
+  call('POST /api/notifications/test').then((r) => {
+    if (!r.ok) flash('Could not send a test notification: ' + r.error, 'err')
+  })
 }
 
 /**
@@ -104,11 +112,18 @@ export function arrived(n: Note): void {
   if (ui.notesOpen) {
     // the panel is open: it is read as it lands
     n.readAt = new Date().toISOString()
-    void call('POST /api/notifications/read', { body: { ids: [n.id] } })
+    call('POST /api/notifications/read', { body: { ids: [n.id] } }).then((r) => {
+      if (r.ok) return
+      flash('Could not mark the notification read: ' + r.error, 'err')
+      resyncAll()
+    })
   }
   if (channel() !== 'granted' || n.seenAt) return
   n.seenAt = new Date().toISOString()
-  void call('POST /api/notifications/seen', { body: { ids: [n.id] } })
+  // not marked seen, another page (or this one, opened again) would show the banner a second time: said
+  call('POST /api/notifications/seen', { body: { ids: [n.id] } }).then((r) => {
+    if (!r.ok) flash('Could not mark the notification shown: ' + r.error, 'err')
+  })
   let banner: Notification
   try {
     banner = new Notification(n.title, { body: n.body || '', icon: '/favicon.png', tag: 'bh-' + n.id })

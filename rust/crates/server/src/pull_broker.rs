@@ -69,19 +69,19 @@ fn pull_with<S: Source>(home: &std::path::Path, adapter: &mut Wealthsimple<S>, n
     let r = pull(&book, adapter, connection, today, now, &mut |s| eprintln!("{s:?}")).map_err(|e| e.to_string())?;
     let mut out = String::new();
     use std::fmt::Write as _;
-    let _ = writeln!(out, "accounts added {}, linked {}", r.accounts_added, r.accounts_linked);
-    let _ = writeln!(out, "rows read {}: records new {}, revised {}, unchanged {}; imported records replaced {}; no longer listed, removed {}", r.rows_read, r.records_new, r.records_revised, r.records_unchanged, r.superseded, r.removed.len());
+    writeln!(out, "accounts added {}, linked {}", r.accounts_added, r.accounts_linked).expect("writing to a String cannot fail");
+    writeln!(out, "rows read {}: records new {}, revised {}, unchanged {}; imported records replaced {}; no longer listed, removed {}", r.rows_read, r.records_new, r.records_revised, r.records_unchanged, r.superseded, r.removed.len()).expect("writing to a String cannot fail");
     for (record, key) in &r.removed {
-        let _ = writeln!(out, "  removed {key} (record {record})");
+        writeln!(out, "  removed {key} (record {record})").expect("writing to a String cannot fail");
     }
     for (account, why) in &r.suspect {
-        let _ = writeln!(out, "suspect read of {account}, nothing removed: {why}");
+        writeln!(out, "suspect read of {account}, nothing removed: {why}").expect("writing to a String cannot fail");
     }
-    let _ = writeln!(out, "moves of holdings linked {}", r.transfers_linked);
-    let _ = writeln!(out, "account days stored {}, restated {}", r.days_stored, r.days_restated);
-    let _ = writeln!(out, "requests {}", adapter.source.requests());
+    writeln!(out, "moves of holdings linked {}", r.transfers_linked).expect("writing to a String cannot fail");
+    writeln!(out, "account days stored {}, restated {}", r.days_stored, r.days_restated).expect("writing to a String cannot fail");
+    writeln!(out, "requests {}", adapter.source.requests()).expect("writing to a String cannot fail");
     for (part, f) in &r.failures {
-        let _ = writeln!(out, "failed: {part}: {f}");
+        writeln!(out, "failed: {part}: {f}").expect("writing to a String cannot fail");
     }
     Ok(out)
 }

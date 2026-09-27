@@ -21,3 +21,6 @@ standin = []
 # tests read the time zone rules built into jiff, never the machine's
 bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 bagholder-ws = { path = ".", features = ["standin"] }
+
+[lints]
+workspace = true

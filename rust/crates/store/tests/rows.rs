@@ -17,7 +17,7 @@ fn test_every_input_reads_cleanly_from_rows_of_every_shape() {
         INSERT INTO balances(account_id, custodian_account_id, security_id, quantity) VALUES ('acct-1','cust','sec-1',10), (NULL,NULL,NULL,NULL), ('acct-2','','sec-2',2.5);
         INSERT INTO margin(account_id,buying_power,currency,unavailable,fetched_at) VALUES ('acct-1',5000,'USD','',NULL), ('acct-2',NULL,NULL,'no margin','t');
         INSERT INTO nav_history(account_id,date,equity,currency,net_deposits) VALUES ('','2026-01-02',100,'CAD',90), ('','2026-01-03',NULL,NULL,NULL), ('acct-1','2026-01-02',50,'',NULL), ('acct-2','2026-01-02',7,'CAD',7);
-        INSERT INTO exposures(key,sectors,countries,coverage,source,as_of,industry,error,fetched_at) VALUES ('sec-1','{"Tech":0.6,"Energy":"0.4"}','{"Canada":1}',1,'src','2026','ind','',NULL), ('sec-2','not json','',NULL,NULL,NULL,NULL,NULL,NULL), ('fund:X',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+        INSERT INTO exposures(key,sectors,countries,coverage,source,as_of,industry,error,fetched_at) VALUES ('sec-1','{"Tech":0.6,"Energy":"0.4"}','{"Canada":1}',1,'src','2026','ind','',NULL), ('sec-2','','',NULL,NULL,NULL,NULL,NULL,NULL), ('fund:X',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
         INSERT INTO watchlist(symbol,exchange,name,currency,security_id,added_at) VALUES ('ENB','TSX','Enbridge','CAD','sec-9','2026-01-01'), ('AAPL','',NULL,NULL,NULL,NULL);
         INSERT INTO news(id,symbol,exchange,source,headline,wire,url,published_at,fetched_at,kind,summary) VALUES ('n1','QNC','TSXV','src','Up','Newsfile','http://x','2026-01-02','t','release','sum'), ('n2','*','MARKET',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
         INSERT INTO universes(key,symbol,name,value,percent_change,sector,country,fetched_at) VALUES ('tsx','RY','Royal',150,1.2,'Financials','Canada','t'), ('tsx','TD',NULL,NULL,NULL,NULL,NULL,NULL), ('sp','AAPL','Apple',3000,-0.5,'Tech','US','t');
@@ -54,4 +54,13 @@ fn test_every_input_reads_cleanly_from_rows_of_every_shape() {
     // never saved is not saved empty
     tables::set_meta(c, rows::TILES_META, "").unwrap();
     assert_eq!(rows::tiles(c).unwrap(), None);
+}
+
+/// An exposure's weights kept as text that does not parse: the store is corrupt
+/// there, and the read fails rather than reading the security as holding nothing.
+#[test]
+fn test_weights_that_do_not_parse_fail_the_read() {
+    let d = db();
+    d.conn.execute_batch("INSERT INTO exposures(key,sectors,countries) VALUES ('sec-1','not json','{}');").unwrap();
+    assert!(rows::exposures(&d.conn).is_err());
 }

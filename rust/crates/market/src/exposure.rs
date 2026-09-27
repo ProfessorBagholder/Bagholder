@@ -192,6 +192,11 @@ fn base_headers<'a>(extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     h
 }
 
+/// An issuer's answer that does not read is that issuer's failure, never an empty breakdown.
+fn unreadable<E: std::fmt::Display>(what: &'static str) -> impl Fn(E) -> FetchError {
+    move |e| FetchError::Transport(format!("{what} does not read: {e}"))
+}
+
 fn get(url: &str, extra: &[(&str, &str)]) -> Result<String, FetchError> {
     pace(&bagholder_net::host_of(url));
     crate::http::get_text(url, &base_headers(extra))
@@ -259,23 +264,24 @@ pub fn venue_country(exchange: &str) -> String {
 pub const TMX_SECTOR_QUERY: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name sector industry exchangeName } }";
 pub const NASDAQ_SUMMARY_URL: &str = "https://api.nasdaq.com/api/quote/{}/summary?assetclass=stocks";
 
-fn tmx_record(key: &str) -> Option<TmxSector> {
+/// TMX's record for one form; a request that fails, or an answer that does not
+/// read, is TMX's failure.
+fn tmx_record(key: &str) -> Result<Option<TmxSector>, FetchError> {
     if let Some(r) = hooks::TMX_RECORD.with(|h| h.borrow().as_ref().map(|f| f(key))) {
-        return r;
+        return Ok(r);
     }
     if key.is_empty() {
-        return None;
+        return Ok(None);
     }
     pace("app-money.tmx.com");
     let d = crate::http::post_json(
         crate::tmx::TMX_URL,
         &json!({"operationName": "getQuoteBySymbol", "variables": {"symbol": key, "locale": "en"}, "query": TMX_SECTOR_QUERY}),
         &crate::http::TMX_HEADERS,
-    )
-    .ok()?;
-    let answer = TmxSectorAnswer::deserialize(&d).unwrap_or_default();
-    let q = answer.data.get_quote_by_symbol?;
-    if !q.sector.is_empty() || !q.industry.is_empty() || !q.name.is_empty() { Some(q) } else { None }
+    )?;
+    let answer = TmxSectorAnswer::deserialize(&d).map_err(|e| FetchError::Transport(format!("TMX Money's record does not read: {e}")))?;
+    let Some(q) = answer.data.get_quote_by_symbol else { return Ok(None) };
+    Ok(if !q.sector.is_empty() || !q.industry.is_empty() || !q.name.is_empty() { Some(q) } else { None })
 }
 
 #[derive(Deserialize, Default)]
@@ -304,18 +310,18 @@ struct NasdaqSummaryValue {
     value: String,
 }
 
-fn nasdaq_summary(symbol: &str) -> (String, String) {
-    let raw = match get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]) { Ok(t) => t, Err(_) => return (String::new(), String::new()) };
-    let d: NasdaqSummaryAnswer = match serde_json::from_str(&raw) { Ok(v) => v, Err(_) => return (String::new(), String::new()) };
-    (d.data.summary_data.sector.value, d.data.summary_data.industry.value)
+fn nasdaq_summary(symbol: &str) -> Result<(String, String), String> {
+    let raw = get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]).map_err(|e| format!("Nasdaq: {e}"))?;
+    let d: NasdaqSummaryAnswer = serde_json::from_str(&raw).map_err(|e| format!("Nasdaq's summary does not read: {e}"))?;
+    Ok((d.data.summary_data.sector.value, d.data.summary_data.industry.value))
 }
 
 /// {sector, industry, country, source} for one
 /// listing, from TMX's record, Nasdaq's for a US listing TMX has no sector for;
 /// the country is the venue's.
-pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> ShareClass {
+pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Result<ShareClass, String> {
     if let Some(v) = hooks::CLASSIFY.with(|h| h.borrow().as_ref().map(|f| f(symbol, exchange, currency))) {
-        return v;
+        return Ok(v);
     }
     let sym = bagholder_model::venues::tmx_symbol(symbol);
     let country = venue_country(exchange);
@@ -331,13 +337,18 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
         // a stand-in for TMX's record answers the whole lookup: the lookup's
         // fallback, resolving another of TMX's forms, asks TMX itself
         let stood_in = hooks::TMX_RECORD.with(|h| h.borrow().is_some());
-        let (mut rec, _) = if stood_in { (tmx_record(&k), k.clone()) } else { crate::tmx::tmx_lookup(ctx.conn, &k, &ctx.today, tmx_record) };
+        let tmx_failed = |e: FetchError| format!("TMX Money: {e}");
+        let (mut rec, _) = if stood_in {
+            (tmx_record(&k).map_err(tmx_failed)?, k.clone())
+        } else {
+            crate::tmx::tmx_lookup_try(ctx.conn, &k, &ctx.today, tmx_record).map_err(|e| e.to_string())?
+        };
         static CDR: OnceLock<Regex> = OnceLock::new();
         if let Some(r) = rec.as_ref() {
             if country.is_empty() && CDR.get_or_init(|| Regex::new(r"\bCDR\b").unwrap()).is_match(&r.name) && !k.ends_with(":US") {
                 // a bare ticker answered with the Canadian depositary receipt of a
                 // US company; the company itself is the US listing
-                if let Some(us) = tmx_record(&format!("{}:US", crate::tmx::tmx_bare(&k))) {
+                if let Some(us) = tmx_record(&format!("{}:US", crate::tmx::tmx_bare(&k))).map_err(tmx_failed)? {
                     rec = Some(us);
                 }
             }
@@ -350,7 +361,7 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
         }
     }
     if sector.is_empty() && (country == "United States" || currency.to_uppercase() == "USD") && !sym.is_empty() && !sym.contains(' ') {
-        let (nsec, nind) = nasdaq_summary(&sym);
+        let (nsec, nind) = nasdaq_summary(&sym)?;
         if !nsec.is_empty() {
             sector = norm_sector(&nsec);
             if industry.is_empty() {
@@ -364,7 +375,7 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
             }
         }
     }
-    ShareClass { sector, industry, country: out_country, source }
+    Ok(ShareClass { sector, industry, country: out_country, source })
 }
 
 // --- the issuers -------------------------------------------------------------------
@@ -436,7 +447,7 @@ fn vanguard_port_id(symbol: &str) -> Result<String, FetchError> {
         let q = json!({"operationName": "FundFinderFunds", "variables": {"portIds": VANGUARD_PORT_IDS.to_vec()},
                        "query": "query FundFinderFunds($portIds: [String!]!) { funds(portIds: $portIds) { portId profile { fundFullName listings { identifiers(altIds: [\"Ticker - Canada\", \"Ticker\"]) { altId altIdValue } } } } }"});
         let d = post(VANGUARD_GQL, &q, &VANGUARD_HEADERS)?;
-        let answer = VanguardFundsAnswer::deserialize(&d).unwrap_or_default();
+        let answer = VanguardFundsAnswer::deserialize(&d).map_err(unreadable("Vanguard's fund list"))?;
         let mut m = map.lock().unwrap();
         for f in answer.data.funds {
             for l in &f.profile.listings {
@@ -520,8 +531,8 @@ fn vanguard_ca(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
         "query": "query getSectorDiversification($portIds: [String!]!) { funds(portIds: $portIds) { sectorDiversification { sectorName fundPercent date } } }"}), &VANGUARD_HEADERS)?;
     let mkt = post(VANGUARD_GQL, &json!({"operationName": "MarketAllocationGqlQuery", "variables": {"portIds": [pid]},
         "query": "query MarketAllocationGqlQuery($portIds: [String!]!) { funds(portIds: $portIds) { marketAllocation { countryName fundMktPercent date } } }"}), &VANGUARD_HEADERS)?;
-    let srows = VanguardSectorAnswer::deserialize(&sec).unwrap_or_default().data.funds.into_iter().next().map(|f| f.sector_diversification).unwrap_or_default();
-    let crows = VanguardMarketAnswer::deserialize(&mkt).unwrap_or_default().data.funds.into_iter().next().map(|f| f.market_allocation).unwrap_or_default();
+    let srows = VanguardSectorAnswer::deserialize(&sec).map_err(unreadable("Vanguard's sectors"))?.data.funds.into_iter().next().map(|f| f.sector_diversification).unwrap_or_default();
+    let crows = VanguardMarketAnswer::deserialize(&mkt).map_err(unreadable("Vanguard's markets"))?.data.funds.into_iter().next().map(|f| f.market_allocation).unwrap_or_default();
     let mut sectors = Weights::default();
     let mut countries = Weights::default();
     for r in &srows {
@@ -854,23 +865,21 @@ struct EvolveHoldingRow {
 
 /// (sectors, holdings) from the page's embedded
 /// `portfolioBreakdownData` and `holdingsData`.
-pub fn parse_evolve_page(html: &str) -> (Weights, Vec<Holding>) {
+pub fn parse_evolve_page(html: &str) -> Result<(Weights, Vec<Holding>), serde_json::Error> {
     static BREAKDOWN: OnceLock<Regex> = OnceLock::new();
     static HOLDINGS: OnceLock<Regex> = OnceLock::new();
     let mut sectors = Weights::default();
     let mut holdings = Vec::new();
     if let Some(m) = BREAKDOWN.get_or_init(|| Regex::new(r"(?s)var portfolioBreakdownData\s*=\s*(\{.*?\});\s*\n").unwrap()).captures(html) {
-        if let Ok(v) = serde_json::from_str::<EvolveBreakdown>(&m[1]) {
-            for r in v.data.sector {
-                let (n, w) = (norm_sector(&r.name), r.weight);
-                if !n.is_empty() && w > 0.0 {
-                    sectors.add(&n, w);
-                }
+        for r in serde_json::from_str::<EvolveBreakdown>(&m[1])?.data.sector {
+            let (n, w) = (norm_sector(&r.name), r.weight);
+            if !n.is_empty() && w > 0.0 {
+                sectors.add(&n, w);
             }
         }
     }
     if let Some(m) = HOLDINGS.get_or_init(|| Regex::new(r"(?s)var holdingsData\s*=\s*(\{.*?\});\s*\n").unwrap()).captures(html) {
-        let rows = serde_json::from_str::<EvolveHoldings>(&m[1]).map(|v| v.data).unwrap_or_default();
+        let rows = serde_json::from_str::<EvolveHoldings>(&m[1])?.data;
         for r in rows {
             let tk = trim_space(&r.ticker).to_string();
             let parts: Vec<&str> = tk.split(bagholder_model::unichars::is_space).filter(|x| !x.is_empty()).collect();
@@ -891,11 +900,11 @@ pub fn parse_evolve_page(html: &str) -> (Weights, Vec<Holding>) {
             holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector: norm_sector(&r.gics_sector), country: ctry, exchange: String::new(), currency: String::new(), fund: is_fund(&nm) });
         }
     }
-    (sectors, holdings)
+    Ok((sectors, holdings))
 }
 
 fn evolve(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
-    let (sectors, holdings) = parse_evolve_page(&get(&EVOLVE_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])?);
+    let (sectors, holdings) = parse_evolve_page(&get(&EVOLVE_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])?).map_err(unreadable("Evolve's page"))?;
     if sectors.is_empty() && holdings.is_empty() {
         return Ok(None);
     }
@@ -990,8 +999,8 @@ struct YahooHolding {
 
 /// (sectors, holdings) from Yahoo's
 /// topHoldings module.
-pub fn parse_yahoo_summary(data: &Value) -> (Weights, Vec<Holding>) {
-    let answer = YahooSummary::deserialize(data).unwrap_or_default();
+pub fn parse_yahoo_summary(data: &Value) -> Result<(Weights, Vec<Holding>), serde_json::Error> {
+    let answer = YahooSummary::deserialize(data)?;
     let th = answer.quote_summary.result.into_iter().next().map(|r| r.top_holdings).unwrap_or_default();
     let mut sectors: Vec<(String, f64)> = Vec::new();
     for entry in th.sector_weightings {
@@ -1024,14 +1033,14 @@ pub fn parse_yahoo_summary(data: &Value) -> (Weights, Vec<Holding>) {
             });
         }
     }
-    (Weights(sectors), holdings)
+    Ok((Weights(sectors), holdings))
 }
 
 fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchError> {
     let (cookie, crumb) = yahoo_session()?;
     let raw = get(&YAHOO_SUMMARY.replacen("{}", &yahoo_symbol(symbol, exchange), 1).replacen("{}", &crumb, 1), &[("Cookie", &cookie), ("Accept", "application/json")])?;
     let d: Value = serde_json::from_str(&raw).map_err(|e| FetchError::Transport(e.to_string()))?;
-    let (sectors, holdings) = parse_yahoo_summary(&d);
+    let (sectors, holdings) = parse_yahoo_summary(&d).map_err(unreadable("Yahoo's top holdings"))?;
     if sectors.is_empty() && holdings.is_empty() {
         return Ok(None);
     }
@@ -1042,9 +1051,9 @@ fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchEr
 
 /// A holding named without a ticker, the directories'
 /// first match on the name.
-pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Listed> {
+pub fn resolve_name(ctx: &Ctx, name: &str) -> Result<Option<Listed>, String> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
-        return v;
+        return Ok(v);
     }
     static SUFFIX: OnceLock<Regex> = OnceLock::new();
     static JUNK: OnceLock<Regex> = OnceLock::new();
@@ -1056,15 +1065,23 @@ pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Listed> {
     let clean = WS.get_or_init(|| Regex::new(r"\s+").unwrap()).replace_all(&clean, " ");
     let clean = trim_space(&clean).to_string();
     if clean.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let rows = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>()).ok()?;
-    let m = rows.first()?;
-    Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() })
+    let rows = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>())?;
+    Ok(rows.first().map(|m| Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() }))
 }
 
-fn cache_get(ctx: &Ctx, key: &str) -> Option<ExposureRecord> {
-    let rec = bagholder_store::feeds::exposure_record(ctx.conn, key).ok()??;
+fn stored(e: rusqlite::Error) -> String {
+    format!("the store could not be read or written: {e}")
+}
+
+/// The record kept under `key` while it is fresh; a store that cannot be read
+/// is the failure, never a record to fetch again.
+fn cache_get(ctx: &Ctx, key: &str) -> Result<Option<ExposureRecord>, String> {
+    Ok(bagholder_store::feeds::exposure_record(ctx.conn, key).map_err(stored)?.and_then(fresh))
+}
+
+fn fresh(rec: bagholder_store::feeds::StoredExposure) -> Option<ExposureRecord> {
     let fetched = rec.fetched_at.clone();
     let (d, _) = fetched.split_once('T')?;
     if fetched.len() != 20 || !fetched.ends_with('Z') {
@@ -1084,18 +1101,18 @@ fn cache_get(ctx: &Ctx, key: &str) -> Option<ExposureRecord> {
     if age_days < FRESH_DAYS { Some(rec.record) } else { None }
 }
 
-fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) {
-    let _ = bagholder_store::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp());
+fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) -> Result<(), String> {
+    bagholder_store::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp()).map_err(stored)
 }
 
 /// A classified share as an exposure record, cached
 /// by ticker and venue form.
-pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> ExposureRecord {
+pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Result<ExposureRecord, String> {
     let key = format!("{}{}:{}", SHARE_KEY, bagholder_model::venues::tmx_symbol(symbol), bagholder_model::venues::tmx_form(exchange, currency).unwrap_or(""));
-    if let Some(hit) = cache_get(ctx, &key) {
-        return hit;
+    if let Some(hit) = cache_get(ctx, &key)? {
+        return Ok(hit);
     }
-    let c = classify_share(ctx, symbol, exchange, currency);
+    let c = classify_share(ctx, symbol, exchange, currency)?;
     let mut sectors = Weights::default();
     if !c.sector.is_empty() {
         sectors.add(&c.sector, 1.0);
@@ -1106,18 +1123,18 @@ pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
     }
     let coverage = if !c.sector.is_empty() || !c.country.is_empty() { 1.0 } else { 0.0 };
     let rec = ExposureRecord { sectors, countries, coverage, source: c.source, as_of: String::new(), industry: c.industry, error: String::new() };
-    store_exposure(ctx, &key, &rec);
-    rec
+    store_exposure(ctx, &key, &rec)?;
+    Ok(rec)
 }
 
 /// Holdings into {sectors, countries, coverage} --
 /// weights over the positive rows, each row classified as given, by its
 /// ticker, by its name, or by looking a fund through.
-pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec<String>) -> ExposureRecord {
+pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec<String>) -> Result<ExposureRecord, String> {
     let rows: Vec<&Holding> = holdings.iter().filter(|h| h.weight > 0.0).collect();
     let total: f64 = rows.iter().map(|h| h.weight).sum();
     if total <= 0.0 {
-        return ExposureRecord::default();
+        return Ok(ExposureRecord::default());
     }
     let mut sectors = Weights::default();
     let mut countries = Weights::default();
@@ -1135,7 +1152,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
         }
         let name = h.name.clone();
         if tk.is_empty() && !name.is_empty() {
-            if let Some(m) = resolve_name(ctx, &name) {
+            if let Some(m) = resolve_name(ctx, &name)? {
                 tk = m.symbol;
                 ex = m.exchange;
                 ccy = m.currency;
@@ -1143,7 +1160,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
         }
         let mut sub: Option<ExposureRecord> = None;
         if h.fund && depth < MAX_DEPTH && (!tk.is_empty() || !name.is_empty()) {
-            sub = fund_exposure(ctx, &tk, &name, &ex, depth + 1, seen);
+            sub = fund_exposure(ctx, &tk, &name, &ex, depth + 1, seen)?;
         }
         if let Some(sb) = sub.as_ref() {
             if !sb.sectors.is_empty() || !sb.countries.is_empty() {
@@ -1161,7 +1178,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
             if ex.is_empty() && ctry == "United States" && ccy.is_empty() {
                 ccy = "USD".into();
             }
-            let c = share_exposure(ctx, &tk, &ex, &ccy);
+            let c = share_exposure(ctx, &tk, &ex, &ccy)?;
             if sec.is_empty() {
                 sec = c.sectors.first_name().unwrap_or("").to_string();
             }
@@ -1179,20 +1196,21 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
             covered += w;
         }
     }
-    ExposureRecord { sectors, countries, coverage: covered.min(1.0), source: String::new(), as_of: String::new(), industry: String::new(), error: String::new() }
+    Ok(ExposureRecord { sectors, countries, coverage: covered.min(1.0), source: String::new(), as_of: String::new(), industry: String::new(), error: String::new() })
 }
 
 /// A fund's {sectors, countries, coverage, source,
 /// asOf}, through its issuer's adapter, cached by ticker; None when no source
-/// covers its family or the source answered nothing.
-pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Option<ExposureRecord> {
+/// covers its family or the source answered nothing. A source that failed,
+/// with none after it answering, is the failure.
+pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Result<Option<ExposureRecord>, String> {
     let key = format!("{}{}", FUND_KEY, bagholder_model::venues::tmx_symbol(if symbol.is_empty() { name } else { symbol }));
     if seen.contains(&key) {
-        return None;
+        return Ok(None);
     }
     seen.push(key.clone());
-    if let Some(hit) = cache_get(ctx, &key) {
-        return Some(hit);
+    if let Some(hit) = cache_get(ctx, &key)? {
+        return Ok(Some(hit));
     }
     let family = issuer_of(name);
     let adapter: Option<fn(&str) -> Result<Option<Breakdown>, FetchError>> = match family {
@@ -1204,34 +1222,39 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         _ => None,
     };
     let mut data: Option<Breakdown> = None;
+    let mut failures: Vec<String> = Vec::new();
     let hooked = hooks::ADAPTER.with(|h| h.borrow().as_ref().map(|f| f(family, symbol, name, exchange)));
     if let Some(d) = hooked {
         data = d;
     } else if let Some(f) = adapter {
         match f(symbol) {
             Ok(d) => data = d,
-            Err(_) => {}
+            Err(e) => failures.push(format!("{family}: {e}")),
         }
     }
     if data.is_none() {
-        // a family with no adapter, or one whose page answered nothing
+        // a family with no adapter, or one whose page answered nothing or failed
         match hooks::FALLBACK.with(|h| h.borrow().as_ref().map(|f| f(symbol, name, exchange))) {
             Some(Ok(d)) => data = d,
-            Some(Err(_)) => {}
+            Some(Err(e)) => failures.push(e),
             None => match yahoo_fund(symbol, exchange) {
                 Ok(d) => data = d,
-                Err(_) => {}
+                Err(e) => failures.push(format!("Yahoo Finance: {e}")),
             },
         }
     }
-    let data = data?;
+    let data = match data {
+        Some(d) => d,
+        None if failures.is_empty() => return Ok(None),
+        None => return Err(format!("{}: {}", if symbol.is_empty() { name } else { symbol }, failures.join("; "))),
+    };
     let scale = |w: Weights| -> Weights { Weights(w.0.into_iter().map(|(n, x)| (n, x / 100.0)).collect()) };
     let mut sectors = scale(data.sectors);
     let mut countries = scale(data.countries);
     let mut coverage: f64 = if !sectors.is_empty() || !countries.is_empty() { 1.0 } else { 0.0 };
     let holdings = data.holdings;
     if !holdings.is_empty() && (sectors.is_empty() || countries.is_empty()) {
-        let agg = lookthrough(ctx, &holdings, depth, seen);
+        let agg = lookthrough(ctx, &holdings, depth, seen)?;
         if sectors.is_empty() {
             sectors = agg.sectors;
         }
@@ -1250,26 +1273,33 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
     }
     let source = if data.source.is_empty() { family.to_string() } else { data.source };
     let rec = ExposureRecord { sectors, countries, coverage, source, as_of: data.as_of, industry: String::new(), error: String::new() };
-    store_exposure(ctx, &key, &rec);
-    Some(rec)
+    store_exposure(ctx, &key, &rec)?;
+    Ok(Some(rec))
 }
 
 /// The exposure record for one of the book's
 /// securities, stored under its id -- a fund looked through, a share
-/// classified.
-pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) -> ExposureRecord {
+/// classified. A read that failed stores nothing: the record kept stands, and
+/// the failure is returned.
+pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) -> Result<ExposureRecord, String> {
     let rec = if is_fund(&sec.name) {
         // a fund no source covers is unclassified: its venue says nothing about what it holds
         let mut seen = Vec::new();
-        fund_exposure(ctx, &sec.symbol, &sec.name, &sec.primary_exchange, 0, &mut seen).unwrap_or_default()
+        fund_exposure(ctx, &sec.symbol, &sec.name, &sec.primary_exchange, 0, &mut seen)?.unwrap_or_default()
     } else {
-        share_exposure(ctx, &sec.symbol, &sec.primary_exchange, &sec.currency)
+        share_exposure(ctx, &sec.symbol, &sec.primary_exchange, &sec.currency)?
     };
-    store_exposure(ctx, &sec.id, &rec);
-    rec
+    store_exposure(ctx, &sec.id, &rec)?;
+    Ok(rec)
 }
 
 /// The ids whose record is missing or older than a week.
-pub fn stale(ctx: &Ctx, ids: &[String]) -> Vec<String> {
-    ids.iter().filter(|sid| cache_get(ctx, sid).is_none()).cloned().collect()
+pub fn stale(ctx: &Ctx, ids: &[String]) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for sid in ids {
+        if cache_get(ctx, sid)?.is_none() {
+            out.push(sid.clone());
+        }
+    }
+    Ok(out)
 }

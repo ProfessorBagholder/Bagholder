@@ -69,7 +69,7 @@
     if (key === 'sltrail' && !(t.sl.trail != null && t.sl.trail > 0)) t.sl.trail = null
     if (key === 'tp') { if (!(t.tp.price != null && t.tp.price > 0)) t.tp.price = null; if (!(t.tp.pct != null && t.tp.pct > 0)) t.tp.pct = null }
   }
-  function setAccount(id: string) { t.accountId = id; try { localStorage.setItem('bh2.ticketAccount', id) } catch { /* ignore */ } fetchQuote() }
+  function setAccount(id: string) { t.accountId = id; try { localStorage.setItem('bh2.ticketAccount', id) } catch { /* the browser keeps nothing: the choice holds for this visit */ } fetchQuote() }
   function setSide(side: 'BUY' | 'SELL') { switchSide(side) }
   function setSlUnit(u: 'amt' | 'pct') { if (t.sl.kind === 'trail') { t.sl.unit = u; t.sl.trail = null; t.text.sltrail = null } else { t.sl.priceUnit = u; t.sl.price = null; t.sl.pct = null; t.text.slprice = null } }
   function setTpUnit(u: 'amt' | 'pct') { t.tp.unit = u; t.tp.price = null; t.tp.pct = null; t.text.tp = null }

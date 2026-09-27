@@ -12,21 +12,26 @@ use crate::session::{ensure_fresh_token, load_session};
 
 pub(crate) use crate::app::log;
 
-/// The session orders are sent and read with, its token refreshed when due.
-pub(crate) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Session> {
+/// What an order is refused with when no one is signed in.
+pub(crate) const NOT_CONNECTED: &str = "Not connected.";
+
+/// The session orders are sent and read with, its token refreshed when due:
+/// `NOT_CONNECTED` where no one is signed in, and a saved login that cannot be
+/// read is that error, never "not signed in".
+pub(crate) fn ticket_session(app: &Arc<App>) -> Result<bagholder_ws::session::Session, String> {
     #[cfg(test)]
     {
-        return app.orders.seam.session.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        return app.orders.seam.session.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| NOT_CONNECTED.to_string());
     }
     #[allow(unreachable_code)]
-    let sess = load_session(app)?;
+    let sess = load_session(app)?.ok_or_else(|| NOT_CONNECTED.to_string())?;
     if sess.access_token.is_empty() {
-        return None;
+        return Err(NOT_CONNECTED.into());
     }
     ensure_fresh_token(app, Some(sess.clone()));
-    match load_session(app) {
-        Some(v) if !v.access_token.is_empty() || !v.refresh_token.is_empty() => Some(v),
-        _ => Some(sess),
+    match load_session(app)? {
+        Some(v) if !v.access_token.is_empty() || !v.refresh_token.is_empty() => Ok(v),
+        _ => Ok(sess),
     }
 }
 
@@ -77,12 +82,8 @@ pub(crate) fn err_text(e: &CallError) -> String {
 
 /// Tell the person: a notice of `kind`, said once under `key`.
 pub(crate) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str) {
-    match app.open() {
-        Ok(conn) => {
-            notify::emit(app, &conn, kind, key, title, body, None);
-        }
-        Err(e) => log(&format!("bagholder orders: the notice {key} could not be written: {e}")),
-    }
+    // a notice that could not be recorded is said in the header until one is
+    notify::tell(app, kind, key, title, body, None);
 }
 
 /// Whether the order and bracket checks run now: whenever the app is connected.

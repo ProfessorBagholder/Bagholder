@@ -27,3 +27,6 @@ pdf-extract = "0.9"
 # tests read the time zone rules built into jiff, never the machine's
 bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"
+
+[lints]
+workspace = true

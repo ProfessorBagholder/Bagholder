@@ -228,24 +228,24 @@ const ORDER_BRANCH: &str = "TR";
 
 impl OrderBroker for Wealthsimple {
     fn create(&self, app: &Arc<App>, request: &Value) -> Sent {
-        let Some(sess) = super::ticket_session(app) else { return Sent::NotSent { why: "Not connected.".into() } };
+        let sess = match super::ticket_session(app) { Ok(s) => s, Err(why) => return Sent::NotSent { why } };
         created(mutate::<bagholder_ws::wire::CreateOrderAnswer>(app, &sess, "SoOrdersOrderCreate", &json!({ "input": request })))
     }
 
     fn cancel(&self, app: &Arc<App>, external_id: &str) -> Sent {
-        let Some(sess) = super::ticket_session(app) else { return Sent::NotSent { why: "Not connected.".into() } };
+        let sess = match super::ticket_session(app) { Ok(s) => s, Err(why) => return Sent::NotSent { why } };
         cancelled(mutate::<bagholder_ws::wire::CancelOrderAnswer>(app, &sess, "SoOrdersOrderCancel", &json!({ "cancelOrderRequest": { "externalId": external_id } })))
     }
 
     fn modify(&self, app: &Arc<App>, external_id: &str, change: &Value) -> Sent {
-        let Some(sess) = super::ticket_session(app) else { return Sent::NotSent { why: "Not connected.".into() } };
+        let sess = match super::ticket_session(app) { Ok(s) => s, Err(why) => return Sent::NotSent { why } };
         let mut input = change.clone();
         input["externalId"] = json!(external_id);
         modified(mutate::<bagholder_ws::wire::ModifyOrderAnswer>(app, &sess, "SoOrdersOrderModify", &json!({ "input": input })))
     }
 
     fn read(&self, app: &Arc<App>, external_id: &str) -> Result<Found, String> {
-        let Some(sess) = super::ticket_session(app) else { return Err("Not connected.".into()) };
+        let sess = super::ticket_session(app)?;
         let data: Value = super::gql_as(app, &sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id})).map_err(|e| e.to_string())?;
         read_extended(&data)
     }

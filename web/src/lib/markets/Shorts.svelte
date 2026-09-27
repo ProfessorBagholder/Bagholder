@@ -47,20 +47,21 @@
     get reading() { return !!feedDoc.data?.reading },
     get loading() { return feedDoc.data == null },
   }
-  const found = $state<Record<string, { loading?: boolean; missing?: boolean; row?: ShortsFeedRow }>>({})
+  const found = $state<Record<string, { loading?: boolean; missing?: boolean; error?: string; row?: ShortsFeedRow }>>({})
   $effect(() => watchDoc('shorts', {}, feedDoc))
 
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   function shortsLookup(text: string) {
     const key = text.trim().toUpperCase()
     clearTimeout(lookupTimer)
-    if (!key || key.length > 12 || /[^A-Z0-9.\-]/.test(key) || found[key]) return
+    // a lookup that failed is not remembered: typed again, it is asked again
+    if (!key || key.length > 12 || /[^A-Z0-9.\-]/.test(key) || (found[key] && !found[key].error)) return
     lookupTimer = setTimeout(() => {
       if (query.trim().toUpperCase() !== key) return
       if ((feed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return
       found[key] = { loading: true }
       call('GET /api/shorts', { query: { symbol: key, exchange: '', currency: '', name: '', trend: false } }).then((d) => {
-        found[key] = d && d.ok && 'covered' in d && d.covered ? { row: d.shorts as unknown as ShortsFeedRow } : { missing: true }
+        found[key] = !d.ok ? { error: d.error } : 'covered' in d && d.covered ? { row: d.shorts as unknown as ShortsFeedRow } : { missing: true }
       })
     }, 450)
   }
@@ -97,13 +98,13 @@
     const q = query.trim().toUpperCase()
     const f = q ? found[q] : null
     if (feed.loading) return 'Reading…'
-    if (q) return f && f.loading ? 'Reading ' + q + '…' : f && f.missing ? 'No short interest is reported for ' + q + '.' : 'No listing by that name.'
+    if (q) return f && f.loading ? 'Reading ' + q + '…' : f && f.error ? 'Could not read short interest for ' + q + ': ' + f.error : f && f.missing ? 'No short interest is reported for ' + q + '.' : 'No listing by that name.'
     return 'Nothing reported yet.'
   })
 
   function pickScope(v: string) {
     scope = v
-    try { localStorage.setItem('bh2.shorts', v) } catch { /* ignore */ }
+    try { localStorage.setItem('bh2.shorts', v) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
   function openRow(r: ShortsFeedRow) {
     if (r.positionId) return goSub('portfolio', r.positionId)

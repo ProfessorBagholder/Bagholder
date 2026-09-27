@@ -171,7 +171,11 @@ impl Figures {
     /// Have `heard` told of every commit to the cache from now on. Once: the
     /// app's bus.
     pub fn hear(&self, heard: std::sync::Arc<dyn Fn() + Send + Sync>) {
-        let _ = self.heard.set(heard);
+        match self.heard.set(heard) {
+            Ok(()) => {}
+            // once: a second listener leaves the first
+            Err(_second) => {}
+        }
     }
 
     /// Each market source failing now, one sentence each (`health::failures`):

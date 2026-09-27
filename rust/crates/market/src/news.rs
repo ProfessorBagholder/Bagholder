@@ -664,22 +664,22 @@ pub fn parse_nasdaq_news(data: &Value, now_unix: i64, symbol: &str, kind: Option
 /// The ticker the gateway tags items with: `PNG.V`, `SXHI.TO`, `HG.CN`,
 /// `HBIX.NE`, or `ASTS`, as every other Yahoo read names the listing; a
 /// Canadian listing with no venue takes the one TMX answered to.
-pub fn yahoo_form(conn: &Connection, symbol: &str, exchange: &str, currency: &str) -> String {
+pub fn yahoo_form(conn: &Connection, symbol: &str, exchange: &str, currency: &str) -> rusqlite::Result<String> {
     if tmx_form(exchange, currency).is_none() {
-        return String::new();
+        return Ok(String::new());
     }
     let forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(symbol, exchange, currency, ""));
     if let Some(first) = forms.first() {
         if exchange.trim().is_empty() && first.ends_with(".TO") {
-            let remembered = crate::tmx::tmx_remembered(conn, &tmx_symbol(symbol));
+            let remembered = crate::tmx::tmx_remembered(conn, &tmx_symbol(symbol))?;
             let bare = crate::tmx::tmx_bare(&remembered);
             let venue = match &remembered[bare.len()..] { ":CNX" => Some("XCNQ"), ":AQL" => Some("NEOE"), _ => None };
             if let Some(form) = venue.and_then(|mic| bagholder_sources::venue::yahoo_forms(symbol, mic).into_iter().next()) {
-                return form;
+                return Ok(form);
             }
         }
     }
-    forms.first().map(|f| f.to_uppercase()).unwrap_or_default()
+    Ok(forms.first().map(|f| f.to_uppercase()).unwrap_or_default())
 }
 
 fn otc_twin(t: &str) -> bool {
@@ -1281,16 +1281,16 @@ pub fn read_extra(net: &Net, key: Feed, ask: &Ask) -> Result<Option<Vec<NewsItem
 /// The sources beside the wire that have something to ask for a listing:
 /// Yahoo a ticker form, Seeking Alpha a feed, Google a search. A listing with
 /// no venue and no currency is left to the wire.
-pub fn sources_for(conn: &Connection, symbol: &str, exchange: &str, currency: &str, name: &str) -> Vec<Feed> {
+pub fn sources_for(conn: &Connection, symbol: &str, exchange: &str, currency: &str, name: &str) -> rusqlite::Result<Vec<Feed>> {
     if symbol == MARKET.0 || tmx_form(exchange, currency).is_none() {
-        return vec![];
+        return Ok(vec![]);
     }
     let have = [
-        !yahoo_form(conn, symbol, exchange, currency).is_empty(),
+        !yahoo_form(conn, symbol, exchange, currency)?.is_empty(),
         !sa_form(symbol, exchange, currency).is_empty(),
         !google_queries(symbol, exchange, currency, name).is_empty(),
     ];
-    EXTRA_SOURCES.iter().zip(have).filter(|(_, h)| *h).map(|(k, _)| *k).collect()
+    Ok(EXTRA_SOURCES.iter().zip(have).filter(|(_, h)| *h).map(|(k, _)| *k).collect())
 }
 
 /// Two copies of one headline are one story when they were published within a
@@ -1313,16 +1313,16 @@ fn stamp_key(source: Feed, symbol: &str, exchange: &str) -> String {
     format!("news_source_fetched:{}:{}", source.as_str(), sf::news_key(symbol, exchange))
 }
 
-fn meta(conn: &Connection, key: &str) -> String {
-    bagholder_store::tables::get_meta(conn, key, "").unwrap_or_default()
+fn meta(conn: &Connection, key: &str) -> rusqlite::Result<String> {
+    bagholder_store::tables::get_meta(conn, key, "")
 }
 
-fn due(conn: &Connection, source: Feed, symbol: &str, exchange: &str, now: i64) -> bool {
-    let last = meta(conn, &stamp_key(source, symbol, exchange));
-    match if last.is_empty() { None } else { instant(&last) } {
+fn due(conn: &Connection, source: Feed, symbol: &str, exchange: &str, now: i64) -> rusqlite::Result<bool> {
+    let last = meta(conn, &stamp_key(source, symbol, exchange))?;
+    Ok(match if last.is_empty() { None } else { instant(&last) } {
         None => true,
         Some(then) => now - then > source_minutes(source) * 60,
-    }
+    })
 }
 
 /// Every source's items for one listing, merged newest first: (wire, rows,
@@ -1345,22 +1345,24 @@ pub fn fetch_listing(
     name: &str,
     force: bool,
     clock: &Clock,
-) -> (Feed, Option<Vec<NewsItem>>, HashSet<Feed>) {
+) -> rusqlite::Result<(Feed, Option<Vec<NewsItem>>, HashSet<Feed>)> {
     if symbol == MARKET.0 {
         let (src, rows) = (readers.wire)(conn, symbol, exchange, currency, clock);
         let answered: HashSet<Feed> = if rows.is_some() { [src].into() } else { HashSet::new() };
-        return (src, rows.map(|w| w.rows), answered);
+        return Ok((src, rows.map(|w| w.rows), answered));
     }
-    let extras: Vec<Feed> = sources_for(conn, symbol, exchange, currency, name)
-        .into_iter()
-        .filter(|k| force || due(conn, *k, symbol, exchange, clock.now))
-        .collect();
+    let mut extras: Vec<Feed> = Vec::new();
+    for k in sources_for(conn, symbol, exchange, currency, name)? {
+        if force || due(conn, k, symbol, exchange, clock.now)? {
+            extras.push(k);
+        }
+    }
     let ask = Ask {
         symbol: symbol.to_string(),
         exchange: exchange.to_string(),
         currency: currency.to_string(),
         name: name.to_string(),
-        yahoo: if extras.contains(&Feed::Yahoo) { yahoo_form(conn, symbol, exchange, currency) } else { String::new() },
+        yahoo: if extras.contains(&Feed::Yahoo) { yahoo_form(conn, symbol, exchange, currency)? } else { String::new() },
     };
     let mut results: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let (src, primary) = std::thread::scope(|scope| {
@@ -1389,13 +1391,13 @@ pub fn fetch_listing(
         answered.insert(src);
     }
     if answered.is_empty() {
-        return (src, None, answered);
+        return Ok((src, None, answered));
     }
     // every source asked this pass waits its turn again, a failing one too
     answered.extend(extras.iter().cloned());
     let mut stored: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let mut stored_feed: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
-    for r in sf::news_for(conn, symbol, exchange).unwrap_or_default() {
+    for r in sf::news_for(conn, symbol, exchange)? {
         let origin = sf::Feed::of_id(&r.id);
         let item = match r.item() { Some(i) => i, None => continue };
         if let Some(o) = origin {
@@ -1447,7 +1449,7 @@ pub fn fetch_listing(
     let mut merged = merged;
     merged.sort_by(|a, b| b.published_at.cmp(&a.published_at));
     merged.truncate(PER_LISTING);
-    (src, Some(merged), answered)
+    Ok((src, Some(merged), answered))
 }
 
 pub type OnNew<'a> = dyn Fn(&Connection, &str, &str, &[NewsItem], &[String]) + Sync + 'a;
@@ -1466,7 +1468,7 @@ pub fn read_listing(
     clock: &Clock,
     on_new: Option<&OnNew>,
 ) -> rusqlite::Result<(Feed, Option<Vec<NewsItem>>)> {
-    let (src, rows, answered) = fetch_listing(conn, readers, symbol, exchange, currency, name, force, clock);
+    let (src, rows, answered) = fetch_listing(conn, readers, symbol, exchange, currency, name, force, clock)?;
     let rows = match rows { Some(r) => r, None => return Ok((src, None)) };
     let extra_answered: Vec<Feed> = answered.iter().filter(|k| EXTRA_SOURCES.contains(k)).cloned().collect();
     let (mut before, mut before_text, mut first_read) = (HashSet::new(), HashMap::<String, Vec<String>>::new(), HashSet::new());
@@ -1483,7 +1485,7 @@ pub fn read_listing(
             }
         }
         for k in &extra_answered {
-            if meta(conn, &stamp_key(*k, symbol, exchange)).is_empty() {
+            if meta(conn, &stamp_key(*k, symbol, exchange))?.is_empty() {
                 first_read.insert(*k);
             }
         }
@@ -1668,7 +1670,16 @@ pub fn stale(conn: &Connection, listings: &[Listing], now: i64, minutes: i64) ->
             None => true,
             Some(then) => now - then > minutes * 60,
         };
-        if old || sources_for(conn, symbol, exchange, currency, name).iter().any(|k| due(conn, *k, symbol, exchange, now)) {
+        let mut any_due = old;
+        if !any_due {
+            for k in sources_for(conn, symbol, exchange, currency, name)? {
+                if due(conn, k, symbol, exchange, now)? {
+                    any_due = true;
+                    break;
+                }
+            }
+        }
+        if any_due {
             out.push(l.clone());
         }
     }

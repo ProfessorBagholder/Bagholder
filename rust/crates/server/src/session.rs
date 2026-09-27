@@ -13,8 +13,22 @@ use crate::http::OkOr;
 
 pub const LOGIN_URL: &str = "https://my.wealthsimple.com/app/login";
 
-pub fn load_session(app: &Arc<App>) -> Option<Session> {
-    app.ws_home().load_session()
+/// The saved login: `None` where none is saved. A file that cannot be read, or
+/// that holds no login, is the error, for the caller to say: never read as no
+/// login, nor as an empty one.
+pub fn load_session(app: &Arc<App>) -> Result<Option<Session>, String> {
+    use serde::Deserialize;
+    let unread = |e: String| format!("The saved Wealthsimple login could not be read: {e}");
+    let text = match std::fs::read_to_string(app.ws_home().session_path()) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(unread(e.to_string())),
+    };
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| unread(e.to_string()))?;
+    if !v.is_object() {
+        return Err(unread("it holds no login".into()));
+    }
+    Session::deserialize(v).map(Some).map_err(|e| unread(e.to_string()))
 }
 
 /// Writes the login; a failure is said in words the header can show.
@@ -46,7 +60,7 @@ pub fn refresh_session(app: &Arc<App>, sess: &mut Session, adopt: bool) -> bool 
 /// file (`adopt` false, a sign-in just captured) is written to the file first.
 fn one_refresh(app: &Arc<App>, sess: &mut Session, adopt: bool) -> Result<(), String> {
     let home = app.ws_home();
-    let client_id = Client { home: &home }.client_id_for(sess);
+    let client_id = Client { home: &home }.client_id_for(sess).map_err(|e| format!("Could not read the cached Wealthsimple client id: {e}"))?;
     if client_id.is_empty() {
         return Err("session has no client id".into());
     }
@@ -104,7 +118,9 @@ pub fn apply_token_info_client_id(app: &Arc<App>, sess: &mut Session, info: Opti
         return String::new();
     }
     sess.client_id = cid.clone();
-    app.ws_home().save_client_id(&cid);
+    if let Err(e) = app.ws_home().save_client_id(&cid) {
+        set_error(app, &format!("Could not save the Wealthsimple client id: {e}"));
+    }
     cid
 }
 
@@ -112,11 +128,23 @@ pub fn apply_token_info_client_id(app: &Arc<App>, sess: &mut Session, info: Opti
 /// login script, cached.
 pub fn scrape_client_id(app: &Arc<App>) -> String {
     let home = app.ws_home();
-    let cached = home.cached_client_id();
+    let cached = match home.cached_client_id() {
+        Ok(c) => c,
+        Err(e) => {
+            set_error(app, &format!("Could not read the cached Wealthsimple client id: {e}"));
+            return String::new();
+        }
+    };
     if !cached.is_empty() {
         return cached;
     }
-    let ua = home.cached_user_agent();
+    let ua = match home.cached_user_agent() {
+        Ok(ua) => ua,
+        Err(e) => {
+            set_error(app, &format!("Could not read the cached browser user agent: {e}"));
+            return String::new();
+        }
+    };
     let hdrs: Vec<(&str, &str)> = if ua.is_empty() { vec![] } else { vec![("User-Agent", ua.as_str())] };
     let get = |url: &str| bagholder_net::client::request("GET", url, &hdrs, None, Duration::from_secs(20)).ok().map(|r| r.text());
     let html = match get(LOGIN_URL) { Some(h) => h, None => return String::new() };
@@ -130,7 +158,9 @@ pub fn scrape_client_id(app: &Arc<App>) -> String {
     let js = match get(&js_url) { Some(j) => j, None => return String::new() };
     match regex::Regex::new(r#"(?s)production:.*?clientId:"([a-f0-9]+)""#).unwrap().captures(&js) {
         Some(c) => {
-            home.save_client_id(&c[1]);
+            if let Err(e) = home.save_client_id(&c[1]) {
+                set_error(app, &format!("Could not save the Wealthsimple client id: {e}"));
+            }
             c[1].to_string()
         }
         None => String::new(),
@@ -140,7 +170,19 @@ pub fn scrape_client_id(app: &Arc<App>) -> String {
 /// Refresh ahead of the expiry. Connected means
 /// this grant produced a new token.
 pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Session>) -> bool {
-    let mut sess = match sess.or_else(|| load_session(app)) {
+    let sess = match sess {
+        Some(s) => Some(s),
+        None => match load_session(app) {
+            Ok(s) => s,
+            Err(e) => {
+                let mut st = app.state.lock().unwrap();
+                st.connected = false;
+                st.error = e;
+                return false;
+            }
+        },
+    };
+    let mut sess = match sess {
         Some(s) if !s.refresh_token.is_empty() => s,
         _ => {
             let mut st = app.state.lock().unwrap();
@@ -164,9 +206,10 @@ pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Session>) -> bool {
     ok
 }
 
-/// The login only; stored rows stay.
-pub fn delete_session(app: &Arc<App>) {
-    app.ws_home().delete_session();
+/// The login only; stored rows stay. A login file that cannot be removed is
+/// still there: nothing is marked disconnected, and the caller answers why.
+pub fn delete_session(app: &Arc<App>) -> Result<(), String> {
+    app.ws_home().delete_session().map_err(|e| format!("Could not remove the Wealthsimple login: {e}"))?;
     let mut st = app.state.lock().unwrap();
     st.connected = false;
     st.email.clear();
@@ -174,6 +217,7 @@ pub fn delete_session(app: &Arc<App>) {
     st.capturing = false;
     st.error.clear();
     st.portfolio_error.clear();
+    Ok(())
 }
 
 pub fn boot_session(app: &Arc<App>) {
@@ -185,11 +229,20 @@ pub fn boot_session(app: &Arc<App>) {
         }
     };
     let mut sess = match load_session(app) {
-        Some(s) => s,
-        None => {
+        Ok(Some(s)) => s,
+        Ok(None) => {
             let mut st = app.state.lock().unwrap();
             st.connected = false;
-            st.last_sync = bagholder_store::tables::get_meta(&conn, "synced_at", "").unwrap_or_default();
+            match bagholder_store::tables::get_meta(&conn, "synced_at", "") {
+                Ok(v) => st.last_sync = v,
+                Err(e) => st.error = format!("Could not read the database: {}", e),
+            }
+            return;
+        }
+        Err(e) => {
+            let mut st = app.state.lock().unwrap();
+            st.connected = false;
+            st.error = e;
             return;
         }
     };
@@ -213,7 +266,11 @@ pub fn boot_session(app: &Arc<App>) {
     let mut ok = info_ok;
     if !ok && !sess.refresh_token.is_empty() {
         ok = refresh_session(app, &mut sess, true);
-        sess = load_session(app).unwrap_or(sess);
+        match load_session(app) {
+            Ok(Some(s)) => sess = s,
+            Ok(None) => {}
+            Err(e) => saved = Err(e),
+        }
     }
     let mut st = app.state.lock().unwrap();
     st.connected = ok;
@@ -242,9 +299,8 @@ pub fn note_session_expired(app: &Arc<App>) {
         was
     };
     if was {
-        if let Ok(conn) = app.open() {
-            crate::notify::emit(app, &conn, "connection", &format!("session:{}", now_iso()), "Sign in needed", "The Wealthsimple session expired. Connect again from the menu.", None);
-        }
+        // a notice that could not be recorded is said in the header until one is
+        crate::notify::tell(app, "connection", &format!("session:{}", now_iso()), "Sign in needed", "The Wealthsimple session expired. Connect again from the menu.", None);
     }
 }
 
@@ -271,8 +327,10 @@ pub struct SyncAnswer {
 /// Start a pull if a login is saved; its progress reaches the page as status
 /// changes.
 pub fn sync_now(app: &Arc<App>) -> SyncAnswer {
-    if load_session(app).is_none() {
-        return SyncAnswer { ok: false, error: Some("not connected".into()), syncing: None };
+    match load_session(app) {
+        Ok(Some(_)) => {}
+        Ok(None) => return SyncAnswer { ok: false, error: Some("not connected".into()), syncing: None },
+        Err(e) => return SyncAnswer { ok: false, error: Some(e), syncing: None },
     }
     app.state.lock().unwrap().error.clear();
     // the broker's reads pull at once
@@ -284,12 +342,18 @@ pub fn sync_now(app: &Arc<App>) -> SyncAnswer {
 /// The grant, always.
 pub fn refresh_now(app: &Arc<App>) -> RefreshAnswer {
     let mut sess = match load_session(app) {
-        Some(s) if !s.refresh_token.is_empty() => s,
-        _ => {
+        Ok(Some(s)) if !s.refresh_token.is_empty() => s,
+        Ok(_) => {
             let mut st = app.state.lock().unwrap();
             st.connected = false;
             st.error = "not connected".into();
             return RefreshAnswer { ok: false, error: "not connected".into(), connected: false };
+        }
+        Err(e) => {
+            let mut st = app.state.lock().unwrap();
+            st.connected = false;
+            st.error = e.clone();
+            return RefreshAnswer { ok: false, error: e, connected: false };
         }
     };
     let ok = refresh_session(app, &mut sess, true);
@@ -311,16 +375,24 @@ pub fn token_loop(app: Arc<App>) {
     // doubling from `RETRY_FIRST` to half an hour.
     const RETRY_FIRST: Duration = Duration::from_secs(30);
     const RETRY_MOST: Duration = Duration::from_secs(1800);
-    let has_login = |app: &Arc<App>| load_session(app).map_or(false, |s| !s.refresh_token.is_empty());
+    // a login that cannot be read is its own value: said in the header, and waited on until it changes
+    let has_login = |app: &Arc<App>| load_session(app).map(|s| s.is_some_and(|s| !s.refresh_token.is_empty()));
     let mut retry: Option<Duration> = None;
     loop {
         let now = now_unix();
         let connected = app.state.lock().unwrap().connected;
         let login = has_login(&app);
+        if let Err(e) = &login {
+            app.state.lock().unwrap().error = e.clone();
+        }
         let sleep = match retry {
             Some(d) => d,
-            None if !login => Duration::MAX, // nothing to keep fresh until someone signs in
-            None => Duration::from_secs_f64(load_session(&app).map_or(0.0, |s| bagholder_ws::session::seconds_until_token_refresh(&s, now)).max(0.0)),
+            None if login != Ok(true) => Duration::MAX, // nothing to keep fresh until someone signs in
+            None => Duration::from_secs_f64(match load_session(&app) {
+                Ok(Some(s)) => bagholder_ws::session::seconds_until_token_refresh(&s, now).max(0.0),
+                // read again at once: the refresh that follows says why it cannot be
+                Ok(None) | Err(_) => 0.0,
+            }),
         };
         let was = (connected, login);
         let changed = || (app.state.lock().unwrap().connected, has_login(&app)) != was;
@@ -334,7 +406,7 @@ pub fn token_loop(app: Arc<App>) {
         if app.stopping() {
             return;
         }
-        if !has_login(&app) {
+        if has_login(&app) != Ok(true) {
             retry = None;
             continue;
         }
@@ -374,7 +446,14 @@ pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
     if capture.access_token.is_empty() {
         return OkOr::err("missing access_token");
     }
-    let mut sess = load_session(app).unwrap_or_default();
+    // a new login is taken over the saved one; a saved one that cannot be read is said, not overwritten unseen
+    let mut sess = match load_session(app) {
+        Ok(s) => s.unwrap_or_default(),
+        Err(e) => {
+            app.state.lock().unwrap().error = e.clone();
+            return OkOr::err(e);
+        }
+    };
     sess.access_token = capture.access_token;
     if !capture.refresh_token.is_empty() {
         sess.refresh_token = capture.refresh_token;
@@ -429,7 +508,14 @@ pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
         }
     }
     if sess.user_agent.is_empty() {
-        let ua = app.ws_home().cached_user_agent();
+        let ua = match app.ws_home().cached_user_agent() {
+            Ok(ua) => ua,
+            Err(e) => {
+                let err = format!("Could not read the cached browser user agent: {e}");
+                set_error(app, &err);
+                return OkOr::err(err);
+            }
+        };
         if !ua.is_empty() {
             sess.user_agent = ua;
         }

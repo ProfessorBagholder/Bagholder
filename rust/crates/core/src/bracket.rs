@@ -264,6 +264,7 @@ impl Bracket {
             _ => return None,
         };
         for (at, e) in rest {
+            #[expect(clippy::let_underscore_must_use, reason = "a refused event was recorded with its refusal when it happened, and changes nothing here either")]
             let _ = b.apply(*at, e);
         }
         Some(b)
@@ -877,7 +878,9 @@ pub fn placed(request: &Request, order_id: &str) -> Option<BracketEvent> {
 
 /// A bracket's tick in full against a stated world: steps until nothing, at most
 /// `limit` of them (a guard against a loop in the rules, never reached by them).
-pub fn settle<F>(b: &mut Bracket, seen: &Seen, limit: usize, mut send: F) -> Vec<Step>
+/// A broker's answer that is not a move from where the bracket stands is refused
+/// with why.
+pub fn settle<F>(b: &mut Bracket, seen: &Seen, limit: usize, mut send: F) -> Result<Vec<Step>, String>
 where
     F: FnMut(&Bracket, &Request) -> Vec<BracketEvent>,
 {
@@ -888,12 +891,13 @@ where
             break;
         }
         for e in &step.events {
-            let _ = b.apply(seen.now, e);
+            // the rules decide only moves from where the bracket stands
+            b.apply(seen.now, e).unwrap_or_else(|why| panic!("the rules decided a refused move: {why}"));
         }
         let sent = step.request.is_some();
         if let Some(r) = &step.request {
             for e in send(b, r) {
-                let _ = b.apply(seen.now, &e);
+                b.apply(seen.now, &e)?;
             }
         }
         steps.push(step);
@@ -902,7 +906,7 @@ where
             break;
         }
     }
-    steps
+    Ok(steps)
 }
 
 #[cfg(test)]

@@ -80,8 +80,10 @@ fn main() {
         let req: Req = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"error": e.to_string()}));
-                let _ = out.flush();
+                // the parent reading the answers has gone: nothing is left to answer
+                if writeln!(out, "{}", json!({"error": e.to_string()})).is_err() || out.flush().is_err() {
+                    break;
+                }
                 continue;
             }
         };

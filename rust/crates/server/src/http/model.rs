@@ -37,7 +37,7 @@ pub fn routes() -> Routed {
 }
 
 async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswer> {
-    super::answer(move || crate::status::answer(&state.app)).await
+    Ok(Json(blocking(move || crate::status::answer(&state.app)).await?.map_err(ApiError::Failed)?))
 }
 
 /// `GET /api/figures/detail`: a trade's or a holding's fills, by its id.

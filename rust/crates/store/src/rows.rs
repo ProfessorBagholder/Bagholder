@@ -100,12 +100,22 @@ pub fn nav(conn: &Connection) -> Result<(Vec<NavRow>, HashMap<String, Vec<NavRow
     Ok((together, by_account))
 }
 
-/// Each security's weights, from the JSON text they are kept as; unreadable is none.
+/// Weights kept as JSON text: an empty column is none, and a text that does not
+/// parse is the row's failure (the store is corrupt there), never none.
+fn weights(r: &Row, name: &str) -> Result<Weights> {
+    let raw = text(r, name)?;
+    if raw.is_empty() {
+        return Ok(Weights::default());
+    }
+    let at = r.as_ref().column_index(name)?;
+    serde_json::from_str(&raw).map_err(|e| rusqlite::Error::FromSqlConversionFailure(at, rusqlite::types::Type::Text, Box::new(e)))
+}
+
+/// Each security's weights, from the JSON text they are kept as.
 pub fn exposures(conn: &Connection) -> Result<Exposures> {
-    let weights = |raw: String| -> Weights { serde_json::from_str(&raw).unwrap_or_default() };
     let rows = all(conn, "SELECT * FROM exposures", |r| {
-        let sectors = weights(text(r, "sectors")?);
-        let countries = weights(text(r, "countries")?);
+        let sectors = weights(r, "sectors")?;
+        let countries = weights(r, "countries")?;
         Ok((text(r, "key")?, Exposure { sectors: sectors.0, countries: countries.0 }))
     })?;
     Ok(rows.into_iter().collect())

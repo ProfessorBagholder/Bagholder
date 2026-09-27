@@ -209,7 +209,8 @@ fn reading(label: &str, score: Option<f64>) -> Option<GaugeReading> {
 /// The reading now, the readings it compares itself
 /// against, its seven indicators, and a year of daily readings.
 pub fn parse_stocks(data: &Value) -> Option<Gauge> {
-    let answer: CnnAnswer = CnnAnswer::deserialize(data).unwrap_or_default();
+    // an answer that does not read is no reading, which `read` says is unreadable
+    let answer = CnnAnswer::deserialize(data).ok()?;
     let fg = &answer.fear_and_greed;
     let score = fg.score?;
     let previous: Vec<GaugeReading> = [
@@ -255,7 +256,7 @@ pub fn parse_stocks(data: &Value) -> Option<Gauge> {
 /// One reading a day, newest first. What it is compared
 /// against is its own earlier days; it publishes no indicators.
 pub fn parse_crypto(data: &Value) -> Option<Gauge> {
-    let answer: CryptoAnswer = CryptoAnswer::deserialize(data).unwrap_or_default();
+    let answer = CryptoAnswer::deserialize(data).ok()?;
     // (date, score, rating), newest first as published
     let days: Vec<(String, f64, String)> = lenient::rows::<CryptoDay>(&answer.data)
         .into_iter()

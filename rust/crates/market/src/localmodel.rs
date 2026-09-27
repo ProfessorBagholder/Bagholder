@@ -156,9 +156,9 @@ pub fn folder() -> Option<PathBuf> {
     state().lock().unwrap().folder.clone()
 }
 
-fn llamafile_path(folder: &std::path::Path) -> PathBuf {
-    let _ = std::fs::create_dir_all(folder);
-    folder.join("summarizer.llamafile")
+fn llamafile_path(folder: &std::path::Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    Ok(folder.join("summarizer.llamafile"))
 }
 
 fn get_ok(url: &str, timeout: Duration) -> bool {
@@ -279,7 +279,11 @@ pub fn ensure() {
         }
         st.phase = "detecting";
     }
-    let _ = std::thread::Builder::new().name("bagholder-localmodel".into()).spawn(provision);
+    // no thread to provision on: the attempt failed, and it is said so rather than
+    // left detecting for ever
+    if let Err(e) = std::thread::Builder::new().name("bagholder-localmodel".into()).spawn(provision) {
+        set("failed", &format!("could not start: {e}"));
+    }
 }
 
 static ON_CHANGE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
@@ -287,6 +291,7 @@ static ON_CHANGE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 /// Called whenever the model's phase changes (coming up, ready, failed): how whoever
 /// waits for a model learns of it without asking again and again. Set once, at start.
 pub fn on_change(f: impl Fn() + Send + Sync + 'static) {
+    #[expect(clippy::let_underscore_must_use, reason = "set once at start; a second app in the same process, as the tests make, keeps the first one's listener")]
     let _ = ON_CHANGE.set(Box::new(f));
 }
 
@@ -325,17 +330,27 @@ fn provision() {
         set("off", "");
         return;
     };
-    let path = llamafile_path(&folder);
+    let path = match llamafile_path(&folder) {
+        Ok(p) => p,
+        Err(e) => {
+            set("failed", &format!("the models folder could not be made: {e}"));
+            return;
+        }
+    };
     if !verified(&path) {
         set("downloading", "");
-        if !download(&path) {
-            set("failed", "download failed");
+        if let Err(e) = download(&path) {
+            set("failed", &format!("download failed: {e}"));
             return;
         }
     }
     if !verified(&path) {
-        set("failed", "checksum mismatch");
-        let _ = std::fs::remove_file(&path);
+        // the file that did not match is not kept to be run; one that cannot be
+        // removed is said beside the mismatch
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => set("failed", &format!("checksum mismatch, and the file could not be removed: {e}")),
+            _ => set("failed", "checksum mismatch"),
+        }
         return;
     }
     set("starting", "");
@@ -371,35 +386,38 @@ pub fn verified(path: &PathBuf) -> bool {
     hex == pin.to_lowercase()
 }
 
-pub fn download(path: &PathBuf) -> bool {
+/// The model file fetched from its pinned host and made runnable, or why not.
+pub fn download(path: &PathBuf) -> Result<(), String> {
     let url = llamafile_url();
     let host = url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("").split(':').next().unwrap_or("").to_string();
     if !ALLOWED_HOSTS.contains(&host.as_str()) {
-        return false;
+        return Err(format!("{host} is not a host the model is fetched from"));
     }
     let tmp = path.with_extension("part");
     let got = bagholder_net::client::request("GET", &url, &[("User-Agent", "Bagholder")], None, DOWNLOAD_TIMEOUT)
         .map_err(|e| e.to_string())
         .and_then(|r| std::fs::write(&tmp, &r.body).map_err(|e| e.to_string()))
         .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
-    if got.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return false;
+    if let Err(e) = got {
+        // a part never written is nothing to remove
+        return match std::fs::remove_file(&tmp) {
+            Err(r) if r.kind() != std::io::ErrorKind::NotFound => Err(format!("{e}; the partial file could not be removed: {r}")),
+            _ => Err(e),
+        };
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mut perm = meta.permissions();
-            perm.set_mode(perm.mode() | 0o110);
-            let _ = std::fs::set_permissions(path, perm);
-        }
+        let mut perm = std::fs::metadata(path).map_err(|e| format!("the model file could not be read: {e}"))?.permissions();
+        perm.set_mode(perm.mode() | 0o110);
+        std::fs::set_permissions(path, perm).map_err(|e| format!("the model file could not be made runnable: {e}"))?;
     }
-    // a downloaded executable is quarantined on macOS; clear it so it can run
+    // a downloaded executable is quarantined on macOS; clear it so it can run (a
+    // file with no quarantine to clear is fine: only xattr not running is a failure)
     if cfg!(target_os = "macos") {
-        let _ = Command::new("xattr").args(["-d", "com.apple.quarantine"]).arg(path).output();
+        Command::new("xattr").args(["-d", "com.apple.quarantine"]).arg(path).output().map_err(|e| format!("xattr could not be run: {e}"))?;
     }
-    true
+    Ok(())
 }
 
 fn spawn(path: &PathBuf) -> bool {
@@ -436,8 +454,10 @@ fn wait_started() -> bool {
         {
             let mut st = state().lock().unwrap();
             if let Some(p) = st.proc.as_mut() {
-                if let Ok(Some(_)) = p.try_wait() {
-                    return false;
+                match p.try_wait() {
+                    Ok(None) => {}
+                    // exited, or its state cannot be read: it is not starting
+                    Ok(Some(_)) | Err(_) => return false,
                 }
             }
         }
@@ -453,9 +473,16 @@ fn wait_started() -> bool {
 pub fn shutdown() {
     let proc = state().lock().unwrap().proc.take();
     if let Some(mut p) = proc {
-        if let Ok(None) = p.try_wait() {
-            let _ = p.kill();
-            let _ = p.wait();
+        match p.try_wait() {
+            // exited already: nothing to stop
+            Ok(Some(_)) => {}
+            // running, or its state cannot be read: it is stopped either way
+            Ok(None) | Err(_) => {
+                #[expect(clippy::let_underscore_must_use, reason = "it may have exited since it was asked; the app is stopping either way")]
+                let _ = p.kill();
+                #[expect(clippy::let_underscore_must_use, reason = "reaping the process stopped; its status answers nothing")]
+                let _ = p.wait();
+            }
         }
     }
 }
@@ -481,7 +508,7 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
         "stop": ["<end_of_turn>", "<|eot_id|>", "</s>"],
         "stream": false,
     });
-    let text = serde_json::to_string(&body).unwrap_or_default();
+    let text = serde_json::to_string(&body).expect("a JSON value always serializes");
     let url = format!("{}/v1/chat/completions", base);
     let got = match hooks::POST.with(|h| h.borrow().as_ref().map(|f| f(&url, &text))) {
         Some(r) => r,

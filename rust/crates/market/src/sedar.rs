@@ -114,8 +114,9 @@ fn state() -> &'static Mutex<State> {
 }
 
 /// SEDAR+'s turn on the one limiter every host goes through.
-fn pace(_st: &mut State) {
-    bagholder_net::machine::turn("www.sedarplus.ca", PACE);
+fn pace(_st: &mut State) -> Fetched<()> {
+    bagholder_net::machine::turn("www.sedarplus.ca", PACE)
+        .map_err(|r| unavailable(format!("SEDAR+ refused a request and is resting until {}", r.until)))
 }
 
 fn session(st: &mut State) -> Fetched<&mut Session> {
@@ -274,7 +275,7 @@ re!(re_app, r"/(csa-\w+)/viewInstance");
 
 impl View {
     fn open(st: &mut State, service: &str) -> Fetched<View> {
-        pace(st);
+        pace(st)?;
         let url = format!("{}/csa-party/service/create.html?targetAppCode=csa-party&service={}", BASE, service);
         let r = session(st)?
             .request("GET", &url, &[], None, TIMEOUT, false)
@@ -350,7 +351,7 @@ impl View {
         for (k, v) in extra {
             data.push((k.to_string(), v.to_string()));
         }
-        pace(st);
+        pace(st)?;
         let body = urlencode(&data);
         let headers = self.headers(container.is_some() || json_frag);
         let hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();

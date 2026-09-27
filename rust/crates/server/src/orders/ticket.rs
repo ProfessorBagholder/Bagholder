@@ -346,7 +346,7 @@ pub fn stop_allowed(app: &Arc<App>, security_id: &str) -> Result<bool, String> {
     if let Some(v) = app.orders.stop_allowed.lock().unwrap_or_else(|e| e.into_inner()).get(security_id) {
         return Ok(*v);
     }
-    let sess = ticket_session(app).ok_or("Not connected.")?;
+    let sess = ticket_session(app)?;
     let d = gql_as(app, &sess, "FetchSecurityMarketData", json!({"id": security_id})).map_err(|e| format!("the order types Wealthsimple takes for it could not be read: {}", err_text(&e)))?;
     let ok = parse_market_data(&d).order_types.iter().any(|t| t == "STOP");
     app.orders.stop_allowed.lock().unwrap_or_else(|e| e.into_inner()).insert(security_id.to_string(), ok);
@@ -469,8 +469,8 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         return TicketQuote::err(format!("No listing stored for {}.", name_of()));
     }
     let sess = match ticket_session(app) {
-        Some(s) => s,
-        None => return TicketQuote::err("Not connected."),
+        Ok(s) => s,
+        Err(e) => return TicketQuote::err(e),
     };
     if sec.is_none() {
         sec = lookup_listing(app, &sess, &symbol.trim().to_uppercase(), exchange);
@@ -776,7 +776,7 @@ pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> PlaceTicketAnswer {
         Ok(b) => b,
         Err(e) => return PlaceTicketAnswer::err(format!("The book could not be opened: {e}")),
     };
-    let answer = if asked.order.side == Side::Sell && orders_live(app) && ticket_session(app).is_some() {
+    let answer = if asked.order.side == Side::Sell && orders_live(app) && ticket_session(app).is_ok() {
         sell(app, &book, &asked.order)
     } else {
         entry(app, &book, asked)
@@ -808,7 +808,7 @@ pub(crate) fn entry(app: &Arc<App>, book: &Book, asked: TicketOrder) -> Result<P
     let now = Timestamp::now();
     let mut o = asked.order;
     // a bracket waits on a fill: with orders off, or nothing to send with, none can come
-    let wants_bracket = (asked.stop.is_some() || asked.target.is_some()) && orders_live(app) && ticket_session(app).is_some();
+    let wants_bracket = (asked.stop.is_some() || asked.target.is_some()) && orders_live(app) && ticket_session(app).is_ok();
     let bracket = if wants_bracket {
         let id = format!("bracket-{}", uuid4());
         let place = BracketPlace { id: id.clone(), broker: o.broker.clone(), broker_account: o.broker_account.clone(), broker_security: o.broker_security.clone(), symbol: o.symbol.clone(), currency: o.currency };

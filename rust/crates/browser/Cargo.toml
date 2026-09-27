@@ -17,3 +17,6 @@ wreq-util = { version = "=3.0.0-rc.14", features = ["emulation", "emulation-comp
 tokio = { version = "1", features = ["rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+
+[lints]
+workspace = true

@@ -253,6 +253,7 @@ impl OrderFold {
         let (first, rest) = events.split_first()?;
         let mut fold = OrderFold::start(first).ok()?;
         for e in rest {
+            #[expect(clippy::let_underscore_must_use, reason = "a refused event was recorded with its refusal when it happened, and changes nothing here either")]
             let _ = fold.apply(e);
         }
         Some(fold)

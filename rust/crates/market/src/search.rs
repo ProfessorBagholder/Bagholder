@@ -161,11 +161,13 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
         // the directories carry the TSX and Nasdaq registries alone, so a CSE
         // or Cboe Canada listing is in none of them: TMX is asked what it
         // knows the ticker as
-        if let Ok(conn) = pool.get() {
-            let (today, _, _) = crate::clock_now();
-            if let Some(hit) = crate::tmx::tmx_listing(&conn, &text, &today) {
-                found = vec![hit];
-            }
+        let conn = pool.get().map_err(|e| format!("Search failed: the store could not be opened: {e}"))?;
+        let (today, _, _) = crate::clock_now();
+        // TMX not answering is one more search that failed, said as the directories' are
+        match crate::tmx::tmx_listing(&conn, &text, &today) {
+            Ok(Some(hit)) => found = vec![hit],
+            Ok(None) => {}
+            Err(e) => errors.push(e.to_string()),
         }
     }
     let mut all = bagholder_model::instruments::search(&text);

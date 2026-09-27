@@ -87,7 +87,7 @@ pub fn fixture(handler: Box<Handler>) -> Fixture {
     std::fs::create_dir_all(&dir).unwrap();
     let home = Home::new(&dir);
     // clears a refused refresh token another test left behind
-    home.delete_session();
+    home.delete_session().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let reqs: Arc<Mutex<Vec<Req>>> = Arc::new(Mutex::new(Vec::new()));

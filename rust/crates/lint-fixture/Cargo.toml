@@ -1,0 +1,14 @@
+[package]
+name = "bagholder-lint-fixture"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# A violation of each form the workspace's lints refuse, built only with the
+# `violations` feature: `server/src/tests_lints.rs` runs clippy on it and expects
+# each to be refused, so the lints are known to be on.
+[features]
+violations = []
+
+[lints]
+workspace = true

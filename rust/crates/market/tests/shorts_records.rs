@@ -120,33 +120,33 @@ fn answers() -> Value {
     let ca_vol_rows = shorts::parse_ca_volume(CA_CSV).unwrap();
     let qnc_row = ca_vol_rows.get("QNC").cloned();
     let tgif_row = ca_vol_rows.get("TGIF").cloned();
-    out.insert("ca_volume_from_present".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", qnc_row.as_ref(), "TSX-V", || panic!("traded asked while the report carries the listing"))));
-    out.insert("ca_volume_from_absent_with_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, "TSX-V", || Some(1519546.0))));
-    out.insert("ca_volume_from_absent_without_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, "TSX-V", || None)));
-    out.insert("ca_volume_from_venue_mismatch".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", tgif_row.as_ref(), "TSX-V", || panic!("traded asked though a row was found"))));
+    out.insert("ca_volume_from_present".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", qnc_row.as_ref(), "TSX-V", || panic!("traded asked while the report carries the listing")).unwrap()));
+    out.insert("ca_volume_from_absent_with_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, "TSX-V", || Ok(Some(1519546.0))).unwrap()));
+    out.insert("ca_volume_from_absent_without_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, "TSX-V", || Ok(None)).unwrap()));
+    out.insert("ca_volume_from_venue_mismatch".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", tgif_row.as_ref(), "TSX-V", || panic!("traded asked though a row was found")).unwrap()));
 
     // --- the run of Canadian reports --------------------------------------
-    let series = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |d| rows_on(grids(d)));
+    let series = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |d| Ok(rows_on(grids(d)))).unwrap();
     out.insert("ca_series_with".into(), cell(&series));
-    let series_other_venue = shorts::ca_series_with("QNC", "CSE", "2026-08-31", TODAY, shorts::SERIES, |d| rows_on(grids(d)));
+    let series_other_venue = shorts::ca_series_with("QNC", "CSE", "2026-08-31", TODAY, shorts::SERIES, |d| Ok(rows_on(grids(d)))).unwrap();
     out.insert("ca_series_with_other_venue".into(), cell(&series_other_venue));
 
     // --- fund unit counts --------------------------------------------------
-    out.insert("fund_units_hbix".into(), cell(&shorts::fund_units_with("HBIX", "CBOE CANADA", "CAD", |_| None, |s| shorts::cboe_units_with(s, || Some(directory())))));
-    out.insert("fund_units_bcbn_company".into(), cell(&shorts::fund_units_with("BCBN", "CBOE CANADA", "CAD", |_| None, |s| shorts::cboe_units_with(s, || Some(directory())))));
-    out.insert("fund_units_nopr_no_price".into(), cell(&shorts::fund_units_with("NOPR", "CBOE CANADA", "CAD", |_| None, |s| shorts::cboe_units_with(s, || Some(directory())))));
-    out.insert("fund_units_odds_not_whole".into(), cell(&shorts::fund_units_with("ODDS", "CBOE CANADA", "CAD", |_| None, |s| shorts::cboe_units_with(s, || Some(directory())))));
-    out.insert("fund_units_other_venue".into(), cell(&shorts::fund_units_with("HBIX", "TSX", "CAD", |_| Some(0.0), |_| panic!("asked the venue for another one's listing"))));
-    out.insert("fund_units_tmx_has_it".into(), cell(&shorts::fund_units_with("XYZ", "CBOE CANADA", "CAD", |_| Some(4200.0), |_| panic!("asked the venue when TMX already had a count"))));
+    out.insert("fund_units_hbix".into(), cell(&shorts::fund_units_with("HBIX", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_bcbn_company".into(), cell(&shorts::fund_units_with("BCBN", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_nopr_no_price".into(), cell(&shorts::fund_units_with("NOPR", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_odds_not_whole".into(), cell(&shorts::fund_units_with("ODDS", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_other_venue".into(), cell(&shorts::fund_units_with("HBIX", "TSX", "CAD", |_| Ok(Some(0.0)), |_| panic!("asked the venue for another one's listing")).unwrap()));
+    out.insert("fund_units_tmx_has_it".into(), cell(&shorts::fund_units_with("XYZ", "CBOE CANADA", "CAD", |_| Ok(Some(4200.0)), |_| panic!("asked the venue when TMX already had a count")).unwrap()));
 
     // --- finish: a US record and a Canadian one, with and without trend ---
     let c = conn();
     let us_with_issuer = Position { shares: Some(56990026.0), as_of: "2026-08-31".into(), average_volume: Some(5864237.0), issuer: "GameStop Corp.".into(), ..Position::default() };
-    let out_us_full = shorts::finish(&c, us_with_issuer, None, "GME", "NYSE", false, ShortMarket::Us, |_| vec![], |issuer| { assert_eq!(issuer, "GameStop Corp."); Some(400000000.0) });
+    let out_us_full = shorts::finish(&c, us_with_issuer, None, "GME", "NYSE", false, ShortMarket::Us, |_| Ok(vec![]), |issuer| { assert_eq!(issuer, "GameStop Corp."); Ok(Some(400000000.0)) }).unwrap();
     out.insert("finish_us_with_issuer_and_float".into(), cell(&out_us_full));
 
     let us_bare = Position { shares: Some(50.0), as_of: "2026-08-31".into(), ..Position::default() };
-    let out_us_bare = shorts::finish(&c, us_bare, None, "RKLB", "NASDAQ", true, ShortMarket::Us, |_| panic!("a US record never asks for a series"), |_| None);
+    let out_us_bare = shorts::finish(&c, us_bare, None, "RKLB", "NASDAQ", true, ShortMarket::Us, |_| panic!("a US record never asks for a series"), |_| Ok(None)).unwrap();
     out.insert("finish_us_no_issuer_no_float".into(), cell(&out_us_bare));
 
     // a Canadian record built the way `for_listing` builds one, with the
@@ -155,13 +155,13 @@ fn answers() -> Value {
     for day in ["2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"] {
         bagholder_store::tables::upsert_benchmark_prices(&c, &[(day.to_string(), 100.0)].into_iter().collect(), "TSX").unwrap();
     }
-    let ca_position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
-    let ca_volume = shorts::ca_volume_with("QNC", "TSX-V", || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None);
+    let ca_position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))).unwrap();
+    let ca_volume = shorts::ca_volume_with("QNC", "TSX-V", || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| Ok(None)).unwrap();
     let ca_position_for_trend_false = ca_position.clone();
     let ca_volume_for_trend_false = ca_volume.clone();
-    let out_ca_trend = shorts::finish(&c, ca_position, ca_volume, "QNC", "TSX-V", true, ShortMarket::Ca, |asof| shorts::ca_series_with("QNC", "TSX-V", asof, TODAY, shorts::SERIES, |d| rows_on(grids(d))), |issuer| { assert_eq!(issuer, "QUANTUM EMOTION CORP."); Some(212448707.0) });
+    let out_ca_trend = shorts::finish(&c, ca_position, ca_volume, "QNC", "TSX-V", true, ShortMarket::Ca, |asof| shorts::ca_series_with("QNC", "TSX-V", asof, TODAY, shorts::SERIES, |d| Ok(rows_on(grids(d)))), |issuer| { assert_eq!(issuer, "QUANTUM EMOTION CORP."); Ok(Some(212448707.0)) }).unwrap();
     out.insert("finish_ca_trend".into(), cell(&out_ca_trend));
-    let out_ca_no_trend = shorts::finish(&c, ca_position_for_trend_false, ca_volume_for_trend_false, "QNC", "TSX-V", false, ShortMarket::Ca, |_| panic!("trend is off: the series is never asked for"), |_| Some(212448707.0));
+    let out_ca_no_trend = shorts::finish(&c, ca_position_for_trend_false, ca_volume_for_trend_false, "QNC", "TSX-V", false, ShortMarket::Ca, |_| panic!("trend is off: the series is never asked for"), |_| Ok(Some(212448707.0))).unwrap();
     out.insert("finish_ca_no_trend".into(), cell(&out_ca_no_trend));
 
     // --- store round trip ---------------------------------------------------

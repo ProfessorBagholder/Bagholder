@@ -21,7 +21,7 @@ function initial(): string {
     const v = localStorage.getItem('bh2.theme')
     if (v && THEMES.some((t) => t[0] === v)) return v
   } catch {
-    /* ignore */
+    /* the browser keeps nothing: the default theme stands */
   }
   return 'nocturne'
 }
@@ -35,7 +35,7 @@ export function applyTheme(name: string): void {
   try {
     localStorage.setItem('bh2.theme', theme.name)
   } catch {
-    /* ignore */
+    /* the browser keeps nothing: the choice holds for this visit */
   }
 }
 

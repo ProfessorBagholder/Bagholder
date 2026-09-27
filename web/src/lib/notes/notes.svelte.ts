@@ -5,6 +5,8 @@
 // with its source, or an external url). Drives the timestamp word and the click
 // target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
 import { call } from '../api'
+import { flash } from '../ui.svelte'
+import { resyncAll } from '../live.svelte'
 import { watchDoc, type Holder } from '../live.svelte'
 import { arrived } from './channel.svelte'
 
@@ -61,13 +63,18 @@ export function showNotifications(): () => void {
 }
 
 // What the person does shows at once; the server's own account of it follows on
-// the stream and is written over the same rows.
+// the stream and is written over the same rows. A change the server refused is said
+// in the header, and the server's word taken again.
 export async function markAllRead(): Promise<void> {
   if (!doc.data || !doc.data.rows.some((n) => !n.readAt)) return
   const now = new Date().toISOString()
   doc.data.rows.forEach((n) => { if (!n.readAt) n.readAt = now })
   doc.data.unread = 0
-  await call('POST /api/notifications/read', { body: { ids: null } })
+  const r = await call('POST /api/notifications/read', { body: { ids: null } })
+  if (!r.ok) {
+    flash('Could not mark the notifications read: ' + r.error, 'err')
+    resyncAll()
+  }
 }
 
 export async function clearNotes(): Promise<void> {
@@ -75,5 +82,9 @@ export async function clearNotes(): Promise<void> {
     doc.data.rows.splice(0)
     doc.data.unread = 0
   }
-  await call('POST /api/notifications/clear')
+  const r = await call('POST /api/notifications/clear')
+  if (!r.ok) {
+    flash('Could not clear the notifications: ' + r.error, 'err')
+    resyncAll()
+  }
 }

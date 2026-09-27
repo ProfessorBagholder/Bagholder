@@ -106,7 +106,7 @@ fn test_ishares_holdings_csv() {
 
 #[test]
 fn test_evolve_page() {
-    let (sectors, holdings) = exposure::parse_evolve_page(EVOLVE_HTML);
+    let (sectors, holdings) = exposure::parse_evolve_page(EVOLVE_HTML).unwrap();
     assert_eq!(sectors.0, vec![("Information Technology".to_string(), 27.86), ("Financials".to_string(), 24.63), ("Communication Services".to_string(), 15.72)]);
     let got: Vec<(String, f64, String, String)> = holdings.iter().map(|r| (r.ticker.clone(), r.weight, r.sector.clone(), r.country.clone())).collect();
     assert_eq!(got, vec![
@@ -144,7 +144,7 @@ fn test_yahoo_summary() {
         "holdings": [{"symbol": "AAPL", "holdingName": "Apple Inc", "holdingPercent": {"raw": 0.07}}, {"symbol": "RY.TO", "holdingName": "Royal Bank of Canada", "holdingPercent": {"raw": 0.03}}],
         "sectorWeightings": [{"realestate": {"raw": 0.02}}, {"technology": {"raw": 0.30}}, {"financial_services": {"raw": 0.20}}],
     }}]}});
-    let (sectors, holdings) = exposure::parse_yahoo_summary(&data);
+    let (sectors, holdings) = exposure::parse_yahoo_summary(&data).unwrap();
     assert_eq!(sectors.0, vec![("Real Estate".to_string(), 2.0), ("Information Technology".to_string(), 30.0), ("Financials".to_string(), 20.0)]);
     let got: Vec<(String, f64, String)> = holdings.iter().map(|r| (r.ticker.clone(), r.weight, r.exchange.clone())).collect();
     assert_eq!(got, vec![("AAPL".to_string(), 7.0, "".to_string()), ("RY.TO".to_string(), 3.0, "TSX".to_string())]);
@@ -183,7 +183,7 @@ fn set_classify(table: HashMap<String, ShareClass>) {
 }
 
 fn lookthrough(c: &Ctx, rows: &[Holding]) -> ExposureRecord {
-    exposure::lookthrough(c, rows, 0, &mut Vec::new())
+    exposure::lookthrough(c, rows, 0, &mut Vec::new()).unwrap()
 }
 
 #[test]
@@ -215,7 +215,7 @@ fn test_a_fund_held_by_a_fund_is_looked_through() {
         _ => None,
     })));
     let c = ctx(&conn);
-    let rec = exposure::fund_exposure(&c, "OUTER", "Test Outer ETF", "TSX", 0, &mut Vec::new()).unwrap();
+    let rec = exposure::fund_exposure(&c, "OUTER", "Test Outer ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
     close(weight_of(&rec.sectors, "Financials"), 0.5);
     close(weight_of(&rec.sectors, "Information Technology"), 0.5);
     close(weight_of(&rec.countries, "Canada"), 0.5);
@@ -270,7 +270,7 @@ fn test_a_bare_ticker_answered_with_a_depositary_receipt_is_retried_as_the_us_li
         "PLTR:US" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir Technologies Inc.".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Nasdaq Global Select".into() }),
         _ => None,
     })));
-    let c = exposure::classify_share(&ctx(&conn), "PLTR", "", "");
+    let c = exposure::classify_share(&ctx(&conn), "PLTR", "", "").unwrap();
     assert_eq!((c.sector, c.country), ("Information Technology".to_string(), "United States".to_string()));
 }
 
@@ -283,7 +283,7 @@ fn test_a_family_without_an_adapter_falls_back_to_yahoo() {
         holdings: vec![holding("RY", "", 100.0, "", "", "TSX", "CAD", false)],
         source: "Yahoo Finance".into(), as_of: String::new(),
     })))));
-    let rec = exposure::fund_exposure(&ctx(&conn), "ZZZ", "Someone Else Global Equity ETF", "TSX", 0, &mut Vec::new()).unwrap();
+    let rec = exposure::fund_exposure(&ctx(&conn), "ZZZ", "Someone Else Global Equity ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
     assert_eq!(rec.sectors.0, vec![("Financials".to_string(), 1.0)], "the fund's stated sectors");
     assert_eq!(rec.countries.0, vec![("Canada".to_string(), 1.0)], "the countries from its named holdings");
     assert_eq!(rec.source, "Yahoo Finance");
@@ -292,11 +292,35 @@ fn test_a_family_without_an_adapter_falls_back_to_yahoo() {
 #[test]
 fn test_a_fund_no_source_covers_is_stored_as_unclassified() {
     let conn = db();
-    hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Err("down".into()))));
+    hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(None))));
     let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
-    let rec = exposure::refresh_security(&ctx(&conn), &sec);
+    let rec = exposure::refresh_security(&ctx(&conn), &sec).unwrap();
     assert_eq!((rec.sectors.0.clone(), rec.countries.0.clone(), rec.coverage), (vec![], vec![], 0.0));
     assert_eq!(bagholder_store::feeds::exposure_record(&conn, "sec-s-1").unwrap().unwrap().record.coverage, 0.0);
+}
+
+/// A source that failed is not a source that answered with nothing: the read
+/// fails with its words and nothing is written, so the record kept stands.
+#[test]
+fn test_a_fund_whose_source_failed_is_not_stored_as_unclassified() {
+    let conn = db();
+    hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Err("Yahoo Finance could not be reached".into()))));
+    let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
+    let err = exposure::refresh_security(&ctx(&conn), &sec).unwrap_err();
+    assert!(err.contains("Yahoo Finance could not be reached"), "{err}");
+    assert_eq!(bagholder_store::feeds::exposure_record(&conn, "sec-s-1").unwrap(), None);
+}
+
+/// A store that refuses the record's write fails the read: nothing is said to
+/// have been classified.
+#[test]
+fn test_an_exposure_write_the_store_refuses_fails_the_read() {
+    let conn = db();
+    hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(None))));
+    conn.execute_batch("CREATE TRIGGER refuse BEFORE INSERT ON exposures BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
+    let err = exposure::refresh_security(&ctx(&conn), &sec).unwrap_err();
+    assert!(err.contains("refused"), "{err}");
 }
 
 #[test]
@@ -305,9 +329,9 @@ fn test_a_share_is_its_one_sector_and_country() {
     set_classify(classified());
     let c = ctx(&conn);
     let sec = Security { id: "sec-s-ry".into(), symbol: "RY".into(), name: "Royal Bank of Canada".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
-    let rec = exposure::refresh_security(&c, &sec);
+    let rec = exposure::refresh_security(&c, &sec).unwrap();
     assert_eq!((rec.sectors.0.clone(), rec.countries.0.clone(), rec.coverage), (vec![("Financials".to_string(), 1.0)], vec![("Canada".to_string(), 1.0)], 1.0));
-    assert_eq!(exposure::stale(&c, &["sec-s-ry".to_string(), "sec-s-none".to_string()]), vec!["sec-s-none".to_string()]);
+    assert_eq!(exposure::stale(&c, &["sec-s-ry".to_string(), "sec-s-none".to_string()]).unwrap(), vec!["sec-s-none".to_string()]);
 }
 
 // --- PortfolioSlicesTest

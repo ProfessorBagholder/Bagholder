@@ -16,11 +16,13 @@ pub const JOURNAL_META: &str = "journal_v2";
 // meta
 // --------------------------------------------------------------------------
 
-/// `get_meta`.
+/// `get_meta`: the value, or `default` where the key has none. A store that
+/// cannot be read is the failure, never the default.
 pub fn get_meta(conn: &Connection, key: &str, default: &str) -> Result<String> {
+    use rusqlite::OptionalExtension;
     let v: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = ?", [key], |r| r.get(0))
-        .ok()
+        .optional()?
         .flatten();
     Ok(v.unwrap_or_else(|| default.to_string()))
 }

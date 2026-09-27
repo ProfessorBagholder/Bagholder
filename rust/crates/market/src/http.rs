@@ -84,7 +84,7 @@ pub fn get_bytes(url: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>, FetchEr
 }
 
 pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result<Value, FetchError> {
-    let body = serde_json::to_string(payload).unwrap_or_default();
+    let body = serde_json::to_string(payload).expect("a JSON value always serializes");
     let mut hdrs: Vec<(&str, &str)> = vec![
         ("User-Agent", UA),
         ("Content-Type", "application/json"),

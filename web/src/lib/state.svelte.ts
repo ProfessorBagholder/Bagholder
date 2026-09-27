@@ -39,8 +39,8 @@ export async function loadDetail(id: string | null): Promise<void> {
   const d = await call('GET /api/figures/detail', { query: { id } })
   if (detail.id !== id) return
   // a failed read is said where the executions go, never left as a table waiting for ever
-  if (d.error || !Array.isArray(d.fills)) {
-    detail.error = d.error || 'The executions could not be read.'
+  if (!d.ok) {
+    detail.error = d.error
     return
   }
   // the same answer is not a change: the chart and the executions stand as they are
@@ -111,7 +111,7 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
   const d = await call('POST /api/journal', { body: { id, thesis: t.thesis ?? '', tags: t.tags ?? [], grade: t.grade ?? '' } })
   if (!d.ok) {
     // said in the header, with the server's reason, and the row put back as the server has it
-    flash('Could not save journal entry: ' + (d.error || 'no answer'), 'err')
+    flash('Could not save journal entry: ' + d.error, 'err')
     resync()
   }
 }
@@ -126,7 +126,7 @@ export async function addWatch(m: { symbol: string; exchange: string; name: stri
   }
   const d = await call('POST /api/watchlist/add', { body: { symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency } })
   if (!d.ok) {
-    flash('Could not add ' + m.symbol + ' to the watchlist: ' + (d.error || 'no answer'), 'err')
+    flash('Could not add ' + m.symbol + ' to the watchlist: ' + d.error, 'err')
     resync()
   }
 }
@@ -140,7 +140,7 @@ export async function removeWatch(id: string, symbol: string): Promise<void> {
   mk.watchlist = mk.watchlist.filter((w) => w.id !== id)
   const d = await call('POST /api/watchlist/remove', { body: { id } })
   if (!d.ok) {
-    flash('Could not remove ' + symbol + ' from the watchlist: ' + (d.error || 'no answer'), 'err')
+    flash('Could not remove ' + symbol + ' from the watchlist: ' + d.error, 'err')
     resync()
   }
 }

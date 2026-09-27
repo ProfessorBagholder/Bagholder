@@ -34,7 +34,16 @@ pub fn running_tests() -> bool {
 /// database: a suite did exactly that, leaving a made-up QIMC headline in the
 /// person's news. The real folder is an error there, not a default.
 pub fn guard_home(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let base = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
+    // unset is no home to guard; a home that is not Unicode cannot be compared, and is refused
+    let var = |k: &str| match std::env::var(k) {
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{k} is not valid Unicode")),
+    };
+    let base = match var("HOME")? {
+        Some(v) => v,
+        None => var("USERPROFILE")?.unwrap_or_default(),
+    };
     let resolve = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let here = resolve(path);
     let same = !base.is_empty()

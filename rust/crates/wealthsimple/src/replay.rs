@@ -66,11 +66,15 @@ impl Replay {
                 continue;
             }
             let Ok(data) = root.obj("data") else { continue };
+            // a reply of a known operation read strictly, as the adapter reads it off
+            // the network: a list it lacks is a capture that does not read, said with
+            // the file it is in
+            let bad = |m: bagholder_sources::reply::Mismatch| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{name}: {m}"));
             if let Some(rest) = name.strip_prefix("positions@").and_then(|n| n.strip_suffix(".json")) {
                 let Some((account, day)) = rest.rsplit_once('@') else { continue };
                 let mut nodes = Vec::new();
-                for a in data.list("accounts").unwrap_or_default() {
-                    for e in a.obj("financials").and_then(|f| f.obj("current")).and_then(|c| c.obj("positionsAsOfDate")).and_then(|p| p.list("edges")).unwrap_or_default() {
+                for a in data.list("accounts").map_err(bad)? {
+                    for e in a.obj("financials").and_then(|f| f.obj("current")).and_then(|c| c.obj("positionsAsOfDate")).and_then(|p| p.list("edges")).map_err(bad)? {
                         if let Ok(n) = e.obj("node") {
                             nodes.push(n.value().clone());
                         }
@@ -78,7 +82,7 @@ impl Replay {
                 }
                 r.positions.insert((account.to_string(), day.to_string()), Value::Array(nodes));
             } else if let Ok(f) = data.obj("activityFeedItems") {
-                for e in f.list("edges").unwrap_or_default() {
+                for e in f.list("edges").map_err(bad)? {
                     if let Ok(node) = e.obj("node") {
                         if let Ok(id) = node.text("canonicalId") {
                             if seen_rows.insert(id.to_string()) {
@@ -98,7 +102,7 @@ impl Replay {
                     r.orders.insert(b.to_string(), o.value().clone());
                 }
             } else if let Ok(c) = data.obj("corporateActionChildActivities") {
-                if let Some(first) = c.list("nodes").unwrap_or_default().first() {
+                if let Some(first) = c.list("nodes").map_err(bad)?.first() {
                     if let Ok(a) = first.text("activityCanonicalId") {
                         r.entitlements.insert(a.to_string(), c.value().clone());
                     }
@@ -119,7 +123,7 @@ impl Replay {
                     r.conversions.insert(id.to_string(), t.value().clone());
                 }
             } else if let Ok(f) = data.obj("searchFundingIntents") {
-                for e in f.list("edges").unwrap_or_default() {
+                for e in f.list("edges").map_err(bad)? {
                     if let Ok(n) = e.obj("node") {
                         if let Ok(id) = n.text("id") {
                             r.conversions.insert(id.to_string(), n.value().clone());
@@ -127,7 +131,7 @@ impl Replay {
                     }
                 }
             } else if let Ok(i) = data.obj("identity") {
-                for e in i.obj("accounts").and_then(|a| a.list("edges")).unwrap_or_default() {
+                for e in i.obj("accounts").and_then(|a| a.list("edges")).map_err(bad)? {
                     // the accounts list's nodes (a reply asking only for ids is not one)
                     if let Ok(n) = e.obj("node").and_then(|n| n.field("unifiedAccountType").map(|_| n)) {
                         if n.text("id").is_ok_and(|id| seen_accounts.insert(id.to_string())) {

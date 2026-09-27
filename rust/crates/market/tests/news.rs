@@ -253,7 +253,7 @@ fn test_yahoo_keeps_what_its_ticker_tags_name() {
     bagholder_store::tables::set_meta(&d.conn, "tmx_form:QIMC", "@:CNX").unwrap();
     let forms: Vec<String> = [("PNG", "TSX-V", "CAD"), ("HG", "CSE", "CAD"), ("HBIX", "Cboe Canada", "CAD"), ("ASTS", "NASDAQ", "USD"),
                               ("LUNR", "NASDAQ", ""), ("QIMC", "", "CAD"), ("VEQT", "", "CAD"), ("F", "", "")]
-        .iter().map(|(a, b, c)| news::yahoo_form(&d.conn, a, b, c)).collect();
+        .iter().map(|(a, b, c)| news::yahoo_form(&d.conn, a, b, c).unwrap()).collect();
     assert_eq!(forms, ["PNG.V", "HG.CN", "HBIX.NE", "ASTS", "LUNR", "QIMC.CN", "VEQT.TO", ""],
                "the venue decides before the currency: a US listing with no currency is not `LUNR.TO`, another company");
 }
@@ -596,7 +596,7 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
     let listings = vec![listing("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), listing("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.")];
     let syms = |ls: Vec<news::Listing>| ls.into_iter().map(|l| l.symbol).collect::<Vec<_>>();
     assert_eq!(syms(news::stale(&d.conn, &listings, now + 60, 15).unwrap()), ["CH", "HG"], "the wire is fresh, the other sources never read");
-    assert!(!news::sources_for(&d.conn, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.").contains(&Feed::Sa), "Seeking Alpha has no CSE feed");
+    assert!(!news::sources_for(&d.conn, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.").unwrap().contains(&Feed::Sa), "Seeking Alpha has no CSE feed");
     let (started, landed) = (Mutex::new(Vec::<String>::new()), Mutex::new(Vec::<(String, bool)>::new()));
     let wire = wire_of(Some(vec![]));
     let empty = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };

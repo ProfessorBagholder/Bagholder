@@ -101,18 +101,18 @@ export async function refreshPreview(): Promise<void> {
   if (n !== asked) return
   if (ticketStore.t !== t) {
     // closed while asked: the draft it left holds what this answers
-    if (draftOf === t && draftStore.d && !('error' in r && r.error)) {
-      draftStore.d.preview = r as Preview
+    if (draftOf === t && draftStore.d && r.ok) {
+      draftStore.d.preview = r
       keepDraft()
     }
     return
   }
-  if ('error' in r && r.error) {
+  if (!r.ok) {
     ticketStore.previewError = r.error
     return
   }
   ticketStore.previewError = ''
-  ticketStore.preview = r as Preview
+  ticketStore.preview = r
 }
 
 // Max: on a Buy the whole shares the account's buying power covers at the working
@@ -174,7 +174,7 @@ function tkRememberedAccount(accounts: TicketAccount[]): string {
   try {
     const id = localStorage.getItem('bh2.ticketAccount')
     if (id && accounts.some((a) => a.id === id)) return id
-  } catch { /* ignore */ }
+  } catch { /* the browser keeps nothing: no account is remembered */ }
   return ''
 }
 function saveDraft(t: Ticket) {
@@ -185,12 +185,12 @@ function saveDraft(t: Ticket) {
   keepDraft()
 }
 function keepDraft() {
-  try { localStorage.setItem('bh2.ticketDraft', JSON.stringify(draftStore.d)) } catch { /* ignore */ }
+  try { localStorage.setItem('bh2.ticketDraft', JSON.stringify(draftStore.d)) } catch { /* the browser keeps nothing: the draft lasts as long as this page */ }
 }
 export function dropDraft() {
   draftStore.d = null
   draftOf = null
-  try { localStorage.removeItem('bh2.ticketDraft') } catch { /* ignore */ }
+  try { localStorage.removeItem('bh2.ticketDraft') } catch { /* the browser keeps nothing: there is no draft kept to drop */ }
 }
 function loadDraftFromStorage() {
   try { draftStore.d = JSON.parse(localStorage.getItem('bh2.ticketDraft') || 'null') } catch { draftStore.d = null }
@@ -291,8 +291,8 @@ export async function submit() {
   const cur = ticketStore.t
   if (!cur) return
   cur.busy = false
-  if (!r || !r.ok) {
-    cur.submitError = (r && (r.error as string)) || 'Could not submit the order.'
+  if (!r.ok) {
+    cur.submitError = r.error
     return
   }
   flash(notice(v, r.status), 'ok', 10000) // longer than the other notices: it names the whole order

@@ -234,6 +234,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-lint-fixture"
+version = "1.47.0"
+
+[[package]]
 name = "bagholder-market"
 version = "1.47.0"
 dependencies = [

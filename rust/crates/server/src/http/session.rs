@@ -61,8 +61,7 @@ async fn sync(State(state): State<AppState>) -> Api<session::SyncAnswer> {
 }
 
 async fn disconnect(State(state): State<AppState>) -> Api<OkOr> {
-    blocking(move || session::delete_session(&state.app)).await?;
-    Ok(axum::Json(OkOr::ok()))
+    answer(move || session::delete_session(&state.app).map_or_else(OkOr::err, |()| OkOr::ok())).await
 }
 
 async fn start_update(State(state): State<AppState>) -> Api<OkOr> {

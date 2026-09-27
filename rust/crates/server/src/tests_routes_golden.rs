@@ -247,7 +247,7 @@ fn test_refresh_route_reaches_a_connected_answer() {
     let got = runtime().block_on(json_of(app.clone(), req));
     assert_eq!(got, json!({"status": 200, "body": {"ok": true, "error": "", "connected": true}}));
     assert_eq!(asked.0.lock().unwrap().len(), 1);
-    assert_eq!(crate::session::load_session(&app).unwrap().refresh_token, "new-refresh");
+    assert_eq!(crate::session::load_session(&app).unwrap().unwrap().refresh_token, "new-refresh");
 }
 
 /// `http::orders`'s routes, on an app of their own with orders live against the fake

@@ -204,7 +204,7 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
         options::read(&ctx, &held.contracts).map_err(err)?;
     }
     let mut out = String::new();
-    let _ = writeln!(out, "{passes} pass(es) of reads");
+    writeln!(out, "{passes} pass(es) of reads").expect("writing to a String cannot fail");
     // each payer held, and the source that reads it
     if let Some(n) = &last {
         let held = needs_of(&book, n, clock.today)?;
@@ -214,7 +214,7 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
             by.entry(source).or_default().push(p.listing.symbol.clone());
         }
         for (source, symbols) in by {
-            let _ = writeln!(out, "payers held, read by {source}: {}", symbols.join(", "));
+            writeln!(out, "payers held, read by {source}: {}", symbols.join(", ")).expect("writing to a String cannot fail");
         }
     }
     for source in cache.sources().map_err(err)? {
@@ -227,13 +227,13 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
             *counts.entry(r.outcome.as_str()).or_default() += 1;
         }
         let counts: Vec<String> = counts.iter().map(|(k, n)| format!("{n} {k}")).collect();
-        let _ = writeln!(out, "{source}: {}", counts.join(", "));
+        writeln!(out, "{source}: {}", counts.join(", ")).expect("writing to a String cannot fail");
         for r in rows.iter().filter(|r| r.outcome != bagholder_sources::outcome::OutcomeKind::Answered) {
             let what = r.instrument.map(|i| i.to_string()).unwrap_or_default();
-            let _ = writeln!(out, "  {} {} {what} {}", r.outcome.as_str(), r.kind.as_str(), r.detail);
+            writeln!(out, "  {} {} {what} {}", r.outcome.as_str(), r.kind.as_str(), r.detail).expect("writing to a String cannot fail");
         }
         for r in rows.iter().filter_map(|r| r.shape_change.as_ref()) {
-            let _ = writeln!(out, "  shape changed: {r}");
+            writeln!(out, "  shape changed: {r}").expect("writing to a String cannot fail");
         }
     }
     // a held security no source reads matters where a figure waits on its payer:
@@ -241,7 +241,7 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
     let e = engine(&book, &cache, clock)?;
     let waiting: Vec<String> = unread.into_iter().filter(|(id, _)| e.figures().payers.contains_key(id)).map(|(id, symbol)| format!("{symbol} ({id})")).collect();
     if !waiting.is_empty() {
-        let _ = writeln!(out, "payers whose figures wait and that no source reads: {}", waiting.join(", "));
+        writeln!(out, "payers whose figures wait and that no source reads: {}", waiting.join(", ")).expect("writing to a String cannot fail");
     }
     Ok(out)
 }
@@ -256,9 +256,9 @@ fn health_report(cache: &MarketCache, now: Timestamp) -> Result<String, String> 
     let mut out = String::new();
     for source in cache.sources().map_err(err)? {
         let rows = cache.outcomes(&source).map_err(err)?;
-        let _ = writeln!(out, "{source}: {}", health::state(&rows, now));
+        writeln!(out, "{source}: {}", health::state(&rows, now)).expect("writing to a String cannot fail");
         for (kind, r) in health::last_of_each(&rows) {
-            let _ = writeln!(out, "  {} {} {} {}", kind.as_str(), r.at, r.kind.as_str(), r.detail);
+            writeln!(out, "  {} {} {} {}", kind.as_str(), r.at, r.kind.as_str(), r.detail).expect("writing to a String cannot fail");
         }
     }
     Ok(out)

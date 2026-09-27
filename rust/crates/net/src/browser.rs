@@ -39,8 +39,12 @@ fn helper() -> std::path::PathBuf {
             return p.into();
         }
     }
-    let exe = std::env::current_exe().unwrap_or_default();
-    exe.parent().map(|d| d.join("bagholder-browser")).unwrap_or_else(|| "bagholder-browser".into())
+    // a binary that cannot find its own path looks the helper up by name; a
+    // helper not found there fails to start, and the session is None as said below
+    match std::env::current_exe() {
+        Ok(exe) => exe.parent().map(|d| d.join("bagholder-browser")).unwrap_or_else(|| "bagholder-browser".into()),
+        Err(_) => "bagholder-browser".into(),
+    }
 }
 
 fn unbase64(text: &str) -> Vec<u8> {
@@ -148,7 +152,11 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // the helper may have exited already, and a kill of an exited process
+        // fails harmlessly; nothing is waiting on this session's answer
+        #[expect(clippy::let_underscore_must_use, reason = "the helper may already have exited; the session is being dropped")]
         let _ = self.child.kill();
+        #[expect(clippy::let_underscore_must_use, reason = "reaping the helper; its exit status answers nothing")]
         let _ = self.child.wait();
     }
 }

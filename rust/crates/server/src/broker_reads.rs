@@ -131,7 +131,8 @@ pub fn run(app: Arc<App>) {
     });
     match last {
         Ok(t) => app.state.lock().unwrap().last_sync = t.map(|t| t.to_string()).unwrap_or_default(),
-        Err(e) => log(&format!("bagholder: when Wealthsimple was last pulled could not be read: {e}")),
+        // said in the header until the next pull, which writes it
+        Err(e) => app.state.lock().unwrap().error = format!("When Wealthsimple was last pulled could not be read: {e}"),
     }
     let mut rest = Rest::default();
     // the page openings the balances have been read for
@@ -168,7 +169,9 @@ pub fn run(app: Arc<App>) {
 
 /// What the loop parked on: it wakes when any of it moves.
 pub(crate) struct Seen {
-    signed_in: bool,
+    /// Whether a sign-in is saved; one that cannot be read is its own value, so its
+    /// being read again, or put right, wakes the loop (the pass says the failure).
+    signed_in: Result<bool, String>,
     open: bool,
     /// The page openings already served by a read.
     served: u64,
@@ -179,17 +182,22 @@ pub(crate) struct Seen {
 
 impl Seen {
     pub(crate) fn now(app: &App, served: u64, resting: bool) -> Seen {
-        Seen { signed_in: session_file(app).load().ok().flatten().is_some(), open: app.events.watchers() > 0, served, resting }
+        Seen { signed_in: signed_in(app), open: app.events.watchers() > 0, served, resting }
     }
 
     /// Sync now, a sign-in or its end, the last page closing, or a page opening
     /// (a second one beside an open page too) that no read has served.
     pub(crate) fn changed(&self, app: &App) -> bool {
         app.pull_asked.load(Ordering::SeqCst)
-            || session_file(app).load().ok().flatten().is_some() != self.signed_in
+            || signed_in(app) != self.signed_in
             || (app.events.watchers() > 0) != self.open
             || (!self.resting && app.events.opened() != self.served)
     }
+}
+
+/// Whether a sign-in is saved, or why that cannot be read.
+fn signed_in(app: &App) -> Result<bool, String> {
+    session_file(app).load().map(|s| s.is_some()).map_err(|e| e.to_string())
 }
 
 /// Which read a pass makes.
@@ -446,12 +454,8 @@ pub(crate) fn sync_went(app: &Arc<App>, failed: Option<&str>) {
         (st.sync_fails, st.sync_first_fail.clone())
     };
     if fails == SYNC_FAILS_TOLD {
-        match app.open() {
-            Ok(conn) => {
-                crate::notify::emit(app, &conn, "connection", &format!("sync:{first}"), "Sync failing", reason, None);
-            }
-            Err(e) => log(&format!("bagholder: Sync failing could not be told: {e}")),
-        }
+        // a notice that could not be recorded is said in the header until one is
+        crate::notify::tell(app, "connection", &format!("sync:{first}"), "Sync failing", reason, None);
     }
 }
 
@@ -553,6 +557,22 @@ mod tests {
             assert_eq!(due(true, true, true, last, now), Some(Due::Pull), "a sync reads the balances with it");
         }
         assert_eq!(due(false, true, false, None, now), Some(Due::Balances), "never read");
+    }
+
+    /// A saved sign-in that cannot be read is neither signed in nor signed out: the
+    /// pass fails with it (said in the header), and putting it right wakes the loop.
+    #[test]
+    fn test_a_sign_in_that_cannot_be_read_is_not_taken_for_none() {
+        crate::tests_common::home(); // offline, dry orders
+        let home = tempfile::tempdir().unwrap();
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        std::fs::write(home.path().join("session.json"), "{ not a sign-in").unwrap();
+        let seen = Seen::now(&app, 0, false);
+        assert!(seen.signed_in.is_err(), "unreadable, not signed out");
+        assert!(!seen.changed(&app));
+        std::fs::remove_file(home.path().join("session.json")).unwrap();
+        assert!(seen.changed(&app), "the sign-in read again wakes the loop");
+        assert_eq!(Seen::now(&app, 0, false).signed_in, Ok(false));
     }
 
     /// The loop wakes for every page opening, a second page beside an open one

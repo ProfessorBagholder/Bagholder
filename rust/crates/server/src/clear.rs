@@ -212,7 +212,7 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
     }
     clear_old(&old, kinds).map_err(Refused::Failed)?;
     if kinds.contains(&Kind::Login) {
-        crate::session::delete_session(app);
+        crate::session::delete_session(app).map_err(Refused::Failed)?;
     }
     if kinds.contains(&Kind::Broker) {
         let mut st = app.state.lock().unwrap();

@@ -60,6 +60,9 @@ pub fn text(data: &[u8]) -> String {
     }
 }
 
+/// `pdftotext`'s text, or None where it could not give all of it (the PDF not
+/// written to it whole, its output not read whole, thirty seconds passed), and
+/// the built-in engine reads the PDF instead.
 fn run_pdftotext(exe: &std::path::Path, data: &[u8]) -> Option<String> {
     let mut child = Command::new(exe)
         .args(["-q", "-nopgbrk", "-", "-"])
@@ -70,23 +73,22 @@ fn run_pdftotext(exe: &std::path::Path, data: &[u8]) -> Option<String> {
         .ok()?;
     let mut stdin = child.stdin.take()?;
     let bytes = data.to_vec();
-    let writer = std::thread::spawn(move || {
-        let _ = stdin.write_all(&bytes);
-    });
+    let writer = std::thread::spawn(move || stdin.write_all(&bytes));
     let started = Instant::now();
     let stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
         let mut s = stdout;
-        let _ = std::io::Read::read_to_end(&mut s, &mut buf);
-        buf
+        std::io::Read::read_to_end(&mut s, &mut buf).map(|_| buf)
     });
     // thirty seconds at most
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if started.elapsed() > Duration::from_secs(30) => {
+                #[expect(clippy::let_underscore_must_use, reason = "it may have exited since it was last asked; either way it is given up on")]
                 let _ = child.kill();
+                #[expect(clippy::let_underscore_must_use, reason = "reaping a process given up on; its status answers nothing")]
                 let _ = child.wait();
                 return None;
             }
@@ -94,7 +96,8 @@ fn run_pdftotext(exe: &std::path::Path, data: &[u8]) -> Option<String> {
             Err(_) => return None,
         }
     }
-    let _ = writer.join();
-    let out = reader.join().ok()?;
+    // text from a PDF it was not given whole, or not read whole, is not its text
+    writer.join().ok()?.ok()?;
+    let out = reader.join().ok()?.ok()?;
     Some(String::from_utf8_lossy(&out).into_owned())
 }

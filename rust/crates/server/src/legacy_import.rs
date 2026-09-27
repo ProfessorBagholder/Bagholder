@@ -305,8 +305,18 @@ pub fn import(old: &Path, home: &Path, at: jiff::Timestamp) -> Result<Report, St
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| e.to_string())?;
         book.import(&data, &translated, at).map_err(|e| e.to_string())
     })();
-    let _ = std::fs::remove_file(&copy);
-    result
+    // the copy goes whatever the import came to; one that cannot be removed is said with it
+    match std::fs::remove_file(&copy) {
+        Ok(()) => result,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => result,
+        Err(e) => {
+            let left = format!("the copy {} could not be removed: {e}", copy.display());
+            Err(match result {
+                Ok(_) => format!("the book imported it, but {left}"),
+                Err(first) => format!("{first}; and {left}"),
+            })
+        }
+    }
 }
 
 /// `bagholder import-book <old database> <data folder>`: import and print the report.

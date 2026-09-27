@@ -2,16 +2,54 @@
 //
 // Every request goes through `request`: the header that marks a write as the
 // page's own, the JSON body, and one way of failing. The server answers a failure
-// with a status code and `{ ok: false, error }`; a request that never reached it
-// is given the same shape here, so a caller reads `ok` and `error` and nothing
-// throws. What the page *shows* does not come from here at all -- it arrives on
-// the event stream (live.ts); this is for what the person does, and for the few
-// things looked up on demand.
+// with a status code and `{ ok: false, error }`; a request that never reached it,
+// or an answer the page cannot read, is given the same shape here, so nothing
+// throws. An answer is either the route's own (`ok` true) or a `Failure`, and none
+// of the route's fields can be read before `ok` is checked: the type checker
+// refuses a caller that reads the answer without first meeting the failure. (A
+// caller that drops the answer altogether is refused by `no_dropped_failures.test.ts`.)
+// What the page *shows* does not come from here at all -- it arrives on the event
+// stream (live.ts); this is for what the person does, and for the few things looked
+// up on demand.
 
 import type { SymbolMatch } from './model'
 import type { Routes } from './generated/routes'
 
-export type Answer<T = Record<string, unknown>> = T & { ok?: boolean; error?: string }
+/** A request that failed: the server's reason, or why it was never answered. Never empty. */
+export interface Failure {
+  ok: false
+  error: string
+}
+/** A route's answer when it was taken: its own shape, with `ok` true (a declared `ok: false` form is the failure's). */
+export type Success<T> = T extends { ok: false } ? never : T & { ok: true }
+/** What a request comes back with: the route's answer, or a failure. */
+export type Answer<T = Record<string, unknown>> = Success<T> | Failure
+
+/** A failure in the page's own words, for what never reached the server or never came back readable. */
+export function failure(error: string): Failure {
+  return { ok: false, error }
+}
+
+// The server's answer, read strictly: an object whose `ok` is not false is the
+// route's answer; `ok: false`, or a status that is not a success, is a failure with
+// the server's reason (or the status, where it gave none); anything else is an answer
+// the page cannot read, and is said as one.
+async function answered<T>(r: Response): Promise<Answer<T>> {
+  const text = await r.text()
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return failure(r.ok ? 'Bagholder answered in a form this page cannot read.' : 'Bagholder answered ' + r.status + (r.statusText ? ' ' + r.statusText : '') + '.')
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return failure('Bagholder answered in a form this page cannot read.')
+  const o = body as Record<string, unknown>
+  if (o.ok === false || !r.ok) {
+    const why = typeof o.error === 'string' && o.error ? o.error : 'Bagholder answered ' + r.status + (r.statusText ? ' ' + r.statusText : '') + ' without a reason.'
+    return failure(why)
+  }
+  return { ...o, ok: true } as unknown as Answer<T>
+}
 
 type Param = string | number | boolean | null | undefined
 
@@ -32,8 +70,8 @@ export function request<T = Record<string, unknown>>(method: 'GET' | 'POST', pat
     opts.body = JSON.stringify(body)
   }
   return fetch(path, opts)
-    .then((r) => r.json() as Promise<Answer<T>>)
-    .catch((e) => ({ ok: false, error: String(e) }) as Answer<T>)
+    .then((r) => answered<T>(r))
+    .catch((e: unknown) => failure(String(e)))
 }
 
 export function get<T = Record<string, unknown>>(path: string, params?: Record<string, Param>): Promise<Answer<T>> {
@@ -102,7 +140,7 @@ export function lookup<K extends RouteKey>(route: K, rules: { keepMs?: number; k
     const key = opts.key ?? path
     const have = peek(key)
     if (have) return Promise.resolve(have)
-    if (opts.signal?.aborted) return Promise.resolve({ ok: false, error: 'aborted' } as Answer<T>)
+    if (opts.signal?.aborted) return Promise.resolve(failure('aborted'))
     let f = flying.get(key)
     if (!f) {
       const stop = new AbortController()
@@ -121,7 +159,7 @@ export function lookup<K extends RouteKey>(route: K, rules: { keepMs?: number; k
     // this reader may stop waiting; the request goes on while anyone else still is
     return new Promise((resolve) => {
       const gone = () => {
-        resolve({ ok: false, error: 'aborted' } as Answer<T>)
+        resolve(failure('aborted'))
         if (--flight.readers === 0 && flying.get(key) === flight) {
           flying.delete(key)
           flight.stop.abort()

@@ -23,3 +23,6 @@ bagholder-sources = { path = "../sources" }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

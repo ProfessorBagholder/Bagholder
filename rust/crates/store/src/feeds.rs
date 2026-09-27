@@ -22,6 +22,12 @@ fn text(r: &Row, name: &str) -> Result<String> {
 
 fn up(s: &str) -> String { s.trim().to_uppercase() }
 
+/// A column's stored JSON read back: text that does not parse is a row the
+/// store cannot read, an error, never an empty value.
+fn stored_json<T: serde::de::DeserializeOwned>(column: &str, raw: &str) -> Result<T> {
+    serde_json::from_str(raw).map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, format!("the stored {column} could not be read: {e}").into()))
+}
+
 // --------------------------------------------------------------------------
 // exposure
 // --------------------------------------------------------------------------
@@ -108,16 +114,17 @@ pub struct StoredExposure {
 /// One row of the `exposures` table into a `StoredExposure`, for
 /// `exposure_record` and `snapshot::exposures_part`.
 pub fn stored_exposure(r: &Row) -> Result<StoredExposure> {
-    let weights = |raw: Option<String>| -> Weights {
-        match raw {
-            Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_default(),
-            _ => Weights::default(),
+    // an empty column is a record with no weights; text that does not parse is not
+    let weights = |column: &str| -> Result<Weights> {
+        match r.get::<_, Option<String>>(column)? {
+            Some(s) if !s.is_empty() => stored_json(column, &s),
+            _ => Ok(Weights::default()),
         }
     };
     Ok(StoredExposure {
         record: ExposureRecord {
-            sectors: weights(r.get("sectors")?),
-            countries: weights(r.get("countries")?),
+            sectors: weights("sectors")?,
+            countries: weights("countries")?,
             coverage: r.get::<_, Option<f64>>("coverage")?.unwrap_or(0.0),
             source: text(r, "source")?,
             as_of: text(r, "as_of")?,
@@ -138,8 +145,8 @@ pub fn replace_exposure(conn: &Connection, key: &str, rec: &ExposureRecord, now:
          as_of = excluded.as_of, industry = excluded.industry, error = excluded.error, fetched_at = excluded.fetched_at",
         rusqlite::params![
             key,
-            serde_json::to_string(&rec.sectors).unwrap_or_default(),
-            serde_json::to_string(&rec.countries).unwrap_or_default(),
+            serde_json::to_string(&rec.sectors).expect("names to numbers always serialize"),
+            serde_json::to_string(&rec.countries).expect("names to numbers always serialize"),
             rec.coverage,
             rec.source,
             rec.as_of,
@@ -567,12 +574,21 @@ pub struct Filing {
 
 /// A column that may not exist on this table at all, so it reads as empty
 /// when absent: the legacy filings columns are
-/// gone from a table created under the current schema.
-fn maybe(r: &Row, name: &str) -> String {
-    match r.as_ref().column_index(name) {
-        Ok(i) => r.get::<_, Option<String>>(i).ok().flatten().unwrap_or_default(),
-        Err(_) => String::new(),
-    }
+/// gone from a table created under the current schema. A number an older
+/// row kept there reads as its text; a blob is no text and is an error.
+fn maybe(r: &Row, name: &str) -> Result<String> {
+    use rusqlite::types::ValueRef;
+    let i = match r.as_ref().column_index(name) {
+        Ok(i) => i,
+        Err(_) => return Ok(String::new()),
+    };
+    Ok(match r.get_ref(i)? {
+        ValueRef::Null => String::new(),
+        ValueRef::Integer(n) => n.to_string(),
+        ValueRef::Real(x) => x.to_string(),
+        ValueRef::Text(t) => String::from_utf8(t.to_vec()).map_err(|e| rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, Box::new(e)))?,
+        ValueRef::Blob(_) => return Err(rusqlite::Error::InvalidColumnType(i, name.to_string(), rusqlite::types::Type::Blob)),
+    })
 }
 
 /// `_filing_from_row`: the old single-source columns stand in when the
@@ -580,32 +596,32 @@ fn maybe(r: &Row, name: &str) -> String {
 /// A row whose source names no known regulator is skipped: only SEDAR+ and
 /// SEC exist.
 fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
-    let or = |a: &str, b: &str| -> String {
-        let x = maybe(r, a);
-        if x.is_empty() { maybe(r, b) } else { x }
+    let or = |a: &str, b: &str| -> Result<String> {
+        let x = maybe(r, a)?;
+        if x.is_empty() { maybe(r, b) } else { Ok(x) }
     };
-    let source = match Regulator::parse(&maybe(r, "source")) {
+    let source = match Regulator::parse(&maybe(r, "source")?) {
         Some(s) => s,
         None => return Ok(None),
     };
     let doc = FiledDocument {
-        id: maybe(r, "id"),
+        id: maybe(r, "id")?,
         source,
-        category: maybe(r, "category"),
-        profile_no: maybe(r, "profile_no"),
-        issuer: maybe(r, "issuer"),
-        form: or("type", "file"),
-        title: maybe(r, "title"),
-        date: or("date", "submitted_at"),
-        date_text: or("date_text", "submitted"),
-        size: maybe(r, "size"),
-        url: maybe(r, "url"),
+        category: maybe(r, "category")?,
+        profile_no: maybe(r, "profile_no")?,
+        issuer: maybe(r, "issuer")?,
+        form: or("type", "file")?,
+        title: maybe(r, "title")?,
+        date: or("date", "submitted_at")?,
+        date_text: or("date_text", "submitted")?,
+        size: maybe(r, "size")?,
+        url: maybe(r, "url")?,
     };
     Ok(Some(Filing {
         doc,
-        subject: maybe(r, "subject"),
-        summary: maybe(r, "summary"),
-        enriched_at: maybe(r, "enriched_at"),
+        subject: maybe(r, "subject")?,
+        summary: maybe(r, "summary")?,
+        enriched_at: maybe(r, "enriched_at")?,
         enrich_version: r.get::<_, Option<i64>>("enrich_version")?,
         // read for good: a regulator's form, read from its own boxes
         enrich_final: match r.as_ref().column_index("enrich_final") {
@@ -616,7 +632,7 @@ fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
             Ok(_) => r.get::<_, Option<i64>>("enrich_reads")?.unwrap_or(0),
             Err(_) => 0,
         },
-        fetched_at: maybe(r, "fetched_at"),
+        fetched_at: maybe(r, "fetched_at")?,
     }))
 }
 
@@ -889,7 +905,7 @@ fn short_row(r: &Row) -> Result<Option<StoredShorts>> {
     };
     let series: Option<String> = r.get("series")?;
     let series: Vec<ShortPoint> = match series {
-        Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_default(),
+        Some(s) if !s.is_empty() => stored_json("series", &s)?,
         _ => vec![],
     };
     Ok(Some(StoredShorts {
@@ -931,15 +947,17 @@ pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> 
         let series: Vec<ShortPoint> = match &rec.series {
             Some(s) => s.clone(),
             None => {
+                use rusqlite::OptionalExtension;
                 let held: Option<String> = conn
                     .query_row(
                         "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
                         rusqlite::params![sym, ex],
                         |r| r.get(0),
                     )
-                    .unwrap_or(None);
+                    .optional()?
+                    .flatten();
                 match held {
-                    Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_default(),
+                    Some(h) if !h.is_empty() => stored_json("series", &h)?,
                     _ => vec![],
                 }
             }
@@ -968,7 +986,7 @@ pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> 
                 rec.total_volume,
                 rec.volume_pct,
                 rec.name,
-                serde_json::to_string(&series).unwrap_or_default(),
+                serde_json::to_string(&series).expect("dated share counts always serialize"),
                 version,
                 now,
             ],
@@ -1058,7 +1076,7 @@ pub fn save_gauge(conn: &Connection, name: &str, rec: &Gauge, now: &str, version
         let rest = GaugeRest { previous: rec.previous.clone(), parts: rec.parts.clone(), series: rec.series.clone() };
         conn.execute(
             "INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![key, rec.source, rec.score, rec.rating, rec.as_of, serde_json::to_string(&rest).unwrap_or_default(), version, now],
+            rusqlite::params![key, rec.source, rec.score, rec.rating, rec.as_of, serde_json::to_string(&rest).expect("a gauge's readings always serialize"), version, now],
         )?;
         Ok(())
     })
@@ -1074,7 +1092,11 @@ pub fn gauge(conn: &Connection, name: &str) -> Result<Option<StoredGauge>> {
     let score: Option<f64> = r.get("score")?;
     let score = match score { Some(s) => s, None => return Ok(None) };
     let payload: Option<String> = r.get("payload")?;
-    let rest: GaugeRest = payload.as_deref().and_then(|p| serde_json::from_str(p).ok()).unwrap_or_default();
+    // an empty payload is a reading with nothing beyond its score; text that does not parse is not
+    let rest: GaugeRest = match payload.as_deref() {
+        Some(p) if !p.is_empty() => stored_json("payload", p)?,
+        _ => GaugeRest::default(),
+    };
     Ok(Some(StoredGauge {
         gauge: Gauge {
             index: text(r, "name")?,
@@ -1194,7 +1216,7 @@ impl Default for Notification {
 fn notification(r: &Row) -> Result<Notification> {
     let extra: Option<String> = r.get("extra")?;
     let extra: NotificationExtra = match extra {
-        Some(e) if !e.is_empty() => serde_json::from_str(&e).unwrap_or_default(),
+        Some(e) if !e.is_empty() => stored_json("extra", &e)?,
         _ => NotificationExtra::default(),
     };
     Ok(Notification {

@@ -38,8 +38,9 @@ pub fn available() -> bool {
     true
 }
 
-fn pace() {
-    bagholder_net::machine::turn("sec.gov", PACE);
+fn pace() -> Fetched<()> {
+    bagholder_net::machine::turn("sec.gov", PACE)
+        .map_err(|r| SourceError::Unavailable(format!("sec.gov refused a request and is resting until {}", r.until)))
 }
 
 /// The standard reason phrase for an HTTP status, for failure messages.
@@ -66,7 +67,7 @@ fn describe(e: &bagholder_net::client::Error) -> String {
 }
 
 fn get(url: &str, what: &str) -> Fetched<bagholder_net::client::Response> {
-    pace();
+    pace()?;
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate"), ("Accept", "application/json")];
     bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
@@ -302,7 +303,7 @@ pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limi
     }
     let raw = get_json(&SUBMISSIONS_URL.replace("{}", &format!("{:010}", cik)))?;
     let sub: Submissions = match &raw {
-        Value::Object(_) => serde_json::from_value(raw).unwrap_or_default(),
+        Value::Object(_) => serde_json::from_value(raw).map_err(|e| SourceError::Other(format!("EDGAR's submissions answer does not read: {e}")))?,
         other => {
             return Err(SourceError::Other(format!(
                 "AttributeError: '{}' object has no attribute 'get'",
@@ -447,7 +448,7 @@ fn fetch_url(url: &str) -> Fetched<(Vec<u8>, String)> {
     if !url.starts_with("https://www.sec.gov/") {
         return Err(SourceError::Unavailable("not an SEC document url".into()));
     }
-    pace();
+    pace()?;
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate")];
     let resp = bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))

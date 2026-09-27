@@ -10,7 +10,7 @@
 
 use serde_json::{json, Value};
 
-use crate::http::{post_json, TMX_HEADERS};
+use crate::http::{post_json, FetchError, TMX_HEADERS};
 use crate::quotes::SourceQuote;
 use bagholder_model::lenient;
 use bagholder_model::value::field_s;
@@ -113,34 +113,61 @@ pub fn parse_tmx_quote(data: &Value) -> Option<SourceQuote> {
     })
 }
 
-fn ask(symbol: &str) -> Value {
+fn ask(symbol: &str) -> Result<Value, FetchError> {
     let payload = json!({
         "operationName": "getQuoteBySymbol",
         "variables": {"symbol": symbol, "locale": "en"},
         "query": TMX_QUOTE_QUERY,
     });
-    post_json(TMX_URL, &payload, &TMX_HEADERS).unwrap_or(Value::Null)
+    post_json(TMX_URL, &payload, &TMX_HEADERS)
+}
+
+/// Why a lookup through TMX's forms failed: the lookup's own request, TMX
+/// asked which form answers, or the store that remembers the form.
+#[derive(Debug)]
+pub enum LookupError<E> {
+    Source(E),
+    Resolve(FetchError),
+    Store(rusqlite::Error),
+}
+
+impl<E> From<rusqlite::Error> for LookupError<E> {
+    fn from(e: rusqlite::Error) -> Self {
+        LookupError::Store(e)
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for LookupError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LookupError::Source(e) => write!(f, "{e}"),
+            LookupError::Resolve(e) => write!(f, "TMX Money {}", crate::http::describe_failure(e)),
+            LookupError::Store(e) => write!(f, "the store could not be read or written: {e}"),
+        }
+    }
 }
 
 /// The form TMX answered to for this symbol, when one
 /// has been remembered.
-pub fn tmx_remembered(conn: &rusqlite::Connection, key: &str) -> String {
+pub fn tmx_remembered(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<String> {
     if key.is_empty() || key.starts_with('^') {
-        return key.to_string();
+        return Ok(key.to_string());
     }
     let bare = tmx_bare(key);
-    let v = bagholder_store::tables::get_meta(conn, &format!("tmx_form:{}", bare), "").unwrap_or_default();
+    let v = bagholder_store::tables::get_meta(conn, &format!("tmx_form:{}", bare), "")?;
     if let Some(rest) = v.strip_prefix('@') {
-        return format!("{}{}", bare, rest);
+        return Ok(format!("{}{}", bare, rest));
     }
-    key.to_string()
+    Ok(key.to_string())
 }
 
 /// Which of TMX's forms answers, checked by the venue
-/// its quote names. Remembered for good; a miss remembered for a day.
-pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> String {
+/// its quote names. Remembered for good; a miss remembered for a day. A form
+/// TMX did not answer for is no miss: the failure is returned and nothing is
+/// remembered.
+pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Result<String, LookupError<FetchError>> {
     if key.is_empty() || key.starts_with('^') {
-        return key.to_string();
+        return Ok(key.to_string());
     }
     let bare = tmx_bare(key);
     let suffix = &key[bare.len()..];
@@ -155,20 +182,20 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
     };
 
     let meta_key = format!("tmx_form:{}", bare);
-    let v = bagholder_store::tables::get_meta(conn, &meta_key, "").unwrap_or_default();
+    let v = bagholder_store::tables::get_meta(conn, &meta_key, "")?;
     if let Some(rest) = v.strip_prefix('@') {
-        return format!("{}{}", bare, rest);
+        return Ok(format!("{}{}", bare, rest));
     }
     if let Some(when) = v.strip_prefix("none@") {
         let cutoff = bagholder_model::dates::shift_date(today, -RESOLVE_RETRY_DAYS);
         if when > cutoff.as_str() {
-            return String::new();
+            return Ok(String::new());
         }
     }
 
     for form in forms {
         let cand = format!("{}{}", bare, form);
-        let q = ask(&cand);
+        let q = ask(&cand).map_err(LookupError::Resolve)?;
         let venue = q
             .get("data")
             .and_then(|d| d.get("getQuoteBySymbol"))
@@ -176,72 +203,67 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
             .unwrap_or_default();
         // the venue the quote names must be the one the form asks for
         if bagholder_sources::venue::tmx_venue_matches(form, &venue) {
-            let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("@{}", form));
-            return cand;
+            bagholder_store::tables::set_meta(conn, &meta_key, &format!("@{}", form))?;
+            return Ok(cand);
         }
     }
-    let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("none@{}", today));
-    String::new()
+    bagholder_store::tables::set_meta(conn, &meta_key, &format!("none@{}", today))?;
+    Ok(String::new())
 }
 
 /// The remembered or given form first; when it answers
 /// nothing, the form TMX resolves for the symbol instead.
-pub fn tmx_lookup<T, F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> (Option<T>, String)
+pub fn tmx_lookup<T, F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<T>, String), LookupError<FetchError>>
 where
     F: Fn(&str) -> Option<T>,
 {
-    let first = tmx_remembered(conn, key);
-    let r = f(&first);
-    if r.is_some() || key.is_empty() || key.starts_with('^') {
-        return (r, first);
-    }
-    let alt = tmx_resolve(conn, key, today);
-    if !alt.is_empty() && alt != first {
-        return (f(&alt), alt);
-    }
-    (r, first)
+    tmx_lookup_try(conn, key, today, |k| Ok::<_, FetchError>(f(k)))
 }
 
 /// The TMX lookup for a lookup that can fail: a failure is passed straight
 /// back, so it stops there -- nothing is resolved and nothing
 /// is remembered on the strength of a request that did not get an answer.
-pub fn tmx_lookup_try<T, F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<T>, String), E>
+pub fn tmx_lookup_try<T, F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<T>, String), LookupError<E>>
 where
     F: Fn(&str) -> Result<Option<T>, E>,
 {
-    let first = tmx_remembered(conn, key);
-    let r = f(&first)?;
+    let first = tmx_remembered(conn, key)?;
+    let r = f(&first).map_err(LookupError::Source)?;
     if r.is_some() || key.is_empty() || key.starts_with('^') {
         return Ok((r, first));
     }
-    let alt = tmx_resolve(conn, key, today);
+    let alt = tmx_resolve(conn, key, today).map_err(|e| match e {
+        LookupError::Source(e) | LookupError::Resolve(e) => LookupError::Resolve(e),
+        LookupError::Store(e) => LookupError::Store(e),
+    })?;
     if !alt.is_empty() && alt != first {
-        return Ok((f(&alt)?, alt));
+        return Ok((f(&alt).map_err(LookupError::Source)?, alt));
     }
     Ok((r, first))
 }
 
-pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) -> Option<SourceQuote> {
-    tmx_lookup(conn, tmx_sym, today, |k| parse_tmx_quote(&ask(k))).0
+/// TMX's quote under the form that answers; a request that fails is the failure.
+pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) -> Result<Option<SourceQuote>, LookupError<FetchError>> {
+    Ok(tmx_lookup_try(conn, tmx_sym, today, |k| ask(k).map(|d| parse_tmx_quote(&d)))?.0)
 }
 
 /// The listing TMX knows a bare ticker as.
 ///
 /// The public directories cover the TSX and Nasdaq registries alone, so this
 /// is how a CSE or Cboe Canada listing is found by name.
-pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Option<bagholder_model::wire::SymbolMatch> {
+pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Result<Option<bagholder_model::wire::SymbolMatch>, LookupError<FetchError>> {
     let bare = tmx_bare(&bagholder_model::venues::tmx_symbol(symbol));
     if bare.is_empty() || bare.contains(' ') {
-        return None;
+        return Ok(None);
     }
-    let form = tmx_resolve(conn, &bare, today);
+    let form = tmx_resolve(conn, &bare, today)?;
     if form.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let q = parse_tmx_quote(&ask(&form))?;
+    let Some(q) = parse_tmx_quote(&ask(&form).map_err(LookupError::Source)?) else { return Ok(None) };
     let venue = tmx_venue(&q.exchange);
     if venue.is_empty() {
-        return None;
+        return Ok(None);
     }
     let name = if q.name.is_empty() { bare.clone() } else { q.name };
     let currency = if !q.currency.is_empty() {
@@ -251,7 +273,7 @@ pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Op
     } else {
         "CAD".into()
     };
-    Some(bagholder_model::wire::SymbolMatch { symbol: bare, name, exchange: venue.to_string(), currency, ..Default::default() })
+    Ok(Some(bagholder_model::wire::SymbolMatch { symbol: bare, name, exchange: venue.to_string(), currency, ..Default::default() }))
 }
 
 /// The symbol a Canadian listing's declared
@@ -307,17 +329,14 @@ pub const TMX_BATCH: i64 = 24;
 
 /// The quote and the declared distribution history for one
 /// Canadian listing. The exchange picks the form of the symbol.
-pub fn fetch_tmx(conn: &rusqlite::Connection, symbol: &str, exchange: &str, today: &str) -> (Option<SourceQuote>, Vec<DistributionRecord>) {
-    let sym = match tmx_record_symbol(symbol, exchange) { Some(s) => s, None => return (None, vec![]) };
-    let (quote, form) = tmx_lookup(conn, &sym, today, |k| parse_tmx_quote(&ask(k)));
+pub fn fetch_tmx(conn: &rusqlite::Connection, symbol: &str, exchange: &str, today: &str) -> Result<(Option<SourceQuote>, Vec<DistributionRecord>), LookupError<FetchError>> {
+    let sym = match tmx_record_symbol(symbol, exchange) { Some(s) => s, None => return Ok((None, vec![])) };
+    let (quote, form) = tmx_lookup_try(conn, &sym, today, |k| ask(k).map(|d| parse_tmx_quote(&d)))?;
     let payload = json!({
         "operationName": "getDividendsForSymbol",
         "variables": {"symbol": form, "page": 1, "batch": TMX_BATCH},
         "query": TMX_DIVIDENDS_QUERY,
     });
-    let divs = match post_json(TMX_URL, &payload, &TMX_HEADERS) {
-        Ok(d) => parse_tmx_dividends(&d),
-        Err(_) => vec![],
-    };
-    (quote, divs)
+    let divs = parse_tmx_dividends(&post_json(TMX_URL, &payload, &TMX_HEADERS).map_err(LookupError::Source)?);
+    Ok((quote, divs))
 }

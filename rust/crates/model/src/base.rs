@@ -129,7 +129,14 @@ impl Inputs {
     }
     pub fn set_accounts(&mut self, list: &[Value]) {
         // an account is read whatever it is: a row that is not an object is an account with nothing known
-        self.accounts = Arc::new(list.iter().map(|r| AccountRow::deserialize(r).unwrap_or_default()).collect());
+        self.accounts = Arc::new(
+            list.iter()
+                .map(|r| match r {
+                    Value::Object(_) => AccountRow::deserialize(r).expect("every field of an account is read leniently from any value"),
+                    _ => AccountRow::default(),
+                })
+                .collect(),
+        );
     }
     pub fn set_balances(&mut self, list: &[Value]) {
         self.balances = rows(list);

@@ -930,8 +930,11 @@ impl<'a> Matcher<'a> {
                 let currency = self.currency(instrument);
                 let flags = BTreeSet::from([Flag::NoExpiryRecord]);
                 for (direction, qty) in lots {
-                    // nothing is shared out of a zero value or fee, so this cannot fail
-                    let _ = self.close(account, instrument, direction, qty, Ok(Money::zero(currency)), Money::zero(currency), &Closer::Expiry, expiry, None, &flags);
+                    // nothing is shared out of a zero value or fee, but the lot's own fee
+                    // still is, and a share that does not fit is a gap
+                    if let Err(g) = self.close(account, instrument, direction, qty, Ok(Money::zero(currency)), Money::zero(currency), &Closer::Expiry, expiry, None, &flags) {
+                        self.taint(account, instrument, &g);
+                    }
                 }
             }
             self.record_units(expiry);
@@ -1106,7 +1109,10 @@ impl<'a> Matcher<'a> {
         let lots: Vec<(Direction, Dec)> = self.book(account, instrument).lots.iter().map(|l| (l.direction, l.qty)).collect();
         let closer = Closer::Transaction(t.id.clone());
         for (d, q) in lots {
-            let _ = self.close(account, instrument, d, q, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &BTreeSet::new());
+            // a lot's own fee is still shared out, and a share that does not fit is a gap
+            if let Err(g) = self.close(account, instrument, d, q, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &BTreeSet::new()) {
+                self.taint(account, instrument, &g);
+            }
         }
     }
 

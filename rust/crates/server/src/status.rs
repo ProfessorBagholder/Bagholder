@@ -62,16 +62,34 @@ pub struct StatusAnswer {
 }
 
 pub fn status(app: &Arc<App>) -> Status {
-    let conn = app.open().ok();
+    // what the header reads that fails is said in its error line, never read as nothing
+    let mut unread: Vec<String> = vec![];
+    let conn = app.open().map_err(|e| format!("The book could not be opened: {e}"));
     // the book's counts, as the figures hold them
     let (acts, accounts) = app.figures.get().and_then(|f| f.read(|e| (e.inputs().ledger.transactions.len() as i64, e.inputs().ledger.accounts.len() as i64))).unwrap_or((0, 0));
-    let upd = update::update_status(app);
-    let sess = session::load_session(app);
-    let notify_status = conn.as_ref().and_then(|c| notify::status(c).ok()).unwrap_or_default();
+    let upd = update::update_status(app).unwrap_or_else(|e| {
+        unread.push(e);
+        update::UpdateRecord::default()
+    });
+    let sess = session::load_session(app).unwrap_or_else(|e| {
+        unread.push(e);
+        None
+    });
+    let notify_status = match &conn {
+        Ok(c) => notify::status(c).unwrap_or_else(|e| {
+            unread.push(format!("The notifications could not be read: {e}"));
+            NotifyStatus::default()
+        }),
+        Err(e) => {
+            unread.push(e.clone());
+            NotifyStatus::default()
+        }
+    };
     let open_orders = orders::open_orders_count(app, None);
-    let can_update = update::can_update(app, None);
+    let can_update = update::can_update(app, &upd);
     let off = update::updates_off();
-    let mut sources = app.figures.get().map(|f| f.source_failures().unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default();
+    let mut sources = unread;
+    sources.extend(app.figures.get().map(|f| f.source_failures().unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
     let st = app.state.lock().unwrap();
@@ -113,10 +131,16 @@ pub fn status(app: &Arc<App>) -> Status {
 /// sentences in one line. Wealthsimple's (the pull, the session, the sign-in),
 /// the balances', the figures', then each market source failing (SPEC §1: every
 /// failure is said in the header until that source succeeds). Empty when
-/// nothing is failing.
+/// nothing is failing; one failure met by two readers is said once.
 pub fn failures(st: &app::State, sources: &[String]) -> String {
     let own = [st.error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str()];
-    own.into_iter().chain(sources.iter().map(String::as_str)).map(str::trim).filter(|e| !e.is_empty()).map(sentence).collect::<Vec<_>>().join(" ")
+    let mut said: Vec<String> = vec![];
+    for s in own.into_iter().chain(sources.iter().map(String::as_str)).map(str::trim).filter(|e| !e.is_empty()).map(sentence) {
+        if !said.contains(&s) {
+            said.push(s);
+        }
+    }
+    said.join(" ")
 }
 
 /// `s` ending as a sentence does.
@@ -129,19 +153,21 @@ fn sentence(s: &str) -> String {
 }
 
 /// `GET /api/status`'s own answer: `status` plus the two version strings a
-/// polling page reloads on.
-pub fn answer(app: &Arc<App>) -> StatusAnswer {
-    let conn = app.open().ok();
-    let data_version = conn.as_ref().and_then(|c| versions::data_version(c).ok()).unwrap_or_default();
-    let core_version = conn.as_ref().and_then(|c| versions::core_version(c).ok()).unwrap_or_default();
+/// polling page reloads on. A version that cannot be read fails the request: a
+/// page told nothing moved would reload nothing.
+pub fn answer(app: &Arc<App>) -> Result<StatusAnswer, String> {
+    let conn = app.open().map_err(|e| format!("The book could not be opened: {e}"))?;
+    let data_version = versions::data_version(&conn).map_err(|e| format!("The book's version could not be read: {e}"))?;
+    let core_version = versions::core_version(&conn).map_err(|e| format!("The book's version could not be read: {e}"))?;
+    drop(conn);
     let today = bagholder_model::clock::today_local();
-    StatusAnswer {
+    Ok(StatusAnswer {
         status: status(app),
         data_version: format!("{}|{}", data_version, today),
         // everything the model reads except the quotes: when this is unchanged but the
         // data version moved, only prices ticked (read by the legacy page, which polls)
         core_version: format!("{}|{}", core_version, today),
-    }
+    })
 }
 
 #[cfg(test)]

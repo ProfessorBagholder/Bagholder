@@ -309,17 +309,17 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     let figures = engine.figures();
     let mut out = String::new();
     match from_book {
-        false => writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes; no benchmark (the old store's are price-only levels).").ok(),
-        true => writeln!(out, "Compared on {today}. Rates, declared distributions and stated frequencies from the book; quotes, closes and the benchmarks' trackers from the market cache, as the readers wrote them.").ok(),
+        false => writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes; no benchmark (the old store's are price-only levels).").expect("writing to a String cannot fail"),
+        true => writeln!(out, "Compared on {today}. Rates, declared distributions and stated frequencies from the book; quotes, closes and the benchmarks' trackers from the market cache, as the readers wrote them.").expect("writing to a String cannot fail"),
     };
-    writeln!(out, "Re-derived with the import mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).ok();
+    writeln!(out, "Re-derived with the import mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).expect("writing to a String cannot fail");
     let mut changed_kinds: BTreeMap<String, usize> = BTreeMap::new();
     for id in &changes.changed {
-        if let Some(t) = engine_inputs_transaction(&book, id) {
+        if let Some(t) = engine_inputs_transaction(&book, id)? {
             *changed_kinds.entry(t.kind.as_str().to_string()).or_default() += 1;
         }
     }
-    writeln!(out, "  changed, by kind now: {changed_kinds:?}").ok();
+    writeln!(out, "  changed, by kind now: {changed_kinds:?}").expect("writing to a String cannot fail");
 
     // trades, by the old key: a round trip is named for the row that opened it
     let mut new_by_old: BTreeMap<String, &bagholder_engine::trades::TradeFig> = BTreeMap::new();
@@ -378,11 +378,11 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
             causes.entry("new trade the old model did not have".into()).or_default().push(format!("{key} pnl {} flags {:?} gaps {:?}", money(&n.pnl), n.flags, n.gaps().words()));
         }
     }
-    writeln!(out, "\nTrades: {} old, {} new, {} the same to the cent.", view.trades.len(), figures.trades.len(), same).ok();
+    writeln!(out, "\nTrades: {} old, {} new, {} the same to the cent.", view.trades.len(), figures.trades.len(), same).expect("writing to a String cannot fail");
     for (cause, items) in &causes {
-        writeln!(out, "  {} — {}", cause, items.len()).ok();
+        writeln!(out, "  {} — {}", cause, items.len()).expect("writing to a String cannot fail");
         for i in items.iter().take(8) {
-            writeln!(out, "      {i}").ok();
+            writeln!(out, "      {i}").expect("writing to a String cannot fail");
         }
     }
 
@@ -418,9 +418,9 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
             None => differ.push(format!("{s}: old {:.2} over {} trades, new waits ({})", old.0, old.1, new.2.iter().copied().collect::<Vec<_>>().join(", "))),
         }
     }
-    writeln!(out, "\nRealized P&L by instrument: {agree} agree to the cent; {} differ.", differ.len()).ok();
+    writeln!(out, "\nRealized P&L by instrument: {agree} agree to the cent; {} differ.", differ.len()).expect("writing to a String cannot fail");
     for d in &differ {
-        writeln!(out, "      {d}").ok();
+        writeln!(out, "      {d}").expect("writing to a String cannot fail");
     }
 
     // positions, by the old key
@@ -454,11 +454,11 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
             pos_causes.entry("new position the old model did not have".into()).or_default().push(format!("{key} {symbol} qty {} book {} gaps {:?}", qty(&n.qty), money(&n.book), n.gaps.words()));
         }
     }
-    writeln!(out, "\nPositions: {} old, {} new, {} the same.", view.positions.len(), figures.positions.len(), pos_same).ok();
+    writeln!(out, "\nPositions: {} old, {} new, {} the same.", view.positions.len(), figures.positions.len(), pos_same).expect("writing to a String cannot fail");
     for (cause, items) in &pos_causes {
-        writeln!(out, "  {} — {}", cause, items.len()).ok();
+        writeln!(out, "  {} — {}", cause, items.len()).expect("writing to a String cannot fail");
         for i in items.iter().take(12) {
-            writeln!(out, "      {i}").ok();
+            writeln!(out, "      {i}").expect("writing to a String cannot fail");
         }
     }
 
@@ -473,15 +473,15 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
             Some(n) => cash_diff.push(format!("{} {} {:?} {:.2} cad {:.2} / {} cad {}", o.id, o.date, o.kind, o.amount, o.amount_cad, n.amount.amount.to_text(), money(&n.amount_cad))),
         }
     }
-    writeln!(out, "\nPayments: {} old, {} new, {} the same; {} differ.", view.cashflow.rows.len() + view.cashflow.other.len(), figures.cash.len(), cash_same, cash_diff.len()).ok();
+    writeln!(out, "\nPayments: {} old, {} new, {} the same; {} differ.", view.cashflow.rows.len() + view.cashflow.other.len(), figures.cash.len(), cash_same, cash_diff.len()).expect("writing to a String cannot fail");
     for d in cash_diff.iter().take(12) {
-        writeln!(out, "      {d}").ok();
+        writeln!(out, "      {d}").expect("writing to a String cannot fail");
     }
 
     // the dashboard, unfiltered
     let scoped = engine.scope(&Filters { benchmark: "SP500".into(), ..Filters::default() });
-    writeln!(out, "\nDashboard: realized old {:.2} new {} ({} trades, {} left out); count old {} new {}.", view.kpi.realized, money(&scoped.kpi.realized), scoped.kpi.count, scoped.kpi.left_out, view.kpi.count, scoped.kpi.count).ok();
-    writeln!(out, "Portfolio: market value old {:.2} new {} ({} left out); cost basis old {:.2} new {} ({} left out).", view.portfolio.market_value, money(&scoped.portfolio.market_value.total), scoped.portfolio.market_value.left_out, view.portfolio.cost_basis, money(&scoped.portfolio.cost_basis.total), scoped.portfolio.cost_basis.left_out).ok();
+    writeln!(out, "\nDashboard: realized old {:.2} new {} ({} trades, {} left out); count old {} new {}.", view.kpi.realized, money(&scoped.kpi.realized), scoped.kpi.count, scoped.kpi.left_out, view.kpi.count, scoped.kpi.count).expect("writing to a String cannot fail");
+    writeln!(out, "Portfolio: market value old {:.2} new {} ({} left out); cost basis old {:.2} new {} ({} left out).", view.portfolio.market_value, money(&scoped.portfolio.market_value.total), scoped.portfolio.market_value.left_out, view.portfolio.cost_basis, money(&scoped.portfolio.cost_basis.total), scoped.portfolio.cost_basis.left_out).expect("writing to a String cannot fail");
     // each position the market value leaves out, by what it waits on
     let mut waiting: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for p in figures.positions.iter() {
@@ -490,9 +490,9 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
         }
     }
     for (why, symbols) in &waiting {
-        writeln!(out, "  market value leaves out, waiting on {why} — {}: {}", symbols.len(), symbols.join(", ")).ok();
+        writeln!(out, "  market value leaves out, waiting on {why} — {}: {}", symbols.len(), symbols.join(", ")).expect("writing to a String cannot fail");
     }
-    writeln!(out, "Cashflow: all-time dividends old {:.2} new {} ({} left out).", view.cashflow.total, money(&scoped.cashflow.total.total), scoped.cashflow.total.left_out).ok();
+    writeln!(out, "Cashflow: all-time dividends old {:.2} new {} ({} left out).", view.cashflow.total, money(&scoped.cashflow.total.total), scoped.cashflow.total.left_out).expect("writing to a String cannot fail");
 
     // what the new engine could not apply
     let m = figures.matched;
@@ -502,32 +502,37 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
             *waits.entry(w).or_default() += 1;
         }
     }
-    writeln!(out, "\nNot applied by the new engine: {:?}; sold or closed beyond what was held: {}; price and cash disagreeing: {}.", waits, m.beyond.len(), m.disagreements.len()).ok();
+    writeln!(out, "\nNot applied by the new engine: {:?}; sold or closed beyond what was held: {}; price and cash disagreeing: {}.", waits, m.beyond.len(), m.disagreements.len()).expect("writing to a String cannot fail");
     for b in m.beyond.iter().take(12) {
-        writeln!(out, "      beyond held: {} {} qty {}", old_row(&b.transaction), figures_symbol(&engine, b.instrument), b.qty.to_text()).ok();
+        writeln!(out, "      beyond held: {} {} qty {}", old_row(&b.transaction), figures_symbol(&engine, b.instrument), b.qty.to_text()).expect("writing to a String cannot fail");
     }
     // the broker check: each account's cash and units against the broker's statement
     if !figures.checks.is_empty() {
         let names: BTreeMap<_, _> = book.accounts().map_err(err)?.into_iter().map(|a| (a.id, a.nickname.unwrap_or_default())).collect();
         let clean = figures.checks.iter().filter(|c| c.differences.is_empty()).count();
-        writeln!(out, "\nBroker check: {} accounts, {} agree exactly.", figures.checks.len(), clean).ok();
+        writeln!(out, "\nBroker check: {} accounts, {} agree exactly.", figures.checks.len(), clean).expect("writing to a String cannot fail");
         for c in figures.checks.iter().filter(|c| !c.differences.is_empty()) {
-            writeln!(out, "  {} ({}){}", names.get(&c.account).cloned().unwrap_or_default(), c.account, if c.pending { ", activity since the statement not read" } else { "" }).ok();
+            writeln!(out, "  {} ({}){}", names.get(&c.account).cloned().unwrap_or_default(), c.account, if c.pending { ", activity since the statement not read" } else { "" }).expect("writing to a String cannot fail");
             for d in &c.differences {
                 match d {
-                    bagholder_engine::equity::Difference::Cash { currency, own, broker } => writeln!(out, "      cash {currency}: book {} broker {}", own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).ok(),
-                    bagholder_engine::equity::Difference::Units { instrument, own, broker } => writeln!(out, "      units {}: book {} broker {}", figures_symbol(&engine, *instrument), own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).ok(),
+                    bagholder_engine::equity::Difference::Cash { currency, own, broker } => writeln!(out, "      cash {currency}: book {} broker {}", own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).expect("writing to a String cannot fail"),
+                    bagholder_engine::equity::Difference::Units { instrument, own, broker } => writeln!(out, "      units {}: book {} broker {}", figures_symbol(&engine, *instrument), own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).expect("writing to a String cannot fail"),
                 };
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&scratch);
+    drop(old);
+    match std::fs::remove_dir_all(&scratch) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("the scratch copy {} could not be removed: {e}", scratch.display())),
+    }
     let _: Option<RecordId> = None;
     Ok(out)
 }
 
-fn engine_inputs_transaction(book: &Book, id: &TransactionId) -> Option<bagholder_core::transaction::Transaction> {
-    book.transaction(id).ok().flatten()
+fn engine_inputs_transaction(book: &Book, id: &TransactionId) -> Result<Option<bagholder_core::transaction::Transaction>, String> {
+    book.transaction(id).map_err(|e| e.to_string())
 }
 
 fn figures_symbol(engine: &Engine, i: InstrumentId) -> String {

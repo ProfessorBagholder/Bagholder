@@ -485,6 +485,23 @@ mod tests {
     }
 
     #[test]
+    fn a_watchlist_that_cannot_be_read_is_said_and_nothing_is_carried_until_it_can_be() {
+        let (_home, app, _) = opened();
+        let conn = app.open().unwrap();
+        bagholder_store::feeds::add_watch(&conn, "QNC", "TSX-V", "QNC named", "CAD", "", "2026-09-01T14:00:00Z").unwrap();
+        conn.execute("ALTER TABLE watchlist RENAME TO watchlist_away", []).unwrap();
+        open(&app);
+        let said = crate::status::status(&app).error;
+        assert!(said.contains("The watchlist could not be carried into the book"), "{said}");
+        let b = book(&app).unwrap();
+        assert!(watched(&b).is_empty() && !b.following_carried().unwrap(), "no row is carried until they all can be");
+        conn.execute("ALTER TABLE watchlist_away RENAME TO watchlist", []).unwrap();
+        open(&app);
+        assert!(!crate::status::status(&app).error.contains("watchlist"), "the next good read takes the failure away");
+        assert_eq!(symbols(&b, &watched(&b)), ["QNC"]);
+    }
+
+    #[test]
     fn a_book_that_never_chose_its_tiles_has_the_default_six_and_one_chosen_empty_stays_empty() {
         let (_home, app, _) = opened();
         ensure(&app).unwrap();
