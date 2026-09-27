@@ -216,7 +216,7 @@ fn cash_leg(payload: &str) -> Mapped {
             instrument: None,
             quantity: None,
             price: None,
-            cash: Some(Money::new(dec(n.text("cash").unwrap()), Currency::CAD)),
+            cash: Some(Money::new(dec(n.text("cash").unwrap()), n.field("currency").map(|c| Currency::parse(c.as_text().unwrap()).unwrap()).unwrap_or(Currency::CAD))),
             fee: None,
             fx_rate: None,
             paid_on: None,
@@ -299,6 +299,12 @@ impl BrokerAdapter for Statements {
     fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
         Some((statement::key(account, month, position), statement::payload(account, month, position, row)))
     }
+    fn statement_gap_record(&self, gap: &bagholder_broker::statements::Gap) -> Option<(String, Value)> {
+        Some((statement::gap_key(gap), statement::gap_payload(gap)))
+    }
+    fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, Value)> {
+        Some((statement::paid_key(paid), statement::paid_payload(paid)))
+    }
 }
 
 /// A book of two accounts, a LIRA and a chequing account, and the broker's statements.
@@ -336,6 +342,26 @@ impl World {
 
     fn feed(&mut self, account: &str, d: &str, kind: &str, cash: &str) -> bagholder_core::RecordId {
         self.row(&Feed, account, d, kind, cash)
+    }
+
+    /// A feed row in another currency.
+    fn feed_in(&mut self, account: &str, d: &str, kind: &str, cash: &str, currency: &str) -> bagholder_core::RecordId {
+        self.n += 1;
+        let payload = format!(r#"{{"account":"{account}","cash":"{cash}","currency":"{currency}","day":"{d}","kind":"{kind}"}}"#);
+        self.book.store(&Feed, &Incoming { connection: Some(self.conn), source_key: &format!("row-{}", self.n), payload: &payload, refs: vec![] }, at(NOW)).unwrap().record
+    }
+
+    /// The broker states the account's cash in each currency.
+    fn states_in(&mut self, account: AccountId, cash: &[(&str, &str)]) {
+        self.n += 1;
+        let when = at(NOW).checked_sub(jiff::Span::new().seconds(1000 - self.n as i64)).unwrap();
+        let read = self.book.broker_read(self.conn, "cash", when).unwrap();
+        self.book.store_cash(account, when, &cash.iter().map(|(c, v)| (Currency::parse(c).unwrap(), dec(v))).collect(), &read).unwrap();
+    }
+
+    fn book_cash_in(&self, account: AccountId, currency: &str) -> Dec {
+        let c = Currency::parse(currency).unwrap();
+        self.book.transactions().unwrap().iter().filter(|t| t.account == account).filter_map(|t| t.cash).filter(|m| m.currency == c).fold(Dec::ZERO, |a, m| a.checked_add(m.amount).unwrap())
     }
 
     /// The broker states the account's cash, each statement a second after the one before.
@@ -691,16 +717,155 @@ fn a_coin_s_row_dated_a_day_before_the_execution_it_states_matches_the_feed_s_da
 }
 
 #[test]
-fn a_statement_that_opens_a_month_off_where_it_closed_the_one_before_is_followed_by_the_rows_it_lists() {
-    // the owner's crypto account: a zero-cash row lifts the balance a cent, and a later row takes it out
+fn a_statement_that_opens_a_month_off_where_the_one_before_closed_moved_the_cash_and_the_difference_is_booked() {
+    // the owner's crypto account, December 2023: November closes at nothing and
+    // December opens a cent up, with no row for it; the broker's cash holds the cent
+    for (june, stated) in [
+        // opening off it with no row at all
+        (vec![("2025-06-10", "EFTOUT", "Withdrawal", "-40", "60.01"), ("2025-06-20", "FEE", "Fee", "-5", "55.01")], "55.01"),
+        // a zero-cash row stating the balance a cent up
+        (vec![("2025-06-01", "TRFINTF", "Amalgamation transfer", "0.0", "100.01"), ("2025-06-10", "EFTOUT", "Withdrawal", "-40", "60.01"), ("2025-06-20", "FEE", "Fee", "-5", "55.01")], "55.01"),
+        // a cent down
+        (vec![("2025-06-10", "EFTOUT", "Withdrawal", "-40", "59.99"), ("2025-06-20", "FEE", "Fee", "-5", "54.99")], "54.99"),
+    ] {
+        let mut w = World::new();
+        w.feed("lira-1", "2025-05-20", "deposit", "100");
+        w.feed("lira-1", "2025-06-10", "withdrawal", "-40");
+        lira_months(&mut w, &[("2025-05-20", "CONT", "Deposit", "100", "100")], &june, stated);
+        let mut failures = vec![];
+        let done = w.run(&mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!((done.booked, done.unreconciled.len(), done.feed_only.len()), (2, 0, 0), "the fee and the gap booked: {done:?}");
+        assert_eq!(w.book_cash(w.lira), dec(stated));
+        let gap = w.book.transactions().unwrap().into_iter().find(|t| t.id.leg == bagholder_broker::statements::gap_leg()).expect("the gap");
+        assert_eq!((gap.trade_date, gap.kind), (day("2025-06-01"), Kind::Fee), "on the month's first day, as the broker's own cash correction");
+        // the next pull, with the cash agreeing, books nothing more
+        let done = w.run(&mut failures);
+        assert_eq!((done.read, done.booked), (0, 0), "{done:?}");
+    }
+}
+
+#[test]
+fn a_gap_booked_is_matched_to_no_row_and_kept_while_the_account_still_differs() {
     let mut w = World::new();
     w.feed("lira-1", "2025-05-20", "deposit", "100");
-    w.feed("lira-1", "2025-06-10", "withdrawal", "-100.01");
-    lira_months(&mut w, &[("2025-05-20", "CONT", "Deposit", "100", "100")], &[("2025-06-01", "TRFINTF", "Amalgamation transfer", "0.0", "100.01"), ("2025-06-10", "TRFOUT", "Transfer out", "-100.01", "0.0"), ("2025-06-20", "FEE", "Fee", "-5", "-5")], "-5.01");
+    w.feed("lira-1", "2025-06-10", "withdrawal", "-40");
+    lira_months(&mut w, &[("2025-05-20", "CONT", "Deposit", "100", "100")], &[("2025-06-10", "EFTOUT", "Withdrawal", "-40", "60.01")], "60.01");
+    let mut failures = vec![];
+    assert_eq!(w.run(&mut failures).booked, 1);
+    // a later movement the feed states and no statement covers yet: the account differs again
+    w.feed("lira-1", "2025-07-02", "deposit", "5");
+    let a = w.lira;
+    w.states(a, "60.01");
+    let done = w.run(&mut failures);
+    assert_eq!((done.booked, done.withdrawn), (0, 0), "{done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("65.01"));
+}
+
+#[test]
+fn a_month_whose_statement_corrects_its_own_balance_by_the_next_opening_reconciles_as_the_feed_states_it() {
+    // the owner's crypto account, April 2025: each purchase stated as a buy and a
+    // fee a cent short of the feed's, the month's closing off by as much, and the
+    // next month opening where the feed is
+    let mut w = World::new();
+    w.feed("lira-1", "2025-04-20", "deposit", "100");
+    w.feed("lira-1", "2025-05-31", "buy", "-25");
+    // the next purchase, made on 2 June, filed with June's first rows
+    w.feed("lira-1", "2025-06-02", "buy", "-25");
+    w.month("lira-1", "2025-04-01", Some(brokerage_statement(&[("2025-04-20", "CONT", "Deposit", "100", "100")])));
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-31", "BUY", "Purchase of 1 BTC (executed at 2025-05-31)", "-24.75", "75.25"), ("2025-05-31", "FEE", "Fee for purchase of 1 BTC (executed at 2025-05-31)", "-0.24", "75.01")])));
+    w.month(
+        "lira-1",
+        "2025-06-01",
+        Some(brokerage_statement(&[
+            ("2025-06-01", "BUY", "Purchase of 1 BTC (executed at 2025-06-02)", "-24.76", "50.24"),
+            ("2025-06-01", "FEE", "Fee for purchase of 1 BTC (executed at 2025-06-02)", "-0.24", "50.0"),
+            ("2025-06-20", "FEE", "Fee", "-5", "45.0"),
+        ])),
+    );
+    let a = w.lira;
+    w.states(a, "45");
+    let a = w.cash;
+    w.states(a, "0");
     let mut failures = vec![];
     let done = w.run(&mut failures);
-    assert_eq!((done.booked, done.unreconciled.len()), (1, 0), "the fee booked, the cent the statement lifted not: {done:?}");
-    assert_eq!(w.book_cash(w.lira), dec("-5.01"));
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len(), done.feed_only.len()), (1, 0, 0), "June's fee alone booked, May as the feed states it: {done:?}");
+    assert_eq!(w.book_cash(w.lira), dec("45"));
+}
+
+#[test]
+fn a_month_that_neither_reconciles_nor_is_corrected_by_the_next_opening_still_stops() {
+    let mut w = World::new();
+    w.feed("lira-1", "2025-04-20", "deposit", "100");
+    w.feed("lira-1", "2025-05-31", "buy", "-25");
+    w.month("lira-1", "2025-04-01", Some(brokerage_statement(&[("2025-04-20", "CONT", "Deposit", "100", "100")])));
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-31", "BUY", "Purchase of 1 BTC (executed at 2025-05-31)", "-24.75", "75.25"), ("2025-05-31", "FEE", "Fee", "-0.24", "75.01")])));
+    // June opens where May closed: the statement stands by its rows, not the feed's
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-20", "FEE", "Fee", "-5", "70.01")])));
+    let a = w.lira;
+    w.states(a, "70.01");
+    let a = w.cash;
+    w.states(a, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    let u = done.unreconciled.iter().find(|u| u.account == w.lira).expect("May named");
+    assert_eq!(u.month, day("2025-05-01"));
+    assert!(u.why.as_deref().is_some_and(|w| w.contains("buy")), "{u:?}");
+    assert_eq!(done.booked, 0, "nothing of May on booked: {done:?}");
+}
+
+#[test]
+fn a_conversion_whose_side_paid_is_unstated_is_read_from_the_stated_cash_when_it_is_all_that_is_unstated() {
+    let conversion = Kind::CurrencyConversion.to_string();
+    let mut w = World::new();
+    // after the newest statement: money in, converted, the side paid stated nowhere
+    w.feed("lira-1", "2025-07-02", "deposit", "100");
+    w.feed_in("lira-1", "2025-07-03", &conversion, "70.75", "USD");
+    let a = w.lira;
+    w.states_in(a, &[("CAD", "0"), ("USD", "70.75")]);
+    let a = w.cash;
+    w.states(a, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(done.booked, 1, "{done:?}");
+    assert_eq!((w.book_cash_in(w.lira, "CAD"), w.book_cash_in(w.lira, "USD")), (dec("0"), dec("70.75")));
+    let paid = w.book.transactions().unwrap().into_iter().find(|t| t.id.leg == bagholder_broker::statements::paid_leg()).expect("the side paid");
+    assert_eq!((paid.kind, paid.trade_date, paid.cash), (Kind::CurrencyConversion, day("2025-07-03"), Some(Money::new(dec("-100"), Currency::CAD))));
+    // read once: the next pull, agreeing, books nothing
+    let done = w.run(&mut failures);
+    assert_eq!(done.booked, 0);
+}
+
+#[test]
+fn a_side_paid_is_not_read_where_it_is_not_all_that_is_unstated() {
+    let conversion = Kind::CurrencyConversion.to_string();
+    // two conversions with a side paid unstated: which paid what is not stated
+    let mut w = World::new();
+    w.feed("lira-1", "2025-07-02", "deposit", "200");
+    w.feed_in("lira-1", "2025-07-03", &conversion, "70.75", "USD");
+    w.feed_in("lira-1", "2025-07-04", &conversion, "70.80", "USD");
+    let a = w.lira;
+    w.states_in(a, &[("CAD", "0"), ("USD", "141.55")]);
+    let mut failures = vec![];
+    assert_eq!(w.run(&mut failures).booked, 0);
+    assert_eq!(w.book_cash_in(w.lira, "CAD"), dec("200"));
+    // the side received disagrees too: something else is unstated
+    let mut w = World::new();
+    w.feed("lira-1", "2025-07-02", "deposit", "100");
+    w.feed_in("lira-1", "2025-07-03", &conversion, "70.75", "USD");
+    let a = w.lira;
+    w.states_in(a, &[("CAD", "0"), ("USD", "60")]);
+    assert_eq!(w.run(&mut failures).booked, 0);
+    // the cash disagrees by money received, not paid
+    let mut w = World::new();
+    w.feed("lira-1", "2025-07-02", "deposit", "100");
+    w.feed_in("lira-1", "2025-07-03", &conversion, "70.75", "USD");
+    let a = w.lira;
+    w.states_in(a, &[("CAD", "150"), ("USD", "70.75")]);
+    assert_eq!(w.run(&mut failures).booked, 0);
+    assert_eq!(w.book_cash_in(w.lira, "CAD"), dec("100"));
 }
 
 #[test]

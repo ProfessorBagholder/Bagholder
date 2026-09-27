@@ -106,6 +106,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("instrument_routes", Holds::Named),
     ("option_terms", Holds::Named),
     ("security_standings", Holds::Named),
+    ("instruments_described", Holds::Named),
     ("instrument_joins", Holds::Named),
     ("issuers", Holds::Named),
     ("settings", Holds::Settings),
@@ -233,6 +234,7 @@ impl Book {
                 "DELETE FROM instrument_joins WHERE instrument_id IN (SELECT id FROM temp.unnamed) OR into_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM option_terms WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM listings_named WHERE instrument_id IN (SELECT id FROM temp.unnamed);
+                 DELETE FROM instruments_described WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instrument_refs WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instrument_routes WHERE instrument_id IN (SELECT id FROM temp.unnamed);
                  DELETE FROM instruments WHERE id IN (SELECT id FROM temp.unnamed);",

@@ -505,6 +505,12 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
         Some((crate::statement::key(account, month, position), crate::statement::payload(account, month, position, row)))
     }
+    fn statement_gap_record(&self, gap: &bagholder_broker::statements::Gap) -> Option<(String, Value)> {
+        Some((crate::statement::gap_key(gap), crate::statement::gap_payload(gap)))
+    }
+    fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, Value)> {
+        Some((crate::statement::paid_key(paid), crate::statement::paid_payload(paid)))
+    }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>> {
         let nodes = self.source.history(account, from)?;
         let days = crate::read::history(&nodes).map_err(mismatch)?;
