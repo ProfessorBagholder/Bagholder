@@ -45,6 +45,8 @@ This is what TanStack Query and SWR do, and what RFC 5861's stale-while-revalida
 
 The owner's rule then holds for every screen by construction, not one screen at a time.
 
+**No new library.** TanStack Query and SWR are cited only as the standard way this is done. Build it on what the page already has: `subs.svelte.ts`, `live.svelte.ts` and `kept.ts`.
+
 **Required:**
 
 1. **One read function for the whole page.** It is the subscriptions' `use`, or one beside it on the same store.
