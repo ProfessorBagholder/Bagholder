@@ -49,14 +49,30 @@ test('a tab never visited loads nothing: each subscribes to its own screen, and 
   await expect.poll(shown).toEqual(['book', 'exposure', 'notifications', 'positions', 'status'])
 })
 
+/** The documents the page has kept in the browser, by key. */
+const keptDocs = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<string[]>((resolve) => {
+        const q = indexedDB.open('bagholder')
+        q.onerror = () => resolve([])
+        q.onsuccess = () => {
+          const d = q.result
+          if (!d.objectStoreNames.contains('docs')) return resolve([])
+          const r = d.transaction('docs', 'readonly').objectStore('docs').getAllKeys()
+          r.onsuccess = () => resolve(r.result.map((k) => String(k).split('|')[2]).sort())
+          r.onerror = () => resolve([])
+        }
+      }),
+  )
+
 test('opened a second time with nothing changed, the page is drawn from what it kept before any reply, and nothing is sent but acknowledgements', async ({ context }) => {
   const first = await context.newPage()
   await first.goto('/#dashboard')
   await ready(first)
-  // what the page keeps is written when it is hidden or left: left here, and given the
-  // moment the browser's database takes to write before the page goes
-  await first.evaluate(() => dispatchEvent(new Event('pagehide')))
-  await first.waitForTimeout(500)
+  // kept as each arrives, so closing the page as a person does loses nothing: a write
+  // begun as the page unloads is dropped by the browser
+  await expect.poll(() => keptDocs(first)).toEqual(['book', 'dashboard', 'notifications', 'status'])
   await first.close()
 
   const again = await context.newPage()
@@ -72,6 +88,17 @@ test('opened a second time with nothing changed, the page is drawn from what it 
   expect(got.filter((m) => m.name === 'same').map((m) => m.doc).sort()).toEqual(['book', 'dashboard', 'notifications', 'status'])
   // a few hundred bytes of acknowledgements, where the Dashboard alone is tens of kilobytes
   expect(got.reduce((n, m) => n + m.bytes, 0)).toBeLessThan(1000)
+})
+
+test('refreshed, the page is drawn from what it kept before the server says a word', async ({ page }) => {
+  await recordStream(page)
+  await page.goto('/#dashboard')
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toEqual(['book', 'dashboard', 'notifications', 'status'])
+  await page.reload()
+  await ready(page)
+  const hello = (await sse(page)).find((m) => m.name === 'hello')!
+  expect(hello.drawn, 'the Dashboard was on screen before the server said a word').toBe(true)
 })
 
 // What each interaction may ask of the server, at most: the requests made and the

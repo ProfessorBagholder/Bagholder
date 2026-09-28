@@ -94,7 +94,7 @@ export async function save(book: string, docs: { key: string; params: unknown; d
     const store = tx.objectStore(STORE)
     for (const x of docs) store.put({ data: x.data, v: x.v } satisfies Kept, name(book, x.key, x.params))
   } catch {
-    /* kept next time the page is hidden, or not at all: the next open loads afresh */
+    /* kept at the next change, or not at all: the next open loads afresh */
   }
 }
 
