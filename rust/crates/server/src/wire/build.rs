@@ -718,21 +718,26 @@ pub fn listed(engine: &Engine, names: &Names, named: &dyn Fn(&str) -> bool) -> (
 /// A trade's or holding's fills, by its id, for its page.
 pub fn detail(engine: &Engine, id: &str) -> Option<Detail> {
     let figs = engine.figures();
-    let fills = figs.trades.iter().find(|t| trade_id(t) == id).map(|t| &t.fills).or_else(|| figs.positions.iter().find(|p| position_id(p) == id).map(|p| &p.fills))?;
+    let (fills, viewed) = figs.trades.iter().find(|t| trade_id(t) == id).map(|t| (&t.fills, t.instruments.clone())).or_else(|| figs.positions.iter().find(|p| position_id(p) == id).map(|p| (&p.fills, vec![p.instrument])))?;
     let by_id: BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction> = engine.inputs().ledger.transactions.iter().map(|t| (&t.id, t)).collect();
-    Some(detail_of(engine, &by_id, id, fills))
+    Some(detail_of(engine, &by_id, id, fills, &viewed))
 }
 
 /// Every trade's and every holding's fills, each as `detail` gives it.
 pub fn details(engine: &Engine) -> Vec<Detail> {
     let figs = engine.figures();
     let by_id: BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction> = engine.inputs().ledger.transactions.iter().map(|t| (&t.id, t)).collect();
-    let trades = figs.trades.iter().map(|t| (trade_id(t), &t.fills));
-    let positions = figs.positions.iter().map(|p| (position_id(p), &p.fills));
-    trades.chain(positions).map(|(id, fills)| detail_of(engine, &by_id, &id, fills)).collect()
+    let trades = figs.trades.iter().map(|t| (trade_id(t), &t.fills, t.instruments.clone()));
+    let positions = figs.positions.iter().map(|p| (position_id(p), &p.fills, vec![p.instrument]));
+    trades.chain(positions).map(|(id, fills, viewed)| detail_of(engine, &by_id, &id, fills, &viewed)).collect()
 }
 
-fn detail_of(engine: &Engine, by_id: &BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction>, id: &str, fills: &std::collections::BTreeSet<bagholder_core::TransactionId>) -> Detail {
+/// The executions of a trade or holding of `viewed` instruments. An assignment or
+/// exercise is one row moving both a contract and its underlying (`SPEC.md` §2,
+/// Options): on the contract's page it closes the contract at zero; on the
+/// underlying's it moves contracts × multiplier shares at the strike, for the cash
+/// the row states.
+fn detail_of(engine: &Engine, by_id: &BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction>, id: &str, fills: &std::collections::BTreeSet<bagholder_core::TransactionId>, viewed: &[InstrumentId]) -> Detail {
     let figs = engine.figures();
     let mut rows: Vec<Fill> = fills
         .iter()
@@ -741,6 +746,12 @@ fn detail_of(engine: &Engine, by_id: &BTreeMap<&bagholder_core::TransactionId, &
             let option = tx.instrument.and_then(|i| engine.inputs().ledger.instruments.get(&i)).is_some_and(|i| i.instrument.kind == InstrumentKind::OptionContract);
             let (side, sub) = fill_words(tx, option, figs.matched.roles.get(&tx.id).copied());
             let currency = tx.cash.map(|c| c.currency).or(tx.price.map(|p| p.currency));
+            if let Some(row) = delivery_row(engine, tx, viewed, &side, &sub) {
+                return row;
+            }
+            // an expiry closes the contract at zero: a price and an amount of nothing
+            let expired = tx.kind == bagholder_core::transaction::Kind::OptionExpiry;
+            let zero = || Fig::Stated(Dec(bagholder_core::Dec::ZERO));
             Fill {
                 id: tx.id.to_string(),
                 when: tx.occurred_at.map(|t| t.to_string()),
@@ -751,12 +762,13 @@ fn detail_of(engine: &Engine, by_id: &BTreeMap<&bagholder_core::TransactionId, &
                     Some(q) => Fig::Stated(Dec(q)),
                     None => Fig::Waits { gaps: vec!["quantity-unstated".into()] },
                 },
-                price: fig_dec(&bagholder_engine::ledger::fill_price(tx, tx.instrument.and_then(|i| engine.inputs().ledger.instruments.get(&i)))),
+                price: if expired { zero() } else { fig_dec(&bagholder_engine::ledger::fill_price(tx, tx.instrument.and_then(|i| engine.inputs().ledger.instruments.get(&i)))) },
                 amount: match tx.cash {
                     Some(c) => Fig::Stated(Dec(c.amount)),
+                    None if expired => zero(),
                     None => Fig::Waits { gaps: vec!["value-unstated".into()] },
                 },
-                currency: currency.map(|c| c.as_str().to_string()).unwrap_or_default(),
+                currency: currency.or_else(|| tx.instrument.and_then(|i| engine.inputs().ledger.instruments.get(&i)).map(|i| i.instrument.currency)).map(|c| c.as_str().to_string()).unwrap_or_default(),
                 flags: Vec::new(),
             }
         })
@@ -764,6 +776,62 @@ fn detail_of(engine: &Engine, by_id: &BTreeMap<&bagholder_core::TransactionId, &
     rows.sort_by(|a, b| (&b.when, &b.date).cmp(&(&a.when, &a.date)));
     Detail { id: id.to_string(), fills: rows }
 }
+
+/// An assignment's or exercise's row as the page viewing it reads it, or None for
+/// any other row.
+fn delivery_row(engine: &Engine, tx: &bagholder_core::transaction::Transaction, viewed: &[InstrumentId], side: &str, sub: &str) -> Option<Fill> {
+    use bagholder_core::instrument::OptionRight;
+    use bagholder_core::transaction::Kind;
+    let exercise = match tx.kind {
+        Kind::OptionAssignment => false,
+        Kind::OptionExercise => true,
+        _ => return None,
+    };
+    let contract = tx.instrument?;
+    let instruments = &engine.inputs().ledger.instruments;
+    let terms = instruments.get(&contract)?.terms.clone()?;
+    let contracts = tx.quantity?;
+    let base = |qty: Fig<Dec>, price: Fig<Dec>, amount: Fig<Dec>, currency: String| Fill {
+        id: tx.id.to_string(),
+        when: tx.occurred_at.map(|t| t.to_string()),
+        date: tx.trade_date.to_string(),
+        side: side.to_string(),
+        sub: sub.to_string(),
+        qty,
+        price,
+        amount,
+        currency,
+        flags: Vec::new(),
+    };
+    if viewed.contains(&contract) {
+        // the contract closes at zero, keeping its premium
+        let currency = instruments.get(&contract).map(|i| i.instrument.currency.as_str().to_string()).unwrap_or_default();
+        return Some(base(Fig::Stated(Dec(contracts)), Fig::Stated(Dec(bagholder_core::Dec::ZERO)), Fig::Stated(Dec(bagholder_core::Dec::ZERO)), currency));
+    }
+    // the underlying: contracts × multiplier shares at the strike, received by a
+    // call's holder or a put's writer, delivered otherwise
+    let shares = terms.multiplier.and_then(|m| contracts.abs().checked_mul(m).ok());
+    let receives = matches!((terms.right, exercise), (OptionRight::Call, true) | (OptionRight::Put, false));
+    let qty = match shares {
+        Some(s) => Fig::Stated(Dec(if receives { s } else { s.neg() })),
+        None => Fig::Waits { gaps: vec!["multiplier-unstated".into()] },
+    };
+    let currency = instruments.get(&terms.underlying).map(|i| i.instrument.currency.as_str().to_string()).unwrap_or_default();
+    let amount = match tx.cash {
+        Some(c) => Fig::Stated(Dec(c.amount)),
+        None => match shares.and_then(|s| terms.strike.checked_mul(s).ok()) {
+            Some(v) => Fig::Stated(Dec(if receives { v.neg() } else { v })),
+            None => Fig::Waits { gaps: vec!["value-unstated".into()] },
+        },
+    };
+    Some(base(qty, Fig::Stated(Dec(terms.strike)), amount, currency))
+}
+
+// the engine's own case reader, to build an engine on a case in the tests below
+#[cfg(test)]
+#[path = "../../../engine/tests/common/mod.rs"]
+#[allow(dead_code, unused_imports, clippy::all)]
+mod case_common;
 
 #[cfg(test)]
 mod tests {
@@ -785,6 +853,42 @@ mod tests {
             Value::Number(_) => "number".into(),
             Value::Bool(_) => "bool".into(),
             Value::Null => Value::Null,
+        }
+    }
+
+    /// An assignment is one row moving the contract and its shares: on the
+    /// contract's page it closes the contract at zero; on the shares' page it
+    /// delivers contracts × multiplier shares at the strike, for the cash it states.
+    #[test]
+    fn an_assignment_reads_on_each_page_as_what_it_did_there() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../../../engine/tests/cases/options.json")).unwrap();
+        let case = cases.as_array().unwrap().iter().find(|c| c["name"] == "a covered call assigned delivers the shares held at the strike; the premium is kept").unwrap();
+        let mut b = super::case_common::build(case);
+        let e = super::case_common::engine(&mut b);
+        let (call, shares) = (b.ids.instrument("C1"), b.ids.instrument("U"));
+        let assigned = b.tx["t3"].to_string();
+        let row_on = |instrument: InstrumentId| {
+            let t = e.figures().trades.iter().find(|t| t.instruments.contains(&instrument)).expect("a trade of it");
+            let d = detail(&e, &trade_id(t)).unwrap();
+            d.fills.into_iter().find(|f| f.id == assigned).expect("the assignment's row")
+        };
+        let d = |v: &str| Fig::Stated(Dec(bagholder_core::Dec::parse(v).unwrap()));
+        let on_call = row_on(call);
+        assert_eq!((on_call.qty, on_call.price, on_call.amount), (d("1"), d("0"), d("0")));
+        let on_shares = row_on(shares);
+        assert_eq!((on_shares.qty, on_shares.price, on_shares.amount, on_shares.currency.as_str()), (d("-100"), d("10"), d("1000"), "USD"));
+        // an expiry closes the contract at zero, a row stating no quantity included
+        let case = cases.as_array().unwrap().iter().find(|c| c["name"] == "an expiry row closes the contract at zero; one stating no quantity closes the whole holding").unwrap();
+        let mut b2 = super::case_common::build(case);
+        let e2 = super::case_common::engine(&mut b2);
+        let expired = b2.tx["t2"].to_string();
+        let row = details(&e2).into_iter().flat_map(|x| x.fills).find(|f| f.id == expired).expect("the expiry's row");
+        assert_eq!((row.price, row.amount), (d("0"), d("0")));
+        assert!(!row.currency.is_empty());
+        // every trade's rows, read at once, are the same rows
+        let all = details(&e);
+        for t in e.figures().trades.iter() {
+            assert_eq!(all.iter().find(|x| x.id == trade_id(t)), detail(&e, &trade_id(t)).as_ref());
         }
     }
 

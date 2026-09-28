@@ -153,6 +153,68 @@
     }
   },
   {
+    "name": "a sale of more than a deposited holding by no more than the rows' rounding takes the units the rounding left out into the deposit's own round trip",
+    "spec": "SPEC.md §2 Trade, Crypto: units a sale takes beyond what is held, within the rows' rounding, arrive at zero cost before it and are units the trade opened; a transfer in is a deposit whose sale is a round trip of its own",
+    "working": [
+      "Every row is from wealthsimple (six places), each exact to 0.0000005.",
+      "t1 moves in 0.323457, stated worth 2600 as it arrived: a deposited lot of 0.323457 at 2600.",
+      "t2 sells 0.323458 for 2700: 0.000001 more than held, within the rows' rounding (t1's, and t2's own). The 0.000001 arrives at zero cost before the sale; its cost is already in t1.",
+      "The units arriving are units of the round trip they were left out of, t1's deposit: the sale closes 0.323458 units of that one trade, cost 2600, P&L 100.00. No round trip of the 0.000001 alone.",
+      "The holding is empty after t2: the trade opened by t1 closes on 2026-02-02, no position is left, nothing is beyond."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "0.02 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "B",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "B",
+        "qty": "0.323457",
+        "value": "2600",
+        "source": "wealthsimple"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "B",
+        "qty": "-0.323458",
+        "cash": "2700",
+        "source": "wealthsimple"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "0.323458",
+          "pnl": "100.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
     "name": "a sale of more than the book holds by more than the rows' rounding closes what is held at its cost, and the rest is beyond what the book holds",
     "spec": "SPEC.md §2 Trade: a sale of more units than the book holds closes what is held at its own cost; the units beyond add nothing to P&L and the broker check lists them; Crypto: more than the rounding is beyond what the book holds",
     "working": [
