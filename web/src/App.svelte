@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { start, refilter, loadDetail } from './lib/state.svelte'
-  import { conn, connect, disconnect, everyScreen } from './lib/live.svelte'
+  import { conn, connect, disconnect, everyScreen, keptRow } from './lib/live.svelte'
   import { status as statusSlot, book, dashboard, positions, trades, cashflow, exposure, markets, trade, use, filtered, limits } from './lib/subs.svelte'
   import { sort } from './lib/sort.svelte'
+  import type { PositionsDoc, TradesDoc } from './lib/model'
   import { heat, marketsOnShow } from './lib/heatmap/heat.svelte'
   import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
@@ -182,6 +183,7 @@
     { key: 'shorts', params: {} },
     { key: 'fear:stocks', params: {} },
     { key: 'fear:crypto', params: {} },
+    { key: 'orders', params: {} },
   ])
   use(() => (detailTab ? 'trade:' + route.sub : null), trade)
 
@@ -189,7 +191,19 @@
   const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
 
   // The detail the address names: a holding under Portfolio, a trade under Trades, each by its id.
-  const shown = $derived(detailTab && trade.data?.id === route.sub ? trade.data : null)
+  // Until its own document is held, it is drawn from the row the list holds of it, the
+  // same trade or holding: a page opened for the first time opens at once.
+  const fromRow = $derived.by(() => {
+    if (!detailTab || !route.sub) return null
+    const id = route.sub
+    if (route.tab === 'trades') {
+      const t = (trades.data ?? (keptRow('trades') as TradesDoc | null))?.trades.find((x) => x.id === id)
+      return t ? { id, trade: t, position: null } : null
+    }
+    const p = (positions.data ?? (keptRow('positions') as PositionsDoc | null))?.positions.find((x) => x.id === id)
+    return p ? { id, trade: null, position: p } : null
+  })
+  const shown = $derived(detailTab && trade.data?.id === route.sub ? trade.data : fromRow)
   const selHolding = $derived(route.tab === 'portfolio' ? shown?.position ?? null : null)
   const sel = $derived.by<import('./lib/model').Trade | null>(() => {
     if (selHolding) return holdingAsTrade(selHolding)
@@ -256,7 +270,18 @@
   // inside the page is left positioned against an animated ancestor. It settles on the
   // animation's end, on its cancellation (hidden, or the class changed under it), and at
   // once where no animation runs at all, so the page is never left mid-arrival.
+  // Only a page that replaces a placeholder arrives: one drawn at once from what was
+  // kept is simply there.
+  let placeheld = false
+  function placeholder(_node: HTMLElement) {
+    placeheld = true
+  }
   function arrive(node: HTMLElement) {
+    if (!placeheld) {
+      node.dataset.arrived = ''
+      return {}
+    }
+    placeheld = false
     node.classList.add('bh-skin')
     const settle = () => {
       node.removeEventListener('animationend', done)
@@ -438,7 +463,7 @@
       {#if conn.error}
         <div class="empty"><div class="status-err">{conn.error}</div><button class="btn btn-secondary" onclick={reconnect}>Retry</button></div>
       {:else}
-        <div out:lift><Skeleton tab={route.tab} /></div>
+        <div out:lift use:placeholder><Skeleton tab={route.tab} /></div>
       {/if}
     {:else}
     <div use:arrive>

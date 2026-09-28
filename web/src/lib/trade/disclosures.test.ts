@@ -77,23 +77,26 @@ describe('the Summary column', () => {
 })
 
 describe('the re-read button', () => {
-  it('shows the Reading state until the forced read answers, whatever the stream sends meanwhile', async () => {
+  // brief 13: a value on screen is never replaced by a loading state
+  it('keeps the list on screen while the forced read runs, taking what the stream sends, the button turning until it answers', async () => {
     const c = show([row('a', 'One sentence.')])
-    ;(c.querySelector('[aria-label="Re-read disclosures"]') as HTMLButtonElement).click()
+    const btn = c.querySelector('[aria-label="Re-read disclosures"]') as HTMLButtonElement
+    btn.click()
     flushSync()
     expect(asked).toHaveLength(1)
-    expect(c.textContent).toContain('Reading disclosures…')
-    expect(c.querySelectorAll('.dc-row .dc-title')).toHaveLength(0)
-    // the list changing on the stream does not end the Reading state
+    expect(c.textContent).not.toContain('Reading disclosures…')
+    expect(c.querySelectorAll('.dc-row')).toHaveLength(1)
+    expect(btn.querySelector('svg')!.getAttribute('style')).toContain('animation')
+    // the list changing on the stream reaches the screen at once
     const h = holders[holders.length - 1]
     h.data = { ...h.data!, filings: [row('a', 'One sentence.'), row('bb', '')] }
     flushSync()
-    expect(c.textContent).toContain('Reading disclosures…')
+    expect(c.querySelectorAll('.dc-row')).toHaveLength(2)
     answer({ ok: true })
     await tick()
     await tick()
     flushSync()
-    expect(c.textContent).not.toContain('Reading disclosures…')
+    expect(btn.querySelector('svg')!.getAttribute('style') || '').not.toContain('animation')
     expect(c.querySelectorAll('.dc-row')).toHaveLength(2)
   })
 

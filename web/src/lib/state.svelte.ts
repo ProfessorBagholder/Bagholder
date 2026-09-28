@@ -2,6 +2,7 @@ import type { Fill } from './model'
 import { connect, disconnect, isUpdate, onRestart, resyncAll } from './live.svelte'
 import { forgetHistory } from './trade/chart'
 import { call } from './api'
+import { askAgain, held, read } from './reads.svelte'
 import { leaveSub, route } from './router.svelte'
 import { flash } from './ui.svelte'
 import { applyFilters, book, markets, positions, trade, trades } from './subs.svelte'
@@ -34,9 +35,14 @@ export function resync(): void {
 // opens, and again only when its own document changed.
 export const detail = $state<{ id: string; fills: Fill[] | undefined; error: string }>({ id: '', fills: undefined, error: '' })
 export async function loadDetail(id: string | null): Promise<void> {
-  if (id !== detail.id) Object.assign(detail, { id: id ?? '', fills: undefined, error: '' })
+  if (id !== detail.id) {
+    // the executions held from before are drawn at once; the server's replace them where they differ
+    const had = id ? held('GET /api/figures/detail', { query: { id } }) : undefined
+    Object.assign(detail, { id: id ?? '', fills: had?.ok ? had.fills : undefined, error: '' })
+  }
   if (!id) return
-  const d = await call('GET /api/figures/detail', { query: { id } })
+  askAgain('GET /api/figures/detail') // asked each time the trade's own document changed
+  const d = await read('GET /api/figures/detail', { query: { id } })
   if (detail.id !== id) return
   // a failed read is said where the executions go, never left as a table waiting for ever
   if (!d.ok) {

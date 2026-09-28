@@ -6,8 +6,9 @@
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
 import { abs, plot, sign, waits, type Dec, type Fig } from '../dec'
-import { lookup, query } from '../api'
-import type { ChartHistory, DayBar, HistoryQuery, TimeBar } from '../generated/chart'
+import { query, type Answer } from '../api'
+import { askAgain, held, read } from '../reads.svelte'
+import type { ChartHistory, DayBar, HistoryAnswer, HistoryQuery, TimeBar } from '../generated/chart'
 
 export type { DayBar, TimeBar } from '../generated/chart'
 // A daily (or weekly/monthly) bar has a `date`; an intraday one has a `time`
@@ -69,11 +70,11 @@ function chartSpan(t: Trade): { from: string; to: string } {
   return { from, to }
 }
 
-// bars still being read are not the answer: asked again when they are in
-const histories = lookup('GET /api/history', { keep: (a) => 'pending' in a && !a.pending })
+// bars still being read are not the answer: never kept, and asked again when they are in
+const final = (a: Answer<HistoryAnswer>) => a.ok && 'pending' in a && !a.pending
 /** A server started again may have other bars, or a source it did not have: ask it. */
 export function forgetHistory(): void {
-  histories.forget()
+  askAgain('GET /api/history')
 }
 /** The chart's own question, as the server is asked it. */
 export function historyQuery(t: Trade, tf: string): HistoryQuery {
@@ -86,9 +87,16 @@ export function historyKey(t: Trade, tf: string): string {
   return 'history:' + query(historyQuery(t, tf))
 }
 
+/** The bars last held for the chart, at once: from this page load or from what the browser kept. */
+export function keptHistory(t: Trade, tf: string): History | null {
+  const r = held('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf })
+  return r && final(r) ? historyOf(t, r) : null
+}
 /** A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped. */
 export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal): Promise<History> {
-  const r = await histories.read({ query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal })
+  return historyOf(t, await read('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal, final }))
+}
+function historyOf(t: Trade, r: Answer<HistoryAnswer>): History {
   // a request that failed is said in the chart's place, in the failure's own words, never as a span with no bars
   if (!('bars' in r)) return { reason: r.error || 'The chart was not answered.', bars: [], available: [], chartSymbol: t.symbol, pending: false, uncovered: false }
   return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending, uncovered: !r.source }

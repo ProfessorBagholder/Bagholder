@@ -83,6 +83,11 @@ test('a page that opens drawing what it kept of the version before loads once, a
     await route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody({ ...model, status: { ...model.status, ...server } }) })
   })
   await page.route('**/api/events/watch', (route) => route.fallback())
+  // the page served names the book the stand-in stream names
+  await page.route((u) => u.pathname === '/', async (route) => {
+    const r = await route.fetch()
+    await route.fulfill({ response: r, body: (await r.text()).replace(/<meta name="bagholder-book" content="[^"]*">/, '<meta name="bagholder-book" content="test">') })
+  })
   await page.goto('/')
   await ready(page)
   // the page keeps the status of the version it heard

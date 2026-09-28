@@ -5,7 +5,7 @@
 // in when a quote lands. The price is the source's exact decimal text, the day's
 // change a fraction.
 import { bareSymbol } from '../sym'
-import { call } from '../api'
+import { read } from '../reads.svelte'
 import type { Dec } from '../dec'
 
 export interface Quote {
@@ -29,7 +29,7 @@ export function sugQuoteSchedule(rows: { symbol: string; exchange?: string; curr
     const k = sugKey(w)
     if (w.last != null || pending[k] || (sugQuotes[k] && Date.now() - readAt[k] < MEMORY_MS)) return
     pending[k] = true
-    call('GET /api/symbols/quote', { query: { symbol: w.symbol, exchange: w.exchange || '', currency: w.currency || '', name: '' } }).then((r) => {
+    read('GET /api/symbols/quote', { query: { symbol: w.symbol, exchange: w.exchange || '', currency: w.currency || '', name: '' } }).then((r) => {
       delete pending[k]
       // a glance with no answer shows no price: the row keeps its dash, and it is asked again when next wanted
       if (r.ok) {

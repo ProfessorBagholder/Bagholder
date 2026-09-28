@@ -35,7 +35,7 @@ async function recordStream(page: Page): Promise<void> {
 }
 
 /** Every document the page keeps: each tab's screen, visited or not, the header's and the book's. */
-const EVERY_SCREEN = ['book', 'cashflow', 'dashboard', 'exposure', 'fear:crypto', 'fear:stocks', 'headlines', 'heatmap', 'markets', 'news', 'notifications', 'positions', 'shorts', 'status', 'trades']
+const EVERY_SCREEN = ['book', 'cashflow', 'dashboard', 'exposure', 'fear:crypto', 'fear:stocks', 'headlines', 'heatmap', 'markets', 'news', 'notifications', 'orders', 'positions', 'shorts', 'status', 'trades']
 
 const sse = (page: Page) => page.evaluate(() => (window as unknown as { __sse: { name: string; doc: string; bytes: number; drawn: boolean }[] }).__sse)
 
@@ -100,6 +100,7 @@ test('refreshed, the page is drawn from what it kept before the server says a wo
   await expect.poll(() => keptDocs(page)).toEqual(EVERY_SCREEN)
   await page.reload()
   await ready(page)
+  await expect.poll(async () => (await sse(page)).some((m) => m.name === 'hello')).toBe(true)
   const hello = (await sse(page)).find((m) => m.name === 'hello')!
   expect(hello.drawn, 'the Dashboard was on screen before the server said a word').toBe(true)
 })
@@ -250,4 +251,37 @@ test('switching tabs touches nothing in the header', async ({ page }) => {
   // the sync line says the minutes as they pass; nothing else in the header moves
   const touched = await page.evaluate(() => (window as unknown as { __hdr: MutationRecord[] }).__hdr.filter((m) => !(m.target as Element).closest?.('#syncline') && !(m.target.parentElement?.closest('#syncline'))).length)
   expect(touched).toBe(0)
+})
+
+// Brief 13: Clear data run while this browser was closed. The page it is next served
+// names the book now held; what this browser kept of the book before is never drawn,
+// not for a frame, even before the server says a word.
+test('a browser closed while its book was cleared draws nothing of the old book on its next open', async ({ page }) => {
+  await page.goto('/#dashboard')
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toEqual(EVERY_SCREEN)
+  // the page served now names another book, and the server's answers are held back
+  await page.route((u) => u.pathname === '/' || u.pathname === '/index.html', async (route) => {
+    const r = await route.fetch()
+    const html = (await r.text()).replace(/<meta name="bagholder-book" content="[^"]*">/, '<meta name="bagholder-book" content="another-book">')
+    expect(html).toContain('content="another-book"')
+    await route.fulfill({ response: r, body: html })
+  })
+  await holdServer(page)
+  await page.evaluate(() => {
+    const w = window as unknown as { __old: boolean }
+    w.__old = false
+  })
+  await page.addInitScript(() => {
+    const w = window as unknown as { __old: boolean }
+    w.__old = false
+    new MutationObserver(() => {
+      if (document.querySelector('#page .kpi .v')) w.__old = true
+    }).observe(document.documentElement, { subtree: true, childList: true })
+  })
+  await page.reload()
+  await expect(page.locator('#page .bhsk').first()).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { __old: boolean }).__old), 'a figure of the cleared book was drawn').toBe(false)
+  // and what was kept of it is gone from this browser
+  await expect.poll(() => keptDocs(page)).toEqual([])
 })

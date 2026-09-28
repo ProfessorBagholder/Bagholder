@@ -3,7 +3,8 @@
 // store is reactive $state so the ShortInterest card renders when a fetch lands.
 import type { Trade, ShortsPayload } from '../model'
 import { listingTicker } from './chart'
-import { lookup, type Answer } from '../api'
+import type { Answer } from '../api'
+import { held, read } from '../reads.svelte'
 import { flash } from '../ui.svelte'
 import type { ShortsAnswer } from '../generated/markets'
 
@@ -33,9 +34,7 @@ export function shortsKey(t: Trade): string {
   return discSymbol(t) + '|' + String(t.exchange || '').toUpperCase()
 }
 
-// a reading is good for half an hour; the run of past reports for as long as the page is open
-const readings = lookup('GET /api/shorts', { keepMs: SHORTS_KEEP_MS })
-const trends = lookup('GET /api/shorts')
+// a reading is asked again once half an hour old; the run of past reports once per page load
 // the answer each shown reading was made from, to tell a new reading from the one shown
 const shownFrom = new Map<string, Answer<ShortsAnswer>>()
 
@@ -44,19 +43,40 @@ export async function ensureShorts(t: Trade): Promise<void> {
   const key = shortsKey(t)
   if (!sym || !reportsShorts(t)) return
   const q = { symbol: sym, exchange: t.exchange || '', currency: t.currency || '', name: '', trend: false }
-  const d = await readings.read({ query: q }, { key })
+  // the reading last held is drawn at once, its trend with it; the server's replaces it where it differs
+  if (!shortsStore[key]) {
+    const had = held('GET /api/shorts', { query: q }, { key: 'reading ' + key })
+    if (had?.ok) {
+      shortsStore[key] = Object.assign({ at: Date.now() }, structuredClone(had)) as ShortsRec
+      const trend = held('GET /api/shorts', { query: { ...q, trend: true } }, { key: 'trend ' + key })
+      if (trend?.ok && 'covered' in trend && trend.covered && shortsStore[key].shorts && !(shortsStore[key].shorts!.series || []).length) shortsStore[key].shorts!.series = trend.shorts?.series || []
+    }
+  }
+  const d = await read('GET /api/shorts', { query: q }, { key: 'reading ' + key, maxAgeMs: SHORTS_KEEP_MS })
   // the reading already shown: nothing to write, and its trend stays on it
   if (shortsStore[key] && shownFrom.get(key) === d) return
   shownFrom.set(key, d)
-  shortsStore[key] = Object.assign({ at: Date.now() }, d.ok ? structuredClone(d) : { ok: false }) as ShortsRec
-  if (!d.ok) flash('Could not read short interest for ' + sym + ': ' + d.error, 'err')
+  // a failure is said, and the reading shown stands
+  if (!d.ok) {
+    flash('Could not read short interest for ' + sym + ': ' + d.error, 'err')
+    if (!shortsStore[key]) shortsStore[key] = { at: Date.now(), ok: false } as unknown as ShortsRec
+    return
+  }
+  const series = shortsStore[key]?.shorts?.series
+  const next = Object.assign({ at: Date.now() }, structuredClone(d)) as ShortsRec
+  // the same reading moves nothing: its trend stays on it
+  const same = shortsStore[key] && JSON.stringify({ ...shortsStore[key], at: 0, shorts: { ...shortsStore[key].shorts, series: [] } }) === JSON.stringify({ ...next, at: 0, shorts: { ...next.shorts, series: [] } })
+  if (!same) {
+    if (series?.length && next.shorts && !(next.shorts.series || []).length) next.shorts.series = series
+    shortsStore[key] = next
+  }
   // the run of past reports comes free with a US listing's answer; a Canadian one is a
   // file per reporting date, asked for once the figures are on screen
   if ('covered' in d && d.covered && !(d.shorts?.series || []).length) {
-    const more = await trends.read({ query: { ...q, trend: true } }, { key })
+    const more = await read('GET /api/shorts', { query: { ...q, trend: true } }, { key: 'trend ' + key })
     const rec = shortsStore[key]
     if (!more.ok) flash('Could not read the short-interest trend for ' + sym + ': ' + more.error, 'err')
-    else if ('covered' in more && more.covered && rec?.shorts) rec.shorts.series = more.shorts?.series || []
+    else if ('covered' in more && more.covered && rec?.shorts && JSON.stringify(rec.shorts.series) !== JSON.stringify(more.shorts?.series || [])) rec.shorts.series = more.shorts?.series || []
   }
 }
 

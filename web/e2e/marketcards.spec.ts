@@ -713,7 +713,8 @@ test.describe('Disclosures', () => {
     await expect(one.locator('.dc-sumcell')).toHaveCount(2)
   })
 
-  test('the re-read button shows the Reading state until the forced read answers', async ({ page, request }) => {
+  // brief 13: a value on screen is never replaced by a loading state
+  test('the re-read button turns while the forced read runs, and the list stays on screen', async ({ page, request }) => {
     const card = await openAaplDisclosures(page, request, [filed('f1', 'One sentence.')])
     await expect(card.locator('.dc-row')).toHaveCount(1)
     let answer: () => void = () => {}
@@ -722,14 +723,14 @@ test.describe('Disclosures', () => {
       await answered
       await route.fulfill({ status: 200, json: { ok: true, symbol: 'AAPL', available: true, sources: {}, categories: [], profileNo: '', fetchedAt: '', refreshed: false, sourceUnavailable: false, filings: [] } })
     })
+    const icon = card.getByLabel('Re-read disclosures').locator('svg')
     await card.getByLabel('Re-read disclosures').click()
-    await expect(card).toContainText('Reading disclosures…')
-    await expect(card.locator('.dc-row .dc-title', { hasText: 'A filing about f1' })).toHaveCount(0)
-    await page.waitForTimeout(300)
-    await expect(card).toContainText('Reading disclosures…')
-    answer()
-    await expect(card.locator('.dc-row', { hasText: 'A filing about f1' })).toHaveCount(1)
+    await expect(icon).toHaveAttribute('style', /animation/)
     await expect(card).not.toContainText('Reading disclosures…')
+    await expect(card.locator('.dc-row', { hasText: 'A filing about f1' })).toHaveCount(1)
+    answer()
+    await expect(icon).not.toHaveAttribute('style', /animation/)
+    await expect(card.locator('.dc-row', { hasText: 'A filing about f1' })).toHaveCount(1)
   })
 
   test('a forced read that is refused says so', async ({ page, request }) => {

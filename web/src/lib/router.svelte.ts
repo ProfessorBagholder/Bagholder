@@ -74,7 +74,7 @@ export function keepScroll(node: HTMLElement, name: string) {
 // The route follows the address. It is read at once wherever the page itself changes
 // the address (`go`, `goSub`), since the browser only announces a change of hash some
 // time after it happens; the announcement still covers Back, Forward and an address typed.
-function follow(): void {
+export function follow(): void {
   const was = { tab: route.tab, sub: route.sub }
   const heat = heatFromHash(location.hash)
   if (JSON.stringify(heat) !== JSON.stringify(route.heat)) route.heat = heat

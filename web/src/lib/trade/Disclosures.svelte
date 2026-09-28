@@ -3,6 +3,7 @@
   // a filings table narrowed by category (mseg) and source (chip), sorted by
   // column, with each row's title and summary read in the background. Columns and
   // controls appear only when they carry more than one value.
+  import { untrack } from 'svelte'
   import type { Trade, Filing, FilingsDoc, SourceStatus } from '../model'
   import { relTime } from '../fmt'
   import { ICONS } from '../icons'
@@ -36,7 +37,13 @@
   let openTimer: ReturnType<typeof setTimeout> | undefined
 
   // shown while this card is: the list, then each row's title and sentence as read
-  $effect(() => showDisclosures(trade))
+  // followed while the card shows this listing: the same listing drawn from a newer row is not followed again
+  const listing = $derived({ symbol: trade.symbol, kind: trade.kind, underlying: trade.underlying, name: trade.name, exchange: trade.exchange, currency: trade.currency })
+  const listingKey = $derived(JSON.stringify(listing))
+  $effect.pre(() => {
+    void listingKey
+    return showDisclosures(untrack(() => listing))
+  })
 
   interface Col {
     key: string
@@ -47,9 +54,10 @@
   }
 
   const view = $derived.by(() => {
-    // until the sources have been asked once there is nothing to say about this listing
-    // and while a forced read is under way, until it answers
-    if (!rec || rec.loading || discRereading[sym] || (rec.payload && rec.payload.everRead === false)) return { state: 'loading' as const }
+    // until the sources have been asked once there is nothing to say about this listing;
+    // a forced read under way leaves the list held on screen until its answer replaces it
+    const held = !!rec?.payload && rec.payload.everRead !== false
+    if (!rec || (!held && (rec.loading || discRereading[sym] || rec.payload?.everRead === false))) return { state: 'loading' as const }
     if (discRereadError[sym]) return { state: 'error' as const, error: discRereadError[sym] }
     if (rec.error) return { state: 'error' as const, error: rec.error }
     const p: FilingsDoc = rec.payload || {
@@ -135,7 +143,7 @@
 {/snippet}
 
 {#snippet readBtn()}
-  <button onclick={reread} aria-label="Re-read disclosures" style="display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--ink55);cursor:pointer"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.sync} /></svg></button>
+  <button onclick={reread} aria-label="Re-read disclosures" style="display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--ink55);cursor:pointer"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style={discRereading[sym] ? 'animation:sp .8s linear infinite' : ''}><path d={ICONS.sync} /></svg></button>
 {/snippet}
 
 <div class="card elev-sm" style="padding:14px 16px 8px">

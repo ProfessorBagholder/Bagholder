@@ -3,7 +3,8 @@
 import { status } from './subs.svelte'
 import { applied } from './subs.svelte'
 import { sort } from './sort.svelte'
-import { request, call } from './api'
+import { call } from './api'
+import { held, read } from './reads.svelte'
 import { localDay, waiting } from './fmt'
 import { waits } from './dec'
 
@@ -337,13 +338,20 @@ export function openFolder(): void {
   ui.folderError = ''
   ui.folderPath = ''
   ui.importAccount = ''
-  call('GET /api/watch').then((w) => {
+  // the folder last known is drawn at once; the server's answer replaces it
+  const had = held('GET /api/watch')
+  if (had?.ok) {
+    ui.watch = had
+    ui.folderPath = had.path
+    ui.importAccount = had.account
+  }
+  read('GET /api/watch').then((w) => {
     if (!w.ok) ui.folderError = w.error
     else {
-      ui.watch = w
       // the folder watched fills the boxes, unless the person has typed or chosen already
-      if (ui.folderPath === '') ui.folderPath = w.path
-      if (ui.importAccount === '') ui.importAccount = w.account
+      if (ui.folderPath === '' || ui.folderPath === ui.watch?.path) ui.folderPath = w.path
+      if (ui.importAccount === '' || ui.importAccount === ui.watch?.account) ui.importAccount = w.account
+      ui.watch = w
     }
   })
 }
@@ -392,7 +400,7 @@ export async function exportCsv(): Promise<void> {
   ui.menuOpen = false
   // every trade under the filters applied, in the list's order: the list on screen shows only as far as scrolled
   const s = sort.trades
-  const m = await call('GET /api/figures/trades', { query: { filters: JSON.stringify(applied.filters), sort: s.key, dir: s.dir } })
+  const m = await read('GET /api/figures/trades', { query: { filters: JSON.stringify(applied.filters), sort: s.key, dir: s.dir } })
   if (!m.ok) {
     flash('Could not export the trades: ' + m.error, 'err')
     return

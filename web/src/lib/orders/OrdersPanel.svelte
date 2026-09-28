@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onDestroy } from 'svelte'
   import {
     ordersStore, panel, openOrders, closeOrders, tabCards, type Tab,
     listing, orderDetailLine, orderFillLine, orderValue, orderEndWord, orderUnconfirmed, SENT_WORD,
@@ -23,7 +23,8 @@
 
   let { onclose }: { onclose: () => void } = $props()
 
-  onMount(() => openOrders())
+  // followed before the panel is drawn: what was held of the orders is drawn with it
+  openOrders()
   onDestroy(() => closeOrders())
 
   const TABS: [Tab, string][] = [['pending', 'Pending'], ['filled', 'Filled'], ['cancelled', 'Cancelled']]

@@ -172,9 +172,31 @@ export function numbering(gap: () => void): (id: string) => void {
 let source: EventSource | null = null
 let streamId = 0
 /** The book the page shows: the one it last showed until the server names it. */
-let book = lastBook()
-// what was kept for it, read once now, so every screen opened later draws in the moment it opens
-void readKept(book)
+// The book the page shows: the one the served page names (the server's own word as
+// the page loads), else the one it showed last. A browser that was closed while its
+// book was cleared draws nothing of the old one, from the first frame.
+let book = servedBook() || lastBook()
+if (book && book !== lastBook()) void bookIs(book)
+function servedBook(): string {
+  if (typeof document === 'undefined') return ''
+  return document.querySelector('meta[name="bagholder-book"]')?.getAttribute('content') ?? ''
+}
+/** The last kept of a screen's document, under any parameters: a list's rows, for a page opened from one. */
+export function keptRow(key: string): unknown {
+  return keptLatest(book, key)?.data ?? null
+}
+/** The book the page shows: what everything read is kept under. */
+export function bookShown(): string {
+  return book
+}
+/**
+ * Documents whose answer must not outlive the moment, never kept in the browser: the
+ * order ticket's live quote, which is only ever the live one.
+ */
+const NEVER_KEPT = ['quote:']
+// what was kept for it, read once now, so every screen opened later draws in the moment it opens;
+// the page is drawn once it is in, its first frame already the last state (main.ts)
+export const keptIn: Promise<void> = readKept(book)
 /** What is being drawn from what was kept: the page says what it shows once these are in. */
 const drawing = new Set<Promise<void>>()
 const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void; priming?: boolean }>()
@@ -482,6 +504,7 @@ export function resyncAll(): void {
  */
 const unkept = new Set<string>()
 function keep(key: string): void {
+  if (NEVER_KEPT.some((p) => key.startsWith(p))) return
   if (!unkept.size) queueMicrotask(keepChanged)
   unkept.add(key)
 }
