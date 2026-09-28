@@ -27,19 +27,20 @@ type Input<K extends GetKey> = Omit<Routes[K], 'answer'>
  * never given from memory to a later ask.
  * - a search the person types, and a match's glance quote (SPEC.md §4 Markets,
  *   Watchlist: a minute's memory, nothing stored);
- * - what is asked as an action, not to be shown: the export of the trades, the news
- *   read for a ticker typed, a forced re-read of a listing's disclosures.
+ * - what is asked as an action, not to be shown: the news read for a ticker typed, a
+ *   forced re-read of a listing's disclosures.
  */
 export const NEVER_KEPT: readonly GetKey[] = [
   'GET /api/symbols/search',
   'GET /api/symbols/quote',
-  'GET /api/figures/trades',
   'GET /api/news/symbol',
   'GET /api/filings',
 ]
 /**
- * Of those, the ones asked of the server each time, never answered from this page
- * load's memory: an action, and the glance quote, whose minute the watchlist keeps.
+ * The ones asked of the server each time, never answered from this page load's memory:
+ * an action, the glance quote, whose minute the watchlist keeps, and every trade (the
+ * export and the rows a trade page is drawn from, each wanting the book as it is now;
+ * the rows are kept, so a trade page opens on them at once).
  */
 const ASKED_EACH_TIME: readonly GetKey[] = ['GET /api/symbols/quote', 'GET /api/figures/trades', 'GET /api/news/symbol', 'GET /api/filings']
 
@@ -65,9 +66,8 @@ const storeKey = (k: string) => 'get:' + k
  * the browser kept. Undefined only for a question never answered (or one never kept).
  */
 export function held<K extends GetKey>(route: K, input?: Input<K>, opts: { key?: string } = {}): Answer<Routes[K]['answer']> | undefined {
-  if (ASKED_EACH_TIME.includes(route)) return undefined
   const k = keyOf(route, input, opts.key)
-  const mem = asked.get(k)
+  const mem = ASKED_EACH_TIME.includes(route) ? undefined : asked.get(k)
   if (mem) return mem.answer as Answer<Routes[K]['answer']>
   const book = bookShown()
   if (NEVER_KEPT.includes(route) || !keptRead(book)) return undefined
