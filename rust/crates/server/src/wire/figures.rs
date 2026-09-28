@@ -144,9 +144,17 @@ pub struct Fill {
 
 /// A trade's or holding's fills, for its page.
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = id)]
 pub struct Detail {
     pub id: String,
     pub fills: Vec<Fill>,
+}
+
+/// Every trade's and holding's fills, by its id: kept by the page, so any trade or
+/// holding page opens on its executions at once (`docs/decisions.md`, 2026-09-28).
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub struct Details {
+    pub details: Vec<Detail>,
 }
 
 // --------------------------------------------------------------------------

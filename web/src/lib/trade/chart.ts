@@ -93,8 +93,8 @@ export function keptHistory(t: Trade, tf: string): History | null {
   return r && final(r) ? historyOf(t, r) : null
 }
 /** A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped. */
-export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal): Promise<History> {
-  return historyOf(t, await read('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal, final }))
+export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal, ahead = false): Promise<History> {
+  return historyOf(t, await read('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal, final, ahead }))
 }
 function historyOf(t: Trade, r: Answer<HistoryAnswer>): History {
   // a request that failed is said in the chart's place, in the failure's own words, never as a span with no bars

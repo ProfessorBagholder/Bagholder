@@ -44,6 +44,14 @@ export const NEVER_KEPT: readonly GetKey[] = [
  */
 const ASKED_EACH_TIME: readonly GetKey[] = ['GET /api/symbols/quote', 'GET /api/figures/trades', 'GET /api/news/symbol', 'GET /api/filings']
 
+/** The page's own reads in the air: what is read ahead waits for none (`whenIdle`). */
+let pageReads = 0
+let idle: (() => void)[] = []
+/** Once the page has no read of its own in the air: what is read ahead never holds up a screen's. */
+export function whenIdle(): Promise<void> {
+  return pageReads ? new Promise((r) => idle.push(r)) : Promise.resolve()
+}
+
 /** An answer asked this page load: given again from memory while it is young enough. */
 const asked = new Map<string, { at: number; answer: Answer<unknown> }>()
 /** The same question in the air: one request, however many ask. */
@@ -91,7 +99,7 @@ export async function heldOnceRead<K extends GetKey>(route: K, input?: Input<K>,
 export function read<K extends GetKey>(
   route: K,
   input?: Input<K>,
-  opts: { key?: string; signal?: AbortSignal; maxAgeMs?: number; final?: (a: Answer<Routes[K]['answer']>) => boolean } = {},
+  opts: { key?: string; signal?: AbortSignal; maxAgeMs?: number; final?: (a: Answer<Routes[K]['answer']>) => boolean; ahead?: boolean } = {},
 ): Promise<Answer<Routes[K]['answer']>> {
   type A = Answer<Routes[K]['answer']>
   const ephemeral = NEVER_KEPT.includes(route)
@@ -104,10 +112,13 @@ export function read<K extends GetKey>(
     const stop = new AbortController()
     // an answer's age runs from when it was asked for: what it says was true then
     const askedAt = Date.now()
+    const own = !opts.ahead
+    if (own) pageReads++
     const made = {
       readers: 0,
       stop,
       answer: call(route, input as never, stop.signal).then((a) => {
+        if (own && --pageReads === 0) idle.splice(0).forEach((r) => r())
         if (flying.get(k) === made) flying.delete(k)
         if (a.ok && (!opts.final || opts.final(a as A))) {
           if (!ASKED_EACH_TIME.includes(route)) asked.set(k, { at: askedAt, answer: a })

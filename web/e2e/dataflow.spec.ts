@@ -318,3 +318,30 @@ test('a trade page no list has shown is drawn from its row at once', async ({ pa
   await expect(page.locator('#page')).toContainText(t.symbol)
   expect(await placeholder(), 'the trade page opened on a placeholder').toBe(false)
 })
+
+// docs/decisions.md, 2026-09-28: no screen opens with nothing but the very first open. A
+// trade's page never opened is ready before it is: its executions and its chart are
+// read ahead and kept, and it opens on them with the server held back.
+test('a trade page never opened opens on its executions and its chart, read ahead', async ({ page, request }) => {
+  const every = (await view(request, 'trades', { limit: 1_000_000 })).trades as { id: string; symbol: string; kind: string }[]
+  const t = every.filter((x) => x.kind === 'Shares').at(-1)!
+  await page.goto('/#dashboard')
+  await ready(page)
+  const keptKeys = () => page.evaluate(() => new Promise<string[]>((resolve) => {
+    const q = indexedDB.open('bagholder')
+    q.onsuccess = () => {
+      const r = q.result.transaction('docs', 'readonly').objectStore('docs').getAllKeys()
+      r.onsuccess = () => resolve(r.result.map(String))
+    }
+  }))
+  await expect.poll(async () => (await keptKeys()).some((k) => k.includes('drawn:chart ' + t.id)), { timeout: 30_000 }).toBe(true)
+  await holdServer(page)
+  await page.reload()
+  await ready(page)
+  const placeholder = await watchPlaceholder(page)
+  await page.evaluate((id) => (location.hash = '#trades/' + encodeURIComponent(id)), t.id)
+  await expect(page.locator('#page')).toContainText(t.symbol)
+  await expect(page.locator('#page')).toContainText(/Executions \(\d+\)/)
+  await expect(page.locator('#page canvas').first()).toBeAttached()
+  expect(await placeholder(), 'the trade page opened on a placeholder').toBe(false)
+})

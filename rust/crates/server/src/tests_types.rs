@@ -366,7 +366,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
-        "TradesDoc" | "Detail" => "figures",
+        "TradesDoc" | "Detail" | "Details" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
@@ -428,7 +428,7 @@ fn figures_declarations() -> String {
     }
     let decls: Vec<String> = decls![
         crate::wire::Fig<()>,
-        Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
+        Partial, Status, Trade, Position, Fill, Detail, Details, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
         Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
         BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc,
         crate::wire::markets::MarketTile, crate::wire::markets::WatchItem, crate::wire::markets::DirectoryEntry, crate::wire::markets::MarketsDoc,

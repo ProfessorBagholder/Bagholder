@@ -3,7 +3,7 @@
 
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
-import type { Detail, TradesDoc } from './figures'
+import type { Detail, Details, TradesDoc } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
@@ -52,6 +52,7 @@ export interface Routes {
   'POST /api/tiles/set': { body: TilesSet; answer: TilesAnswer }
   'GET /api/status': { answer: StatusAnswer }
   'GET /api/figures/detail': { query: TradeQuery; answer: Detail }
+  'GET /api/figures/details': { answer: Details }
   'GET /api/figures/trades': { query: TradesQuery; answer: TradesDoc }
   'GET /api/view': { query: ViewQuery; answer: ViewAnswer }
   'POST /api/data/clear': { body: Clear; answer: ClearAnswer }

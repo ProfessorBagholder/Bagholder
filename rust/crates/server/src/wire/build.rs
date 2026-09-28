@@ -720,6 +720,20 @@ pub fn detail(engine: &Engine, id: &str) -> Option<Detail> {
     let figs = engine.figures();
     let fills = figs.trades.iter().find(|t| trade_id(t) == id).map(|t| &t.fills).or_else(|| figs.positions.iter().find(|p| position_id(p) == id).map(|p| &p.fills))?;
     let by_id: BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction> = engine.inputs().ledger.transactions.iter().map(|t| (&t.id, t)).collect();
+    Some(detail_of(engine, &by_id, id, fills))
+}
+
+/// Every trade's and every holding's fills, each as `detail` gives it.
+pub fn details(engine: &Engine) -> Vec<Detail> {
+    let figs = engine.figures();
+    let by_id: BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction> = engine.inputs().ledger.transactions.iter().map(|t| (&t.id, t)).collect();
+    let trades = figs.trades.iter().map(|t| (trade_id(t), &t.fills));
+    let positions = figs.positions.iter().map(|p| (position_id(p), &p.fills));
+    trades.chain(positions).map(|(id, fills)| detail_of(engine, &by_id, &id, fills)).collect()
+}
+
+fn detail_of(engine: &Engine, by_id: &BTreeMap<&bagholder_core::TransactionId, &bagholder_core::transaction::Transaction>, id: &str, fills: &std::collections::BTreeSet<bagholder_core::TransactionId>) -> Detail {
+    let figs = engine.figures();
     let mut rows: Vec<Fill> = fills
         .iter()
         .filter_map(|f| by_id.get(f))
@@ -748,7 +762,7 @@ pub fn detail(engine: &Engine, id: &str) -> Option<Detail> {
         })
         .collect();
     rows.sort_by(|a, b| (&b.when, &b.date).cmp(&(&a.when, &a.date)));
-    Some(Detail { id: id.to_string(), fills: rows })
+    Detail { id: id.to_string(), fills: rows }
 }
 
 #[cfg(test)]

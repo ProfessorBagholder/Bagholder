@@ -6,6 +6,7 @@
   import { sort } from './lib/sort.svelte'
   import type { PositionsDoc, TradesDoc } from './lib/model'
   import { held, read } from './lib/reads.svelte'
+  import { readAhead } from './lib/trade/ahead'
   import { heat, marketsOnShow } from './lib/heatmap/heat.svelte'
   import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
@@ -215,7 +216,13 @@
     if (!book.data || everyTradeRead) return
     everyTradeRead = true
     void read('GET /api/figures/trades', { query: { filters: '', sort: '', dir: '' } }, { key: EVERY_TRADE }).then((r) => {
-      if (!r.ok) flash('Could not read the trades: ' + r.error, 'err')
+      if (!r.ok) {
+        flash('Could not read the trades: ' + r.error, 'err')
+        return
+      }
+      // then each trade's and holding's page made ready before it is first opened
+      const holdings = (positions.data ?? (keptRow('positions') as PositionsDoc | null))?.positions ?? []
+      void readAhead([...r.trades, ...holdings.map(holdingAsTrade)])
     })
   })
   const selHolding = $derived(route.tab === 'portfolio' ? shown?.position ?? null : null)
