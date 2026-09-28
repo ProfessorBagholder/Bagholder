@@ -282,10 +282,19 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   }
 }
 
+/**
+ * The server this page load has heard answer: never one drawn from what was kept.
+ * A kept status is the word of a server heard on an earlier load; compared with it,
+ * the new build a reload fetched would read as the old one and load itself again,
+ * for ever.
+ */
+let heard: ServerStamp | null = null
+
 /** A new state of the header's status: from a server started again, and was it an update? */
-function restarted(was: unknown, now: unknown): boolean {
-  const a = stamp(was)
+function restarted(now: unknown): boolean {
+  const a = heard
   const b = stamp(now)
+  if (b) heard = b
   if (!a || !b || a.startedAt === b.startedAt) return false
   if (isUpdate(a, b)) {
     afterRestart(a, b) // the page loads itself again: this build takes nothing more from the new server
@@ -349,7 +358,7 @@ export async function connect(): Promise<void> {
     const { doc, data, v } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown; v: string }
     const w = wanted.get(doc)
     if (!w) return
-    if (doc === 'status' && restarted(w.holder.data, data)) return
+    if (doc === 'status' && restarted(data)) return
     if (isObj(w.holder.data) && isObj(data)) reconcile(w.holder.data, data, ROW_KEYS[docKind(doc)] ?? {})
     else w.holder.data = data
     w.holder.v = v
