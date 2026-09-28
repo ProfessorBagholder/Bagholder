@@ -357,7 +357,9 @@ fn share_dec(total: Dec, part: Dec, whole: Dec) -> Result<Dec, Gaps> {
     if part == whole {
         return Ok(total);
     }
-    Ok(total.checked_mul(part)?.div_rounded(whole, SHARE_PLACES, Rounding::HalfEven)?)
+    // worked exactly however many digits the product needs (a coin's millions of units
+    // at a fraction of a cent), rounded once to the share's places
+    Ok(total.mul_div_rounded(part, whole, SHARE_PLACES, Rounding::HalfEven)?)
 }
 
 fn fig_share(total: &Fig<Money>, part: Dec, whole: Dec) -> Fig<Money> {
@@ -2117,5 +2119,28 @@ mod fill_price_tests {
         assert!(fill_price(&fill("1", None, Some("-410"), None), Some(&unstated)).is_err(), "a contract whose size is unstated");
         assert!(fill_price(&fill("80", None, None, None), Some(&share)).is_err(), "neither a price nor cash");
         assert!(fill_price(&fill("0", None, Some("-10"), None), Some(&share)).is_err(), "no units");
+    }
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::*;
+
+    /// A sale of millions of a coin's units at a fraction of a cent, shared over the
+    /// lots it closes: the proceeds times a lot's units need more digits than a `Dec`
+    /// holds before the division by the sale's units brings them back. Each share is
+    /// worked from the exact value and rounded once.
+    #[test]
+    fn a_coin_sale_of_millions_of_units_shares_its_proceeds_over_its_lots() {
+        let d = |s: &str| Dec::parse(s).unwrap();
+        let proceeds = Money::new(d("727.54718203318461"), Currency::CAD);
+        let sold = d("58523216.72421281");
+        let (first, second) = (d("42540998.84372"), d("15982217.88049281"));
+        let a = share(proceeds, first, sold).unwrap();
+        let b = share(proceeds, second, sold).unwrap();
+        // worked at 200 digits (Python's decimal module), each rounded half to even to 12 places
+        assert_eq!(a.amount, d("528.859921960173"));
+        assert_eq!(b.amount, d("198.687260073012"));
+        assert_eq!(share(proceeds, sold, sold).unwrap(), proceeds);
     }
 }
