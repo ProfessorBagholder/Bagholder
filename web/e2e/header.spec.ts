@@ -68,6 +68,32 @@ for (const [what, next] of [
   })
 }
 
+// The page that reloads for a new version saves what it holds on the way out, the
+// old server's status among it, and draws that first on the load that follows. It
+// must never take that for the server it heard, or it reloads for ever: signed in,
+// the server reads the balances before it answers, so the old status is always
+// drawn first (2.0.0 on the owner's page).
+test('a new version loads the page again once, though what the page kept of the old server is drawn before the new one answers', async ({ page, request }) => {
+  const model = await modelDoc(request)
+  let server: Record<string, unknown> = { startedAt: 'A' }
+  let slow = 0
+  await page.route('**/api/events?*', async (route) => {
+    if (slow) await new Promise((r) => setTimeout(r, slow))
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody({ ...model, status: { ...model.status, ...server } }) })
+  })
+  await page.route('**/api/events/watch', (route) => route.fallback())
+  let loads = 0
+  page.on('request', (r) => { if (r.resourceType() === 'document') loads++ })
+  await page.goto('/')
+  await ready(page)
+  // the new version answers only after what the page kept is drawn, as a signed-in server does
+  slow = 2000
+  server = { startedAt: 'C', version: (model.status as { version: string }).version + '-next' }
+  await expect.poll(() => loads, { timeout: 10_000 }).toBeGreaterThanOrEqual(2)
+  await page.waitForTimeout(8000)
+  expect(loads).toBe(2)
+})
+
 test('the status line on the book as it is: not connected, and nothing on offer', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('#syncline')).toHaveText('Not connected')
