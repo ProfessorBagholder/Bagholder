@@ -32,7 +32,7 @@
   // The server reads a publisher only while some page shows its meter, so watching
   // both keeps both fresh, and turning to the other never draws an old reading first.
   const docs = $state<Record<string, { data: FearDoc | null }>>(Object.fromEntries(INDEX_OPTS.map(([ix]) => [ix, { data: null }])))
-  $effect(() => {
+  $effect.pre(() => {
     const stops = INDEX_OPTS.map(([ix]) => watchDoc('fear:' + ix, {}, docs[ix]))
     return () => stops.forEach((stop) => stop())
   })

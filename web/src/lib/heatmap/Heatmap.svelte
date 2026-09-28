@@ -32,7 +32,7 @@
   // whichever way it came on show (a click, the remembered choice, the address, the
   // slideshow). Its rows arrive in the model; the document says only a failed read.
   const udocs = $state<Record<string, { data: UniverseDoc | null }>>({})
-  $effect(() => {
+  $effect.pre(() => {
     const stops = marketsOnShow(heat.universe, alone ? show.on : null).map((u) => {
       if (!udocs[u]) udocs[u] = { data: null }
       return watchDoc('universe:' + u, {}, udocs[u])

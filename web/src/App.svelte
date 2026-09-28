@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { start, refilter, loadDetail } from './lib/state.svelte'
-  import { conn, connect, disconnect } from './lib/live.svelte'
+  import { conn, connect, disconnect, everyScreen } from './lib/live.svelte'
   import { status as statusSlot, book, dashboard, positions, trades, cashflow, exposure, markets, trade, use, filtered, limits } from './lib/subs.svelte'
   import { sort } from './lib/sort.svelte'
+  import { heat, marketsOnShow } from './lib/heatmap/heat.svelte'
   import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
   import { symText } from './lib/sym'
@@ -161,8 +162,27 @@
   use(() => (!route.heat && (route.tab === 'portfolio' || route.tab === 'markets') ? 'positions' : null), positions, filtered)
   use(() => (!route.heat && route.tab === 'portfolio' && !route.sub ? 'exposure' : null), exposure, filtered)
   use(() => (route.heat || route.tab === 'markets' ? 'markets' : null), markets, filtered)
-  use(() => (!route.heat && route.tab === 'trades' && !route.sub ? 'trades' : null), trades, () => ({ ...filtered(), sort: $state.snapshot(sort.trades), limit: limits.trades }))
-  use(() => (!route.heat && route.tab === 'cashflow' ? 'cashflow' : null), cashflow, () => ({ ...filtered(), sort: $state.snapshot(sort.cash), limit: limits.cash }))
+  const tradesParams = () => ({ ...filtered(), sort: $state.snapshot(sort.trades), limit: limits.trades })
+  const cashParams = () => ({ ...filtered(), sort: $state.snapshot(sort.cash), limit: limits.cash })
+  use(() => (!route.heat && route.tab === 'trades' && !route.sub ? 'trades' : null), trades, tradesParams)
+  use(() => (!route.heat && route.tab === 'cashflow' ? 'cashflow' : null), cashflow, cashParams)
+  // every tab's screen, kept whether visited or not: no tab ever opens with nothing
+  everyScreen(() => [
+    { key: 'dashboard', params: filtered() },
+    { key: 'trades', params: tradesParams() },
+    { key: 'positions', params: filtered() },
+    { key: 'exposure', params: filtered() },
+    { key: 'markets', params: filtered() },
+    { key: 'cashflow', params: cashParams() },
+    // the Markets cards' own: any last state of each serves until the card's own is answered
+    { key: 'heatmap', params: { ...filtered(), universe: heat.universe, size: heat.size } },
+    ...marketsOnShow(heat.universe, null).map((u) => ({ key: 'universe:' + u, params: {} })),
+    { key: 'headlines', params: { ...filtered(), scope: 'all', kind: 'stories', query: '', sort: $state.snapshot(sort.news), limit: limits.news } },
+    { key: 'news', params: {} },
+    { key: 'shorts', params: {} },
+    { key: 'fear:stocks', params: {} },
+    { key: 'fear:crypto', params: {} },
+  ])
   use(() => (detailTab ? 'trade:' + route.sub : null), trade)
 
   const status = $derived(statusSlot.data)

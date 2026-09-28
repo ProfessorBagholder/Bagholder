@@ -118,10 +118,29 @@ export function kept(book: string, key: string, params: unknown): Kept | null {
   return k ? { data: structuredClone(k.data), v: k.v } : null
 }
 
+/**
+ * The last thing kept of `key` for `book` under any parameters (a copy of it), or
+ * null: what a screen whose filters or sort changed shows until the server answers
+ * it. Its version is not the one asked for, so it is never named to the server.
+ */
+export function keptLatest(book: string, key: string): Kept | null {
+  if (!keptRead(book)) return null
+  const of = prefix(book) + key + '|'
+  let last: Kept | undefined
+  for (const [k, v] of held) if (k.startsWith(of)) last = v
+  return last ? { data: structuredClone(last.data), v: '' } : null
+}
+
 /** Keep each document as it stands now. */
 export async function save(book: string, docs: { key: string; params: unknown; data: unknown; v: string }[]): Promise<void> {
   if (!book || !docs.length) return
-  if (book === heldFor) for (const x of docs) held.set(name(book, x.key, x.params), { data: x.data, v: x.v })
+  // the last kept of each is the newest in memory: what a screen under new parameters shows first
+  if (book === heldFor)
+    for (const x of docs) {
+      const n = name(book, x.key, x.params)
+      held.delete(n)
+      held.set(n, { data: x.data, v: x.v })
+    }
   const d = await open()
   if (!d) return
   try {
