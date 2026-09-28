@@ -7,6 +7,14 @@
 - Replace it with the plan below, built as one PR.
 - Nothing in it is the owner's to decide.
 
+## The owner's requirement, which was never ambiguous
+
+- Anything the app has already loaded is shown immediately, on every screen, every time: on a reload, on a restart, and on a screen's first opening in a page load.
+- A value on screen is never replaced by a loading state. The newer value is fetched in the background and replaces only what changed.
+- Data is loaded when it is needed. Nothing is loaded again that hasn't changed.
+
+**This is the acceptance criterion.** It is checked on every screen the app can show, the way the owner uses the app. Everything below is how to meet it.
+
 ## Why it keeps happening
 
 **There is no one place the page reads through.**
