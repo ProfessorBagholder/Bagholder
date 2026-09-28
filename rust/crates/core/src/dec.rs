@@ -341,6 +341,50 @@ impl Dec {
         Ok(if negative { t.neg() } else { t })
     }
 
+    /// `self × mul ÷ div` to `places` decimal places, rounded once, by `rule`, from
+    /// the exact value: a share of an amount (a sale's proceeds over the units a
+    /// lot takes of it) whose product needs more digits than a `Dec` holds before
+    /// the division brings it back. Worked in integers as wide as it needs; only a
+    /// result that does not fit at `places` is an error.
+    pub fn mul_div_rounded(self, mul: Dec, div: Dec, places: u32, rule: Rounding) -> Result<Dec, DecError> {
+        if div.is_zero() {
+            return Err(DecError::DivisionByZero);
+        }
+        if places > MAX_PLACES {
+            return Err(DecError::Overflow);
+        }
+        if self.is_zero() || mul.is_zero() {
+            return Ok(Dec::ZERO);
+        }
+        let (a, b, c) = (self.0.normalize(), mul.0.normalize(), div.0.normalize());
+        let negative = (a.is_sign_negative() != b.is_sign_negative()) != c.is_sign_negative();
+        // value = (A·B / 10^(sa+sb)) / (C / 10^sc); the result's mantissa is value · 10^places
+        let mut num = Big::from(a.mantissa().unsigned_abs()).times(&Big::from(b.mantissa().unsigned_abs()));
+        let mut den = Big::from(c.mantissa().unsigned_abs());
+        let e = c.scale() as i64 + places as i64 - (a.scale() + b.scale()) as i64;
+        for _ in 0..e.max(0) {
+            num = num.times_small(10);
+        }
+        for _ in 0..(-e).max(0) {
+            den = den.times_small(10);
+        }
+        let (mut q, r) = num.divmod(&den);
+        let twice = r.times_small(2);
+        let up = match rule {
+            Rounding::TowardZero => false,
+            Rounding::AwayFromZero => !r.is_zero(),
+            Rounding::Floor => negative && !r.is_zero(),
+            Rounding::Ceiling => !negative && !r.is_zero(),
+            Rounding::HalfUp => twice >= den,
+            Rounding::HalfEven => twice > den || (twice == den && q.is_odd()),
+        };
+        if up {
+            q = q.plus_one();
+        }
+        let m = q.to_u128().filter(|m| *m >> 96 == 0).ok_or(DecError::Overflow)? as i128;
+        Ok(Dec(Decimal::from_i128_with_scale(if negative && m != 0 { -m } else { m }, places)))
+    }
+
     /// `self` rounded to `places`, by `rule`.
     pub fn round(self, places: u32, rule: Rounding) -> Dec {
         Dec(self.0.round_dp_with_strategy(places.min(MAX_PLACES), rule.strategy()))
@@ -386,6 +430,124 @@ impl Dec {
 
 /// An unsigned integer of up to 192 bits, in three 64-bit limbs (least
 /// significant first): enough for the product of two 96-bit mantissas.
+/// An unsigned integer as wide as it needs (64-bit limbs, least significant first,
+/// no trailing zero limbs): the one place `mul_div_rounded` works in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Big(Vec<u64>);
+
+impl From<u128> for Big {
+    fn from(v: u128) -> Big {
+        Big(vec![v as u64, (v >> 64) as u64]).trimmed()
+    }
+}
+
+impl Big {
+    fn trimmed(mut self) -> Big {
+        while self.0.last() == Some(&0) {
+            self.0.pop();
+        }
+        self
+    }
+    fn is_zero(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn is_odd(&self) -> bool {
+        self.0.first().is_some_and(|l| l & 1 == 1)
+    }
+    fn bits(&self) -> usize {
+        self.0.last().map_or(0, |top| 64 * (self.0.len() - 1) + (64 - top.leading_zeros() as usize))
+    }
+    fn bit(&self, i: usize) -> bool {
+        self.0.get(i / 64).is_some_and(|l| (l >> (i % 64)) & 1 == 1)
+    }
+    fn times(&self, other: &Big) -> Big {
+        let mut out = vec![0u64; self.0.len() + other.0.len()];
+        for (i, &x) in self.0.iter().enumerate() {
+            let mut carry: u128 = 0;
+            for (j, &y) in other.0.iter().enumerate() {
+                let cur = out[i + j] as u128 + x as u128 * y as u128 + carry;
+                out[i + j] = cur as u64;
+                carry = cur >> 64;
+            }
+            out[i + other.0.len()] = carry as u64;
+        }
+        Big(out).trimmed()
+    }
+    fn times_small(&self, k: u64) -> Big {
+        self.times(&Big::from(k as u128))
+    }
+    fn plus_one(&self) -> Big {
+        let mut out = self.0.clone();
+        for limb in out.iter_mut() {
+            let (v, carry) = limb.overflowing_add(1);
+            *limb = v;
+            if !carry {
+                return Big(out);
+            }
+        }
+        out.push(1);
+        Big(out)
+    }
+    /// `self << 1 | bit`.
+    fn shifted_in(&self, bit: bool) -> Big {
+        let mut out = Vec::with_capacity(self.0.len() + 1);
+        let mut carry = bit as u64;
+        for &l in &self.0 {
+            out.push(l << 1 | carry);
+            carry = l >> 63;
+        }
+        out.push(carry);
+        Big(out).trimmed()
+    }
+    fn minus(&self, other: &Big) -> Big {
+        let mut out = self.0.clone();
+        let mut borrow = 0u64;
+        for (i, limb) in out.iter_mut().enumerate() {
+            let o = other.0.get(i).copied().unwrap_or(0);
+            let (v1, b1) = limb.overflowing_sub(o);
+            let (v2, b2) = v1.overflowing_sub(borrow);
+            *limb = v2;
+            borrow = (b1 || b2) as u64;
+        }
+        debug_assert_eq!(borrow, 0, "a larger number taken from a smaller");
+        Big(out).trimmed()
+    }
+    /// Quotient and remainder, by long division one bit at a time.
+    fn divmod(&self, den: &Big) -> (Big, Big) {
+        let mut q = Big(Vec::new());
+        let mut r = Big(Vec::new());
+        for i in (0..self.bits()).rev() {
+            r = r.shifted_in(self.bit(i));
+            let take = r >= *den;
+            if take {
+                r = r.minus(den);
+            }
+            q = q.shifted_in(take);
+        }
+        (q, r)
+    }
+    fn to_u128(&self) -> Option<u128> {
+        match self.0.len() {
+            0 => Some(0),
+            1 => Some(self.0[0] as u128),
+            2 => Some((self.0[1] as u128) << 64 | self.0[0] as u128),
+            _ => None,
+        }
+    }
+}
+
+impl PartialOrd for Big {
+    fn partial_cmp(&self, other: &Big) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Big {
+    fn cmp(&self, other: &Big) -> std::cmp::Ordering {
+        self.0.len().cmp(&other.0.len()).then_with(|| self.0.iter().rev().cmp(other.0.iter().rev()))
+    }
+}
+
 struct Wide([u64; 3]);
 
 impl Wide {
@@ -598,6 +760,31 @@ mod tests {
         assert_eq!(d("-0.0000000000000000000000000003").mul_to_fit(d("0.5")).unwrap(), d("-0.0000000000000000000000000002"));
         // only a product too large to hold is an error
         assert_eq!(d("79228162514264337593543950335").mul_to_fit(d("2")), Err(DecError::Overflow));
+    }
+
+    #[test]
+    fn a_share_whose_product_needs_more_digits_than_fit_is_worked_exactly() {
+        // a sale's proceeds shared over the units a lot takes: the product alone needs 32 digits
+        let proceeds = d("877.84254866591115");
+        let whole = d("58523216.72421281");
+        assert_eq!(proceeds.mul_div_rounded(whole, whole, 12, Rounding::HalfEven).unwrap(), d("877.842548665911"));
+        let part = d("12345678.12345678");
+        let got = proceeds.mul_div_rounded(part, whole, 12, Rounding::HalfEven).unwrap();
+        // the exact value, worked at 200 digits (Python's decimal module): 185.1839689533067…
+        assert_eq!(got, d("185.183968953307"));
+        // signs, a tie to even and a tie away from zero, a zero and a division by zero
+        assert_eq!(d("-1").mul_div_rounded(d("1"), d("8"), 2, Rounding::HalfEven).unwrap(), d("-0.12"));
+        assert_eq!(d("1").mul_div_rounded(d("-1"), d("-8"), 2, Rounding::HalfUp).unwrap(), d("0.13"));
+        assert_eq!(d("3").mul_div_rounded(d("1"), d("8"), 2, Rounding::HalfEven).unwrap(), d("0.38"));
+        assert_eq!(d("0").mul_div_rounded(d("5"), d("7"), 4, Rounding::HalfEven).unwrap(), Dec::ZERO);
+        assert_eq!(d("1").mul_div_rounded(d("5"), Dec::ZERO, 4, Rounding::HalfEven), Err(DecError::DivisionByZero));
+        // wherever the plain product fits, the answer is div_rounded's
+        for (a, b, c) in [("10.5", "3", "7"), ("-0.0001", "12345", "0.3"), ("99999", "0.00001", "3")] {
+            let (a, b, c) = (d(a), d(b), d(c));
+            for rule in [Rounding::HalfEven, Rounding::HalfUp, Rounding::TowardZero, Rounding::AwayFromZero, Rounding::Floor, Rounding::Ceiling] {
+                assert_eq!(a.mul_div_rounded(b, c, 6, rule).unwrap(), a.checked_mul(b).unwrap().div_rounded(c, 6, rule).unwrap(), "{a} {b} {c} {rule:?}");
+            }
+        }
     }
 
     #[test]
