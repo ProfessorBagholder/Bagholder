@@ -1,4 +1,7 @@
-# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24),
+# with what each account is worth now: the fields its own AccountFinancials fragment
+# asks under `financials.currentCombined` (FetchAllAccountFinancials, as the original
+# app read it).
 query FetchAllAccounts($identityId: ID!, $filter: AccountsFilter = {}, $pageSize: Int = 25, $cursor: String) {
   identity(id: $identityId) {
     id
@@ -15,6 +18,15 @@ fragment AllAccounts on Identity {
       cursor
       node {
         ...AccountWithLink
+        financials {
+          currentCombined {
+            id
+            netLiquidationValue {
+              amount
+              currency
+            }
+          }
+        }
       }
     }
   }

@@ -75,9 +75,10 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
             Some(target) => Some(custodian.get(&target).cloned().ok_or_else(|| n.field("accountFeatures").map(|f| f.mismatch(format!("a Margin Boost naming custodian account {target:?}, which no account stated holds"))).unwrap_or_else(|m| m))?),
         };
         // what it is worth now: its combined financials' net liquidation value
-        let net_value = match n.field("financials").map(|f| f.value().clone()) {
-            Ok(Value::Null) | Err(_) => None,
-            Ok(_) => {
+        // (the field is asked for: an answer without it is not the one asked for)
+        let net_value = match n.field("financials")?.value() {
+            Value::Null => None,
+            _ => {
                 let f = n.obj("financials")?;
                 match f.field("currentCombined")?.value() {
                     Value::Null => None,
