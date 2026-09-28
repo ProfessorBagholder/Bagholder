@@ -201,6 +201,8 @@ function primed(doc: string, w: { params: unknown; holder: Holder<unknown> }): v
   wanted.delete(doc)
   sayWanted()
 }
+/** Every document this page load has followed, on show or read to be kept: never read again only to be kept. */
+const followed = new Set<string>()
 function primeScreens(): void {
   if (!book) return
   if (!keptRead(book)) {
@@ -209,7 +211,8 @@ function primeScreens(): void {
   }
   let added = false
   for (const { key, params } of screens()) {
-    if (wanted.has(key) || keptLatest(book, key)) continue
+    if (followed.has(key) || keptLatest(book, key)) continue
+    followed.add(key)
     wanted.set(key, { params, holder: { data: null }, priming: true })
     added = true
   }
@@ -300,6 +303,7 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   // filters changed) replaces it, and stopping this one then leaves that alone
   const entry = { params, holder: holder as Holder<unknown>, changed }
   wanted.set(key, entry)
+  followed.add(key)
   if (holder.data == null) {
     // drawn at once from what was kept, before the server answers: in the same moment
     // once the page has read it, which it does as it opens
