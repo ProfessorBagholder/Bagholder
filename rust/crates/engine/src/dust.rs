@@ -10,6 +10,18 @@ use bagholder_core::{AccountId, Dec, InstrumentId, Money};
 
 use crate::input::Inputs;
 
+/// Whether an amount of a coin worth `value` is worth less than the smallest
+/// coin order the account's broker takes, converted at `day`'s rate where the
+/// currencies differ. Not dust where any of it is unknown.
+pub fn is_dust_worth(inputs: &Inputs, account: AccountId, instrument: InstrumentId, value: Money, day: Date) -> bool {
+    if !inputs.ledger.instruments.get(&instrument).is_some_and(|i| i.instrument.kind == InstrumentKind::Crypto) {
+        return false;
+    }
+    let Some(smallest) = inputs.ledger.accounts.get(&account).and_then(|a| a.coin_minimum) else { return false };
+    let value = Money::new(value.amount.abs(), value.currency);
+    crate::fx::convert(&inputs.facts.rates, &inputs.clock, value, smallest.currency, day).is_ok_and(|v| v < smallest.amount)
+}
+
 /// Whether `qty` of a coin, at `price` a unit in its own currency, is worth less
 /// than the smallest coin order the account's broker takes, the value converted
 /// at `day`'s rate where the two currencies differ. Not dust where any of it is

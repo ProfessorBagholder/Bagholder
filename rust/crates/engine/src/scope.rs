@@ -728,7 +728,13 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
             navs.push(Money::new(n, Currency::CAD));
         }
         for (c, v) in &b.cash {
-            let slot = if v.is_negative() { used.entry(*c).or_insert(Ok(Dec::ZERO)) } else { cash_by.entry(*c).or_insert(Ok(Dec::ZERO)) };
+            // money borrowed is a margin account's negative cash; another
+            // account's (a credit card's balance owed) is a debt, not margin
+            let slot = match (v.is_negative(), is_margin(a)) {
+                (true, true) => used.entry(*c).or_insert(Ok(Dec::ZERO)),
+                (true, false) => continue,
+                (false, _) => cash_by.entry(*c).or_insert(Ok(Dec::ZERO)),
+            };
             if let Ok(total) = slot {
                 *slot = total.checked_add(v.abs()).map_err(Gaps::from);
             }

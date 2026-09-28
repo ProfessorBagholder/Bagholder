@@ -115,9 +115,12 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
             b.as_of = Some(at);
             b.cash = cash;
         }
-        if let Some((day, units)) = s.units {
+        // a statement of units kept before the broker's worth of each was
+        // (migration 021) is not compared: the next read states both
+        if let Some((day, units)) = s.units.filter(|(_, u)| u.is_empty() || !s.unit_values.is_empty()) {
             b.held_as_of = Some(day);
             b.held = units;
+            b.held_value = s.unit_values;
         }
         b.activity_read_at = s.activity_read_at;
         b.cash_read = s.cash_read.map(|(_, c)| c);
@@ -130,4 +133,33 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
         out.insert(a.id, b);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bagholder_book::statements::UnitsLine;
+    use bagholder_core::account::{AccountRef, AccountStatus};
+    use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
+    use bagholder_core::{Broker, Dec, Money};
+
+    #[test]
+    fn a_statement_of_units_kept_before_their_worth_was_is_not_compared_and_one_with_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let now: bagholder_core::jiff::Timestamp = "2026-09-27T12:00:00Z".parse().unwrap();
+        let (book, _) = Book::open_in(dir.path(), "test", now).unwrap();
+        let ws = Broker::named("wealthsimple");
+        let conn = book.add_connection(&ws, "Wealthsimple", now).unwrap();
+        let a = book.add_account(conn, &[AccountRef::new(ws.clone(), "crypto-1")], &bagholder_book::import::wealthsimple_account_type("CRYPTO"), AccountStatus::Open, None, now).unwrap();
+        let draft = bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(ws), "sec-z-x")], kind: InstrumentKind::Crypto, currency: Currency::CAD, name: None, option: None, standing: None };
+        let i = book.instrument_stated(&draft, &SourceName::named("wealthsimple"), now).unwrap().unwrap();
+        let read = book.broker_read(conn, "units", now).unwrap();
+        let q = Dec::parse("0.0000005").unwrap();
+        book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: None }], &read, now).unwrap();
+        assert!(brokers(&book).unwrap()[&a].held.is_empty(), "kept before the worth was: not compared");
+        let worth = Money::new(Dec::parse("0.0000014").unwrap(), Currency::CAD);
+        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: Some(worth) }], &read, now).unwrap();
+        let b = &brokers(&book).unwrap()[&a];
+        assert_eq!((b.held[&i], b.held_value[&i]), (q, worth));
+    }
 }
