@@ -317,16 +317,20 @@
   // The 2px bar under the active tab slides and resizes rather than jumping,
   // driven by the active button's own measurements (placeTabIndicator).
   function tabIndicator(bar: HTMLElement) {
+    // written only where it moved: a check that finds it in place touches nothing
+    const set = (k: 'left' | 'width' | 'opacity', v: string) => {
+      if (bar.style[k] !== v) bar.style[k] = v
+    }
     const place = () => {
       const parent = bar.parentElement
       const on = parent?.querySelector('.tabbtn.on') as HTMLElement | null
       if (!on) {
-        bar.style.opacity = '0'
+        set('opacity', '0')
         return
       }
-      bar.style.left = on.offsetLeft + 'px'
-      bar.style.width = on.offsetWidth + 'px'
-      bar.style.opacity = '1'
+      set('left', on.offsetLeft + 'px')
+      set('width', on.offsetWidth + 'px')
+      set('opacity', '1')
     }
     place()
     const ro = new ResizeObserver(place)

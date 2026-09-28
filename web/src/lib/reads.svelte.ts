@@ -102,13 +102,15 @@ export function read<K extends GetKey>(
   let f = flying.get(k)
   if (!f) {
     const stop = new AbortController()
+    // an answer's age runs from when it was asked for: what it says was true then
+    const askedAt = Date.now()
     const made = {
       readers: 0,
       stop,
       answer: call(route, input as never, stop.signal).then((a) => {
         if (flying.get(k) === made) flying.delete(k)
         if (a.ok && (!opts.final || opts.final(a as A))) {
-          if (!ASKED_EACH_TIME.includes(route)) asked.set(k, { at: Date.now(), answer: a })
+          if (!ASKED_EACH_TIME.includes(route)) asked.set(k, { at: askedAt, answer: a })
           if (!ephemeral) void save(bookShown(), [{ key: storeKey(k), params: {}, data: structuredClone(a), v: '' }])
         }
         return a as Answer<unknown>
