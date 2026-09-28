@@ -15,7 +15,7 @@
 import { post } from './api'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
-import { bookIs, lastBook, load, save } from './kept'
+import { bookIs, kept, keptRead, lastBook, readKept, save } from './kept'
 
 export type Step = string | { k: string; v: string }
 export type Op = ['set', Step[], unknown] | ['del', Step[]] | ['rows', Step[], string, string[], Record<string, unknown>]
@@ -173,6 +173,8 @@ let source: EventSource | null = null
 let streamId = 0
 /** The book the page shows: the one it last showed until the server names it. */
 let book = lastBook()
+// what was kept for it, read once now, so every screen opened later draws in the moment it opens
+void readKept(book)
 /** What is being drawn from what was kept: the page says what it shows once these are in. */
 const drawing = new Set<Promise<void>>()
 const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void }>()
@@ -262,16 +264,22 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   const entry = { params, holder: holder as Holder<unknown>, changed }
   wanted.set(key, entry)
   if (holder.data == null) {
-    // drawn at once from what was kept, before the server answers
-    const p = load(book, key, params).then((k) => {
+    // drawn at once from what was kept, before the server answers: in the same moment
+    // once the page has read it, which it does as it opens
+    const draw = () => {
+      const k = kept(book, key, params)
       if (k && holder.data == null && wanted.get(key) === entry) {
         holder.data = k.data as T
         holder.v = k.v
         changed?.()
       }
-    })
-    drawing.add(p)
-    p.finally(() => drawing.delete(p))
+    }
+    if (keptRead(book)) draw()
+    else {
+      const p = readKept(book).then(draw)
+      drawing.add(p)
+      p.finally(() => drawing.delete(p))
+    }
   }
   sayWanted()
   return () => {

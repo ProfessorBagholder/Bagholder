@@ -101,6 +101,32 @@ test('refreshed, the page is drawn from what it kept before the server says a wo
   expect(hello.drawn, 'the Dashboard was on screen before the server said a word').toBe(true)
 })
 
+test('a tab opened for the first time since the page loaded, kept from before, is drawn in the moment it opens: no placeholder, no arrival', async ({ page }) => {
+  await page.goto('/#dashboard')
+  await ready(page)
+  await page.locator('.tabbtn', { hasText: 'Trades' }).click()
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toContain('trades')
+  await page.goto('/#dashboard')
+  await page.reload()
+  await ready(page)
+  // the server's answers held back: the tab can only be drawn from what was kept
+  let release = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  await page.route('**/api/events**', async (route) => { await held; await route.continue() })
+  await page.evaluate(() => {
+    const w = window as unknown as { __placeholder: boolean }
+    w.__placeholder = false
+    new MutationObserver(() => {
+      if (document.querySelector('#page .bhsk, #page .bh-skin')) w.__placeholder = true
+    }).observe(document.getElementById('page')!, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
+  })
+  await page.locator('.tabbtn', { hasText: 'Trades' }).click()
+  await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { __placeholder: boolean }).__placeholder), 'a placeholder or an arrival was drawn').toBe(false)
+  release()
+})
+
 // What each interaction may ask of the server, at most: the requests made and the
 // messages the stream brings. A growth fails here and is argued for, or undone.
 const BUDGET = {
