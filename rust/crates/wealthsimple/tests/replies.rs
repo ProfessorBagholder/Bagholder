@@ -441,6 +441,15 @@ fn balances_read_between_syncs_keep_what_each_account_is_worth_now() {
     assert_eq!(p.stated().net_value_now, Some((later, Money::new(dec("201007.25"), Currency::CAD))));
 }
 
+/// The accounts' worth is asked for with them: an answer without it is not the one asked for.
+#[test]
+fn accounts_answered_without_what_each_is_worth_fail_the_pull() {
+    let without = body("wealthsimple-pull/edited-accounts-one.json").replacen("\"financials\":", "\"notFinancials\":", 1);
+    let p = pulled(Op::Accounts, &[without]);
+    let (_, why) = p.failures().into_iter().find(|(part, _)| part == "accounts").expect("the accounts' read failed");
+    assert!(why.contains("financials"), "{why}");
+}
+
 #[test]
 fn accounts_answered_empty_write_nothing_and_read_nothing_more() {
     let p = pulled(Op::Accounts, &[edited("edited-empty-accounts.json")]);
