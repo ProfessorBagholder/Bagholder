@@ -5,6 +5,7 @@
   import { status as statusSlot, book, dashboard, positions, trades, cashflow, exposure, markets, trade, use, filtered, limits } from './lib/subs.svelte'
   import { sort } from './lib/sort.svelte'
   import type { PositionsDoc, TradesDoc } from './lib/model'
+  import { held, read } from './lib/reads.svelte'
   import { heat, marketsOnShow } from './lib/heatmap/heat.svelte'
   import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
@@ -190,6 +191,7 @@
   const status = $derived(statusSlot.data)
   const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
 
+  const EVERY_TRADE = 'every trade'
   // The detail the address names: a holding under Portfolio, a trade under Trades, each by its id.
   // Until its own document is held, it is drawn from the row the list holds of it, the
   // same trade or holding: a page opened for the first time opens at once.
@@ -197,13 +199,25 @@
     if (!detailTab || !route.sub) return null
     const id = route.sub
     if (route.tab === 'trades') {
-      const t = (trades.data ?? (keptRow('trades') as TradesDoc | null))?.trades.find((x) => x.id === id)
+      const every = held('GET /api/figures/trades', { query: { filters: '', sort: '', dir: '' } }, { key: EVERY_TRADE })
+      const t = (trades.data ?? (keptRow('trades') as TradesDoc | null))?.trades.find((x) => x.id === id) ?? (every?.ok ? every.trades.find((x) => x.id === id) : undefined)
       return t ? { id, trade: t, position: null } : null
     }
     const p = (positions.data ?? (keptRow('positions') as PositionsDoc | null))?.positions.find((x) => x.id === id)
     return p ? { id, trade: null, position: p } : null
   })
   const shown = $derived(detailTab && trade.data?.id === route.sub ? trade.data : fromRow)
+  // Every trade's row, read once a page load and kept: a trade page opened from anywhere
+  // (the review queue, a month, a grade) is drawn from its row at once, whether or not the
+  // Trades list has shown it
+  let everyTradeRead = false
+  $effect(() => {
+    if (!book.data || everyTradeRead) return
+    everyTradeRead = true
+    void read('GET /api/figures/trades', { query: { filters: '', sort: '', dir: '' } }, { key: EVERY_TRADE }).then((r) => {
+      if (!r.ok) flash('Could not read the trades: ' + r.error, 'err')
+    })
+  })
   const selHolding = $derived(route.tab === 'portfolio' ? shown?.position ?? null : null)
   const sel = $derived.by<import('./lib/model').Trade | null>(() => {
     if (selHolding) return holdingAsTrade(selHolding)
@@ -303,16 +317,20 @@
   // The 2px bar under the active tab slides and resizes rather than jumping,
   // driven by the active button's own measurements (placeTabIndicator).
   function tabIndicator(bar: HTMLElement) {
+    // written only where it moved: a check that finds it in place touches nothing
+    const set = (k: 'left' | 'width' | 'opacity', v: string) => {
+      if (bar.style[k] !== v) bar.style[k] = v
+    }
     const place = () => {
       const parent = bar.parentElement
       const on = parent?.querySelector('.tabbtn.on') as HTMLElement | null
       if (!on) {
-        bar.style.opacity = '0'
+        set('opacity', '0')
         return
       }
-      bar.style.left = on.offsetLeft + 'px'
-      bar.style.width = on.offsetWidth + 'px'
-      bar.style.opacity = '1'
+      set('left', on.offsetLeft + 'px')
+      set('width', on.offsetWidth + 'px')
+      set('opacity', '1')
     }
     place()
     const ro = new ResizeObserver(place)

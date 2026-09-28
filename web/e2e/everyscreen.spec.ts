@@ -76,10 +76,10 @@ async function screens(request: APIRequestContext): Promise<Screen[]> {
 /** Every message the stream brings, and every placeholder drawn, from the page's first script on. */
 async function watchFromTheStart(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const w = window as unknown as { __messages: number; __placeholders: string[]; __changes: number; __counting: boolean }
+    const w = window as unknown as { __messages: number; __placeholders: string[]; __changes: string[]; __counting: boolean }
     w.__messages = 0
     w.__placeholders = []
-    w.__changes = 0
+    w.__changes = []
     w.__counting = false
     const Real = window.EventSource
     class Counted extends Real {
@@ -91,7 +91,14 @@ async function watchFromTheStart(page: Page): Promise<void> {
     window.EventSource = Counted as unknown as typeof EventSource
     const LOADING = /^(Loading…|Reading…|Reading [^\s]+…)$/
     new MutationObserver((records) => {
-      if (w.__counting) w.__changes += records.length
+      // a relative time turning over with the clock (`read 2 min ago`) is the clock, not an answer
+      if (w.__counting)
+        for (const r of records) {
+          const el = r.target.nodeType === 1 ? (r.target as Element) : r.target.parentElement
+          if (/ ago\b|just now/.test(el?.textContent ?? '')) continue
+          // what changed, said so a failure names it
+          w.__changes.push(`${r.type} ${el?.nodeName ?? ''}.${String(el?.className ?? '').trim().replace(/\s+/g, '.')} ${r.attributeName ?? ''} +[${Array.from(r.addedNodes).map((n) => (n.textContent ?? '').slice(0, 30)).join('|')}] -[${Array.from(r.removedNodes).map((n) => (n.textContent ?? '').slice(0, 30)).join('|')}]`)
+        }
       for (const r of records)
         for (const n of Array.from(r.addedNodes)) {
           const el = n.nodeType === 1 ? (n as Element) : n.parentElement
@@ -103,6 +110,9 @@ async function watchFromTheStart(page: Page): Promise<void> {
     }).observe(document, { subtree: true, childList: true, characterData: true, attributes: true })
   })
 }
+
+/** What the page shows, a relative time (`3 min ago`, `just now`) read as the clock allows it to differ. */
+const shownText = (page: Page) => page.evaluate(() => document.body.innerText.replace(/\d+ (s|min|h|d|mo|y) ago|just now/g, 'AGO'))
 
 /** The page's reads, held until let through: what is drawn meanwhile can only be what was kept. */
 async function holdServer(page: Page): Promise<() => void> {
@@ -161,7 +171,7 @@ test('every screen, opened again after a reload with the server held back, is dr
   for (const s of list) {
     await s.open(page)
     await settled(page)
-    seen[s.name] = await page.locator('body').innerText()
+    seen[s.name] = await shownText(page)
     await page.keyboard.press('Escape')
     await page.keyboard.press('Escape')
   }
@@ -175,13 +185,13 @@ test('every screen, opened again after a reload with the server held back, is dr
       await page.reload()
       await s.open(page)
       // drawn from what was kept, the server not yet heard from
-      await expect.poll(() => page.locator('body').innerText(), { timeout: 3000 }).toBe(seen[s.name])
+      await expect.poll(() => shownText(page), { timeout: 3000 }).toBe(seen[s.name])
       expect(await page.evaluate(() => (window as unknown as { __placeholders: string[] }).__placeholders)).toEqual([])
       // the server's answers, unchanged, change nothing on screen
-      await page.evaluate(() => { const w = window as unknown as { __changes: number; __counting: boolean }; w.__changes = 0; w.__counting = true })
+      await page.evaluate(() => { const w = window as unknown as { __changes: string[]; __counting: boolean }; w.__changes = []; w.__counting = true })
       release()
       await settled(page)
-      expect(await page.evaluate(() => (window as unknown as { __changes: number }).__changes), 'elements changed when the server answered the same').toBe(0)
+      expect(await page.evaluate(() => (window as unknown as { __changes: string[] }).__changes), 'elements changed when the server answered the same').toEqual([])
       expect(await page.evaluate(() => (window as unknown as { __placeholders: string[] }).__placeholders)).toEqual([])
       await page.unrouteAll({ behavior: 'ignoreErrors' })
     })

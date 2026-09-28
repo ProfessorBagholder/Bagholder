@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { ready, following } from './helpers'
+import { ready, following, view } from './helpers'
 
 // docs/architecture.md §13, held in the browser: the page follows what is on screen,
 // keeps every tab's screen between opens (docs/decisions.md, 2026-09-28: no screen ever
@@ -63,7 +63,8 @@ const keptDocs = (page: Page) =>
           const d = q.result
           if (!d.objectStoreNames.contains('docs')) return resolve([])
           const r = d.transaction('docs', 'readonly').objectStore('docs').getAllKeys()
-          r.onsuccess = () => resolve(r.result.map((k) => String(k).split('|')[2]).sort())
+          // the screens' documents: not the read layer's answers (`get:`) or what a screen drew (`drawn:`)
+          r.onsuccess = () => resolve(r.result.map((k) => String(k).split('|')[2]).filter((k) => !/^(get|drawn):/.test(k)).sort())
           r.onerror = () => resolve([])
         }
       }),
@@ -284,4 +285,36 @@ test('a browser closed while its book was cleared draws nothing of the old book 
   expect(await page.evaluate(() => (window as unknown as { __old: boolean }).__old), 'a figure of the cleared book was drawn').toBe(false)
   // and what was kept of it is gone from this browser
   await expect.poll(() => keptDocs(page)).toEqual([])
+})
+
+// Brief 13: a trade page opened from anywhere (the review queue, a month, a grade) is
+// drawn from the trade's row at once, whether or not the Trades list ever showed it.
+test('a trade page no list has shown is drawn from its row at once', async ({ page, request }) => {
+  const every = (await view(request, 'trades', { limit: 1_000_000 })).trades as { id: string; symbol: string }[]
+  const t = every[every.length - 1]
+  await page.goto('/#dashboard')
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toContain('trades')
+  // what the Trades list kept is gone: only the row of every trade can draw the page
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    const q = indexedDB.open('bagholder')
+    q.onsuccess = () => {
+      const store = q.result.transaction('docs', 'readwrite').objectStore('docs')
+      const c = store.openCursor()
+      c.onsuccess = () => {
+        const cur = c.result
+        if (!cur) return resolve()
+        const k = String(cur.key)
+        if (k.split('|')[2] === 'trades' || k.includes('|trade:')) cur.delete()
+        cur.continue()
+      }
+    }
+  }))
+  await holdServer(page)
+  await page.reload()
+  await ready(page)
+  const placeholder = await watchPlaceholder(page)
+  await page.evaluate((id) => (location.hash = '#trades/' + encodeURIComponent(id)), t.id)
+  await expect(page.locator('#page')).toContainText(t.symbol)
+  expect(await placeholder(), 'the trade page opened on a placeholder').toBe(false)
 })

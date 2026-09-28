@@ -10,8 +10,11 @@ import { follow } from './lib/router.svelte'
 
 // Drawn once what the browser kept is read (a few milliseconds): the first frame is the
 // last state, never a placeholder that the kept state then replaces.
-// The address as it is when the page is drawn, which may have changed while that was read.
-void keptIn.then(() => {
+// Drawn once in the page's own typeface too, served beside it: never first in a stand-in
+// whose widths the typeface then moves. The address as it is when the page is drawn,
+// which may have changed while those were read.
+const typeface = document.fonts?.load('400 1em "Inter Variable"').catch(() => [])
+void Promise.all([keptIn, typeface]).then(() => {
   follow()
   mount(App, { target: document.getElementById('app')! })
 })

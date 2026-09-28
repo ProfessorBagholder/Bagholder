@@ -89,7 +89,10 @@ test('short interest is asked for again when the reader returns to a reading ove
   await page.clock.install()
   let asked = 0
   page.on('request', (r) => { if (r.url().includes('/api/shorts?') && !r.url().includes('trend=1')) asked++ })
+  // the reading's age runs from its answer: the clock moves only once it has arrived
+  const answered = page.waitForResponse((r) => r.url().includes('/api/shorts?') && !r.url().includes('trend=1'))
   await openFirstTrade(page)
+  await answered
   await expect.poll(() => asked).toBe(1)
   const comeBack = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   await page.clock.fastForward(10 * 60_000)
