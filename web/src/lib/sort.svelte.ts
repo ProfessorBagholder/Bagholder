@@ -11,7 +11,8 @@ export interface SortState {
 }
 
 const DEFAULTS: Record<string, SortState> = {
-  trades: { key: 'exitDate', dir: 'desc' },
+  // the list's own order, newest activity first, which no column's arrow names
+  trades: { key: 'activity', dir: 'desc' },
   positions: { key: 'unreal', dir: 'desc' },
   bySymbol: { key: 'pnl', dir: 'desc' },
   execs: { key: 'when', dir: 'desc' },

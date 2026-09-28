@@ -101,6 +101,29 @@ test.describe('Trades list', () => {
     expect(new Set(all).size).toBeGreaterThan(1) // a column that could be in either order proves nothing
   })
 
+  // SPEC.md §4 Trades: Close sorts by the close itself; the open trades (`Open`) stand
+  // together beyond every date, first when descending, last when ascending
+  test('Close sorts by the close, the open trades together first descending and last ascending', async ({ page }) => {
+    await page.goto('/#trades')
+    await ready(page)
+    const closeCol = () => page.locator('#page table tbody tr td:nth-child(2)').allTextContents()
+    const ordered = (vals: string[], dir: 'desc' | 'asc') => {
+      const open = vals.map((v) => v === 'Open')
+      const firstClosed = open.indexOf(false)
+      const lastOpen = open.lastIndexOf(true)
+      const grouped = dir === 'desc' ? lastOpen < firstClosed || lastOpen === -1 : open.indexOf(true) === -1 || open.indexOf(true) > open.lastIndexOf(false)
+      const dates = vals.filter((v) => v !== 'Open')
+      return grouped && sortedBy(dates, dir === 'desc' ? (a, b) => text(b, a) : text)
+    }
+    await headerCell(page, 'Close').click()
+    await expect.poll(async () => ordered(await closeCol(), 'desc')).toBe(true)
+    const all = await closeCol()
+    expect(all).toContain('Open')
+    expect(all.some((v) => v !== 'Open')).toBe(true)
+    await headerCell(page, 'Close').click()
+    await expect.poll(async () => ordered(await closeCol(), 'asc')).toBe(true)
+  })
+
   test('switching the sort to a different header resets its direction to descending', async ({ page }) => {
     await page.goto('/#trades')
     await ready(page)

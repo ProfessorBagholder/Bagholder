@@ -166,7 +166,7 @@ pub fn open(key: &str, params: &Value) -> Option<Result<Box<dyn View>, String>> 
                 Box::new(Whole::<TradeDoc>::new(Reads::TradesAndHoldings, move |cx: &Cx| one_trade(cx, &id)))
             }
             "positions" => Box::new(Positions { filters: filters()?, sent: None }),
-            "trades" => Box::new(Trades::new(filters()?, p.sort.clone().unwrap_or(Sort { key: "exitDate".into(), dir: Dir::Desc }), p.limit.unwrap_or(FIRST_ROWS))?),
+            "trades" => Box::new(Trades::new(filters()?, p.sort.clone().unwrap_or(Sort { key: "activity".into(), dir: Dir::Desc }), p.limit.unwrap_or(FIRST_ROWS))?),
             "cashflow" => Box::new(CashflowView::new(filters()?, p.sort.clone().unwrap_or(Sort { key: "date".into(), dir: Dir::Desc }), p.limit.unwrap_or(FIRST_ROWS))?),
             _ => unreachable!("matched above"),
         })
@@ -641,8 +641,15 @@ fn trade_sort_value(t: &Trade, key: &str) -> SortValue {
         }
         "grade" => ["F", "C", "B", "A"].iter().position(|g| *g == t.grade).map(|i| SortValue::Number(i as f64)).unwrap_or(SortValue::None),
         "pnl" => SortValue::of(serde_json::to_value(&t.pnl_cad).ok().as_ref()),
-        // newest activity first: an open trade by its latest fill, a closed one by its close
-        "exitDate" => SortValue::Text(t.last_date.clone()),
+        // the list's own order, no column's: newest activity first, an open trade by its
+        // latest fill, a closed one by its close
+        "activity" => SortValue::Text(t.last_date.clone()),
+        // the Close column: a closed trade by its close; an open one reads `Open`, after
+        // every date (`~` sorts after any digit), the open ones by their latest fill
+        "exitDate" => SortValue::Text(match &t.exit_date {
+            Some(d) => d.clone(),
+            None => format!("~{}", t.last_date),
+        }),
         k => SortValue::of(serde_json::to_value(t).ok().as_ref().and_then(|v| v.get(k))),
     }
 }
@@ -661,7 +668,7 @@ struct Trades {
 
 impl Trades {
     fn new(filters: bagholder_engine::scope::Filters, sort: Sort, limit: usize) -> Result<Trades, String> {
-        const COLUMNS: [&str; 13] = ["entryDate", "exitDate", "symbol", "exchange", "qty", "entry", "exit", "currency", "pnl", "pnlPct", "holdDays", "grade", "tags"];
+        const COLUMNS: [&str; 14] = ["activity", "entryDate", "exitDate", "symbol", "exchange", "qty", "entry", "exit", "currency", "pnl", "pnlPct", "holdDays", "grade", "tags"];
         if !COLUMNS.contains(&sort.key.as_str()) {
             return Err(format!("the trades have no column {:?} to sort by", sort.key));
         }
