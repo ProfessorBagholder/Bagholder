@@ -305,6 +305,55 @@ impl BrokerAdapter for Statements {
     fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, Value)> {
         Some((statement::paid_key(paid), statement::paid_payload(paid)))
     }
+    fn fill_record(&self, fill: &bagholder_broker::statements::Fill) -> Option<(String, Value)> {
+        Some((statement::fill_key(fill), statement::fill_payload(fill)))
+    }
+}
+
+/// A fill in the activity feed: a coin's units and the cash they cost.
+struct FeedFill;
+
+impl Mapping for FeedFill {
+    fn source(&self) -> SourceName {
+        SourceName::named("wealthsimple")
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn map(&self, _ctx: &MapContext, payload: &str) -> Mapped {
+        let v = json::parse(payload).unwrap();
+        let n = bagholder_sources::reply::Node::root(&v);
+        let symbol = n.text("symbol").unwrap().to_string();
+        let day = n.day("day").unwrap();
+        Mapped {
+            legs: vec![Draft {
+                leg: Leg::named("trade"),
+                account: AccountRef::new(ws(), n.text("account").unwrap().to_string()),
+                occurred_at: Some(at(n.text("at").unwrap())),
+                trade_date: day,
+                settle_date: None,
+                kind: Kind::parse(n.text("kind").unwrap()).unwrap(),
+                effect: None,
+                instrument: Some(InstrumentDraft {
+                    refs: vec![Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(ws()), format!("sec-z-{}", symbol.to_lowercase()))],
+                    kind: bagholder_core::instrument::InstrumentKind::Crypto,
+                    currency: Currency::CAD,
+                    name: Some(bagholder_book::mapping::NameDraft { symbol, venue_mic: None, venue_name: None, name: None, seen: day }),
+                    option: None,
+                    standing: None,
+                }),
+                quantity: Some(dec(n.text("qty").unwrap())),
+                price: None,
+                cash: Some(Money::new(dec(n.text("cash").unwrap()), Currency::CAD)),
+                fee: None,
+                fx_rate: None,
+                paid_on: None,
+                value: None,
+            }],
+            problems: vec![],
+            adjustments: vec![],
+        }
+    }
 }
 
 /// A book of two accounts, a LIRA and a chequing account, and the broker's statements.
@@ -380,6 +429,25 @@ impl World {
         self.broker.asked.clear();
         let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, self.lira_keys.clone()), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
         run(&self.book, &mut self.broker, self.conn, &keys, &self.closed, day("2025-07-15"), at(NOW), &mut |_| {}, failures).unwrap()
+    }
+
+    /// A coin's fill in the feed.
+    fn fill(&mut self, account: &str, when: &str, kind: &str, symbol: &str, qty: &str, cash: &str) -> bagholder_core::RecordId {
+        self.n += 1;
+        let payload = format!(r#"{{"account":"{account}","at":"{when}","cash":"{cash}","day":"{}","kind":"{kind}","qty":"{qty}","symbol":"{symbol}"}}"#, &when[..10]);
+        self.book.store(&FeedFill, &Incoming { connection: Some(self.conn), source_key: &format!("fill-{}", self.n), payload: &payload, refs: vec![] }, at(NOW)).unwrap().record
+    }
+
+    /// Each kept statement's fills whose units the statement states otherwise, taking the feed's place.
+    fn fills(&mut self, failures: &mut Vec<(String, Failure)>) -> usize {
+        let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, self.lira_keys.clone()), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
+        bagholder_broker::statements::fills(&self.book, &mut self.broker, self.conn, &keys, at(NOW), failures).unwrap()
+    }
+
+    /// Units of a coin the account's live transactions hold.
+    fn units_of(&self, account: AccountId, symbol: &str) -> Dec {
+        let i = self.book.instrument_by_ref(&Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(ws()), format!("sec-z-{}", symbol.to_lowercase()))).unwrap().unwrap();
+        self.book.transactions().unwrap().iter().filter(|t| t.account == account && t.instrument == Some(i)).filter_map(|t| t.quantity).fold(Dec::ZERO, |a, q| a.checked_add(q).unwrap())
     }
 
     fn book_cash(&self, account: AccountId) -> Dec {
@@ -879,4 +947,51 @@ fn an_account_whose_activity_begins_after_the_newest_statement_reads_nothing() {
     let mut failures = vec![];
     let done = w.run(&mut failures);
     assert_eq!((done.read, done.booked, done.unreconciled.len()), (0, 0, 0), "{done:?}");
+}
+
+/// Keeps a month's statement for the LIRA as read, without a read.
+fn kept(w: &mut World, m: &str, rows: &[(&str, &str, &str, &str, &str)]) {
+    let read = w.book.broker_read(w.conn, "statement:lira-1", at(NOW)).unwrap();
+    w.book.keep_monthly_statement(w.conn, "lira-1", day(m), &brokerage_statement(rows).canonical(), &read).unwrap();
+}
+
+#[test]
+fn a_fill_the_statement_states_other_units_of_takes_the_statement_s_units_once() {
+    // the feed's market purchase states an estimate of its units; the statement the units executed
+    let mut w = World::new();
+    let feed = w.fill("lira-1", "2024-11-11T15:16:35Z", "buy", "DOGE", "2442.098654", "-1039.16");
+    w.fill("lira-1", "2024-11-11T15:17:39Z", "sell", "DOGE", "-2442.502592", "1091.47");
+    kept(&mut w, "2024-11-01", &[
+        ("2024-11-11", "BUY", "Purchase of 2442.5025927700 DOGE (executed at 2024-11-11), FX Rate: 1.3990", "-1039.16", "0.0"),
+        ("2024-11-11", "FEE", "Fee for purchase of 2442.5025927700 DOGE (executed at 2024-11-11)", "0.0", "0.0"),
+        ("2024-11-11", "SELL", "Sale of 2442.5025920000 DOGE (executed at 2024-11-11), FX Rate: 1.3866", "1091.47", "1091.47"),
+    ]);
+    let mut failures = vec![];
+    assert_eq!(w.fills(&mut failures), 1, "the purchase's units, and the sale's that agree to the feed's places: {failures:?}");
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(w.book.record(feed).unwrap().state, RecordState::Superseded);
+    assert_eq!(w.units_of(w.lira, "DOGE"), dec("0.0000007700"), "the statement's units in, the feed's out");
+    assert_eq!(w.book_cash(w.lira), dec("52.31"), "cash as the feed states it");
+    // read again, nothing changes
+    assert_eq!(w.fills(&mut failures), 0);
+}
+
+#[test]
+fn same_day_fills_of_one_amount_are_paired_by_their_nearest_units_and_another_coin_s_never() {
+    let mut w = World::new();
+    w.fill("lira-1", "2024-03-05T15:00:00Z", "buy", "BTC", "0.000223", "-25");
+    w.fill("lira-1", "2024-03-05T16:00:00Z", "buy", "BTC", "0.000231", "-25");
+    w.fill("lira-1", "2024-03-05T17:00:00Z", "buy", "ETH", "0.010000", "-25");
+    kept(&mut w, "2024-03-01", &[
+        ("2024-03-05", "BUY", "Purchase of 0.0002227000 BTC (executed at 2024-03-05)", "-25", "-25"),
+        ("2024-03-05", "BUY", "Purchase of 0.0002305900 BTC (executed at 2024-03-05)", "-25", "-50"),
+        ("2024-03-05", "BUY", "Purchase of 0.0099000000 SOL (executed at 2024-03-05)", "-25", "-75"),
+    ]);
+    let mut failures = vec![];
+    assert_eq!(w.fills(&mut failures), 2);
+    assert_eq!(w.units_of(w.lira, "BTC"), dec("0.0004532900"));
+    assert_eq!(w.units_of(w.lira, "ETH"), dec("0.010000"), "a row of another coin is no fill of it");
+    // a fill taken from its row keeps it: the next read pairs nothing again
+    assert_eq!(w.fills(&mut failures), 0);
+    assert_eq!(w.units_of(w.lira, "BTC"), dec("0.0004532900"));
 }

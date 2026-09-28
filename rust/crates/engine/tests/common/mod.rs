@@ -166,7 +166,8 @@ pub fn build(case: &Value) -> Built {
         let default_ccy = s(&t, "currency").map(str::to_string).or(instrument_ccy).unwrap_or_else(|| "CAD".into());
         let transaction = Transaction {
             id: id.clone(),
-            mapping: MappingVersion { source: source.clone(), version: 1 },
+            // the source that stated it, where a case says (a coin's rows are rounded per source)
+            mapping: MappingVersion { source: s(&t, "source").map(|x| SourceName::parse(x).unwrap()).unwrap_or_else(|| source.clone()), version: 1 },
             account: ids.account(s(&t, "account").unwrap()),
             occurred_at: s(&t, "at").map(at),
             trade_date: day(s(&t, "day").unwrap()),

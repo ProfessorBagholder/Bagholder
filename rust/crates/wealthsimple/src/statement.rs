@@ -150,6 +150,47 @@ pub fn paid_key(p: &bagholder_broker::statements::Paid) -> String {
     format!("{}|paid|{}", p.account, p.conversion)
 }
 
+/// A fill as the statement states it (`statements::Fill`): the statement's row,
+/// the units it states, and what the feed's row states besides, which it keeps.
+pub fn fill_payload(f: &bagholder_broker::statements::Fill) -> Value {
+    let text = |s: &str| Value::String(s.to_string());
+    let opt = |v: Option<String>| v.map(|s| Value::String(s)).unwrap_or(Value::Null);
+    let money = |m: Option<Money>| (opt(m.map(|m| m.amount.to_text())), opt(m.map(|m| m.currency.as_str().to_string())));
+    let t = &f.feed;
+    let (price, price_currency) = money(t.price);
+    let (cash, cash_currency) = money(t.cash);
+    let (fee, fee_currency) = money(t.fee);
+    let Value::Object(mut row) = payload(&f.account, f.month, f.position, &f.row) else { unreachable!("a row is an object") };
+    for (k, v) in [
+        ("kind", text(FILL)),
+        ("security", text(&f.security.value)),
+        ("instrumentKind", text(f.kind.as_str())),
+        ("instrumentCurrency", text(f.currency.as_str())),
+        ("quantity", text(&f.quantity.to_text())),
+        ("side", text(t.kind.as_str())),
+        ("effect", opt(t.effect.map(|e| e.as_str().to_string()))),
+        ("occurredAt", opt(t.occurred_at.map(|a| a.to_string()))),
+        ("tradeDate", text(&t.trade_date.to_string())),
+        ("settleDate", opt(t.settle_date.map(|d| d.to_string()))),
+        ("price", price),
+        ("priceCurrency", price_currency),
+        ("cash", cash),
+        ("cashCurrency", cash_currency),
+        ("fee", fee),
+        ("feeCurrency", fee_currency),
+        ("fxRate", opt(t.fx_rate.map(|r| r.to_text()))),
+    ] {
+        row.insert(k.to_string(), v);
+    }
+    Value::Object(row)
+}
+
+/// One per row of one account's month, as a row booked is.
+pub fn fill_key(f: &bagholder_broker::statements::Fill) -> String {
+    format!("{}|fill", key(&f.account, f.month, f.position))
+}
+
+const FILL: &str = "fill";
 const OPENING: &str = "opening";
 const PAID: &str = "conversion-paid";
 
@@ -172,6 +213,54 @@ impl Mapping for StatementMapping {
             Err(m) => Mapped::unreadable(format!("a statement row not of the shape kept: {m}")),
         }
     }
+}
+
+/// A fill as the statement states it: the feed's transaction, with the units
+/// the statement states.
+fn fill(n: &Node, _row_currency: Currency) -> Result<Mapped, Mismatch> {
+    let parsed = |field: &str, what: &str| -> Result<Option<String>, Mismatch> {
+        let f = n.field(field)?;
+        match f.value() {
+            Value::Null => Ok(None),
+            _ => f.as_text().map(|t| Some(t.to_string())).map_err(|_| f.mismatch(format!("{what} that is not text"))),
+        }
+    };
+    let currency_of = |field: &str| -> Result<Option<Currency>, Mismatch> {
+        parsed(field, "a currency")?.map(|c| Currency::parse(&c).map_err(|e| n.field(field).map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))).transpose()
+    };
+    let dec_of = |field: &str| -> Result<Option<bagholder_core::Dec>, Mismatch> {
+        parsed(field, "a number")?.map(|v| bagholder_core::Dec::parse(&v).map_err(|e| n.field(field).map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))).transpose()
+    };
+    let money = |amount: &str, currency: &str| -> Result<Option<Money>, Mismatch> { Ok(dec_of(amount)?.zip(currency_of(currency)?).map(|(a, c)| Money::new(a, c))) };
+    let side = n.text("side")?;
+    let kind = Kind::parse(side).map_err(|e| n.field("side").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+    let effect = parsed("effect", "an effect")?.map(|e| bagholder_core::transaction::Effect::parse(&e).map_err(|x| n.field("effect").map(|f| f.mismatch(x.to_string())).unwrap_or_else(|m| m))).transpose()?;
+    let instrument_kind = bagholder_core::instrument::InstrumentKind::parse(n.text("instrumentKind")?).map_err(|e| n.field("instrumentKind").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+    let instrument_currency = currency_of("instrumentCurrency")?.ok_or_else(|| n.field("instrumentCurrency").map(|f| f.mismatch("absent".to_string())).unwrap_or_else(|m| m))?;
+    let occurred_at = parsed("occurredAt", "an instant")?.map(|a| a.parse::<jiff::Timestamp>().map_err(|e| n.field("occurredAt").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))).transpose()?;
+    let settle_date = parsed("settleDate", "a day")?.map(|d| d.parse::<jiff::civil::Date>().map_err(|e| n.field("settleDate").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))).transpose()?;
+    let security = bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(crate::mapping::broker()), n.text("security")?.to_string());
+    Ok(Mapped {
+        legs: vec![Draft {
+            leg: Leg::parse("trade").expect("a leg name written in the code"),
+            account: AccountRef::new(crate::mapping::broker(), n.text("account")?.to_string()),
+            occurred_at,
+            trade_date: n.day("tradeDate")?,
+            settle_date,
+            kind,
+            effect,
+            instrument: Some(bagholder_book::mapping::InstrumentDraft { refs: vec![security], kind: instrument_kind, currency: instrument_currency, name: None, option: None, standing: None }),
+            quantity: Some(n.dec_text("quantity")?),
+            price: money("price", "priceCurrency")?,
+            cash: money("cash", "cashCurrency")?,
+            fee: money("fee", "feeCurrency")?,
+            fx_rate: dec_of("fxRate")?,
+            paid_on: None,
+            value: None,
+        }],
+        problems: vec![],
+        adjustments: vec![],
+    })
 }
 
 fn map_row(v: &Value) -> Result<Mapped, Mismatch> {
@@ -215,6 +304,7 @@ fn map_row(v: &Value) -> Result<Mapped, Mismatch> {
             return draft(bagholder_broker::statements::gap_leg().as_str(), n.day("month")?, Kind::Fee, moved);
         }
         Some(PAID) => return draft(bagholder_broker::statements::paid_leg().as_str(), n.day("day")?, Kind::CurrencyConversion, n.dec_text("cashMovement")?),
+        Some(FILL) => return fill(&n, currency),
         Some(other) => return Err(n.field("kind")?.mismatch(format!("a record of a kind not kept: {other:?}"))),
     }
     let row = row(&n, currency)?;

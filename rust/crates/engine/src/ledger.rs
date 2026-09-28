@@ -220,6 +220,21 @@ pub struct Dust {
     pub beyond: bool,
 }
 
+/// Units of a coin that arrived with no row of their own, at no cost: what a
+/// row's rounding left out, or the last reward paid into a move out of staking
+/// (`SPEC.md` §2, Crypto).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arrived {
+    /// The row that shows they were held.
+    pub transaction: TransactionId,
+    pub account: AccountId,
+    pub instrument: InstrumentId,
+    /// Always positive.
+    pub qty: Dec,
+    /// A reward paid into a move out of staking (else what rounding left out).
+    pub reward: bool,
+}
+
 /// An event's units as the broker states them against its ratio.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitsDisagree {
@@ -273,6 +288,8 @@ pub struct Matched {
     /// Every amount of a coin that was dust (`crate::dust`): written off, or
     /// taken beyond what was held and not listed.
     pub dust: Vec<Dust>,
+    /// Every amount of a coin that arrived with no row of its own.
+    pub arrived: Vec<Arrived>,
     /// Each instrument's last price a fill stated above nothing, in its own
     /// currency: what dust is valued at where nothing newer is known.
     pub last_price: BTreeMap<InstrumentId, Dec>,
@@ -646,6 +663,13 @@ struct Matcher<'a> {
     /// Contracts whose record has an expiry, assignment or exercise row, on any
     /// day: the broker's own row says how they ended.
     ended_on_record: BTreeSet<(AccountId, InstrumentId)>,
+    /// Each coin's finest place each source states its units to: a source
+    /// rounds a row's units there, so a row's units are exact only to half a
+    /// unit of that place.
+    places: BTreeMap<(InstrumentId, bagholder_core::SourceName), u32>,
+    /// Each coin holding: how far its rows since it was last empty can be from
+    /// the units they moved, by their rounding alone.
+    rounding_held: BTreeMap<(AccountId, InstrumentId), Dec>,
 }
 
 impl<'a> Matcher<'a> {
@@ -663,6 +687,74 @@ impl<'a> Matcher<'a> {
 
     fn is_option(&self, i: InstrumentId) -> bool {
         self.info(i).is_some_and(|x| x.instrument.kind == InstrumentKind::OptionContract)
+    }
+
+    fn is_coin(&self, i: InstrumentId) -> bool {
+        self.info(i).is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto)
+    }
+
+    /// The long units the book holds.
+    fn long_held(&mut self, account: AccountId, instrument: InstrumentId) -> Option<Dec> {
+        self.book(account, instrument).lots.iter().filter(|l| l.direction == Direction::Long).try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty).ok())
+    }
+
+    /// How far the book's units of a coin can be from what the broker holds by
+    /// its rows' rounding alone: half a unit of the finest place its rows state,
+    /// for each row since the holding was last empty.
+    fn rounding(&self, t: &Transaction, instrument: InstrumentId) -> Option<Dec> {
+        let held = self.rounding_held.get(&(t.account, instrument)).copied().unwrap_or(Dec::ZERO);
+        held.checked_add(self.half_unit(t, instrument)?).ok()
+    }
+
+    /// Half a unit of the place the row's source states the coin's units to.
+    fn half_unit(&self, t: &Transaction, instrument: InstrumentId) -> Option<Dec> {
+        let places = self.places.get(&(instrument, t.mapping.source.clone()))?;
+        Dec::new(5, places.checked_add(1)?).ok()
+    }
+
+    /// Units of a coin a row states the account holds (a move of the whole
+    /// holding into or out of staking) or takes out (a sale), beyond what the
+    /// book holds: they arrived with no row, and arrive now, at no cost. Within
+    /// the rows' rounding they are what the rounding left out; beyond it, a
+    /// row stating units in staking brings the last reward its rows left out
+    /// (the owner's Polkadot, 4 November 2024: unstaked a day's reward more than
+    /// every reward row states). Anything else stays beyond what the book held.
+    fn arrived_unstated(&mut self, t: &Transaction, instrument: InstrumentId, stated: Dec, staking: bool) {
+        let account = t.account;
+        let Some(held) = self.long_held(account, instrument) else { return };
+        let Ok(excess) = stated.checked_sub(held) else { return };
+        if !excess.is_positive() {
+            return;
+        }
+        let within = self.rounding(t, instrument).is_some_and(|r| excess <= r);
+        let flags = match (within, staking) {
+            (true, _) => BTreeSet::new(),
+            (false, true) => BTreeSet::from([Flag::Reward]),
+            (false, false) => return,
+        };
+        let zero = Money::zero(self.currency(instrument));
+        let reward = flags.contains(&Flag::Reward);
+        self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, excess, Ok(zero), zero, flags, None);
+        self.out.arrived.push(Arrived { transaction: t.id.clone(), account, instrument, qty: excess, reward });
+    }
+
+    /// A row that moved a coin holding: half a unit of the place its source
+    /// states units to, added to the holding's rounding, which begins again
+    /// once the holding is empty.
+    fn count_row(&mut self, t: &Transaction, instrument: InstrumentId) {
+        let account = t.account;
+        if !self.is_coin(instrument) {
+            return;
+        }
+        if self.long_held(account, instrument).is_some_and(|h| h.is_zero()) {
+            self.rounding_held.remove(&(account, instrument));
+            return;
+        }
+        let Some(half) = self.half_unit(t, instrument) else { return };
+        let e = self.rounding_held.entry((account, instrument)).or_insert(Dec::ZERO);
+        if let Ok(v) = e.checked_add(half) {
+            *e = v;
+        }
     }
 
     fn book(&mut self, account: AccountId, instrument: InstrumentId) -> &mut Book {
@@ -1076,6 +1168,13 @@ impl<'a> Matcher<'a> {
         if t.kind == Kind::Dividend {
             return self.apply_distribution(t);
         }
+        // a coin's move into or out of staking moves no units, and states the units it moved
+        if t.kind == Kind::StakingMove && self.is_coin(instrument) {
+            if let Some(stated) = t.paid_on.filter(|q| q.is_positive()) {
+                self.arrived_unstated(t, instrument, stated, true);
+            }
+            return;
+        }
         match mv {
             Move::Nothing => return,
             Move::Event => return self.apply_event(t),
@@ -1111,6 +1210,9 @@ impl<'a> Matcher<'a> {
         let (fee, charge) = charged(t, currency);
         let closer = Closer::Transaction(t.id.clone());
         let none = BTreeSet::new();
+        if !acquiring && self.is_coin(instrument) && matches!(mv, Move::Trade(_) | Move::Transfer | Move::Reward | Move::Resolve) {
+            self.arrived_unstated(t, instrument, qty, false);
+        }
         match mv {
             Move::Trade(effect) => {
                 let mult = multiplier(self.info(instrument), instrument);
@@ -1158,6 +1260,7 @@ impl<'a> Matcher<'a> {
             Move::Event | Move::Nothing => {}
         }
         self.write_off_dust(t, instrument);
+        self.count_row(t, instrument);
     }
 
     /// What a coin transaction leaves of the holding, worth less than the
@@ -1859,6 +1962,19 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
             .filter(|t| matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise))
             .filter_map(|t| t.instrument.map(|i| (t.account, i)))
             .collect(),
+        places: {
+            let mut p: BTreeMap<(InstrumentId, bagholder_core::SourceName), u32> = BTreeMap::new();
+            for t in &ledger.transactions {
+                if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
+                    if ledger.instruments.get(&i).is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto) {
+                        let e = p.entry((i, t.mapping.source.clone())).or_insert(0);
+                        *e = (*e).max(q.places());
+                    }
+                }
+            }
+            p
+        },
+        rounding_held: BTreeMap::new(),
     };
     // each adjustment's event: its own row and the event rows of that account and
     // day on the instruments its legs name

@@ -786,6 +786,8 @@ fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
         }
         // less what was written off as dust, and with what was taken beyond as dust
         let dust = f.matched.dust.iter().filter(|d| d.account == *account && d.instrument == *instrument).try_fold(Dec::ZERO, |a, d| if d.beyond { a.checked_add(d.qty) } else { a.checked_sub(d.qty) }).unwrap();
+        // and with what arrived with no row of its own
+        let dust = f.matched.arrived.iter().filter(|d| d.account == *account && d.instrument == *instrument).try_fold(dust, |a, d| a.checked_add(d.qty)).unwrap();
         let sum = own.iter().try_fold(dust, |a, x| a.checked_add(x.quantity.unwrap())).unwrap();
         let held = f.matched.units_on(*account, *instrument, today);
         if held != Ok(sum) {

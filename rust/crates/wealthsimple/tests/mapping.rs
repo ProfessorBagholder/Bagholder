@@ -489,3 +489,12 @@ fn a_move_whose_other_side_s_positions_are_not_kept_and_whose_own_show_holdings_
     assert_eq!(m.problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), vec!["moved-holdings-unstated"]);
     assert_eq!(cash_of(&m), None);
 }
+
+#[test]
+fn a_move_into_or_out_of_staking_states_the_units_it_moved_and_moves_none() {
+    let (row, m) = one(&all(), "CRYPTO_STAKING_ACTION", Some("AUTO_STAKE"), "COMPLETED");
+    let d = &m.legs[0];
+    assert_eq!(d.kind, bagholder_core::transaction::Kind::StakingMove);
+    assert_eq!(d.quantity, None, "no change to the holding");
+    assert_eq!(d.paid_on, text(&row, "assetQuantity").map(|q| dec(q).abs()), "the units it moved");
+}

@@ -272,4 +272,10 @@ pub trait BrokerAdapter {
         let _ = paid;
         None
     }
+    /// A fill as the statement states it, in the place of the feed's row for
+    /// it: the key and the record.
+    fn fill_record(&self, fill: &crate::statements::Fill) -> Option<(String, Value)> {
+        let _ = fill;
+        None
+    }
 }

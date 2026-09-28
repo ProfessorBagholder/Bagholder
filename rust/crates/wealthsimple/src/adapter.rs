@@ -511,6 +511,9 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, Value)> {
         Some((crate::statement::paid_key(paid), crate::statement::paid_payload(paid)))
     }
+    fn fill_record(&self, fill: &bagholder_broker::statements::Fill) -> Option<(String, Value)> {
+        Some((crate::statement::fill_key(fill), crate::statement::fill_payload(fill)))
+    }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>> {
         let nodes = self.source.history(account, from)?;
         let days = crate::read::history(&nodes).map_err(mismatch)?;

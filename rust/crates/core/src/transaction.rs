@@ -90,7 +90,8 @@ pub struct Transaction {
     /// The conversion rate the source applied, where it states one.
     pub fx_rate: Option<Dec>,
     /// For a payment (a distribution, interest on a holding), the units it was
-    /// paid on, where the source states them: never a change to the position.
+    /// paid on; for a move into or out of staking, the units it moved; where the
+    /// source states them: never a change to the position.
     pub paid_on: Option<Dec>,
     /// For units that moved in, what the source states they were worth as they
     /// arrived (Wealthsimple's amount on a coin moved in): never cash that moved.
