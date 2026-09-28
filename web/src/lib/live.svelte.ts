@@ -364,12 +364,16 @@ export async function connect(): Promise<void> {
     w.holder.v = v
     w.holder.error = ''
     w.changed?.()
+    keep(doc)
   })
   es.addEventListener('same', (e) => {
     seen((e as MessageEvent).lastEventId)
     const { doc, v } = JSON.parse((e as MessageEvent).data) as { doc: string; v: string }
     const w = wanted.get(doc)
-    if (w) w.holder.v = v
+    if (w) {
+      w.holder.v = v
+      keep(doc)
+    }
   })
   es.addEventListener('patch', (e) => {
     seen((e as MessageEvent).lastEventId)
@@ -379,6 +383,7 @@ export async function connect(): Promise<void> {
     applyOps(w.holder.data, ops)
     w.holder.v = v
     w.changed?.()
+    keep(doc)
   })
   es.addEventListener('refused', (e) => {
     seen((e as MessageEvent).lastEventId)
@@ -407,16 +412,24 @@ export function resyncAll(): void {
   })
 }
 
-/** Keep every document shown as it stands: when the page is hidden or left, the moment it may not come back. */
-export function keepShown(): void {
-  const docs = [...wanted.entries()].filter(([, w]) => w.holder.data != null && w.holder.v).map(([key, w]) => ({ key, params: w.params, data: $state.snapshot(w.holder.data), v: w.holder.v! }))
-  void save(book, docs)
+/**
+ * Keep each document the moment it changes, not when the page is left: a browser
+ * drops a write still under way when the page unloads, so one made on leaving is
+ * never there on the next open. The documents that changed in one message are kept
+ * together once it has been taken.
+ */
+const unkept = new Set<string>()
+function keep(key: string): void {
+  if (!unkept.size) queueMicrotask(keepChanged)
+  unkept.add(key)
 }
-if (typeof document !== 'undefined') {
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') keepShown()
+function keepChanged(): void {
+  const docs = [...unkept].flatMap((key) => {
+    const w = wanted.get(key)
+    return w && w.holder.data != null && w.holder.v ? [{ key, params: w.params, data: $state.snapshot(w.holder.data), v: w.holder.v }] : []
   })
-  window.addEventListener('pagehide', keepShown)
+  unkept.clear()
+  void save(book, docs)
 }
 
 export function disconnect(): void {

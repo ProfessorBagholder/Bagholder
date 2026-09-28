@@ -85,8 +85,7 @@ test('a page that opens drawing what it kept of the version before loads once, a
   await page.route('**/api/events/watch', (route) => route.fallback())
   await page.goto('/')
   await ready(page)
-  // the page is left: it keeps the status of the version it heard
-  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+  // the page keeps the status of the version it heard
   await expect.poll(() => page.evaluate(keptVersion)).toBe(version)
   // updated: the new server answers only once the page has drawn what it kept
   server = { startedAt: 'C', version: version + '-next' }
