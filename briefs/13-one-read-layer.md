@@ -37,7 +37,7 @@ Still left after #323:
 
 ## The plan: one read layer
 
-This is what TanStack Query and SWR do, and what RFC 5861's stale-while-revalidate describes:
+The pattern is stale-while-revalidate (RFC 5861):
 - every read goes through one cache, keyed by what is read;
 - a component asks the cache, never the server;
 - the cache answers at once with the last value it holds, asks the server in the background, and replaces only what changed;
@@ -45,7 +45,7 @@ This is what TanStack Query and SWR do, and what RFC 5861's stale-while-revalida
 
 The owner's rule then holds for every screen by construction, not one screen at a time.
 
-**No new library.** TanStack Query and SWR are cited only as the standard way this is done. Build it on what the page already has: `subs.svelte.ts`, `live.svelte.ts` and `kept.ts`.
+**No new library.** It is a pattern, not a framework, and the page already has most of it. Build it on `subs.svelte.ts`, `live.svelte.ts` and `kept.ts`.
 
 **Required:**
 
