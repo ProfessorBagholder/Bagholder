@@ -91,6 +91,17 @@ The owner's rule then holds for every screen by construction, not one screen at 
      - When the server's answers are released unchanged, it fails if any element changes (the MutationObserver check in `web/e2e/dataflow.spec.ts`).
      - Its list of screens is generated from the router's and panels' own lists, so a screen added later is walked without anyone writing a test for it.
 
+## Clear all clears what the browser kept, everywhere
+
+- **The gap:**
+  - On opening, the page draws from the book it last showed. It reads that book's id from `localStorage` (`web/src/lib/live.svelte.ts:175-177`) and draws from it before the server names the current book (`:402`).
+  - So a browser that was closed when Clear all ran shows the cleared data on its next open, until the server answers.
+- **The fix:**
+  - The served page carries the current book's id, as it will carry the write token.
+  - A browser whose kept copy belongs to another book deletes it before anything is drawn.
+  - The browser that runs Clear all deletes its copy at once. The web's standard for this is the `Clear-Site-Data: "storage"` response header.
+- **Test:** Clear all runs while a second browser context is closed. When that context opens, it never draws a value from before the clear.
+
 ## How the owner hears from CTO
 
 **Add this to the top of `CLAUDE.md`, as the owner's rule.** No file has it today, and step 4 of "How changes land" invites the opposite:
