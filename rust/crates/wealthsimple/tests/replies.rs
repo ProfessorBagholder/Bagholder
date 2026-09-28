@@ -419,6 +419,13 @@ fn accounts_answered_write_the_account_with_its_type_status_and_name() {
 }
 
 #[test]
+fn accounts_answered_keep_what_each_account_is_worth_now() {
+    let p = pulled(Op::Accounts, &[body("wealthsimple-pull/edited-accounts-one.json")]);
+    let (_, worth) = p.stated().net_value_now.expect("its net liquidation value now, as Wealthsimple states it");
+    assert_eq!(worth, Money::new(dec("198451.616214"), Currency::CAD));
+}
+
+#[test]
 fn accounts_answered_empty_write_nothing_and_read_nothing_more() {
     let p = pulled(Op::Accounts, &[edited("edited-empty-accounts.json")]);
     assert!(p.report.failures.is_empty(), "{:?}", p.report.failures);

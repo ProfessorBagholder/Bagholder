@@ -37,6 +37,8 @@ pub struct Stated {
     /// activity: every fill it reflects is on the record, so the book's cash is
     /// checked against it.
     pub cash_read: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
+    /// The newest statement of what the account is worth now, and when.
+    pub net_value_now: Option<(jiff::Timestamp, Money)>,
     /// The newest statement of units, and the day they are as of.
     pub units: Option<(jiff::civil::Date, BTreeMap<InstrumentId, Dec>)>,
     /// What that statement states each instrument's units are worth, where it
@@ -235,6 +237,15 @@ impl Book {
         Ok(())
     }
 
+    /// Store what the broker states an account is worth now.
+    pub fn store_net_value(&self, account: AccountId, at: jiff::Timestamp, value: Money, read: &ReadId) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO account_values (account_id, stated_at, amount, currency, read_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![account.to_string(), text::at(at), value.amount.to_text(), value.currency.to_string(), read.0],
+        )?;
+        Ok(())
+    }
+
     /// Store a statement of units as of a day.
     pub fn store_units(&self, account: AccountId, as_of: jiff::civil::Date, lines: &[UnitsLine], read: &ReadId, at: jiff::Timestamp) -> Result<()> {
         self.atomically(|| {
@@ -327,6 +338,13 @@ impl Book {
             if let Some((at, id)) = stated.iter().find(|(at, _)| *at <= read) {
                 out.cash_read = Some((*at, cash_of(id)?));
             }
+        }
+        let value: Option<(String, String, String)> = self
+            .conn()
+            .query_row("SELECT stated_at, amount, currency FROM account_values WHERE account_id = ?1 ORDER BY stated_at DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        if let Some((at, amount, currency)) = value {
+            out.net_value_now = Some((text::instant("account_values", "stated_at", &at)?, Money::new(text::dec("account_values", "amount", &amount)?, text::parsed("account_values", "currency", &currency, Currency::parse)?)));
         }
         let units: Option<(String, String)> = self
             .conn()

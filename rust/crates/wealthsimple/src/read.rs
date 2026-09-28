@@ -74,8 +74,25 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
             None => None,
             Some(target) => Some(custodian.get(&target).cloned().ok_or_else(|| n.field("accountFeatures").map(|f| f.mismatch(format!("a Margin Boost naming custodian account {target:?}, which no account stated holds"))).unwrap_or_else(|m| m))?),
         };
+        // what it is worth now: its combined financials' net liquidation value
+        let net_value = match n.field("financials").map(|f| f.value().clone()) {
+            Ok(Value::Null) | Err(_) => None,
+            Ok(_) => {
+                let f = n.obj("financials")?;
+                match f.field("currentCombined")?.value() {
+                    Value::Null => None,
+                    _ => {
+                        let v = f.obj("currentCombined")?.obj("netLiquidationValue")?;
+                        let amount = Dec::parse_to_fit(v.text("amount")?).map_err(|e| v.field("amount").map(|x| x.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+                        let currency = Currency::parse(v.text("currency")?).map_err(|e| v.field("currency").map(|x| x.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+                        Some(Money::new(amount, currency))
+                    }
+                }
+            }
+        };
         out.push(AccountStated {
             key: n.text("id")?.to_string(),
+            net_value,
             account_type: wealthsimple_account_type(n.text("unifiedAccountType")?),
             open,
             nickname: n.opt_text("nickname")?.map(str::to_string),

@@ -76,6 +76,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("statements", Holds::Broker),
     ("statement_cash", Holds::Broker),
     ("statement_units", Holds::Broker),
+    ("account_values", Holds::Broker),
     ("monthly_statements", Holds::Broker),
     ("journal", Holds::Journal),
     ("journal_tags", Holds::Journal),
@@ -171,7 +172,7 @@ impl Book {
             }
             if what.broker {
                 c.execute_batch(
-                    "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_cash; DELETE FROM statements;
+                    "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
                      DELETE FROM buying_power; DELETE FROM account_days; DELETE FROM account_links; DELETE FROM margin_backing;
                      DELETE FROM activity_reads; DELETE FROM broker_reads;",
                 )?;

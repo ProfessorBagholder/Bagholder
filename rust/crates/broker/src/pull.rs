@@ -247,6 +247,24 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         keys_of.entry(ids[&a.key]).or_default().push(a.key.clone());
     }
     let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
+    // what each account is worth now, where every account of the broker's behind it states it
+    {
+        let read = book.broker_read(connection, "accounts", now)?;
+        for (id, keys) in &keys_of {
+            let mut total: Option<bagholder_core::Money> = None;
+            let mut whole = true;
+            for k in keys {
+                match (stated.iter().find(|a| &a.key == k).and_then(|a| a.net_value), total) {
+                    (Some(v), None) => total = Some(v),
+                    (Some(v), Some(t)) if t.currency == v.currency => total = Some(bagholder_core::Money::new(t.amount.checked_add(v.amount).map_err(|e| bagholder_book::BookError::Refused(format!("an account's worth too large to add: {e}")))?, t.currency)),
+                    _ => whole = false,
+                }
+            }
+            if let (true, Some(v)) = (whole, total) {
+                book.store_net_value(*id, now, v, &read)?;
+            }
+        }
+    }
     step(Step::Balances);
     store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     // the movements the activity feed left out, for an account whose cash now

@@ -98,7 +98,7 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
     let mut out = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
         let s = book.stated(a.id).map_err(err)?;
-        if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() && s.buying_power.is_none() {
+        if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() && s.buying_power.is_none() && s.net_value_now.is_none() {
             continue;
         }
         let mut b = bagholder_engine::input::BrokerAccount::default();
@@ -109,8 +109,13 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
             b.net_value.insert(*day, value.amount);
             b.net_deposits.insert(*day, deposits.amount);
         }
-        // the account's value now: the newest day's the broker has stated
-        b.net_value_now = b.net_value.values().next_back().copied();
+        // the account's value now, as the broker states it with the accounts
+        // (its daily values are a day behind, and are the equity curve's)
+        b.net_value_now = match s.net_value_now {
+            Some((_, v)) if v.currency == Currency::CAD => Some(v.amount),
+            Some((_, v)) => return Err(format!("account {} states what it is worth in {}, not CAD", a.id, v.currency)),
+            None => None,
+        };
         if let Some((at, cash)) = s.cash {
             b.as_of = Some(at);
             b.cash = cash;
