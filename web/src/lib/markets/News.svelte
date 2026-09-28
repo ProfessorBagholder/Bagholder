@@ -22,7 +22,7 @@
   import GridHead from './GridHead.svelte'
   import { call } from '../api'
   import { flash } from '../ui.svelte'
-  import { searchSymbols } from '../api'
+  import { read, searchSymbols } from '../reads.svelte'
   import { atEnd } from '../actions/atEnd'
   import { tickerKey, bookListing, directoryListing, type Chip } from './newsChip'
   import { escapable } from '../escape'
@@ -185,7 +185,7 @@
     if (c.stories || c.releases) return
     const only = l.chip
     reading = only.symbol
-    call('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
+    read('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
       reading = ''
       if (!r.ok) {
         flash('Could not read the news for ' + only.symbol + ': ' + r.error, 'err')

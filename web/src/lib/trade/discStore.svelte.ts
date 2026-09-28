@@ -7,13 +7,15 @@
 import type { Trade, Filing, FilingsDoc } from '../model'
 import { listingTicker } from './chart'
 import { watchDoc } from '../live.svelte'
-import { call } from '../api'
+import { read } from '../reads.svelte'
 
 export const DISC_ORDER = ['Financials', 'Material events', 'Governance', 'Offerings', 'Insider & ownership', 'News releases', 'Other']
 
 export interface DiscRec {
   loading?: boolean
   payload?: FilingsDoc
+  /** The version of `payload` the server sent: kept with it, so a card shown again says it holds it. */
+  v?: string
   error?: string
 }
 
@@ -56,7 +58,11 @@ export function showDisclosures(t: { symbol: string; kind?: string; underlying?:
     const holder = {
       get data() { return discStore[sym]?.payload ?? null },
       set data(v: FilingsDoc | null) {
-        discStore[sym] = v && v.ok ? { payload: v } : { error: 'Could not read disclosures.' }
+        discStore[sym] = v && v.ok ? { payload: v, v: discStore[sym]?.v } : { error: 'Could not read disclosures.' }
+      },
+      get v() { return discStore[sym]?.v },
+      set v(x: string | undefined) {
+        if (discStore[sym]) discStore[sym].v = x
       },
     }
     watching.set(sym, { count: 1, stop: watchDoc<FilingsDoc>(docKey(sym, t), {}, holder) })
@@ -78,7 +84,7 @@ export async function refreshDisclosures(sym: string, t: { name?: string; exchan
   discRereading[sym] = true
   delete discRereadError[sym]
   try {
-    const a = await call('GET /api/filings', { query: { symbol: sym, name: t?.name ?? '', exchange: t?.exchange ?? '', currency: t?.currency ?? '', refresh: true } })
+    const a = await read('GET /api/filings', { query: { symbol: sym, name: t?.name ?? '', exchange: t?.exchange ?? '', currency: t?.currency ?? '', refresh: true } })
     if (!a.ok) discRereadError[sym] = 'Could not read disclosures: ' + a.error
   } finally {
     delete discRereading[sym]

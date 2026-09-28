@@ -54,10 +54,26 @@ fn file(name: &str, data: Vec<u8>, cache: &'static str) -> Response {
     ([(header::CONTENT_TYPE, HeaderValue::from_static(content_type(name))), (header::CACHE_CONTROL, HeaderValue::from_static(cache))], data).into_response()
 }
 
+/// The page, carrying the id of the book it will show: a browser whose kept copy is
+/// another book's (a Clear data run while it was closed) draws nothing of it, from the
+/// first frame, before the server has said a word.
 async fn index(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let root = state.app.root.clone();
-    let data = blocking(move || built(&root, "index.html")).await?;
+    let app = state.app.clone();
+    let data = blocking(move || built(&app.root, "index.html").map(|d| with_book(d, &crate::events::book_id(&app)))).await?;
     data.map(|d| file("index.html", d, "no-cache")).ok_or_else(|| ApiError::NotFound("index missing".into()))
+}
+
+/// `index.html` with the book's id in a `<meta name="bagholder-book">` at the top of its head.
+pub(crate) fn with_book(page: Vec<u8>, book: &str) -> Vec<u8> {
+    let Ok(text) = String::from_utf8(page.clone()) else { return page };
+    let escaped: String = book.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    match text.find("<head>") {
+        Some(at) => {
+            let end = at + "<head>".len();
+            format!("{}<meta name=\"bagholder-book\" content=\"{}\">{}", &text[..end], escaped, &text[end..]).into_bytes()
+        }
+        None => page,
+    }
 }
 
 async fn asset(State(state): State<AppState>, Path(path): Path<String>) -> Result<Response, ApiError> {
@@ -90,4 +106,19 @@ async fn page_file(State(state): State<AppState>, name: &'static str) -> Result<
     let root = state.app.root.clone();
     let data = blocking(move || unhashed(&root, name)).await?;
     data.map(|d| file(name, d, "no-cache")).ok_or_else(|| ApiError::NotFound(format!("{} missing", name)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_book;
+
+    #[test]
+    fn the_page_names_its_book_first_in_its_head_and_nothing_but_the_id_gets_in() {
+        let page = b"<!doctype html><html><head><title>B</title></head></html>".to_vec();
+        let out = String::from_utf8(with_book(page, "019a-7f\"><script>")).unwrap();
+        assert_eq!(out, "<!doctype html><html><head><meta name=\"bagholder-book\" content=\"019a-7fscript\"><title>B</title></head></html>");
+        // a book not yet named leaves the page to wait for the server's word
+        let empty = String::from_utf8(with_book(b"<head></head>".to_vec(), "")).unwrap();
+        assert_eq!(empty, "<head><meta name=\"bagholder-book\" content=\"\"></head>");
+    }
 }

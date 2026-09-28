@@ -12,7 +12,6 @@
 // stream (live.ts); this is for what the person does, and for the few things looked
 // up on demand.
 
-import type { SymbolMatch } from './model'
 import type { Routes } from './generated/routes'
 
 /** A request that failed: the server's reason, or why it was never answered. Never empty. */
@@ -105,86 +104,4 @@ function routed<K extends RouteKey>(key: K, input?: RouteInput<K>): { method: 'G
 export function call<K extends RouteKey>(key: K, input?: RouteInput<K>, signal?: AbortSignal): Promise<Answer<Routes[K]['answer']>> {
   const r = routed(key, input)
   return request<Routes[K]['answer']>(r.method, r.url, r.body, signal)
-}
-
-// ---- what is looked up on demand ---------------------------------------------------
-// A chart's bars, a listing's short interest, what is known of a listing, a symbol
-// search: each is asked for when something on the page needs it, and they share one
-// way of being asked. The same question asked twice while the first is in the air is
-// one request; an answer worth keeping is kept (for good, or for `keepMs`); a failure is
-// never kept, so it is asked again; and a request nobody is waiting for any more is
-// dropped -- a reader gives the signal that says it has stopped waiting.
-
-export interface Lookup<T, I> {
-  /** The route's answer to `input`, kept under `key` (the URL itself when none is given). */
-  read(input: I, opts?: { key?: string; signal?: AbortSignal }): Promise<Answer<T>>
-  /** The kept answer, if there is one and it is young enough. */
-  peek(key: string): Answer<T> | undefined
-  /** Drop what is kept (the server was started again; the answers were the old one's). */
-  forget(): void
-}
-
-/** On-demand reads of one GET route of the table. */
-export function lookup<K extends RouteKey>(route: K, rules: { keepMs?: number; keep?: (a: Answer<Routes[K]['answer']>) => boolean } = {}): Lookup<Routes[K]['answer'], RouteInput<K>> {
-  type T = Routes[K]['answer']
-  const kept = new Map<string, { at: number; answer: Answer<T> }>()
-  const flying = new Map<string, { answer: Promise<Answer<T>>; readers: number; stop: AbortController }>()
-  const peek = (key: string) => {
-    const k = kept.get(key)
-    if (!k) return undefined
-    if (rules.keepMs != null && Date.now() - k.at >= rules.keepMs) return undefined
-    return k.answer
-  }
-  function read(input: RouteInput<K>, opts: { key?: string; signal?: AbortSignal } = {}): Promise<Answer<T>> {
-    const path = routed(route, input).url
-    const key = opts.key ?? path
-    const have = peek(key)
-    if (have) return Promise.resolve(have)
-    if (opts.signal?.aborted) return Promise.resolve(failure('aborted'))
-    let f = flying.get(key)
-    if (!f) {
-      const stop = new AbortController()
-      const made = { readers: 0, stop, answer: request<T>('GET', path, undefined, stop.signal).then((a) => {
-        if (flying.get(key) === made) flying.delete(key)
-        if (a.ok && (rules.keep ? rules.keep(a) : true)) kept.set(key, { at: Date.now(), answer: a })
-        return a
-      }) }
-      f = made
-      flying.set(key, f)
-    }
-    const flight = f
-    flight.readers++
-    const signal = opts.signal
-    if (!signal) return flight.answer
-    // this reader may stop waiting; the request goes on while anyone else still is
-    return new Promise((resolve) => {
-      const gone = () => {
-        resolve(failure('aborted'))
-        if (--flight.readers === 0 && flying.get(key) === flight) {
-          flying.delete(key)
-          flight.stop.abort()
-        }
-      }
-      signal.addEventListener('abort', gone, { once: true })
-      void flight.answer.then((a) => {
-        signal.removeEventListener('abort', gone)
-        resolve(a)
-      })
-    })
-  }
-  return { read, peek, forget: () => kept.clear() }
-}
-
-// ---- listings by name or ticker --------------------------------------------------
-// Asked from the filter's symbol picker, the watchlist's add row and the news and
-// short-interest lookups: one implementation, and an answer is kept for the
-// session, since a listing does not change while the page is open.
-
-const searches = lookup('GET /api/symbols/search')
-
-export async function searchSymbols(text: string): Promise<SymbolMatch[]> {
-  const q = text.trim()
-  if (!q) return []
-  const r = await searches.read({ query: { q } }, { key: q.toLowerCase() })
-  return r.ok ? r.matches : [] // a failed lookup is not remembered
 }

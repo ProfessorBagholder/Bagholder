@@ -15,7 +15,9 @@
   import { saveJournal, server, detail } from './state.svelte'
   import { use, filtered } from './subs.svelte'
   import { openTicket } from './ticket/ticket.svelte'
-  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import { untrack } from 'svelte'
+  import { recall, remember } from './reads.svelte'
+  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, keptHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
   import { watchDoc } from './live.svelte'
   import { tradeChart } from './actions/tradeChart'
   import { fillsChart } from './actions/fillsChart'
@@ -40,11 +42,26 @@
   let loaded = $state<{ tf: string; hist: History; provisional: boolean } | null>(null)
   let wantedTf = $state('')
 
-  $effect(() => {
+  // the chart shown is replaced only by bars that differ: the same answer moves nothing
+  function show(next: { tf: string; hist: History; provisional: boolean }): void {
+    const was = untrack(() => loaded)
+    if (was && was.tf === next.tf && was.provisional === next.provisional && JSON.stringify(was.hist) === JSON.stringify(next.hist)) return
+    loaded = next
+    // the chart as drawn (the bars stored so far, while newer are read): drawn so on the next open, before any read answers
+    remember('chart ' + trade.id, next)
+  }
+  $effect.pre(() => {
     const t = trade
     if (fills === undefined) return // the trade's fills are still on their way
     void server.restarts // a server started again is asked again
     const wanted = wantedTf || chartTfFor(t)
+    // the chart as it was last drawn is drawn at once; the server's bars replace it where they differ
+    const had = recall<{ tf: string; hist: History; provisional: boolean }>('chart ' + t.id)
+    if (had) show(had)
+    else {
+      const bars = keptHistory(t, wanted)
+      if (bars) show({ tf: chartTfFor(t, bars.available) || wanted, hist: bars, provisional: false })
+    }
     let cancelled = false
     const closing = new AbortController() // bars nobody is waiting for any more are not read
     let stopWatching: (() => void) | undefined
@@ -60,10 +77,10 @@
       if (h.pending) {
         // the bars stored so far are drawn while newer ones are read; with none
         // stored for minute bars, the daily chart stands in
-        if (h.bars.length) loaded = { tf, hist: h, provisional: true }
+        if (h.bars.length) show({ tf, hist: h, provisional: true })
         else if (want !== '1d' && available.indexOf('1d') >= 0) {
           const d = await loadHistory(t, '1d', closing.signal)
-          if (!cancelled) loaded = { tf: '1d', hist: d, provisional: true }
+          if (!cancelled) show({ tf: '1d', hist: d, provisional: true })
         }
         // the minute bars are being read: be told when they are in, and ask once more
         // then -- not every three seconds until they are
@@ -81,7 +98,7 @@
         stopWatching = watchDoc(historyKey(t, want), {}, { data: flag })
         return
       }
-      loaded = { tf, hist: h, provisional: false }
+      show({ tf, hist: h, provisional: false })
     }
     mount(wanted)
     return () => {

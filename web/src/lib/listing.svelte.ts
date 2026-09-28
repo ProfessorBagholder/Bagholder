@@ -8,7 +8,7 @@
 // (`/api/listing`); its price, where the watchlist carries it, is the model's own and
 // moves with it.
 
-import { lookup } from './api'
+import { heldOnceRead, read } from './reads.svelte'
 import { flash } from './ui.svelte'
 import { bareSymbol } from './sym'
 import { localDay } from './fmt'
@@ -30,8 +30,7 @@ interface Known {
 
 const LISTING_DAYS = 365
 const known = $state<Record<string, Known>>({})
-// asked once while the page is open; a failed lookup is asked again the next time the page opens
-const listings = lookup('GET /api/listing')
+// asked once while the page is open, what was held drawn first; a failed lookup is asked again the next time the page opens
 const applied = new Set<string>()
 
 export function listingId(o: { symbol?: string; exchange?: string | null }): string {
@@ -41,8 +40,14 @@ export function listingId(o: { symbol?: string; exchange?: string | null }): str
 export const isListingId = (id: string | null | undefined): boolean => String(id || '').startsWith('listing:')
 
 function entry(id: string): Known {
+  // the store's own (reactive) object, so what is written to it reaches the page
+  if (!known[id]) known[id] = parsed(id)
+  return known[id]
+}
+/** What the address itself says of a listing: its symbol and venue. */
+function parsed(id: string): Known {
   const [symbol, exchange = ''] = id.slice('listing:'.length).split('@')
-  return (known[id] ??= { symbol, exchange, currency: '', name: '', kind: '', securityId: '' })
+  return { symbol, exchange, currency: '', name: '', kind: '', securityId: '' }
 }
 
 /** What a row already says of the listing it opens, kept so its page has a name at once. */
@@ -58,7 +63,8 @@ export function rememberListing(o: { symbol: string; exchange?: string | null; c
 /** The listing standing in for a trade on the detail page. */
 export function listingAsTrade(id: string, markets: MarketsDoc | null): Trade | null {
   if (!isListingId(id)) return null
-  const l = entry(id)
+  // read only: a page drawing a listing writes nothing while it draws
+  const l = known[id] ?? parsed(id)
   // the quote the model already keeps for a watched listing, which moves with it
   const w = markets?.watchlist.find((x) => listingId(x) === id)
   const watched = w && w.last != null
@@ -89,23 +95,35 @@ export function listingAsTrade(id: string, markets: MarketsDoc | null): Trade | 
  * id when the book turns out to hold it (a row opened before the model caught up):
  * its page is the holding's.
  */
-export async function loadListing(id: string, held: (positionId: string) => void): Promise<void> {
+export async function loadListing(id: string, heldBy: (positionId: string) => void): Promise<void> {
   if (!isListingId(id)) return
   const l = entry(id)
-  const d = await listings.read({ query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name } }, { key: id })
+  const q = { query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name } }
+  // what was last known of it is taken at once: a listing the book turned out to hold opens its holding's page
+  const had = await heldOnceRead('GET /api/listing', q, { key: id })
+  if (had?.ok) {
+    if ('positionId' in had) return heldBy(had.positionId)
+    take(l, had)
+  }
+  const d = await read('GET /api/listing', q, { key: id })
   if (!d.ok) {
     // said in the header; the page shows the listing without executions rather than waiting for ever
     flash('Could not read ' + l.symbol + ': ' + d.error, 'err')
     l.fills = []
     return
   }
-  if ('positionId' in d) return held(d.positionId)
+  if ('positionId' in d) return heldBy(d.positionId)
   if (applied.has(id)) return
   applied.add(id)
+  take(l, d)
+}
+
+/** What the server knows of a listing, written where it differs from what is shown. */
+function take(l: Known, d: { exchange?: string; currency?: string; name?: string; kind?: string; securityId?: string; fills: Fill[]; price?: Dec | null; percentChange?: number | null }): void {
   for (const k of ['exchange', 'currency', 'name', 'kind', 'securityId'] as const) {
     if (!l[k] && d[k]) l[k] = d[k] as string
   }
-  l.fills = d.fills
-  l.price = d.price ?? null
-  l.percentChange = d.percentChange ?? null
+  if (JSON.stringify(l.fills) !== JSON.stringify(d.fills)) l.fills = d.fills
+  if (l.price !== (d.price ?? null)) l.price = d.price ?? null
+  if (l.percentChange !== (d.percentChange ?? null)) l.percentChange = d.percentChange ?? null
 }

@@ -135,6 +135,7 @@ test('a listing found outside the book carries the three icons in their places, 
 
 test('⌘K opens the filters over the Orders panel', async ({ page }) => {
   await page.goto('/')
+  await ready(page) // with no book yet there is nothing to search, and ⌘K does nothing
   await page.getByRole('button', { name: 'Orders' }).click()
   await page.keyboard.press('ControlOrMeta+k')
   await expect(page.getByLabel('Search', { exact: true })).toBeVisible()

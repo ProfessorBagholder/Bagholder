@@ -11,7 +11,7 @@
   import { goSub } from './router.svelte'
   import { symText, bareSymbol } from './sym'
   import { ICONS } from './icons'
-  import { searchSymbols } from './api'
+  import { searchSymbols } from './reads.svelte'
   import { rememberListing } from './listing.svelte'
 
   // `field` opens the popover straight at one field's editor (for a chip's Edit /

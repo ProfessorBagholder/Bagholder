@@ -28,7 +28,9 @@ function scripts(path: string, text: string): { code: string; line: number }[] {
 }
 
 const API_MODULE = /(^|\/)api$/
-const API_FUNCTIONS = ['request', 'get', 'post', 'call', 'lookup', 'searchSymbols'] // api.ts's own, for api.ts itself
+// the one read layer: its `read` reaches the server as `call` does
+const READS_MODULE = /(^|\/)reads\.svelte$/
+const API_FUNCTIONS = ['request', 'get', 'post', 'call'] // api.ts's own, for api.ts itself
 const SAYS_NOTHING = /^(ignored?|noop|no-op|nothing|empty|swallow(ed)?)\.?$/i
 
 /** Why each dropped failure in `code` is one, as `line: what`. */
@@ -37,26 +39,23 @@ function dropped(code: string, fileName = 'x.ts', firstLine = 1): string[] {
   const found: string[] = []
   const at = (n: ts.Node, what: string) => found.push(`${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + firstLine}: ${what}: ${n.getText(sf).split('\n')[0].trim()}`)
 
-  // the names that reach the server here: the api module's functions, as imported, and its lookups
+  // the names that reach the server here: the api module's functions, and the read layer's read, as imported
   const api = new Set<string>(/(^|\/)api\.ts$/.test(fileName) ? API_FUNCTIONS : [])
   for (const s of sf.statements) {
-    if (!ts.isImportDeclaration(s) || !ts.isStringLiteral(s.moduleSpecifier) || !API_MODULE.test(s.moduleSpecifier.text)) continue
+    if (!ts.isImportDeclaration(s) || !ts.isStringLiteral(s.moduleSpecifier)) continue
     const named = s.importClause?.namedBindings
+    if (READS_MODULE.test(s.moduleSpecifier.text)) {
+      if (named && ts.isNamedImports(named)) for (const e of named.elements) if (!e.isTypeOnly && (e.propertyName ?? e.name).text === 'read') api.add(e.name.text)
+      continue
+    }
+    if (!API_MODULE.test(s.moduleSpecifier.text)) continue
     if (named && ts.isNamedImports(named)) for (const e of named.elements) if (!e.isTypeOnly) api.add(e.name.text)
   }
-  const lookups = new Set<string>()
-  const findLookups = (n: ts.Node): void => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isCallExpression(n.initializer) && ts.isIdentifier(n.initializer.expression) && n.initializer.expression.text === 'lookup' && api.has('lookup'))
-      lookups.add(n.name.text)
-    ts.forEachChild(n, findLookups)
-  }
-  findLookups(sf)
 
   const isApiCall = (e: ts.Expression): boolean => {
     if (!ts.isCallExpression(e)) return false
     const f = e.expression
-    if (ts.isIdentifier(f)) return api.has(f.text)
-    return ts.isPropertyAccessExpression(f) && f.name.text === 'read' && ts.isIdentifier(f.expression) && lookups.has(f.expression.text)
+    return ts.isIdentifier(f) && api.has(f.text)
   }
   const unwrap = (e: ts.Expression): ts.Expression => {
     for (;;) {
@@ -146,7 +145,7 @@ describe('the page drops no failure', () => {
   })
 
   it('catches each form it looks for', () => {
-    const head = "import { call, post, request, lookup } from '../api'\nconst bars = lookup('GET /api/history')\n"
+    const head = "import { call, post, request } from '../api'\nimport { read } from '../reads.svelte'\n"
     const forms = [
       'try { f() } catch {}',
       'try { f() } catch (e) {}',
@@ -162,13 +161,13 @@ describe('the page drops no failure', () => {
       "call('POST /api/sync').finally(() => done())",
       "post('/api/events/resync', { id: 1 })",
       "request('GET', '/api/status')",
-      'bars.read({ query: q })',
+      "read('GET /api/history', { query: q })",
     ]
     for (const f of forms) expect(dropped(head + f), f).toHaveLength(1)
   })
 
   it('lets a failure met, or a catch that says why, stand', () => {
-    const head = "import { call, lookup } from '../api'\nconst bars = lookup('GET /api/history')\n"
+    const head = "import { call } from '../api'\nimport { read } from '../reads.svelte'\n"
     const forms = [
       'try { f() } catch { /* the choice holds for this visit; the browser keeps nothing */ }',
       "try { f() } catch { return 'all' }",
@@ -176,7 +175,7 @@ describe('the page drops no failure', () => {
       "call('POST /api/sync').then((r) => { if (!r.ok) say(r.error) })",
       "call('POST /api/sync').then(scanned)",
       "async function f() { return call('POST /api/sync') }",
-      'async function f() { const a = await bars.read({ query: q }); use(a) }',
+      "async function f() { const a = await read('GET /api/history', { query: q }); use(a) }",
       "call2('x')", // not the api's
     ]
     for (const f of forms) expect(dropped(head + f), f).toEqual([])
