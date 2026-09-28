@@ -1,9 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 import { ready, following } from './helpers'
 
-// docs/architecture.md §13, held in the browser: the page loads what is on screen when
-// it is first needed, keeps it between opens, asks for nothing it does not show, and a
-// change of screen or of filters touches only what it changes.
+// docs/architecture.md §13, held in the browser: the page follows what is on screen,
+// keeps every tab's screen between opens (docs/decisions.md, 2026-09-28: no screen ever
+// opens with nothing), and a change of screen or of filters touches only what it changes.
 
 /** Every message the page's stream brings, by event and document, and its size: recorded before the page's own code runs. */
 async function recordStream(page: Page): Promise<void> {
@@ -34,9 +34,12 @@ async function recordStream(page: Page): Promise<void> {
   })
 }
 
+/** Every document the page keeps: each tab's screen, visited or not, the header's and the book's. */
+const EVERY_SCREEN = ['book', 'cashflow', 'dashboard', 'exposure', 'fear:crypto', 'fear:stocks', 'headlines', 'heatmap', 'markets', 'news', 'notifications', 'positions', 'shorts', 'status', 'trades']
+
 const sse = (page: Page) => page.evaluate(() => (window as unknown as { __sse: { name: string; doc: string; bytes: number; drawn: boolean }[] }).__sse)
 
-test('a tab never visited loads nothing: each subscribes to its own screen, and to the holdings only where they are shown', async ({ page }) => {
+test('the page follows only the screen on show: each tab its own, and the holdings only where they are shown', async ({ page }) => {
   const shown = following(page)
   await page.goto('/#dashboard')
   await ready(page)
@@ -72,7 +75,7 @@ test('opened a second time with nothing changed, the page is drawn from what it 
   await ready(first)
   // kept as each arrives, so closing the page as a person does loses nothing: a write
   // begun as the page unloads is dropped by the browser
-  await expect.poll(() => keptDocs(first)).toEqual(['book', 'dashboard', 'notifications', 'status'])
+  await expect.poll(() => keptDocs(first)).toEqual(EVERY_SCREEN)
   await first.close()
 
   const again = await context.newPage()
@@ -94,11 +97,98 @@ test('refreshed, the page is drawn from what it kept before the server says a wo
   await recordStream(page)
   await page.goto('/#dashboard')
   await ready(page)
-  await expect.poll(() => keptDocs(page)).toEqual(['book', 'dashboard', 'notifications', 'status'])
+  await expect.poll(() => keptDocs(page)).toEqual(EVERY_SCREEN)
   await page.reload()
   await ready(page)
   const hello = (await sse(page)).find((m) => m.name === 'hello')!
   expect(hello.drawn, 'the Dashboard was on screen before the server said a word').toBe(true)
+})
+
+test('a tab opened for the first time since the page loaded, kept from before, is drawn in the moment it opens: no placeholder, no arrival', async ({ page }) => {
+  await page.goto('/#dashboard')
+  await ready(page)
+  await page.locator('.tabbtn', { hasText: 'Trades' }).click()
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toContain('trades')
+  await page.goto('/#dashboard')
+  await page.reload()
+  await ready(page)
+  // the server's answers held back: the tab can only be drawn from what was kept
+  let release = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  await page.route('**/api/events**', async (route) => { await held; await route.continue() })
+  await page.evaluate(() => {
+    const w = window as unknown as { __placeholder: boolean }
+    w.__placeholder = false
+    new MutationObserver(() => {
+      if (document.querySelector('#page .bhsk, #page .bh-skin')) w.__placeholder = true
+    }).observe(document.getElementById('page')!, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
+  })
+  await page.locator('.tabbtn', { hasText: 'Trades' }).click()
+  await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { __placeholder: boolean }).__placeholder), 'a placeholder or an arrival was drawn').toBe(false)
+  release()
+})
+
+/** Whether a placeholder or the arrival animation is drawn on the page from now on. */
+async function watchPlaceholder(page: Page): Promise<() => Promise<boolean>> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __placeholder: boolean }
+    w.__placeholder = false
+    new MutationObserver(() => {
+      if (document.querySelector('#page .bhsk, #page .bh-skin')) w.__placeholder = true
+    }).observe(document.getElementById('page')!, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
+  })
+  return () => page.evaluate(() => (window as unknown as { __placeholder: boolean }).__placeholder)
+}
+
+/** The server's answers held back from now on: the page can only draw what it kept. Returns what lets them through. */
+async function holdServer(page: Page): Promise<() => Promise<void>> {
+  let release = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  await page.route('**/api/events**', async (route) => {
+    await held
+    await route.continue()
+  })
+  return async () => release()
+}
+
+test('a first open keeps every tab, visited or not: none ever opens with nothing, and none is followed once kept', async ({ page }) => {
+  const shown = following(page)
+  await page.goto('/#dashboard')
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toEqual(EVERY_SCREEN)
+  await expect.poll(shown).toEqual(['book', 'dashboard', 'notifications', 'status'])
+  const release = await holdServer(page)
+  const placeholder = await watchPlaceholder(page)
+  for (const tab of ['Trades', 'Portfolio', 'Markets', 'Cashflow']) {
+    await page.locator('.tabbtn', { hasText: tab }).click()
+    await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+  }
+  expect(await placeholder(), 'a tab never visited opened on a placeholder').toBe(false)
+  // the Markets tab and every card on it, drawn from what was kept, reads as the server's own answer does
+  await page.locator('.tabbtn', { hasText: 'Markets' }).click()
+  const kept = await page.locator('#page').innerText()
+  await release()
+  await page.reload()
+  await ready(page)
+  await expect.poll(shown).toEqual(['book', 'fear:crypto', 'fear:stocks', 'headlines', 'heatmap', 'markets', 'news', 'notifications', 'positions', 'shorts', 'status'])
+  await expect.poll(() => page.locator('#page').innerText()).toBe(kept)
+})
+
+test('a tab under filters it was never read with shows its last state until the server answers', async ({ page }) => {
+  await page.goto('/#dashboard')
+  await ready(page)
+  await expect.poll(() => keptDocs(page)).toEqual(EVERY_SCREEN)
+  await page.getByRole('button', { name: 'Filters' }).click()
+  await page.locator('.pop-row', { hasText: /^Date/ }).click()
+  await page.getByLabel('From').fill('2020-01-01')
+  await page.getByRole('button', { name: 'Done' }).click()
+  await holdServer(page)
+  const placeholder = await watchPlaceholder(page)
+  await page.locator('.tabbtn', { hasText: 'Cashflow' }).click()
+  await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+  expect(await placeholder(), 'the tab opened on a placeholder').toBe(false)
 })
 
 // What each interaction may ask of the server, at most: the requests made and the

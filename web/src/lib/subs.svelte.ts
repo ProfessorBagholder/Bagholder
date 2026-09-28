@@ -52,10 +52,12 @@ const held = new Map<string, { n: number; stop: () => void }>()
  * Show `key` into `into` while `params` says so, for as long as the calling
  * component is mounted: its parameters are read again when what they read
  * changes (the filters applied, the sort, how far a list is scrolled). Called
- * where a component starts.
+ * where a component starts. Held before the screen is drawn, so a screen opened
+ * with what was kept of it is drawn with it in the same moment, never first
+ * without it (a placeholder, then the screen arriving).
  */
 export function use<T>(key: string | (() => string | null), into: Slot<T>, params: () => unknown = () => ({})): void {
-  $effect(() => {
+  $effect.pre(() => {
     const k = typeof key === 'function' ? key() : key
     if (!k) return
     const p = params()

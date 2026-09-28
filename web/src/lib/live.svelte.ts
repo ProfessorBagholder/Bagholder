@@ -15,7 +15,7 @@
 import { post } from './api'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
-import { bookIs, lastBook, load, save } from './kept'
+import { bookIs, kept, keptLatest, keptRead, lastBook, readKept, save } from './kept'
 
 export type Step = string | { k: string; v: string }
 export type Op = ['set', Step[], unknown] | ['del', Step[]] | ['rows', Step[], string, string[], Record<string, unknown>]
@@ -173,9 +173,51 @@ let source: EventSource | null = null
 let streamId = 0
 /** The book the page shows: the one it last showed until the server names it. */
 let book = lastBook()
+// what was kept for it, read once now, so every screen opened later draws in the moment it opens
+void readKept(book)
 /** What is being drawn from what was kept: the page says what it shows once these are in. */
 const drawing = new Set<Promise<void>>()
-const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void }>()
+const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void; priming?: boolean }>()
+
+/**
+ * Every tab's screen, as each would be followed now. One the browser has kept
+ * nothing of is followed once, as the book becomes known, and kept, so no tab ever
+ * opens with nothing (`docs/decisions.md`, 2026-09-28).
+ */
+let screens: () => { key: string; params: unknown }[] = () => []
+export function everyScreen(list: () => { key: string; params: unknown }[]): void {
+  screens = list
+}
+/**
+ * A screen read only to be kept: kept as it stands, and followed no longer once it
+ * holds what its source answered, not a read still under way (a meter, a feed or a
+ * news pass the server is still reading says so in its `reading`).
+ */
+function primed(doc: string, w: { params: unknown; holder: Holder<unknown> }): void {
+  const data = w.holder.data
+  void save(book, [{ key: doc, params: w.params, data: structuredClone(data), v: w.holder.v ?? '' }])
+  const reading = isObj(data) ? data.reading : undefined
+  if (reading === true || (Array.isArray(reading) && reading.length)) return
+  wanted.delete(doc)
+  sayWanted()
+}
+/** Every document this page load has followed, on show or read to be kept: never read again only to be kept. */
+const followed = new Set<string>()
+function primeScreens(): void {
+  if (!book) return
+  if (!keptRead(book)) {
+    void readKept(book).then(primeScreens)
+    return
+  }
+  let added = false
+  for (const { key, params } of screens()) {
+    if (followed.has(key) || keptLatest(book, key)) continue
+    followed.add(key)
+    wanted.set(key, { params, holder: { data: null }, priming: true })
+    added = true
+  }
+  if (added) sayWanted()
+}
 
 /** Which server answered: when it started, the version it runs and the protocol it speaks (from its status). */
 export interface ServerStamp {
@@ -261,17 +303,26 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   // filters changed) replaces it, and stopping this one then leaves that alone
   const entry = { params, holder: holder as Holder<unknown>, changed }
   wanted.set(key, entry)
+  followed.add(key)
   if (holder.data == null) {
-    // drawn at once from what was kept, before the server answers
-    const p = load(book, key, params).then((k) => {
+    // drawn at once from what was kept, before the server answers: in the same moment
+    // once the page has read it, which it does as it opens
+    const draw = () => {
+      // what was kept under these parameters, else the last kept under any: the last
+      // state of the screen, until the server answers for the new ones
+      const k = kept(book, key, params) ?? keptLatest(book, key)
       if (k && holder.data == null && wanted.get(key) === entry) {
         holder.data = k.data as T
-        holder.v = k.v
+        holder.v = k.v || undefined
         changed?.()
       }
-    })
-    drawing.add(p)
-    p.finally(() => drawing.delete(p))
+    }
+    if (keptRead(book)) draw()
+    else {
+      const p = readKept(book).then(draw)
+      drawing.add(p)
+      p.finally(() => drawing.delete(p))
+    }
   }
   sayWanted()
   return () => {
@@ -351,6 +402,7 @@ export async function connect(): Promise<void> {
       void bookIs(book)
       saidFor = 0 // said again, holding nothing of this book
     }
+    primeScreens()
     sayWanted()
   })
   es.addEventListener('snapshot', (e) => {
@@ -358,6 +410,12 @@ export async function connect(): Promise<void> {
     const { doc, data, v } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown; v: string }
     const w = wanted.get(doc)
     if (!w) return
+    if (w.priming) {
+      w.holder.data = data
+      w.holder.v = v
+      primed(doc, w)
+      return
+    }
     if (doc === 'status' && restarted(data)) return
     if (isObj(w.holder.data) && isObj(data)) reconcile(w.holder.data, data, ROW_KEYS[docKind(doc)] ?? {})
     else w.holder.data = data
@@ -382,6 +440,7 @@ export async function connect(): Promise<void> {
     if (w?.holder.data == null) return
     applyOps(w.holder.data, ops)
     w.holder.v = v
+    if (w.priming) return primed(doc, w)
     w.changed?.()
     keep(doc)
   })
@@ -389,7 +448,10 @@ export async function connect(): Promise<void> {
     seen((e as MessageEvent).lastEventId)
     const { doc, error } = JSON.parse((e as MessageEvent).data) as { doc: string; error: string }
     const w = wanted.get(doc)
-    if (w) w.holder.error = error
+    if (w?.priming) {
+      wanted.delete(doc)
+      sayWanted()
+    } else if (w) w.holder.error = error
     else if (!doc) {
       // the stream could not read what the page shows: said, and said again the other way
       conn.error = error

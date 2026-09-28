@@ -65,28 +65,82 @@ function rememberBook(book: string): void {
 const prefix = (book: string) => PROTOCOL + '|' + book + '|'
 const name = (book: string, key: string, params: unknown) => prefix(book) + key + '|' + JSON.stringify(params ?? {})
 
-/** What was kept of `key` under `params` for `book`, or null. */
-export async function load(book: string, key: string, params: unknown): Promise<Kept | null> {
-  if (!book) return null
-  const d = await open()
-  if (!d) return null
-  return new Promise((resolve) => {
-    try {
-      const req = d.transaction(STORE, 'readonly').objectStore(STORE).get(name(book, key, params))
-      req.onsuccess = () => {
-        const k = req.result as Kept | undefined
-        resolve(k && typeof k.v === 'string' ? k : null)
-      }
-      req.onerror = () => resolve(null)
-    } catch {
-      resolve(null)
+/**
+ * Everything kept for the book, read into memory once as the page opens: a screen
+ * opened later is drawn from it in the same moment, never after a read of the
+ * browser's database that would let a frame of the placeholder through.
+ */
+const held = new Map<string, Kept>()
+let heldFor = ''
+let reading: Promise<void> | null = null
+let read = false
+
+/** Read what was kept for `book` into memory, once; later calls wait on the same read. */
+export function readKept(book: string): Promise<void> {
+  if (book === heldFor && reading) return reading
+  heldFor = book
+  held.clear()
+  read = false
+  reading = (async () => {
+    const d = book ? await open() : null
+    if (d) {
+      await new Promise<void>((resolve) => {
+        try {
+          const from = prefix(book)
+          const req = d.transaction(STORE, 'readonly').objectStore(STORE).openCursor(IDBKeyRange.bound(from, from + '\uffff'))
+          req.onsuccess = () => {
+            const c = req.result
+            if (!c) return resolve()
+            const k = c.value as Kept | undefined
+            if (k && typeof k.v === 'string' && heldFor === book) held.set(String(c.key), k)
+            c.continue()
+          }
+          req.onerror = () => resolve()
+        } catch {
+          resolve()
+        }
+      })
     }
-  })
+    if (heldFor === book) read = true
+  })()
+  return reading
+}
+
+/** Whether what was kept for `book` is in memory. */
+export function keptRead(book: string): boolean {
+  return read && heldFor === book
+}
+
+/** What was kept of `key` under `params` for `book`, from memory (a copy of it), or null. */
+export function kept(book: string, key: string, params: unknown): Kept | null {
+  if (!keptRead(book)) return null
+  const k = held.get(name(book, key, params))
+  return k ? { data: structuredClone(k.data), v: k.v } : null
+}
+
+/**
+ * The last thing kept of `key` for `book` under any parameters (a copy of it), or
+ * null: what a screen whose filters or sort changed shows until the server answers
+ * it. Its version is not the one asked for, so it is never named to the server.
+ */
+export function keptLatest(book: string, key: string): Kept | null {
+  if (!keptRead(book)) return null
+  const of = prefix(book) + key + '|'
+  let last: Kept | undefined
+  for (const [k, v] of held) if (k.startsWith(of)) last = v
+  return last ? { data: structuredClone(last.data), v: '' } : null
 }
 
 /** Keep each document as it stands now. */
 export async function save(book: string, docs: { key: string; params: unknown; data: unknown; v: string }[]): Promise<void> {
   if (!book || !docs.length) return
+  // the last kept of each is the newest in memory: what a screen under new parameters shows first
+  if (book === heldFor)
+    for (const x of docs) {
+      const n = name(book, x.key, x.params)
+      held.delete(n)
+      held.set(n, { data: x.data, v: x.v })
+    }
   const d = await open()
   if (!d) return
   try {

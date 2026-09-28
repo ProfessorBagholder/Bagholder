@@ -30,7 +30,7 @@
   // Shown, the card says so: the news is read for a page showing it (and for a
   // Releases notification), and the server sends the listings its pass has still to read.
   const pass = $state<{ data: NewsDoc | null }>({ data: null })
-  $effect(() => watchDoc('news', {}, pass))
+  $effect.pre(() => watchDoc('news', {}, pass))
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const KIND_OPTS = [['stories', 'Stories'], ['releases', 'Releases'], ['disc', 'Disclosures']] as const

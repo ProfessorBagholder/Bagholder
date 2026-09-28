@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
 
+## 2026-09-28
+
+- **No screen ever opens with nothing to show, except on the very first open, before Wealthsimple has been connected or a CSV read.** Every tab's screen is kept in the browser from the moment the book is known, visited or not, and a screen whose parameters changed (a filter, a sort) shows the last it had until the new one arrives; no placeholder or loading state ever stands where a previous value exists, and the new value simply replaces it. The architecture's "a tab never visited loads nothing" is withdrawn. (Owner, 2026-09-28: "There should never be 'nothing saved to show yet' unless opening the app for the very first time and it has never been connected to Wealthsimple and no CSVs are loaded"; "it is NEVER ACCEPTABLE to have any time wiped out or 'loading state showing' if the previous value was already available.") Held by: `web/e2e/dataflow.spec.ts` (every tab kept after a first open; a kept tab drawn with no placeholder or arrival; a tab under new filters drawn from its last state).
+
 ## 2026-09-27
 
 - **An error never breaks the page's layout: the header's error stays one line, and the whole of it is read on hover and copied with an icon beside it.** (Owner, 2026-09-27: "the error shouldn't break the entire UI… the user needs a way to access the complete error, without disrupting the UI… like a copy to clipboard icon".) Held by: `web/e2e/header.spec.ts` (one line at every width, the tip, the copy).

@@ -48,7 +48,7 @@
     get loading() { return feedDoc.data == null },
   }
   const found = $state<Record<string, { loading?: boolean; missing?: boolean; error?: string; row?: ShortsFeedRow }>>({})
-  $effect(() => watchDoc('shorts', {}, feedDoc))
+  $effect.pre(() => watchDoc('shorts', {}, feedDoc))
 
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   function shortsLookup(text: string) {
