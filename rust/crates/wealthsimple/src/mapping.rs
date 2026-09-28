@@ -61,11 +61,12 @@ pub fn broker() -> Broker {
     Broker::named("wealthsimple")
 }
 
-/// The smallest coin order Wealthsimple takes: "The minimum amount required to
-/// buy crypto is $1.00" (help.wealthsimple.com/hc/en-ca/articles/1500002199881,
-/// read 2026-09-27). A coin amount worth less is dust (`SPEC.md` §2, Dust).
+/// The smallest coin sale Wealthsimple takes: its order ticket refuses a sale
+/// worth less than $0.02 (the web app's order checks, `crypto-minimum`, the
+/// sale's minimum 0.02 beside a purchase's 1, read from its build 2026-09-27).
+/// A coin amount worth less cannot be sold, and is dust (`SPEC.md` §2, Dust).
 pub fn coin_minimum() -> Money {
-    Money::new(Dec::from_int(1), Currency::CAD)
+    Money::new(Dec::new(2, 2).expect("two cents"), Currency::CAD)
 }
 
 pub struct WealthsimpleMapping;
@@ -84,7 +85,7 @@ impl Mapping for WealthsimpleMapping {
     /// 7: a move between two accounts whose one side's positions are not kept
     ///    is its stated cash where the other side's show no holdings moving.
     fn version(&self) -> u32 {
-        7
+        8
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -344,6 +345,11 @@ fn single(root: &Node, row: &Row, base: &Base, r: &Rule, out: &mut Mapped) -> Re
     // never a change to the holding
     if r.kind == Kind::Dividend {
         d.paid_on = row.quantity.filter(|q| q.is_positive());
+    }
+    // a move into or out of staking: the units it moved, which the holding
+    // then is at least, never a change to it
+    if r.kind == Kind::StakingMove {
+        d.paid_on = row.quantity.map(|q| q.abs()).filter(|q| q.is_positive());
     }
     // units moved in with no cash: the row's amount is what Wealthsimple states they
     // were worth as they arrived (a coin from a wallet), the arrival's cost where the

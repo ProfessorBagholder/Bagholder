@@ -1,0 +1,296 @@
+[
+  {
+    "name": "a move out of staking that states more units than the book holds brings the rest in as a reward at no cost, and the sale of every unit closes the trade",
+    "spec": "SPEC.md §2 Trade, Crypto: a move into or out of staking changes no holding and states the units it moved; where that is more than the book holds, the rest arrived with no row and opens a lot at zero cost, a reward",
+    "working": [
+      "t1 buys 10 D for 100.00: a lot of 10 at 10.00 each.",
+      "t2 is a staking reward of 0.5: a lot of 0.5 at zero cost. The book holds 10.5.",
+      "t3 moves out of staking and states 10.6 units. A staking move changes no holding, but it states 0.1 more than the book holds (10.6 - 10.5); that 0.1 arrived with no row (the period's last reward) and opens a lot of 0.1 at zero cost, a reward. The book holds 10.6.",
+      "t4 sells 10.6 for 127.20. Every unit is held, so nothing is beyond. Cost of the units sold: 100 + 0 + 0 = 100. P&L = 127.20 - 100 = 27.20.",
+      "The holding is empty after t4, so the trade opened by t1 closes on 2026-02-02 and no position is left.",
+      "Qty is the units opened (SPEC.md §2 trade table): 10 bought + 0.5 reward + 0.1 reward arriving in the move = 10.6. Reading: the rewards are lots of the same round trip, so their units count among the units opened; SPEC.md does not say in so many words whether reward units count in a trade's Qty."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "0.02 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "D",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "D",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-06",
+        "at": "2026-01-06T23:00:00Z",
+        "kind": "staking-reward",
+        "instrument": "D",
+        "qty": "0.5"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-01-20",
+        "at": "2026-01-20T20:00:00Z",
+        "kind": "staking-move",
+        "instrument": "D",
+        "paid_on": "10.6"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "D",
+        "qty": "-10.6",
+        "cash": "127.20"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10.6",
+          "pnl": "27.20"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a sale of more than the book holds by no more than the rounding of the rows since the holding was last empty takes units the rounding left out, at no cost",
+    "spec": "SPEC.md §2 Trade, Crypto: each row is exact only to half a unit of its source's last place; a sale that takes more than the book holds by no more than the rounding of the rows since the holding was last empty takes units that rounding left out, at zero cost",
+    "working": [
+      "Every row is from wealthsimple (activity feed, six places), so each is exact to 0.0000005.",
+      "t1 buys 0.123456 for 1000; t2 buys 0.200001 for 1600. The book holds 0.323457 at a cost of 2600.",
+      "t3 sells 0.323458: 0.000001 more than held. The rows since the holding was last empty are t1 and t2 (0.000001 of rounding), or t1, t2 and t3 (0.0000015) if the sale's own row counts; either way 0.000001 is within it.",
+      "So 0.000001 arrives at zero cost before the sale (its cost is already in t1 and t2), and the sale closes 0.323458 units: cost 2600. P&L = 2700 - 2600 = 100.00. Nothing is beyond.",
+      "The holding is empty after t3, so the trade opened by t1 closes on 2026-02-02 and no position is left.",
+      "Qty is the units opened: 0.123456 + 0.200001 + the 0.000001 the rounding left out = 0.323458. Reading: the units that arrive at zero cost are opened in this round trip, like any lot; SPEC.md does not state it for this case."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "0.02 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "B",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "B",
+        "qty": "0.123456",
+        "cash": "-1000",
+        "source": "wealthsimple"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "B",
+        "qty": "0.200001",
+        "cash": "-1600",
+        "source": "wealthsimple"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "B",
+        "qty": "-0.323458",
+        "cash": "2700",
+        "source": "wealthsimple"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "0.323458",
+          "pnl": "100.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "a sale of more than the book holds by more than the rows' rounding closes what is held at its cost, and the rest is beyond what the book holds",
+    "spec": "SPEC.md §2 Trade: a sale of more units than the book holds closes what is held at its own cost; the units beyond add nothing to P&L and the broker check lists them; Crypto: more than the rounding is beyond what the book holds",
+    "working": [
+      "Every row is from wealthsimple (six places): each exact to 0.0000005.",
+      "t1 and t2 buy 0.323457 for 2600.",
+      "t3 sells 0.3235: 0.000043 more than held, far more than the rounding of the rows (0.000001 for t1 and t2, 0.0000015 with t3). So nothing arrives; 0.000043 is beyond what the book holds.",
+      "The sale closes the 0.323457 held at their cost of 2600. Its price is 2700 / 0.3235; the units closed bring 2700 x 0.323457 / 0.3235 = 2699.6411...; the units beyond add nothing to P&L. P&L = 2699.6411 - 2600 = 99.64.",
+      "The units beyond are worth 0.000043 x 2700 / 0.3235 = 0.3589 CAD at the transaction's price, not less than the smallest coin sale of 0.02 CAD, so they are not dust and the broker check lists t3.",
+      "The holding is empty after t3: the trade opened by t1 closes on 2026-02-02 with Qty 0.323457 (the units opened); no position is left."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "0.02 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "B",
+        "kind": "crypto"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "B",
+        "qty": "0.123456",
+        "cash": "-1000",
+        "source": "wealthsimple"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "B",
+        "qty": "0.200001",
+        "cash": "-1600",
+        "source": "wealthsimple"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "B",
+        "qty": "-0.323500",
+        "cash": "2700",
+        "source": "wealthsimple"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "0.323457",
+          "pnl": "99.64"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": [
+        "t3"
+      ]
+    }
+  },
+  {
+    "name": "a share is not a coin: a sale of more than the book holds is beyond it, with no allowance for rounding and no dust",
+    "spec": "SPEC.md §2 Trade: a sale of more units than the book holds closes what is held at its own cost, the units beyond add nothing to P&L and the broker check lists them; the rounding of a source's units and dust are a coin's",
+    "working": [
+      "S is a security. The rounding allowance is stated under Crypto for a coin's units, and dust is a coin's, so neither applies.",
+      "t1 buys 10.5 for 105 (10.00 each).",
+      "t2 sells 10.6 for 127.20 (12.00 each): 0.1 more than held, beyond what the book holds.",
+      "The sale closes the 10.5 held at their cost of 105; they bring 10.5 x 12 = 126.00; the 0.1 beyond adds nothing. P&L = 126.00 - 105 = 21.00.",
+      "The broker check lists t2 (the units beyond are not a coin's, so they are never dust).",
+      "The holding is empty after t2: the trade opened by t1 closes on 2026-02-02 with Qty 10.5; no position is left."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "0.02 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "S",
+        "kind": "security"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "S",
+        "qty": "10.5",
+        "cash": "-105",
+        "source": "wealthsimple"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "S",
+        "qty": "-10.6",
+        "cash": "127.20",
+        "source": "wealthsimple"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10.5",
+          "pnl": "21.00"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": [
+        "t2"
+      ]
+    }
+  }
+]
