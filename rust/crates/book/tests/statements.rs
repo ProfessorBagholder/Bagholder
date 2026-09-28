@@ -51,13 +51,14 @@ fn the_newest_cash_and_units_are_the_ones_read() {
     f.book.store_cash(a, at("2026-09-24T10:00:00Z"), &BTreeMap::from([(Currency::CAD, d("7")), (Currency::USD, d("-1"))]), &r).unwrap();
     let rec = f.store(&Spelled::v(1), "buy", &legs(vec![buy("tfsa-1", share("CA0000000001", "XYZ"), "3", "-30", "2026-09-01T15:00:00Z")]));
     let i = f.book.transactions_of(rec.record).unwrap()[0].instrument.unwrap();
-    f.book.store_units(a, day("2026-09-22"), &[UnitsLine { instrument: i, quantity: d("3"), book_value: Some(cad("31")) }], &r, t0()).unwrap();
+    f.book.store_units(a, day("2026-09-22"), &[UnitsLine { instrument: i, quantity: d("3"), book_value: Some(cad("31")), value: Some(cad("36.75")) }], &r, t0()).unwrap();
     let s = f.book.stated(a).unwrap();
     let (when, cash) = s.cash.unwrap();
     assert_eq!(when, at("2026-09-24T10:00:00Z"));
     assert_eq!(cash[&Currency::USD], d("-1"));
     let (as_of, units) = s.units.unwrap();
     assert_eq!((as_of, units[&i]), (day("2026-09-22"), Dec::parse("3").unwrap()));
+    assert_eq!(s.unit_values[&i], cad("36.75"), "what the broker states the units are worth");
 }
 
 #[test]

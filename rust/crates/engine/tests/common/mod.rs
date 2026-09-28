@@ -330,6 +330,11 @@ pub fn build(case: &Value) -> Built {
         for (i, v) in obj(&b, "held") {
             acct.held.insert(ids.instrument(&i), dec(v.as_str().unwrap()));
         }
+        // what the broker states those units are worth: "0.004 CAD"
+        for (i, v) in obj(&b, "held_value") {
+            let (amount, currency) = v.as_str().unwrap().split_once(' ').unwrap();
+            acct.held_value.insert(ids.instrument(&i), Money::new(dec(amount), ccy(currency)));
+        }
         acct.net_value_now = s(&b, "now").map(dec);
         acct.as_of = s(&b, "as_of").map(at);
         acct.activity_read_at = s(&b, "activity_read_at").map(at);

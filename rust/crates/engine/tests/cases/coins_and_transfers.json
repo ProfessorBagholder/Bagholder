@@ -835,12 +835,12 @@
     }
   },
   {
-    "name": "the broker states a coin the book no longer holds, worth less than the smallest order at its price now: no difference",
+    "name": "the broker states a coin the book no longer holds, worth less than the smallest order at the worth the broker states: no difference",
     "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
     "working": [
-      "book: 10 bought for 100, 10 sold for 120: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C",
-      "broker states 0.04 C held; difference 0.04 x 12 (price now) = 0.48 < 1.00: dust, not a disagreement",
-      "cash not stated: no cash difference; differences 0"
+      "book: 10 bought for 100, 10 sold for 120: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C; cash 20",
+      "broker states 0.04 C held, worth 0.48 CAD; the 0.04 units the broker holds beyond the book's are valued as the broker states their worth, not at any price now (none is given): 0.48 < 1.00: dust, not a disagreement",
+      "broker cash 20 = book cash 20: no cash difference; differences 0"
     ],
     "today": "2026-03-02",
     "accounts": [
@@ -878,16 +878,13 @@
         "cash": "120"
       }
     ],
-    "quotes": {
-      "C": {
-        "price": "12",
-        "source": "crypto"
-      }
-    },
     "brokers": {
       "A": {
         "held": {
           "C": "0.04"
+        },
+        "held_value": {
+          "C": "0.48 CAD"
         },
         "held_as_of": "2026-03-02",
         "cash": {
@@ -916,12 +913,12 @@
     }
   },
   {
-    "name": "the broker states a coin the book no longer holds, worth the smallest order or more at its price now: a difference",
+    "name": "the broker states a coin the book no longer holds, worth the smallest order or more at the worth the broker states: a difference",
     "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
     "working": [
-      "book: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C",
-      "broker states 0.5 C; difference 0.5 x 12 (price now) = 6.00, not less than 1.00: one unit difference",
-      "cash not stated; differences 1"
+      "book: 10 bought for 100, 10 sold for 120: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C; cash 20",
+      "broker states 0.5 C held, worth 6.00 CAD; the 0.5 units the broker holds beyond the book's are valued as the broker states their worth, not at any price now (none is given): 6.00, not less than 1.00: one unit difference",
+      "broker cash 20 = book cash 20: no cash difference; differences 1"
     ],
     "today": "2026-03-02",
     "accounts": [
@@ -959,16 +956,13 @@
         "cash": "120"
       }
     ],
-    "quotes": {
-      "C": {
-        "price": "12",
-        "source": "crypto"
-      }
-    },
     "brokers": {
       "A": {
         "held": {
           "C": "0.5"
+        },
+        "held_value": {
+          "C": "6.00 CAD"
         },
         "held_as_of": "2026-03-02",
         "cash": {
@@ -997,12 +991,13 @@
     }
   },
   {
-    "name": "the broker states a coin with no price now: its difference is valued at the last price a fill stated, worth less: no difference",
+    "name": "the book holds a coin beyond what the broker states, with no price now: the book's extra is valued at the last price a fill stated, worth less than the smallest order: no difference",
     "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
     "working": [
-      "book: flat, trade t1 closed 2026-02-02, P&L 20.00; holds 0 C",
-      "no price now; the last price a fill stated is t2's, 120 / 10 = 12.00",
-      "difference 0.04 x 12.00 = 0.48 < 1.00: not a disagreement; differences 0"
+      "book: t1 buys 10 for 100 (10.00 each); t2 sells 5 for 120 (24.00 each) against 50.00 of cost: realized 70.00",
+      "5 C left, worth 5 x 24.00 = 120.00 at t2's price, not dust: held; trade t1 open, 10 units, P&L 70.00; one position, A/C, 5; cash -100 + 120 = 20",
+      "broker states 4.96 C: the book holds 0.04 beyond the broker's; no price now, so valued at the last price a fill stated, t2's 24.00: 0.04 x 24.00 = 0.96 < 1.00: dust, not a disagreement",
+      "broker cash 20 = book cash 20: no cash difference; differences 0"
     ],
     "today": "2026-03-02",
     "accounts": [
@@ -1036,14 +1031,14 @@
         "at": "2026-02-02T15:00:00Z",
         "kind": "sell",
         "instrument": "C",
-        "qty": "-10",
+        "qty": "-5",
         "cash": "120"
       }
     ],
     "brokers": {
       "A": {
         "held": {
-          "C": "0.04"
+          "C": "4.96"
         },
         "held_as_of": "2026-03-02",
         "cash": {
@@ -1055,13 +1050,19 @@
       "trades": [
         {
           "opened_by": "t1",
-          "closed": "2026-02-02",
+          "closed": "open",
           "qty": "10",
-          "pnl": "20.00"
+          "pnl": "70.00"
         }
       ],
-      "position_count": 0,
-      "positions": [],
+      "position_count": 1,
+      "positions": [
+        {
+          "instrument": "C",
+          "account": "A",
+          "qty": "5"
+        }
+      ],
       "beyond": [],
       "checks": [
         {

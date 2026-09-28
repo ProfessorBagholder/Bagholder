@@ -260,6 +260,8 @@ pub struct BrokerAccount {
     pub cash_read: Option<BTreeMap<Currency, Dec>>,
     /// Units held per instrument, as of `held_as_of`.
     pub held: BTreeMap<InstrumentId, Dec>,
+    /// What the broker states those units are worth, where it states it.
+    pub held_value: BTreeMap<InstrumentId, Money>,
     /// The day the broker states `held` as of: the last day whose activity is
     /// read in full (`docs/plans/stage-3b-wealthsimple.md`, question 4); today
     /// where none is stated.

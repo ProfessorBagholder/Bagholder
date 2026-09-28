@@ -267,11 +267,12 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     // units already stated as of that day are not asked again, unless one
-    // held goes by no name yet: its description is read with them
+    // held goes by no name yet (its description is read with them), or the
+    // statement kept predates the broker's stated worth of each
     let mut holdings = Vec::new();
     for (id, ks) in &keys_of {
         let current = match book.stated(*id)?.units {
-            Some((d, lines)) if d == as_of => {
+            Some((d, lines)) if d == as_of && lines.keys().all(|i| book.stated(*id).map(|s| s.unit_values.contains_key(i)).unwrap_or(false)) => {
                 let mut named = true;
                 for i in lines.keys() {
                     named &= book.current_name(*i)?.is_some() || book.option_terms(*i)?.is_some();
@@ -289,6 +290,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         let name = stated.iter().find(|a| ids[&a.key] == *id).map(|a| a.name()).unwrap_or_default();
         step(Step::Holdings { account: name, n: n + 1, of });
         let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
+        let mut valued: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
         let mut complete = true;
         for k in ks {
             match adapter.units(k, as_of) {
@@ -325,6 +327,12 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
                             Some(i) => {
                                 let e = sum.entry(i).or_insert(Dec::ZERO);
                                 *e = add(*e, u.quantity)?;
+                                // its value, none once one account's states none or another currency
+                                let v = valued.entry(i).or_insert(u.value.map(|v| bagholder_core::Money::zero(v.currency)));
+                                *v = match (*v, u.value) {
+                                    (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
+                                    _ => None,
+                                };
                             }
                             // a statement is kept only whole
                             None => complete = false,
@@ -340,7 +348,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         // a statement of units is stored only whole: every account behind it read
         if complete {
             let read = book.broker_read(connection, "units", now)?;
-            let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: None }).collect();
+            let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: None, value: valued.get(&instrument).copied().flatten() }).collect();
             book.store_units(*id, as_of, &lines, &read, now)?;
         }
     }

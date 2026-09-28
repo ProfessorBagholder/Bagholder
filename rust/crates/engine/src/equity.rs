@@ -148,12 +148,23 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
             let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
             for i in instruments {
                 let (o, br) = (matched.units_on(*account, i, as_of), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
-                // a coin's difference worth less than the broker's smallest order,
-                // at its price now (else the last a fill of it stated), is dust,
-                // never a disagreement
+                // a coin's difference worth less than the broker's smallest order
+                // is dust, never a disagreement: the broker's units valued as the
+                // broker states them; the book's beyond them at the coin's price
+                // now (else the last a fill of it stated)
                 if let Ok(own) = &o {
-                    let price = crate::positions::current_price(inputs, i).or_else(|| matched.last_price.get(&i).copied());
-                    let dust = own.checked_sub(br).ok().is_some_and(|diff| price.is_some_and(|p| crate::dust::is_dust(inputs, *account, i, diff, p, today)));
+                    let dust = match own.checked_sub(br) {
+                        Ok(diff) if !diff.is_positive() => b.held_value.get(&i).is_some_and(|v| {
+                            // what the broker holds and the book does not: its share of the stated worth
+                            let worth = if own.is_zero() { Some(*v) } else { diff.abs().div_rounded(br.abs(), 28, bagholder_core::Rounding::HalfEven).ok().and_then(|s| v.amount.mul_to_fit(s).ok()).map(|a| bagholder_core::Money::new(a, v.currency)) };
+                            worth.is_some_and(|w| crate::dust::is_dust_worth(inputs, *account, i, w, today))
+                        }),
+                        Ok(diff) => {
+                            let price = crate::positions::current_price(inputs, i).or_else(|| matched.last_price.get(&i).copied());
+                            price.is_some_and(|p| crate::dust::is_dust(inputs, *account, i, diff, p, today))
+                        }
+                        Err(_) => false,
+                    };
                     if dust {
                         continue;
                     }

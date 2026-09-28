@@ -888,6 +888,19 @@ fn positions_answered_write_the_units_held_as_of_the_day() {
 }
 
 #[test]
+fn positions_state_what_each_holding_is_worth_and_one_that_states_none_writes_no_units() {
+    let p = pulled(Op::Positions, &[body("wealthsimple-pull/positions@anon-tfsa-1@2025-11-18.json")]);
+    let s = p.stated();
+    let (_, units) = s.units.expect("the units stated");
+    assert_eq!(s.unit_values.len(), units.len(), "every holding's worth, as Wealthsimple states it");
+    let p = pulled(Op::Positions, &[edited("wrong-shape-positions-without-value.json")]);
+    let [(part, why)] = p.failures().try_into().unwrap();
+    assert_eq!(part, "units:anon-tfsa-1");
+    assert!(why.contains("totalValue"), "{why}");
+    assert_eq!(p.stated().units, None);
+}
+
+#[test]
 fn positions_answered_empty_write_that_nothing_is_held() {
     let p = pulled(Op::Positions, &[edited("edited-empty-positions.json")]);
     assert!(p.report.failures.is_empty(), "{:?}", p.report.failures);

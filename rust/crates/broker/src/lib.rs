@@ -95,6 +95,8 @@ pub struct Units {
     pub quantity: Dec,
     /// The broker's book value, kept as its statement, never a cost.
     pub book_value: Option<Money>,
+    /// What the broker states the position is worth now.
+    pub value: Option<Money>,
 }
 
 /// An account's value and net deposits on a day.

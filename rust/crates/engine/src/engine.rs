@@ -363,6 +363,10 @@ impl Engine {
                 };
                 quote_moved(i, was.as_ref(), q.as_ref(), &mut moved);
                 self.reprice(i, &mut moved);
+                // a coin's price decides whether a difference from the broker is dust
+                let before_checks = self.checks.clone();
+                self.checks = broker_checks(&self.inputs, &self.matched);
+                diff(&mut moved, before_checks.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().map(|c| (Entity::BrokerCheck(c.account), c)));
             }
             Change::Closes(i, c) => {
                 if self.is_underlying(i) {

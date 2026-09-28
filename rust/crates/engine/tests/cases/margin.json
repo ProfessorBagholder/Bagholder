@@ -1,0 +1,56 @@
+[
+  {
+    "name": "Margin used counts only a margin account's negative cash: a credit card's balance owed is a debt, not margin",
+    "spec": "SPEC.md §6 Portfolio, Margin used: 'The negative cash balances of the open margin accounts in scope, one per currency, shown positive, converted to CAD … another account's negative balance (a credit card's balance owed) is a debt, not margin, and not counted'; subtitle 'Its share of the market value of every holding in the accounts in scope'",
+    "working": [
+      "No filter: every account is in scope, M (margin, open) and K (credit card, open).",
+      "Margin account M: 80,000 deposited, 1,000 G bought at 100 (100,000); the broker states CAD cash −20,000.",
+      "Credit card K: the broker states CAD cash −5,380.56; K is not a margin account, so its negative balance is a debt and is not counted.",
+      "Margin used: the negative cash of the open margin accounts in scope, one per currency, shown positive, in CAD: M's CAD −20,000 → 20,000.00 (not 25,380.56).",
+      "Every holding in the accounts in scope: 1,000 G × 100 = 100,000 (K holds nothing).",
+      "Margin used %: 20,000 ÷ 100,000 = 0.2."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      { "id": "M", "kind": "margin" },
+      { "id": "K", "kind": "credit-card" }
+    ],
+    "instruments": [
+      { "id": "G" }
+    ],
+    "quotes": {
+      "G": { "price": "100" }
+    },
+    "transactions": [
+      {
+        "id": "m0",
+        "account": "M",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "deposit",
+        "cash": "80000"
+      },
+      {
+        "id": "m1",
+        "account": "M",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "G",
+        "qty": "1000",
+        "cash": "-100000"
+      }
+    ],
+    "brokers": {
+      "M": { "cash": { "CAD": "-20000" } },
+      "K": { "cash": { "CAD": "-5380.56" } }
+    },
+    "expect": {
+      "kpi": {
+        "filters": {},
+        "margin_used": "20000.00",
+        "margin_used_pct": 0.2
+      }
+    }
+  }
+]

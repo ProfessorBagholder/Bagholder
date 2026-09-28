@@ -535,7 +535,7 @@ mod tests {
         let state = |units: &std::collections::BTreeMap<bagholder_core::InstrumentId, bagholder_core::Dec>| {
             let now = Timestamp::now();
             let read = book.broker_read(connection, "positions", now).unwrap();
-            let lines: Vec<UnitsLine> = units.iter().map(|(i, q)| UnitsLine { instrument: *i, quantity: *q, book_value: None }).collect();
+            let lines: Vec<UnitsLine> = units.iter().map(|(i, q)| UnitsLine { instrument: *i, quantity: *q, book_value: None, value: Some(bagholder_core::Money::new(*q, bagholder_core::Currency::CAD)) }).collect();
             book.store_units(account, as_of, &lines, &read, now).unwrap();
             book.note_activity_read(account, now, true).unwrap();
             // as the reader of balances does: the figures moved, so the pages are told

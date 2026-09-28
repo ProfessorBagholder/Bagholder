@@ -494,6 +494,9 @@ fn run(path: &Path) -> Vec<String> {
                     c.fail(format!("income holdings in scope: expected {want_h:?}, got {got:?}"));
                 }
             }
+            if let Some(v) = k.get("margin_used") {
+                c.money("portfolio margin used", v, &sc.portfolio.margin_used);
+            }
             if let Some(v) = k.get("margin_used_pct") {
                 c.ratio_fig("portfolio margin used %", v, &sc.portfolio.margin_used_pct);
             }
@@ -867,12 +870,9 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
                         }
                     }
                 }
-                // every instrument held today is quoted, and every coin the broker
-                // states an account holds (its price values a difference as dust),
-                // and nothing else
-                let coin = |x: &InstrumentId| b.inputs.ledger.instruments.get(x).is_some_and(|i| i.instrument.kind == bagholder_core::instrument::InstrumentKind::Crypto);
-                let stated = b.inputs.market.brokers.values().flat_map(|a| a.held.iter()).filter(|(x, q)| !q.is_zero() && coin(x)).map(|(x, _)| *x);
-                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_ok_and(|q| q.is_zero())).map(|(_, x)| *x).chain(stated).collect();
+                // every instrument held today is quoted, and nothing else: a coin
+                // only the broker states is valued as the broker states it
+                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_ok_and(|q| q.is_zero())).map(|(_, x)| *x).collect();
                 seen += 1;
                 if needs.held != held {
                     failures.push(format!("{name}: held today {held:?}, the needs name {:?}", needs.held));

@@ -87,7 +87,7 @@ fn add_the_rest(f: &Fixture, a: AccountId) -> TradeId {
     f.book.watch(&draft, t0()).unwrap();
     let read = f.book.broker_read(f.connection, "units", t0()).unwrap();
     let held = f.book.own_instrument(&ws(NEW)).unwrap().unwrap();
-    f.book.store_units(a, "2026-07-03".parse().unwrap(), &[UnitsLine { instrument: held, quantity: d("600"), book_value: None }], &read, t0()).unwrap();
+    f.book.store_units(a, "2026-07-03".parse().unwrap(), &[UnitsLine { instrument: held, quantity: d("600"), book_value: None, value: None }], &read, t0()).unwrap();
     trade
 }
 

@@ -39,6 +39,9 @@ pub struct Stated {
     pub cash_read: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
     /// The newest statement of units, and the day they are as of.
     pub units: Option<(jiff::civil::Date, BTreeMap<InstrumentId, Dec>)>,
+    /// What that statement states each instrument's units are worth, where it
+    /// states every line of it in one currency.
+    pub unit_values: BTreeMap<InstrumentId, Money>,
     /// When the account's activity was last read in full.
     pub activity_read_at: Option<jiff::Timestamp>,
     /// The newest statement of what it can borrow, when it was stated: an
@@ -53,6 +56,8 @@ pub struct UnitsLine {
     pub quantity: Dec,
     /// The broker's own book value, kept as its statement, never a cost.
     pub book_value: Option<Money>,
+    /// What the broker states the position is worth.
+    pub value: Option<Money>,
 }
 
 impl Book {
@@ -237,8 +242,8 @@ impl Book {
             self.conn().execute("INSERT INTO statements (id, account_id, kind, as_of_day, read_id) VALUES (?1, ?2, 'units', ?3, ?4)", params![id, account.to_string(), day(as_of), read.0])?;
             for l in lines {
                 self.conn().execute(
-                    "INSERT INTO statement_units (statement_id, instrument_id, quantity, book_value, book_value_currency) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![id, l.instrument.to_string(), l.quantity.to_text(), l.book_value.map(|m| m.amount.to_text()), l.book_value.map(|m| m.currency.to_string())],
+                    "INSERT INTO statement_units (statement_id, instrument_id, quantity, book_value, book_value_currency, value, value_currency) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![id, l.instrument.to_string(), l.quantity.to_text(), l.book_value.map(|m| m.amount.to_text()), l.book_value.map(|m| m.currency.to_string()), l.value.map(|m| m.amount.to_text()), l.value.map(|m| m.currency.to_string())],
                 )?;
             }
             Ok(())
@@ -332,14 +337,28 @@ impl Book {
             // instruments read as one added up
             let joined = self.joined()?;
             let mut m: BTreeMap<InstrumentId, Dec> = BTreeMap::new();
-            let mut st = self.conn().prepare("SELECT instrument_id, quantity FROM statement_units WHERE statement_id = ?1")?;
-            for r in st.query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-                let (i, q) = r?;
+            // each instrument's value, none once a line of it states none or another currency
+            let mut values: BTreeMap<InstrumentId, Option<Money>> = BTreeMap::new();
+            let mut st = self.conn().prepare("SELECT instrument_id, quantity, value, value_currency FROM statement_units WHERE statement_id = ?1")?;
+            type Line = (String, String, Option<String>, Option<String>);
+            for r in st.query_map(params![id], |r| -> rusqlite::Result<Line> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)) })? {
+                let (i, q, v, vc) = r?;
                 let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
                 let q = text::dec("statement_units", "quantity", &q)?;
-                let e = m.entry(joined.get(&i).copied().unwrap_or(i)).or_insert(Dec::ZERO);
+                let head = joined.get(&i).copied().unwrap_or(i);
+                let e = m.entry(head).or_insert(Dec::ZERO);
                 *e = e.checked_add(q).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?;
+                let value = match (v, vc) {
+                    (Some(v), Some(c)) => Some(Money::new(text::dec("statement_units", "value", &v)?, text::parsed("statement_units", "value_currency", &c, Currency::parse)?)),
+                    _ => None,
+                };
+                let slot = values.entry(head).or_insert(Some(Money::zero(value.map(|v| v.currency).unwrap_or(Currency::CAD))));
+                *slot = match (*slot, value) {
+                    (Some(a), Some(v)) if a.currency == v.currency => a.amount.checked_add(v.amount).ok().map(|x| Money::new(x, a.currency)),
+                    _ => None,
+                };
             }
+            out.unit_values = values.into_iter().filter_map(|(i, v)| v.map(|v| (i, v))).collect();
             out.units = Some((text::date("statements", "as_of_day", &d)?, m));
         }
         let bp: Option<(String, Option<String>, Option<String>, Option<String>)> = self
