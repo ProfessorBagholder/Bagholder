@@ -123,7 +123,7 @@ async fn figures_trades(State(state): State<AppState>, Params(q): Params<TradesQ
             Some("asc") => crate::views::Dir::Asc,
             Some(other) => return Err(ApiError::BadRequest(format!("no direction {other:?}"))),
         };
-        let sort = crate::views::Sort { key: q.sort.unwrap_or_else(|| "exitDate".into()), dir };
+        let sort = crate::views::Sort { key: q.sort.unwrap_or_else(|| "activity".into()), dir };
         let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
         let names = f.names().map_err(ApiError::Failed)?;
         let context = app.market_context().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
