@@ -16,6 +16,7 @@ pub fn routes() -> Routed {
     let mut routed = api_routes! {
         get "/api/status" => status;
         get "/api/figures/detail" => figures_detail;
+        get "/api/figures/details" => figures_details;
         get "/api/figures/trades" => figures_trades;
         get "/api/view" => view;
         post "/api/data/clear" => data_clear;
@@ -46,6 +47,13 @@ async fn figures_detail(State(state): State<AppState>, Params(q): Params<TradeQu
     let id = q.id.unwrap_or_default();
     let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::detail(e, &id))).flatten()).await?;
     Ok(Json(found.ok_or_else(|| ApiError::NotFound("no such trade or holding".into()))?))
+}
+
+/// `GET /api/figures/details`: every trade's and holding's fills.
+async fn figures_details(State(state): State<AppState>) -> Api<crate::wire::figures::Details> {
+    let app = state.app;
+    let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::details(e)))).await?;
+    Ok(Json(crate::wire::figures::Details { details: found.ok_or_else(|| ApiError::Conflict("the figures are not open".into()))? }))
 }
 
 #[derive(Deserialize, TS)]

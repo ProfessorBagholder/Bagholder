@@ -37,8 +37,11 @@ export const detail = $state<{ id: string; fills: Fill[] | undefined; error: str
 export async function loadDetail(id: string | null): Promise<void> {
   if (id !== detail.id) {
     // the executions held from before are drawn at once; the server's replace them where they differ
+    // its own last answer, else what the read of every trade's and holding's held of it
     const had = id ? held('GET /api/figures/detail', { query: { id } }) : undefined
-    Object.assign(detail, { id: id ?? '', fills: had?.ok ? had.fills : undefined, error: '' })
+    const every = id && !had?.ok ? held('GET /api/figures/details') : undefined
+    const fills = had?.ok ? had.fills : every?.ok ? every.details.find((d) => d.id === id)?.fills : undefined
+    Object.assign(detail, { id: id ?? '', fills, error: '' })
   }
   if (!id) return
   askAgain('GET /api/figures/detail') // asked each time the trade's own document changed

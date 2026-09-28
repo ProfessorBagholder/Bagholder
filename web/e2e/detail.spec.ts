@@ -113,17 +113,14 @@ test('short interest is neither asked for nor drawn on any page but a share list
   const others = pages.filter((p) => !p.shares)
   expect(others.length, 'the book has pages that are not a share listing').toBeGreaterThan(0)
   let asked = 0
-  let charted = 0
   page.on('request', (r) => {
     if (r.url().includes('/api/shorts?')) asked++
-    if (r.url().includes('/api/history?')) charted++
   })
   for (const p of others) {
-    const before = charted
     await page.goto('/' + p.hash)
     await expect(page.locator('#page > [data-arrived]')).toBeVisible()
-    // the page has asked for its chart, which it asks for beside the card: the card's own ask would be out by now
-    await expect.poll(() => charted).toBeGreaterThan(before)
+    // the page is drawn, its executions with it: a card beside them would have asked by now
+    await expect(page.locator('#page')).toContainText(/Executions \(\d+\)/)
     await page.waitForTimeout(300)
     expect(asked, p.hash).toBe(0)
     await expect(page.locator('#page').getByText('Short volume', { exact: true })).toHaveCount(0)

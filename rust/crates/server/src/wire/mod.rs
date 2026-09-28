@@ -84,6 +84,7 @@ mod tests {
             ("Trade", key::<Trade>()),
             ("Position", key::<Position>()),
             ("Fill", key::<Fill>()),
+            ("Detail", key::<Detail>()),
             ("Point", key::<Point>()),
             ("YearRow", key::<YearRow>()),
             ("MonthlyBar", key::<MonthlyBar>()),

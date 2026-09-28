@@ -93,6 +93,8 @@ qty: Fig<Dec>, price: Fig<Dec>, amount: Fig<Dec>, currency: string, flags: Array
 
 export type Detail = { id: string, fills: Array<Fill>, };
 
+export type Details = { details: Array<Detail>, };
+
 export type Kpi = { 
 /**
  * Realized P&L in the dates chosen, every sale's; open trades' included.
