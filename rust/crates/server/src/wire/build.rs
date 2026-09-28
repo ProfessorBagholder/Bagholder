@@ -390,7 +390,7 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
             // an account the ticket can place with: the one broker orders go to, self-directed, trading securities
             tradable: info.broker == bagholder_core::Broker::named("wealthsimple") && matches!(info.account.account_type, AccountType::Known { managed: false, kind: AccountKind::Cash | AccountKind::Margin, .. }),
             margin: matches!(info.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. }),
-            nav: inputs.market.brokers.get(id).and_then(|b| b.net_value.iter().next_back().map(|(_, v)| Dec(*v))),
+            nav: inputs.market.brokers.get(id).and_then(|b| b.net_value_now).map(Dec),
         })
         .collect()
 }

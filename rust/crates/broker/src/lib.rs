@@ -56,6 +56,8 @@ pub struct AccountStated {
     pub linked_to: Option<String>,
     /// The margin account this one backs as collateral, by the broker's id for it.
     pub backs: Option<String>,
+    /// What the broker states it is worth now, where it states it.
+    pub net_value: Option<Money>,
 }
 
 /// One activity row, as the broker sent it.
