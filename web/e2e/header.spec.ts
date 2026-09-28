@@ -68,31 +68,61 @@ for (const [what, next] of [
   })
 }
 
-// The page that reloads for a new version saves what it holds on the way out, the
-// old server's status among it, and draws that first on the load that follows. It
-// must never take that for the server it heard, or it reloads for ever: signed in,
-// the server reads the balances before it answers, so the old status is always
-// drawn first (2.0.0 on the owner's page).
-test('a new version loads the page again once, though what the page kept of the old server is drawn before the new one answers', async ({ page, request }) => {
+// The page keeps what it showed in the browser and draws it first on the next open,
+// the header's status among it. A page loaded after an update therefore draws the old
+// server's status before the new server answers: it must never take that for a server
+// it heard, or it meets the old version against the new at every load and reloads for
+// ever (2.0.0 on the owner's page, the header reading the version before).
+test('a page that opens drawing what it kept of the version before loads once, and shows the new version', async ({ page, request }) => {
   const model = await modelDoc(request)
+  const version = (model.status as { version: string }).version
   let server: Record<string, unknown> = { startedAt: 'A' }
-  let slow = 0
+  let hold: Promise<void> = Promise.resolve()
   await page.route('**/api/events?*', async (route) => {
-    if (slow) await new Promise((r) => setTimeout(r, slow))
+    await hold
     await route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody({ ...model, status: { ...model.status, ...server } }) })
   })
   await page.route('**/api/events/watch', (route) => route.fallback())
-  let loads = 0
-  page.on('request', (r) => { if (r.resourceType() === 'document') loads++ })
   await page.goto('/')
   await ready(page)
-  // the new version answers only after what the page kept is drawn, as a signed-in server does
-  slow = 2000
-  server = { startedAt: 'C', version: (model.status as { version: string }).version + '-next' }
-  await expect.poll(() => loads, { timeout: 10_000 }).toBeGreaterThanOrEqual(2)
-  await page.waitForTimeout(8000)
-  expect(loads).toBe(2)
+  // the page is left: it keeps the status of the version it heard
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+  await expect.poll(() => page.evaluate(keptVersion)).toBe(version)
+  // updated: the new server answers only once the page has drawn what it kept
+  server = { startedAt: 'C', version: version + '-next' }
+  let answer = () => {}
+  hold = new Promise((r) => (answer = r))
+  let loads = 0
+  page.on('request', (r) => { if (r.resourceType() === 'document') loads++ })
+  await page.reload()
+  await expect(page.getByText('v' + version, { exact: true })).toBeVisible()
+  answer()
+  hold = Promise.resolve()
+  // the new version's status is taken, not answered by loading the page again
+  await expect(page.getByText('v' + version + '-next', { exact: true })).toBeVisible()
+  expect(loads).toBe(1)
 })
+
+/** The version in the header's status the page keeps in the browser, or '' when none is kept. */
+function keptVersion(): Promise<string> {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('bagholder')
+    req.onerror = () => resolve('')
+    req.onsuccess = () => {
+      const d = req.result
+      if (!d.objectStoreNames.contains('docs')) return resolve('')
+      const all = d.transaction('docs', 'readonly').objectStore('docs').openCursor()
+      let found = ''
+      all.onsuccess = () => {
+        const c = all.result
+        if (!c) return resolve(found)
+        if (String(c.key).includes('|status|')) found = String((c.value as { data?: { version?: string } }).data?.version ?? '')
+        c.continue()
+      }
+      all.onerror = () => resolve('')
+    }
+  })
+}
 
 test('the status line on the book as it is: not connected, and nothing on offer', async ({ page }) => {
   await page.goto('/')
