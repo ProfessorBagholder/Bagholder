@@ -425,6 +425,22 @@ fn accounts_answered_keep_what_each_account_is_worth_now() {
     assert_eq!(worth, Money::new(dec("198451.616214"), Currency::CAD));
 }
 
+/// What each account is worth is read again with the balances between syncs, every
+/// five minutes a page is open (`SPEC.md`, the sources): the book holds the newest.
+#[test]
+fn balances_read_between_syncs_keep_what_each_account_is_worth_now() {
+    let p = pulled(Op::Accounts, &[body("wealthsimple-pull/edited-accounts-one.json")]);
+    let connection = p.book.accounts().unwrap()[0].connection;
+    let later: jiff::Timestamp = "2025-11-19T20:05:00Z".parse().unwrap();
+    let f = answering(&[body("wealthsimple-pull/edited-accounts-one.json").replace("198451.616214", "201007.25")]);
+    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op: Op::Accounts });
+    let read = bagholder_broker::pull::balances(&p.book, &mut ws, connection, later).unwrap();
+    drop(ws);
+    assert!(read.failures.is_empty(), "{:?}", read.failures);
+    assert_eq!((read.accounts, f.asked()), (vec![p.account().unwrap()], 1));
+    assert_eq!(p.stated().net_value_now, Some((later, Money::new(dec("201007.25"), Currency::CAD))));
+}
+
 #[test]
 fn accounts_answered_empty_write_nothing_and_read_nothing_more() {
     let p = pulled(Op::Accounts, &[edited("edited-empty-accounts.json")]);
