@@ -19,7 +19,7 @@ use bagholder_core::record::RecordState;
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, RecordId};
 
-use crate::{BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Row, Step};
+use crate::{AccountStated, BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Row, Step};
 
 /// What one pull did and what failed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -247,24 +247,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         keys_of.entry(ids[&a.key]).or_default().push(a.key.clone());
     }
     let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
-    // what each account is worth now, where every account of the broker's behind it states it
-    {
-        let read = book.broker_read(connection, "accounts", now)?;
-        for (id, keys) in &keys_of {
-            let mut total: Option<bagholder_core::Money> = None;
-            let mut whole = true;
-            for k in keys {
-                match (stated.iter().find(|a| &a.key == k).and_then(|a| a.net_value), total) {
-                    (Some(v), None) => total = Some(v),
-                    (Some(v), Some(t)) if t.currency == v.currency => total = Some(bagholder_core::Money::new(t.amount.checked_add(v.amount).map_err(|e| bagholder_book::BookError::Refused(format!("an account's worth too large to add: {e}")))?, t.currency)),
-                    _ => whole = false,
-                }
-            }
-            if let (true, Some(v)) = (whole, total) {
-                book.store_net_value(*id, now, v, &read)?;
-            }
-        }
-    }
+    store_net_values(book, connection, &stated, &keys_of, now)?;
     step(Step::Balances);
     store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     // the movements the activity feed left out, for an account whose cash now
@@ -628,8 +611,10 @@ pub struct BalancesRead {
 }
 
 /// The balances now, apart from a pull (`docs/plans/stage-3c-switch.md`, §3: every
-/// five minutes while a page is open): each open account's cash, and what each
-/// margin account can borrow, for the connection's accounts the book holds.
+/// five minutes while a page is open): each open account's worth and cash, and what
+/// each margin account can borrow, for the connection's accounts the book holds
+/// (`SPEC.md`, the sources: net liquidation value at every sync and every five
+/// minutes while a page is open).
 pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, now: jiff::Timestamp) -> Result<BalancesRead> {
     let broker = adapter.broker();
     let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
@@ -648,8 +633,37 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         keys_of.insert(a.id, keys);
     }
     let mut failures = Vec::new();
-    let accounts = store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?;
-    Ok(BalancesRead { accounts, failures })
+    let mut accounts: BTreeSet<AccountId> = BTreeSet::new();
+    match adapter.accounts() {
+        Ok(stated) => accounts.extend(store_net_values(book, connection, &stated, &keys_of, now)?),
+        Err(f) => failures.push(("accounts".into(), f)),
+    }
+    accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
+    Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures })
+}
+
+/// What each account is worth now, as the broker states it, where every account of
+/// the broker's behind it states it (one book account can be several of the
+/// broker's: its worth is theirs added up). The accounts a value was stored for.
+fn store_net_values(book: &Book, connection: ConnectionId, stated: &[AccountStated], keys_of: &BTreeMap<AccountId, Vec<String>>, now: jiff::Timestamp) -> Result<Vec<AccountId>> {
+    let read = book.broker_read(connection, "net-value", now)?;
+    let mut stored = Vec::new();
+    for (id, keys) in keys_of {
+        let mut total: Option<bagholder_core::Money> = None;
+        let mut whole = true;
+        for k in keys {
+            match (stated.iter().find(|a| &a.key == k).and_then(|a| a.net_value), total) {
+                (Some(v), None) => total = Some(v),
+                (Some(v), Some(t)) if t.currency == v.currency => total = Some(bagholder_core::Money::new(t.amount.checked_add(v.amount).map_err(|e| bagholder_book::BookError::Refused(format!("an account's worth too large to add: {e}")))?, t.currency)),
+                _ => whole = false,
+            }
+        }
+        if let (true, Some(v)) = (whole, total) {
+            book.store_net_value(*id, now, v, &read)?;
+            stored.push(*id);
+        }
+    }
+    Ok(stored)
 }
 
 /// Each account's cash and, for a margin account, what it can borrow, stored as
