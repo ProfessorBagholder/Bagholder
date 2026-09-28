@@ -423,6 +423,13 @@ pub fn fill_price(t: &Transaction, info: Option<&InstrumentInfo>) -> Fig<Dec> {
     let q = t.quantity.filter(|q| !q.is_zero()).ok_or_else(|| Gaps::of(Gap::QuantityUnstated(t.id.clone())))?;
     let units = q.abs();
     let mult = multiplier(Some(i), i.instrument.id);
+    // a row that moves no cash and states no price but states what its units were
+    // worth (a coin moved in, a reward): that worth over its units
+    if t.cash.is_none() {
+        if let Some(v) = t.value.filter(|v| v.currency == i.instrument.currency) {
+            return Ok(v.amount.abs().div_rounded(units.checked_mul(mult?)?, crate::trades::PRICE_PLACES, Rounding::HalfEven)?);
+        }
+    }
     let value = fill_value(t, units, q.is_positive(), i.instrument.currency, &mult)?;
     Ok(value.amount.div_rounded(units.checked_mul(mult?)?, crate::trades::PRICE_PLACES, Rounding::HalfEven)?)
 }
@@ -736,7 +743,21 @@ impl<'a> Matcher<'a> {
         };
         let zero = Money::zero(self.currency(instrument));
         let reward = flags.contains(&Flag::Reward);
-        self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, excess, Ok(zero), zero, flags, None);
+        // what the rounding left out belongs to the units it was left out of: the round
+        // trip of the last lot held, a deposited one's too, never a round trip of its own
+        let mut flags = flags;
+        let joins = if within {
+            let last = self.book(account, instrument).lots.iter().rev().find(|l| l.direction == Direction::Long).map(|l| (l.trip.clone(), l.flags.contains(&Flag::Deposited)));
+            last.map(|(trip, deposited)| {
+                if deposited {
+                    flags.insert(Flag::Deposited);
+                }
+                trip
+            })
+        } else {
+            None
+        };
+        self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, excess, Ok(zero), zero, flags, joins);
         self.out.arrived.push(Arrived { transaction: t.id.clone(), account, instrument, qty: excess, reward });
     }
 
@@ -2119,6 +2140,13 @@ mod fill_price_tests {
         assert!(fill_price(&fill("1", None, Some("-410"), None), Some(&unstated)).is_err(), "a contract whose size is unstated");
         assert!(fill_price(&fill("80", None, None, None), Some(&share)).is_err(), "neither a price nor cash");
         assert!(fill_price(&fill("0", None, Some("-10"), None), Some(&share)).is_err(), "no units");
+        // a row moving no cash that states what its units were worth (a coin moved in): that worth over its units
+        let mut moved = fill("0.5", None, None, None);
+        moved.value = Some(Money::new(d("30000"), Currency::USD));
+        assert_eq!(fill_price(&moved, Some(&share)), Ok(d("60000")));
+        // stated in another currency than the instrument's, it prices nothing
+        moved.value = Some(Money::new(d("30000"), Currency::CAD));
+        assert!(fill_price(&moved, Some(&share)).is_err());
     }
 }
 
