@@ -103,6 +103,11 @@ pub fn write(home: &Path) -> Result<String, String> {
         let cad = |v: f64| Money::new(Dec::parse(&format!("{:.2}", v * share)).expect("a value to the cent"), Currency::CAD);
         let account_days: Vec<AccountDay> = nav.iter().filter_map(|(d, v, dep)| Some(AccountDay { day: d.parse().ok()?, net_value: cad(*v), net_deposits: cad(*dep) })).collect();
         book.store_account_days(account, &account_days, &read).map_err(err)?;
+        // what it is worth now, as the broker states it with the accounts: made up as its latest day's
+        if let Some(last) = account_days.last() {
+            let read = book.broker_read(connection, "accounts", at).map_err(err)?;
+            book.store_net_value(account, at, last.net_value, &read).map_err(err)?;
+        }
         let mut cash: std::collections::BTreeMap<Currency, Dec> = std::collections::BTreeMap::new();
         for t in transactions.iter().filter(|t| t.account == account) {
             if let Some(c) = t.cash {
