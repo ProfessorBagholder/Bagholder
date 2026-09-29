@@ -21,4 +21,5 @@ Read from any checkout without switching branches:
 | 10 | [Verdict on the stage 5 plan: Go with changes](10-stage-5-verdict.md) | A1 withdrawn by the owner (2026-09-27); see 13 |
 | 11 | [Verdict on the statement-gaps plan: Go with changes](11-statement-gaps-verdict.md) | Current |
 | 12 | [Verdict on the filters-everywhere plan: Go with changes](12-filters-everywhere-verdict.md) | Current |
-| 13 | [Why screens still open empty: one read layer (#323: Stop, replaced)](13-one-read-layer.md) | Current |
+| 13 | [Why screens still open empty: one read layer (#323: Stop, replaced)](13-one-read-layer.md) | Built (#324–#326); see 14 |
+| 14 | [Brief 13 as built: accepted, one fix](14-brief-13-as-built.md) | Current |
