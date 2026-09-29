@@ -123,7 +123,7 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
         read_all(f, &ctx, &needs).map_err(|e| e.to_string())?;
         last = Some(n);
     }
-    let quoting = demand(app, &book, &needs.held)?;
+    let quoting = demand(app, &ctx, &needs.held)?;
     quotes::read_quotes(&ctx, &quoting).map_err(|e| e.to_string())?;
     for l in &quoting {
         f.price_changed(l.id)?;
@@ -141,20 +141,54 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
 }
 
 /// What is quoted now: what is held while a page shows a holding's price, what
-/// is followed while a page shows the Markets tab.
-fn demand(app: &App, book: &bagholder_book::Book, held: &[bagholder_sources::contract::Listing]) -> Result<Vec<bagholder_sources::contract::Listing>, String> {
+/// is followed while a page shows the Markets tab, and, page or none, a quote the
+/// header says its source is failing on, once that source's rest ends: the
+/// failure is asked again as `next_due` promises, so the header never goes on
+/// stating a failure the running reader has not met (a reader fixed since, a
+/// source back since).
+fn demand(app: &App, ctx: &Ctx, held: &[bagholder_sources::contract::Listing]) -> Result<Vec<bagholder_sources::contract::Listing>, String> {
     let mut quoting: Vec<bagholder_sources::contract::Listing> = Vec::new();
+    let add = |l: &bagholder_sources::contract::Listing, quoting: &mut Vec<bagholder_sources::contract::Listing>| {
+        if !quoting.iter().any(|q| q.id == l.id) {
+            quoting.push(l.clone());
+        }
+    };
     if app.events.showing(&PRICED) {
-        quoting.extend(held.iter().cloned());
+        held.iter().for_each(|l| add(l, &mut quoting));
     }
-    if app.events.showing(&FOLLOWED) {
-        for l in crate::following::listings(book)? {
-            if !quoting.iter().any(|q| q.id == l.id) {
-                quoting.push(l);
-            }
+    let failing = failing_quotes(ctx)?;
+    let showing_followed = app.events.showing(&FOLLOWED);
+    // the followed listings are read only where one is quoted
+    let followed = if showing_followed || failing.iter().any(|id| !held.iter().any(|l| l.id == *id)) { crate::following::listings(ctx.book)? } else { Vec::new() };
+    if showing_followed {
+        followed.iter().for_each(|l| add(l, &mut quoting));
+    }
+    for id in failing {
+        if let Some(l) = held.iter().chain(&followed).find(|l| l.id == id) {
+            add(l, &mut quoting);
         }
     }
     Ok(quoting)
+}
+
+/// The instruments whose quote is the newest outcome of a source the header
+/// states as failing (`health::failures`), that source's rest over.
+fn failing_quotes(ctx: &Ctx) -> Result<Vec<InstrumentId>, String> {
+    use bagholder_sources::contract::DataKind;
+    let e = |e: bagholder_sources::cache::CacheError| e.to_string();
+    let mut out = Vec::new();
+    for o in ctx.cache.newest_counted().map_err(e)? {
+        let (DataKind::Quote, Some(id)) = (o.kind, o.instrument) else { continue };
+        if bagholder_sources::health::failure(&o).is_none() {
+            continue;
+        }
+        let failed = ctx.cache.failures_in_a_row(&o.source, DataKind::Quote, Some(id)).map_err(e)?;
+        let rest = SignedDuration::try_from(bagholder_sources::market::grown_rest(ctx.net.limiter().pace(&o.host).rest, failed)).map_err(|e| e.to_string())?;
+        if o.at + rest <= ctx.now {
+            out.push(id);
+        }
+    }
+    Ok(out)
 }
 
 /// Read the payers held under `symbol` now, each change applied: the ones read.
@@ -341,17 +375,44 @@ mod tests {
             assert!(app.events.watch(&app, feed.id(), docs));
             feed
         };
-        assert!(demand(&app, &book, &held).unwrap().is_empty(), "no page: nothing quoted");
+        let cache = f.cache().unwrap();
+        let bank = bank_zone().unwrap();
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
+        assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "no page: nothing quoted");
         {
             let _positions = show(&["positions"]);
-            assert_eq!(ids(&demand(&app, &book, &held).unwrap()), ids(&held), "the Positions tab: the holdings alone");
+            assert_eq!(ids(&demand(&app, &ctx, &held).unwrap()), ids(&held), "the Positions tab: the holdings alone");
         }
         {
             let _markets = show(&["markets"]);
             let want: BTreeSet<InstrumentId> = ids(&held).union(&ids(&followed)).copied().collect();
-            assert_eq!(ids(&demand(&app, &book, &held).unwrap()), want, "the Markets tab: the holdings and what is followed");
+            assert_eq!(ids(&demand(&app, &ctx, &held).unwrap()), want, "the Markets tab: the holdings and what is followed");
         }
-        assert!(demand(&app, &book, &held).unwrap().is_empty(), "the page closed: nothing quoted");
+        assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "the page closed: nothing quoted");
+        // a quote whose source the header states as failing is asked again when the
+        // source's rest ends, page or none: a holding's and a followed listing's
+        use bagholder_sources::cache::OutcomeRow;
+        use bagholder_sources::contract::DataKind;
+        use bagholder_sources::outcome::OutcomeKind;
+        let row = |source: &'static str, id: InstrumentId, outcome: OutcomeKind, at: Timestamp| OutcomeRow {
+            source: bagholder_core::SourceName::named(source),
+            host: "quotes.example".into(),
+            kind: DataKind::Quote,
+            instrument: Some(id),
+            outcome,
+            detail: String::new(),
+            shape_change: None,
+            at,
+        };
+        let watched = followed.iter().find(|l| !held.iter().any(|h| h.id == l.id)).unwrap().id;
+        let long_ago = now - SignedDuration::from_hours(24);
+        cache.record(&row("one", held[0].id, OutcomeKind::Mismatch, long_ago)).unwrap();
+        cache.record(&row("two", watched, OutcomeKind::Unreachable, long_ago)).unwrap();
+        assert_eq!(ids(&demand(&app, &ctx, &held).unwrap()), BTreeSet::from([held[0].id, watched]), "each failing quote, its rest over");
+        // within its rest a failure is not asked again; an answer since ends it
+        cache.record(&row("one", held[0].id, OutcomeKind::Meaning, now)).unwrap();
+        cache.record(&row("two", watched, OutcomeKind::Answered, now)).unwrap();
+        assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "one resting, one answered: nothing quoted");
     }
 
     /// The option contracts held are priced from their chains by the app's own
