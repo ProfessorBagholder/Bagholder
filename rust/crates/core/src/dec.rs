@@ -118,6 +118,46 @@ impl Dec {
         Decimal::from_str_exact(s).map(Dec).map_err(|_| DecError::Overflow)
     }
 
+    /// `parse`, for a source that writes a decimal in scientific notation where
+    /// its own printer chooses to (Python's `str(Decimal)`: `0E-20` for a zero kept
+    /// to twenty places, `1.5E-7` for a small value): plain text as `parse` reads
+    /// it, or a plain mantissa, `E` or `e`, and a signed whole exponent. The value
+    /// is exact or refused, as `parse`'s; trailing zeros after the point carry no
+    /// value and are not counted against the places a `Dec` holds.
+    pub fn parse_scientific(s: &str) -> Result<Dec, DecError> {
+        let malformed = || DecError::Malformed(s.to_string());
+        let Some((mantissa, exponent)) = s.split_once(['E', 'e']) else { return Dec::parse(s) };
+        Dec::parse(mantissa).map_err(|e| if matches!(e, DecError::Malformed(_)) { malformed() } else { e })?;
+        let exp_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        if exp_digits.is_empty() || !exp_digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(malformed());
+        }
+        let exp: i64 = exponent.parse().map_err(|_| malformed())?;
+        // far past any place a `Dec` holds: only a zero is still a value
+        if exp.abs() > 4096 {
+            let zero = mantissa.bytes().all(|b| matches!(b, b'-' | b'0' | b'.'));
+            return if zero { Ok(Dec::ZERO) } else { Err(DecError::Overflow) };
+        }
+        let negative = mantissa.starts_with('-');
+        let body = mantissa.strip_prefix('-').unwrap_or(mantissa);
+        let (whole, frac) = body.split_once('.').unwrap_or((body, ""));
+        let digits = format!("{whole}{frac}");
+        let point = whole.len() as i64 + exp;
+        let (int_part, frac_part) = if point <= 0 {
+            (String::from("0"), format!("{}{digits}", "0".repeat((-point) as usize)))
+        } else if point as usize >= digits.len() {
+            (format!("{digits}{}", "0".repeat(point as usize - digits.len())), String::new())
+        } else {
+            (digits[..point as usize].to_string(), digits[point as usize..].to_string())
+        };
+        let int_part = int_part.trim_start_matches('0');
+        let int_part = if int_part.is_empty() { "0" } else { int_part };
+        let frac_part = frac_part.trim_end_matches('0');
+        let sign = if negative { "-" } else { "" };
+        let plain = if frac_part.is_empty() { format!("{sign}{int_part}") } else { format!("{sign}{int_part}.{frac_part}") };
+        Dec::parse(&plain).map_err(|e| if matches!(e, DecError::Malformed(_)) { malformed() } else { e })
+    }
+
     /// `parse`, for a source that writes more fractional digits than a `Dec`
     /// holds: the value rounded once, half to even, at the last place that fits,
     /// from the digits as written (a tie only when every digit after it is zero).
@@ -713,6 +753,34 @@ mod tests {
         // a sum whose places no longer fit is refused, not rounded
         assert_eq!(d("9999999999999999999999999999").checked_add(d("0.1")), Err(DecError::Inexact));
         assert_eq!(d("9999999999999999999999999999").checked_sub(d("0.1")), Err(DecError::Inexact));
+    }
+
+    #[test]
+    fn scientific_notation_is_read_exactly_or_refused() {
+        // Python's `str(Decimal)`, which writes a zero kept to twenty places as `0E-20`
+        for (input, value) in [
+            ("0E-20", "0"),
+            ("-0E-20", "0"),
+            ("0E+3", "0"),
+            ("0E-99999", "0"),
+            ("1.5E-7", "0.00000015"),
+            ("-1.5e-7", "-0.00000015"),
+            ("1.23E+5", "123000"),
+            ("12.5E1", "125"),
+            ("12.5E-1", "1.25"),
+            ("7E0", "7"),
+            ("1.00000E-20", "0.00000000000000000001"),
+            ("-3.29670329670329670300", "-3.296703296703296703"),
+            ("7.2600", "7.26"),
+        ] {
+            assert_eq!(Dec::parse_scientific(input), Ok(d(value)), "{input}");
+        }
+        for bad in ["", "E5", "1E", "1E+", "1E5.0", "1EE5", "1E5E5", ".5E1", "5.E1", "+1E5", "007E1", "1e 5", "NaN", "Infinity", "1E--5"] {
+            assert!(matches!(Dec::parse_scientific(bad), Err(DecError::Malformed(_))), "{bad:?}");
+        }
+        assert_eq!(Dec::parse_scientific("1E-29"), Err(DecError::Overflow));
+        assert_eq!(Dec::parse_scientific("1E+29"), Err(DecError::Overflow));
+        assert_eq!(Dec::parse_scientific("1E-99999"), Err(DecError::Overflow));
     }
 
     #[test]

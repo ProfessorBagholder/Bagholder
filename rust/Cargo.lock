@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-book"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-book",
  "bagholder-core",
@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-broker"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-book",
  "bagholder-core",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-browser"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-core"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "jiff",
  "rust_decimal",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-diff"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-diff-derive"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-engine"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-core",
  "serde",
@@ -235,11 +235,11 @@ dependencies = [
 
 [[package]]
 name = "bagholder-lint-fixture"
-version = "2.0.3"
+version = "2.0.4"
 
 [[package]]
 name = "bagholder-market"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-core",
  "bagholder-model",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-model"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-core",
  "bagholder-diff",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-net"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "flate2",
  "jiff",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-server"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "axum",
  "bagholder-book",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-sources"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-book",
  "bagholder-core",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-sqlite"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "jiff",
  "rusqlite",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-store"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-diff",
  "bagholder-diff-derive",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-wealthsimple"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-book",
  "bagholder-broker",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "bagholder-ws"
-version = "2.0.3"
+version = "2.0.4"
 dependencies = [
  "bagholder-model",
  "bagholder-net",

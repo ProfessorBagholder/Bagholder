@@ -391,3 +391,23 @@ fn a_cboe_canada_listing_with_no_trade_yet_stands_at_its_previous_close() {
     let q = &got[&id(2)];
     assert_eq!((q.price, q.change, q.change_pct, q.quoted_at), (Money::new(dec("7.24"), Currency::CAD), Some(Dec::ZERO), Some(Dec::ZERO), at));
 }
+
+/// Cboe Canada writes its decimals with Python's `str(Decimal)`, which turns a
+/// change of zero kept to twenty places into `0E-20`: an unchanged listing is read
+/// at its price, unmoved, never refused as a reply Bagholder cannot read.
+#[test]
+fn a_cboe_canada_decimal_in_exponent_form_is_read_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-28T20:30:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(2), InstrumentKind::Security.as_str(), Currency::CAD.as_str());
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(common::Recorded::new().with("https://www-api.cboe.com/ca/equities/securities-1/HBIX/quote/", 200, "cboe-canada", "quote-HBIX-unchanged-zero-in-exponent-form.json"));
+    let net = common::net(&recorded, "2026-09-28T20:30:00Z");
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    quotes::read_quotes(&ctx, &[listing(2, InstrumentKind::Security, Currency::CAD, "HBIX", Some("NEOE"))]).unwrap();
+    let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
+    let q = &got[&id(2)];
+    assert_eq!((q.price, q.change, q.change_pct, q.quoted_at), (Money::new(dec("7.23"), Currency::CAD), Some(Dec::ZERO), Some(Dec::ZERO), t("2026-09-28T20:00:00Z")));
+}
