@@ -119,6 +119,15 @@ impl<'a> Node<'a> {
         }
     }
 
+    /// A decimal written as text by a source whose printer switches to scientific
+    /// notation for some values (`"0E-20"`), read exactly (`Dec::parse_scientific`).
+    pub fn as_dec_text_scientific(&self) -> Read<Dec> {
+        match self.value {
+            Value::String(t) => Dec::parse_scientific(t).map_err(|e| self.mismatch(format!("{t:?} is not a decimal: {e}"))),
+            v => Err(self.mismatch(format!("expected a decimal written as text, found {}", v.kind()))),
+        }
+    }
+
     /// A decimal written as text by a source that writes more digits than a
     /// decimal holds: rounded once to fit (`Dec::parse_to_fit`).
     pub fn as_dec_text_to_fit(&self) -> Read<Dec> {
@@ -187,6 +196,14 @@ impl<'a> Node<'a> {
 
     pub fn dec_text(&self, key: &str) -> Read<Dec> {
         self.field(key)?.as_dec_text()
+    }
+
+    pub fn dec_text_scientific(&self, key: &str) -> Read<Dec> {
+        self.field(key)?.as_dec_text_scientific()
+    }
+
+    pub fn opt_dec_text_scientific(&self, key: &str) -> Read<Option<Dec>> {
+        self.present(key)?.map(|n| n.as_dec_text_scientific()).transpose()
     }
 
     pub fn dec_text_to_fit(&self, key: &str) -> Read<Dec> {

@@ -1,7 +1,9 @@
 //! Cboe Canada's quote for a listing on its own venue
 //! (`www-api.cboe.com/ca/equities/securities-1/<symbol>/quote/`): the last price
 //! at its `trade_time`, which carries its offset, and the day's change as stated.
-//! An unknown symbol answers 404 with a page, not data.
+//! An unknown symbol answers 404 with a page, not data. Its decimals are Python's
+//! `str(Decimal)`, which turns to scientific notation where it chooses (a zero change
+//! kept to twenty places is `0E-20`), so each is read as such.
 
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::json::Value;
@@ -54,11 +56,11 @@ pub fn parse(v: &Value, symbol: &str) -> Outcome<CboeAnswer> {
         // the listing named (`symb_name`), with no trade: the trade's own name, time and
         // price blank, the previous close standing
         if answered.is_empty() && d.text("trade_time")?.is_empty() && d.text("symb_name")?.eq_ignore_ascii_case(symbol) {
-            let last = d.dec_text("last")?;
+            let last = d.dec_text_scientific("last")?;
             if !last.is_zero() {
                 return Ok(Err(format!("{symbol} has a last price of {last} and no trade")));
             }
-            let prev_close = d.dec_text("prev_close")?;
+            let prev_close = d.dec_text_scientific("prev_close")?;
             if prev_close <= Dec::ZERO {
                 return Ok(Err(format!("{symbol}'s previous close is {prev_close}")));
             }
@@ -67,7 +69,7 @@ pub fn parse(v: &Value, symbol: &str) -> Outcome<CboeAnswer> {
         if !answered.eq_ignore_ascii_case(symbol) {
             return Ok(Err(format!("Cboe Canada answered {answered} for {symbol}")));
         }
-        let price = d.dec_text("last")?;
+        let price = d.dec_text_scientific("last")?;
         if price <= Dec::ZERO {
             return Ok(Err(format!("{symbol}'s last price is {price}")));
         }
@@ -75,7 +77,7 @@ pub fn parse(v: &Value, symbol: &str) -> Outcome<CboeAnswer> {
         let Some(at) = trade_time(time) else {
             return Ok(Err(format!("{symbol}'s trade time {time:?} is not an instant")));
         };
-        Ok(Ok(CboeAnswer::Traded(CboeQuote { price, at, change: d.opt_dec_text("change")?, change_pct: d.opt_dec_text("change_pct")? })))
+        Ok(Ok(CboeAnswer::Traded(CboeQuote { price, at, change: d.opt_dec_text_scientific("change")?, change_pct: d.opt_dec_text_scientific("change_pct")? })))
     };
     match read() {
         Ok(Ok(q)) => Outcome::Answered(q),
