@@ -136,7 +136,8 @@ impl bagholder_net::Transport for Shared {
 /// A network answered by `recorded`, on a clock set to `at`.
 pub fn net(recorded: &std::sync::Arc<Recorded>, at: &str) -> bagholder_net::Net {
     let clock = std::sync::Arc::new(bagholder_net::ManualClock::at(at.parse().unwrap()));
-    bagholder_net::Net::answered_by(clock, std::sync::Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(recorded.clone())))
+    // one run of the app across every instant a test asks at
+    bagholder_net::Net::answered_by(clock, std::sync::Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(recorded.clone()))).started_at(bagholder_core::jiff::Timestamp::MIN)
 }
 
 /// Put an instrument straight into the book's file, as a record would have: the

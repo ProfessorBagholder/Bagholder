@@ -62,6 +62,21 @@ impl OutcomeKind {
     pub fn is_failure(self) -> bool {
         matches!(self, OutcomeKind::Unreachable | OutcomeKind::Mismatch | OutcomeKind::Meaning)
     }
+
+    /// Whether this outcome is the reader's judgement of a reply (its shape or
+    /// what it says), which a later build's reader may judge otherwise: a
+    /// failure of this kind met before the running process started is not taken
+    /// as standing until the running reader has asked again.
+    pub fn judged_by_reader(self) -> bool {
+        matches!(self, OutcomeKind::Mismatch | OutcomeKind::Meaning)
+    }
+
+    /// Whether an outcome of this kind recorded `at` stands for the process
+    /// started at `started`: every outcome does, except a reader's judgement
+    /// from before it started.
+    pub fn stands(self, at: bagholder_core::jiff::Timestamp, started: bagholder_core::jiff::Timestamp) -> bool {
+        !(self.judged_by_reader() && at < started)
+    }
 }
 
 impl fmt::Display for OutcomeKind {

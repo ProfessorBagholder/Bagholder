@@ -184,7 +184,8 @@ fn failing_quotes(ctx: &Ctx) -> Result<Vec<InstrumentId>, String> {
         }
         let failed = ctx.cache.failures_in_a_row(&o.source, DataKind::Quote, Some(id)).map_err(e)?;
         let rest = SignedDuration::try_from(bagholder_sources::market::grown_rest(ctx.net.limiter().pace(&o.host).rest, failed)).map_err(|e| e.to_string())?;
-        if o.at + rest <= ctx.now {
+        // a reader's judgement from before this run is asked again at once
+        if o.at + rest <= ctx.now || !o.outcome.stands(o.at, ctx.net.started()) {
             out.push(id);
         }
     }
@@ -320,7 +321,8 @@ fn rest_ends(ctx: &Ctx, now: Timestamp) -> Result<Vec<Timestamp>, String> {
                 continue;
             }
             let key = (o.host.clone(), o.kind.as_str().to_string(), o.instrument.map(|i| i.to_string()).unwrap_or_default());
-            let failed = o.outcome.is_failure() || o.outcome == OutcomeKind::Refused;
+            // a reader's judgement from before this run rests no longer
+            let failed = (o.outcome.is_failure() || o.outcome == OutcomeKind::Refused) && o.outcome.stands(o.at, ctx.net.started());
             let e = streaks.entry(key).or_insert((o.at, 0, !failed));
             // newest first: count failures until the first answer
             if !e.2 {
@@ -410,7 +412,7 @@ mod tests {
         cache.record(&row("two", watched, OutcomeKind::Unreachable, long_ago)).unwrap();
         assert_eq!(ids(&demand(&app, &ctx, &held).unwrap()), BTreeSet::from([held[0].id, watched]), "each failing quote, its rest over");
         // within its rest a failure is not asked again; an answer since ends it
-        cache.record(&row("one", held[0].id, OutcomeKind::Meaning, now)).unwrap();
+        cache.record(&row("one", held[0].id, OutcomeKind::Unreachable, now)).unwrap();
         cache.record(&row("two", watched, OutcomeKind::Answered, now)).unwrap();
         assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "one resting, one answered: nothing quoted");
     }

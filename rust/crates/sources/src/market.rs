@@ -92,9 +92,10 @@ pub fn grown_rest(rest: Duration, failed: u32) -> Duration {
 }
 
 /// Whether the newest read failed within its source's rest: a failure is asked
-/// again on the source's own rest, never in a loop.
-pub fn resting(reads: &[ReadRow], now: Timestamp, rest: Duration) -> bool {
-    reads.first().is_some_and(|r| (r.outcome.is_failure() || r.outcome == OutcomeKind::Refused) && now < r.at + SignedDuration::try_from(rest).unwrap_or(SignedDuration::ZERO))
+/// again on the source's own rest, never in a loop. A reader's judgement from
+/// before the process `started` rests no longer: the running reader asks again.
+pub fn resting(reads: &[ReadRow], now: Timestamp, rest: Duration, started: Timestamp) -> bool {
+    reads.first().is_some_and(|r| (r.outcome.is_failure() || r.outcome == OutcomeKind::Refused) && r.outcome.stands(r.at, started) && now < r.at + SignedDuration::try_from(rest).unwrap_or(SignedDuration::ZERO))
 }
 
 /// Whether a read made after `d` settled covered it: its source answered through
@@ -116,8 +117,8 @@ pub(crate) fn settled_by_read(reads: &[ReadRow], market: Market, d: Date, now: T
 /// settled. A day the source answered with no value (a holiday) is covered by
 /// that read and not asked again; a day after the last one a read held is not
 /// known yet and stays due.
-pub fn due_span(market: Market, from: Date, to: Date, state: &CloseState, now: Timestamp, bank: &TimeZone, rest: Duration) -> Option<(Date, Date)> {
-    if resting(&state.reads, now, rest) {
+pub fn due_span(market: Market, from: Date, to: Date, state: &CloseState, now: Timestamp, bank: &TimeZone, rest: Duration, started: Timestamp) -> Option<(Date, Date)> {
+    if resting(&state.reads, now, rest, started) {
         return None;
     }
     let latest = latest_settled(market, to, now, bank)?;
@@ -134,8 +135,8 @@ pub fn due_span(market: Market, from: Date, to: Date, state: &CloseState, now: T
 }
 
 /// The span of closes due for one need, if any.
-pub fn due_close(need: &CloseNeed, market: Market, state: &CloseState, now: Timestamp, bank: &TimeZone, rest: Duration) -> Option<(Date, Date)> {
-    due_span(market, need.from, need.to, state, now, bank, rest)
+pub fn due_close(need: &CloseNeed, market: Market, state: &CloseState, now: Timestamp, bank: &TimeZone, rest: Duration, started: Timestamp) -> Option<(Date, Date)> {
+    due_span(market, need.from, need.to, state, now, bank, rest, started)
 }
 
 /// Keep one read of a subject: an answer settles from the first day asked to the
@@ -226,7 +227,7 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
             _ => Via::Yahoo,
         };
         let state = CloseState { days: ctx.cache.close_days(id)?, reads: ctx.cache.reads(&subject, DataKind::DailyClose)? };
-        let Some((from, to)) = due_close(need, market, &state, ctx.now, ctx.bank, rest_of(ctx, first.host())) else { continue };
+        let Some((from, to)) = due_close(need, market, &state, ctx.now, ctx.bank, rest_of(ctx, first.host()), ctx.net.started()) else { continue };
         // the chain in order: a coin's Exchange pairs, then the same pairs on
         // Yahoo; a listing's Yahoo forms; the winner first
         let mut chain: Vec<(Via, String)> = match market {
@@ -332,7 +333,7 @@ pub fn read_benchmark(ctx: &Ctx, b: Benchmark, from: Date, to: Date) -> Result<(
     let source = yahoo::source();
     let (symbol, currency) = b.tracker();
     let state = benchmark_state(ctx, b)?;
-    let Some((first, last)) = due_span(b.market(), from, to, &state, ctx.now, ctx.bank, rest_of(ctx, yahoo::HOST)) else { return Ok(()) };
+    let Some((first, last)) = due_span(b.market(), from, to, &state, ctx.now, ctx.bank, rest_of(ctx, yahoo::HOST), ctx.net.started()) else { return Ok(()) };
     let mut noted = yahoo::ask_span(ctx.net, symbol, first, last, ctx.now);
     if let Outcome::Answered(c) = &noted.outcome {
         if c.currency != currency {
@@ -357,4 +358,30 @@ pub fn read_benchmark(ctx: &Ctx, b: Benchmark, from: Date, to: Date) -> Result<(
     }
     keep_read(ctx, b.key(), DataKind::Benchmark, &source, (first, last), kind, held_last)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(s: &str) -> Timestamp {
+        s.parse().unwrap()
+    }
+
+    /// A reader's judgement from before the run started rests no longer; the
+    /// source's own failures keep their rest across a start.
+    #[test]
+    fn a_readers_judgement_from_an_earlier_run_does_not_rest() {
+        let started = t("2026-09-24T12:00:00Z");
+        let read = |outcome, at: &str| vec![ReadRow { source: bagholder_core::SourceName::named("s"), first: t(at).to_zoned(TimeZone::UTC).date(), last: t(at).to_zoned(TimeZone::UTC).date(), outcome, at: t(at) }];
+        let rest = Duration::from_secs(3600);
+        let now = t("2026-09-24T12:00:01Z");
+        for judged in [OutcomeKind::Mismatch, OutcomeKind::Meaning] {
+            assert!(!resting(&read(judged, "2026-09-24T11:30:00Z"), now, rest, started));
+            assert!(resting(&read(judged, "2026-09-24T12:00:00Z"), now, rest, started));
+        }
+        for own in [OutcomeKind::Unreachable, OutcomeKind::Refused] {
+            assert!(resting(&read(own, "2026-09-24T11:30:00Z"), now, rest, started));
+        }
+    }
 }

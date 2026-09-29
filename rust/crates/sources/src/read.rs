@@ -68,7 +68,7 @@ impl Ctx<'_> {
         // the rest grows with each failure in a row of this subject's source
         let instrument = InstrumentId::parse(subject).ok();
         let failed = self.cache.failures_in_a_row(&newest.source, kind, instrument)?;
-        Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed)))
+        Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed), self.net.started()))
     }
 
     /// Whether `source`'s newest read of `subject`'s `kind` failed and its rest
@@ -82,7 +82,7 @@ impl Ctx<'_> {
         }
         let instrument = InstrumentId::parse(subject).ok();
         let failed = self.cache.failures_in_a_row(source, kind, instrument)?;
-        Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed)))
+        Ok(crate::market::resting(&reads, self.now, crate::market::grown_rest(self.net.limiter().pace(host).rest, failed), self.net.started()))
     }
 
     /// Keep that `subject`'s `kind` was read today, and how it ended: what

@@ -59,7 +59,7 @@ const REST: Duration = Duration::from_secs(600);
 #[test]
 fn a_listings_close_is_due_once_its_session_has_settled() {
     let n = need(listing(1, InstrumentKind::Security, Currency::USD, "SPY", Some("ARCX")), date(2026, 9, 1), date(2026, 9, 23));
-    let due = |state: &CloseState, now: &str| market::due_close(&n, Market::UnitedStates, state, t(now), &eastern(), REST);
+    let due = |state: &CloseState, now: &str| market::due_close(&n, Market::UnitedStates, state, t(now), &eastern(), REST, Timestamp::MIN);
     let none = CloseState::default();
     // 16:00 Eastern on the 23rd: the 22nd has settled, the 23rd has not
     assert_eq!(due(&none, "2026-09-23T20:00:00Z"), Some((date(2026, 9, 1), date(2026, 9, 22))));
@@ -85,7 +85,7 @@ fn a_listings_close_is_due_once_its_session_has_settled() {
 #[test]
 fn a_holiday_is_asked_once_and_a_day_a_source_has_not_posted_stays_due() {
     let labour = need(listing(1, InstrumentKind::Security, Currency::USD, "SPY", Some("ARCX")), date(2026, 9, 1), date(2026, 9, 8));
-    let due = |state: &CloseState, now: &str| market::due_close(&labour, Market::UnitedStates, state, t(now), &eastern(), REST);
+    let due = |state: &CloseState, now: &str| market::due_close(&labour, Market::UnitedStates, state, t(now), &eastern(), REST, Timestamp::MIN);
     // asked the evening of Labour Day: the read held Friday the 4th last, so the
     // 7th is not settled by it, and is asked with the 8th once that settles
     let friday = CloseState { days: days(date(2026, 9, 1), date(2026, 9, 4)), reads: vec![read(date(2026, 9, 1), date(2026, 9, 4), OutcomeKind::Answered, "2026-09-07T21:00:00Z")] };
@@ -100,8 +100,8 @@ fn a_holiday_is_asked_once_and_a_day_a_source_has_not_posted_stays_due() {
 fn a_coins_day_settles_at_the_end_of_the_utc_day_every_day() {
     let n = need(listing(2, InstrumentKind::Crypto, Currency::CAD, "BTC", None), date(2026, 9, 19), date(2026, 9, 21));
     let none = CloseState::default();
-    assert_eq!(market::due_close(&n, Market::Crypto, &none, t("2026-09-21T23:59:00Z"), &eastern(), REST), Some((date(2026, 9, 19), date(2026, 9, 20))));
-    assert_eq!(market::due_close(&n, Market::Crypto, &none, t("2026-09-22T00:00:00Z"), &eastern(), REST), Some((date(2026, 9, 19), date(2026, 9, 21))));
+    assert_eq!(market::due_close(&n, Market::Crypto, &none, t("2026-09-21T23:59:00Z"), &eastern(), REST, Timestamp::MIN), Some((date(2026, 9, 19), date(2026, 9, 20))));
+    assert_eq!(market::due_close(&n, Market::Crypto, &none, t("2026-09-22T00:00:00Z"), &eastern(), REST, Timestamp::MIN), Some((date(2026, 9, 19), date(2026, 9, 21))));
     // the pairs: its own market first, then its USD market
     assert_eq!(market::coin_pairs(&n.listing), vec!["BTC-CAD".to_string(), "BTC-USD".to_string()]);
 }
@@ -270,8 +270,8 @@ fn a_benchmark_reaches_back_when_the_oldest_day_moves_earlier() {
     // levels stored from 2022 by a read after they settled; then trades from 2015 arrive
     let state = CloseState { days: days(date(2022, 1, 3), date(2026, 9, 23)), reads: vec![read(date(2022, 1, 3), date(2026, 9, 23), OutcomeKind::Answered, "2026-09-23T21:00:00Z")] };
     let now = t("2026-09-24T12:00:00Z");
-    assert_eq!(market::due_span(Market::Canada, date(2022, 1, 3), date(2026, 9, 24), &state, now, &eastern(), REST), None);
-    assert_eq!(market::due_span(Market::Canada, date(2015, 6, 1), date(2026, 9, 24), &state, now, &eastern(), REST), Some((date(2015, 6, 1), date(2021, 12, 31))));
+    assert_eq!(market::due_span(Market::Canada, date(2022, 1, 3), date(2026, 9, 24), &state, now, &eastern(), REST, Timestamp::MIN), None);
+    assert_eq!(market::due_span(Market::Canada, date(2015, 6, 1), date(2026, 9, 24), &state, now, &eastern(), REST, Timestamp::MIN), Some((date(2015, 6, 1), date(2021, 12, 31))));
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn each_tracker_is_read_with_its_dividends_once_its_sessions_settle() {
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
     let zone = eastern();
     let state = |b: Benchmark| CloseState { days: cache.benchmark_days(b).unwrap(), reads: cache.reads(b.key(), DataKind::Benchmark).unwrap() };
-    let due = |b: Benchmark, now: &str| market::due_span(b.market(), date(2025, 9, 22), date(2026, 9, 24), &state(b), t(now), &zone, REST);
+    let due = |b: Benchmark, now: &str| market::due_span(b.market(), date(2025, 9, 22), date(2026, 9, 24), &state(b), t(now), &zone, REST, Timestamp::MIN);
     // nothing stored: at 16:29 Eastern on Wednesday the 23rd the days to the 22nd are due, at 16:30 the 23rd too
     for b in Benchmark::ALL {
         assert_eq!(due(b, "2026-09-23T20:29:59Z"), Some((date(2025, 9, 22), date(2026, 9, 22))), "{b:?}");
