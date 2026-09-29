@@ -117,6 +117,9 @@ pub trait Transport: Send + Sync {
 /// The network as the sources see it.
 pub struct Net {
     clock: Arc<dyn Clock>,
+    /// When this network was made, as its clock said: the start of the process
+    /// that asks through it.
+    started: jiff::Timestamp,
     limiter: Arc<Limiter>,
     browser: Mutex<Option<browser::Session>>,
     replaced: Option<Box<dyn Transport>>,
@@ -124,12 +127,27 @@ pub struct Net {
 
 impl Net {
     pub fn new(clock: Arc<dyn Clock>, limiter: Arc<Limiter>) -> Net {
-        Net { clock, limiter, browser: Mutex::new(None), replaced: None }
+        let started = clock.now();
+        Net { clock, started, limiter, browser: Mutex::new(None), replaced: None }
     }
 
     /// A network whose every request is answered by `transport`.
     pub fn answered_by(clock: Arc<dyn Clock>, limiter: Arc<Limiter>, transport: Box<dyn Transport>) -> Net {
-        Net { clock, limiter, browser: Mutex::new(None), replaced: Some(transport) }
+        let started = clock.now();
+        Net { clock, started, limiter, browser: Mutex::new(None), replaced: Some(transport) }
+    }
+
+    /// When this network was made: an outcome recorded before it was met by an
+    /// earlier run of the app, and so perhaps by another build's readers.
+    pub fn started(&self) -> jiff::Timestamp {
+        self.started
+    }
+
+    /// The same network, taken to have been made at `started`: a test's run of
+    /// the app that began before the instants it asks at.
+    pub fn started_at(mut self, started: jiff::Timestamp) -> Net {
+        self.started = started;
+        self
     }
 
     pub fn clock(&self) -> &dyn Clock {

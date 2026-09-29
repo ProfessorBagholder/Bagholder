@@ -125,11 +125,13 @@ pub fn label(source: &SourceName) -> &str {
 /// hides it. A failure the source has not been asked again for while it answered
 /// other requests for longer than the longest rest is no longer asked for (every
 /// failure a reader still needs is asked again within that rest), and is not said.
-pub fn failures(newest_by_subject: &[OutcomeRow]) -> Vec<String> {
+/// Nor is a reader's judgement from before the process `started`: an earlier
+/// build's reader may have made it, and the running one asks again at once.
+pub fn failures(newest_by_subject: &[OutcomeRow], started: Timestamp) -> Vec<String> {
     let longest = SignedDuration::try_from(crate::market::LONGEST_REST).unwrap_or(SignedDuration::ZERO);
     let mut out: Vec<(SourceName, &OutcomeRow)> = Vec::new();
     for o in newest_by_subject {
-        if failure(o).is_none() {
+        if failure(o).is_none() || !o.outcome.stands(o.at, started) {
             continue;
         }
         let answered_since = newest_by_subject.iter().filter(|a| a.source == o.source && a.outcome == OutcomeKind::Answered).map(|a| a.at).max();
@@ -264,7 +266,7 @@ mod tests {
         // one sentence per failing source, in the order given; an answering one says nothing
         let (a, b, c) = (LABELS[0].0, LABELS[1].0, LABELS[2].0);
         let newest = [outcome_row(a, &Outcome::<()>::Unreachable("reset".into())), outcome_row(b, &Outcome::Answered(())), outcome_row::<()>(c, &Outcome::Refused { status: Some(429), retry_after: None })];
-        assert_eq!(failures(&newest), vec![format!("{} could not be reached.", LABELS[0].1), format!("{} refused the request (too many).", LABELS[2].1)]);
+        assert_eq!(failures(&newest, Timestamp::MIN), vec![format!("{} could not be reached.", LABELS[0].1), format!("{} refused the request (too many).", LABELS[2].1)]);
     }
 
     /// Each subject's failure stands until that subject answers: another subject
@@ -279,14 +281,31 @@ mod tests {
         let failed = subject(1, &Outcome::Meaning("a repeated day".into()), "2026-09-24T11:00:00Z");
         let said = vec![format!("{} answered with data that cannot be right.", LABELS[0].1)];
         // another subject answered after it: still said
-        assert_eq!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T11:05:00Z"), failed.clone()]), said);
+        assert_eq!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T11:05:00Z"), failed.clone()], Timestamp::MIN), said);
         // its own subject answered: that row is the subject's newest, nothing said
-        assert!(failures(&[subject(1, &Outcome::Answered(()), "2026-09-24T11:05:00Z")]).is_empty());
+        assert!(failures(&[subject(1, &Outcome::Answered(()), "2026-09-24T11:05:00Z")], Timestamp::MIN).is_empty());
         // the source answering others for past the longest rest: no longer asked for
-        assert_eq!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T17:00:00Z"), failed.clone()]), said);
-        assert!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T17:00:01Z"), failed.clone()]).is_empty());
+        assert_eq!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T17:00:00Z"), failed.clone()], Timestamp::MIN), said);
+        assert!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T17:00:01Z"), failed.clone()], Timestamp::MIN).is_empty());
         // two failing subjects: one sentence, the newer's
         let refused = subject(3, &Outcome::Refused { status: Some(429), retry_after: None }, "2026-09-24T11:10:00Z");
-        assert_eq!(failures(&[failed, refused]), vec![format!("{} refused the request (too many).", LABELS[0].1)]);
+        assert_eq!(failures(&[failed, refused], Timestamp::MIN), vec![format!("{} refused the request (too many).", LABELS[0].1)]);
+    }
+
+    /// A reader's judgement (a mismatch, a meaning failure) made before the
+    /// process started may be an earlier build's: it is not said until the
+    /// running reader asks again. The source's own failures stand across a start.
+    #[test]
+    fn a_readers_judgement_from_before_the_start_is_not_said() {
+        use crate::outcome::Outcome;
+        let name = LABELS[0].0;
+        let started = at("2026-09-24T12:00:00Z");
+        let row = |o: &Outcome<()>, when: &str| OutcomeRow { at: at(when), ..outcome_row(name, o) };
+        for judged in [Outcome::Meaning("a repeated day".into()), Outcome::Mismatch(crate::reply::Mismatch { path: "a".into(), why: "b".into() })] {
+            assert!(failures(&[row(&judged, "2026-09-24T11:59:59Z")], started).is_empty());
+            assert_eq!(failures(&[row(&judged, "2026-09-24T12:00:00Z")], started).len(), 1, "met by the running reader");
+        }
+        assert_eq!(failures(&[row(&Outcome::Unreachable("reset".into()), "2026-09-24T11:00:00Z")], started), vec![format!("{} could not be reached.", LABELS[0].1)]);
+        assert_eq!(failures(&[row(&Outcome::Refused { status: Some(429), retry_after: None }, "2026-09-24T11:00:00Z")], started).len(), 1);
     }
 }

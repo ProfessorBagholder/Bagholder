@@ -230,14 +230,14 @@ impl Figures {
     /// Each market source failing now, one sentence each (`health::failures`):
     /// read from what the cache recorded of each source, the one record of
     /// them, so a failure shows exactly until its own subject next answers.
-    pub fn source_failures(&self) -> Result<Vec<String>, String> {
+    pub fn source_failures(&self, started: Timestamp) -> Result<Vec<String>, String> {
         let mut conn = self.failures_conn.lock().unwrap_or_else(|e| e.into_inner());
         if conn.is_none() {
             // only read on: it has nothing of its own to be heard
             *conn = Some(MarketCache::open(&self.home.join(CACHE_FILE), crate::app::APP_VERSION, Timestamp::now()).map_err(err)?.0);
         }
         let newest = conn.as_ref().expect("opened above").newest_counted_by_subject().map_err(err)?;
-        Ok(bagholder_sources::health::failures(&newest))
+        Ok(bagholder_sources::health::failures(&newest, started))
     }
 
     /// Read the engine, once it is built.

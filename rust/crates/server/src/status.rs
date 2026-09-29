@@ -89,7 +89,7 @@ pub fn status(app: &Arc<App>) -> Status {
     let can_update = update::can_update(app, &upd);
     let off = update::updates_off();
     let mut sources = unread;
-    sources.extend(app.figures.get().map(|f| f.source_failures().unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default());
+    sources.extend(app.figures.get().map(|f| f.source_failures(app.net.started()).unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default());
     sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));

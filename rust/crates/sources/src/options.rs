@@ -128,7 +128,7 @@ pub fn read(ctx: &Ctx, shown: &[ContractNeed]) -> Result<()> {
         let held = ctx.cache.option_chain(symbol)?;
         // a failed read waits out the source's rest, whatever is shown
         let subject = format!("chain:{symbol}");
-        if resting(&ctx.cache.reads(&subject, DataKind::Quote)?, ctx.now, ctx.net.limiter().pace(HOST).rest) {
+        if resting(&ctx.cache.reads(&subject, DataKind::Quote)?, ctx.now, ctx.net.limiter().pace(HOST).rest, ctx.net.started()) {
             continue;
         }
         // a contract shown for the first time needs the chain whatever its age
