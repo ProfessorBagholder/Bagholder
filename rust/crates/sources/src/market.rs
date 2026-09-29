@@ -76,12 +76,15 @@ pub struct CloseState {
     pub reads: Vec<ReadRow>,
 }
 
+/// The longest rest a failure is given before it is asked again.
+pub const LONGEST_REST: Duration = Duration::from_secs(6 * 3600);
+
 /// The rest after `failed` failures in a row of one source: its own rest after
 /// the first, twice as long after each one after it, and six hours at most. A
 /// source that answers wrongly (a date ten years out) does not mend in a minute,
 /// and is not asked again every minute for as long as it is wrong.
 pub fn grown_rest(rest: Duration, failed: u32) -> Duration {
-    const MOST: Duration = Duration::from_secs(6 * 3600);
+    const MOST: Duration = LONGEST_REST;
     if failed <= 1 {
         return rest.min(MOST);
     }

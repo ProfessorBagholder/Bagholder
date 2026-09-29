@@ -512,7 +512,8 @@ impl MarketCache {
     // -- outcomes --------------------------------------------------------------
 
     /// Record one request's outcome, and keep the source's newest thousand
-    /// outcomes and the newest of each kind.
+    /// outcomes, the newest of each kind and the newest of each subject (what a
+    /// failure in the header stands on until that subject answers).
     pub fn record(&self, row: &OutcomeRow) -> Result<()> {
         // a request the process was told not to make asked nothing: it is no
         // outcome of the source's, and saying it failed would be untrue
@@ -527,7 +528,8 @@ impl MarketCache {
             self.conn.execute(
                 "DELETE FROM outcomes WHERE source = ?1
                    AND id NOT IN (SELECT id FROM outcomes WHERE source = ?1 ORDER BY id DESC LIMIT ?2)
-                   AND id NOT IN (SELECT MAX(id) FROM outcomes WHERE source = ?1 GROUP BY outcome)",
+                   AND id NOT IN (SELECT MAX(id) FROM outcomes WHERE source = ?1 GROUP BY outcome)
+                   AND id NOT IN (SELECT MAX(id) FROM outcomes WHERE source = ?1 GROUP BY host, kind, instrument_id)",
                 params![row.source.as_str(), OUTCOMES_KEPT],
             )?;
             Ok(())
@@ -540,14 +542,13 @@ impl MarketCache {
         self.outcome_rows("SELECT source, host, kind, instrument_id, outcome, detail, shape_change, at FROM outcomes WHERE source = ?1 ORDER BY id DESC", params![of.as_str()])
     }
 
-    /// Each source's newest outcome that says how the source is, one per
-    /// source: a "not carried" answer says nothing of it and is passed over
-    /// (`health`). The record keeps the newest of each kind, so this is there
-    /// for every source that has answered or failed.
-    pub fn newest_counted(&self) -> Result<Vec<OutcomeRow>> {
+    /// The newest outcome that says how the source is of each subject each source
+    /// was asked (its host, the kind of data, the instrument): the header's
+    /// failures, each standing until its own subject next answers (`health::failures`).
+    pub fn newest_counted_by_subject(&self) -> Result<Vec<OutcomeRow>> {
         self.outcome_rows(
             "SELECT source, host, kind, instrument_id, outcome, detail, shape_change, at FROM outcomes
-              WHERE id IN (SELECT MAX(id) FROM outcomes WHERE outcome != ?1 GROUP BY source) ORDER BY source",
+              WHERE id IN (SELECT MAX(id) FROM outcomes WHERE outcome != ?1 GROUP BY source, host, kind, instrument_id) ORDER BY source, id DESC",
             params![OutcomeKind::NotCarried.as_str()],
         )
     }

@@ -233,8 +233,15 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
         if values.len() != stamps.len() {
             return Ok(Err(format!("{symbol}'s chart has {} times and {} closes", stamps.len(), values.len())));
         }
+        // Yahoo ends the series with the live price, stamped at the last trade
+        // (`regularMarketTime`), after the bars, which are stamped at their session's
+        // start: that point is the quote, never a day's bar. It can fall on the last
+        // bar's day (a future's evening session) or on a day with no session (a
+        // currency on a Saturday).
+        let live = stamps.last().map(|t| t.as_int()).transpose()?.is_some_and(|t| t == at.as_second() && t != period_start.as_second());
+        let bars = if live { stamps.len() - 1 } else { stamps.len() };
         let mut last: Option<Date> = None;
-        for (t, c) in stamps.iter().zip(&values) {
+        for (t, c) in stamps.iter().zip(&values).take(bars) {
             let d = day_of(instant(t.as_int()?, t.path())?);
             if last.is_some_and(|l| d <= l) {
                 return Ok(Err(format!("{symbol}'s chart repeats or reorders {d}")));

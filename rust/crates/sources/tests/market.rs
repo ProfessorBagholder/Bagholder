@@ -254,3 +254,24 @@ fn an_ambiguous_schedule_word_is_not_read() {
     // every two months, or twice a month: not read until a reply settles it
     assert_eq!(tmx::per_year("Bi-Monthly"), None);
 }
+
+/// Yahoo ends a chart with the live price, stamped at the last trade: never a bar.
+/// A future's evening session puts it on the last bar's day, which a reader of
+/// bars alone refused as a repeated day; a currency's weekend price puts it on a
+/// day with no session, which would be a close no session made.
+#[test]
+fn the_charts_last_point_is_the_live_price_and_no_bar() {
+    for name in ["ES=F-range-1d-evening-session.json", "ES=F-2026-09-21-2026-09-29-evening-session.json"] {
+        // before the day's regular end: the day's bar is not closed yet
+        let c = chart(name, "ES=F", "2026-09-29T02:30:00Z");
+        assert_eq!(close(&c, date(2026, 9, 28)), None, "{name}");
+        assert_eq!(c.quote.price, dec("7737.25"), "{name}: the live point is the quote");
+        // once it ends, the day's close is its bar's, never the evening session's price
+        let c = chart(name, "ES=F", "2026-09-29T05:00:00Z");
+        assert_eq!(close(&c, date(2026, 9, 28)), Some(dec("7746.75")), "{name}");
+    }
+    let span = chart("ES=F-2026-09-21-2026-09-29-evening-session.json", "ES=F", "2026-09-29T05:00:00Z");
+    assert_eq!(span.closes.len(), 6);
+    let cad = chart("CAD=X-range-1d.json", "CAD=X", "2026-09-28T12:00:00Z");
+    assert_eq!(close(&cad, date(2026, 9, 26)), None, "a Saturday has no close");
+}

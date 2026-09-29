@@ -119,10 +119,30 @@ pub fn label(source: &SourceName) -> &str {
 }
 
 /// Each source failing now, in plain words, one sentence each, in the order
-/// given: a source whose newest counted outcome (`MarketCache::newest_counted`)
-/// is a refusal or a failure. It stays failing until that source next answers.
-pub fn failures(newest: &[OutcomeRow]) -> Vec<String> {
-    newest.iter().filter_map(failure).collect()
+/// given: a source with a subject (`MarketCache::newest_counted_by_subject`) whose
+/// newest counted outcome is a refusal or a failure, said as the newest such. Each
+/// stands until its own subject next answers, so another subject's answer never
+/// hides it. A failure the source has not been asked again for while it answered
+/// other requests for longer than the longest rest is no longer asked for (every
+/// failure a reader still needs is asked again within that rest), and is not said.
+pub fn failures(newest_by_subject: &[OutcomeRow]) -> Vec<String> {
+    let longest = SignedDuration::try_from(crate::market::LONGEST_REST).unwrap_or(SignedDuration::ZERO);
+    let mut out: Vec<(SourceName, &OutcomeRow)> = Vec::new();
+    for o in newest_by_subject {
+        if failure(o).is_none() {
+            continue;
+        }
+        let answered_since = newest_by_subject.iter().filter(|a| a.source == o.source && a.outcome == OutcomeKind::Answered).map(|a| a.at).max();
+        if answered_since.is_some_and(|a| a > o.at + longest) {
+            continue;
+        }
+        match out.iter_mut().find(|(s, _)| *s == o.source) {
+            Some((_, said)) if o.at > said.at => *said = o,
+            Some(_) => {}
+            None => out.push((o.source.clone(), o)),
+        }
+    }
+    out.into_iter().filter_map(|(_, o)| failure(o)).collect()
 }
 
 /// A failed outcome as one sentence naming the source and what failed, in the
@@ -245,5 +265,28 @@ mod tests {
         let (a, b, c) = (LABELS[0].0, LABELS[1].0, LABELS[2].0);
         let newest = [outcome_row(a, &Outcome::<()>::Unreachable("reset".into())), outcome_row(b, &Outcome::Answered(())), outcome_row::<()>(c, &Outcome::Refused { status: Some(429), retry_after: None })];
         assert_eq!(failures(&newest), vec![format!("{} could not be reached.", LABELS[0].1), format!("{} refused the request (too many).", LABELS[2].1)]);
+    }
+
+    /// Each subject's failure stands until that subject answers: another subject
+    /// of the same source answering after it never hides it. One the source has
+    /// not been asked again for past the longest rest while answering others is
+    /// no longer asked for, and is not said.
+    #[test]
+    fn a_failure_stands_until_its_own_subject_answers() {
+        use crate::outcome::Outcome;
+        let name = LABELS[0].0;
+        let subject = |n: u8, o: &Outcome<()>, when: &str| OutcomeRow { instrument: Some(bagholder_core::InstrumentId::parse(&format!("{n:08x}-0000-7000-8000-000000000000")).unwrap()), at: at(when), ..outcome_row(name, o) };
+        let failed = subject(1, &Outcome::Meaning("a repeated day".into()), "2026-09-24T11:00:00Z");
+        let said = vec![format!("{} answered with data that cannot be right.", LABELS[0].1)];
+        // another subject answered after it: still said
+        assert_eq!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T11:05:00Z"), failed.clone()]), said);
+        // its own subject answered: that row is the subject's newest, nothing said
+        assert!(failures(&[subject(1, &Outcome::Answered(()), "2026-09-24T11:05:00Z")]).is_empty());
+        // the source answering others for past the longest rest: no longer asked for
+        assert_eq!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T17:00:00Z"), failed.clone()]), said);
+        assert!(failures(&[subject(2, &Outcome::Answered(()), "2026-09-24T17:00:01Z"), failed.clone()]).is_empty());
+        // two failing subjects: one sentence, the newer's
+        let refused = subject(3, &Outcome::Refused { status: Some(429), retry_after: None }, "2026-09-24T11:10:00Z");
+        assert_eq!(failures(&[failed, refused]), vec![format!("{} refused the request (too many).", LABELS[0].1)]);
     }
 }

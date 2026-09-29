@@ -141,8 +141,8 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
 }
 
 /// What is quoted now: what is held while a page shows a holding's price, what
-/// is followed while a page shows the Markets tab, and, page or none, a quote the
-/// header says its source is failing on, once that source's rest ends: the
+/// is followed while a page shows the Markets tab, and, page or none, each quote
+/// whose newest read failed, once that source's rest ends: the
 /// failure is asked again as `next_due` promises, so the header never goes on
 /// stating a failure the running reader has not met (a reader fixed since, a
 /// source back since).
@@ -171,13 +171,13 @@ fn demand(app: &App, ctx: &Ctx, held: &[bagholder_sources::contract::Listing]) -
     Ok(quoting)
 }
 
-/// The instruments whose quote is the newest outcome of a source the header
-/// states as failing (`health::failures`), that source's rest over.
+/// The instruments whose quote's newest outcome failed (what the header states,
+/// `health::failures`), that source's rest over.
 fn failing_quotes(ctx: &Ctx) -> Result<Vec<InstrumentId>, String> {
     use bagholder_sources::contract::DataKind;
     let e = |e: bagholder_sources::cache::CacheError| e.to_string();
     let mut out = Vec::new();
-    for o in ctx.cache.newest_counted().map_err(e)? {
+    for o in ctx.cache.newest_counted_by_subject().map_err(e)? {
         let (DataKind::Quote, Some(id)) = (o.kind, o.instrument) else { continue };
         if bagholder_sources::health::failure(&o).is_none() {
             continue;

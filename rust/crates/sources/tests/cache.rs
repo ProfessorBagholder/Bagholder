@@ -208,10 +208,18 @@ fn a_thousand_quote_outcomes_do_not_evict_the_banks_last() {
     assert_eq!(health::last_of_each(&tmx)[&OutcomeKind::Mismatch].at, t("2026-09-01T21:00:00Z"));
     assert_eq!(health::state(&bank, t("2026-09-24T00:00:00Z")), State::Working);
     assert_eq!(c.sources().unwrap().len(), 2);
+    // and each subject's newest: a failure stands on it until that subject answers
+    let other = OutcomeRow { instrument: Some(id(2)), ..outcome("tmx", OutcomeKind::Meaning, t("2026-09-01T22:00:00Z")) };
+    c.record(&other).unwrap();
+    for n in 0..1200 {
+        c.record(&outcome("tmx", OutcomeKind::Answered, start + Duration::from_secs(2000 + n))).unwrap();
+    }
+    let by_subject = c.newest_counted_by_subject().unwrap();
+    assert!(by_subject.iter().any(|o| o.instrument == Some(id(2)) && o.outcome == OutcomeKind::Meaning));
 }
 
 #[test]
-fn each_sources_newest_counted_outcome_is_the_one_that_says_how_it_is() {
+fn each_subjects_newest_counted_outcome_is_the_one_that_says_how_it_is() {
     let (_d, c) = open();
     let at = |n: u64| t("2026-09-24T12:00:00Z") + Duration::from_secs(n);
     // every outcome that says how a source is, followed by one that does not
@@ -221,12 +229,14 @@ fn each_sources_newest_counted_outcome_is_the_one_that_says_how_it_is() {
         c.record(&outcome("a", kind, at(n + 1))).unwrap();
         c.record(&outcome("a", OutcomeKind::NotCarried, at(n + 2))).unwrap();
         c.record(&outcome("b", OutcomeKind::Unreachable, at(n + 3))).unwrap();
-        let newest: Vec<_> = c.newest_counted().unwrap().into_iter().map(|o| (o.source.as_str().to_string(), o.outcome, o.at)).collect();
-        assert_eq!(newest, vec![("a".to_string(), kind, at(n + 1)), ("b".to_string(), OutcomeKind::Unreachable, at(n + 3))]);
+        c.record(&OutcomeRow { instrument: Some(id(2)), ..outcome("a", OutcomeKind::Unreachable, at(n + 4)) }).unwrap();
+        let newest: Vec<_> = c.newest_counted_by_subject().unwrap().into_iter().map(|o| (o.source.as_str().to_string(), o.instrument, o.outcome, o.at)).collect();
+        // one per subject: each source's subjects newest first
+        assert_eq!(newest, vec![("a".to_string(), Some(id(2)), OutcomeKind::Unreachable, at(n + 4)), ("a".to_string(), Some(id(1)), kind, at(n + 1)), ("b".to_string(), Some(id(1)), OutcomeKind::Unreachable, at(n + 3))]);
     }
     // a source that has only said it does not carry something says nothing of itself
     c.record(&outcome("c", OutcomeKind::NotCarried, at(1000))).unwrap();
-    assert!(c.newest_counted().unwrap().iter().all(|o| o.source.as_str() != "c"));
+    assert!(c.newest_counted_by_subject().unwrap().iter().all(|o| o.source.as_str() != "c"));
 }
 
 #[test]
@@ -239,10 +249,10 @@ fn a_request_the_process_was_told_not_to_make_is_no_outcome_of_the_source() {
     // as it reads, or with the reader's own subject before it
     c.record(&OutcomeRow { detail: format!("SPY: {}", bagholder_net::client::OFFLINE), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
     assert!(c.outcomes(&SourceName::named("a")).unwrap().is_empty());
-    assert!(c.newest_counted().unwrap().is_empty(), "a source nobody asked is not failing");
+    assert!(c.newest_counted_by_subject().unwrap().is_empty(), "a source nobody asked is not failing");
     // a source that could not be reached is still one, whatever else its words say
     c.record(&OutcomeRow { detail: "offline: the host said so".into(), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
-    assert_eq!(c.newest_counted().unwrap().len(), 1);
+    assert_eq!(c.newest_counted_by_subject().unwrap().len(), 1);
 }
 
 #[test]
