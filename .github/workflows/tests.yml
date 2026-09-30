@@ -1,12 +1,18 @@
-# Every suite, on every pull request and every push to master. Nothing ran on a pull request before
-# this: a branch was only ever as tested as whoever remembered to run it. The server and the page are
-# one product -- the page is built into the server -- so a pull request is green only when both are.
+# Every suite, on every pull request and every push to master that touches anything but markdown.
+# Nothing ran on a pull request before this: a branch was only ever as tested as whoever remembered
+# to run it. The server and the page are one product -- the page is built into the server -- so a
+# pull request is green only when both are. No test or step reads a .md file, so a change to
+# documentation alone runs nothing.
 name: Tests
 
 on:
   pull_request:
+    paths-ignore:
+      - '**.md'
   push:
     branches: [master]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 permissions:
