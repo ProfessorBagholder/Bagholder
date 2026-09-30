@@ -205,7 +205,7 @@ For `docs/architecture.md`: each unbuilt or refused item marked in place (§12 c
 
 For `SPEC.md`: one rule per line with an id, without changing a word of meaning, and a test on line length; the changes of decision 2 and 6-9 written as they land, each with the product it is modelled on; `DISCLOSURES.md`'s model size corrected.
 
-For `docs/`: a `known-gaps.md` register of the shipping build's known defects with severity, the product that shows the standard and the test that will hold the fix; the security gap in `old-app-mistakes.md:63` moves there first, with gap6-1 and gap6-2 beside it.
+Known defects: no new file. Each finding of this brief that is not fixed in the stage that covers it is a GitHub issue, with its severity, the product that shows the standard and the test that will hold the fix; the security gap in `old-app-mistakes.md:63` is the first, with gap6-1 and gap6-2 beside it.
 
 For `.github/workflows`: the image started on the demo book in CI with a dry order placed through the page's own path; the capacity test on the owner-size book; layer caching; the release published only when every archive is attached; `cargo audit` and `npm audit`; actions pinned by digest.
 
