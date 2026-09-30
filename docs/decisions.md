@@ -6,6 +6,7 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 Brief 15's decision 2 (the screen batch), taken item by item on the mockups shown to the owner (chat, 2026-09-30):
 
+- **A holding's row names its account nowhere, on hover included.** A session added a hover tip naming it on 2026-09-25, carrying over the old page's browser tooltip unasked; the owner found it random and broken: it stopped working once a truncated cell's tip had shown. ("why a random tooltip has appeared on the holdings tile showing the account, which doesn't even work properly.") The only hover tip is cut text read whole. Held by: `web/e2e/portfolio.spec.ts` (hovering a row shows no tip).
 - **A screen that is clean stays clean: a change never adds labels, badges, disclaimers or restated facts to it.** ("it's literally exactly the same thing but just making it busier/uglier/more verbose for no reason whatsoever"; "there is already an FX column, so additionally specifying the currency in the next column beside that makes no sense and makes it look uglier.") Held by: review only.
 - **The Value curve marks each deposit and withdrawal, its amount read on hover.** ("the hover showing deposit amounts against the equity curve value backdrop does look like a nice touch.") Held by: review only until the change lands.
 - **The order ticket refuses what it cannot send.** ("obviously 'What it cannot send' should be refused.") Held by: review only until the change lands.
