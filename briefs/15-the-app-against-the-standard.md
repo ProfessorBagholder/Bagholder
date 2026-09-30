@@ -188,7 +188,7 @@ Six stages. Each is a gated plan under `docs/plans/`, built as one PR per stage 
 
 ## The process changes
 
-For `CLAUDE.md`, applied by the owner (CTO's session cannot edit it):
+For `CLAUDE.md`, written by the reviewer as [#335](https://github.com/ProfessorBagholder/Bagholder/pull/335), for the owner to merge:
 
 1. After the last sentence of the first rule (line 3, "the screen stays as it is unless `SPEC.md` changes"), add: "That is a limit on what a session may change, never a bar on how it is built: structure, data flow, storage, the code that moves money and what the app costs the machine are built as the best engineers build an application of this kind, and a small machine (a Raspberry Pi) must carry it; a request is never implemented so narrowly that this is set aside. Where the screen falls short of how the leading trading journals (Tradervue, TradeZella, TraderSync, Edgewonk) and brokerage screens (Interactive Brokers, Wealthsimple, Questrade, Sharesight) do it, say so, naming the product and what it does, as a proposal to the owner in one line; build it only if the owner takes it."
 2. Add, above the gate: "**A report names a symptom; the change fixes the class.** Before writing code, name the rule the symptom breaks and list every screen, figure, source or path where the same rule applies, by reading the code. Fix all of them in one PR and hold the rule with one test over the whole list. A fix that would leave the same defect standing elsewhere goes through the gate."
