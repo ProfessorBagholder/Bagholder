@@ -124,27 +124,22 @@ test("Holdings figures are in the position's own currency, unlike Allocation's C
   await expect(shortRow.first()).toContainText(symText(short[0].symbol))
 })
 
-test("hovering a holding's row names its account in the app's own tip; the row never shows it", async ({ page, request }) => {
-  const m = await figures(request)
+test("hovering a holding's row names nothing; a cut symbol is read whole and the tip goes when the pointer leaves it", async ({ page }) => {
   await page.goto('/#portfolio')
   await ready(page)
-  const rows = page.locator('#page tbody tr[data-tip]')
-  await expect(rows).toHaveCount((m.positions as Position[]).length)
-  // every row names its own holding's account: the same symbol in two accounts names two accounts
-  const named: string[] = []
+  const rows = page.locator('#page tbody tr')
+  const tip = page.locator('#cutTip')
   for (let i = 0; i < (await rows.count()); i++) {
-    const row = rows.nth(i)
-    await row.locator('td').nth(1).hover()
-    await expect(page.locator('#cutTip'), `row ${i}`).toBeVisible()
-    const symbol = ((await row.locator('td').first().textContent()) ?? '').replace(/\s*SHORT$/, '').trim()
-    named.push(symbol + ' · ' + ((await page.locator('#cutTip .tv').textContent()) ?? ''))
+    await rows.nth(i).locator('td').nth(1).hover()
+    await expect(tip, `row ${i}`).toBeHidden()
   }
-  expect(named.sort()).toEqual((m.positions as Position[]).map((p) => symText(p.symbol) + ' · ' + p.account).sort())
-  await page.locator('#hdr').hover()
-  await expect(page.locator('#cutTip')).toBeHidden()
-  // the account is not a column: no cell of a row reads it
-  for (const p of m.positions as Position[]) await expect(page.locator('#page tbody td', { hasText: new RegExp('^' + p.account + '$') })).toHaveCount(0)
-  expect(await page.locator('[title]').count()).toBe(0)
+  // a symbol the column cuts is read whole, and moving along the row takes the tip away
+  const cut = rows.locator('td:first-child').filter({ hasText: 'CALL' }).first()
+  await cut.hover()
+  await expect(tip).toBeVisible()
+  await expect(tip.locator('.tv')).toHaveText(((await cut.textContent()) ?? '').trim())
+  await cut.locator('xpath=..').locator('td').nth(2).hover()
+  await expect(tip).toBeHidden()
 })
 
 test('Holdings sorts by Unrealized P&L first; a header click re-sorts it, and a second click reverses it', async ({ page, request }) => {

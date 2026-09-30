@@ -1,6 +1,5 @@
 // What the reader cannot read: text cut by an ellipsis is shown whole, in a tip, while
-// the pointer is on it; and what a row names without showing (a holding's account, its
-// `data-tip`), in the same tip. The only hover the page has besides the charts' own.
+// the pointer is on it. The only hover the page has besides the charts' own.
 //
 // One listener for the whole page, because any cell of any table may be the cut one and
 // which ones are changes with the window's width.
@@ -56,16 +55,8 @@ export function cutElement(node: EventTarget | null): Element | null {
   return null
 }
 
-/**
- * A row that names what it does not show, in its `data-tip` (a holding's account): read in
- * the same tip, while the pointer is on the row and no cut text under it wants the tip.
- */
-export function namedElement(node: EventTarget | null): HTMLElement | null {
-  const el = node instanceof Element ? (node.closest('[data-tip]') as HTMLElement | null) : null
-  return el && el.dataset.tip ? el : null
-}
-
-function show(el: Element, text = el.textContent!.trim()): void {
+function show(el: Element): void {
+  const text = el.textContent!.trim()
   const tip = tipNode()
   tip.querySelector('.tv')!.textContent = text
   // a tile says what it is under its symbol, the one line a reader cannot get at any other way
@@ -93,9 +84,7 @@ export function startCutTip(): () => void {
   let at: { x: number; y: number } | null = null
   const showFor = (target: EventTarget | null) => {
     const cut = cutElement(target)
-    const named = cut ? null : namedElement(target)
     if (cut) show(cut)
-    else if (named) show(named, named.dataset.tip)
     else hide()
   }
   const over = (e: MouseEvent) => {
@@ -104,7 +93,7 @@ export function startCutTip(): () => void {
   }
   const out = (e: MouseEvent) => {
     if (!e.relatedTarget) at = null
-    if (!e.relatedTarget || !(cutElement(e.relatedTarget) || namedElement(e.relatedTarget))) hide()
+    if (!e.relatedTarget || !cutElement(e.relatedTarget)) hide()
   }
   const scrolled = () => {
     if (!at) return hide()
