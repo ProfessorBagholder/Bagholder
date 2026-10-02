@@ -236,8 +236,11 @@ impl Figures {
             // only read on: it has nothing of its own to be heard
             *conn = Some(MarketCache::open(&self.home.join(CACHE_FILE), crate::app::APP_VERSION, Timestamp::now()).map_err(err)?.0);
         }
-        let newest = conn.as_ref().expect("opened above").newest_counted_by_subject().map_err(err)?;
-        Ok(bagholder_sources::health::failures(&newest, started))
+        let cache = conn.as_ref().expect("opened above");
+        let newest = cache.newest_counted_by_subject().map_err(err)?;
+        // a subject's failures in a row; one the cache cannot count is counted as said
+        let in_a_row = |o: &bagholder_sources::cache::OutcomeRow| cache.failures_in_a_row(&o.source, o.kind, o.instrument).unwrap_or(bagholder_sources::health::SAID_AFTER);
+        Ok(bagholder_sources::health::failures(&newest, started, in_a_row))
     }
 
     /// Read the engine, once it is built.

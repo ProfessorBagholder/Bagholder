@@ -139,7 +139,12 @@
     // the arrows change tabs only with nothing open: not under a panel, a popover or a dialog
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !filterOpen && !ui.menuOpen && !ui.notesOpen && !ticketStore.t && !ui.modal && !ui.confirm && !isFieldFocused()) {
       const j = TABS.indexOf(route.tab) + (e.key === 'ArrowRight' ? 1 : -1)
-      if (j >= 0 && j < TABS.length) { e.preventDefault(); go(TABS[j]) }
+      if (j >= 0 && j < TABS.length) {
+        e.preventDefault()
+        go(TABS[j])
+        // the keyboard goes with the tab: a tab button that had it hands it to the tab now open
+        if ((document.activeElement as HTMLElement | null)?.classList.contains('tabbtn')) (document.querySelectorAll<HTMLElement>('.tabbar .tabbtn')[j])?.focus()
+      }
       return
     }
     if (e.key === 'Escape') {

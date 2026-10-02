@@ -97,3 +97,17 @@ test('Left and Right change tabs only with nothing open', async ({ page }) => {
   await expect(tab).toHaveText('Trades')
   await expect(page).toHaveURL(/#trades$/)
 })
+
+test('a tab clicked and then left with the arrow keys draws no focus ring on the tab row; the keyboard goes with the tab', async ({ page }) => {
+  await page.goto('/#dashboard')
+  await ready(page)
+  await page.locator('.tabbtn', { hasText: 'Dashboard' }).click()
+  for (const [key, label] of [['ArrowRight', 'Trades'], ['ArrowRight', 'Portfolio'], ['ArrowLeft', 'Trades']] as const) {
+    await page.keyboard.press(key)
+    await expect(page.locator('.tabbtn.on')).toHaveText(label)
+    // the button with the keyboard is the open tab's, and no tab button draws a ring
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement).textContent)).toBe(label)
+    const rings = await page.locator('.tabbtn').evaluateAll((els) => els.map((el) => getComputedStyle(el).outlineStyle))
+    expect(rings.every((r) => r === 'none'), rings.join()).toBe(true)
+  }
+})

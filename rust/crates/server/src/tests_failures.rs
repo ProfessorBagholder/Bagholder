@@ -218,3 +218,21 @@ fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
     crate::feeds::feed_answered(&app, "shorts:LUNR");
     assert!(error(&app).starts_with("The short interest of ASTS, MU could not be read"), "{}", error(&app));
 }
+
+/// A single failed request to an outside source is not told to the person: the
+/// failure is said once the next asking fails too, and an answer between starts
+/// the count again.
+#[test]
+fn test_a_single_failed_request_to_a_source_is_not_said() {
+    let (_home, app) = fresh();
+    let feed = "shorts:ZZQQ";
+    crate::feeds::source_failed(&app, feed, "CIRO: HTTP 403".into());
+    assert_eq!(error(&app), "", "one failure");
+    crate::feeds::feed_answered(&app, feed);
+    crate::feeds::source_failed(&app, feed, "CIRO: HTTP 403".into());
+    assert_eq!(error(&app), "", "one failure after an answer");
+    crate::feeds::source_failed(&app, feed, "CIRO: HTTP 403".into());
+    assert_eq!(error(&app), "The short interest of ZZQQ could not be read: CIRO: HTTP 403.");
+    crate::feeds::feed_answered(&app, feed);
+    assert_eq!(error(&app), "");
+}

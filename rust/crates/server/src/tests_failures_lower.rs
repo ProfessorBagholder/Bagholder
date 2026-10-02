@@ -87,6 +87,8 @@ fn exposures_whose_store_cannot_be_read_are_said_in_the_header_until_a_pass_read
     let app = app();
     {
         let _broken = Broken::new(&app, "ALTER TABLE exposures RENAME TO exposures_away;", "ALTER TABLE exposures_away RENAME TO exposures;");
+        // said once the next pass fails too (`feeds::source_failed`)
+        crate::feeds::refresh_exposures(&app);
         crate::feeds::refresh_exposures(&app);
         assert!(error(&app).contains("exposures could not be refreshed"), "{}", error(&app));
     }
@@ -112,6 +114,9 @@ fn short_interest_that_could_not_be_read_is_said_in_the_header_until_the_listing
     {
         // the market's trading days, which days to cover is counted over, cannot be read
         let _broken = Broken::new(&app, "ALTER TABLE benchmark_closes RENAME TO benchmark_closes_away;", "ALTER TABLE benchmark_closes_away RENAME TO benchmark_closes;");
+        // one failed read is not said; the next failing too is (`feeds::source_failed`)
+        assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());
+        assert!(!error(&app).contains("short interest of QNC"), "{}", error(&app));
         assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());
         assert!(error(&app).contains("short interest of QNC could not be read"), "{}", error(&app));
     }
