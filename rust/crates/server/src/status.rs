@@ -362,9 +362,14 @@ mod tests {
     }
 
     /// Record one outcome of `source` in the app's cache, as a reader does.
+    /// A source's outcome; a failure as often in a row as it takes to be said
+    /// (`health::SAID_AFTER`), so the source is failing, not one request.
     fn record(app: &App, source: &'static str, outcome: OutcomeKind) -> OutcomeRow {
         let row = OutcomeRow { source: SourceName::named(source), host: "h".into(), kind: DataKind::Quote, instrument: None, outcome, detail: String::new(), shape_change: None, at: Timestamp::now() };
-        app.figures.get().unwrap().cache().unwrap().record(&row).unwrap();
+        let times = if outcome.is_failure() || outcome == OutcomeKind::Refused { bagholder_sources::health::SAID_AFTER } else { 1 };
+        for _ in 0..times {
+            app.figures.get().unwrap().cache().unwrap().record(&row).unwrap();
+        }
         row
     }
 

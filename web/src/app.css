@@ -245,6 +245,8 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .nt-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .tabbtn{background:transparent;border:0;cursor:pointer;font:500 13px var(--font);padding:11px 0;flex:none;white-space:nowrap;color:var(--ink60)}
 .tabbtn:hover{color:var(--accent-300)}
+/* the open tab's underline marks it; a focus ring on the tab row is never drawn (docs/decisions.md 2026-09-30) */
+.tabbtn:focus,.tabbtn:focus-visible{outline:none}
 .tabbtn.on{color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)}
 .kpi{padding:12px;height:87px;display:flex;flex-direction:column;justify-content:center}
 .kpi .v{font-size:21px;font-weight:500;font-variant-numeric:tabular-nums;margin-top:4px;white-space:nowrap;line-height:1.15}

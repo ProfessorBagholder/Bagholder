@@ -369,7 +369,8 @@ fn said(source: &str) -> impl Fn(FetchError) -> String + '_ {
 }
 
 fn us_volume_file(today: &str) -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, String> {
-    us_volume_file_with(today, |url| get_text(url, &headers()).map_err(said("FINRA")))
+    // a day FINRA has not published is no file, not a failure: the day before is tried
+    us_volume_file_with(today, |url| published_text(url).map_err(said("FINRA")))
 }
 
 /// The newest of the files tried that answers with rows. A date with no file
@@ -422,16 +423,21 @@ pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow>
     rows
 }
 
-fn get_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
-    crate::http::get_bytes(url, &headers())
+/// A dated report's text, empty where it is not published yet (`http::get_published`).
+fn published_text(url: &str) -> Result<String, FetchError> {
+    Ok(crate::http::get_published(url, &headers())?.map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default())
 }
 
-fn ca_position_grid(url: &str) -> Result<Vec<Vec<Value>>, String> {
-    get_bytes(url).map_err(said("CIRO")).and_then(|raw| crate::xls::table(&raw).map_err(|e| format!("CIRO's position report does not read: {e}")))
+/// CIRO's position report for one date, `None` where it is not published yet.
+fn ca_position_grid(url: &str) -> Result<Option<Vec<Vec<Value>>>, String> {
+    match crate::http::get_published(url, &headers()).map_err(said("CIRO"))? {
+        None => Ok(None),
+        Some(raw) => crate::xls::table(&raw).map(Some).map_err(|e| format!("CIRO's position report does not read: {e}")),
+    }
 }
 
 fn ca_position_file(today: &str) -> Result<Option<(String, HashMap<String, CaPositionRow>)>, String> {
-    ca_position_file_with(today, ca_position_grid)
+    ca_position_file_with(today, |url| ca_position_grid(url).map(Option::unwrap_or_default))
 }
 
 /// `ca_position_file` with the fetch and the spreadsheet reading handed in.
@@ -489,14 +495,15 @@ pub fn parse_ca_volume(text: &str) -> Result<HashMap<String, CaVolumeRow>, Strin
 }
 
 fn ca_volume_file(today: &str) -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, String> {
-    ca_volume_file_with(today, |url| get_text(url, &headers()).map_err(said("CIRO")))
+    ca_volume_file_with(today, |url| published_text(url).map_err(said("CIRO")))
 }
 
 /// `ca_volume_file` with the fetch handed in.
 pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str, mut get: G) -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, String> {
     let tries = volume_periods(today, TRIES).into_iter().map(|(start, end)| {
         let url = CA_VOLUME_URL.replacen("{}", &compact(&start), 1).replacen("{}", &compact(&end), 1);
-        let got = get(&url).and_then(|t| parse_ca_volume(&t).map_err(|e| format!("CIRO's short sale summary does not read: {e}")));
+        // an empty text is a period not published yet: no rows, the period before is tried
+        let got = get(&url).and_then(|t| if t.is_empty() { Ok(HashMap::new()) } else { parse_ca_volume(&t).map_err(|e| format!("CIRO's short sale summary does not read: {e}")) });
         (format!("{}/{}", start, end), got)
     });
     newest_of(tries, |rows| !rows.is_empty())
@@ -504,13 +511,15 @@ pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str
 
 /// One dated Canadian report, kept for the session
 /// so a run of them is read once. A report that could not be read is the
-/// failure, and is not kept.
+/// failure, and is not kept; one not published yet has no rows, and is not kept
+/// either, so it is read once it is.
 fn ca_positions_on(day: &str) -> Result<HashMap<String, CaPositionRow>, String> {
     let name = format!("ca_position:{}", day);
     if let Some(rows) = CA_POSITION_FILES.cached(&name) {
         return Ok(rows);
     }
-    let rows = parse_ca_positions(&ca_position_grid(&CA_POSITION_URL.replace("{}", &compact(day)))?);
+    let Some(grid) = ca_position_grid(&CA_POSITION_URL.replace("{}", &compact(day)))? else { return Ok(HashMap::new()) };
+    let rows = parse_ca_positions(&grid);
     CA_POSITION_FILES.warm(&name, day, rows.clone());
     Ok(rows)
 }

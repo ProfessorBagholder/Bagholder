@@ -2,6 +2,11 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
 
+## 2026-10-02
+
+- **A single failed request is not told to the person; a source is said to be failing only when a request to it fails again at its next asking. A report the publisher has not put out yet is no failure at all.** (Owner, chat, 2026-10-02: "A single failed request that is of no importance whatsoever shoudlnt' be getting flagged to the user.") Held by: `sources/src/health.rs` (`a_single_failed_request_is_not_said`); `server/src/tests_failures.rs` (`test_a_single_failed_request_to_a_source_is_not_said`); `market/src/http.rs` (`a_report_not_published_yet_is_told_from_a_failure`).
+- **The tab row never draws a focus ring, and the keyboard goes with the tab the arrow keys open.** (Owner, chat, 2026-10-02: "if I click Dashboard and then use arrows to tab away, it does that … should not be the case.") Held by: `web/e2e/navigation.spec.ts` (`a tab clicked and then left with the arrow keys draws no focus ring on the tab row`).
+
 ## 2026-09-30
 
 Brief 15's decision 2 (the screen batch), taken item by item on the mockups shown to the owner (chat, 2026-09-30):

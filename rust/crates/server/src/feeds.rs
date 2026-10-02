@@ -44,6 +44,9 @@ pub struct FeedsState {
     /// Each feed failing now, by feed, in the header's words, until it next answers
     /// (SPEC §1: a failure is said in the header until its source succeeds).
     failing: Mutex<BTreeMap<String, String>>,
+    /// Each outside source's reads that failed in a row, by feed: one failed
+    /// request is not said; the failure is said once the next asking fails too.
+    missed: Mutex<BTreeMap<String, u32>>,
     /// The sources a test's universe reads asked, and the failure it told them to
     /// answer with.
     #[cfg(test)]
@@ -74,8 +77,24 @@ pub(crate) fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
     }
 }
 
+/// A read from an outside source failed: said in the header (`feed_failed`) only
+/// once the source has failed `SAID_AFTER` times in a row, so a single refused or
+/// lost request, which the next asking answers, is not told to the person.
+pub(crate) fn source_failed(app: &Arc<App>, feed: &str, why: String) {
+    let missed = {
+        let mut m = app.feeds.missed.lock().unwrap_or_else(|e| e.into_inner());
+        let n = m.entry(feed.to_string()).or_insert(0);
+        *n += 1;
+        *n
+    };
+    if missed >= bagholder_sources::health::SAID_AFTER {
+        feed_failed(app, feed, why);
+    }
+}
+
 /// `feed` has answered: its failure, if one was standing, is no longer said.
 pub(crate) fn feed_answered(app: &Arc<App>, feed: &str) {
+    app.feeds.missed.lock().unwrap_or_else(|e| e.into_inner()).remove(feed);
     if app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).remove(feed).is_some() {
         app.events.signal();
     }
@@ -237,7 +256,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     let (today_s, _, _) = bagholder_market::clock_now();
     let Ok(p) = pool(app) else { return };
     let ctx = exposure::Ctx { conn: &c, pool: p, today: today_s.clone() };
-    let exposure_failed = |e: String| feed_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
+    let exposure_failed = |e: String| source_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
     let stale = |ids: &[String]| exposure::stale(&ctx, ids);
     let mut todo: Vec<String> = match stale(&held) {
         Ok(t) => t.into_iter().filter(|sid| secs.contains_key(sid)).collect(),
@@ -403,7 +422,7 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
         let (Ok(c), Ok(p)) = (conn(&a), pool(&a)) else { return }; // said in the header by `conn`
         let ctx = exposure::Ctx { conn: &c, pool: p, today: today() };
         if let Err(e) = exposure::share_exposure(&ctx, &symbol, &exchange, &currency) {
-            feed_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
+            source_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
         }
     });
 }
@@ -494,7 +513,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
             }
             Err(e) => {
                 log(&format!("bagholder news: refresh failed: {}", e));
-                feed_failed(app, "news", format!("The news could not be refreshed: {e}"));
+                source_failed(app, "news", format!("The news could not be refreshed: {e}"));
                 0
             }
         }
@@ -2118,7 +2137,7 @@ fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf:
     });
     match &rec {
         Ok(_) => feed_answered(app, &feed),
-        Err(why) => feed_failed(app, &feed, why.clone()),
+        Err(why) => source_failed(app, &feed, why.clone()),
     }
     app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).remove(&which);
     app.events.signal();
@@ -2273,7 +2292,7 @@ pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str,
         }
         Err(e) => {
             // said with every other listing the same failure stopped (`feed_failures`)
-            feed_failed(app, &feed, e.to_string());
+            source_failed(app, &feed, e.to_string());
             return Ok(None);
         }
     };
@@ -3968,6 +3987,9 @@ mod tests {
         let _g = crate::tests_common::guard();
         let a = app();
         read_fear_with(&a, "stocks", || Ok(gauge(40.0))).unwrap();
+        // one failed read is not said; the next failing too is
+        let _ = read_fear_with(&a, "stocks", || Err("CNN could not be reached.".into()));
+        assert!(feed_failures(&a).is_empty(), "one failed read");
         let _ = read_fear_with(&a, "stocks", || Err("CNN could not be reached.".into()));
         assert_eq!(feed_failures(&a), vec!["CNN could not be reached.".to_string()]);
         assert!(crate::status::status(&a).error.contains("CNN could not be reached."), "the header says it");
