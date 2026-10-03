@@ -591,6 +591,10 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> Result<bool, String> {
 /// bare one), so every reader of them goes through here. `None` when the
 /// browser helper cannot be started.
 pub fn yahoo_quote_summary(form: &str, modules: &str) -> Result<Option<(u16, String)>, String> {
+    // a process told to stay off the network asks no one, and says so in the words that mark it
+    if bagholder_net::client::offline() {
+        return Err(format!("Yahoo Finance: {}", bagholder_net::client::OFFLINE));
+    }
     let mut slot = yahoo().lock().unwrap();
     if !yahoo_open(&mut slot)? {
         return Ok(None);
