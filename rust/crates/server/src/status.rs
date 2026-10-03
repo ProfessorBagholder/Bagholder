@@ -186,7 +186,39 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
             out.push(format!("{what} of {} in {}{day} took {} more than the book held.", symbol(inputs, b.instrument), in_account(inputs, b.account), units(b.qty)));
         }
     }
+    out.extend(unread_rows(inputs));
     out
+}
+
+/// Each account's rows the book could not place (a broker's kind of activity its
+/// mapping has no rule for, a file's row naming an account the book does not
+/// hold): kept as received, counted in no figure, and so said in the header until
+/// they are placed (`docs/decisions.md` 2026-09-22, a failure is always visible).
+/// One sentence an account: how many rows, and why, in the mapping's words, each
+/// reason with the first day it occurs.
+pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
+    use bagholder_core::transaction::Kind;
+    use std::collections::BTreeMap;
+    // account → why → (rows, first day)
+    let mut by: BTreeMap<bagholder_core::AccountId, BTreeMap<String, (usize, bagholder_core::jiff::civil::Date)>> = BTreeMap::new();
+    for t in inputs.ledger.transactions.iter().filter(|t| t.kind == Kind::Unclassified) {
+        let why = inputs.ledger.records.get(&t.id.record).and_then(|r| r.problems.first()).map(|p| p.detail.trim().trim_end_matches('.').to_string()).unwrap_or_else(|| "a row its mapping does not place".to_string());
+        let e = by.entry(t.account).or_default().entry(why).or_insert((0, t.trade_date));
+        e.0 += 1;
+        e.1 = e.1.min(t.trade_date);
+    }
+    let mut out: Vec<(String, String)> = by
+        .into_iter()
+        .map(|(account, whys)| {
+            let n: usize = whys.values().map(|(c, _)| c).sum();
+            let list = whys.iter().map(|(why, (c, first))| if *c == 1 { format!("{why}, on {first}") } else { format!("{why}, {c} rows, the first on {first}") }).collect::<Vec<_>>().join("; ");
+            let what = if n == 1 { "A row".to_string() } else { format!("{n} rows") };
+            let verb = if n == 1 { "could not be placed and counts" } else { "could not be placed and count" };
+            (crate::wire::build::account_name(inputs, account), format!("{what} in {} {verb} in no figure: {list}.", in_account(inputs, account)))
+        })
+        .collect();
+    out.sort();
+    out.into_iter().map(|(_, s)| s).collect()
 }
 
 /// Where the book keeps what the last pull's statements said, for a restart.
