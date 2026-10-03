@@ -447,16 +447,32 @@ fn read_chunked(conn: &mut Conn, out: &mut Vec<u8>) -> Result<(), Error> {
     }
 }
 
-fn gunzip(raw: &[u8]) -> Vec<u8> {
-    // The gzip two-byte magic; anything else is returned as it came.
-    if raw.len() < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
-        return raw.to_vec();
-    }
-    let mut out = Vec::new();
-    let mut d = flate2::read::GzDecoder::new(raw);
-    match d.read_to_end(&mut out) {
-        Ok(_) => out,
-        Err(_) => raw.to_vec(),
+/// The body as the server meant it, undoing the content coding its
+/// `Content-Encoding` header names (RFC 9110 §8.4). The body is never judged by
+/// its own bytes: a file that is itself gzip (a `.tar.gz` release archive) is
+/// returned as it came. A coding that cannot be undone is the error, never the
+/// raw bytes passed off as the body.
+fn decoded(raw: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, Error> {
+    let coding = headers.iter().find(|(k, _)| k == "content-encoding").map(|(_, v)| v.trim().to_ascii_lowercase()).unwrap_or_default();
+    let undo = |r: std::io::Result<usize>, out: Vec<u8>, name: &str| r.map(|_| out).map_err(|e| Error::Transport(format!("a {name} body that does not decode: {e}")));
+    match coding.as_str() {
+        "" | "identity" => Ok(raw),
+        "gzip" | "x-gzip" => {
+            let mut out = Vec::new();
+            let r = flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut out);
+            undo(r, out, "gzip")
+        }
+        // HTTP's deflate is zlib-wrapped (RFC 9110 §8.4.1.2); some servers send the bare stream
+        "deflate" => {
+            let mut out = Vec::new();
+            if flate2::read::ZlibDecoder::new(&raw[..]).read_to_end(&mut out).is_ok() {
+                return Ok(out);
+            }
+            let mut out = Vec::new();
+            let r = flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut out);
+            undo(r, out, "deflate")
+        }
+        other => Err(Error::Transport(format!("a body in a coding not asked for: {other}"))),
     }
 }
 
@@ -662,7 +678,41 @@ fn send(
         if head.status >= 400 && !lenient {
             return Err(Error::Status(head.status));
         }
-        return Ok(Response { status: head.status, body: gunzip(&raw), headers: head.headers.clone() });
+        return Ok(Response { status: head.status, body: decoded(raw, &head.headers)?, headers: head.headers.clone() });
     }
     Err(Error::Transport("too many redirects".into()))
+}
+
+#[cfg(test)]
+mod coding_tests {
+    use super::decoded;
+    use std::io::Write;
+
+    fn gz(data: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+    fn h(coding: &str) -> Vec<(String, String)> {
+        vec![("content-encoding".to_string(), coding.to_string())]
+    }
+
+    /// A body is decoded by the coding the server names, never by its own bytes:
+    /// a file that is itself gzip (a release archive) comes back as it was sent.
+    #[test]
+    fn a_body_is_decoded_by_its_content_encoding_alone() {
+        let file = gz(b"an archive's own bytes");
+        assert_eq!(decoded(file.clone(), &[]).unwrap(), file, "a .tar.gz sent with no coding is the file itself");
+        assert_eq!(decoded(file.clone(), &h("identity")).unwrap(), file);
+        assert_eq!(decoded(gz(b"text"), &h("gzip")).unwrap(), b"text");
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(b"text").unwrap();
+        assert_eq!(decoded(z.finish().unwrap(), &h("deflate")).unwrap(), b"text");
+        let mut d = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        d.write_all(b"text").unwrap();
+        assert_eq!(decoded(d.finish().unwrap(), &h("deflate")).unwrap(), b"text", "the bare stream some servers send");
+        // what cannot be undone is the error, never the raw bytes
+        assert!(decoded(b"not gzip".to_vec(), &h("gzip")).is_err());
+        assert!(decoded(b"x".to_vec(), &h("br")).is_err());
+    }
 }
