@@ -469,6 +469,39 @@ pub(crate) fn sync_went(app: &Arc<App>, failed: Option<&str>) {
     }
 }
 
+/// Where the dry balance probe writes what Wealthsimple answered, once per version
+/// (`docs/plans/broker-check-reserved-cash.md`, open question 1).
+pub const PROBE_FILE: &str = "probe-balances";
+
+/// After a balances read that went through, on the same session and only once a
+/// version: what Wealthsimple states about each open account's cash, every
+/// balance type and the trading balance view, read only, written beside the book
+/// for the plan's question. A probe that cannot be written is logged; it moves
+/// nothing and is no failure of the read.
+fn probe_balances_once(app: &App, book: &Book, conn: ConnectionId, adapter: &mut Wealthsimple<Client<'_>>) {
+    let path = app.home.join(format!("{PROBE_FILE}-{}.json", crate::app::APP_VERSION));
+    if path.exists() {
+        return;
+    }
+    let mut keys = Vec::new();
+    let accounts = match book.accounts() {
+        Ok(a) => a,
+        Err(e) => return log(&format!("bagholder: the balance probe could not list the accounts: {e}")),
+    };
+    for a in accounts {
+        if a.connection == conn && a.status == bagholder_core::account::AccountStatus::Open {
+            match book.account_refs(a.id) {
+                Ok(refs) => keys.extend(refs.into_iter().map(|r| r.value)),
+                Err(e) => return log(&format!("bagholder: the balance probe could not read an account's keys: {e}")),
+            }
+        }
+    }
+    let answer = adapter.source.probe_balances(&keys);
+    if let Err(e) = std::fs::write(&path, answer.canonical()) {
+        log(&format!("bagholder: the balance probe could not be written to {}: {e}", path.display()));
+    }
+}
+
 fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, now: Timestamp) -> Result<Read, String> {
     let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
     let read = bagholder_broker::pull::balances(book, &mut adapter, conn, now).map_err(|e| e.to_string())?;
@@ -478,6 +511,9 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     let (failed, lapsed) = failures(&read.failures);
     if lapsed {
         return Ok(Read::Lapsed);
+    }
+    if failed.is_empty() {
+        probe_balances_once(app, book, conn, &mut adapter);
     }
     let mut st = app.state.lock().unwrap();
     if failed.is_empty() {

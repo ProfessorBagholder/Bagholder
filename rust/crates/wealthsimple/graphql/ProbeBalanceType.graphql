@@ -1,0 +1,8 @@
+query ProbeBalanceType {
+  __type(name: "BalanceType") {
+    enumValues {
+      name
+      description
+    }
+  }
+}
