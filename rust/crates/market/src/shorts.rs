@@ -584,6 +584,30 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> Result<bool, String> {
     Ok(true)
 }
 
+/// One of Yahoo's `quoteSummary` answers (`modules`, comma-separated) for a
+/// symbol form, as its status and body, through the one session that opens with
+/// a browser's handshake: Yahoo turns its crumb and these answers away from a
+/// plain client (429 to a full browser User-Agent, an invalid-cookie answer to a
+/// bare one), so every reader of them goes through here. `None` when the
+/// browser helper cannot be started.
+pub fn yahoo_quote_summary(form: &str, modules: &str) -> Result<Option<(u16, String)>, String> {
+    // a process told to stay off the network asks no one, and says so in the words that mark it
+    if bagholder_net::client::offline() {
+        return Err(format!("Yahoo Finance: {}", bagholder_net::client::OFFLINE));
+    }
+    let mut slot = yahoo().lock().unwrap();
+    if !yahoo_open(&mut slot)? {
+        return Ok(None);
+    }
+    let y = slot.as_mut().expect("opened above");
+    let url = format!("https://query1.finance.yahoo.com/v10/finance/quoteSummary/{form}?modules={modules}&crumb={}", y.crumb);
+    let a = y.session.get(&url, Duration::from_secs(TIMEOUT_SEC)).map_err(|e| format!("{form} from Yahoo Finance: {e}"))?;
+    if a.status == 429 {
+        crate::quotes::yahoo_back_off();
+    }
+    Ok(Some((a.status, a.text())))
+}
+
 /// The units a fund listed on Cboe Canada has in issue,
 /// from that venue's own directory -- its market capitalisation divided by its
 /// last price, which gives back the count the exchange put in, whole for every

@@ -911,31 +911,6 @@ fn evolve(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
     Ok(Some(Breakdown { sectors, countries: Weights::default(), holdings, source: "Evolve ETFs".into(), as_of: String::new() }))
 }
 
-pub const YAHOO_CRUMB: &str = "https://query2.finance.yahoo.com/v1/test/getcrumb";
-pub const YAHOO_SUMMARY: &str = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=topHoldings&crumb={}";
-
-fn yahoo_session() -> Result<(String, String), FetchError> {
-    static SESSION: OnceLock<Mutex<(String, String)>> = OnceLock::new();
-    let sess = SESSION.get_or_init(|| Mutex::new((String::new(), String::new())));
-    {
-        let s = sess.lock().unwrap();
-        if !s.1.is_empty() {
-            return Ok(s.clone());
-        }
-    }
-    pace("fc.yahoo.com");
-    let ask = bagholder_net::Ask { timeout: Duration::from_secs(crate::http::TIMEOUT_SEC), ..bagholder_net::Ask::get("https://fc.yahoo.com", &[("User-Agent", UA)]) };
-    // an error page's cookies are read too, so any status is an answer here
-    let cookies: Vec<String> = match bagholder_net::machine::net().send(&ask) {
-        Ok(r) => r.headers.iter().filter(|(k, _)| k == "set-cookie").map(|(_, v)| v.split(';').next().unwrap_or("").to_string()).collect(),
-        Err(_) => vec![],
-    };
-    let cookie = cookies.join("; ");
-    let crumb = trim_space(&get(YAHOO_CRUMB, &[("Cookie", &cookie)])?).to_string();
-    *sess.lock().unwrap() = (cookie.clone(), crumb.clone());
-    Ok((cookie, crumb))
-}
-
 /// Yahoo's form of a listing on the venue it names (`bagholder_sources::venue`);
 /// a venue the app does not name leaves the bare symbol.
 pub fn yahoo_symbol(symbol: &str, exchange: &str) -> String {
@@ -1037,8 +1012,13 @@ pub fn parse_yahoo_summary(data: &Value) -> Result<(Weights, Vec<Holding>), serd
 }
 
 fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchError> {
-    let (cookie, crumb) = yahoo_session()?;
-    let raw = get(&YAHOO_SUMMARY.replacen("{}", &yahoo_symbol(symbol, exchange), 1).replacen("{}", &crumb, 1), &[("Cookie", &cookie), ("Accept", "application/json")])?;
+    // the statistics session the float is read with: Yahoo answers these only to a browser's handshake
+    let Some((status, raw)) = crate::shorts::yahoo_quote_summary(&yahoo_symbol(symbol, exchange), "topHoldings").map_err(FetchError::Transport)? else {
+        return Err(FetchError::Transport("Yahoo Finance: the browser helper that opens its session could not be started".into()));
+    };
+    if status != 200 {
+        return Err(FetchError::Status(status));
+    }
     let d: Value = serde_json::from_str(&raw).map_err(|e| FetchError::Transport(e.to_string()))?;
     let (sectors, holdings) = parse_yahoo_summary(&d).map_err(unreadable("Yahoo's top holdings"))?;
     if sectors.is_empty() && holdings.is_empty() {
