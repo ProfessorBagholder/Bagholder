@@ -703,6 +703,10 @@ mod tests {
         let row = csv_records(&f)[0];
         let cash = f.read(|e| e.inputs().ledger.transactions.iter().filter(|t| t.id.record == row).map(|t| (t.kind, t.cash)).collect::<Vec<_>>()).unwrap();
         assert_eq!(cash, vec![(Kind::Unclassified, None)]);
+        // and the header says it, in the mapping's words, until it is placed
+        let said = f.read(|e| crate::status::unread_rows(e.inputs())).unwrap();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].starts_with("A row in ") && said[0].contains("could not be placed and counts in no figure") && said[0].contains("nobody-123"), "{said:?}");
     }
 
     #[test]
