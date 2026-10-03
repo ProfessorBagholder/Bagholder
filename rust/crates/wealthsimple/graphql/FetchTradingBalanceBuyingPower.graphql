@@ -1,0 +1,15 @@
+query FetchTradingBalanceBuyingPower($accountCanonicalId: ID!, $currency: Currency!, $securityId: ID) {
+  account(id: $accountCanonicalId) {
+    id
+    financials {
+      current {
+        id
+        tradingBalanceViewV2 {
+          id
+          buyingPower(securityId: $securityId, currency: $currency) { id quantity currency }
+          cash(currency: $currency) { id quantity currency }
+        }
+      }
+    }
+  }
+}
