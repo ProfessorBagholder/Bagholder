@@ -362,7 +362,12 @@ pub fn refresh_exposures(app: &Arc<App>) {
     if stopped > 0 {
         failures.push(format!("{stopped} of the readers stopped short"));
     }
-    went(app, EXPOSURE, if failures.is_empty() { Ok(()) } else { Err(format!("The exposure records could not be brought up to date: {}", failures.join("; "))) });
+    // what failed are outside sources' answers: said once the next pass fails too (`source_failed`)
+    if failures.is_empty() {
+        feed_answered(app, EXPOSURE);
+    } else {
+        source_failed(app, EXPOSURE, format!("The exposure records could not be brought up to date: {}", failures.join("; ")));
+    }
 }
 
 /// Soon after start, when the listings the records are kept for change, and a
