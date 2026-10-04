@@ -32,33 +32,23 @@ Brokers separate the cash balance from what is available to trade (Interactive B
 2. **Short puts and pending withdrawals** (required change 5). Settled from the owner's statement history (cash statements since 2026-09-27) against the short puts and withdrawals open in each period; the periods checked are named in the PR.
 3. **Units under an open sell** (required change 4). The owner's records hold a pending `DIY_SELL` row; whether the stated position on its days is net of it is checked from the statement history the same way.
 
-4. **Whether a pending row in the activity feed is a hold** (found 2026-10-03, building). It is not, on the owner's records. Each cash statement of the account in question against the rows the feed listed as `PENDING` / `SUBMITTED` at that read:
+4. **Whether a pending row in the activity feed is a hold.** Settled by the 2.0.14 probe (2026-10-04 00:39 UTC), which read the orders back from Wealthsimple:
+   - the $70.00 option limit buy of 2026-10-01 is `EXPIRED`: a day order that lapsed at that day's close, which is why its hold was gone by the 10-02 read;
+   - the option sell of 2026-09-28 is also `EXPIRED`;
+   - the stock sell of 2026-09-10 is `submitted`, `UNTIL_CANCEL`, lapsing 2026-12-08: still working.
 
-   | Cash stated (UTC) | USD stated | Book's USD | Pending rows in the feed then |
-   |---|---|---|---|
-   | 2026-09-29 19:52 | 15,039.57 | 15,039.57 | a stock sell (since 09-10), an option sell (since 09-28) |
-   | 2026-10-01 14:47 | 14,881.57 | 14,951.57 | the same two, and an option limit buy of $70.00 (since 10-01 13:31) |
-   | 2026-10-02 14:09 | 14,951.57 | 14,951.57 | the same three, unchanged |
-   | 2026-10-03 00:13 and 16:54 | 14,951.57 | 14,951.57 | the same three, unchanged |
-
-   The $70.00 hold is in the stated cash on 10-01 and gone by 10-02, while the feed still lists the buy as `SUBMITTED` at every full read since (each read revisits a row not final; its record has one revision). The feed does update a row when an order ends for an order this app placed (all seven it placed and that ended read `FILLED`, `CANCELLED` or `EXPIRED`), so either an order placed in Wealthsimple's own app keeps its feed row `SUBMITTED` after it lapses, or Wealthsimple released the hold on a working order. Either way the feed's pending row does not say whether cash is held: brief 16's derivation would replace the 10-01 false sentence with a false sentence on every read from 10-02 on ("states $14,951.57, the book holds $14,881.57").
-
-   Also found, for open questions 2 and 3: no account held a short option on any statement of units from 2026-09-25 to 2026-10-03 (no negative quantity stated), so no secured put can be checked from the history; and on 2026-10-03 the account states 500,000 units of the stock and 40 of the option while the feed lists open sells of exactly those quantities, so the stated units are not net of an open sell (if those sells are working; the same doubt as above applies).
+   The activity feed agrees. Both option rows moved to `EXPIRED` (revision 2) at the first full read after each lapsed. The finding first recorded here on 2026-10-03, that the rows stayed `SUBMITTED`, was a query error: the query filtered on the pending status before taking each record's newest revision. So a pending row in the feed is a working order, and the feed is a sound source of holds. Two more facts from the probe: an order reads back by the row's `externalCanonicalId` (its `canonicalId` answers `NOT_FOUND`), and the working stock sell's 500,000 units are in the stated units in full. **Stated units are not net of a working sell, so a sell holds no units.**
 
 ## Approach
 
-Only if the probe shows no stated figure (otherwise the check compares with the stated figure and the rest of this section is not built). Revised 2026-10-03 (open question 4): the holds come from the broker's list of the orders it is working, never from the activity feed's pending rows.
-
-- `bagholder-wealthsimple` / the pull: at each balances read, the broker's working orders (`OrderServiceExtendedOrderFeed`, which the app already reads strictly for the Orders panel, every order Wealthsimple states as working, including those placed in its own app) are read in the same pull as the cash and kept with that cash statement as stated: account, security, side, type, quantity, limit price, currency. A failed read of the list makes that statement's check pending, never a guess.
-- The hold of each working order, one arm per documented kind: a limit buy, quantity × limit price × the contract's multiplier (1 for a share); a market buy or an IPO bid, unstated; a sell, no cash hold, and units held only if the history shows it (open question 3).
-- Then the existing first and third bullets below (`statement_holds` keyed by the broker's order id rather than a record; the engine's rule) stand, with "pending row" read as "working order".
+Only if the probe shows no stated figure (it shows none). The holds come from the activity rows read in the same pull as the cash, as brief 16 approved, now that open question 4 shows a pending row is a working order. Brief 17 accepted the working-order feed in place of the rows only on the 2026-10-03 finding, which was wrong. With the rows, the holds and the cash come from the same full read, and each hold is keyed by its record as brief 16 required. The order feed would need one more call per pull and would answer the same thing.
 
 Brief 17 (Go with changes) applied:
 
 - **Open question 4 is settled by reading the orders back before building** (required change 1): version 2.0.14 (#345) reads back each order a not-final activity row names by each id the row states (`status`, `timeInForce`, `expiredAtUtc`) and the working-order feed, once, at the app's next orders read on its own session; the answers go here and in the build's PR.
-- **One branch, never a switch** (required change 2). If the read-back shows the 10-01 buy ended: the documented rule is built as a rule (a working buy order holds quantity × limit price × multiplier, no commission, the $70.00 being exactly 1 × 0.70 × 100; a working market buy or IPO bid holds an unstated amount). If it shows a working order whose hold was released: no derivation; while a buy order is working the currency's check is pending, and why is an issue. One engine case for the branch taken.
+- **One branch, never a switch** (required change 2). The read-back shows the 10-01 buy ended (`EXPIRED`), so this branch is built: the documented rule is built as a rule (a working buy order holds quantity × limit price × multiplier, no commission, the $70.00 being exactly 1 × 0.70 × 100; a working market buy or IPO bid holds an unstated amount). One engine case holds it.
 - **Unverified is unstated** (required change 3): pending withdrawals and transfers out, IPO bids and market buys are holds of unknown size (the check pending while one is open). The secured-put arm is built from the article's figure (strike × multiplier × contracts less the premium) and named unverified in the PR, no short option having been open. If the read-back shows stated units net of a working sell, units compare with `FetchTradingBalanceViewPendingOrderQuantity`, nothing derived.
-- **The stale pending row** (required change 4) is issue #346, outside this plan.
+- **The stale pending row** (required change 4): there is none. Issue #346 was filed on the wrong finding and is closed.
 
 Brief 16's approach, kept for the record:
 
@@ -96,4 +86,4 @@ To fill when built.
 
 ## Handoff
 
-Revised for brief 16; the probe ran (2.0.13): no gross cash and no held amounts stated. Building stopped at open question 4; brief 17: Go with changes, applied. Waiting on the 2.0.14 probe's answer.
+Revised for brief 16; the probe ran (2.0.13): no gross cash and no held amounts stated. Building stopped at open question 4; brief 17: Go with changes, applied; the 2.0.14 probe settled open questions 3 and 4; building.
