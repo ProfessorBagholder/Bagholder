@@ -94,6 +94,10 @@ pub struct OrdersState {
     pub(crate) elsewhere: Mutex<Vec<Elsewhere>>,
     /// Why the brackets' quote could not be acted on, until the next good read.
     pub(crate) quote_problem: Mutex<Option<String>>,
+    /// Why live brackets are not being checked, from the first check missed until one runs.
+    pub(crate) watch_problem: Mutex<Option<String>>,
+    /// Whether each bracket's venue was in session at its last check (none: not known).
+    pub(crate) session_seen: Mutex<HashMap<String, Option<bool>>>,
     /// Seconds a ticket's sale waits for a bracket's exit to be confirmed cancelled
     /// (`ticket::CANCEL_CONFIRM_SECONDS`; a test shortens it).
     pub(crate) sale_wait: AtomicU32,
@@ -116,6 +120,8 @@ impl OrdersState {
             found: Mutex::new(HashMap::new()),
             elsewhere: Mutex::new(Vec::new()),
             quote_problem: Mutex::new(None),
+            watch_problem: Mutex::new(None),
+            session_seen: Mutex::new(HashMap::new()),
             sale_wait: AtomicU32::new(ticket::CANCEL_CONFIRM_SECONDS),
             gate: gate::GateState::default(),
             #[cfg(test)]

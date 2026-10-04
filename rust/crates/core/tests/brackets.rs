@@ -2,7 +2,7 @@
 //! answers, refuses, loses answers and fills in parts. Every send is checked
 //! against the invariant that nothing is placed while an exit is in flight.
 
-use bagholder_core::bracket::{self, Bracket, BracketEvent, Exit, ExitRole, Phase, Request, Seen, StopLeg, Tape, Trail};
+use bagholder_core::bracket::{self, Bracket, BracketEvent, Exit, ExitRole, Phase, RefusalClass, Request, Seen, StateKey, StopLeg, Tape, Trail};
 use bagholder_core::order::{BrokerStatus, OrderEvent, OrderFold, OrderState, Reading};
 use bagholder_core::Dec;
 use jiff::{SignedDuration, Timestamp};
@@ -31,7 +31,10 @@ struct World {
     answer: Answer,
     placed: Vec<(ExitRole, Option<Dec>, Dec)>,
     cancels: Vec<String>,
+    resizes: Vec<Dec>,
     closed_elsewhere: Option<String>,
+    key: StateKey,
+    sale_running: bool,
 }
 
 impl World {
@@ -40,7 +43,7 @@ impl World {
         let mut b = Bracket::of(&[(now, BracketEvent::Created { quantity: d("10"), stop, target: target.map(d) })]).unwrap();
         b.native = native;
         let entry = OrderFold::of(&[OrderEvent::Written { dry: false }, OrderEvent::Accepted { broker_id: "entry".into() }]).unwrap();
-        World { b, now, open: true, tape: None, entry, exit: None, next: 0, answer: Answer::Accept, placed: vec![], cancels: vec![], closed_elsewhere: None }
+        World { b, now, open: true, tape: None, entry, exit: None, next: 0, answer: Answer::Accept, placed: vec![], cancels: vec![], resizes: vec![], closed_elsewhere: None, key: StateKey::default(), sale_running: false }
     }
 
     fn stop(level: &str) -> Option<StopLeg> {
@@ -63,7 +66,7 @@ impl World {
     fn tick(&mut self) {
         for _ in 0..16 {
             let step = {
-                let seen = Seen { now: self.now, open: self.open, tape: self.tape, entry: Some(&self.entry), exit: self.exit.as_ref(), closed_elsewhere: self.closed_elsewhere.clone(), stop_allowed: self.b.native };
+                let seen = Seen { now: self.now, open: self.open, tape: self.tape, entry: Some(&self.entry), exit: self.exit.as_ref(), closed_elsewhere: self.closed_elsewhere.clone(), stop_allowed: self.b.native, key: self.key.clone(), sale_running: self.sale_running, entry_order: Some("entry") };
                 bracket::decide(&self.b, &seen)
             };
             if step.is_nothing() {
@@ -76,6 +79,7 @@ impl World {
                     assert_eq!(&x.order_id, order_id);
                     x.fold.apply(&OrderEvent::CancelAsked).unwrap();
                     x.cancel_asked = true;
+                    x.cancel_asked_at = Some(self.now);
                 }
             }
             if self.b.exit.is_none() {
@@ -101,7 +105,8 @@ impl World {
                 let mut fold = OrderFold::of(&[OrderEvent::Written { dry: false }]).unwrap();
                 match self.answer.clone() {
                     Answer::Refuse(why, code) => {
-                        self.b.apply(self.now, &BracketEvent::Refused { why: why.into(), code: code.map(String::from) }).unwrap();
+                        let class = bracket::classify(false, code, why);
+                        self.b.apply(self.now, &BracketEvent::Refused { why: why.into(), code: code.map(String::from), role: Some(role), class, key: self.key.clone() }).unwrap();
                         return;
                     }
                     Answer::Accept => {
@@ -112,9 +117,21 @@ impl World {
                     }
                 }
                 self.b.apply(self.now, &bracket::placed(&request, &id).unwrap()).unwrap();
-                self.exit = Some(Exit { order_id: id, role, fold, cancel_asked: false, price, quantity: Some(quantity), expires_at: Some(self.now + SignedDuration::from_hours(24 * 90)) });
+                self.exit = Some(Exit { order_id: id, role, fold, cancel_asked: false, cancel_asked_at: None, price, quantity: Some(quantity), expires_at: Some(self.now + SignedDuration::from_hours(24 * 90)) });
             }
-            Request::Cancel { order_id } => self.cancels.push(order_id),
+            Request::Cancel { order_id } => {
+                if let Some(x) = self.exit.as_mut().filter(|x| x.order_id == order_id) {
+                    x.cancel_asked_at = Some(self.now);
+                }
+                self.cancels.push(order_id)
+            }
+            Request::Resize { order_id, quantity } => {
+                let x = self.exit.as_mut().expect("a resize of the exit held");
+                assert_eq!(x.order_id, order_id);
+                x.quantity = Some(quantity);
+                self.resizes.push(quantity);
+                self.b.apply(self.now, &BracketEvent::Resized { quantity }).unwrap();
+            }
         }
     }
 
@@ -255,40 +272,105 @@ fn a_trailing_stop_follows_the_high_by_half_a_percent_or_more_by_cancel_and_new_
 }
 
 #[test]
-fn a_refused_exit_is_tried_again_after_a_minute_five_fifteen_then_hourly() {
+fn a_refusal_that_can_never_succeed_is_never_sent_again_and_the_stop_watched_here_fires_at_once() {
     let mut w = World::new(World::stop("95"), None, true);
     w.fill_entry("10", "100");
-    w.answer = Answer::Refuse("the market is closed", None);
+    w.answer = Answer::Refuse("Stop price has too many decimal places. Max allowed: 2", None);
     w.tick();
     w.tick();
-    assert_eq!((w.placed.len(), w.b.attempts), (1, 1));
-    for (wait, n) in [(59, 1), (1, 2), (299, 2), (1, 3), (899, 3), (1, 4), (3599, 4), (1, 5), (3600, 6)] {
-        w.later(wait);
+    assert_eq!(w.b.refused.as_ref().map(|r| r.class), Some(RefusalClass::Invalid));
+    for _ in 0..50 {
+        w.later(3600);
+        w.key.working = Some(w.key.working.unwrap_or(0) + 1);
         w.tick();
-        assert_eq!(w.placed.len(), n, "after {wait} s more");
     }
+    assert_eq!(w.placed.len(), 1, "never sent again, whatever changes");
+    // the level crossed: a market sell at once, not held back by the stop's refusal
     w.answer = Answer::Accept;
-    w.later(3600);
+    w.quote("94.90");
     w.tick();
-    assert_eq!((w.b.attempts, w.role()), (0, Some(ExitRole::Stop)));
+    assert_eq!(w.placed.last().unwrap().0, ExitRole::Market);
 }
 
 #[test]
-fn a_refusal_for_shares_that_are_not_there_ends_the_bracket() {
+fn a_refusal_that_depends_on_how_things_stand_is_asked_again_only_when_they_change() {
     let mut w = World::new(World::stop("95"), None, true);
     w.fill_entry("10", "100");
     w.answer = Answer::Refuse("not enough shares", Some("NOT_ENOUGH_SHARES"));
     w.tick();
     w.tick();
-    assert_eq!((w.b.phase, w.b.outcome.as_deref()), (Phase::Ended, Some("the shares are not there")));
+    assert_eq!((w.b.phase, w.b.refused.as_ref().map(|r| r.class)), (Phase::Guarding, Some(RefusalClass::State)), "the shares may be tied up in another order: not ended");
+    for _ in 0..20 {
+        w.later(3600);
+        w.tick();
+    }
+    assert_eq!(w.placed.len(), 1, "no timer sends it again");
+    // the other order on the shares ends: asked again once
+    w.key.working = Some(0);
+    w.answer = Answer::Accept;
+    w.tick();
+    assert_eq!((w.placed.len(), w.role()), (2, Some(ExitRole::Stop)));
 }
 
 #[test]
-fn an_exit_cancelled_at_the_broker_by_hand_ends_the_bracket() {
+fn an_answer_not_on_record_is_asked_again_on_each_change_at_most_three_times_then_only_watched() {
+    let mut w = World::new(World::stop("95"), None, true);
+    w.fill_entry("10", "100");
+    w.answer = Answer::Refuse("something Wealthsimple never said before", None);
+    w.tick();
+    w.tick();
+    for n in 0..6 {
+        w.later(60);
+        w.tick();
+        assert_eq!(w.placed.len(), (n.min(2) + 1) as usize, "unchanged: nothing more");
+        w.key.open = !w.key.open;
+        w.tick();
+    }
+    assert_eq!(w.placed.len(), 3, "three tries, then the stop is only watched");
+}
+
+#[test]
+fn a_send_with_no_answer_is_sent_again_at_the_next_check() {
+    let mut w = World::new(World::stop("95"), None, true);
+    w.fill_entry("10", "100");
+    w.answer = Answer::Refuse(bracket::SESSION_LAPSED, None);
+    w.tick();
+    assert_eq!((w.placed.len(), w.b.refused.as_ref().map(|r| r.class)), (1, Some(RefusalClass::NoAnswer)));
+    w.answer = Answer::Accept;
+    w.later(5);
+    w.tick();
+    assert_eq!((w.placed.len(), w.role()), (2, Some(ExitRole::Stop)));
+}
+
+#[test]
+fn a_fired_market_sell_never_waits_on_a_refused_stop() {
+    for why in ["not enough shares", "something Wealthsimple never said before", "Stop price has too many decimal places. Max allowed: 2"] {
+        let mut w = World::new(World::stop("95"), None, true);
+        w.fill_entry("10", "100");
+        w.answer = Answer::Refuse(why, None);
+        w.tick();
+        w.tick();
+        w.answer = Answer::Accept;
+        w.later(1);
+        w.quote("94");
+        w.tick();
+        assert_eq!(w.placed.last().unwrap().0, ExitRole::Market, "{why}: the market sell went out a second after the refusal");
+    }
+}
+
+#[test]
+fn an_exit_cancelled_at_the_broker_without_the_app_asking_is_told_and_the_stop_watched_here() {
     let mut w = armed(World::stop("95"), None, true);
     w.broker(BrokerStatus::Cancelled, "0");
     w.tick();
-    assert_eq!((w.b.phase, w.b.outcome.as_deref()), (Phase::Ended, Some("stop cancelled at Wealthsimple by hand")));
+    assert_eq!((w.b.phase, w.b.off_broker), (Phase::Guarding, true), "not an outcome: the bracket lives");
+    let placed = w.placed.len();
+    w.later(60);
+    w.tick();
+    assert_eq!(w.placed.len(), placed, "nothing placed at the broker again until the person acts");
+    w.quote("94");
+    w.tick();
+    assert_eq!(w.placed.last().unwrap().0, ExitRole::Market, "the level is watched here and fires");
 }
 
 #[test]
@@ -355,6 +437,7 @@ fn an_ended_bracket_is_closing_until_its_exits_cancel_is_confirmed() {
 #[test]
 fn a_sale_from_the_ticket_clears_the_stop_first_and_a_sale_that_does_not_go_out_puts_it_back() {
     let mut w = armed(World::stop("95"), None, true);
+    w.sale_running = true;
     w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("10") }).unwrap();
     w.tick();
     assert_eq!(w.cancels.len(), 1);
@@ -370,6 +453,7 @@ fn a_sale_from_the_ticket_clears_the_stop_first_and_a_sale_that_does_not_go_out_
 #[test]
 fn a_part_sold_from_the_ticket_leaves_the_stop_on_the_rest() {
     let mut w = armed(World::stop("95"), None, true);
+    w.sale_running = true;
     w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("4") }).unwrap();
     w.tick();
     w.broker(BrokerStatus::Cancelled, "0");
@@ -492,7 +576,8 @@ fn under_any_run_of_broker_answers_and_prices_no_exit_is_placed_while_one_is_in_
             w.later(5 + rng.next(400) as i64);
             w.tick();
             // the stop is never left neither resting nor watched while the bracket guards
-            if w.b.phase == Phase::Guarding && w.b.native && w.b.stop.is_some() && w.exit.is_none() && w.b.may_retry(w.now) && w.tape.is_some() {
+            // (a refusal this very tick is answered at the next)
+            if w.b.phase == Phase::Guarding && w.b.native && !w.b.off_broker && w.b.stop.is_some() && w.exit.is_none() && w.b.may_send(ExitRole::Stop, &w.key) && w.b.may_send(ExitRole::Market, &w.key) && w.tape.is_some() && w.b.refused.as_ref().is_none_or(|r| r.at < w.now) {
                 panic!("run {run}: guarding with nothing resting and nothing placed: {:?}", w.b);
             }
             if w.b.phase == Phase::Ended {
@@ -526,4 +611,163 @@ fn a_position_is_gone_only_on_a_sale_of_every_share_or_two_statements_without_it
     let (_, e) = closed_by_reads(&w.b, Dec::ZERO, Some((t("2026-10-04T00:00:00Z"), true)));
     w.b.apply(w.now, &e.unwrap()).unwrap();
     assert_eq!(w.b.missed_at, None);
+}
+
+impl World {
+    /// The ticket's sale went out for `qty` of the bracket's shares: the bracket holds it.
+    fn sale_sent(&mut self, qty: &str) {
+        let mut fold = OrderFold::of(&[OrderEvent::Written { dry: false }]).unwrap();
+        fold.apply(&OrderEvent::Accepted { broker_id: "sale".into() }).unwrap();
+        self.b.apply(self.now, &BracketEvent::SaleSent { order_id: "sale".into(), quantity: d(qty) }).unwrap();
+        self.exit = Some(Exit { order_id: "sale".into(), role: ExitRole::Sale, fold, cancel_asked: false, cancel_asked_at: None, price: Some(d("101")), quantity: Some(d(qty)), expires_at: None });
+    }
+
+    fn entry_reads(&mut self, status: BrokerStatus, filled: &str) {
+        self.entry.apply(&OrderEvent::Read(Reading::of(status, d(filled), Some(d("100"))))).unwrap();
+    }
+}
+
+#[test]
+fn a_halted_bracket_sends_nothing_more_but_still_sells_when_its_stop_level_is_reached() {
+    let mut w = armed(World::stop("95"), None, false);
+    w.b.apply(w.now, &BracketEvent::Halted { why: "cap".into() }).unwrap();
+    w.quote("97");
+    w.tick();
+    let before = w.placed.len();
+    w.quote("94.50");
+    w.tick();
+    assert_eq!((w.placed.len(), w.placed.last().unwrap().0), (before + 1, ExitRole::Market));
+}
+
+#[test]
+fn a_sale_from_the_ticket_this_run_is_not_sending_gives_the_bracket_back_its_stop() {
+    // the app stopped between asking for the sale and sending it
+    let mut w = armed(World::stop("95"), None, true);
+    w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("10") }).unwrap();
+    w.sale_running = false;
+    w.tick();
+    assert_eq!((w.b.phase, w.role()), (Phase::Guarding, Some(ExitRole::Stop)), "on the first check after a start, its stop still resting");
+
+    // the stop's cancel was confirmed before the app stopped: the stop is placed again
+    let mut w = armed(World::stop("95"), None, true);
+    w.sale_running = true;
+    w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("10") }).unwrap();
+    w.tick();
+    w.broker(BrokerStatus::Cancelled, "0");
+    w.tick();
+    w.sale_running = false;
+    w.tick();
+    w.tick();
+    assert_eq!((w.b.phase, w.placed.last().cloned()), (Phase::Guarding, Some((ExitRole::Stop, Some(d("95")), d("10")))));
+}
+
+#[test]
+fn a_ticket_sale_ends_the_bracket_only_when_it_fills() {
+    let mut w = armed(World::stop("95"), None, true);
+    w.sale_running = true;
+    w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("10") }).unwrap();
+    w.tick();
+    w.broker(BrokerStatus::Cancelled, "0");
+    w.tick();
+    w.sale_sent("10");
+    w.sale_running = false;
+    w.tick();
+    assert_eq!(w.b.phase, Phase::Selling, "accepted is not sold");
+    w.broker(BrokerStatus::Filled, "10");
+    w.tick();
+    assert_eq!((w.b.phase, w.b.outcome.as_deref()), (Phase::Ended, Some("sold from the ticket")));
+}
+
+#[test]
+fn a_ticket_sale_that_expires_or_fills_in_part_puts_the_stop_back_on_what_is_left() {
+    for (status, filled, left) in [(BrokerStatus::Expired, "0", "10"), (BrokerStatus::Cancelled, "0", "10"), (BrokerStatus::Expired, "4", "6")] {
+        let mut w = armed(World::stop("95"), None, true);
+        w.sale_running = true;
+        w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("10") }).unwrap();
+        w.tick();
+        w.broker(BrokerStatus::Cancelled, "0");
+        w.tick();
+        w.sale_sent("10");
+        w.sale_running = false;
+        if filled != "0" {
+            w.broker(BrokerStatus::Open, filled);
+        }
+        w.broker(status, filled);
+        w.tick();
+        w.tick();
+        assert_eq!((w.b.phase, w.placed.last().cloned()), (Phase::Guarding, Some((ExitRole::Stop, Some(d("95")), d(left)))), "{status:?} with {filled} sold");
+    }
+}
+
+#[test]
+fn the_stop_level_reached_while_a_ticket_sale_rests_cancels_it_and_sells_at_market() {
+    let mut w = armed(World::stop("95"), None, true);
+    w.sale_running = true;
+    w.b.apply(w.now, &BracketEvent::SaleAsked { quantity: d("10") }).unwrap();
+    w.tick();
+    w.broker(BrokerStatus::Cancelled, "0");
+    w.tick();
+    w.sale_sent("10");
+    w.sale_running = false;
+    w.quote("94");
+    w.tick();
+    assert_eq!((w.b.phase, w.cancels.last().map(String::as_str)), (Phase::ToMarket, Some("sale")));
+    w.broker(BrokerStatus::Cancelled, "0");
+    w.tick();
+    assert_eq!(w.placed.last().unwrap(), &(ExitRole::Market, None, d("10")));
+}
+
+#[test]
+fn an_entry_filling_in_parts_arms_on_its_first_fill_and_the_stop_follows_by_a_change_in_place() {
+    let mut w = World::new(World::stop("95"), None, true);
+    w.entry_reads(BrokerStatus::Open, "3");
+    w.tick();
+    w.tick();
+    assert_eq!((w.b.phase, w.placed.last().cloned()), (Phase::Guarding, Some((ExitRole::Stop, Some(d("95")), d("3")))), "armed for what filled");
+    w.entry_reads(BrokerStatus::Open, "5");
+    w.tick();
+    w.tick();
+    assert_eq!((w.b.quantity, w.resizes.clone()), (d("5"), vec![d("5")]), "grown, and the stop changed in place, not cancelled");
+    assert!(w.cancels.is_empty());
+    // more fills inside the rest: one change for them, after it
+    w.entry_reads(BrokerStatus::Open, "6");
+    w.tick();
+    w.entry_reads(BrokerStatus::Open, "8");
+    w.tick();
+    assert_eq!(w.resizes.len(), 1, "coalesced within the rest");
+    w.later(bracket::RESIZE_SECONDS);
+    w.tick();
+    assert_eq!(w.resizes.last(), Some(&d("8")));
+    // the entry ends: its quantity is final and the stop matches it at once
+    w.entry_reads(BrokerStatus::Filled, "10");
+    w.tick();
+    w.tick();
+    assert_eq!((w.b.quantity, w.resizes.last()), (d("10"), Some(&d("10"))));
+}
+
+#[test]
+fn a_stop_that_fires_while_the_entry_still_works_cancels_what_is_left_of_the_entry() {
+    let mut w = World::new(World::stop("95"), None, false);
+    w.entry_reads(BrokerStatus::Open, "3");
+    w.tick();
+    w.quote("94");
+    w.tick();
+    assert_eq!(w.placed.last().unwrap().0, ExitRole::Market);
+    w.tick();
+    assert_eq!(w.cancels.last().map(String::as_str), Some("entry"), "nothing more is bought behind a stop that has sold");
+}
+
+#[test]
+fn a_cancel_the_broker_has_not_confirmed_is_asked_again_after_its_rest() {
+    let mut w = armed(World::stop("95"), None, true);
+    w.b.apply(w.now, &BracketEvent::Ended { outcome: "cancelled by the user".into() }).unwrap();
+    w.tick();
+    assert_eq!(w.cancels.len(), 1);
+    w.broker(BrokerStatus::Open, "0");
+    w.later(bracket::CANCEL_REASK_SECONDS - 1);
+    w.tick();
+    assert_eq!(w.cancels.len(), 1, "not before its rest");
+    w.later(1);
+    w.tick();
+    assert_eq!(w.cancels.len(), 2, "asked again");
 }

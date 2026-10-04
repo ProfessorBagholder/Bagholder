@@ -62,6 +62,10 @@ pub struct FakeState {
     pub read_fails: Vec<String>,
     /// The changes asked, by id.
     pub modifies: Vec<(String, Value)>,
+    /// A read-back of this order held open until the test lets it go.
+    pub held_read: Option<(String, std::sync::mpsc::Receiver<()>)>,
+    /// Told of every cancel asked.
+    pub cancel_told: Option<std::sync::mpsc::Sender<String>>,
     serial: u32,
 }
 
@@ -125,6 +129,9 @@ impl OrderBroker for FakeBroker {
         let b = self.behaviour();
         let mut s = self.0.lock().unwrap();
         s.cancels.push(external_id.to_string());
+        if let Some(tx) = &s.cancel_told {
+            tx.send(external_id.to_string()).unwrap();
+        }
         match b {
             Behaviour::Refuse(why, code) => Sent::Refused { why: why.into(), code: code.map(String::from) },
             Behaviour::LoseBefore => Sent::Unclear { why: "the connection dropped".into() },
@@ -144,6 +151,20 @@ impl OrderBroker for FakeBroker {
     }
 
     fn read(&self, _app: &Arc<App>, external_id: &str) -> Result<Found, String> {
+        // a broker call that hangs: held, with the fake's lock let go, until released
+        let held = {
+            let mut s = self.0.lock().unwrap();
+            match s.held_read.take() {
+                Some((id, rx)) if id == external_id => Some(rx),
+                other => {
+                    s.held_read = other;
+                    None
+                }
+            }
+        };
+        if let Some(rx) = held {
+            rx.recv().unwrap();
+        }
         let mut s = self.0.lock().unwrap();
         s.reads.push(external_id.to_string());
         if s.reads_fail || s.read_fails.iter().any(|f| f == external_id) {
@@ -213,7 +234,10 @@ fn an_order_whose_request_never_reached_the_broker_is_failed_by_read_back() {
     let book = app.figures.get().unwrap().book().unwrap();
     fake.then(Behaviour::LoseBefore);
     gate::place(&app, &book, &order("order-1", None), &Asker::Person, t0()).unwrap().unwrap();
-    let after = gate::read_back(&app, &book, "order-1", t0()).unwrap();
+    // just sent, "no such order" is not final: the broker may not list it yet
+    let soon = gate::read_back(&app, &book, "order-1", t0() + SignedDuration::from_secs(gate::NOT_FOUND_GRACE_SECONDS - 1)).unwrap();
+    assert_eq!(soon.state, OrderState::Unconfirmed);
+    let after = gate::read_back(&app, &book, "order-1", t0() + SignedDuration::from_secs(gate::NOT_FOUND_GRACE_SECONDS)).unwrap();
     assert_eq!((after.state, after.why.as_deref()), (OrderState::Failed, Some("the broker has no record of it")));
     assert_eq!(fake.at_broker(), 0);
 }
@@ -483,6 +507,9 @@ fn a_lost_answer_on_an_exit_the_broker_never_got_places_it_again_exactly_once() 
     w.fake.then(Behaviour::LoseBefore);
     w.tick(); // arms, and the stop goes out in the same check: its answer is lost
     assert_eq!(w.exit("b1").unwrap().fold.state, OrderState::Unconfirmed);
+    w.tick(); // read back inside the grace: nothing decided
+    assert_eq!(w.exit("b1").unwrap().fold.state, OrderState::Unconfirmed);
+    w.later(gate::NOT_FOUND_GRACE_SECONDS);
     w.tick(); // read back: no such order; failed; placed again
     w.settle();
     let creates: Vec<String> = w.fake.0.lock().unwrap().creates.iter().filter(|c| !c.ends_with("-entry")).cloned().collect();
@@ -590,15 +617,16 @@ fn the_target_reached_cancels_the_stop_and_a_lapsed_session_leaves_the_stop_watc
     w.fake.set(&stop, BrokerStatus::Cancelled, "0");
     *w.app.orders.seam.session.lock().unwrap() = None;
     w.fake.then(Behaviour::NotSent);
+    w.fake.then(Behaviour::NotSent);
     w.later(5);
-    w.tick(); // the cancel is read back: cleared
-    w.tick(); // the target is tried: not sent
+    w.tick(); // the cancel is read back: cleared, and the target tried: not sent
+    w.tick(); // tried again at the next check, never after a timer's rest: not sent
     assert!(w.working_exits().is_empty(), "nothing rests at the broker");
     assert_eq!(w.phase(&b), Phase::ToTarget, "the stop level is watched meanwhile");
-    // the price falls to the stop while nothing rests: a market sell goes out (after the retry rest)
+    // the price falls to the stop while nothing rests: a market sell goes out at once
     *w.app.orders.seam.session.lock().unwrap() = Some(bagholder_ws::session::Session { access_token: "tok".into(), ..Default::default() });
     w.quote("94");
-    w.later(61);
+    w.later(5);
     w.tick();
     let working = w.working_exits();
     assert_eq!(working.len(), 1, "{working:?}");
@@ -622,11 +650,21 @@ fn a_market_sell_rejected_after_it_was_taken_puts_the_stop_back() {
     w.fake.set(&market, BrokerStatus::Rejected, "0");
     w.later(5);
     w.tick();
-    assert_eq!(w.phase("b1"), Phase::Guarding, "out of firing, the stop watched again");
-    // after the rest a refusal earns, the watched stop fires again
-    w.later(61);
+    // the market sell is the protection: sent again at once, never after a rest
+    assert_eq!(w.phase("b1"), Phase::Firing, "out of firing and straight back in");
+    assert_ne!(w.exit("b1").unwrap().request.id, market);
+    // three answers of a shape not on record, and it is only watched, said on its card
+    for _ in 0..2 {
+        let m = w.exit("b1").unwrap().request.id;
+        w.fake.set(&m, BrokerStatus::Rejected, "0");
+        w.later(5);
+        w.tick();
+    }
+    w.later(5);
     w.tick();
-    assert_eq!(w.phase("b1"), Phase::Firing);
+    assert_eq!(w.phase("b1"), Phase::Guarding);
+    let card = crate::orders::orders_doc(&w.app).brackets.into_iter().find(|b| b.id == "b1").unwrap();
+    assert!(card.legs[0].note.starts_with("Watching · "), "{:?}", card.legs[0].note);
     w.state_is_the_log();
 }
 
@@ -689,6 +727,11 @@ fn a_sale_from_the_ticket_goes_out_only_once_the_stops_cancel_is_confirmed() {
     let creates = w.fake.0.lock().unwrap().creates.clone();
     assert_eq!(creates.last().map(String::as_str), Some("sale-1"));
     assert_eq!(w.fake.0.lock().unwrap().orders[&stop].status, BrokerStatus::Cancelled, "the stop was gone before the sale went out");
+    assert_eq!(w.phase(&b), Phase::Selling, "taken is not sold: the bracket holds the sale");
+    let mut w = w;
+    w.fake.set("sale-1", BrokerStatus::Filled, "10");
+    w.later(5);
+    w.settle();
     assert_eq!((w.phase(&b), w.bracket_of(&b).outcome.as_deref()), (Phase::Ended, Some("sold from the ticket")));
     w.state_is_the_log();
 }
@@ -744,6 +787,7 @@ fn part_of_the_shares_sold_from_the_ticket_leaves_the_stop_on_the_rest() {
         fake.set(&s, BrokerStatus::Cancelled, "0");
     });
     assert!(crate::orders::sell(&w.app, &w.book, &sale("4")).unwrap().ok);
+    w.fake.set("sale-1", BrokerStatus::Filled, "4");
     w.later(5);
     w.settle();
     assert_eq!((w.phase(&b), w.bracket_of(&b).quantity), (Phase::Guarding, d("6")));
@@ -869,4 +913,103 @@ fn a_bracket_carried_over_from_the_earlier_app_has_its_card() {
     assert_eq!((card.tab.as_str(), card.live), ("filled", false));
     assert_eq!(card.at, (t0() + SignedDuration::from_hours(1)).to_string(), "dated when it ended, not when it was carried over");
     assert_eq!(card.value, crate::wire::Fig::Stated(crate::wire::Dec(d("1000"))), "what was paid: the entry's fill");
+}
+
+#[test]
+fn a_bracket_whose_broker_call_hangs_holds_up_no_other_bracket() {
+    let _g = crate::tests_common::guard();
+    let mut w = World::new();
+    let e1 = w.bracket("b1", "10", World::stop("95"), None);
+    let e2 = w.bracket("b2", "10", World::stop("95"), Some("105"));
+    w.quote("100");
+    w.fake.set(&e1, BrokerStatus::Filled, "10");
+    w.fake.set(&e2, BrokerStatus::Filled, "10");
+    w.settle();
+    let (slow, stop2) = (w.exit("b1").unwrap().request.id, w.exit("b2").unwrap().request.id);
+    // b1's stop read hangs; b2 reaches its target, which cancels its stop first
+    let (release, held) = std::sync::mpsc::channel();
+    let (told, cancels) = std::sync::mpsc::channel();
+    {
+        let mut s = w.fake.0.lock().unwrap();
+        s.held_read = Some((slow, held));
+        s.cancel_told = Some(told);
+    }
+    w.quote("106");
+    let (app, quotes, now) = (w.app.clone(), w.quotes(), w.now);
+    let tick = std::thread::spawn(move || crate::orders::bracket_tick(&app, Some(quotes), now).unwrap());
+    // a bound, so a check that waits on another bracket fails here instead of hanging
+    let cancelled = cancels.recv_timeout(std::time::Duration::from_secs(60));
+    release.send(()).unwrap();
+    tick.join().unwrap();
+    assert_eq!(cancelled.as_deref(), Ok(stop2.as_str()), "b2 acted while b1's call hung");
+}
+
+#[test]
+fn between_sessions_a_bracket_with_nothing_in_flight_reads_nothing_and_its_venues_open_brings_it_back() {
+    use bagholder_book::mapping::{InstrumentDraft, NameDraft};
+    use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
+    let _g = crate::tests_common::guard();
+    let (mut w, b) = World::armed(World::stop("95"), None);
+    // the listing, as the book knows it: on Nasdaq
+    let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), "sec");
+    let name = NameDraft { symbol: "SHOP".into(), venue_mic: Some("XNAS".into()), venue_name: None, name: None, seen: "2026-09-28".parse().unwrap() };
+    let draft = InstrumentDraft { refs: vec![r], kind: InstrumentKind::Security, currency: Currency::parse("USD").unwrap(), name: Some(name), option: None, standing: None };
+    w.book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), w.now).unwrap().unwrap();
+    let reads = |w: &World| w.fake.0.lock().unwrap().reads.len();
+    // Saturday: the first check after the close reads the resting stop once
+    w.now = "2026-10-03T15:00:00Z".parse().unwrap();
+    w.open = false;
+    w.tick();
+    let after_close = reads(&w);
+    for _ in 0..20 {
+        w.later(5);
+        w.tick();
+    }
+    assert_eq!(reads(&w), after_close, "nothing read while the session is closed and nothing is in flight");
+    // Monday's open: checked again
+    w.now = "2026-10-05T13:30:00Z".parse().unwrap();
+    w.open = true;
+    w.tick();
+    assert!(reads(&w) > after_close, "the open brings the check back");
+    assert_eq!(w.phase(&b), Phase::Guarding);
+}
+
+#[test]
+fn an_entry_filling_in_parts_gets_its_stop_at_the_first_fill_and_the_stop_follows_by_a_change_at_wealthsimple() {
+    let _g = crate::tests_common::guard();
+    let mut w = World::new();
+    let entry = w.bracket("b1", "10", World::stop("95"), None);
+    w.quote("100");
+    w.fake.set(&entry, BrokerStatus::Open, "3");
+    w.settle();
+    assert_eq!(w.phase("b1"), Phase::Guarding, "armed at the first fill");
+    let working = w.working_exits();
+    assert_eq!((working.len(), working[0].1.request["quantity"].as_f64()), (1, Some(3.0)));
+    let stop = working[0].0.clone();
+    // the entry fills in full: the resting stop's quantity is changed, never cancelled
+    w.fake.set(&entry, BrokerStatus::Filled, "10");
+    w.later(5);
+    w.settle();
+    let modifies = w.fake.0.lock().unwrap().modifies.clone();
+    assert_eq!(modifies.last().map(|(id, c)| (id.clone(), c["newQuantity"].as_f64())), Some((stop.clone(), Some(10.0))));
+    assert!(!w.fake.0.lock().unwrap().cancels.contains(&stop), "no moment without a stop");
+    assert_eq!(w.bracket_of("b1").quantity, d("10"));
+    w.state_is_the_log();
+}
+
+#[test]
+fn a_stop_that_fires_while_the_entry_still_works_cancels_the_rest_of_the_entry() {
+    let _g = crate::tests_common::guard();
+    let mut w = World::new();
+    *w.app.orders.seam.stop_allowed.lock().unwrap() = Some(false); // watched here
+    let entry = w.bracket("b1", "10", World::stop("95"), None);
+    w.quote("100");
+    w.fake.set(&entry, BrokerStatus::Open, "3");
+    w.settle();
+    w.quote("94");
+    w.later(5);
+    w.settle();
+    let s = w.fake.0.lock().unwrap();
+    assert!(s.cancels.contains(&entry), "the rest of the entry is cancelled: {:?}", s.cancels);
+    assert!(s.creates.iter().any(|c| s.orders[c].request["executionType"].as_str() == Some("MARKET")), "and the market sell went out");
 }

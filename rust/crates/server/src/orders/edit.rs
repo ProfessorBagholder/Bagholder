@@ -165,7 +165,7 @@ fn adjust(app: &Arc<App>, bracket_id: &str, leg: &str, price: &PageDec, trail: &
         }
         let exit = brackets::exit_of(&book, b)?;
         let step = bracket::adjust(exit.as_ref(), stop, target);
-        brackets::take_step(app, &book, &sb, &step, &Asker::Person, now)?;
+        brackets::take_step(app, &book, &sb, &step, &Asker::Person, now, &bagholder_core::bracket::StateKey::default())?;
         crate::app::log(&format!("bagholder bracket {bracket_id} for {}: {} {} by the user", sb.place.symbol, if stop_leg { "stop loss" } else { "take profit" }, if remove { "removed" } else { "moved" }));
     }
     // the step that follows the change (a resting leg cancelled to be placed again) goes out now

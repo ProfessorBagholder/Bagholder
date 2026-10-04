@@ -864,11 +864,14 @@ fn record(book: &Book, id: &str, now: Timestamp, e: &BracketEvent) -> Result<(),
 
 /// A sale from the ticket. The brackets guarding the shares clear the way first (their
 /// exit's cancel confirmed, so a stop and this sale never rest on the same shares);
-/// the sale goes out only then. A sale not confirmed in time, refused, or unsettled
-/// puts each bracket back to guarding, its stop placed again by the next check: the
-/// position is never left with neither.
+/// the sale goes out only then, and each bracket holds it until it fills or ends,
+/// watching its stop level meanwhile. A sale not confirmed in time or refused puts
+/// each bracket back to guarding, its stop placed again by the next check; a run that
+/// stops part way leaves brackets the next check gives their stop back (`Selling`
+/// marks the ones this run is sending): the position is never left with neither.
 pub(crate) fn sell(app: &Arc<App>, book: &Book, o: &OrderRequest) -> Result<PlaceTicketAnswer, String> {
     let brackets = guarding(book, o)?;
+    let _selling = gate::Selling::start(app, brackets.iter().map(|(id, _)| id.clone()).collect());
     let started = Timestamp::now();
     for (id, take) in &brackets {
         let lock = gate::bracket_lock(app, id);
@@ -930,17 +933,18 @@ pub(crate) fn sell(app: &Arc<App>, book: &Book, o: &OrderRequest) -> Result<Plac
             Err(e) => log(&format!("bagholder order: the sale {} could not be read back: {e}", o.id)),
         }
     }
-    let at_broker = matches!(fold.state, OrderState::Pending | OrderState::PartlyFilled | OrderState::Filled | OrderState::Cancelling);
-    if at_broker {
+    // at Wealthsimple, or not known yet: each bracket holds the sale as its exit, so
+    // nothing else is placed on those shares until it fills or ends (a sale that ends
+    // unfilled gives the stop back; one never found by the read-back fails, likewise)
+    let held = matches!(fold.state, OrderState::Pending | OrderState::PartlyFilled | OrderState::Filled | OrderState::Cancelling | OrderState::Sending | OrderState::Unconfirmed);
+    if held {
         for (id, take) in &brackets {
             let lock = gate::bracket_lock(app, id);
             let _one = lock.lock().unwrap_or_else(|e| e.into_inner());
-            record(book, id, Timestamp::now(), &BracketEvent::Sold { quantity: *take })?;
+            record(book, id, Timestamp::now(), &BracketEvent::SaleSent { order_id: o.id.clone(), quantity: *take })?;
         }
     } else {
-        // refused, never reached Wealthsimple, or still unsettled: the stop goes back. Were
-        // the sale at Wealthsimple after all, it holds the shares and the stop is refused for
-        // them, which ends the bracket
+        // refused, or never reached Wealthsimple: the stop goes back
         drop_all(&format!("the sale is {}", fold.state.as_str()))?;
     }
     log(&format!("bagholder order: {} {} ({})", o.id, super::order_words(o.side, o.quantity, o.kind, o.limit_price, o.stop_price), fold.state.as_str()));

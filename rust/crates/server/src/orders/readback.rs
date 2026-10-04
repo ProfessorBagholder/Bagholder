@@ -425,6 +425,10 @@ pub fn refresh_orders(app: &Arc<App>) -> RefreshOrdersAnswer {
     match book.orders_in_flight() {
         Ok(orders) => {
             for o in orders {
+                // a bracket's stop resting between sessions is read by its bracket at the open and the close
+                if o.request.bracket.as_ref().is_some_and(|(b, role)| *role != OrderRole::Entry && super::brackets::exit_rests(&book, b, now)) {
+                    continue;
+                }
                 match gate::read_back(app, &book, &o.request.id, now) {
                     Ok(_) => read += 1,
                     Err(e) => {

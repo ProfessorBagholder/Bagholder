@@ -103,7 +103,8 @@ pub fn place(app: &Arc<App>, book: &Book, o: &OrderRequest, asker: &Asker, now: 
             if book.orders_of_bracket(bracket).map_err(|e| e.to_string())?.iter().any(|x| x.request.bracket.as_ref().is_some_and(|(_, r)| *r != OrderRole::Entry) && x.fold.state.in_flight()) {
                 return Ok(Err(Held::InFlight));
             }
-            if sent_this_minute(book, bracket, now)? >= BRACKET_CAP_PER_MINUTE {
+            // the guard holds back the engine, never the market sell a reached stop fires
+            if *role != OrderRole::Market && sent_this_minute(book, bracket, now)? >= BRACKET_CAP_PER_MINUTE {
                 return Ok(Err(Held::Capped));
             }
         }
@@ -134,7 +135,8 @@ pub fn cancel(app: &Arc<App>, book: &Book, id: &str, asker: &Asker, now: Timesta
         return Ok(Err(Held::Dry));
     }
     let before = fold(book, id)?;
-    if !matches!(before.state, OrderState::Pending | OrderState::PartlyFilled) {
+    // a cancel not confirmed yet may be asked again
+    if !matches!(before.state, OrderState::Pending | OrderState::PartlyFilled | OrderState::Cancelling) {
         return Ok(Err(Held::NotNow(format!("the order is {}", before.state.as_str()))));
     }
     if let Some((bracket, role)) = book.order(id).map_err(|e| e.to_string())?.and_then(|o| o.request.bracket) {
@@ -168,6 +170,8 @@ pub fn read_back(app: &Arc<App>, book: &Book, id: &str, now: Timestamp) -> Resul
     let found = broker(app).read(app, id)?;
     let reading = match found {
         Found::Order(r) => r,
+        // just sent, the broker may not list it yet: asked again at the next check
+        Found::None if matches!(before.state, OrderState::Sending | OrderState::Unconfirmed) && book.order(id).map_err(|e| e.to_string())?.is_some_and(|o| now.duration_since(o.created_at) < SignedDuration::from_secs(NOT_FOUND_GRACE_SECONDS)) => return Ok(before),
         Found::None => Reading::of(BrokerStatus::NotFound, Dec::ZERO, None),
     };
     record(app, book, id, &Asker::Engine, now, &OrderEvent::Read(reading))?;
@@ -408,7 +412,38 @@ pub struct GateState {
     pub bracket_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// The orders this run is sending now, whose create has not been answered yet.
     pub sending: Mutex<HashSet<String>>,
+    /// The brackets whose ticket sale this run is sending now: a bracket asked to clear
+    /// the way for a sale no run is sending gives it up and guards again.
+    pub selling: Mutex<HashSet<String>>,
 }
+
+/// Brackets marked as having their ticket sale sent by this run for as long as this
+/// lives, an early return or a failure included.
+pub(crate) struct Selling<'a> {
+    app: &'a App,
+    ids: Vec<String>,
+}
+
+impl<'a> Selling<'a> {
+    pub(crate) fn start(app: &'a App, ids: Vec<String>) -> Selling<'a> {
+        app.orders.gate.selling.lock().unwrap_or_else(|e| e.into_inner()).extend(ids.iter().cloned());
+        Selling { app, ids }
+    }
+}
+
+impl Drop for Selling<'_> {
+    fn drop(&mut self) {
+        let mut set = self.app.orders.gate.selling.lock().unwrap_or_else(|e| e.into_inner());
+        for id in &self.ids {
+            set.remove(id);
+        }
+    }
+}
+
+/// How long after an order was sent the broker's "no such order" is not taken as
+/// final: the ticket waits as long for the broker to confirm a cancel
+/// (`ticket::CANCEL_CONFIRM_SECONDS`), the same order service answering.
+pub const NOT_FOUND_GRACE_SECONDS: i64 = 30;
 
 /// An order marked as being sent for as long as this lives.
 struct Sending<'a> {

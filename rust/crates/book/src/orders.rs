@@ -8,7 +8,7 @@
 //! state columns are that fold, kept so live ones are found by state, never by a
 //! list cut at a count.
 
-use bagholder_core::bracket::{Bracket, BracketEvent, ExitRole, Phase, StopLeg, Trail};
+use bagholder_core::bracket::{Bracket, BracketEvent, ExitRole, Phase, RefusalClass, StateKey, StopLeg, Trail};
 use bagholder_core::order::{Applied, Asker, BrokerStatus, NotAllowed, OrderEvent, OrderFold, OrderKind, OrderRole, OrderState, Reading, Side, TimeInForce};
 use bagholder_core::{Currency, Dec};
 use rusqlite::{params, OptionalExtension, Row};
@@ -695,7 +695,14 @@ fn bracket_body(e: &BracketEvent) -> Value {
         BracketEvent::Adopted { level, target, quantity } => json!({ "level": opt_dec_v(*level), "target": opt_dec_v(*target), "quantity": opt_dec_v(*quantity) }),
         BracketEvent::Adjusted { stop, target } => json!({ "stop": stop_v(stop), "target": opt_dec_v(*target) }),
         BracketEvent::Placed { role, order_id, price, quantity } => json!({ "role": role.as_str(), "order_id": order_id, "price": opt_dec_v(*price), "quantity": dec_v(*quantity) }),
-        BracketEvent::Refused { why, code } => json!({ "why": why, "code": code }),
+        BracketEvent::Refused { why, code, role, class, key } => json!({
+            "why": why, "code": code, "role": role.map(|r| r.as_str()), "class": class.as_str(),
+            "open": key.open, "units": opt_dec_v(key.units), "working": key.working,
+        }),
+        BracketEvent::SaleSent { order_id, quantity } => json!({ "order_id": order_id, "quantity": dec_v(*quantity) }),
+        BracketEvent::Grown { total } => json!({ "total": dec_v(*total) }),
+        BracketEvent::Resized { quantity } => json!({ "quantity": dec_v(*quantity) }),
+        BracketEvent::OffBroker { role } => json!({ "role": role.as_str() }),
         BracketEvent::CancelAsked { order_id } => json!({ "order_id": order_id }),
         BracketEvent::Cleared { filled } => json!({ "filled": dec_v(*filled) }),
         BracketEvent::Moved { to } => json!({ "to": to.as_str() }),
@@ -751,8 +758,36 @@ fn bracket_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<B
             BracketEvent::Placed { role: f.word("role", ExitRole::parse)?, order_id: f.text("order_id")?, price: f.opt_dec("price")?, quantity: f.dec("quantity")? }
         }
         "refused" => {
-            f.only(&["why", "code"])?;
-            BracketEvent::Refused { why: f.text("why")?, code: f.opt_text("code")? }
+            f.only(&["why", "code", "role", "class", "open", "units", "working"])?;
+            let (why, code) = (f.text("why")?, f.opt_text("code")?);
+            // a refusal recorded before refusals had classes is classed as it would be now
+            let class = match f.opt_text("class")? {
+                Some(c) => RefusalClass::parse(&c).map_err(|e| e.to_string())?,
+                None => bagholder_core::bracket::classify(false, code.as_deref(), &why),
+            };
+            let role = f.opt_text("role")?.map(|r| ExitRole::parse(&r).map_err(|e| e.to_string())).transpose()?;
+            let working = match m.get("working") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| format!("working is {v}, not a count"))?),
+            };
+            let key = StateKey { open: m.get("open").and_then(Value::as_bool).unwrap_or(false), units: f.opt_dec("units")?, working };
+            BracketEvent::Refused { why, code, role, class, key }
+        }
+        "sale-sent" => {
+            f.only(&["order_id", "quantity"])?;
+            BracketEvent::SaleSent { order_id: f.text("order_id")?, quantity: f.dec("quantity")? }
+        }
+        "grown" => {
+            f.only(&["total"])?;
+            BracketEvent::Grown { total: f.dec("total")? }
+        }
+        "resized" => {
+            f.only(&["quantity"])?;
+            BracketEvent::Resized { quantity: f.dec("quantity")? }
+        }
+        "off-broker" => {
+            f.only(&["role"])?;
+            BracketEvent::OffBroker { role: f.word("role", ExitRole::parse)? }
         }
         "cancel-asked" => {
             f.only(&["order_id"])?;

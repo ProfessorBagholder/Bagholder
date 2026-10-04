@@ -86,11 +86,30 @@ pub(crate) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &st
     notify::tell(app, kind, key, title, body, None);
 }
 
-/// Whether the order and bracket checks run now: whenever the app is connected.
-/// A sync in progress does not pause them: a stop is watched every few seconds
-/// whatever else reads Wealthsimple (`SPEC.md` §4, Brackets after the fill).
+/// Whether the order and bracket checks run now: while the app holds an access token
+/// Wealthsimple issued that has not expired. A refresh that failed while the token
+/// still has time does not stop them, nor does a sync in progress: a stop is watched
+/// every few seconds whatever else reads Wealthsimple (`SPEC.md` §4, Brackets after
+/// the fill; brief 15 §2).
 pub(crate) fn orders_can_run(app: &Arc<App>) -> bool {
-    app.state.lock().unwrap().connected
+    watch_blocked(app).is_none()
+}
+
+/// Why the checks cannot run now, in the person's words; none while they can.
+pub(crate) fn watch_blocked(app: &Arc<App>) -> Option<String> {
+    #[cfg(test)]
+    let held: Result<Option<bagholder_ws::session::Session>, String> = Ok(app.orders.seam.session.lock().unwrap_or_else(|e| e.into_inner()).clone());
+    #[cfg(not(test))]
+    let held = crate::session::load_session(app);
+    let sess = match held {
+        Ok(Some(s)) if !s.access_token.is_empty() => s,
+        Ok(_) => return Some("Wealthsimple is not signed in".into()),
+        Err(e) => return Some(e),
+    };
+    match bagholder_ws::session::expires_at_unix(&sess) {
+        Some(at) if at <= crate::app::now_unix() => Some("the Wealthsimple sign-in has expired; sign in again".into()),
+        _ => None,
+    }
 }
 
 /// The failures the order code has standing, for the header (`SPEC.md` §1: every
@@ -98,6 +117,7 @@ pub(crate) fn orders_can_run(app: &Arc<App>) -> bool {
 /// bracket stopped by its guard.
 pub fn order_failures(app: &Arc<App>) -> Vec<String> {
     let mut out: Vec<String> = app.orders.quote_problem.lock().unwrap_or_else(|e| e.into_inner()).clone().into_iter().collect();
+    out.extend(app.orders.watch_problem.lock().unwrap_or_else(|e| e.into_inner()).clone());
     if let Some(f) = app.figures.get() {
         match f.book().and_then(|b| b.live_brackets().map_err(|e| e.to_string())) {
             Ok(live) => {

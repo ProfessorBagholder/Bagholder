@@ -644,7 +644,8 @@ impl<'a> Client<'a> {
             .unwrap_or_default();
         let body = json!({"operationName": operation, "query": q, "variables": Value::Object(vars)});
 
-        let data = http_json_timeout("POST", &graphql_url(), Some(&body), &headers, 90);
+        let timeout = if ORDER_READS.contains(&operation) { ORDER_TIMEOUT_SECS } else { 90 };
+        let data = http_json_timeout("POST", &graphql_url(), Some(&body), &headers, timeout);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
             Some(401) | Some(403) => return Err(CallError::NotAuthorized),
             _ => {}
@@ -714,7 +715,7 @@ impl Client<'_> {
         let payload = serde_json::to_vec(&body).expect("a JSON value always serializes");
         let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !k.eq_ignore_ascii_case("Content-Type")).collect();
         hdrs.push(("Content-Type", "application/json"));
-        let resp = match bagholder_net::client::request_once("POST", &graphql_url(), &hdrs, Some(&payload), Duration::from_secs(90)) {
+        let resp = match bagholder_net::client::request_once("POST", &graphql_url(), &hdrs, Some(&payload), Duration::from_secs(ORDER_TIMEOUT_SECS)) {
             Ok(r) => r,
             Err(e) => return Mutation::Unclear(format!("{operation}: {e}")),
         };
@@ -752,6 +753,17 @@ pub fn read_mutation<T: DeserializeOwned>(operation: &str, status: u16, text: &s
         _ => Mutation::Unclear(format!("{operation}: a reply with no data")),
     }
 }
+
+// -- how long an order call may take ----------------------------------------------
+
+/// An order's create, cancel, change and read-back give up after this long: a
+/// bracket is checked every five seconds, so a call longer than three checks is
+/// taken as lost (unclear) and settled by reading the order back by its id at the
+/// next, never waited on while other brackets wait (brief 15 §2; brief 19).
+pub const ORDER_TIMEOUT_SECS: u64 = 15;
+
+/// The reads on the order path, held to `ORDER_TIMEOUT_SECS`.
+pub const ORDER_READS: [&str; 3] = ["FetchSoOrdersExtendedOrder", "OrderServiceExtendedOrderFeed", "FetchSecurityMarketData"];
 
 // -- when the token is refreshed ------------------------------------------------
 
