@@ -185,6 +185,35 @@ impl Book {
         Ok(Stored { record, outcome, changes })
     }
 
+    /// Replace what the record holds against its account: its account and
+    /// instrument found by their references; an account the book does not hold
+    /// is a problem, an instrument it does not know is held on none.
+    fn write_hold(&self, record: RecordId, hold: Option<&crate::mapping::HoldDraft>) -> Result<Vec<Problem>> {
+        self.conn().execute("DELETE FROM record_holds WHERE record_id = ?", [record.to_string()])?;
+        let Some(h) = hold else { return Ok(vec![]) };
+        let Some(account) = self.account_by_ref(&h.account)? else {
+            return Ok(vec![Problem::new("account-unknown", format!("no account has the {} id {}", h.account.broker, h.account.value))]);
+        };
+        let instrument = match &h.instrument {
+            Some(r) => self.instrument_by_ref(r)?,
+            None => None,
+        };
+        self.conn().execute(
+            "INSERT INTO record_holds (record_id, account_id, kind, currency, instrument_id, amount, quantity, premium) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                record.to_string(),
+                account.to_string(),
+                h.kind.as_str(),
+                h.currency.map(|c| c.to_string()),
+                instrument.map(|i| i.to_string()),
+                h.amount.map(|a| a.to_text()),
+                h.quantity.map(|q| q.to_text()),
+                h.premium.map(|p| p.to_text())
+            ],
+        )?;
+        Ok(vec![])
+    }
+
     fn add_revision(&self, id: RecordId, n: u32, payload: &str, at: jiff::Timestamp) -> Result<()> {
         self.conn().execute(
             "INSERT INTO record_revisions(record_id, revision, received_at, payload) VALUES (?, ?, ?, ?)",
@@ -249,6 +278,7 @@ impl Book {
             self.insert_transaction(t)?;
         }
         problems.extend(self.write_adjustments(record, &mapped.adjustments)?);
+        problems.extend(self.write_hold(record, mapped.hold.as_ref())?);
         self.add_problems(record, &problems)?;
         self.conn().execute("UPDATE source_records SET derived_version = ? WHERE id = ?", params![version, record.to_string()])?;
 

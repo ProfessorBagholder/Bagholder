@@ -67,6 +67,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("links", Holds::Records),
     ("link_records", Holds::Records),
     ("transfer_links", Holds::Records),
+    ("record_holds", Holds::Records),
     ("broker_reads", Holds::Broker),
     ("activity_reads", Holds::Broker),
     ("account_days", Holds::Broker),
@@ -76,6 +77,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("statements", Holds::Broker),
     ("statement_cash", Holds::Broker),
     ("statement_units", Holds::Broker),
+    ("statement_holds", Holds::Broker),
     ("account_values", Holds::Broker),
     ("monthly_statements", Holds::Broker),
     ("journal", Holds::Journal),
@@ -166,13 +168,15 @@ impl Book {
                      DELETE FROM record_refs WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM record_revisions WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM transactions WHERE record_id IN (SELECT id FROM temp.cleared);
+                     DELETE FROM record_holds WHERE record_id IN (SELECT id FROM temp.cleared);
+                     DELETE FROM statement_holds WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM source_records WHERE id IN (SELECT id FROM temp.cleared);
                      DROP TABLE temp.cleared;",
                 )?;
             }
             if what.broker {
                 c.execute_batch(
-                    "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
+                    "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_holds; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
                      DELETE FROM buying_power; DELETE FROM account_days; DELETE FROM account_links; DELETE FROM margin_backing;
                      DELETE FROM activity_reads; DELETE FROM broker_reads;",
                 )?;
@@ -220,6 +224,8 @@ impl Book {
                     AND id NOT IN (SELECT to_instrument FROM adjustment_legs WHERE to_instrument IS NOT NULL)
                     AND id NOT IN (SELECT anchor_instrument FROM trades WHERE anchor_instrument IS NOT NULL)
                     AND id NOT IN (SELECT instrument_id FROM statement_units)
+                    AND id NOT IN (SELECT instrument_id FROM record_holds WHERE instrument_id IS NOT NULL)
+                    AND id NOT IN (SELECT instrument_id FROM statement_holds WHERE instrument_id IS NOT NULL)
                     AND id NOT IN (SELECT instrument_id FROM declared_reads)
                     AND id NOT IN (SELECT instrument_id FROM stated_frequencies)
                     AND id NOT IN (SELECT instrument_id FROM instrument_sightings)
@@ -248,6 +254,7 @@ impl Book {
              DELETE FROM issuers WHERE id NOT IN (SELECT issuer_id FROM instruments WHERE issuer_id IS NOT NULL);
              CREATE TEMP TABLE unnamed_accounts AS SELECT id FROM accounts WHERE
                 id NOT IN (SELECT account_id FROM transactions)
+                AND id NOT IN (SELECT account_id FROM record_holds)
                 AND id NOT IN (SELECT account_id FROM statements)
                 AND id NOT IN (SELECT account_id FROM buying_power)
                 AND id NOT IN (SELECT account_id FROM account_days)

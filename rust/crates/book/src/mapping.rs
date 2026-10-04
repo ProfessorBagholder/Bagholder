@@ -44,13 +44,29 @@ pub struct Mapped {
     /// What the record says a corporate event did, or what the person states
     /// about a transaction (`bagholder_core::adjustment`).
     pub adjustments: Vec<AdjustmentDraft>,
+    /// What the broker holds against the account while the record is not final
+    /// (`bagholder_core::hold`).
+    pub hold: Option<HoldDraft>,
 }
 
 impl Mapped {
     /// A record the mapping could not read at all.
     pub fn unreadable(why: impl Into<String>) -> Mapped {
-        Mapped { legs: vec![], problems: vec![Problem::new("unreadable", why)], adjustments: vec![] }
+        Mapped { legs: vec![], problems: vec![Problem::new("unreadable", why)], adjustments: vec![], hold: None }
     }
+}
+
+/// A hold as a mapping describes it: its account and instrument by the broker's
+/// references; the book finds them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoldDraft {
+    pub account: AccountRef,
+    pub kind: bagholder_core::hold::HoldKind,
+    pub currency: Option<bagholder_core::Currency>,
+    pub instrument: Option<bagholder_core::instrument::Reference>,
+    pub amount: Option<bagholder_core::Dec>,
+    pub quantity: Option<bagholder_core::Dec>,
+    pub premium: Option<bagholder_core::Dec>,
 }
 
 /// An adjustment as a mapping describes it: the transaction it explains, and

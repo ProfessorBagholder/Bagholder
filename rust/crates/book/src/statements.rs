@@ -37,6 +37,8 @@ pub struct Stated {
     /// activity: every fill it reflects is on the record, so the book's cash is
     /// checked against it.
     pub cash_read: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
+    /// What the broker held against the account when it stated `cash_read`.
+    pub cash_read_holds: Vec<bagholder_core::hold::Hold>,
     /// The newest statement of what the account is worth now, and when.
     pub net_value_now: Option<(jiff::Timestamp, Money)>,
     /// The newest statement of units, and the day they are as of.
@@ -219,6 +221,13 @@ impl Book {
             for (c, a) in cash {
                 self.conn().execute("INSERT INTO statement_cash (statement_id, currency, amount) VALUES (?1, ?2, ?3)", params![id, c.to_string(), a.to_text()])?;
             }
+            // what its live records hold against the account as the cash is stated
+            self.conn().execute(
+                "INSERT INTO statement_holds (statement_id, record_id, kind, currency, instrument_id, amount, quantity, premium)
+                 SELECT ?1, h.record_id, h.kind, h.currency, h.instrument_id, h.amount, h.quantity, h.premium
+                 FROM record_holds h JOIN source_records r ON r.id = h.record_id AND r.state = 'live' WHERE h.account_id = ?2",
+                params![id, account.to_string()],
+            )?;
             Ok(())
         })
     }
@@ -297,6 +306,29 @@ impl Book {
         .collect()
     }
 
+    /// What the broker held against an account when it stated the cash of `statement`.
+    fn statement_holds(&self, statement: &str) -> Result<Vec<bagholder_core::hold::Hold>> {
+        let t = "statement_holds";
+        let mut st = self.conn().prepare_cached("SELECT record_id, kind, currency, instrument_id, amount, quantity, premium FROM statement_holds WHERE statement_id = ?1 ORDER BY record_id")?;
+        let rows = st.query_map(params![statement], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?))
+        })?;
+        let dec = |col: &'static str, v: Option<String>| v.map(|v| text::dec(t, col, &v)).transpose();
+        rows.map(|r| {
+            let (record, kind, currency, instrument, amount, quantity, premium) = r?;
+            Ok(bagholder_core::hold::Hold {
+                record: text::parsed(t, "record_id", &record, RecordId::parse)?,
+                kind: text::parsed(t, "kind", &kind, bagholder_core::hold::HoldKind::parse)?,
+                currency: currency.map(|c| text::currency(t, "currency", &c)).transpose()?,
+                instrument: instrument.map(|i| text::parsed(t, "instrument_id", &i, InstrumentId::parse)).transpose()?,
+                amount: dec("amount", amount)?,
+                quantity: dec("quantity", quantity)?,
+                premium: dec("premium", premium)?,
+            })
+        })
+        .collect()
+    }
+
     /// What the broker last stated about `account`.
     pub fn stated(&self, account: AccountId) -> Result<Stated> {
         let a = account.to_string();
@@ -337,6 +369,7 @@ impl Book {
         if let Some(read) = out.activity_read_at {
             if let Some((at, id)) = stated.iter().find(|(at, _)| *at <= read) {
                 out.cash_read = Some((*at, cash_of(id)?));
+                out.cash_read_holds = self.statement_holds(id)?;
             }
         }
         let value: Option<(String, String, String)> = self

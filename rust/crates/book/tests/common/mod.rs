@@ -135,7 +135,12 @@ impl Mapping for Spelled {
             Ok(v) => v,
             Err(e) => return Mapped::unreadable(e.to_string()),
         };
-        let Some(legs) = v.get("legs").and_then(Value::as_array) else { return Mapped::unreadable("no legs") };
+        let none = vec![];
+        let legs = match v.get("legs").and_then(Value::as_array) {
+            Some(l) => l,
+            None if v.get("hold").is_some() => &none,
+            None => return Mapped::unreadable("no legs"),
+        };
         let money = |l: &Value, f: &str| l.get(f).and_then(Value::as_str).map(|a| Money::new(d(a), Currency::parse(l.get("currency").and_then(Value::as_str).unwrap_or("CAD")).unwrap()));
         let legs = legs
             .iter()
@@ -188,7 +193,17 @@ impl Mapping for Spelled {
                     .collect()
             })
             .unwrap_or_default();
-        Mapped { legs, problems, adjustments }
+        // `{"hold": {"account", "kind", "currency", "amount"}}`
+        let hold = v.get("hold").map(|h| bagholder_book::mapping::HoldDraft {
+            account: AccountRef::new(Broker::named("wealthsimple"), h["account"].as_str().unwrap()),
+            kind: bagholder_core::hold::HoldKind::parse(h["kind"].as_str().unwrap()).unwrap(),
+            currency: h.get("currency").and_then(Value::as_str).map(|c| Currency::parse(c).unwrap()),
+            instrument: None,
+            amount: h.get("amount").and_then(Value::as_str).map(d),
+            quantity: None,
+            premium: None,
+        });
+        Mapped { legs, problems, adjustments, hold }
     }
 }
 

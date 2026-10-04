@@ -224,6 +224,7 @@ impl Mapping for Imported {
             }],
             problems: vec![],
             adjustments: vec![],
+            hold: None
         }
     }
 }

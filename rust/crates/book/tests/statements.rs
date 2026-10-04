@@ -114,3 +114,43 @@ fn a_part_s_last_read_is_the_newest_of_its_reads() {
     f.book.broker_read(f.connection, "cash", at("2026-09-25T20:00:00Z")).unwrap();
     assert_eq!(f.book.last_read(f.connection, "accounts").unwrap(), Some(at("2026-09-24T20:00:00Z")));
 }
+
+#[test]
+fn a_statement_of_cash_keeps_what_the_live_records_held_as_it_was_stated() {
+    use bagholder_core::hold::HoldKind;
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let m = Spelled::v(1);
+    let order = f.store(&m, "order", &serde_json::json!({"hold": {"account": "tfsa-1", "kind": "buy", "currency": "USD", "amount": "70.00"}}));
+    let r = f.book.broker_read(f.connection, "cash", t0()).unwrap();
+    let first = at("2026-10-01T14:47:07Z");
+    f.book.note_activity_read(a, first, true).unwrap();
+    f.book.store_cash(a, first, &BTreeMap::from([(Currency::USD, d("14881.57"))]), &r).unwrap();
+    let s = f.book.stated(a).unwrap();
+    assert_eq!(s.cash_read_holds.len(), 1);
+    let h = &s.cash_read_holds[0];
+    assert_eq!((h.record, h.kind, h.currency, h.amount), (order.record, HoldKind::Buy, Some(Currency::USD), Some(d("70.00"))));
+
+    // the order lapses: its record holds nothing, and the next statement none,
+    // while the first keeps what it was stated beside
+    let lapsed = f.book.store(&m, &f.incoming("order", r#"{"legs": []}"#), at("2026-10-02T14:09:55Z")).unwrap();
+    assert_eq!(lapsed.record, order.record);
+    let second = at("2026-10-02T14:09:55Z");
+    f.book.note_activity_read(a, second, true).unwrap();
+    f.book.store_cash(a, second, &BTreeMap::from([(Currency::USD, d("14951.57"))]), &r).unwrap();
+    assert!(f.book.stated(a).unwrap().cash_read_holds.is_empty());
+    let n: i64 = f.book.conn_for_tests().query_row("SELECT COUNT(*) FROM statement_holds", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn a_record_no_longer_live_holds_nothing_at_the_next_statement() {
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let order = f.store(&Spelled::v(1), "order", &serde_json::json!({"hold": {"account": "tfsa-1", "kind": "withdrawal", "currency": "CAD"}}));
+    f.book.mark_removed(order.record, t0()).unwrap();
+    let r = f.book.broker_read(f.connection, "cash", t0()).unwrap();
+    f.book.note_activity_read(a, t0(), true).unwrap();
+    f.book.store_cash(a, t0(), &BTreeMap::from([(Currency::CAD, d("1"))]), &r).unwrap();
+    assert!(f.book.stated(a).unwrap().cash_read_holds.is_empty());
+}

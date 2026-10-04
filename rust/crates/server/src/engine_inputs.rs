@@ -129,6 +129,7 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
         }
         b.activity_read_at = s.activity_read_at;
         b.cash_read = s.cash_read.map(|(_, c)| c);
+        b.cash_read_holds = s.cash_read_holds;
         b.buying_power = match s.buying_power {
             None => None,
             Some((_, Ok(m))) if m.currency == Currency::CAD => Some(Ok(m.amount)),
