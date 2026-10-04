@@ -179,6 +179,40 @@ fn migrate(schema: &Schema, conn: &Connection, path: &Path, app_version: &str, a
         done.snapshot = Some(snapshot(schema, conn, path, from, at)?);
     }
     let applied_at = at.to_string();
+    // A migration that changes a table SQLite cannot alter builds it again: a new
+    // table, the rows copied, the old one dropped, the new one renamed. With
+    // references enforced, the drop deletes every row first and each row another
+    // table points at counts as broken, though the renamed table holds it again by
+    // commit, so the migration fails on any file whose rows are referenced (a
+    // book holding a bracket with its orders). SQLite's own procedure
+    // (https://www.sqlite.org/lang_altertable.html#otheralter): references off
+    // while the migrations run (it cannot change inside a transaction), every
+    // reference checked before each one commits, and the setting put back after.
+    let enforced: bool = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let ran = run_pending(schema, conn, from, &applied_at, app_version, &mut done);
+    conn.pragma_update(None, "foreign_keys", if enforced { "ON" } else { "OFF" })?;
+    ran?;
+    Ok(done)
+}
+
+/// Every reference in the file points at a row: what `PRAGMA foreign_key_check`
+/// finds is a failure naming the first.
+fn references_hold(conn: &Connection) -> rusqlite::Result<()> {
+    let broken: Option<(String, Option<i64>, String)> = conn
+        .query_row("PRAGMA foreign_key_check", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map(Some)
+        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })?;
+    match broken {
+        None => Ok(()),
+        Some((table, row, parent)) => Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+            Some(format!("a row of {table} (rowid {}) points at a {parent} row that is not there", row.map_or("none".into(), |r| r.to_string()))),
+        )),
+    }
+}
+
+fn run_pending(schema: &Schema, conn: &Connection, from: u32, applied_at: &str, app_version: &str, done: &mut Migrated) -> Result<(), MigrateError> {
     for m in &schema.migrations[from as usize..] {
         crate::atomically(conn, || {
             if m.number == 1 {
@@ -194,6 +228,7 @@ fn migrate(schema: &Schema, conn: &Connection, path: &Path, app_version: &str, a
                 ))?;
             }
             conn.execute_batch(m.sql)?;
+            references_hold(conn)?;
             conn.execute(
                 "INSERT INTO schema_migrations(number, name, applied_at, app_version) VALUES (?, ?, ?, ?)",
                 rusqlite::params![m.number, m.name, applied_at, app_version],
@@ -203,7 +238,7 @@ fn migrate(schema: &Schema, conn: &Connection, path: &Path, app_version: &str, a
         .map_err(|error| MigrateError::Failed { store: schema.name, number: m.number, name: m.name, error })?;
         done.to = m.number;
     }
-    Ok(done)
+    Ok(())
 }
 
 /// The folder a store's snapshots are kept in: `snapshots/` beside its file.
@@ -349,6 +384,53 @@ mod tests {
         assert_eq!(version(&copy).unwrap(), 1);
         let body: String = copy.query_row("SELECT body FROM notes", [], |r| r.get(0)).unwrap();
         assert_eq!(body, "kept");
+    }
+
+    const P1: Migration = Migration { number: 1, name: "parents and children", sql: "CREATE TABLE parents (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a'))) STRICT;
+         CREATE TABLE children (id INTEGER PRIMARY KEY, parent TEXT NOT NULL REFERENCES parents(id)) STRICT;" };
+    // a CHECK changes only by building the table again, as the book's migration 25 does
+    const P2: Migration = Migration { number: 2, name: "a kind more", sql: "CREATE TABLE parents_v2 (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a','b'))) STRICT;
+         INSERT INTO parents_v2 SELECT id, kind FROM parents; DROP TABLE parents; ALTER TABLE parents_v2 RENAME TO parents;" };
+    const P2_DANGLING: Migration = Migration { number: 2, name: "a parent lost", sql: "DELETE FROM parents WHERE id = 'p1';" };
+    static PARENTS: [Migration; 1] = [P1];
+    static REBUILT: [Migration; 2] = [P1, P2];
+    static LOST: [Migration; 2] = [P1, P2_DANGLING];
+
+    /// A file at version 1 whose child row points at its parent, with references on.
+    fn referenced(path: &Path) {
+        let (conn, _) = open(&schema(&PARENTS), path, "1", at("2026-01-01T00:00:00Z")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn.execute_batch("INSERT INTO parents VALUES ('p1', 'a'); INSERT INTO children(parent) VALUES ('p1');").unwrap();
+    }
+
+    #[test]
+    fn a_table_built_again_under_rows_that_point_at_it_migrates_and_its_references_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        referenced(&path);
+        let conn = crate::open_db(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        drop(conn);
+        let (conn, done) = open(&schema(&REBUILT), &path, "2", at("2026-01-02T00:00:00Z")).unwrap();
+        assert_eq!((done.from, done.to), (1, 2));
+        let on: bool = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert!(on, "references are enforced again after the migrations, as the file was opened");
+        conn.execute("INSERT INTO parents VALUES ('p2', 'b')", []).unwrap();
+        assert!(conn.execute("INSERT INTO children(parent) VALUES ('nobody')", []).is_err(), "the child still points at the rebuilt table");
+        assert!(conn.execute("DELETE FROM parents WHERE id = 'p1'", []).is_err(), "and its rows are held by it");
+    }
+
+    #[test]
+    fn a_migration_that_leaves_a_reference_pointing_at_nothing_fails_and_is_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        referenced(&path);
+        let err = open(&schema(&LOST), &path, "2", at("2026-01-02T00:00:00Z")).unwrap_err();
+        assert!(err.to_string().contains("migration 2 (a parent lost) failed") && err.to_string().contains("a row of children"), "{err}");
+        let conn = crate::open_db(&path).unwrap();
+        assert_eq!(version(&conn).unwrap(), 1);
+        let n: i64 = conn.query_row("SELECT count(*) FROM parents", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "the parent is still there");
     }
 
     #[test]
