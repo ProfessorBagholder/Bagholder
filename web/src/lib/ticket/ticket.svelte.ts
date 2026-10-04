@@ -204,7 +204,7 @@ export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', 
   const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY', holding)
   ui.menuOpen = false
   const t: Ticket = {
-    step: 'form', symbol, securityId: securityId || info.securityId, exchange,
+    step: 'form', orderId: '', symbol, securityId: securityId || info.securityId, exchange,
     side: side === 'SELL' ? 'SELL' : 'BUY', accountId, holding: holding || undefined, type: 'LIMIT', tif: 'DAY',
     qty, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
@@ -277,6 +277,7 @@ export async function submit() {
   const q = v.q
   // the exact decimal text of the server's own figures for the ticket
   const body = {
+    id: t.orderId,
     symbol: t.symbol, securityId: q.securityId || t.securityId || '', accountId: t.accountId, side: t.side, type: t.type, tif: t.tif,
     quantity: v.qty,
     limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? v.limit : null,

@@ -689,7 +689,7 @@ fn stop_of(v: Option<&Value>) -> std::result::Result<Option<StopLeg>, String> {
 fn bracket_body(e: &BracketEvent) -> Value {
     match e {
         BracketEvent::Created { quantity, stop, target } => json!({ "quantity": dec_v(*quantity), "stop": stop_v(stop), "target": opt_dec_v(*target) }),
-        BracketEvent::Armed { quantity, high, native } => json!({ "quantity": dec_v(*quantity), "high": opt_dec_v(*high), "native": native }),
+        BracketEvent::Armed { quantity, high } => json!({ "quantity": dec_v(*quantity), "high": opt_dec_v(*high) }),
         BracketEvent::EntryEnded { why } | BracketEvent::Halted { why } | BracketEvent::SaleDropped { why } => json!({ "why": why }),
         BracketEvent::Trailed { level, high } => json!({ "level": dec_v(*level), "high": dec_v(*high) }),
         BracketEvent::Adopted { level, target, quantity } => json!({ "level": opt_dec_v(*level), "target": opt_dec_v(*target), "quantity": opt_dec_v(*quantity) }),
@@ -710,8 +710,8 @@ fn bracket_body(e: &BracketEvent) -> Value {
         BracketEvent::Done => json!({}),
         BracketEvent::SaleAsked { quantity } | BracketEvent::Sold { quantity } => json!({ "quantity": dec_v(*quantity) }),
         BracketEvent::PositionRead { held, read_at } => json!({ "held": held, "read_at": at_text(*read_at) }),
-        BracketEvent::Imported { phase, quantity, stop, target, native, exit, attempts, why, outcome, seen_held, row } => json!({
-            "phase": phase.as_str(), "quantity": dec_v(*quantity), "stop": stop_v(stop), "target": opt_dec_v(*target), "native": native,
+        BracketEvent::Imported { phase, quantity, stop, target, exit, attempts, why, outcome, seen_held, row } => json!({
+            "phase": phase.as_str(), "quantity": dec_v(*quantity), "stop": stop_v(stop), "target": opt_dec_v(*target),
             "exit_role": exit.as_ref().map(|(r, _)| r.as_str()), "exit_id": exit.as_ref().map(|(_, id)| id.clone()),
             "attempts": attempts, "why": why, "outcome": outcome, "seen_held": seen_held, "row": row,
         }),
@@ -726,8 +726,10 @@ fn bracket_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<B
             BracketEvent::Created { quantity: f.dec("quantity")?, stop: stop_of(m.get("stop"))?, target: f.opt_dec("target")? }
         }
         "armed" => {
+            // "native" is read past: an event written before every stop rested at the
+            // broker carries whether it would (`SPEC.md` §6, Arming)
             f.only(&["quantity", "high", "native"])?;
-            BracketEvent::Armed { quantity: f.dec("quantity")?, high: f.opt_dec("high")?, native: f.bool("native")? }
+            BracketEvent::Armed { quantity: f.dec("quantity")?, high: f.opt_dec("high")? }
         }
         "entry-ended" => {
             f.only(&["why"])?;
@@ -830,7 +832,6 @@ fn bracket_event_of(kind: &str, m: &Map<String, Value>) -> std::result::Result<B
                 quantity: f.dec("quantity")?,
                 stop: stop_of(m.get("stop"))?,
                 target: f.opt_dec("target")?,
-                native: f.bool("native")?,
                 exit,
                 attempts,
                 why: f.opt_text("why")?,

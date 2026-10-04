@@ -134,7 +134,12 @@ marginAccountId: string, };
 
 export type TicketQuoteDetail = { securityId: string, symbol: string, name: string, exchange: string, currency: string, securityType: string, buyable: boolean, sellable: boolean, tradeEligible: boolean, status: string, last: number | null, bid: number | null, ask: number | null, bidSize: number | null, askSize: number | null, mid: number | null, change: number | null, changePct: number | null, marketStatus: string, quotedAsOf: string, multiplier: number | null, };
 
-export type TicketQuoteOk = { ok: true, quote: TicketQuoteDetail, orderTypes: Array<string>, marginRate: number | null, accounts: Array<OrderAccount>, account: OrderAccount | null, buyingPower: number | null, cash: number | null, marginAvailable: number | null, live: boolean, };
+export type TicketQuoteOk = { ok: true, quote: TicketQuoteDetail, orderTypes: Array<string>, marginRate: number | null, accounts: Array<OrderAccount>, account: OrderAccount | null, buyingPower: number | null, cash: number | null, marginAvailable: number | null, live: boolean, 
+/**
+ * What could not be read for the ticket, each in its own words: the ticket says
+ * it, and figures that need it are not shown.
+ */
+unread: Array<string>, };
 
 export type TicketQuote = TicketQuoteOk | OkOr;
 
@@ -150,7 +155,12 @@ trailUnit: string | null, };
 
 export type TicketTarget = { price: PageDec, };
 
-export type Ticket = { symbol: string, securityId: string, accountId: string, 
+export type Ticket = { 
+/**
+ * The order's id, made by the page when it opened the review: the same order
+ * submitted twice is one order (brief 15 §2; brief 19, change 8).
+ */
+id: string, symbol: string, securityId: string, accountId: string, 
 /**
  * `BUY` or `SELL`.
  */
@@ -262,4 +272,10 @@ after: Fig<Dec> | null,
 /**
  * The whole units the buying power covers at the working price (a Buy).
  */
-maxQuantity: Dec | null, };
+maxQuantity: Dec | null, 
+/**
+ * Why Wealthsimple would not take the order as it stands, in the ticket's words:
+ * the review says it and Submit is off (owner, 2026-09-30: "'What it cannot
+ * send' should be refused").
+ */
+cannotSend: string | null, };

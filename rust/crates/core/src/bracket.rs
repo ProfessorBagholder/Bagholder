@@ -197,8 +197,8 @@ pub fn back_off(target: Dec) -> Dec {
 #[derive(Clone, Debug, PartialEq)]
 pub enum BracketEvent {
     Created { quantity: Dec, stop: Option<StopLeg>, target: Option<Dec> },
-    /// The entry filled: armed for what filled; `native` when the broker takes stop orders for it.
-    Armed { quantity: Dec, high: Option<Dec>, native: bool },
+    /// The entry filled: armed for what filled.
+    Armed { quantity: Dec, high: Option<Dec> },
     /// The entry ended with nothing filled.
     EntryEnded { why: String },
     /// A new high, and the stop level under it.
@@ -244,7 +244,7 @@ pub enum BracketEvent {
     PositionRead { held: bool, read_at: Timestamp },
     /// Carried over from the earlier app's store once, where it stood then, with the
     /// row as it was (JSON text).
-    Imported { phase: Phase, quantity: Dec, stop: Option<StopLeg>, target: Option<Dec>, native: bool, exit: Option<(ExitRole, String)>, attempts: u32, why: Option<String>, outcome: Option<String>, seen_held: bool, row: String },
+    Imported { phase: Phase, quantity: Dec, stop: Option<StopLeg>, target: Option<Dec>, exit: Option<(ExitRole, String)>, attempts: u32, why: Option<String>, outcome: Option<String>, seen_held: bool, row: String },
 }
 
 impl BracketEvent {
@@ -304,8 +304,6 @@ pub struct Bracket {
     pub quantity: Dec,
     pub stop: Option<StopLeg>,
     pub target: Option<Dec>,
-    /// The broker takes stop orders for the listing: the stop rests there. Otherwise it is watched here.
-    pub native: bool,
     /// The current exit's order id.
     pub exit: Option<(ExitRole, String)>,
     /// The price and quantity the current exit stands at, as the bracket knows it:
@@ -338,13 +336,12 @@ impl Bracket {
     pub fn of(events: &[(Timestamp, BracketEvent)]) -> Option<Bracket> {
         let (first, rest) = events.split_first()?;
         let mut b = match &first.1 {
-            BracketEvent::Created { quantity, stop, target } => Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, refused: None, entry_filled: Dec::ZERO, resized_at: None, off_broker: false, why: None, outcome: None, sale: None, seen_held: false, missed_at: None },
-            BracketEvent::Imported { phase, quantity, stop, target, native, exit, attempts, why, outcome, seen_held, .. } => Bracket {
+            BracketEvent::Created { quantity, stop, target } => Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, exit: None, exit_at: None, refused: None, entry_filled: Dec::ZERO, resized_at: None, off_broker: false, why: None, outcome: None, sale: None, seen_held: false, missed_at: None },
+            BracketEvent::Imported { phase, quantity, stop, target, exit, attempts, why, outcome, seen_held, .. } => Bracket {
                 phase: *phase,
                 quantity: *quantity,
                 stop: *stop,
                 target: *target,
-                native: *native,
                 exit: exit.clone(),
                 // the exit stands where the earlier app placed it: what the broker states is followed
                 exit_at: exit.as_ref().map(|(role, _)| (if *role == ExitRole::Target { *target } else { stop.map(|s| s.level) }, *quantity)),
@@ -373,13 +370,12 @@ impl Bracket {
         let refuse = |b: &Bracket| Err(format!("{} is not a move from {}", e.kind(), b.phase.as_str()));
         match e {
             BracketEvent::Created { .. } | BracketEvent::Imported { .. } => return refuse(self),
-            BracketEvent::Armed { quantity, high, native } => {
+            BracketEvent::Armed { quantity, high } => {
                 if self.phase != Waiting {
                     return refuse(self);
                 }
                 self.quantity = *quantity;
                 self.entry_filled = *quantity;
-                self.native = *native;
                 if let (Some(stop), Some(high)) = (self.stop.as_mut(), high) {
                     if let Some(trail) = stop.trail {
                         stop.high = Some(*high);
@@ -665,8 +661,6 @@ pub struct Seen<'a> {
     pub exit: Option<&'a Exit>,
     /// Why the position is gone, when the book shows it closed elsewhere.
     pub closed_elsewhere: Option<String>,
-    /// The broker takes stop orders for the listing (asked when the bracket arms).
-    pub stop_allowed: bool,
     /// How things stand for a refusal that depends on them.
     pub key: StateKey,
     /// The ticket's sale for this bracket is being sent by this run.
@@ -879,7 +873,7 @@ pub fn decide(b: &Bracket, seen: &Seen) -> Step {
                 if at_target && b.may_send(ExitRole::Target, &seen.key) && !b.off_broker {
                     return place(b, seen, ExitRole::Target, b.target);
                 }
-                if b.native && b.stop.is_some() {
+                if b.stop.is_some() {
                     return place(b, seen, ExitRole::Stop, level);
                 }
                 Step::nothing()
@@ -1038,7 +1032,7 @@ fn arm(seen: &Seen) -> Step {
     // armed from the first fill, for what has filled; it grows with the entry
     // (`docs/decisions.md` 2026-10-04)
     if entry.filled.is_positive() {
-        return Step::record(vec![BracketEvent::Armed { quantity: entry.filled, high: entry.average, native: seen.stop_allowed }]);
+        return Step::record(vec![BracketEvent::Armed { quantity: entry.filled, high: entry.average }]);
     }
     if entry.state.in_flight() {
         return Step::nothing();
@@ -1192,7 +1186,7 @@ mod tests {
     fn at(phase: Phase) -> Bracket {
         let stop = Some(StopLeg { level: d("95"), trail: None, high: None });
         let mut path = vec![BracketEvent::Created { quantity: d("10"), stop, target: Some(d("110")) }];
-        let armed = BracketEvent::Armed { quantity: d("10"), high: None, native: true };
+        let armed = BracketEvent::Armed { quantity: d("10"), high: None };
         let more: Vec<BracketEvent> = match phase {
             Waiting => vec![],
             Guarding => vec![armed],
@@ -1217,7 +1211,7 @@ mod tests {
     fn every_event() -> Vec<BracketEvent> {
         let mut v = vec![
             BracketEvent::Created { quantity: d("1"), stop: None, target: None },
-            BracketEvent::Armed { quantity: d("10"), high: None, native: true },
+            BracketEvent::Armed { quantity: d("10"), high: None },
             BracketEvent::EntryEnded { why: "x".into() },
             BracketEvent::Trailed { level: d("96"), high: d("101") },
             BracketEvent::Adopted { level: Some(d("94")), target: None, quantity: None },
@@ -1238,7 +1232,7 @@ mod tests {
             BracketEvent::Grown { total: d("20") },
             BracketEvent::Resized { quantity: d("12") },
             BracketEvent::OffBroker { role: ExitRole::Stop },
-            BracketEvent::Imported { phase: Guarding, quantity: d("1"), stop: None, target: None, native: false, exit: None, attempts: 0, why: None, outcome: None, seen_held: false, row: "{}".into() },
+            BracketEvent::Imported { phase: Guarding, quantity: d("1"), stop: None, target: None, exit: None, attempts: 0, why: None, outcome: None, seen_held: false, row: "{}".into() },
         ];
         for &p in Phase::ALL {
             v.push(BracketEvent::Moved { to: p });

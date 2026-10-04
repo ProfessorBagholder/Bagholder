@@ -15,7 +15,6 @@ use bagholder_core::bracket::{self, Bracket, BracketEvent, Exit, ExitRole, Phase
 use bagholder_core::order::{Asker, OrderEvent, OrderFold, OrderKind, OrderRole, OrderState, Side, TimeInForce};
 use bagholder_core::Dec;
 use jiff::{SignedDuration, Timestamp};
-use serde_json::json;
 
 use super::gate::{self, Held};
 use super::{log, ticket_session, TicketQuoteDetail};
@@ -175,22 +174,7 @@ pub fn exit_order(sb: &StoredBracket, role: ExitRole, price: Option<Dec>, quanti
         ExitRole::Market => (OrderKind::Market, OrderRole::Market, None, None),
         ExitRole::Sale => return None,
     };
-    let mut request = json!({
-        "canonicalAccountId": sb.place.broker_account,
-        "externalId": id,
-        "executionType": super::ws_execution(kind),
-        "orderType": "SELL_QUANTITY",
-        "quantity": quantity.to_f64(),
-        "securityId": sb.place.broker_security,
-        "timeInForce": "UNTIL_CANCEL",
-    });
-    if let Some(p) = limit {
-        request["limitPrice"] = json!(p.to_f64());
-    }
-    if let Some(p) = stop {
-        request["stopPrice"] = json!(p.to_f64());
-    }
-    Some(OrderRequest {
+    let mut o = OrderRequest {
         id,
         broker: sb.place.broker.clone(),
         broker_account: sb.place.broker_account.clone(),
@@ -204,8 +188,10 @@ pub fn exit_order(sb: &StoredBracket, role: ExitRole, price: Option<Dec>, quanti
         stop_price: stop,
         time_in_force: TimeInForce::UntilCancel,
         bracket: Some((sb.place.id.clone(), order_role)),
-        request,
-    })
+        request: serde_json::Value::Null,
+    };
+    o.request = gate::request_record(&o);
+    Some(o)
 }
 
 fn record(book: &Book, id: &str, asker: &Asker, now: Timestamp, e: &BracketEvent) -> Result<(), String> {
@@ -307,26 +293,59 @@ fn awaited(x: &Exit) -> bool {
     x.fold.state.in_flight()
 }
 
+/// What stands in the way of a bracket's check, said in the header until the bracket's
+/// next check goes through (`SPEC.md` §1: a failure is said until its own next
+/// success); the terminal line stays beside it. `None` clears it.
+pub(crate) fn trouble(app: &Arc<App>, id: &str, why: Option<String>) {
+    let changed = {
+        let mut t = app.orders.bracket_trouble.lock().unwrap_or_else(|e| e.into_inner());
+        let before = t.get(id).cloned();
+        match &why {
+            Some(w) => t.insert(id.to_string(), w.clone()),
+            None => t.remove(id),
+        };
+        before != why
+    };
+    if changed {
+        app.events.signal();
+    }
+}
+
 /// One bracket's check: what it waits on read back, then its steps until it has
-/// nothing to do or a request is out. Taken under the bracket's lock.
+/// nothing to do or a request is out. Taken under the bracket's lock. What went wrong
+/// in it is said in the header until a check of the bracket goes through.
 pub fn check_bracket(app: &Arc<App>, book: &Book, id: &str, quotes: &HashMap<String, Quoted>, now: Timestamp) -> Result<(), String> {
+    let mut troubles = Vec::new();
+    let checked = check_one(app, book, id, quotes, now, &mut troubles);
+    if let Err(e) = &checked {
+        troubles.push(format!("A bracket could not be checked: {e}"));
+    }
+    trouble(app, id, troubles.into_iter().next());
+    checked
+}
+
+fn check_one(app: &Arc<App>, book: &Book, id: &str, quotes: &HashMap<String, Quoted>, now: Timestamp, troubles: &mut Vec<String>) -> Result<(), String> {
     let lock = gate::bracket_lock(app, id);
     let _one = lock.lock().unwrap_or_else(|e| e.into_inner());
     let Some(sb) = book.bracket(id).map_err(|e| e.to_string())? else { return Ok(()) };
+    let mut said = |why: String| {
+        log(&format!("bagholder bracket {id}: {why}"));
+        troubles.push(format!("The bracket on {}: {why}", sb.place.symbol));
+    };
     // what the bracket waits on is read from the broker first
     if super::orders_live(app) {
         // the entry while it works, armed or not: a bracket grows with its fills
         if let Some((entry, fold)) = entry_of(book, id)? {
             if fold.state.in_flight() {
                 if let Err(e) = gate::read_back(app, book, &entry, now) {
-                    log(&format!("bagholder bracket {id}: the entry could not be read back: {e}"));
+                    said(format!("its entry could not be read back from Wealthsimple: {e}"));
                 }
             }
         }
         if let Some(x) = exit_of(book, &sb.bracket)? {
             if awaited(&x) {
                 if let Err(e) = gate::read_back(app, book, &x.order_id, now) {
-                    log(&format!("bagholder bracket {id}: its exit could not be read back: {e}"));
+                    said(format!("its exit could not be read back from Wealthsimple: {e}"));
                 }
             }
         }
@@ -351,27 +370,13 @@ pub fn check_bracket(app: &Arc<App>, book: &Book, id: &str, quotes: &HashMap<Str
                         closed_elsewhere = why;
                     }
                     Ok(None) => {}
-                    Err(e) => log(&format!("bagholder bracket {id}: what the book holds could not be read: {e}")),
+                    Err(e) => said(format!("what the book holds of it could not be read: {e}")),
                 }
             }
         }
-        // whether the stop can rest at Wealthsimple is asked when the bracket arms; not
-        // known, it waits for the next check rather than arm as the other kind
-        let arming = b.phase == Phase::Waiting && entry.as_ref().is_some_and(|e| e.filled.is_positive());
-        let stop_allowed = if arming {
-            match super::stop_allowed(app, &sb.place.broker_security) {
-                Ok(v) => v,
-                Err(e) => {
-                    log(&format!("bagholder bracket {id} for {}: not armed yet: {e}", sb.place.symbol));
-                    return Ok(());
-                }
-            }
-        } else {
-            false
-        };
         let key = state_key(app, book, &sb, quote.open);
         let sale_running = app.orders.gate.selling.lock().unwrap_or_else(|e| e.into_inner()).contains(id);
-        let seen = Seen { now, open: quote.open, tape: quote.tape, entry: entry.as_ref(), exit: exit.as_ref(), closed_elsewhere, stop_allowed, key: key.clone(), sale_running, entry_order: entry_row.as_ref().map(|(id, _)| id.as_str()) };
+        let seen = Seen { now, open: quote.open, tape: quote.tape, entry: entry.as_ref(), exit: exit.as_ref(), closed_elsewhere, key: key.clone(), sale_running, entry_order: entry_row.as_ref().map(|(id, _)| id.as_str()) };
         let step: Step = bracket::decide(b, &seen);
         if step.is_nothing() {
             return Ok(());
@@ -381,7 +386,7 @@ pub fn check_bracket(app: &Arc<App>, book: &Book, id: &str, quotes: &HashMap<Str
             return Ok(());
         }
     }
-    log(&format!("bagholder bracket {id}: more than {STEPS_PER_CHECK} steps in one check; the rest wait for the next"));
+    said(format!("more than {STEPS_PER_CHECK} steps in one check; the rest wait for the next"));
     Ok(())
 }
 
@@ -497,6 +502,11 @@ pub fn bracket_tick(app: &Arc<App>, quotes: Option<HashMap<String, Quoted>>, now
     let all = book.live_brackets().map_err(|e| e.to_string())?;
     // between sessions a bracket with nothing in flight reads nothing and asks for no quote
     let live: Vec<StoredBracket> = all.iter().filter(|sb| !resting(app, &book, sb, now)).cloned().collect();
+    // a bracket no longer live has nothing standing in its way
+    let gone: Vec<String> = app.orders.bracket_trouble.lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|k| !all.iter().any(|sb| &sb.place.id == *k)).cloned().collect();
+    for id in gone {
+        trouble(app, &id, None);
+    }
     let quotes = quotes.unwrap_or_else(|| quotes_for(app, &live, now));
     // each bracket on its own thread with its own book connection: one slow broker
     // call holds up only its own bracket (brief 15 §2)
@@ -507,6 +517,7 @@ pub fn bracket_tick(app: &Arc<App>, quotes: Option<HashMap<String, Quoted>>, now
                 let checked = f.book().and_then(|book| check_bracket(app, &book, &sb.place.id, quotes, now));
                 if let Err(e) = checked {
                     log(&format!("bagholder bracket {}: {e}", sb.place.id));
+                    trouble(app, &sb.place.id, Some(format!("The bracket on {} could not be checked: {e}", sb.place.symbol)));
                 }
             });
         }

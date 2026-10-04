@@ -140,7 +140,7 @@ test('a Market order hides Limit/Stop price and Time in force; other types show 
   await expect(page.locator('#tk-limit')).toBeVisible()
 })
 
-test('only the order types the quote reports for the security are offered', async ({ page, request }) => {
+test('the ticket offers the order types the server names, and nothing of its own', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
     [quoteKey('TD', 'sec-td', (await holding(request, 'TD')).account, 'TSX')]: { ok: true, orderTypes: ['MARKET', 'LIMIT'] },
   })
@@ -360,6 +360,8 @@ test('submitting sends Wealthsimple\'s own request shape and flashes the order p
   await page.getByRole('button', { name: 'Review' }).click()
   await page.getByRole('button', { name: 'Submit' }).click()
   await expect.poll(() => sent).toEqual({
+    // the order's id, made when the review opened
+    id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
     symbol: 'NVDA', securityId: 'sec-nvda', accountId: nvdaAccount, side: 'BUY', type: 'LIMIT', tif: 'DAY',
     // the exact decimal text of the server's preview, never a float
     quantity: '25', limitPrice: '165.4', stopPrice: null, currency: 'USD',
@@ -405,6 +407,54 @@ test('a rejection stays on the review step with its reason', async ({ page, requ
   await page.getByRole('button', { name: 'Submit' }).click()
   await expect(page.locator('.status-err')).toHaveText('A limit price is required.')
   await expect(page.getByRole('dialog', { name: 'Review order' })).toBeVisible() // still there, nothing recorded
+})
+
+test('one review submitted again is the same order: the same id is sent, and Back makes a new one', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '')
+  await ready(page)
+  const ids: string[] = []
+  await page.route('**/api/order', (route) => { ids.push(route.request().postDataJSON().id); return route.fulfill({ json: { ok: false, error: 'Not sent: Not connected.' } }) })
+  await page.keyboard.press('Control+k')
+  await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
+  await page.getByRole('button', { name: 'Buy NVDA', exact: true }).click()
+  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Submit' }).click()
+  await expect(page.locator('.status-err')).toHaveText('Not sent: Not connected.')
+  await page.getByRole('button', { name: 'Submit' }).click()
+  await expect.poll(() => ids.length).toBe(2)
+  expect(ids[1]).toBe(ids[0])
+  await page.getByRole('button', { name: 'Back' }).click()
+  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Submit' }).click()
+  await expect.poll(() => ids.length).toBe(3)
+  expect(ids[2]).not.toBe(ids[0])
+})
+
+test('a price Wealthsimple would not take is said on the review, and Submit is off', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '')
+  await ready(page)
+  let sent = false
+  await page.route('**/api/order', (route) => { sent = true; return route.fulfill({ json: { ok: true, status: 'pending' } }) })
+  await page.keyboard.press('Control+k')
+  await page.getByRole('textbox', { name: 'Search' }).fill('NVDA')
+  await page.getByRole('button', { name: 'Buy NVDA', exact: true }).click()
+  await page.locator('#tk-limit').fill('165.405')
+  await page.locator('#tk-limit').press('Enter')
+  await page.getByRole('button', { name: 'Review' }).click()
+  await expect(page.locator('.status-err')).toHaveText('The limit price 165.405 has more decimal places than Wealthsimple takes: two from $1, four below it.')
+  await expect(page.getByRole('button', { name: 'Submit' })).toBeDisabled()
+  expect(sent).toBe(false)
+})
+
+test('a read the ticket could not make is said on it', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '', () => {}, {
+    [quoteKey('AAPL', 'sec-aapl', (await holding(request, 'AAPL')).account, 'NASDAQ')]: { ok: true, quote: { last: 163.47, currency: 'USD', multiplier: 1 }, unread: ['The margin rate could not be read: the connection dropped'] },
+  })
+  await ready(page)
+  await page.keyboard.press('Control+k')
+  await page.getByRole('textbox', { name: 'Search' }).fill('AAPL')
+  await page.getByRole('button', { name: 'Buy AAPL', exact: true }).click()
+  await expect(page.locator('.status-err')).toHaveText('The margin rate could not be read: the connection dropped')
 })
 
 test('Esc keeps the draft; reopening the same symbol and side restores it', async ({ page, request }) => {

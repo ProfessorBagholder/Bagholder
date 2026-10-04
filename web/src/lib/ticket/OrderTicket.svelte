@@ -74,7 +74,11 @@
   function setSlUnit(u: 'amt' | 'pct') { if (t.sl.kind === 'trail') { t.sl.unit = u; t.sl.trail = null; t.text.sltrail = null } else { t.sl.priceUnit = u; t.sl.price = null; t.sl.pct = null; t.text.slprice = null } }
   function setTpUnit(u: 'amt' | 'pct') { t.tp.unit = u; t.tp.price = null; t.tp.pct = null; t.text.tp = null }
   function doMax() { const m = maxQty(); if (m != null) { t.qty = m; t.text.qty = null; t.text.amt = null } }
-  function review() { if (!(t.qty != null && t.qty > 0)) t.qty = 1; t.step = 'review'; t.submitError = '' }
+  // the review is the order: its id is made here, so a second Submit of it is the same order
+  function review() { if (!(t.qty != null && t.qty > 0)) t.qty = 1; t.orderId = crypto.randomUUID(); t.step = 'review'; t.submitError = '' }
+  function back() { t.step = 'form'; t.orderId = ''; t.submitError = '' }
+  // what Wealthsimple would not take, as the server read the ticket: said, and Submit off
+  const cannotSend = $derived(ticketStore.preview?.cannotSend ?? '')
 </script>
 
 <div id="tkWrap">
@@ -105,6 +109,7 @@
           </div>
         </div>
         {#if t.error}<div class="status-err" style="font-size:12px;margin-top:-12px">{t.error}</div>{/if}
+        {#each t.data?.unread ?? [] as why (why)}<div class="status-err" style="font-size:12px;margin-top:-12px">{why}</div>{/each}
 
         <div class="tk-seg">
           <button class="tk-segopt buy" class:on={v.buy} onclick={() => setSide('BUY')}>Buy</button>
@@ -215,9 +220,9 @@
           {/if}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:16px;box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.10)"><span style="font-size:13px;font-weight:500">{v.buy ? 'Estimated cost' : 'Estimated proceeds'}</span><span class="num" style="font-size:20px;line-height:1.2;font-weight:500">{(t.type === 'MARKET' ? '≈ ' : '') + tkAmt(v.notional)}</span></div>
-        {#if t.submitError}<div class="status-err" style="font-size:12px">{t.submitError}</div>{/if}
+        {#if cannotSend}<div class="status-err" style="font-size:12px">{cannotSend}</div>{:else if t.submitError}<div class="status-err" style="font-size:12px">{t.submitError}</div>{/if}
       </div>
-      <div class="tk-ft"><button class="tk-cancel" onclick={() => { t.step = 'form'; t.submitError = '' }}>Back</button><button class="tk-go" disabled={t.busy} onclick={submit}>{t.busy ? 'Submitting…' : 'Submit'}</button></div>
+      <div class="tk-ft"><button class="tk-cancel" onclick={back}>Back</button><button class="tk-go" disabled={t.busy || !!cannotSend} onclick={submit}>{t.busy ? 'Submitting…' : 'Submit'}</button></div>
     {/if}
   </div>
 </div>

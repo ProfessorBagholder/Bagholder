@@ -45,9 +45,9 @@ pub enum Found {
 /// A broker's order operations, as the gate uses them. Wealthsimple's is the one
 /// the app runs; a test hands in a fake that misbehaves.
 pub trait OrderBroker: Send + Sync {
-    fn create(&self, app: &Arc<App>, request: &Value) -> Sent;
+    fn create(&self, app: &Arc<App>, order: &OrderRequest) -> Sent;
     fn cancel(&self, app: &Arc<App>, external_id: &str) -> Sent;
-    fn modify(&self, app: &Arc<App>, external_id: &str, change: &Value) -> Sent;
+    fn modify(&self, app: &Arc<App>, external_id: &str, change: &Change) -> Sent;
     /// Where the order stands, by the app's own id; `Err` when the broker could not be asked.
     fn read(&self, app: &Arc<App>, external_id: &str) -> Result<Found, String>;
 }
@@ -117,7 +117,7 @@ pub fn place(app: &Arc<App>, book: &Book, o: &OrderRequest, asker: &Asker, now: 
     // until its answer is recorded, a read-back must not decide it: the broker may
     // not have it yet, and "no such order" would fail an order it is about to take
     let _sending = Sending::start(app, &o.id);
-    let event = match broker(app).create(app, &o.request) {
+    let event = match broker(app).create(app, o) {
         Sent::Accepted { broker_id: Some(id) } => OrderEvent::Accepted { broker_id: id },
         // taken, and no id named: the read-back finds it
         Sent::Accepted { broker_id: None } => OrderEvent::Unclear { why: "the broker took it and named no id".into() },
@@ -203,14 +203,7 @@ pub fn modify(app: &Arc<App>, book: &Book, id: &str, limit_price: Option<Dec>, q
         return Ok(Err(Held::NotNow(format!("the order is {}", before.state.as_str()))));
     }
     record(app, book, id, asker, now, &OrderEvent::ModifyAsked { limit_price, quantity })?;
-    let mut change = serde_json::Map::new();
-    if let Some(p) = limit_price {
-        change.insert("newLimitPrice".into(), json!(p.to_f64()));
-    }
-    if let Some(q) = quantity {
-        change.insert("newQuantity".into(), json!(q.to_f64()));
-    }
-    match broker(app).modify(app, id, &Value::Object(change)) {
+    match broker(app).modify(app, id, &Change { limit_price, quantity }) {
         Sent::Accepted { .. } | Sent::Unclear { .. } => {}
         Sent::Refused { why, .. } | Sent::NotSent { why } => record(app, book, id, asker, now, &OrderEvent::ModifyRefused { why })?,
     }
@@ -231,21 +224,19 @@ pub struct Wealthsimple;
 const ORDER_BRANCH: &str = "TR";
 
 impl OrderBroker for Wealthsimple {
-    fn create(&self, app: &Arc<App>, request: &Value) -> Sent {
+    fn create(&self, app: &Arc<App>, order: &OrderRequest) -> Sent {
         let sess = match super::ticket_session(app) { Ok(s) => s, Err(why) => return Sent::NotSent { why } };
-        created(mutate::<bagholder_ws::wire::CreateOrderAnswer>(app, &sess, "SoOrdersOrderCreate", &json!({ "input": request })))
+        created(mutate::<bagholder_ws::wire::CreateOrderAnswer, _>(app, &sess, "SoOrdersOrderCreate", &Input { input: create_input(order) }))
     }
 
     fn cancel(&self, app: &Arc<App>, external_id: &str) -> Sent {
         let sess = match super::ticket_session(app) { Ok(s) => s, Err(why) => return Sent::NotSent { why } };
-        cancelled(mutate::<bagholder_ws::wire::CancelOrderAnswer>(app, &sess, "SoOrdersOrderCancel", &json!({ "cancelOrderRequest": { "externalId": external_id } })))
+        cancelled(mutate::<bagholder_ws::wire::CancelOrderAnswer, _>(app, &sess, "SoOrdersOrderCancel", &json!({ "cancelOrderRequest": { "externalId": external_id } })))
     }
 
-    fn modify(&self, app: &Arc<App>, external_id: &str, change: &Value) -> Sent {
+    fn modify(&self, app: &Arc<App>, external_id: &str, change: &Change) -> Sent {
         let sess = match super::ticket_session(app) { Ok(s) => s, Err(why) => return Sent::NotSent { why } };
-        let mut input = change.clone();
-        input["externalId"] = json!(external_id);
-        modified(mutate::<bagholder_ws::wire::ModifyOrderAnswer>(app, &sess, "SoOrdersOrderModify", &json!({ "input": input })))
+        modified(mutate::<bagholder_ws::wire::ModifyOrderAnswer, _>(app, &sess, "SoOrdersOrderModify", &Input { input: change.input(external_id) }))
     }
 
     fn read(&self, app: &Arc<App>, external_id: &str) -> Result<Found, String> {
@@ -256,13 +247,97 @@ impl OrderBroker for Wealthsimple {
 }
 
 
+// ---------------------------------------------------------------------------
+// What Wealthsimple is sent
+// ---------------------------------------------------------------------------
+
+/// A decimal written into the request as the JSON number it is, digit for digit:
+/// the price confirmed is the price sent, never a float's nearest (brief 19, change 5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Exact(pub Dec);
+
+impl serde::Serialize for Exact {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let raw = serde_json::value::RawValue::from_string(self.0.to_string()).map_err(serde::ser::Error::custom)?;
+        raw.serialize(s)
+    }
+}
+
+/// A mutation's variables: its one input.
+#[derive(serde::Serialize)]
+struct Input<T> {
+    input: T,
+}
+
+/// An order as Wealthsimple's web app creates one (`SoOrdersOrderCreate`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInput {
+    pub canonical_account_id: String,
+    pub external_id: String,
+    pub execution_type: &'static str,
+    pub order_type: &'static str,
+    pub quantity: Exact,
+    pub security_id: String,
+    pub time_in_force: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_price: Option<Exact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_price: Option<Exact>,
+}
+
+/// What an order is sent as, from what the book records of it.
+pub fn create_input(o: &OrderRequest) -> CreateInput {
+    use bagholder_core::order::{Side, TimeInForce};
+    CreateInput {
+        canonical_account_id: o.broker_account.clone(),
+        external_id: o.id.clone(),
+        execution_type: super::ws_execution(o.kind),
+        order_type: if o.side == Side::Buy { "BUY_QUANTITY" } else { "SELL_QUANTITY" },
+        quantity: Exact(o.quantity),
+        security_id: o.broker_security.clone(),
+        time_in_force: if o.time_in_force == TimeInForce::Day { "DAY" } else { "UNTIL_CANCEL" },
+        limit_price: o.limit_price.map(Exact),
+        stop_price: o.stop_price.map(Exact),
+    }
+}
+
+/// The record of what an order is sent as, kept with it in the book.
+pub fn request_record(o: &OrderRequest) -> Value {
+    serde_json::to_value(create_input(o)).unwrap_or(Value::Null)
+}
+
+/// A change to a working order's limit or quantity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Change {
+    pub limit_price: Option<Dec>,
+    pub quantity: Option<Dec>,
+}
+
+/// A change as Wealthsimple's web app sends one (`SoOrdersOrderModify`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_limit_price: Option<Exact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_quantity: Option<Exact>,
+    pub external_id: String,
+}
+
+impl Change {
+    pub fn input(&self, external_id: &str) -> ModifyInput {
+        ModifyInput { new_limit_price: self.limit_price.map(Exact), new_quantity: self.quantity.map(Exact), external_id: external_id.to_string() }
+    }
+}
+
 use bagholder_ws::session::Mutation;
 
 fn refused_or(m: Mutation<()>) -> Sent {
     match m {
         Mutation::Answer(()) => Sent::Accepted { broker_id: None },
         Mutation::Refused(why) => Sent::Refused { why, code: None },
-        Mutation::NotAuthorized => Sent::Refused { why: "The Wealthsimple session lapsed.".into(), code: None },
+        Mutation::NotTaken(why) => Sent::NotSent { why },
         Mutation::Unclear(why) => Sent::Unclear { why },
     }
 }
@@ -271,7 +346,7 @@ fn split<T>(m: Mutation<T>) -> Result<T, Sent> {
     match m {
         Mutation::Answer(a) => Ok(a),
         Mutation::Refused(why) => Err(refused_or(Mutation::Refused(why))),
-        Mutation::NotAuthorized => Err(refused_or(Mutation::NotAuthorized)),
+        Mutation::NotTaken(why) => Err(refused_or(Mutation::NotTaken(why))),
         Mutation::Unclear(why) => Err(refused_or(Mutation::Unclear(why))),
     }
 }
@@ -314,14 +389,14 @@ pub fn modified(m: Mutation<bagholder_ws::wire::ModifyOrderAnswer>) -> Sent {
 }
 
 #[cfg(not(test))]
-fn mutate<T: serde::de::DeserializeOwned>(app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: &Value) -> bagholder_ws::session::Mutation<T> {
+fn mutate<T: serde::de::DeserializeOwned, V: serde::Serialize>(app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: &V) -> bagholder_ws::session::Mutation<T> {
     let home = app.ws_home();
     bagholder_ws::session::Client { home: &home }.mutate(sess, op, vars)
 }
 
 /// Under test nothing reaches the network: a test hands the gate a fake broker.
 #[cfg(test)]
-fn mutate<T: serde::de::DeserializeOwned>(_app: &Arc<App>, _sess: &bagholder_ws::session::Session, op: &str, _vars: &Value) -> bagholder_ws::session::Mutation<T> {
+fn mutate<T: serde::de::DeserializeOwned, V: serde::Serialize>(_app: &Arc<App>, _sess: &bagholder_ws::session::Session, op: &str, _vars: &V) -> bagholder_ws::session::Mutation<T> {
     bagholder_ws::session::Mutation::Unclear(format!("{op}: no network in tests"))
 }
 
@@ -415,6 +490,28 @@ pub struct GateState {
     /// The brackets whose ticket sale this run is sending now: a bracket asked to clear
     /// the way for a sale no run is sending gives it up and guards again.
     pub selling: Mutex<HashSet<String>>,
+    /// The ticket orders this run is placing now, by their id: a repeat while one is
+    /// placed is answered as in flight, never sent again.
+    pub placing: Mutex<HashSet<String>>,
+}
+
+/// A ticket order marked as being placed for as long as this lives; `None` when
+/// another request is placing the same order now.
+pub(crate) struct Placing<'a> {
+    app: &'a App,
+    id: String,
+}
+
+impl<'a> Placing<'a> {
+    pub(crate) fn start(app: &'a App, id: &str) -> Option<Placing<'a>> {
+        app.orders.gate.placing.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string()).then(|| Placing { app, id: id.to_string() })
+    }
+}
+
+impl Drop for Placing<'_> {
+    fn drop(&mut self) {
+        self.app.orders.gate.placing.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+    }
 }
 
 /// Brackets marked as having their ticket sale sent by this run for as long as this
@@ -478,12 +575,5 @@ pub fn modify_elsewhere(app: &Arc<App>, external_id: &str, limit_price: Option<D
     if !super::orders_live(app) {
         return Err(Held::Dry);
     }
-    let mut change = serde_json::Map::new();
-    if let Some(p) = limit_price {
-        change.insert("newLimitPrice".into(), json!(p.to_f64()));
-    }
-    if let Some(q) = quantity {
-        change.insert("newQuantity".into(), json!(q.to_f64()));
-    }
-    Ok(broker(app).modify(app, external_id, &Value::Object(change)))
+    Ok(broker(app).modify(app, external_id, &Change { limit_price, quantity }))
 }

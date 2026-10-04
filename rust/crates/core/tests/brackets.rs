@@ -35,15 +35,17 @@ struct World {
     closed_elsewhere: Option<String>,
     key: StateKey,
     sale_running: bool,
+    /// The broker takes the stop; otherwise it refuses every stop for good and the
+    /// stop is watched here.
+    stops_rest: bool,
 }
 
 impl World {
-    fn new(stop: Option<StopLeg>, target: Option<&str>, native: bool) -> World {
+    fn new(stop: Option<StopLeg>, target: Option<&str>, stops_rest: bool) -> World {
         let now: Timestamp = "2026-09-28T15:00:00Z".parse().unwrap();
-        let mut b = Bracket::of(&[(now, BracketEvent::Created { quantity: d("10"), stop, target: target.map(d) })]).unwrap();
-        b.native = native;
+        let b = Bracket::of(&[(now, BracketEvent::Created { quantity: d("10"), stop, target: target.map(d) })]).unwrap();
         let entry = OrderFold::of(&[OrderEvent::Written { dry: false }, OrderEvent::Accepted { broker_id: "entry".into() }]).unwrap();
-        World { b, now, open: true, tape: None, entry, exit: None, next: 0, answer: Answer::Accept, placed: vec![], cancels: vec![], resizes: vec![], closed_elsewhere: None, key: StateKey::default(), sale_running: false }
+        World { b, now, open: true, tape: None, entry, exit: None, next: 0, answer: Answer::Accept, placed: vec![], cancels: vec![], resizes: vec![], closed_elsewhere: None, key: StateKey::default(), sale_running: false, stops_rest }
     }
 
     fn stop(level: &str) -> Option<StopLeg> {
@@ -66,7 +68,7 @@ impl World {
     fn tick(&mut self) {
         for _ in 0..16 {
             let step = {
-                let seen = Seen { now: self.now, open: self.open, tape: self.tape, entry: Some(&self.entry), exit: self.exit.as_ref(), closed_elsewhere: self.closed_elsewhere.clone(), stop_allowed: self.b.native, key: self.key.clone(), sale_running: self.sale_running, entry_order: Some("entry") };
+                let seen = Seen { now: self.now, open: self.open, tape: self.tape, entry: Some(&self.entry), exit: self.exit.as_ref(), closed_elsewhere: self.closed_elsewhere.clone(), key: self.key.clone(), sale_running: self.sale_running, entry_order: Some("entry") };
                 bracket::decide(&self.b, &seen)
             };
             if step.is_nothing() {
@@ -103,7 +105,8 @@ impl World {
                 self.next += 1;
                 let id = format!("x{}", self.next);
                 let mut fold = OrderFold::of(&[OrderEvent::Written { dry: false }]).unwrap();
-                match self.answer.clone() {
+                let answer = if role == ExitRole::Stop && !self.stops_rest { Answer::Refuse("Stop price has too many decimal places. Max allowed: 2", None) } else { self.answer.clone() };
+                match answer {
                     Answer::Refuse(why, code) => {
                         let class = bracket::classify(false, code, why);
                         self.b.apply(self.now, &BracketEvent::Refused { why: why.into(), code: code.map(String::from), role: Some(role), class, key: self.key.clone() }).unwrap();
@@ -165,8 +168,8 @@ fn an_entry_that_ends_unfilled_ends_the_bracket() {
     assert_eq!((w.b.phase, w.b.outcome.as_deref()), (Phase::Ended, Some("entry cancelled")));
 }
 
-fn armed(stop: Option<StopLeg>, target: Option<&str>, native: bool) -> World {
-    let mut w = World::new(stop, target, native);
+fn armed(stop: Option<StopLeg>, target: Option<&str>, stops_rest: bool) -> World {
+    let mut w = World::new(stop, target, stops_rest);
     w.fill_entry("10", "100");
     w.quote("100");
     w.tick();
@@ -177,10 +180,12 @@ fn armed(stop: Option<StopLeg>, target: Option<&str>, native: bool) -> World {
 #[test]
 fn a_watched_stop_fires_a_market_sell_on_the_bid_and_its_fill_ends_the_bracket() {
     let mut w = armed(World::stop("95"), None, false);
-    assert!(w.placed.is_empty(), "the broker takes no stop order for it: watched here");
+    assert_eq!(w.placed.len(), 1, "the stop is sent; refused for good, it is watched here");
+    w.tick();
+    assert_eq!(w.placed.len(), 1, "a stop refused for good is never sent again");
     w.quote("95.5");
     w.tick();
-    assert!(w.placed.is_empty());
+    assert_eq!(w.placed.len(), 1);
     w.quote("94.9");
     w.tick();
     assert_eq!((w.b.phase, w.role()), (Phase::Firing, Some(ExitRole::Market)));
@@ -577,7 +582,7 @@ fn under_any_run_of_broker_answers_and_prices_no_exit_is_placed_while_one_is_in_
             w.tick();
             // the stop is never left neither resting nor watched while the bracket guards
             // (a refusal this very tick is answered at the next)
-            if w.b.phase == Phase::Guarding && w.b.native && !w.b.off_broker && w.b.stop.is_some() && w.exit.is_none() && w.b.may_send(ExitRole::Stop, &w.key) && w.b.may_send(ExitRole::Market, &w.key) && w.tape.is_some() && w.b.refused.as_ref().is_none_or(|r| r.at < w.now) {
+            if w.b.phase == Phase::Guarding && !w.b.off_broker && w.b.stop.is_some() && w.exit.is_none() && w.b.may_send(ExitRole::Stop, &w.key) && w.b.may_send(ExitRole::Market, &w.key) && w.tape.is_some() && w.b.refused.as_ref().is_none_or(|r| r.at < w.now) {
                 panic!("run {run}: guarding with nothing resting and nothing placed: {:?}", w.b);
             }
             if w.b.phase == Phase::Ended {
