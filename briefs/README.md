@@ -27,3 +27,4 @@ Read from any checkout without switching branches:
 | 16 | [Verdict on the reserved-cash plan (#339): Go with changes](16-reserved-cash-verdict.md) | Superseded by 17 |
 | 17 | [The reserved-cash plan resubmitted (#339): Go with changes](17-reserved-cash-resubmitted.md) | Current; source question settled by 18 |
 | 18 | [The reserved-cash plan at eb7a0f05: no objection to the source, one addition](18-reserved-cash-source.md) | Current |
+| 19 | [Verdict on the stage 1 plan, the money (#348): Go with changes](19-stage-money-verdict.md) | Current |
