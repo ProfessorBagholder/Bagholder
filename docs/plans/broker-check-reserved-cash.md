@@ -53,7 +53,12 @@ Only if the probe shows no stated figure (otherwise the check compares with the 
 - The hold of each working order, one arm per documented kind: a limit buy, quantity × limit price × the contract's multiplier (1 for a share); a market buy or an IPO bid, unstated; a sell, no cash hold, and units held only if the history shows it (open question 3).
 - Then the existing first and third bullets below (`statement_holds` keyed by the broker's order id rather than a record; the engine's rule) stand, with "pending row" read as "working order".
 
-What this still cannot tell: if Wealthsimple releases the cash of an order that stays working (the second reading of open question 4), this derivation is wrong too. The first release that keeps the working orders beside each cash statement settles it on the owner's next open order: its PR states the comparison, and the derivation is turned on only once a working limit buy has been seen held at its stated amount on two reads.
+Brief 17 (Go with changes) applied:
+
+- **Open question 4 is settled by reading the orders back before building** (required change 1): version 2.0.14 (#345) reads back each order a not-final activity row names by each id the row states (`status`, `timeInForce`, `expiredAtUtc`) and the working-order feed, once, at the app's next orders read on its own session; the answers go here and in the build's PR.
+- **One branch, never a switch** (required change 2). If the read-back shows the 10-01 buy ended: the documented rule is built as a rule (a working buy order holds quantity × limit price × multiplier, no commission, the $70.00 being exactly 1 × 0.70 × 100; a working market buy or IPO bid holds an unstated amount). If it shows a working order whose hold was released: no derivation; while a buy order is working the currency's check is pending, and why is an issue. One engine case for the branch taken.
+- **Unverified is unstated** (required change 3): pending withdrawals and transfers out, IPO bids and market buys are holds of unknown size (the check pending while one is open). The secured-put arm is built from the article's figure (strike × multiplier × contracts less the premium) and named unverified in the PR, no short option having been open. If the read-back shows stated units net of a working sell, units compare with `FetchTradingBalanceViewPendingOrderQuantity`, nothing derived.
+- **The stale pending row** (required change 4) is issue #346, outside this plan.
 
 Brief 16's approach, kept for the record:
 
@@ -91,4 +96,4 @@ To fill when built.
 
 ## Handoff
 
-Revised for brief 16; the probe ran (2.0.13): no gross cash and no held amounts stated. Building stopped at open question 4; resubmitted for review with the order-feed source.
+Revised for brief 16; the probe ran (2.0.13): no gross cash and no held amounts stated. Building stopped at open question 4; brief 17: Go with changes, applied. Waiting on the 2.0.14 probe's answer.
