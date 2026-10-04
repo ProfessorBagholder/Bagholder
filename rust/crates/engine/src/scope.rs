@@ -696,7 +696,7 @@ fn open_accounts_in_scope<'a>(f: &Filters, inputs: &'a Inputs) -> Vec<&'a crate:
     inputs.ledger.accounts.values().filter(|a| a.account.status == AccountStatus::Open).filter(|a| f.accounts.is_empty() || f.accounts.contains(&a.account.id)).collect()
 }
 
-fn is_margin(a: &crate::input::AccountInfo) -> bool {
+pub(crate) fn is_margin(a: &crate::input::AccountInfo) -> bool {
     matches!(a.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. })
 }
 

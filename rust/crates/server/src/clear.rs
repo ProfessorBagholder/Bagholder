@@ -321,6 +321,13 @@ mod tests {
         let margin_kind = AccountType::Known { kind: AccountKind::Margin, registration: Registration::Unregistered, managed: false, joint: false };
         let margin = book.add_account(ws_account.connection, &[AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "margin-x")], &margin_kind, AccountStatus::Open, Some("Margin"), t).unwrap();
         book.store_margin_backing(ws_account.connection, &[(ws_account.id, margin)], &read).unwrap();
+        // what a record not yet final held, and the statement it was stated beside, stood in for
+        book.conn_for_tests()
+            .execute_batch(
+                "INSERT INTO record_holds (record_id, account_id, kind, currency, amount) SELECT id, (SELECT id FROM accounts LIMIT 1), 'buy', 'USD', '1' FROM source_records LIMIT 1;
+                 INSERT INTO statement_holds (statement_id, record_id, kind, currency, amount) SELECT (SELECT id FROM statements LIMIT 1), record_id, kind, currency, amount FROM record_holds;",
+            )
+            .unwrap();
         // an order and a bracket with their logs
         use bagholder_core::order::{Asker, OrderKind, OrderRole, Side, TimeInForce};
         let place = bagholder_book::orders::BracketPlace { id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };

@@ -224,6 +224,7 @@ fn cash_leg(payload: &str) -> Mapped {
         }],
         problems: vec![],
         adjustments: vec![],
+        hold: None,
     }
 }
 
@@ -352,6 +353,7 @@ impl Mapping for FeedFill {
             }],
             problems: vec![],
             adjustments: vec![],
+        hold: None,
         }
     }
 }

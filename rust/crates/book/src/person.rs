@@ -217,7 +217,7 @@ impl Mapping for PersonMapping {
                 })
             };
             return match read() {
-                Ok(d) => Mapped { legs: vec![d], problems: vec![], adjustments: vec![] },
+                Ok(d) => Mapped { legs: vec![d], problems: vec![], adjustments: vec![], hold: None },
                 Err(why) => Mapped::unreadable(format!("an entry that does not read: {why}")),
             };
         }
@@ -248,7 +248,7 @@ impl Mapping for PersonMapping {
             })
         };
         match read() {
-            Ok(a) => Mapped { legs: vec![], problems: vec![], adjustments: vec![a] },
+            Ok(a) => Mapped { legs: vec![], problems: vec![], adjustments: vec![a], hold: None },
             Err(why) => Mapped::unreadable(format!("an entry that does not read: {why}")),
         }
     }

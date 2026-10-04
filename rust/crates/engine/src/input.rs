@@ -258,6 +258,9 @@ pub struct BrokerAccount {
     /// Cash per currency as stated at or before `activity_read_at`: every fill
     /// it reflects is on the record, so the broker check compares with it.
     pub cash_read: Option<BTreeMap<Currency, Dec>>,
+    /// What the broker held against the account when it stated `cash_read`
+    /// (`bagholder_core::hold`): its stated cash is net of them.
+    pub cash_read_holds: Vec<bagholder_core::hold::Hold>,
     /// Units held per instrument, as of `held_as_of`.
     pub held: BTreeMap<InstrumentId, Dec>,
     /// What the broker states those units are worth, where it states it.

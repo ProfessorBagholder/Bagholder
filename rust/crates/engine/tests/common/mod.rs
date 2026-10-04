@@ -341,6 +341,19 @@ pub fn build(case: &Value) -> Built {
         if let Some(c) = b.get("cash_read").and_then(Value::as_object) {
             acct.cash_read = Some(c.iter().map(|(k, v)| (ccy(k), dec(v.as_str().unwrap()))).collect());
         }
+        // what the broker held when it stated `cash_read`: [{"kind", "currency",
+        // "instrument", "amount", "contracts", "premium"}], each optional but the kind
+        for (n, h) in b.get("cash_read_holds").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
+            acct.cash_read_holds.push(bagholder_core::hold::Hold {
+                record: bagholder_core::RecordId::parse(&format!("00000000-0000-4000-8000-{:012}", 900_000 + n)).unwrap(),
+                kind: bagholder_core::hold::HoldKind::parse(s(h, "kind").unwrap()).unwrap(),
+                currency: s(h, "currency").map(ccy),
+                instrument: s(h, "instrument").map(|i| ids.instrument(i)),
+                amount: s(h, "amount").map(dec),
+                quantity: s(h, "contracts").map(dec),
+                premium: s(h, "premium").map(dec),
+            });
+        }
         acct.held_as_of = s(&b, "held_as_of").map(day);
         acct.buying_power = s(&b, "buying_power").map(|v| Ok(dec(v)));
         market.brokers.insert(id, acct);

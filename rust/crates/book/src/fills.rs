@@ -98,7 +98,7 @@ impl Mapping for FillMapping {
             })
         };
         match read() {
-            Ok(d) => Mapped { legs: vec![d], problems: vec![], adjustments: vec![] },
+            Ok(d) => Mapped { legs: vec![d], problems: vec![], adjustments: vec![], hold: None },
             Err(why) => Mapped::unreadable(format!("a fill that does not read: {why}")),
         }
     }

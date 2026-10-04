@@ -259,7 +259,7 @@ fn fill(n: &Node, _row_currency: Currency) -> Result<Mapped, Mismatch> {
             value: None,
         }],
         problems: vec![],
-        adjustments: vec![],
+        adjustments: vec![], hold: None
     })
 }
 
@@ -287,7 +287,7 @@ fn map_row(v: &Value) -> Result<Mapped, Mismatch> {
                 value: None,
             }],
             problems: vec![],
-            adjustments: vec![],
+            adjustments: vec![], hold: None
         })
     };
     // a row as the statement stated it has no kind; a record kept beside the rows names its own
@@ -327,7 +327,7 @@ fn map_row(v: &Value) -> Result<Mapped, Mismatch> {
     };
     Ok(match codes::kind(&row.code) {
         // a trade is the feed's to state, with its units and price: never booked from a statement
-        Some(Kind::Buy | Kind::Sell) | None => Mapped { legs: vec![draft], problems: vec![Problem::new("unclassified", format!("a statement row of code {:?}, which is not booked", row.code))], adjustments: vec![] },
-        Some(kind) => Mapped { legs: vec![Draft { kind, ..draft }], problems: vec![], adjustments: vec![] },
+        Some(Kind::Buy | Kind::Sell) | None => Mapped { legs: vec![draft], problems: vec![Problem::new("unclassified", format!("a statement row of code {:?}, which is not booked", row.code))], adjustments: vec![], hold: None },
+        Some(kind) => Mapped { legs: vec![Draft { kind, ..draft }], problems: vec![], adjustments: vec![], hold: None },
     })
 }

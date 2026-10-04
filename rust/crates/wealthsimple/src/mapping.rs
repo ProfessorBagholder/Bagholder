@@ -38,7 +38,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bagholder_book::mapping::{AdjustmentDraft, AdjustmentLegDraft, Draft, InstrumentDraft, MapContext, Mapped, Mapping, NameDraft, OptionDraft, Standing, StandingDraft};
+use bagholder_book::mapping::{AdjustmentDraft, AdjustmentLegDraft, Draft, HoldDraft, InstrumentDraft, MapContext, Mapped, Mapping, NameDraft, OptionDraft, Standing, StandingDraft};
 use bagholder_core::account::AccountRef;
 use bagholder_core::instrument::{InstrumentKind, OptionRight, RefScheme, Reference};
 use bagholder_core::json::{self, Value};
@@ -84,8 +84,9 @@ impl Mapping for WealthsimpleMapping {
     /// and the id its listing trades under now are one instrument.
     /// 7: a move between two accounts whose one side's positions are not kept
     ///    is its stated cash where the other side's show no holdings moving.
+    /// 9: a row not yet final states what the broker holds against its account.
     fn version(&self) -> u32 {
-        8
+        9
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -100,7 +101,7 @@ impl Mapping for WealthsimpleMapping {
         match map_record(ctx, &v) {
             Ok(m) => m,
             Err(Failed::Reply(m)) => Mapped::unreadable(format!("Wealthsimple's reply does not have the shape read: {m}")),
-            Err(Failed::Problem(p)) => Mapped { legs: vec![], problems: vec![p], adjustments: vec![] },
+            Err(Failed::Problem(p)) => Mapped { legs: vec![], problems: vec![p], adjustments: vec![], hold: None },
         }
     }
 }
@@ -262,6 +263,7 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
     // only what Wealthsimple states as executed moves anything; a pending row
     // is read again until it is final (brief 07 §2)
     let executed = row.status == "COMPLETED";
+    out.hold = hold(&root, &row)?;
     let base = Base { account: AccountRef::new(broker(), row.account), occurred_at: row.occurred_at, day };
     match row.ty {
         "OPTIONS_MULTILEG" => multi_leg(&root, &row, &base, &mut out)?,
@@ -280,6 +282,53 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
         },
     }
     Ok(out)
+}
+
+/// What a row not yet final holds against its account, one arm per kind
+/// Wealthsimple documents (`docs/plans/broker-check-reserved-cash.md`; its help
+/// centre, read 2026-10-01): a limit buy working in full holds the amount its row
+/// states (quantity × limit × multiplier: a $0.70 limit on one contract of 100
+/// states $70.00, the hold seen on the owner's account); any other buy holds an
+/// amount it does not state (a market buy "to cover the full balance of your
+/// trade in the event of a sudden price movement", article 360058451433; an IPO
+/// bid's top of range plus a buffer, 50825154775451; a partly filled order's
+/// rest); a put sold is cash-secured outside margin at strike × multiplier ×
+/// contracts less the premium (43198629134235), which the engine applies to the
+/// contracts it opens; money leaving the account is reserved in an amount not
+/// stated (360058451453). A sell holds nothing: the units Wealthsimple states
+/// are not net of a working sell (the owner's account, 2026-10-03), nor its cash.
+fn hold(root: &Node, row: &Row) -> Result<Option<HoldDraft>, Failed> {
+    if crate::adapter::settled(row.status) != Some(false) {
+        return Ok(None);
+    }
+    use bagholder_core::hold::HoldKind;
+    let draft = |kind, amount, instrument, quantity, premium| HoldDraft { account: AccountRef::new(broker(), row.account), kind, currency: row.currency, instrument, amount, quantity, premium };
+    let buy = matches!(row.ty, "DIY_BUY" | "MANAGED_BUY" | "CRYPTO_BUY" | "OPTIONS_BUY" | "PREDICTIONS_BUY");
+    Ok(match (row.ty, row.sub) {
+        _ if buy && row.sub == Some("LIMIT_ORDER") && row.status == "PENDING" => Some(draft(HoldKind::Buy, row.amount, None, None, None)),
+        _ if buy => Some(draft(HoldKind::Buy, None, None, None, None)),
+        // a multi-leg order's legs are stated by its order, read only once it fills
+        ("OPTIONS_MULTILEG", _) => Some(draft(HoldKind::Buy, None, None, None, None)),
+        ("OPTIONS_SELL", _) => match row.node.text("contractType")? {
+            "put" | "PUT" => {
+                let Some(id) = row.security else { return Err(Problem::new("security-not-stated", "a put sold whose security Wealthsimple does not state").into()) };
+                let s = root.obj("securities").and_then(|all| all.obj(id)).map_err(|_| Problem::new("security-not-read", format!("security {id}, which the record names, was not read with it")))?;
+                let o = s.obj("optionDetails")?;
+                let multiplier = o.dec("multiplier").or_else(|_| o.dec_text("multiplier"))?;
+                let strike = row.node.dec_text("strikePrice")?;
+                let contracts = row.quantity.map(Dec::abs);
+                let secured = match contracts {
+                    Some(q) => Some(strike.checked_mul(multiplier).and_then(|v| v.checked_mul(q)).map_err(|e| Problem::new("unreadable", format!("a put sold whose collateral is too large: {e}")))?),
+                    None => None,
+                };
+                Some(draft(HoldKind::PutSale, secured, Some(Reference::new(RefScheme::BrokerSecurity(broker()), id)), contracts, row.amount.map(Dec::abs)))
+            }
+            "call" | "CALL" => None,
+            other => return Err(row.node.field("contractType")?.mismatch(format!("expected call or put, found {other:?}")).into()),
+        },
+        ("WITHDRAWAL", _) | ("P2P_PAYMENT", Some("SEND")) | ("INTERNAL_TRANSFER" | "LEGACY_INTERNAL_TRANSFER", Some("SOURCE")) | ("INSTITUTIONAL_TRANSFER_INTENT", Some("TRANSFER_OUT")) => Some(draft(HoldKind::Withdrawal, None, None, None, None)),
+        _ => None,
+    })
 }
 
 /// What every transaction of a record shares.

@@ -81,10 +81,14 @@ fn test_a_shown_universe_whose_rows_are_stale_is_read_again() {
         let (_home, app) = app();
         stored(&app, source, UNIVERSE_STALE_SEC + 60.0);
         let _page = page_showing(&app, &[&format!("universe:{}", source.keys()[0])]);
-        until("the read", || reads(&app) == vec![source]);
-        let c = app.cache().unwrap();
-        let at = bagholder_store::feeds::universe_read_at(&c, source.keys()[0]).unwrap().unwrap();
-        assert!(now_unix() - crate::app::parse_instant(&at).unwrap() < 60.0, "the rows are the new read's");
+        // the read is counted as it starts and stored as it ends: wait for the end
+        let fresh = || {
+            let c = app.cache().unwrap();
+            let at = bagholder_store::feeds::universe_read_at(&c, source.keys()[0]).unwrap().unwrap();
+            now_unix() - crate::app::parse_instant(&at).unwrap() < 60.0
+        };
+        until("the read, stored", || reads(&app) == vec![source] && fresh());
+        assert_eq!(reads(&app), vec![source], "read once");
     }
 }
 

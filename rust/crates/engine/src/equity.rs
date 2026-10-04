@@ -131,11 +131,20 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
             Some(c) => (c, false),
             None => (&b.cash, pending),
         };
-        let currencies: BTreeSet<Currency> = own_cash.keys().chain(stated_cash.keys()).copied().collect();
+        // the stated cash is net of what the broker held against the account when
+        // it stated it: the book's cash less those holds is compared with it, and
+        // while one in a currency is of unknown size that currency's check waits
+        let holds = if b.cash_read.is_some() { held(inputs, matched, *account, &b.cash_read_holds, today) } else { Held::default() };
+        let currencies: BTreeSet<Currency> = own_cash.keys().chain(stated_cash.keys()).chain(holds.cash.keys()).copied().collect();
         for c in currencies {
             let (o, br) = (own_cash.get(&c).cloned().unwrap_or(Ok(Dec::ZERO)), stated_cash.get(&c).copied().unwrap_or(Dec::ZERO));
+            let unknown = holds.every_currency_unknown || holds.unknown.contains(&c);
+            let o = match holds.cash.get(&c) {
+                Some(h) if !unknown => o.and_then(|o| o.checked_sub(*h).map_err(Gaps::from)),
+                _ => o,
+            };
             if o != Ok(br) {
-                differences.push(Difference::Cash { currency: c, own: o, broker: br, pending: cash_pending });
+                differences.push(Difference::Cash { currency: c, own: o, broker: br, pending: cash_pending || unknown });
             }
         }
         // units only where the broker stated them: an account whose holdings it
@@ -175,6 +184,61 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
             }
         }
         out.push(BrokerCheck { account: *account, differences, pending });
+    }
+    out
+}
+
+/// What the broker held against an account's cash at a statement, per currency.
+#[derive(Debug, Default)]
+struct Held {
+    cash: BTreeMap<Currency, Dec>,
+    /// Currencies a hold of unknown size is in.
+    unknown: BTreeSet<Currency>,
+    /// A hold of unknown size whose currency is not stated either.
+    every_currency_unknown: bool,
+}
+
+/// Each hold's cash (`bagholder_core::hold`): a buy's stated amount; a put sale's
+/// collateral less its premium for the contracts it opens beyond the long ones
+/// the account holds, in an account without margin only (with margin it is
+/// secured by buying power, not cash); anything else of unknown size.
+fn held(inputs: &Inputs, matched: &Matched, account: AccountId, holds: &[bagholder_core::hold::Hold], today: Date) -> Held {
+    use bagholder_core::hold::HoldKind;
+    let margin = inputs.ledger.accounts.get(&account).is_some_and(crate::scope::is_margin);
+    let mut out = Held::default();
+    for h in holds {
+        let amount: Option<Dec> = match h.kind {
+            HoldKind::Buy => h.amount,
+            HoldKind::Withdrawal => None,
+            HoldKind::PutSale if margin => continue,
+            HoldKind::PutSale => (|| {
+                let (collateral, contracts, premium) = (h.amount?, h.quantity?, h.premium?);
+                let long = match h.instrument {
+                    Some(i) => matched.units_on(account, i, today).ok()?.max(Dec::ZERO),
+                    None => Dec::ZERO,
+                };
+                let opening = contracts.checked_sub(long).ok()?.max(Dec::ZERO);
+                if opening.is_zero() || !contracts.is_positive() {
+                    return Some(Dec::ZERO);
+                }
+                collateral.checked_sub(premium).ok()?.mul_div_rounded(opening, contracts, 10, bagholder_core::Rounding::HalfEven).ok()
+            })(),
+        };
+        match (h.currency, amount) {
+            (Some(c), Some(a)) => {
+                let e = out.cash.entry(c).or_insert(Dec::ZERO);
+                match e.checked_add(a) {
+                    Ok(t) => *e = t,
+                    Err(_) => {
+                        out.unknown.insert(c);
+                    }
+                }
+            }
+            (Some(c), None) => {
+                out.unknown.insert(c);
+            }
+            (None, _) => out.every_currency_unknown = true,
+        }
     }
     out
 }
