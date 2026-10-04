@@ -203,7 +203,8 @@ impl Mapping for Spelled {
             quantity: None,
             premium: None,
         });
-        Mapped { legs, problems, adjustments, hold }
+        let orders = v.get("orders").and_then(Value::as_array).map(|o| o.iter().map(|x| x.as_str().unwrap().to_string()).collect()).unwrap_or_default();
+        Mapped { legs, problems, adjustments, hold, orders }
     }
 }
 

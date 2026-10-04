@@ -228,6 +228,29 @@ impl Book {
                  FROM record_holds h JOIN source_records r ON r.id = h.record_id AND r.state = 'live' WHERE h.account_id = ?2",
                 params![id, account.to_string()],
             )?;
+            // a working order with a fill against it already holds only its rest, which
+            // its row does not state: a fill the app booked from its own order, or
+            // another live record of the same order that moved anything (brief 18)
+            let mut st = self.conn().prepare(
+                "SELECT DISTINCT s.record_id, o.filled FROM statement_holds s
+                 JOIN record_orders ro ON ro.record_id = s.record_id
+                 LEFT JOIN orders o ON o.id = ro.order_id OR o.broker_id = ro.order_id
+                 WHERE s.statement_id = ?1 AND s.amount IS NOT NULL AND (o.id IS NOT NULL OR EXISTS (
+                     SELECT 1 FROM record_orders other JOIN source_records r ON r.id = other.record_id AND r.state = 'live'
+                     JOIN transactions t ON t.record_id = other.record_id
+                     WHERE other.order_id = ro.order_id AND other.record_id <> s.record_id))",
+            )?;
+            let rows: Vec<(String, Option<String>)> = st.query_map(params![id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            for (record, filled) in rows {
+                let filled_some = match filled {
+                    Some(f) => text::dec("orders", "filled", &f)?.is_positive(),
+                    // no order of the app's: another record of the order moved something
+                    None => true,
+                };
+                if filled_some {
+                    self.conn().execute("UPDATE statement_holds SET amount = NULL WHERE statement_id = ?1 AND record_id = ?2", params![id, record])?;
+                }
+            }
             Ok(())
         })
     }

@@ -154,3 +154,51 @@ fn a_record_no_longer_live_holds_nothing_at_the_next_statement() {
     f.book.store_cash(a, t0(), &BTreeMap::from([(Currency::CAD, d("1"))]), &r).unwrap();
     assert!(f.book.stated(a).unwrap().cash_read_holds.is_empty());
 }
+
+/// What the statement of cash a test makes holds for the record `r`.
+fn held_at(f: &Fixture, a: bagholder_core::AccountId, when: &str) -> Vec<bagholder_core::hold::Hold> {
+    let r = f.book.broker_read(f.connection, "cash", at(when)).unwrap();
+    f.book.note_activity_read(a, at(when), true).unwrap();
+    f.book.store_cash(a, at(when), &BTreeMap::from([(Currency::USD, d("1"))]), &r).unwrap();
+    f.book.stated(a).unwrap().cash_read_holds
+}
+
+#[test]
+fn a_working_buy_with_a_fill_against_its_order_holds_an_amount_its_row_does_not_state() {
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let m = Spelled::v(1);
+    let pending = serde_json::json!({"hold": {"account": "tfsa-1", "kind": "buy", "currency": "USD", "amount": "500.00"}, "orders": ["order-a", "order-ext-a"]});
+    f.store(&m, "order-a", &pending);
+    // nothing filled against it: the row's amount is the hold
+    assert_eq!(held_at(&f, a, "2026-10-01T15:00:00Z")[0].amount, Some(d("500.00")));
+
+    // the app's own order of that id has a fill booked: the rest is unstated
+    f.book
+        .conn_for_tests()
+        .execute(
+            "INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, time_in_force, request, created_at, state, filled, updated_at)
+             VALUES ('order-ext-a', 'wealthsimple', 'tfsa-1', 'sec', 'XYZ', 'USD', 'buy', 'limit', '10', 'day', '{}', '2026-10-01T15:00:00Z', 'partly-filled', '4', '2026-10-01T15:00:00Z')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(held_at(&f, a, "2026-10-01T16:00:00Z")[0].amount, None);
+}
+
+#[test]
+fn a_working_buy_whose_order_has_another_record_that_moved_something_holds_an_unstated_amount() {
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let m = Spelled::v(1);
+    f.store(&m, "order-b", &serde_json::json!({"hold": {"account": "tfsa-1", "kind": "buy", "currency": "USD", "amount": "300.00"}, "orders": ["order-b"]}));
+    // a record of another order moves something: the hold is untouched
+    let mut other = legs(vec![buy("tfsa-1", share("CA0000000001", "XYZ"), "3", "-90", "2026-10-01T15:00:00Z")]);
+    other["orders"] = serde_json::json!(["order-other"]);
+    f.store(&m, "fill-other", &other);
+    assert_eq!(held_at(&f, a, "2026-10-01T15:30:00Z")[0].amount, Some(d("300.00")));
+    // a fill of the same order, as its own record: the rest is unstated
+    let mut fill = legs(vec![buy("tfsa-1", share("CA0000000001", "XYZ"), "1", "-30", "2026-10-01T15:00:00Z")]);
+    fill["orders"] = serde_json::json!(["order-b"]);
+    f.store(&m, "fill-b", &fill);
+    assert_eq!(held_at(&f, a, "2026-10-01T16:00:00Z")[0].amount, None);
+}

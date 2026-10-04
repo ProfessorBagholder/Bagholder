@@ -325,7 +325,8 @@ mod tests {
         book.conn_for_tests()
             .execute_batch(
                 "INSERT INTO record_holds (record_id, account_id, kind, currency, amount) SELECT id, (SELECT id FROM accounts LIMIT 1), 'buy', 'USD', '1' FROM source_records LIMIT 1;
-                 INSERT INTO statement_holds (statement_id, record_id, kind, currency, amount) SELECT (SELECT id FROM statements LIMIT 1), record_id, kind, currency, amount FROM record_holds;",
+                 INSERT INTO statement_holds (statement_id, record_id, kind, currency, amount) SELECT (SELECT id FROM statements LIMIT 1), record_id, kind, currency, amount FROM record_holds;
+                 INSERT INTO record_orders (record_id, order_id) SELECT record_id, 'order-x' FROM record_holds;",
             )
             .unwrap();
         // an order and a bracket with their logs

@@ -68,6 +68,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("link_records", Holds::Records),
     ("transfer_links", Holds::Records),
     ("record_holds", Holds::Records),
+    ("record_orders", Holds::Records),
     ("broker_reads", Holds::Broker),
     ("activity_reads", Holds::Broker),
     ("account_days", Holds::Broker),
@@ -169,6 +170,7 @@ impl Book {
                      DELETE FROM record_revisions WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM transactions WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM record_holds WHERE record_id IN (SELECT id FROM temp.cleared);
+                     DELETE FROM record_orders WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM statement_holds WHERE record_id IN (SELECT id FROM temp.cleared);
                      DELETE FROM source_records WHERE id IN (SELECT id FROM temp.cleared);
                      DROP TABLE temp.cleared;",

@@ -47,12 +47,14 @@ pub struct Mapped {
     /// What the broker holds against the account while the record is not final
     /// (`bagholder_core::hold`).
     pub hold: Option<HoldDraft>,
+    /// The broker's order ids the record names (an order's own row, a fill of it).
+    pub orders: Vec<String>,
 }
 
 impl Mapped {
     /// A record the mapping could not read at all.
     pub fn unreadable(why: impl Into<String>) -> Mapped {
-        Mapped { legs: vec![], problems: vec![Problem::new("unreadable", why)], adjustments: vec![], hold: None }
+        Mapped { legs: vec![], problems: vec![Problem::new("unreadable", why)], adjustments: vec![], hold: None, orders: vec![] }
     }
 }
 

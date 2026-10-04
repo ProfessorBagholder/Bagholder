@@ -734,5 +734,90 @@
         }
       ]
     }
+  },
+  {
+    "name": "a buy order partly filled holds the rest in an amount its row does not state, so its currency's check waits",
+    "spec": "SPEC.md, the header: the broker check, what a broker holds against an account (brief 18)",
+    "working": [
+      "Book USD cash in PF: deposit pf1 +1000.00, buy pf2 -400.00 = 600.00 (both rows before the broker's cash read at 2026-01-07T15:00Z and its activity read at 16:00Z, so both count).",
+      "Units: the book holds 4 X (pf2); the broker states 4 X as of 2026-01-07, the day the activity read covers. Equal: no unit difference.",
+      "Holds standing when the cash was stated: one buy in USD with no amount stated (a partly filled order's rest). SPEC: any buy other than a limit buy working in full holds an amount the broker does not state, and while one is open its currency's check waits, nothing said.",
+      "Book's USD cash less known holds: 600.00 - 0.00 (the open hold's amount is unknown, so nothing can be subtracted) = 600.00.",
+      "Broker's stated USD cash: 300.00. 600.00 differs from 300.00, but USD has an unstated hold open, so the difference waits and is not said: pending.",
+      "Totals: 1 difference (USD cash), 1 of them pending; no difference is said."
+    ],
+    "today": "2026-01-08",
+    "accounts": [
+      {
+        "id": "PF",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "USD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "pf1",
+        "account": "PF",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "USD"
+      },
+      {
+        "id": "pf2",
+        "account": "PF",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "4",
+        "cash": "-400"
+      }
+    ],
+    "brokers": {
+      "PF": {
+        "cash": {
+          "USD": "300"
+        },
+        "cash_read": {
+          "USD": "300"
+        },
+        "as_of": "2026-01-07T15:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "held": {
+          "X": "4"
+        },
+        "held_as_of": "2026-01-07",
+        "cash_read_holds": [
+          {
+            "kind": "buy",
+            "currency": "USD"
+          }
+        ]
+      }
+    },
+    "expect": {
+      "checks": [
+        {
+          "account": "PF",
+          "differences": 1,
+          "pending_differences": 1,
+          "cash": [
+            {
+              "currency": "USD",
+              "own": "600.00",
+              "broker": "300.00",
+              "pending": true
+            }
+          ]
+        }
+      ]
+    }
   }
 ]

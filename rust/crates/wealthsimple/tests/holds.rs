@@ -108,3 +108,12 @@ fn a_final_row_holds_nothing_whatever_its_kind() {
         }
     }
 }
+
+#[test]
+fn a_row_names_the_order_ids_it_carries() {
+    let m = map_payload(&recorded("limit-buy"));
+    assert_eq!(m.orders, vec!["order-00Yg9BqrHHNN".to_string(), "order-7526368f-c34d-4f6b-a3eb-bf9a007a5f08".to_string()]);
+    // a row of no order names none
+    let w = with(&recorded("limit-buy"), &[("type", text("WITHDRAWAL")), ("subType", text("EFT")), ("canonicalId", text("funding_intent-1")), ("externalCanonicalId", Value::Null), ("securityId", Value::Null)]);
+    assert!(map_payload(&w).orders.is_empty());
+}

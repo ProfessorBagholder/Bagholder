@@ -85,8 +85,9 @@ impl Mapping for WealthsimpleMapping {
     /// 7: a move between two accounts whose one side's positions are not kept
     ///    is its stated cash where the other side's show no holdings moving.
     /// 9: a row not yet final states what the broker holds against its account.
+    /// 10: a row names the broker's order ids it carries.
     fn version(&self) -> u32 {
-        9
+        10
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -101,7 +102,7 @@ impl Mapping for WealthsimpleMapping {
         match map_record(ctx, &v) {
             Ok(m) => m,
             Err(Failed::Reply(m)) => Mapped::unreadable(format!("Wealthsimple's reply does not have the shape read: {m}")),
-            Err(Failed::Problem(p)) => Mapped { legs: vec![], problems: vec![p], adjustments: vec![], hold: None },
+            Err(Failed::Problem(p)) => Mapped { legs: vec![], problems: vec![p], adjustments: vec![], hold: None, orders: vec![] },
         }
     }
 }
@@ -264,6 +265,12 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
     // is read again until it is final (brief 07 §2)
     let executed = row.status == "COMPLETED";
     out.hold = hold(&root, &row)?;
+    // the order ids the row names: its order's own row and a fill of it share them
+    for key in ["canonicalId", "externalCanonicalId"] {
+        if let Some(id) = row.node.opt_text(key)?.filter(|i| i.starts_with("order-")) {
+            out.orders.push(id.to_string());
+        }
+    }
     let base = Base { account: AccountRef::new(broker(), row.account), occurred_at: row.occurred_at, day };
     match row.ty {
         "OPTIONS_MULTILEG" => multi_leg(&root, &row, &base, &mut out)?,
