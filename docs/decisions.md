@@ -2,6 +2,14 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
 
+## 2026-10-04
+
+Brief 19's three owner questions on the money stage (`docs/plans/stage-money.md`), taken as recommended (chat, 2026-10-04, answered "Yes (Recommended)" to each):
+
+- **A stop Wealthsimple rejects is never resent on a timer.** A rejection that can never succeed (a wrong price step, an order type the security does not take) is told once, and the app watches the stop level itself and sells at market the moment the price crosses it. A rejection that could succeed later (shares tied up in another order, the market closed) is placed again when that changes. A send that got no answer is repeated as soon as the connection or sign-in is back. The fallback market sell never waits on a stop's retries. Held by: review only until the change lands (then `core/tests/brackets.rs`).
+- **A stop goes on for the shares already bought from the first partial fill, grows with each fill, and the rest of the entry is cancelled if the stop fires first.** Brokers' own pages (Interactive Brokers, Alpaca) do not say what they do here; NinjaTrader's ATM strategies resize the stop and target to the position as it scales. Held by: review only until the change lands.
+- **Every problem the app finds with one of Wealthsimple's rows is said in the header**, in the existing sentence (how many, why, the first day), not only rows it has no rule for. The list screen of such rows stays undecided (2026-09-30). Held by: review only until the change lands.
+
 ## 2026-10-02
 
 - **A single failed request is not told to the person; a source is said to be failing only when a request to it fails again at its next asking. A report the publisher has not put out yet is no failure at all.** (Owner, chat, 2026-10-02: "A single failed request that is of no importance whatsoever shoudlnt' be getting flagged to the user.") Held by: `sources/src/health.rs` (`a_single_failed_request_is_not_said`); `server/src/tests_failures.rs` (`test_a_single_failed_request_to_a_source_is_not_said`); `market/src/http.rs` (`a_report_not_published_yet_is_told_from_a_failure`).
