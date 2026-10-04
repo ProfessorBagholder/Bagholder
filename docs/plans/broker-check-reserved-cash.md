@@ -82,8 +82,8 @@ To initial when built.
 
 ## Verification
 
-To fill when built.
+Built in #347 (version 2.0.15); its body quotes each acceptance criterion with its evidence.
 
 ## Handoff
 
-Revised for brief 16; the probe ran (2.0.13): no gross cash and no held amounts stated. Building stopped at open question 4; brief 17: Go with changes, applied; the 2.0.14 probe settled open questions 3 and 4; building.
+Revised for brief 16; the probe ran (2.0.13): no gross cash and no held amounts stated. Building stopped at open question 4; brief 17: Go with changes, applied; the 2.0.14 probe settled open questions 3 and 4; built in #347.
