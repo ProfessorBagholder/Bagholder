@@ -275,10 +275,9 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
                 Some(r) if mine(Some(r)) && cancelling => "Cancelling".into(),
                 Some(r) if mine(Some(r)) && sending => "Placing".into(),
                 Some(_) => String::new(),
-                // no stop out: one that should rest is being placed, or tried again
-                None if b.native || b.off_broker => refused(ExitRole::Stop).unwrap_or_else(|| "Placing".into()),
-                // watched here: a market sell it fired and the broker refused reads as one
-                None => refused(ExitRole::Market).unwrap_or_default(),
+                // no stop out: it is being placed, or what stops it is said; a market
+                // sell the watch fired and the broker refused reads as one
+                None => refused(ExitRole::Market).or_else(|| refused(ExitRole::Stop)).unwrap_or_else(|| "Placing".into()),
             },
             Phase::Guarding => String::new(),
             Phase::ToTarget if is_stop => "Cancelling".into(),

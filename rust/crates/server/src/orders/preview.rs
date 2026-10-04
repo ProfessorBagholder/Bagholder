@@ -124,6 +124,10 @@ pub struct Preview {
     pub after: Option<Fig<Text>>,
     /// The whole units the buying power covers at the working price (a Buy).
     pub max_quantity: Option<Text>,
+    /// Why Wealthsimple would not take the order as it stands, in the ticket's words:
+    /// the review says it and Submit is off (owner, 2026-09-30: "'What it cannot
+    /// send' should be refused").
+    pub cannot_send: Option<String>,
 }
 
 /// A field that does not read as a decimal.
@@ -140,6 +144,31 @@ fn field(name: &str, v: &Option<String>) -> Result<Option<Dec>, Unread> {
 /// A price as an order may carry it: two decimals from $1, four below it.
 pub fn tick(p: Dec) -> Dec {
     p.round(if p >= Dec::ONE { 2 } else { 4 }, Rounding::HalfUp)
+}
+
+/// Why Wealthsimple would not take `p` as a price: more decimal places than an order
+/// carries (its answer on the owner's record, 2026-09-10: "Limit price has too many
+/// decimal places. Max allowed: 2"). The price is never rounded for the person.
+pub fn off_tick(name: &str, p: Dec) -> Option<String> {
+    (tick(p) != p).then(|| format!("{name} {p} has more decimal places than Wealthsimple takes: two from $1, four below it."))
+}
+
+/// Why Wealthsimple would reject a stop-limit order, by its own table of the ones it
+/// takes ("Understanding stop-limit orders", help.wealthsimple.com/hc/en-ca/articles/
+/// 4413542667675): a Canadian one carries the same stop and limit price; a US buy's
+/// stop is not below the current price, and a US sell's not above it. `against` is
+/// the price the stop is weighed against: the ask for a buy, the bid for a sale, else
+/// the last.
+pub fn stop_limit_refusal(currency: &str, buy: bool, stop: Dec, limit: Dec, against: Option<Dec>) -> Option<String> {
+    match currency.to_uppercase().as_str() {
+        "CAD" if stop != limit => Some("A Canadian stop-limit order carries the same stop and limit price at Wealthsimple.".into()),
+        "USD" => match against {
+            Some(q) if buy && stop < q => Some(format!("Wealthsimple takes a US stop-limit buy only with its stop above the current price, {q}.")),
+            Some(q) if !buy && stop > q => Some(format!("Wealthsimple takes a US stop-limit sale only with its stop below the current price, {q}.")),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn cents(p: Dec) -> Dec {
@@ -318,6 +347,22 @@ pub fn preview(r: &PreviewRequest, to_cad: &ToCad) -> Result<Preview, Unread> {
         }
         _ => None,
     };
+    // what Wealthsimple would not take, the first of it
+    let (has_limit, has_stop) = (matches!(r.kind.as_str(), "LIMIT" | "STOP_LIMIT"), matches!(r.kind.as_str(), "STOP" | "STOP_LIMIT"));
+    let cannot_send = [
+        (!qty.is_positive()).then(|| "The quantity must be more than zero.".to_string()),
+        limit.filter(|_| has_limit).and_then(|p| off_tick("The limit price", p)),
+        stop.filter(|_| has_stop).and_then(|p| off_tick("The stop price", p)),
+        stop_loss_price.filter(|_| stop_loss_on && !trailing).and_then(|p| off_tick("The stop loss price", p)),
+        take_profit_price.filter(|_| take_profit_on).and_then(|p| off_tick("The take profit price", p)),
+        match (r.kind.as_str(), stop, limit) {
+            ("STOP_LIMIT", Some(s), Some(l)) => stop_limit_refusal(&r.quote.currency, buy, s, l, (if buy { ask } else { bid }).or(last)),
+            _ => None,
+        },
+    ]
+    .into_iter()
+    .flatten()
+    .next();
     let text = |v: Option<Dec>| v.map(Text);
     Ok(Preview {
         entry: text(entry),
@@ -346,6 +391,7 @@ pub fn preview(r: &PreviewRequest, to_cad: &ToCad) -> Result<Preview, Unread> {
         margin_after: fig_text(margin_after),
         after: fig_text(after),
         max_quantity: text(max_quantity),
+        cannot_send,
     })
 }
 

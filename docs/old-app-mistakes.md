@@ -58,6 +58,9 @@ A test in the old crates that records one of these as it behaves today is named 
 - **The page worked out order values and leg amounts from floats, a contract's size guessed from its symbol.** Guarded: the orders document carries every amount (`orders/doc.rs`); `web/src/no_money_arithmetic.test.ts` has no Orders panel entry.
 - **No record of who asked, no history.** Guarded: every order and bracket event carries its asker (`tests_execution.rs` `who_asked_is_kept_with_every_request`).
 
+- **A stop loss was watched here instead of resting at Wealthsimple whenever a per-security list lacked a stop** (`allowedOrderSubtypes`, read at arming): a rule a session invented on 2026-09-09 with no source, carried into `SPEC.md` and the Rust build; Wealthsimple takes stop orders on every stock, ETF and option. A failed read of that list also left a bracket unarmed. Guarded: no per-security lookup exists; `core/tests/brackets.rs` `a_fill_arms_the_bracket_for_what_filled_and_places_the_stop_at_once`, `server/src/tests_orders.rs` `a_read_the_ticket_could_not_make_is_said_and_the_order_types_stay_wealthsimples`.
+- **A price was rounded to the order's tick after the person confirmed it, and sent as a float**; a 401 or 429 was told as Wealthsimple rejecting the order; two submits of one review were two orders. Guarded: `server/src/tests_orders.rs` `a_price_off_the_orders_tick_is_refused_never_rounded_after_the_review`, `the_price_on_the_review_is_the_price_on_the_wire`, `one_review_submitted_twice_is_one_order_and_two_identical_answers`, `a_repeat_while_the_first_is_being_placed_is_in_flight_and_never_sent`; `ws/src/session.rs` (the transport's 401/403/429 as not taken).
+
 ## Running it (stage 5)
 
 - **With the container's port published beyond loopback, anyone on the network can place orders**: access is a loopback check. Not guarded yet.

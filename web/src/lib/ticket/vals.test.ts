@@ -9,7 +9,7 @@ import type { Dec } from '../dec'
 
 function ticket(over: Partial<Ticket> = {}): Ticket {
   return {
-    step: 'form', symbol: 'NVDA', securityId: '', exchange: 'NASDAQ',
+    step: 'form', orderId: '', symbol: 'NVDA', securityId: '', exchange: 'NASDAQ',
     side: 'BUY', accountId: 'a', type: 'LIMIT', tif: 'DAY',
     qty: 10, limit: 100, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: 5, priceUnit: 'pct', trail: null, unit: 'pct' },

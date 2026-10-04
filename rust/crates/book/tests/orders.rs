@@ -143,7 +143,7 @@ fn place() -> BracketPlace {
 fn every_bracket_event() -> Vec<BracketEvent> {
     let trail = Some(StopLeg { level: d("95.5"), trail: Some(Trail::Pct(d("5"))), high: Some(d("100.52")) });
     vec![
-        BracketEvent::Armed { quantity: d("10"), high: Some(d("100")), native: true },
+        BracketEvent::Armed { quantity: d("10"), high: Some(d("100")) },
         BracketEvent::EntryEnded { why: "entry cancelled".into() },
         BracketEvent::Trailed { level: d("96.01"), high: d("101.06") },
         BracketEvent::Adopted { level: Some(d("94")), target: None, quantity: Some(d("8")) },
@@ -180,9 +180,9 @@ fn a_bracket_is_written_once_its_phase_is_its_logs_fold_and_every_event_reads_ba
     b.write_order(&request("order-1", Some(("bracket-1", OrderRole::Entry))), false, &Asker::Person, at).unwrap();
     assert!(b.write_order(&request("order-x", Some(("bracket-none", OrderRole::Stop))), false, &Asker::Engine, at).is_err(), "no such bracket");
     assert_eq!(b.orders_of_bracket("bracket-1").unwrap().len(), 1);
-    assert_eq!(b.bracket_event("bracket-1", &Asker::Engine, at, &BracketEvent::Armed { quantity: d("10"), high: Some(d("100")), native: true }).unwrap(), Ok(Phase::Guarding));
+    assert_eq!(b.bracket_event("bracket-1", &Asker::Engine, at, &BracketEvent::Armed { quantity: d("10"), high: Some(d("100")) }).unwrap(), Ok(Phase::Guarding));
     let stored = b.bracket("bracket-1").unwrap().unwrap();
-    assert_eq!((stored.bracket.phase, stored.bracket.native, stored.place), (Phase::Guarding, true, place()));
+    assert_eq!((stored.bracket.phase, stored.place), (Phase::Guarding, place()));
     assert_eq!(b.live_brackets().unwrap().len(), 1);
     for e in every_bracket_event() {
         let _ = b.bracket_event("bracket-1", &Asker::Engine, at, &e).unwrap();
@@ -221,7 +221,7 @@ fn an_order_and_a_bracket_carried_over_stand_where_the_earlier_app_had_them_and_
     let (_d, b) = book();
     let (was, at) = (t("2026-09-01T14:00:00Z"), t("2026-09-28T14:00:00Z"));
     let stop = Some(StopLeg { level: d("95"), trail: Some(Trail::Amount(d("2"))), high: Some(d("97")) });
-    let bracket = BracketEvent::Imported { phase: Phase::Guarding, quantity: d("10"), stop, target: Some(d("110")), native: true, exit: Some((ExitRole::Stop, "order-2".into())), attempts: 1, why: Some("closed".into()), outcome: None, seen_held: true, row: "{\"id\":\"bracket-1\"}".into() };
+    let bracket = BracketEvent::Imported { phase: Phase::Guarding, quantity: d("10"), stop, target: Some(d("110")), exit: Some((ExitRole::Stop, "order-2".into())), attempts: 1, why: Some("closed".into()), outcome: None, seen_held: true, row: "{\"id\":\"bracket-1\"}".into() };
     b.import_bracket(&place(), &bracket, was, at).unwrap();
     let sb = b.bracket("bracket-1").unwrap().unwrap();
     assert_eq!((sb.bracket.phase, sb.bracket.exit.clone(), sb.created_at), (Phase::Guarding, Some((ExitRole::Stop, "order-2".to_string())), was));
@@ -235,4 +235,19 @@ fn an_order_and_a_bracket_carried_over_stand_where_the_earlier_app_had_them_and_
     assert!(b.states_disagreeing().unwrap().is_empty());
     // only an imported event starts one this way
     assert!(b.import_order(&request("order-3", None), &OrderEvent::Written { dry: false }, was, at).is_err());
+}
+
+#[test]
+fn an_arming_written_when_a_stop_could_be_watched_only_reads_as_an_arming() {
+    // before every stop rested at Wealthsimple (`SPEC.md` §6, Arming) an arming carried
+    // whether its stop would; such a row still reads, and says nothing more
+    let (_d, b) = book();
+    let at = t("2026-09-28T14:00:00Z");
+    let created = BracketEvent::Created { quantity: d("10"), stop: Some(StopLeg { level: d("95"), trail: None, high: None }), target: None };
+    b.write_bracket(&place(), &created, &Asker::Person, at).unwrap();
+    b.bracket_event("bracket-1", &Asker::Engine, at, &BracketEvent::Armed { quantity: d("10"), high: None }).unwrap().unwrap();
+    b.conn_for_tests().execute(r#"UPDATE bracket_events SET body = '{"quantity": "10", "high": null, "native": false}' WHERE kind = 'armed'"#, []).unwrap();
+    let log = b.bracket_log("bracket-1").unwrap();
+    assert_eq!(log[1].event, BracketEvent::Armed { quantity: d("10"), high: None });
+    assert_eq!(b.bracket("bracket-1").unwrap().unwrap().bracket.phase, Phase::Guarding);
 }

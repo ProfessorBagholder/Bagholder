@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { localDay, localWhen, pts } from './fmt'
+import { localDay, localWhen, pts, orderPx } from './fmt'
+import type { Dec } from './dec'
 
 // The viewer's zone is Toronto for every page test (vite.config.ts, test.env).
 describe('times in the viewer zone', () => {
@@ -24,5 +25,18 @@ describe('a difference of two percentages', () => {
     expect(pts(0)).toBe('+0.0 pts')
     expect(pts(null)).toBe('—')
     expect(pts(Number.NaN)).toBe('—')
+  })
+})
+
+describe('orderPx', () => {
+  const d = (s: string) => s as Dec
+  it('writes a price an order carries with every decimal it holds, never fewer than px', () => {
+    expect(orderPx(d('165.40'))).toBe('165.40')
+    expect(orderPx(d('165.4'))).toBe('165.40')
+    expect(orderPx(d('1.736'))).toBe('1.736')
+    expect(orderPx(d('0.2537'))).toBe('0.2537')
+    expect(orderPx(d('0.25'))).toBe('0.25')
+    expect(orderPx(d('1234.5'))).toBe('1,234.50')
+    expect(orderPx(null)).toBe('—')
   })
 })

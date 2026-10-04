@@ -680,8 +680,10 @@ pub enum Mutation<T> {
     Answer(T),
     /// Wealthsimple refused it: nothing was done.
     Refused(String),
-    /// The session is not good: nothing was done, and a sign-in is needed.
-    NotAuthorized,
+    /// Wealthsimple did not take it, and says nothing of the order: the session is
+    /// not good (401, 403), it asks for fewer requests (429), or the request never
+    /// left the app. Nothing was done; the same request may go out once the cause clears.
+    NotTaken(String),
     /// No answer that says what became of it (a timeout, a dropped connection, a
     /// server error, a reply that does not read): the order is read back to find out.
     Unclear(String),
@@ -690,7 +692,7 @@ pub enum Mutation<T> {
 impl Client<'_> {
     /// A mutation, sent once (`bagholder_net::client::request_once`): never again on
     /// a failed read, and never through a redirect. Only the order gate calls it.
-    pub fn mutate<T: DeserializeOwned>(&self, sess: &Session, operation: &str, variables: &Value) -> Mutation<T> {
+    pub fn mutate<T: DeserializeOwned, V: serde::Serialize>(&self, sess: &Session, operation: &str, variables: &V) -> Mutation<T> {
         let token = sess.access_token.clone();
         let extra: Vec<(&str, String)> = vec![
             ("Authorization", format!("Bearer {}", token)),
@@ -705,14 +707,24 @@ impl Client<'_> {
         // nothing is sent without the user agent: the order is not placed
         let ua = match self.home.cached_user_agent() {
             Ok(ua) => ua,
-            Err(e) => return Mutation::Refused(ua_failed(e)),
+            Err(e) => return Mutation::NotTaken(ua_failed(e)),
         };
         let headers = headers_for(sess, &extra, &ua);
         let Some(q) = crate::queries::query(operation) else {
-            return Mutation::Refused(format!("unknown operation {operation}"));
+            return Mutation::NotTaken(format!("unknown operation {operation}"));
         };
-        let body = json!({"operationName": operation, "query": q, "variables": variables});
-        let payload = serde_json::to_vec(&body).expect("a JSON value always serializes");
+        // the variables as they serialize: an exact decimal goes out as its own digits
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body<'a, V> {
+            operation_name: &'a str,
+            query: &'a str,
+            variables: &'a V,
+        }
+        let payload = match serde_json::to_vec(&Body { operation_name: operation, query: q, variables }) {
+            Ok(p) => p,
+            Err(e) => return Mutation::NotTaken(format!("{operation}: the request could not be written: {e}")),
+        };
         let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !k.eq_ignore_ascii_case("Content-Type")).collect();
         hdrs.push(("Content-Type", "application/json"));
         let resp = match bagholder_net::client::request_once("POST", &graphql_url(), &hdrs, Some(&payload), Duration::from_secs(ORDER_TIMEOUT_SECS)) {
@@ -727,7 +739,9 @@ impl Client<'_> {
 /// that nothing was done are a refusal; anything that does not say is unclear.
 pub fn read_mutation<T: DeserializeOwned>(operation: &str, status: u16, text: &str) -> Mutation<T> {
     match status {
-        401 | 403 => return Mutation::NotAuthorized,
+        // nothing was done: said as the person acts on it, not as a refusal of the order
+        401 | 403 => return Mutation::NotTaken(format!("Wealthsimple refused the session ({status}). Connect Wealthsimple again.")),
+        429 => return Mutation::NotTaken(format!("Wealthsimple asked for fewer requests ({status}). Try again in a moment.")),
         500..=599 => return Mutation::Unclear(format!("{operation}: Wealthsimple answered with an error ({status})")),
         400..=499 => return Mutation::Refused(format!("{operation}: Wealthsimple refused the request ({status})")),
         _ => {}
@@ -844,6 +858,8 @@ mod mutation_tests {
         assert!(matches!(read(200, "<html>"), Mutation::Unclear(_)));
         assert!(matches!(read(502, ""), Mutation::Unclear(_)));
         assert!(matches!(read(422, "{}"), Mutation::Refused(_)));
-        assert_eq!(read(401, ""), Mutation::NotAuthorized);
+        assert!(matches!(read(401, ""), Mutation::NotTaken(m) if m.contains("(401)")));
+        assert!(matches!(read(403, ""), Mutation::NotTaken(m) if m.contains("(403)")));
+        assert!(matches!(read(429, ""), Mutation::NotTaken(m) if m.contains("(429)")));
     }
 }

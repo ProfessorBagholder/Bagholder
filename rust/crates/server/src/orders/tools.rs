@@ -118,6 +118,7 @@ pub(crate) fn watch_blocked(app: &Arc<App>) -> Option<String> {
 pub fn order_failures(app: &Arc<App>) -> Vec<String> {
     let mut out: Vec<String> = app.orders.quote_problem.lock().unwrap_or_else(|e| e.into_inner()).clone().into_iter().collect();
     out.extend(app.orders.watch_problem.lock().unwrap_or_else(|e| e.into_inner()).clone());
+    out.extend(app.orders.bracket_trouble.lock().unwrap_or_else(|e| e.into_inner()).values().cloned());
     if let Some(f) = app.figures.get() {
         match f.book().and_then(|b| b.live_brackets().map_err(|e| e.to_string())) {
             Ok(live) => {

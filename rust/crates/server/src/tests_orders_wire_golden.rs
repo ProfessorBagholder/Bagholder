@@ -289,7 +289,8 @@ fn test_every_order_answer_wealthsimple_gives_is_read_as_the_golden_pins() {
     // the transport's own outcomes
     got.insert("transport".into(), json!({
         "refused": dbg(&gate::created(Mutation::Refused("Bad request".into()))),
-        "session lapsed": dbg(&gate::created(Mutation::NotAuthorized)),
+        "session lapsed": dbg(&gate::created(Mutation::NotTaken("Wealthsimple refused the session (401). Connect Wealthsimple again.".into()))),
+        "too many requests": dbg(&gate::created(Mutation::NotTaken("Wealthsimple asked for fewer requests (429). Try again in a moment.".into()))),
         "no answer": dbg(&gate::created(Mutation::Unclear("the connection dropped".into()))),
     }));
 

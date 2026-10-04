@@ -36,7 +36,9 @@ jiff = "0.2.37"
 regex = "1"
 openssl = "0.10"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# raw_value: a price or quantity goes to Wealthsimple as its exact decimal digits in
+# the number position (`orders/gate.rs`, `Exact`), never as a float (brief 19, change 5).
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "raw_value"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 # The HTTP server (docs/architecture.md, "Process and HTTP"). axum on tokio and
 # hyper: typed extractors and responses per route, tower middleware for the gate,

@@ -19,11 +19,15 @@ export interface TicketData {
   quote?: Quote; orderTypes?: string[]
   marginRate?: number | null; marginAvailable?: number | null; cash?: number | null
   buyingPower?: number | null; accounts?: TicketAccount[]
+  /** What could not be read for the ticket, in the server's words. */
+  unread?: string[]
 }
 export interface TicketAccount { id: string; name: string; type?: string; margin: boolean; marginAccountId?: string | null; nav?: number | null }
 
 export interface Ticket {
   step: 'form' | 'review'
+  /** The order's id, made when the review opens: a second Submit of one review is the same order. */
+  orderId: string
   symbol: string; securityId: string; exchange: string
   side: 'BUY' | 'SELL'; accountId: string
   /** The holding the ticket was opened from, by its id: its account and quantity are the defaults. */

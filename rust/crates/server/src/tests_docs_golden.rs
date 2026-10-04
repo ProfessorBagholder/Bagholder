@@ -175,6 +175,7 @@ fn quote(bid: f64, ask: f64, last: f64) -> crate::orders::TicketQuote {
         cash: Some(500.0),
         margin_available: None,
         live: true,
+        unread: vec![],
     })
 }
 

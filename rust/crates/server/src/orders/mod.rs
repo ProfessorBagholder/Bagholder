@@ -81,8 +81,6 @@ pub struct OrdersState {
     pub(crate) refreshed_at: Mutex<Option<jiff::Timestamp>>,
     /// A read-back is asked for now (an order was just sent, cancelled or changed).
     pub(crate) read_asked: AtomicBool,
-    /// Whether Wealthsimple takes stop orders for a security, by its id.
-    pub(crate) stop_allowed: Mutex<HashMap<String, bool>>,
     /// Shares per unit of a security the book does not hold, as Wealthsimple's quote
     /// stated it, by its id.
     pub(crate) units: Mutex<HashMap<String, bagholder_core::Dec>>,
@@ -96,6 +94,9 @@ pub struct OrdersState {
     pub(crate) quote_problem: Mutex<Option<String>>,
     /// Why live brackets are not being checked, from the first check missed until one runs.
     pub(crate) watch_problem: Mutex<Option<String>>,
+    /// What stands in the way of each bracket's check, by its id, until a check of it
+    /// goes through: said in the header.
+    pub(crate) bracket_trouble: Mutex<std::collections::BTreeMap<String, String>>,
     /// Whether each bracket's venue was in session at its last check (none: not known).
     pub(crate) session_seen: Mutex<HashMap<String, Option<bool>>>,
     /// Seconds a ticket's sale waits for a bracket's exit to be confirmed cancelled
@@ -115,12 +116,12 @@ impl OrdersState {
             live: AtomicBool::new(live),
             refreshed_at: Mutex::new(None),
             read_asked: AtomicBool::new(false),
-            stop_allowed: Mutex::new(HashMap::new()),
             units: Mutex::new(HashMap::new()),
             found: Mutex::new(HashMap::new()),
             elsewhere: Mutex::new(Vec::new()),
             quote_problem: Mutex::new(None),
             watch_problem: Mutex::new(None),
+            bracket_trouble: Mutex::new(std::collections::BTreeMap::new()),
             session_seen: Mutex::new(HashMap::new()),
             sale_wait: AtomicU32::new(ticket::CANCEL_CONFIRM_SECONDS),
             gate: gate::GateState::default(),
@@ -141,7 +142,6 @@ pub mod seam {
     pub struct Seam {
         pub session: Mutex<Option<bagholder_ws::session::Session>>,
         pub gql: Mutex<Option<Gql>>,
-        pub stop_allowed: Mutex<Option<bool>>,
     }
 }
 

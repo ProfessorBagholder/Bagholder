@@ -16,7 +16,7 @@ use bagholder_book::Book;
 use bagholder_core::bracket::{BracketEvent, ExitRole, Phase, StopLeg, Trail};
 use bagholder_core::order::{OrderEvent, OrderKind, OrderRole, OrderState, Side, TimeInForce};
 use bagholder_core::{Currency, Dec};
-use bagholder_store::orders::{Bracket as OldBracket, BracketStatus, Order as OldOrder, OrderStatus, OrderType, Role, SlKind, SlMode, Source, TrailUnit};
+use bagholder_store::orders::{Bracket as OldBracket, BracketStatus, Order as OldOrder, OrderStatus, OrderType, Role, SlKind, Source, TrailUnit};
 
 /// What the import carried.
 #[derive(Debug, Default, PartialEq)]
@@ -176,7 +176,6 @@ fn bracket_of(b: &OldBracket, exits: &[&OldOrder]) -> Result<(BracketPlace, Brac
         quantity,
         stop,
         target,
-        native: b.sl_mode == SlMode::Native || (b.sl_mode == SlMode::Unset && b.sl_native),
         exit,
         attempts: u32::try_from(b.attempts.max(0)).unwrap_or(u32::MAX),
         why: Some(b.error.clone()).filter(|e| !e.is_empty()),

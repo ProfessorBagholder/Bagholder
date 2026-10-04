@@ -20,10 +20,15 @@ use serde_json::{json, Value};
 use ts_rs::TS;
 
 use super::gate::{self, Held};
-use super::preview::tick;
+use super::preview::off_tick;
 use super::{brackets, err_text, gql_as, log, orders_live, ticket_session};
 use crate::app::{uuid4, App};
 
+/// The order types the ticket offers. Wealthsimple takes market, limit, stop (a
+/// stop-market) and stop-limit orders on Canadian and US stocks, ETFs and options,
+/// by kind of product and not by security ("Understanding stop-market orders",
+/// help.wealthsimple.com/hc/en-ca/articles/39734190700187, and "Understanding
+/// stop-limit orders", …/4413542667675): the ticket asks nothing per security.
 pub const ORDER_EXEC_TYPES: [&str; 4] = ["MARKET", "LIMIT", "STOP", "STOP_LIMIT"];
 
 /// One account the ticket may place against, as it offers accounts:
@@ -213,26 +218,22 @@ pub fn parse_quote(node: &wire::SummarySecurity) -> Option<TicketQuoteDetail> {
     })
 }
 
-/// The order types the ticket offers, and the margin rate, from
-/// `FetchSecurityMarketData`.
+/// The margin rate, from `FetchSecurityMarketData`.
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketData {
-    pub order_types: Vec<String>,
     pub margin_rate: Option<f64>,
 }
 
 pub fn parse_market_data(data: &bagholder_ws::wire::SecurityMarketData) -> MarketData {
     let sec = data.security.clone().unwrap_or_default();
-    let subtypes: Vec<String> = sec.allowed_order_subtypes.iter().filter(|x| !x.is_empty()).map(|x| x.to_uppercase()).collect();
     let mut rate = sec.margin_rates.and_then(|r| r.client_margin_rate);
     if let Some(r) = rate {
         if r > 1.0 {
             rate = Some(r / 100.0);
         }
     }
-    let order_types: Vec<String> = ORDER_EXEC_TYPES.iter().filter(|t| subtypes.iter().any(|x| x == *t)).map(|t| t.to_string()).collect();
-    MarketData { order_types, margin_rate: rate }
+    MarketData { margin_rate: rate }
 }
 
 /// The buying power and cash on one account, from
@@ -337,22 +338,6 @@ pub fn account_name(app: &Arc<App>, broker_account: &str) -> String {
     }
 }
 
-/// Whether Wealthsimple takes stop orders for a security, asked once while the app runs.
-pub fn stop_allowed(app: &Arc<App>, security_id: &str) -> Result<bool, String> {
-    #[cfg(test)]
-    if let Some(v) = *app.orders.seam.stop_allowed.lock().unwrap_or_else(|e| e.into_inner()) {
-        return Ok(v);
-    }
-    if let Some(v) = app.orders.stop_allowed.lock().unwrap_or_else(|e| e.into_inner()).get(security_id) {
-        return Ok(*v);
-    }
-    let sess = ticket_session(app)?;
-    let d = gql_as(app, &sess, "FetchSecurityMarketData", json!({"id": security_id})).map_err(|e| format!("the order types Wealthsimple takes for it could not be read: {}", err_text(&e)))?;
-    let ok = parse_market_data(&d).order_types.iter().any(|t| t == "STOP");
-    app.orders.stop_allowed.lock().unwrap_or_else(|e| e.into_inner()).insert(security_id.to_string(), ok);
-    Ok(ok)
-}
-
 /// Wealthsimple's word for an order type.
 pub fn ws_execution(kind: OrderKind) -> &'static str {
     match kind {
@@ -430,6 +415,9 @@ pub struct TicketQuoteOk {
     pub cash: Option<f64>,
     pub margin_available: Option<f64>,
     pub live: bool,
+    /// What could not be read for the ticket, each in its own words: the ticket says
+    /// it, and figures that need it are not shown.
+    pub unread: Vec<String>,
 }
 
 /// The full quote, or why there is none, in the ticket's own words.
@@ -504,10 +492,11 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
     if quote.currency.is_empty() {
         quote.currency = sec.currency.to_uppercase();
     }
+    let mut unread = Vec::new();
     let mut md = MarketData::default();
     match gql_as(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
         Ok(d) => md = parse_market_data(&d),
-        Err(e) => log(&format!("bagholder ticket: market data for {} failed: {}", sid, e)),
+        Err(e) => unread.push(format!("The margin rate could not be read: {}", err_text(&e))),
     }
     let accounts = match order_accounts(app) {
         Ok(a) => a,
@@ -519,14 +508,14 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         let cur = if quote.currency.is_empty() { "CAD".to_string() } else { quote.currency.clone() };
         match gql_as(app, &sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": a.id, "currency": cur, "securityId": sid})) {
             Ok(d) => balance = parse_buying_power(&d),
-            Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", a.id, e)),
+            Err(e) => unread.push(format!("The buying power could not be read: {}", err_text(&e))),
         }
     }
     let margin_available = match ticket_figures(app, acct.as_ref().map_or("", |a| a.margin_account_id.as_str())) {
         Ok(v) => v,
         Err(e) => return TicketQuote::err(format!("The book could not be read: {e}")),
     };
-    let order_types = if !md.order_types.is_empty() { md.order_types } else { ORDER_EXEC_TYPES.iter().map(|s| s.to_string()).collect() };
+    let order_types = ORDER_EXEC_TYPES.iter().map(|s| s.to_string()).collect();
     TicketQuote::Ok(TicketQuoteOk {
         ok: true,
         quote,
@@ -538,6 +527,7 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         cash: balance.cash,
         margin_available,
         live: orders_live(app),
+        unread,
     })
 }
 
@@ -602,6 +592,9 @@ pub struct TicketTarget {
 #[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Ticket {
+    /// The order's id, made by the page when it opened the review: the same order
+    /// submitted twice is one order (brief 15 §2; brief 19, change 8).
+    pub id: String,
     pub symbol: String,
     pub security_id: String,
     pub account_id: String,
@@ -651,13 +644,15 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
     let positive = |p: Option<Dec>| p.filter(|x| x.is_positive());
     let Some(quantity) = positive(t.quantity.read("Quantity")?) else { return Err("Quantity must be more than zero.".into()) };
     let (has_limit, has_stop) = (matches!(kind, OrderKind::Limit | OrderKind::StopLimit), matches!(kind, OrderKind::Stop | OrderKind::StopLimit));
+    // a price goes out as confirmed, or not at all: never rounded after the review
+    let on_tick = |name: &str, p: Dec| -> Result<Dec, String> { off_tick(name, p).map_or(Ok(p), Err) };
     let limit_price = if has_limit {
-        Some(positive(t.limit_price.read("The limit price")?).map(tick).ok_or("A limit price is required.")?)
+        Some(on_tick("The limit price", positive(t.limit_price.read("The limit price")?).ok_or("A limit price is required.")?)?)
     } else {
         None
     };
     let stop_price = if has_stop {
-        Some(positive(t.stop_price.read("The stop price")?).map(tick).ok_or("A stop price is required.")?)
+        Some(on_tick("The stop price", positive(t.stop_price.read("The stop price")?).ok_or("A stop price is required.")?)?)
     } else {
         None
     };
@@ -672,7 +667,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
                 Some("trail") => true,
                 _ => return Err("Stop loss type must be Stop or Trailing stop.".into()),
             };
-            let price = positive(sl.price.read("The stop loss price")?).map(tick);
+            let price = positive(sl.price.read("The stop loss price")?).map(|p| on_tick("The stop loss price", p)).transpose()?;
             let leg = if trail_kind {
                 let distance = positive(sl.trail.read("The trail")?).ok_or("A trail is required.")?;
                 let trail = match sl.trail_unit.as_deref().map(str::to_lowercase).as_deref() {
@@ -692,47 +687,30 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
             stop = Some(leg);
         }
         if let Some(tp) = &t.take_profit {
-            target = Some(positive(tp.price.read("The take profit price")?).map(tick).ok_or("A take profit price is required.")?);
+            target = Some(on_tick("The take profit price", positive(tp.price.read("The take profit price")?).ok_or("A take profit price is required.")?)?);
         }
     }
     let named = if sec.currency.trim().is_empty() { t.currency.clone().unwrap_or_default() } else { sec.currency.clone() };
     let currency = Currency::parse(&named.trim().to_uppercase()).map_err(|_| format!("The currency of {} is not known.", sec.symbol))?;
-    let id = format!("order-{}", uuid4());
-    let mut request = json!({
-        "canonicalAccountId": acct.id,
-        "externalId": id,
-        "executionType": ws_execution(kind),
-        "orderType": if side == Side::Buy { "BUY_QUANTITY" } else { "SELL_QUANTITY" },
-        "quantity": quantity.to_f64(),
-        "securityId": sec.id,
-        "timeInForce": if tif == TimeInForce::Day { "DAY" } else { "UNTIL_CANCEL" },
-    });
-    if let Some(p) = limit_price {
-        request["limitPrice"] = json!(p.to_f64());
-    }
-    if let Some(p) = stop_price {
-        request["stopPrice"] = json!(p.to_f64());
-    }
-    Ok(TicketOrder {
-        order: OrderRequest {
-            id,
-            broker: "wealthsimple".into(),
-            broker_account: acct.id,
-            broker_security: sec.id,
-            symbol: sec.symbol,
-            currency,
-            side,
-            kind,
-            quantity,
-            limit_price,
-            stop_price,
-            time_in_force: tif,
-            bracket: None,
-            request,
-        },
-        stop,
-        target,
-    })
+    let id = order_id(&t.id)?;
+    let mut order = OrderRequest {
+        id,
+        broker: "wealthsimple".into(),
+        broker_account: acct.id,
+        broker_security: sec.id,
+        symbol: sec.symbol,
+        currency,
+        side,
+        kind,
+        quantity,
+        limit_price,
+        stop_price,
+        time_in_force: tif,
+        bracket: None,
+        request: Value::Null,
+    };
+    order.request = gate::request_record(&order);
+    Ok(TicketOrder { order, stop, target })
 }
 
 /// `POST /api/order`: what a placed (or refused) order is answered as.
@@ -765,17 +743,60 @@ impl PlaceTicketAnswer {
 /// cancelled before the bracket guards again and nothing is sold.
 pub const CANCEL_CONFIRM_SECONDS: u32 = 30;
 
-/// Place what a ticket asks for.
+/// The id an order is sent and kept under, from the one the page made at the review:
+/// a UUID's text, nothing else.
+fn order_id(page: &str) -> Result<String, String> {
+    let p = page.trim().to_ascii_lowercase();
+    let uuid = p.len() == 36 && p.char_indices().all(|(i, c)| if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() });
+    if uuid { Ok(format!("order-{p}")) } else { Err("The order has no id: review it again.".into()) }
+}
+
+/// What a ticket order is, for telling a repeat of it from another order under its id.
+fn same_order(a: &OrderRequest, b: &OrderRequest) -> bool {
+    let key = |o: &OrderRequest| (o.broker_account.clone(), o.broker_security.clone(), o.side, o.kind, o.quantity, o.limit_price, o.stop_price, o.time_in_force);
+    key(a) == key(b)
+}
+
+/// The answer to a ticket order the book already holds under its id: a repeat is
+/// answered as the first was; another order under the same id is refused.
+fn repeated(book: &Book, asked: &TicketOrder) -> Result<Option<PlaceTicketAnswer>, String> {
+    let Some(first) = book.order(&asked.order.id).map_err(|e| e.to_string())? else { return Ok(None) };
+    let bracket = first.request.bracket.as_ref().map(|(b, _)| b.clone());
+    let legs = match &bracket {
+        Some(b) => book.bracket_log(b).map_err(|e| e.to_string())?.into_iter().find_map(|l| match l.event {
+            BracketEvent::Created { stop, target, .. } => Some((stop, target)),
+            _ => None,
+        }),
+        None => None,
+    };
+    // a bracket is written only while orders can be sent: one sent without carries no legs to compare
+    let same_legs = legs.is_none_or(|l| l == (asked.stop, asked.target));
+    if !same_order(&first.request, &asked.order) || !same_legs {
+        return Ok(Some(PlaceTicketAnswer::err("An order was already sent under this review with other details. Review it again.")));
+    }
+    Ok(Some(told(&first.request, &first.fold, bracket)))
+}
+
+/// Place what a ticket asks for, once: a repeat of it is answered as the first was,
+/// and one that comes while the first is being placed is answered as in flight.
 pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> PlaceTicketAnswer {
     let asked = match ticket_order(app, t) {
         Ok(x) => x,
         Err(e) => return PlaceTicketAnswer::err(e),
+    };
+    let Some(_placing) = gate::Placing::start(app, &asked.order.id) else {
+        return PlaceTicketAnswer { ok: true, error: None, id: Some(asked.order.id), status: Some(OrderState::Sending.as_str().into()), bracket_id: None };
     };
     let Some(f) = app.figures.get() else { return PlaceTicketAnswer::err("The book is not open.") };
     let book = match f.book() {
         Ok(b) => b,
         Err(e) => return PlaceTicketAnswer::err(format!("The book could not be opened: {e}")),
     };
+    match repeated(&book, &asked) {
+        Ok(Some(answer)) => return answer,
+        Ok(None) => {}
+        Err(e) => return PlaceTicketAnswer::err(format!("The book could not be read: {e}")),
+    }
     let answer = if asked.order.side == Side::Sell && orders_live(app) && ticket_session(app).is_ok() {
         sell(app, &book, &asked.order)
     } else {
@@ -797,7 +818,8 @@ fn told(o: &OrderRequest, fold: &bagholder_core::order::OrderFold, bracket: Opti
             status: Some(fold.state.as_str().into()),
             bracket_id: bracket,
         },
-        OrderState::Failed => PlaceTicketAnswer { ok: false, error: Some(format!("Order failed: {}", fold.why.clone().unwrap_or_default())), id: Some(o.id.clone()), status: Some(fold.state.as_str().into()), bracket_id: bracket },
+        // it never reached Wealthsimple: nothing was placed (a lapsed session, too many requests)
+        OrderState::Failed => PlaceTicketAnswer { ok: false, error: Some(format!("Not sent: {}", fold.why.clone().unwrap_or_default())), id: Some(o.id.clone()), status: Some(fold.state.as_str().into()), bracket_id: bracket },
         s => PlaceTicketAnswer { ok: true, error: None, id: Some(o.id.clone()), status: Some(s.as_str().into()), bracket_id: bracket },
     }
 }

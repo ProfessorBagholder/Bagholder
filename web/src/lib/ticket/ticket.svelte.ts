@@ -3,7 +3,7 @@ import type { Position } from '../model'
 import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live.svelte'
 import { symText } from '../sym'
-import { px, qty as qtyFmt } from '../fmt'
+import { orderPx, qty as qtyFmt } from '../fmt'
 import { view, previewRequest, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
 import type { Preview } from '../generated/orders'
 import { call } from '../api'
@@ -204,7 +204,7 @@ export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', 
   const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY', holding)
   ui.menuOpen = false
   const t: Ticket = {
-    step: 'form', symbol, securityId: securityId || info.securityId, exchange,
+    step: 'form', orderId: '', symbol, securityId: securityId || info.securityId, exchange,
     side: side === 'SELL' ? 'SELL' : 'BUY', accountId, holding: holding || undefined, type: 'LIMIT', tif: 'DAY',
     qty, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
@@ -266,8 +266,8 @@ export function fetchQuote() {
 function notice(v: ReturnType<typeof view>, status: string | undefined) {
   const t = ticketStore.t!
   const head = status === 'dry' ? 'Not sent (orders are off) · ' : status === 'unconfirmed' || status === 'sending' ? 'Sent, not confirmed · ' : 'Order placed · '
-  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : px(v.entry) + ' ' + v.typeWord.toLowerCase()) +
-    (v.slOn ? ', stop ' + px(v.slPrice) : '') + (v.tpOn ? ', target ' + px(v.tpPrice) : '')
+  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : orderPx(v.entry) + ' ' + v.typeWord.toLowerCase()) +
+    (v.slOn ? ', stop ' + orderPx(v.slPrice) : '') + (v.tpOn ? ', target ' + orderPx(v.tpPrice) : '')
 }
 
 export async function submit() {
@@ -277,6 +277,7 @@ export async function submit() {
   const q = v.q
   // the exact decimal text of the server's own figures for the ticket
   const body = {
+    id: t.orderId,
     symbol: t.symbol, securityId: q.securityId || t.securityId || '', accountId: t.accountId, side: t.side, type: t.type, tif: t.tif,
     quantity: v.qty,
     limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? v.limit : null,

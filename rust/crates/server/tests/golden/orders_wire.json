@@ -626,7 +626,8 @@
   },
   "transport": {
     "refused": "Refused { why: \"Bad request\", code: None }",
-    "session lapsed": "Refused { why: \"The Wealthsimple session lapsed.\", code: None }",
+    "session lapsed": "NotSent { why: \"Wealthsimple refused the session (401). Connect Wealthsimple again.\" }",
+    "too many requests": "NotSent { why: \"Wealthsimple asked for fewer requests (429). Try again in a moment.\" }",
     "no answer": "Unclear { why: \"the connection dropped\" }"
   }
 }

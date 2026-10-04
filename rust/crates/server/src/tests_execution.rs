@@ -66,6 +66,9 @@ pub struct FakeState {
     pub held_read: Option<(String, std::sync::mpsc::Receiver<()>)>,
     /// Told of every cancel asked.
     pub cancel_told: Option<std::sync::mpsc::Sender<String>>,
+    /// Every stop order refused for good, as a stop price it will never take: the
+    /// stop is then watched here.
+    pub refuse_stops: bool,
     serial: u32,
 }
 
@@ -105,11 +108,18 @@ impl FakeBroker {
 }
 
 impl OrderBroker for FakeBroker {
-    fn create(&self, _app: &Arc<App>, request: &Value) -> Sent {
+    fn create(&self, _app: &Arc<App>, order: &OrderRequest) -> Sent {
+        // what would go out, read back as JSON: the exact text the gate writes
+        let text = serde_json::to_string(&gate::create_input(order)).expect("an input serializes");
+        let request: Value = serde_json::from_str(&text).expect("an input reads back");
+        let request = &request;
         let id = request["externalId"].as_str().expect("an external id").to_string();
-        let b = self.behaviour();
+        let mut b = self.behaviour();
         let mut s = self.0.lock().unwrap();
         s.creates.push(id.clone());
+        if s.refuse_stops && request["executionType"].as_str() == Some("STOP") {
+            b = Behaviour::Refuse("Stop price has too many decimal places. Max allowed: 2", None);
+        }
         let taken = matches!(b, Behaviour::Accept | Behaviour::LoseAfter | Behaviour::NoId);
         if taken {
             assert!(!s.orders.contains_key(&id), "the same order sent twice: {id}");
@@ -140,9 +150,13 @@ impl OrderBroker for FakeBroker {
         }
     }
 
-    fn modify(&self, _app: &Arc<App>, external_id: &str, change: &Value) -> Sent {
+    fn modify(&self, _app: &Arc<App>, external_id: &str, change: &gate::Change) -> Sent {
         let b = self.behaviour();
-        self.0.lock().unwrap().modifies.push((external_id.to_string(), change.clone()));
+        // the change as it would go out, its id left out
+        let text = serde_json::to_string(&change.input(external_id)).expect("a change serializes");
+        let mut change: Value = serde_json::from_str(&text).expect("a change reads back");
+        change.as_object_mut().expect("an object").remove("externalId");
+        self.0.lock().unwrap().modifies.push((external_id.to_string(), change));
         match b {
             Behaviour::Refuse(why, code) => Sent::Refused { why: why.into(), code: code.map(String::from) },
             Behaviour::LoseBefore => Sent::Unclear { why: "the connection dropped".into() },
@@ -382,7 +396,6 @@ impl World {
         let (home, app, fake) = fresh();
         app.set_orders_live(true);
         *app.orders.seam.session.lock().unwrap() = Some(bagholder_ws::session::Session { access_token: "tok".into(), ..Default::default() });
-        *app.orders.seam.stop_allowed.lock().unwrap() = Some(true);
         let book = app.figures.get().unwrap().book().unwrap();
         World { _home: home, app, fake, book, now: t0(), bid: None, open: true }
     }
@@ -638,7 +651,7 @@ fn the_target_reached_cancels_the_stop_and_a_lapsed_session_leaves_the_stop_watc
 fn a_market_sell_rejected_after_it_was_taken_puts_the_stop_back() {
     let _g = crate::tests_common::guard();
     let mut w = World::new();
-    *w.app.orders.seam.stop_allowed.lock().unwrap() = Some(false); // watched here
+    w.fake.0.lock().unwrap().refuse_stops = true; // watched here
     let entry = w.bracket("b1", "10", World::stop("95"), None);
     w.quote("100");
     w.fake.set(&entry, BrokerStatus::Filled, "10");
@@ -874,7 +887,7 @@ fn a_quote_older_than_fifteen_seconds_by_its_own_time_is_not_acted_on() {
 fn nothing_fires_on_a_stale_quote() {
     let _g = crate::tests_common::guard();
     let (mut w, b) = World::armed(World::stop("95"), None);
-    *w.app.orders.seam.stop_allowed.lock().unwrap() = Some(false);
+    w.fake.0.lock().unwrap().refuse_stops = true;
     let _ = &mut w;
     let before = w.fake.0.lock().unwrap().creates.len();
     let mut quotes = w.quotes();
@@ -903,7 +916,7 @@ fn a_bracket_carried_over_from_the_earlier_app_has_its_card() {
     let _g = crate::tests_common::guard();
     let w = World::new();
     let place = bagholder_book::orders::BracketPlace { id: "b-old".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
-    let first = BracketEvent::Imported { phase: Phase::Ended, quantity: d("10"), stop: World::stop("95"), target: Some(d("110")), native: true, exit: None, attempts: 0, why: None, outcome: Some("target".into()), seen_held: true, row: "{}".into() };
+    let first = BracketEvent::Imported { phase: Phase::Ended, quantity: d("10"), stop: World::stop("95"), target: Some(d("110")), exit: None, attempts: 0, why: None, outcome: Some("target".into()), seen_held: true, row: "{}".into() };
     let entry = bagholder_core::order::OrderEvent::Imported { state: OrderState::Filled, broker_id: Some("ws-1".into()), filled: d("10"), average: Some(d("100")), why: None, row: "{}".into() };
     w.book.import_orders(&[(place, first, t0(), t0() + SignedDuration::from_hours(1))], &[(order("e-old", Some(("b-old", OrderRole::Entry))), entry, t0(), t0())]).unwrap();
     // a size Wealthsimple's quote stated for it
@@ -1001,7 +1014,7 @@ fn an_entry_filling_in_parts_gets_its_stop_at_the_first_fill_and_the_stop_follow
 fn a_stop_that_fires_while_the_entry_still_works_cancels_the_rest_of_the_entry() {
     let _g = crate::tests_common::guard();
     let mut w = World::new();
-    *w.app.orders.seam.stop_allowed.lock().unwrap() = Some(false); // watched here
+    w.fake.0.lock().unwrap().refuse_stops = true; // watched here
     let entry = w.bracket("b1", "10", World::stop("95"), None);
     w.quote("100");
     w.fake.set(&entry, BrokerStatus::Open, "3");
@@ -1011,5 +1024,22 @@ fn a_stop_that_fires_while_the_entry_still_works_cancels_the_rest_of_the_entry()
     w.settle();
     let s = w.fake.0.lock().unwrap();
     assert!(s.cancels.contains(&entry), "the rest of the entry is cancelled: {:?}", s.cancels);
-    assert!(s.creates.iter().any(|c| s.orders[c].request["executionType"].as_str() == Some("MARKET")), "and the market sell went out");
+    assert!(s.creates.iter().any(|c| s.orders.get(c).is_some_and(|o| o.request["executionType"].as_str() == Some("MARKET"))), "and the market sell went out");
+}
+
+#[test]
+fn a_bracket_whose_exit_cannot_be_read_back_is_said_in_the_header_until_a_check_goes_through() {
+    let _g = crate::tests_common::guard();
+    let (mut w, b) = World::armed(World::stop("95"), None);
+    let stop = w.exit(&b).unwrap().request.id;
+    w.fake.0.lock().unwrap().read_fails.push(stop);
+    w.later(5);
+    w.tick();
+    let said = crate::orders::order_failures(&w.app);
+    assert!(said.iter().any(|s| s.contains("its exit could not be read back from Wealthsimple")), "{said:?}");
+    w.fake.0.lock().unwrap().read_fails.clear();
+    w.later(5);
+    w.tick();
+    let said = crate::orders::order_failures(&w.app);
+    assert!(!said.iter().any(|s| s.contains("could not be read back")), "cleared by the next check that goes through: {said:?}");
 }
