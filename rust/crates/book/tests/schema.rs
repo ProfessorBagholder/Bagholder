@@ -110,3 +110,38 @@ fn a_stored_value_the_book_did_not_write_is_an_error_naming_where() {
         }
     }
 }
+
+/// A book from before migration 25 holding a bracket with its entry order and its
+/// log (rows that point at the bracket) reaches the latest schema with every row and
+/// reference kept: migration 25 builds the brackets table again (owner's book,
+/// 2026-10-04: "FOREIGN KEY constraint failed" on 2.1.0).
+#[test]
+fn a_book_holding_a_bracket_with_its_orders_migrates_past_the_brackets_rebuild() {
+    use bagholder_book::schema::SCHEMA;
+    use bagholder_sqlite::migrate::{self, Schema};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.db");
+    static BEFORE: std::sync::OnceLock<Schema> = std::sync::OnceLock::new();
+    let before = BEFORE.get_or_init(|| Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &SCHEMA.migrations[..24] });
+    {
+        let (conn, _) = migrate::open(before, &path, "2.0.16", "2026-10-01T00:00:00Z".parse().unwrap()).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn.execute_batch(
+            "INSERT INTO brackets (id, broker, broker_account, broker_security, symbol, currency, created_at, phase, updated_at)
+               VALUES ('bracket-1', 'wealthsimple', 'acct', 'sec', 'SHOP', 'USD', '2026-10-01T14:00:00Z', 'guarding', '2026-10-01T14:00:00Z');
+             INSERT INTO bracket_events (bracket_id, seq, at, asker, kind, body, refused)
+               VALUES ('bracket-1', 0, '2026-10-01T14:00:00Z', 'person', 'created', '{\"quantity\": \"10\", \"stop\": null, \"target\": null}', NULL);
+             INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, time_in_force, bracket_id, role, request, created_at, state, filled, updated_at)
+               VALUES ('order-1', 'wealthsimple', 'acct', 'sec', 'SHOP', 'USD', 'buy', 'limit', '10', 'day', 'bracket-1', 'entry', '{}', '2026-10-01T14:00:00Z', 'filled', '10', '2026-10-01T14:00:00Z');",
+        )
+        .unwrap();
+    }
+    let (conn, done) = migrate::open(&SCHEMA, &path, "test", "2026-10-04T00:00:00Z".parse().unwrap()).unwrap();
+    assert_eq!((done.from, done.to), (24, SCHEMA.latest()));
+    let kept: (i64, i64, i64) = conn
+        .query_row("SELECT (SELECT count(*) FROM brackets), (SELECT count(*) FROM bracket_events), (SELECT count(*) FROM orders WHERE bracket_id = 'bracket-1')", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap();
+    assert_eq!(kept, (1, 1, 1));
+    let broken: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(broken, 0);
+}
