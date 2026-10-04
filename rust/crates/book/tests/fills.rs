@@ -102,6 +102,7 @@ impl Mapping for BrokerRow {
             problems: vec![],
             adjustments: vec![],
             hold: None,
+            orders: vec![],
         }
     }
 }

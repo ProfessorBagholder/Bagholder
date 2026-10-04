@@ -279,6 +279,10 @@ impl Book {
         }
         problems.extend(self.write_adjustments(record, &mapped.adjustments)?);
         problems.extend(self.write_hold(record, mapped.hold.as_ref())?);
+        self.conn().execute("DELETE FROM record_orders WHERE record_id = ?", [record.to_string()])?;
+        for o in &mapped.orders {
+            self.conn().execute("INSERT OR IGNORE INTO record_orders (record_id, order_id) VALUES (?1, ?2)", params![record.to_string(), o])?;
+        }
         self.add_problems(record, &problems)?;
         self.conn().execute("UPDATE source_records SET derived_version = ? WHERE id = ?", params![version, record.to_string()])?;
 

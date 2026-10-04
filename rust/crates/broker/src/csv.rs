@@ -588,6 +588,7 @@ impl Mapping for CsvMapping {
             problems,
             adjustments: vec![],
             hold: None,
+            orders: vec![],
         };
         let mut problems = s.problems.clone();
         if let Some(why) = &p.unplaced {
@@ -637,6 +638,7 @@ impl Mapping for CsvMapping {
             problems,
             adjustments: vec![],
             hold: None,
+            orders: vec![],
         }
     }
 }
