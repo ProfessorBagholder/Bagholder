@@ -150,7 +150,11 @@ fn every_bracket_event() -> Vec<BracketEvent> {
         BracketEvent::Adjusted { stop: trail, target: Some(d("120")) },
         BracketEvent::Adjusted { stop: Some(StopLeg { level: d("90"), trail: Some(Trail::Amount(d("2.5"))), high: None }), target: None },
         BracketEvent::Placed { role: ExitRole::Stop, order_id: "order-2".into(), price: Some(d("96.01")), quantity: d("8") },
-        BracketEvent::Refused { why: "closed".into(), code: None },
+        BracketEvent::Refused { why: "closed".into(), code: None, role: Some(ExitRole::Stop), class: bagholder_core::bracket::RefusalClass::Unknown, key: bagholder_core::bracket::StateKey { open: true, units: Some(d("10")), working: Some(1) } },
+        BracketEvent::Refused { why: "Not connected.".into(), code: None, role: None, class: bagholder_core::bracket::RefusalClass::NoAnswer, key: bagholder_core::bracket::StateKey::default() },
+        BracketEvent::Grown { total: d("12") },
+        BracketEvent::Resized { quantity: d("12") },
+        BracketEvent::OffBroker { role: ExitRole::Stop },
         BracketEvent::CancelAsked { order_id: "order-2".into() },
         BracketEvent::Cleared { filled: d("1") },
         BracketEvent::Moved { to: Phase::Target },
@@ -158,6 +162,7 @@ fn every_bracket_event() -> Vec<BracketEvent> {
         BracketEvent::SaleAsked { quantity: d("3") },
         BracketEvent::Sold { quantity: d("3") },
         BracketEvent::SaleDropped { why: "refused".into() },
+        BracketEvent::SaleSent { order_id: "order-9".into(), quantity: d("3") },
         BracketEvent::PositionRead { held: false, read_at: t("2026-10-01T20:00:00Z") },
         BracketEvent::Ended { outcome: "stopped".into() },
         BracketEvent::Done,
@@ -192,14 +197,19 @@ fn a_bracket_is_written_once_its_phase_is_its_logs_fold_and_every_event_reads_ba
 #[test]
 fn the_words_the_tables_allow_are_exactly_the_states_the_machines_have() {
     let sql = include_str!("../migrations/013-orders-and-brackets.sql");
-    let list = |column: &str| -> Vec<String> {
+    // the brackets table as it stands now (migration 25 rebuilt it): its snapshot at the newest version
+    let n = bagholder_book::schema::MIGRATIONS.len();
+    let now = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("schema/v{n}.sql"))).unwrap();
+    let brackets = now[now.find("CREATE TABLE \"brackets\" (").or_else(|| now.find("CREATE TABLE brackets (")).expect("the brackets table")..].to_string();
+    let list_in = |sql: &str, column: &str| -> Vec<String> {
         let at = sql.find(&format!("CHECK ({column} IN (")).unwrap_or_else(|| panic!("no check on {column}"));
         let rest = &sql[at..];
         let inner = &rest[rest.find("IN (").unwrap() + 4..rest.find("))").unwrap()];
         inner.split(',').map(|w| w.trim().trim_matches('\'').to_string()).collect()
     };
+    let list = |column: &str| list_in(sql, column);
     assert_eq!(list("state"), orders::order_state_words());
-    assert_eq!(list("phase"), orders::bracket_phase_words());
+    assert_eq!(list_in(&brackets, "phase"), orders::bracket_phase_words());
     assert_eq!(list("side"), Side::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>());
     assert_eq!(list("order_type"), OrderKind::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>());
     assert_eq!(list("time_in_force"), TimeInForce::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>());

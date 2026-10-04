@@ -19,6 +19,7 @@ pub mod money;
 pub mod order;
 pub mod names;
 pub mod record;
+pub mod sessions;
 pub mod transaction;
 
 pub use dec::{Dec, DecError, Rounding};

@@ -1391,26 +1391,35 @@ fn a_target_price_changed_by_hand_at_wealthsimple_is_adopted() {
 }
 
 #[test]
-fn a_stop_cancelled_by_hand_at_wealthsimple_ends_the_bracket() {
+fn a_stop_cancelled_at_wealthsimple_without_the_app_asking_is_told_and_the_stop_watched_here() {
     let _g = crate::tests_common::guard();
     let (mut w, b) = World::armed(World::stop("95"), Some("110"));
+    crate::notify::set_settings(&crate::notify::book(&w.app).unwrap(), &serde_json::from_value(json!({"problems": true})).unwrap()).unwrap();
     let stop = w.exit(&b).unwrap().request.id;
     let creates = exit_creates(&w).len();
     w.fake.set(&stop, BrokerStatus::Cancelled, "0");
     w.later(5);
     w.tick();
     let after = w.bracket_of(&b);
-    assert_eq!((after.phase, after.outcome.as_deref()), (Phase::Ended, Some("stop cancelled at Wealthsimple by hand")));
-    assert!(cancels(&w).is_empty(), "nothing else of the bracket's rested, so nothing to cancel");
-    w.quote("115");
-    w.later(5);
+    // a problem told, not an outcome (brief 15, `docs/plans/stage-money.md` part A)
+    assert_eq!((after.phase, after.off_broker), (Phase::Guarding, true));
+    let told = bagholder_store::feeds::list_notifications(crate::notify::book(&w.app).unwrap().notices(), 0, "", false, 100, true).unwrap().into_iter().any(|n| n.title.starts_with("Stop cancelled at Wealthsimple"));
+    assert!(told, "the person is told");
+    let card = o::orders_doc(&w.app).brackets.into_iter().find(|x| x.id == b).unwrap();
+    assert!(card.legs[0].note.starts_with("Watching · "), "{:?}", card.legs[0].note);
+    w.later(60);
     w.settle();
-    assert_eq!(exit_creates(&w).len(), creates, "the target never fires");
+    assert_eq!(exit_creates(&w).len(), creates, "nothing placed at Wealthsimple again until the person acts");
+    // the stop level is watched here and fires
+    w.quote("94");
+    w.later(5);
+    w.tick();
+    assert_eq!(exit_creates(&w).len(), creates + 1);
     w.state_is_the_log();
 }
 
 #[test]
-fn an_exit_refused_for_shares_that_are_not_there_ends_the_bracket_with_the_reason() {
+fn an_exit_refused_for_shares_tied_up_waits_for_things_to_change_never_for_a_timer() {
     let _g = crate::tests_common::guard();
     for code in ["BALANCE_INSUFFICIENT_SHARES", "NOT_ENOUGH_SHARES", "balance_insufficient_shares"] {
         let mut w = World::new();
@@ -1420,61 +1429,47 @@ fn an_exit_refused_for_shares_that_are_not_there_ends_the_bracket_with_the_reaso
         w.fake.then(Behaviour::Refuse("You do not have enough shares", Some(code)));
         w.settle();
         let b = w.bracket_of("b1");
-        assert_eq!((b.phase, b.outcome.as_deref(), b.why.as_deref()), (Phase::Ended, Some("the shares are not there"), Some("You do not have enough shares")), "{code}");
+        // the shares may be held by another order: not ended (`docs/decisions.md` 2026-10-04)
+        assert_eq!((b.phase, b.refused.as_ref().map(|r| r.class), b.why.as_deref()), (Phase::Guarding, Some(bagholder_core::bracket::RefusalClass::State), Some("You do not have enough shares")), "{code}");
+        let card = o::orders_doc(&w.app).brackets.into_iter().find(|b| b.id == "b1").unwrap();
+        assert_eq!(card.legs[0].note, "Waiting · You do not have enough shares", "{code}");
         let creates = exit_creates(&w).len();
         w.later(3600);
         w.settle();
-        assert_eq!(exit_creates(&w).len(), creates, "{code}: nothing is tried again");
+        assert_eq!(exit_creates(&w).len(), creates, "{code}: no timer sends it again");
+        // the market closes and opens again: how things stand changed, asked again once
+        w.open = false;
+        w.settle();
+        w.open = true;
+        w.settle();
+        assert_eq!(exit_creates(&w).len(), creates + 1, "{code}: asked again on the change");
         w.state_is_the_log();
     }
-    // taken, then read back rejected for the same reason
-    let (mut w, b) = World::armed(World::stop("95"), None);
-    let stop = w.exit(&b).unwrap().request.id;
-    fake_order(&w, &stop, |o| {
-        o.status = BrokerStatus::Rejected;
-        o.why = Some("You do not have enough shares".into());
-        o.code = Some("NOT_ENOUGH_SHARES".into());
-    });
-    w.later(5);
-    w.settle();
-    let after = w.bracket_of(&b);
-    assert_eq!((after.phase, after.outcome.as_deref(), after.why.as_deref()), (Phase::Ended, Some("the shares are not there"), Some("You do not have enough shares")));
-    let creates = exit_creates(&w).len();
-    w.later(3600);
-    w.settle();
-    assert_eq!(exit_creates(&w).len(), creates, "nothing is tried again");
-    w.state_is_the_log();
 }
 
 #[test]
-fn a_rejected_exit_is_tried_again_after_one_five_fifteen_minutes_then_hourly() {
+fn a_rejected_exit_is_never_sent_again_on_a_timer_and_the_card_says_what_it_waits_for() {
     let _g = crate::tests_common::guard();
     let mut w = World::new();
     w.app.orders.units.lock().unwrap().insert("sec".into(), Dec::ONE);
     let entry = w.bracket("b1", "10", World::stop("95"), None);
     w.quote("100");
     w.fake.set(&entry, BrokerStatus::Filled, "10");
-    for _ in 0..5 {
-        w.fake.then(Behaviour::Refuse("Market closed", None));
-    }
+    w.fake.then(Behaviour::Refuse("Market closed", None));
     w.tick();
     let b = w.bracket_of("b1");
-    assert_eq!((b.phase, b.attempts, b.why.as_deref(), exit_creates(&w).len()), (Phase::Guarding, 1, Some("Market closed"), 1));
+    assert_eq!((b.phase, b.why.as_deref(), exit_creates(&w).len()), (Phase::Guarding, Some("Market closed"), 1));
     let card = o::orders_doc(&w.app).brackets.into_iter().find(|b| b.id == "b1").unwrap();
-    assert_eq!(card.legs[0].note, "Retrying · Market closed");
-    let mut tried = 1;
+    assert_eq!(card.legs[0].note, "Waiting · Market closed");
     for rest in [60, 300, 900, 3600, 3600] {
-        w.later(rest - 1);
+        w.later(rest);
         w.tick();
-        assert_eq!(exit_creates(&w).len(), tried, "not before {rest} seconds");
-        w.later(1);
-        w.tick();
-        tried += 1;
-        assert_eq!(exit_creates(&w).len(), tried, "tried again after {rest} seconds");
+        assert_eq!(exit_creates(&w).len(), 1, "nothing after {rest} more seconds");
     }
-    let b = w.bracket_of("b1");
-    assert_eq!((b.phase, b.attempts, b.why.as_deref()), (Phase::Guarding, 0, None), "the sixth went out");
-    assert_eq!(w.working_exits().len(), 1);
+    // the stop level reached meanwhile: the market sell goes out at once
+    w.quote("94");
+    w.tick();
+    assert_eq!(exit_creates(&w).len(), 2);
     w.state_is_the_log();
 }
 
@@ -1609,19 +1604,25 @@ fn a_resting_target_is_rolled_too_and_stays_the_targets() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_order_and_bracket_checks_run_while_a_sync_does() {
+fn the_order_and_bracket_checks_run_while_a_token_is_held_whatever_a_refresh_or_a_sync_did() {
     let _g = crate::tests_common::guard();
     let (_h, app, _fake) = fresh();
-    let set = |connected: bool, syncing: bool| {
-        let mut st = app.state.lock().unwrap();
-        st.connected = connected;
-        st.syncing = syncing;
+    let held = |expires: Option<f64>| {
+        *app.orders.seam.session.lock().unwrap() = Some(bagholder_ws::session::Session { access_token: "tok".into(), expires_at: expires.map(bagholder_ws::session::Expiry::Unix), ..Default::default() });
     };
-    for syncing in [false, true] {
-        set(true, syncing);
-        assert!(o::orders_can_run(&app), "connected, syncing {syncing}: the checks run");
-        set(false, syncing);
-        assert!(!o::orders_can_run(&app), "not connected: nothing to check with");
+    for (connected, syncing) in [(true, false), (true, true), (false, false), (false, true)] {
+        {
+            let mut st = app.state.lock().unwrap();
+            st.connected = connected;
+            st.syncing = syncing;
+        }
+        // a refresh that failed sets connected false: the token still has time, the checks run
+        held(Some(crate::app::now_unix() + 600.0));
+        assert!(o::orders_can_run(&app), "connected {connected}, syncing {syncing}: a live token runs the checks");
+        held(Some(crate::app::now_unix() - 1.0));
+        assert!(!o::orders_can_run(&app), "an expired token runs nothing");
+        *app.orders.seam.session.lock().unwrap() = None;
+        assert!(!o::orders_can_run(&app), "no sign-in runs nothing");
     }
 }
 

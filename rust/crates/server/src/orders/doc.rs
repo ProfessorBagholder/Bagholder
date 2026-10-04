@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use bagholder_book::orders::{StoredBracket, StoredOrder};
 use bagholder_book::Book;
-use bagholder_core::bracket::{Bracket, BracketEvent, ExitRole, Phase, Trail};
+use bagholder_core::bracket::{self, Bracket, BracketEvent, ExitRole, Phase, RefusalClass, Trail};
 use bagholder_core::order::{OrderKind, OrderRole, OrderState, Side, TimeInForce};
 use bagholder_core::Dec;
 use bagholder_diff_derive::Diff;
@@ -232,7 +232,25 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
     let exit_state = exit.map(|o| o.fold.state);
     let sending = matches!(exit_state, Some(OrderState::Sending | OrderState::Unconfirmed));
     let cancelling = exit_state == Some(OrderState::Cancelling);
-    let retrying = || format!("Retrying · {}", b.why.clone().unwrap_or_default());
+    // a refusal reads by what follows it (`docs/decisions.md` 2026-10-04): watched here
+    // when it can never succeed, waiting when it waits on a change, retrying when the
+    // broker did not answer; a stop the broker cancelled is watched here
+    let why = b.why.clone().unwrap_or_default();
+    let refused = |role: ExitRole| -> Option<String> {
+        if b.off_broker {
+            return Some(format!("Watching · {why}"));
+        }
+        let r = b.refused.as_ref()?;
+        if r.role.is_some_and(|x| x != role) {
+            return None;
+        }
+        Some(match r.class {
+            RefusalClass::Invalid => format!("Watching · {why}"),
+            RefusalClass::Unknown if r.tries >= bracket::UNKNOWN_TRIES => format!("Watching · {why}"),
+            RefusalClass::State | RefusalClass::Unknown => format!("Waiting · {why}"),
+            RefusalClass::NoAnswer => format!("Retrying · {why}"),
+        })
+    };
     let exited_by = match b.outcome.as_deref() {
         Some("stopped") => Some(ExitRole::Stop),
         Some("target") => Some(ExitRole::Target),
@@ -258,14 +276,9 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
                 Some(r) if mine(Some(r)) && sending => "Placing".into(),
                 Some(_) => String::new(),
                 // no stop out: one that should rest is being placed, or tried again
-                None if b.native => {
-                    if b.attempts > 0 {
-                        retrying()
-                    } else {
-                        "Placing".into()
-                    }
-                }
-                None => String::new(),
+                None if b.native || b.off_broker => refused(ExitRole::Stop).unwrap_or_else(|| "Placing".into()),
+                // watched here: a market sell it fired and the broker refused reads as one
+                None => refused(ExitRole::Market).unwrap_or_default(),
             },
             Phase::Guarding => String::new(),
             Phase::ToTarget if is_stop => "Cancelling".into(),
@@ -275,18 +288,14 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
                 Some(ExitRole::Target) if sending => "Placing".into(),
                 Some(ExitRole::Target) if cancelling => "Cancelling".into(),
                 Some(ExitRole::Target) => String::new(),
-                _ if b.attempts > 0 => retrying(),
-                _ => "Placing".into(),
+                _ => refused(ExitRole::Target).unwrap_or_else(|| "Placing".into()),
             },
             Phase::BackToStop | Phase::ToMarket if is_stop => "Placing".into(),
             Phase::BackToStop | Phase::ToMarket => "Cancelling".into(),
-            Phase::Firing if is_stop => {
-                if b.attempts > 0 {
-                    retrying()
-                } else {
-                    "Placing".into()
-                }
-            }
+            Phase::Firing if is_stop => refused(ExitRole::Market).unwrap_or_else(|| "Placing".into()),
+            // the ticket's sale rests: the stop is watched here until it fills
+            Phase::Selling if is_stop => "Watching".into(),
+            Phase::Selling => String::new(),
             Phase::Firing => String::new(),
             Phase::ClosingForSale => {
                 if mine(exit_role) {

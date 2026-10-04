@@ -333,6 +333,8 @@ impl OrderFold {
             },
             OrderEvent::CancelAsked => match self.state {
                 Pending | PartlyFilled => Ok(self.to(Cancelling)),
+                // a cancel the broker has not confirmed, asked again
+                Cancelling => Ok(Applied::Nothing),
                 _ => Err(self.refuse(event, "only a working order can be cancelled")),
             },
             OrderEvent::CancelRefused { why } => match self.state {

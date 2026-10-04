@@ -40,6 +40,8 @@ text_enum! {
         Firing = "firing",
         /// A sale from the ticket: the exit's cancel is out, the sale follows it.
         ClosingForSale = "closing-for-sale",
+        /// The ticket's sale rests at the broker; the stop is watched here until it fills.
+        Selling = "selling",
         /// Ended: what it has in flight is being cancelled.
         Closing = "closing",
         /// Stopped for sending more orders than a bracket can: nothing is sent until the person acts.
@@ -63,7 +65,73 @@ text_enum! {
         Target = "target",
         /// A market sell: a watched stop fired.
         Market = "market",
+        /// The person's sale from the ticket, held by the bracket until it fills or ends.
+        Sale = "sale",
     }
+}
+
+text_enum! {
+    /// Whether a request the broker refused can succeed later (`docs/decisions.md`
+    /// 2026-10-04, brief 19).
+    RefusalClass "refusal class" {
+        /// The request itself is wrong (a price step, a decimal count): never resent;
+        /// the stop is watched here.
+        Invalid = "invalid",
+        /// It depends on how things stand (the shares tied up, the market closed):
+        /// asked again when that changes.
+        State = "state",
+        /// An answer of a shape not on record: asked again when things change, a
+        /// bounded number of times, then watched here.
+        Unknown = "unknown",
+        /// No answer from the broker (the connection, the sign-in, too many requests):
+        /// sent again at the next check, which runs only while connected.
+        NoAnswer = "no-answer",
+    }
+}
+
+/// What a state-dependent refusal is asked again on: a change in any of these.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StateKey {
+    /// The listing's market is open.
+    pub open: bool,
+    /// The account's units of the listing, as the newest statement states them.
+    pub units: Option<Dec>,
+    /// Orders working at the broker on the listing's shares in the account.
+    pub working: Option<u32>,
+}
+
+/// Wealthsimple's words for answers that are not its own refusal of the order.
+pub const SESSION_LAPSED: &str = "The Wealthsimple session lapsed.";
+
+/// Which class a refusal is in, from what the broker answered (read strictly: only
+/// answers on record are placed in a class of their own; any other is `Unknown`).
+pub fn classify(not_sent: bool, code: Option<&str>, why: &str) -> RefusalClass {
+    if not_sent || why == SESSION_LAPSED || why.contains("(429)") || why.contains("(401)") || why.contains("(403)") {
+        return RefusalClass::NoAnswer;
+    }
+    if code.is_some_and(|c| NO_SHARES.contains(&c.to_uppercase().as_str())) {
+        return RefusalClass::State;
+    }
+    // the one refusal on the owner's record (2026-09-10): "Limit price has too many
+    // decimal places. Max allowed: 2"
+    if why.contains("too many decimal places") {
+        return RefusalClass::Invalid;
+    }
+    RefusalClass::Unknown
+}
+
+/// The refusals of an `Unknown` answer a bracket asks past before it only watches.
+pub const UNKNOWN_TRIES: u32 = 3;
+
+/// A refusal the bracket stands under.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refusal {
+    /// The role refused; none for one recorded before roles were (any role but a market sell).
+    pub role: Option<ExitRole>,
+    pub class: RefusalClass,
+    pub key: StateKey,
+    pub tries: u32,
+    pub at: Timestamp,
 }
 
 /// How a trailing stop trails the high.
@@ -106,9 +174,14 @@ pub fn trail_moves(new: Dec, current: Dec) -> bool {
 /// Wealthsimple's codes for refusing a sale of shares the account does not hold.
 pub const NO_SHARES: [&str; 2] = ["BALANCE_INSUFFICIENT_SHARES", "NOT_ENOUGH_SHARES"];
 
-/// The rests before an exit refused is tried again: a minute, five, fifteen, then
-/// hourly (`SPEC.md` §6, Failures).
-pub const RETRY_SECONDS: [i64; 4] = [60, 300, 900, 3600];
+/// A stop's quantity follows the entry's fills by a change to the resting order at
+/// most this often, so a resize keeps well under the bracket's ten orders a minute
+/// with room for a trail and a fire (brief 19, change 2).
+pub const RESIZE_SECONDS: i64 = 30;
+
+/// A cancel the broker has not confirmed is asked again after this long: the ticket's
+/// sale waits as long for a cancel (`SPEC.md` §6, Nothing left behind).
+pub const CANCEL_REASK_SECONDS: i64 = 30;
 
 /// Within a week of the broker's ninety days a resting exit is placed again while
 /// the market is closed, and within two days in any session (`SPEC.md` §6, Ninety days).
@@ -137,8 +210,9 @@ pub enum BracketEvent {
     /// An exit went out (the broker has it, or its answer is being read back), at
     /// this price for this quantity.
     Placed { role: ExitRole, order_id: String, price: Option<Dec>, quantity: Dec },
-    /// An exit the broker would not take.
-    Refused { why: String, code: Option<String> },
+    /// A request the broker would not take, or did not answer: for which role, in
+    /// which class, and how things stood when it did.
+    Refused { why: String, code: Option<String>, role: Option<ExitRole>, class: RefusalClass, key: StateKey },
     /// The current exit's cancel was sent.
     CancelAsked { order_id: String },
     /// The current exit ended at the broker; what it filled is no longer the bracket's.
@@ -157,6 +231,15 @@ pub enum BracketEvent {
     Sold { quantity: Dec },
     /// The ticket's sale did not go out: the bracket guards again.
     SaleDropped { why: String },
+    /// The ticket's sale went out: the bracket holds it as its exit until it fills or ends.
+    SaleSent { order_id: String, quantity: Dec },
+    /// More of the entry filled while it works: the bracket's shares are now `total` of it.
+    Grown { total: Dec },
+    /// The resting exit's quantity was changed at the broker to `quantity`.
+    Resized { quantity: Dec },
+    /// The broker cancelled the exit without the app asking: told, and the stop is
+    /// watched here until the person acts.
+    OffBroker { role: ExitRole },
     /// A statement of the account's units read at `read_at` lists the position, or not.
     PositionRead { held: bool, read_at: Timestamp },
     /// Carried over from the earlier app's store once, where it stood then, with the
@@ -184,6 +267,10 @@ impl BracketEvent {
             BracketEvent::SaleAsked { .. } => "sale-asked",
             BracketEvent::Sold { .. } => "sold",
             BracketEvent::SaleDropped { .. } => "sale-dropped",
+            BracketEvent::SaleSent { .. } => "sale-sent",
+            BracketEvent::Grown { .. } => "grown",
+            BracketEvent::Resized { .. } => "resized",
+            BracketEvent::OffBroker { .. } => "off-broker",
             BracketEvent::PositionRead { .. } => "position-read",
             BracketEvent::Imported { .. } => "imported",
         }
@@ -199,6 +286,8 @@ pub struct Exit {
     pub fold: OrderFold,
     /// The app asked for its cancel at some point.
     pub cancel_asked: bool,
+    /// When the app last asked for its cancel.
+    pub cancel_asked_at: Option<Timestamp>,
     /// The price and quantity the broker states for it now: another than the
     /// bracket knows it at (`Bracket::exit_at`) is a change made by hand at the
     /// broker, which the bracket follows.
@@ -222,9 +311,15 @@ pub struct Bracket {
     /// The price and quantity the current exit stands at, as the bracket knows it:
     /// what it was placed with, or what was followed from a change by hand.
     pub exit_at: Option<(Option<Dec>, Dec)>,
-    /// Refusals since the last exit went out.
-    pub attempts: u32,
-    pub refused_at: Option<Timestamp>,
+    /// The refusal the bracket stands under, until an exit goes out.
+    pub refused: Option<Refusal>,
+    /// How much of the entry the bracket holds shares of.
+    pub entry_filled: Dec,
+    /// When the resting exit's quantity was last changed.
+    pub resized_at: Option<Timestamp>,
+    /// The broker cancelled an exit without the app asking: nothing is placed at the
+    /// broker, the stop is watched here, until the person changes the bracket.
+    pub off_broker: bool,
     /// The newest refusal, halt or ending, in the words recorded.
     pub why: Option<String>,
     pub outcome: Option<String>,
@@ -243,7 +338,7 @@ impl Bracket {
     pub fn of(events: &[(Timestamp, BracketEvent)]) -> Option<Bracket> {
         let (first, rest) = events.split_first()?;
         let mut b = match &first.1 {
-            BracketEvent::Created { quantity, stop, target } => Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, attempts: 0, refused_at: None, why: None, outcome: None, sale: None, seen_held: false, missed_at: None },
+            BracketEvent::Created { quantity, stop, target } => Bracket { phase: Phase::Waiting, quantity: *quantity, stop: *stop, target: *target, native: false, exit: None, exit_at: None, refused: None, entry_filled: Dec::ZERO, resized_at: None, off_broker: false, why: None, outcome: None, sale: None, seen_held: false, missed_at: None },
             BracketEvent::Imported { phase, quantity, stop, target, native, exit, attempts, why, outcome, seen_held, .. } => Bracket {
                 phase: *phase,
                 quantity: *quantity,
@@ -253,8 +348,10 @@ impl Bracket {
                 exit: exit.clone(),
                 // the exit stands where the earlier app placed it: what the broker states is followed
                 exit_at: exit.as_ref().map(|(role, _)| (if *role == ExitRole::Target { *target } else { stop.map(|s| s.level) }, *quantity)),
-                attempts: *attempts,
-                refused_at: None,
+                refused: (*attempts > 0).then(|| Refusal { role: None, class: RefusalClass::Unknown, key: StateKey::default(), tries: *attempts, at: first.0 }),
+                entry_filled: *quantity,
+                resized_at: None,
+                off_broker: false,
                 why: why.clone(),
                 outcome: outcome.clone(),
                 sale: None,
@@ -281,6 +378,7 @@ impl Bracket {
                     return refuse(self);
                 }
                 self.quantity = *quantity;
+                self.entry_filled = *quantity;
                 self.native = *native;
                 if let (Some(stop), Some(high)) = (self.stop.as_mut(), high) {
                     if let Some(trail) = stop.trail {
@@ -335,9 +433,10 @@ impl Bracket {
                 // the person acting on a halted bracket starts it again
                 if self.phase == Halted {
                     self.phase = Guarding;
-                    self.attempts = 0;
-                    self.refused_at = None;
                 }
+                // the person acting is the change a refusal or a broker's cancel waits for
+                self.refused = None;
+                self.off_broker = false;
             }
             BracketEvent::Placed { role, order_id, price, quantity } => {
                 if self.exit.is_some() || !self.phase.is_live() || self.phase == Waiting {
@@ -345,26 +444,31 @@ impl Bracket {
                 }
                 self.exit = Some((*role, order_id.clone()));
                 self.exit_at = Some((*price, *quantity));
-                self.attempts = 0;
-                self.refused_at = None;
-                self.why = None;
+                // a refusal of this same role stands until an exit of it fills or the
+                // person acts: a request taken and then rejected again counts on it
+                if self.refused.as_ref().is_none_or(|r| r.role != Some(*role)) {
+                    self.refused = None;
+                    self.why = None;
+                }
                 self.phase = match (self.phase, role) {
                     (Guarding | ToTarget | Target, ExitRole::Target) => Target,
                     (_, ExitRole::Market) => Firing,
                     (p, _) => p,
                 };
             }
-            BracketEvent::Refused { why, code } => {
+            BracketEvent::Refused { why, code: _, role, class, key } => {
                 if !self.phase.is_live() {
                     return refuse(self);
                 }
-                self.attempts += 1;
-                self.refused_at = Some(at);
+                // a market sell is never left unsent for a wrong request: asked again as an unknown answer is
+                let class = if *role == Some(ExitRole::Market) && *class == RefusalClass::Invalid { RefusalClass::Unknown } else { *class };
+                let tries = match &self.refused {
+                    Some(r) if r.role == *role && r.class == class => r.tries + 1,
+                    _ => 1,
+                };
+                self.refused = Some(Refusal { role: *role, class, key: key.clone(), tries, at });
                 self.why = Some(why.clone());
-                if code.as_deref().is_some_and(|c| NO_SHARES.contains(&c.to_uppercase().as_str())) {
-                    self.outcome = Some("the shares are not there".into());
-                    self.phase = if self.exit.is_some() { Closing } else { Ended };
-                } else if self.phase == Firing && self.exit.is_none() {
+                if self.phase == Firing && self.exit.is_none() {
                     // the market sell did not go out: the stop guards again
                     self.phase = Guarding;
                 }
@@ -377,7 +481,20 @@ impl Bracket {
             BracketEvent::Cleared { filled } => {
                 let Some((role, _)) = self.exit.take() else { return refuse(self) };
                 self.exit_at = None;
+                if filled.is_positive() {
+                    self.refused = None;
+                }
                 self.quantity = self.quantity.checked_sub(*filled).unwrap_or(self.quantity);
+                if role == ExitRole::Sale {
+                    // the ticket's sale ended: what it sold is gone, the rest is guarded again
+                    if !self.quantity.is_positive() {
+                        self.outcome = Some("sold from the ticket".into());
+                        self.phase = Ended;
+                    } else if self.phase == Selling {
+                        self.phase = Guarding;
+                    }
+                    return Ok(());
+                }
                 // a market sell that ended without selling everything: the stop guards the rest
                 if self.phase == Firing && role == ExitRole::Market {
                     self.phase = Guarding;
@@ -391,6 +508,7 @@ impl Bracket {
                         | (Target, ToMarket) | (Target, BackToStop) | (Target, Guarding)
                         | (BackToStop, Guarding) | (ToMarket, Firing) | (ToMarket, Guarding)
                         | (Firing, Guarding)
+                        | (Selling, ToMarket) | (Selling, Guarding)
                 );
                 if !ok {
                     return refuse(self);
@@ -419,7 +537,7 @@ impl Bracket {
                 self.phase = Halted;
             }
             BracketEvent::SaleAsked { quantity } => {
-                if matches!(self.phase, Waiting | Closing | Ended | ClosingForSale) {
+                if matches!(self.phase, Waiting | Closing | Ended | ClosingForSale | Selling) {
                     return refuse(self);
                 }
                 self.sale = Some(*quantity);
@@ -457,18 +575,58 @@ impl Bracket {
                 self.why = Some(why.clone());
                 self.phase = Guarding;
             }
+            BracketEvent::SaleSent { order_id, quantity } => {
+                if self.phase != ClosingForSale || self.exit.is_some() {
+                    return refuse(self);
+                }
+                self.sale = None;
+                self.exit = Some((ExitRole::Sale, order_id.clone()));
+                self.exit_at = Some((None, *quantity));
+                self.phase = Selling;
+            }
+            BracketEvent::Grown { total } => {
+                if !self.phase.is_live() || matches!(self.phase, Waiting | Closing) || *total <= self.entry_filled {
+                    return refuse(self);
+                }
+                let more = total.checked_sub(self.entry_filled).unwrap_or(Dec::ZERO);
+                self.quantity = self.quantity.checked_add(more).unwrap_or(self.quantity);
+                self.entry_filled = *total;
+            }
+            BracketEvent::Resized { quantity } => {
+                let Some((_, qty)) = self.exit_at.as_mut() else { return refuse(self) };
+                *qty = *quantity;
+                self.resized_at = Some(at);
+            }
+            BracketEvent::OffBroker { role } => {
+                if !self.phase.is_live() {
+                    return refuse(self);
+                }
+                self.off_broker = true;
+                self.why = Some(format!("the {} was cancelled at Wealthsimple", role.as_str()));
+            }
         }
         Ok(())
     }
 
-    /// Whether a refused exit may be tried again at `now`.
-    pub fn may_retry(&self, now: Timestamp) -> bool {
-        match (self.attempts, self.refused_at) {
-            (0, _) | (_, None) => true,
-            (n, Some(t)) => {
-                let wait = RETRY_SECONDS[(n as usize).min(RETRY_SECONDS.len()) - 1];
-                now.duration_since(t) >= SignedDuration::from_secs(wait)
-            }
+    /// Whether a request for `role` may go out now, under the refusal the bracket
+    /// stands under (`docs/decisions.md` 2026-10-04): a refusal of another role never
+    /// holds this one back, so a fired market sell never waits on a stop's refusal.
+    pub fn may_send(&self, role: ExitRole, key: &StateKey) -> bool {
+        let Some(r) = &self.refused else { return true };
+        let same = match r.role {
+            Some(refused) => refused == role,
+            None => role != ExitRole::Market,
+        };
+        if !same {
+            return true;
+        }
+        match r.class {
+            RefusalClass::Invalid => false,
+            RefusalClass::State => r.key != *key,
+            // a market sell is the protection itself: asked again at each check, a bounded number of times
+            RefusalClass::Unknown if role == ExitRole::Market => r.tries < UNKNOWN_TRIES,
+            RefusalClass::Unknown => r.key != *key && r.tries < UNKNOWN_TRIES,
+            RefusalClass::NoAnswer => true,
         }
     }
 
@@ -509,6 +667,12 @@ pub struct Seen<'a> {
     pub closed_elsewhere: Option<String>,
     /// The broker takes stop orders for the listing (asked when the bracket arms).
     pub stop_allowed: bool,
+    /// How things stand for a refusal that depends on them.
+    pub key: StateKey,
+    /// The ticket's sale for this bracket is being sent by this run.
+    pub sale_running: bool,
+    /// The entry's own order id, to cancel what is left of it once the stop fires.
+    pub entry_order: Option<&'a str>,
 }
 
 /// A request for the gate.
@@ -517,6 +681,8 @@ pub enum Request {
     /// A sell for the bracket's shares: a stop at `price`, a limit at `price`, or at market.
     Place { role: ExitRole, price: Option<Dec>, quantity: Dec },
     Cancel { order_id: String },
+    /// Change the resting exit's quantity in place, so no moment is unguarded.
+    Resize { order_id: String, quantity: Dec },
 }
 
 /// One step: what to record, and at most one request to send.
@@ -549,6 +715,7 @@ fn filled_outcome(role: ExitRole) -> &'static str {
     match role {
         ExitRole::Target => "target",
         ExitRole::Stop | ExitRole::Market => "stopped",
+        ExitRole::Sale => "sold from the ticket",
     }
 }
 
@@ -597,12 +764,28 @@ fn cancel(x: &Exit, then: Option<Phase>) -> Step {
     Step::send(events, Request::Cancel { order_id: x.order_id.clone() })
 }
 
-/// A sell for the bracket's shares, when a refusal's rest is over.
-fn place(b: &Bracket, now: Timestamp, role: ExitRole, price: Option<Dec>) -> Step {
-    if !b.may_retry(now) {
+/// A sell for the bracket's shares, unless a refusal holds this role back, or the
+/// broker cancelled an exit and only a market sell may go out.
+fn place(b: &Bracket, seen: &Seen, role: ExitRole, price: Option<Dec>) -> Step {
+    if !b.may_send(role, &seen.key) || (b.off_broker && role != ExitRole::Market) || !b.quantity.is_positive() {
         return Step::nothing();
     }
     Step::send(vec![], Request::Place { role, price, quantity: b.quantity })
+}
+
+/// A cancel out and not confirmed: nothing, until it has waited its rest, then asked again.
+fn cancelling(x: &Exit, now: Timestamp) -> Step {
+    let due = x.cancel_asked_at.is_none_or(|t| now.duration_since(t) >= SignedDuration::from_secs(CANCEL_REASK_SECONDS));
+    if due {
+        Step::send(vec![], Request::Cancel { order_id: x.order_id.clone() })
+    } else {
+        Step::nothing()
+    }
+}
+
+/// Whether the entry still works and can be cancelled.
+fn entry_working(seen: &Seen) -> bool {
+    seen.entry.is_some_and(|e| matches!(e.state, OrderState::Pending | OrderState::PartlyFilled))
 }
 
 /// The one step the bracket takes from where it stands. The caller records the
@@ -610,11 +793,25 @@ fn place(b: &Bracket, now: Timestamp, role: ExitRole, price: Option<Dec>) -> Ste
 /// `refused`, or the order's own events), and asks again until the step is nothing.
 pub fn decide(b: &Bracket, seen: &Seen) -> Step {
     use Phase::*;
+    // the stop fired while the entry still works: what is left of the entry is
+    // cancelled, so nothing more is bought behind a stop that has sold (brief 19, change 2)
+    let stopped = matches!(b.phase, ToMarket | Firing) || (matches!(b.phase, Closing | Ended) && b.outcome.as_deref() == Some("stopped"));
+    if stopped && entry_working(seen) {
+        if let Some(id) = seen.entry_order {
+            return Step::send(vec![], Request::Cancel { order_id: id.to_string() });
+        }
+    }
     if b.phase == Ended {
         return Step::nothing();
     }
     if b.phase == Waiting {
         return arm(seen);
+    }
+    // more of the entry filled since: the bracket's shares grow with it
+    if let Some(e) = seen.entry {
+        if e.filled > b.entry_filled && !matches!(b.phase, Closing | Halted) {
+            return Step::record(vec![BracketEvent::Grown { total: e.filled }]);
+        }
     }
     // what became of the exit first
     let exit = seen.exit.filter(|x| b.exit.as_ref().is_some_and(|(_, id)| *id == x.order_id));
@@ -623,19 +820,30 @@ pub fn decide(b: &Bracket, seen: &Seen) -> Step {
         return Step::nothing();
     }
     if let Some(x) = exit {
-        if let Some(step) = reconcile(b, x) {
+        if let Some(step) = reconcile(b, x, &seen.key) {
             return step;
         }
     }
     if b.phase == Closing {
         return match exit {
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             Some(x) if x.fold.state.in_flight() => keep_cancelling(x),
             Some(_) => Step::nothing(),
             None => Step::record(vec![BracketEvent::Done]),
         };
     }
     if b.phase == Halted {
+        // halted sends nothing more, but a stop level reached with nothing resting
+        // still sells: the guard holds back the engine, never the protection
+        let hit = matches!((b.stop.map(|s| s.level), seen.tape.map(|t| t.trigger())), (Some(l), Some(t)) if t <= l);
+        if hit && exit.is_none() {
+            return place(b, seen, ExitRole::Market, None);
+        }
         return Step::nothing();
+    }
+    // a sale from the ticket this run is not sending: it will not finish, the bracket guards again
+    if b.phase == ClosingForSale && !seen.sale_running && !exit.is_some_and(waiting_on) {
+        return Step::record(vec![BracketEvent::SaleDropped { why: "the sale from the ticket did not finish".into() }]);
     }
     // a position closed elsewhere is seen only with nothing resting to fill for it
     if exit.is_none() && !matches!(b.phase, ClosingForSale) {
@@ -665,21 +873,25 @@ pub fn decide(b: &Bracket, seen: &Seen) -> Step {
         Guarding => match exit {
             None => {
                 if stop_hit {
-                    return place(b, seen.now, ExitRole::Market, None);
+                    return place(b, seen, ExitRole::Market, None);
                 }
-                if at_target {
-                    return place(b, seen.now, ExitRole::Target, b.target);
+                // a target the broker will not take now leaves the stop resting instead
+                if at_target && b.may_send(ExitRole::Target, &seen.key) && !b.off_broker {
+                    return place(b, seen, ExitRole::Target, b.target);
                 }
                 if b.native && b.stop.is_some() {
-                    return place(b, seen.now, ExitRole::Stop, level);
+                    return place(b, seen, ExitRole::Stop, level);
                 }
                 Step::nothing()
             }
             Some(x) if waiting_on(x) => Step::nothing(),
-            Some(x) if x.fold.state == OrderState::Cancelling => Step::nothing(),
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             Some(x) => {
-                if at_target {
+                if at_target && !b.off_broker {
                     return cancel(x, Some(ToTarget));
+                }
+                if let Some(step) = resize(b, x, seen) {
+                    return step;
                 }
                 if stale(b, x) || roll_due(x, seen.now, seen.open) {
                     return cancel(x, None);
@@ -694,36 +906,41 @@ pub fn decide(b: &Bracket, seen: &Seen) -> Step {
             None => Step::record(vec![BracketEvent::Moved { to: Guarding }]),
         },
         ToTarget => match exit {
-            Some(x) if x.fold.state == OrderState::Cancelling || waiting_on(x) => Step::nothing(),
+            Some(x) if waiting_on(x) => Step::nothing(),
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             // the cancel was refused: asked again
             Some(x) => cancel(x, None),
             None => {
                 if stop_hit {
-                    return place(b, seen.now, ExitRole::Market, None);
+                    return place(b, seen, ExitRole::Market, None);
                 }
                 if matches!((b.target, trigger), (Some(tp), Some(t)) if t < back_off(tp)) {
                     return Step::record(vec![BracketEvent::Moved { to: Guarding }]);
                 }
-                place(b, seen.now, ExitRole::Target, b.target)
+                place(b, seen, ExitRole::Target, b.target)
             }
         },
         Target => match exit {
             None => {
                 if stop_hit {
-                    return place(b, seen.now, ExitRole::Market, None);
+                    return place(b, seen, ExitRole::Market, None);
                 }
                 if matches!((b.target, trigger), (Some(tp), Some(t)) if t < back_off(tp)) {
                     return Step::record(vec![BracketEvent::Moved { to: Guarding }]);
                 }
-                place(b, seen.now, ExitRole::Target, b.target)
+                place(b, seen, ExitRole::Target, b.target)
             }
-            Some(x) if x.fold.state == OrderState::Cancelling || waiting_on(x) => Step::nothing(),
+            Some(x) if waiting_on(x) => Step::nothing(),
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             Some(x) => {
                 if stop_hit {
                     return cancel(x, Some(ToMarket));
                 }
                 if matches!((b.target, trigger), (Some(tp), Some(t)) if t < back_off(tp)) {
                     return cancel(x, Some(BackToStop));
+                }
+                if let Some(step) = resize(b, x, seen) {
+                    return step;
                 }
                 if stale(b, x) || roll_due(x, seen.now, seen.open) {
                     return cancel(x, None);
@@ -732,22 +949,33 @@ pub fn decide(b: &Bracket, seen: &Seen) -> Step {
             }
         },
         BackToStop => match exit {
-            Some(x) if x.fold.state == OrderState::Cancelling || waiting_on(x) => Step::nothing(),
+            Some(x) if waiting_on(x) => Step::nothing(),
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             Some(x) => cancel(x, None),
             None => Step::record(vec![BracketEvent::Moved { to: Guarding }]),
         },
         ToMarket => match exit {
-            Some(x) if x.fold.state == OrderState::Cancelling || waiting_on(x) => Step::nothing(),
+            Some(x) if waiting_on(x) => Step::nothing(),
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             Some(x) => cancel(x, None),
-            None => place(b, seen.now, ExitRole::Market, None),
+            None => place(b, seen, ExitRole::Market, None),
         },
         Firing => match exit {
             Some(_) => Step::nothing(),
             None => Step::record(vec![BracketEvent::Moved { to: Guarding }]),
         },
         ClosingForSale => match exit {
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
             Some(x) if x.fold.state.in_flight() => keep_cancelling(x),
             _ => Step::nothing(),
+        },
+        Selling => match exit {
+            None => Step::record(vec![BracketEvent::Moved { to: Guarding }]),
+            Some(x) if waiting_on(x) => Step::nothing(),
+            Some(x) if x.fold.state == OrderState::Cancelling => cancelling(x, seen.now),
+            // the stop level reached while the sale rests: the sale gives way to a market sell
+            Some(x) if stop_hit => cancel(x, Some(ToMarket)),
+            Some(_) => Step::nothing(),
         },
         Waiting | Closing | Halted | Ended => Step::nothing(),
     }
@@ -762,9 +990,30 @@ fn stale(b: &Bracket, x: &Exit) -> bool {
     let level = match x.role {
         ExitRole::Stop => b.stop.map(|s| s.level),
         ExitRole::Target => b.target,
-        ExitRole::Market => return false,
+        ExitRole::Market | ExitRole::Sale => return false,
     };
     stated != level || x.quantity.unwrap_or(known_qty) != b.quantity
+}
+
+/// A resting exit at the bracket's level whose quantity is not the bracket's: changed
+/// in place, at most once a `RESIZE_SECONDS`, and at once when the entry has ended, so
+/// a stop following an entry's fills is never cancelled and placed again (brief 19).
+fn resize(b: &Bracket, x: &Exit, seen: &Seen) -> Option<Step> {
+    if !matches!(x.role, ExitRole::Stop | ExitRole::Target) || !matches!(x.fold.state, OrderState::Pending | OrderState::PartlyFilled) || x.cancel_asked {
+        return None;
+    }
+    let (known_price, known_qty) = b.exit_at.unwrap_or((None, b.quantity));
+    let level = if x.role == ExitRole::Stop { b.stop.map(|s| s.level) } else { b.target };
+    let qty = x.quantity.unwrap_or(known_qty);
+    if x.price.or(known_price) != level || qty == b.quantity || !b.quantity.is_positive() {
+        return None;
+    }
+    let entry_done = seen.entry.is_none_or(|e| e.state.is_final());
+    let rested = b.resized_at.is_none_or(|t| seen.now.duration_since(t) >= SignedDuration::from_secs(RESIZE_SECONDS));
+    if !(entry_done || rested) {
+        return Some(Step::nothing());
+    }
+    Some(Step::send(vec![], Request::Resize { order_id: x.order_id.clone(), quantity: b.quantity }))
 }
 
 /// An exit whose own answer is not known yet: nothing is sent past it.
@@ -783,11 +1032,16 @@ fn keep_cancelling(x: &Exit) -> Step {
 
 fn arm(seen: &Seen) -> Step {
     let Some(entry) = seen.entry else { return Step::nothing() };
-    if entry.state.in_flight() || entry.state == OrderState::Dry {
+    if entry.state == OrderState::Dry {
         return Step::nothing();
     }
+    // armed from the first fill, for what has filled; it grows with the entry
+    // (`docs/decisions.md` 2026-10-04)
     if entry.filled.is_positive() {
         return Step::record(vec![BracketEvent::Armed { quantity: entry.filled, high: entry.average, native: seen.stop_allowed }]);
+    }
+    if entry.state.in_flight() {
+        return Step::nothing();
     }
     Step::record(vec![BracketEvent::EntryEnded { why: format!("entry {}", entry.state.as_str()) }])
 }
@@ -795,10 +1049,12 @@ fn arm(seen: &Seen) -> Step {
 /// Bring the bracket in line with what became of its exit: a fill ends it, an end
 /// clears it (and a cancel nobody here asked for ends the bracket), a price or a
 /// quantity changed by hand is followed. `None` when there is nothing to do.
-fn reconcile(b: &Bracket, x: &Exit) -> Option<Step> {
+fn reconcile(b: &Bracket, x: &Exit, key: &StateKey) -> Option<Step> {
     use OrderState::*;
     use Phase::{Closing, ClosingForSale, Guarding, Target};
     match x.fold.state {
+        Filled if x.role == ExitRole::Sale => Some(Step::record(vec![BracketEvent::Cleared { filled: x.fold.filled }])),
+        Cancelled | Expired | Rejected | Failed if x.role == ExitRole::Sale => Some(Step::record(vec![BracketEvent::Cleared { filled: x.fold.filled }])),
         Filled => {
             if b.phase == Closing {
                 return Some(Step::record(vec![BracketEvent::Cleared { filled: x.fold.filled }]));
@@ -817,8 +1073,13 @@ fn reconcile(b: &Bracket, x: &Exit) -> Option<Step> {
                 return Some(Step::record(events));
             }
             match x.fold.state {
-                Cancelled if !x.cancel_asked => events.push(BracketEvent::Ended { outcome: format!("{} cancelled at Wealthsimple by hand", x.role.as_str()) }),
-                Rejected => events.push(BracketEvent::Refused { why: x.fold.why.clone().unwrap_or_else(|| "rejected".into()), code: x.fold.code.clone() }),
+                // a problem told, not an outcome: the stop is watched here until the person acts
+                Cancelled if !x.cancel_asked => events.push(BracketEvent::OffBroker { role: x.role }),
+                Rejected => {
+                    let why = x.fold.why.clone().unwrap_or_else(|| "rejected".into());
+                    let class = classify(false, x.fold.code.as_deref(), &why);
+                    events.push(BracketEvent::Refused { why, code: x.fold.code.clone(), role: Some(x.role), class, key: key.clone() });
+                }
                 _ => {}
             }
             Some(Step::record(events))
@@ -872,7 +1133,7 @@ pub fn closed_by_reads(b: &Bracket, sold: Dec, newest: Option<(Timestamp, bool)>
 pub fn placed(request: &Request, order_id: &str) -> Option<BracketEvent> {
     match request {
         Request::Place { role, price, quantity } => Some(BracketEvent::Placed { role: *role, order_id: order_id.into(), price: *price, quantity: *quantity }),
-        Request::Cancel { .. } => None,
+        Request::Cancel { .. } | Request::Resize { .. } => None,
     }
 }
 
@@ -943,6 +1204,7 @@ mod tests {
             ClosingForSale => vec![armed, placed(ExitRole::Stop, "x1"), BracketEvent::SaleAsked { quantity: d("4") }],
             Closing => vec![armed, placed(ExitRole::Stop, "x1"), BracketEvent::Ended { outcome: "cancelled".into() }],
             Halted => vec![armed, BracketEvent::Halted { why: "cap".into() }],
+            Selling => vec![armed, BracketEvent::SaleAsked { quantity: d("4") }, BracketEvent::SaleSent { order_id: "x1".into(), quantity: d("4") }],
             Ended => vec![armed, BracketEvent::Ended { outcome: "cancelled".into() }],
         };
         path.extend(more);
@@ -961,8 +1223,8 @@ mod tests {
             BracketEvent::Adopted { level: Some(d("94")), target: None, quantity: None },
             BracketEvent::Adjusted { stop: Some(StopLeg { level: d("93"), trail: None, high: None }), target: Some(d("111")) },
             placed(ExitRole::Target, "x2"),
-            BracketEvent::Refused { why: "x".into(), code: None },
-            BracketEvent::Refused { why: "x".into(), code: Some("NOT_ENOUGH_SHARES".into()) },
+            BracketEvent::Refused { why: "x".into(), code: None, role: Some(ExitRole::Stop), class: RefusalClass::Unknown, key: StateKey::default() },
+            BracketEvent::Refused { why: "x".into(), code: Some("NOT_ENOUGH_SHARES".into()), role: Some(ExitRole::Stop), class: RefusalClass::State, key: StateKey::default() },
             BracketEvent::CancelAsked { order_id: "x1".into() },
             BracketEvent::Cleared { filled: Dec::ZERO },
             BracketEvent::Ended { outcome: "x".into() },
@@ -972,6 +1234,10 @@ mod tests {
             BracketEvent::Sold { quantity: d("4") },
             BracketEvent::SaleDropped { why: "x".into() },
             BracketEvent::PositionRead { held: true, read_at: t() },
+            BracketEvent::SaleSent { order_id: "s2".into(), quantity: d("4") },
+            BracketEvent::Grown { total: d("20") },
+            BracketEvent::Resized { quantity: d("12") },
+            BracketEvent::OffBroker { role: ExitRole::Stop },
             BracketEvent::Imported { phase: Guarding, quantity: d("1"), stop: None, target: None, native: false, exit: None, attempts: 0, why: None, outcome: None, seen_held: false, row: "{}".into() },
         ];
         for &p in Phase::ALL {
@@ -1005,31 +1271,32 @@ mod tests {
                     (p, _) => p,
                 })
             }
-            BracketEvent::Refused { code, .. } => {
+            BracketEvent::Refused { .. } => {
                 if !live {
                     return None;
-                }
-                if code.is_some() {
-                    return Some(if exit { Closing } else { Ended });
                 }
                 Some(if from == Firing && !exit { Guarding } else { from })
             }
             BracketEvent::CancelAsked { .. } => exit.then_some(from),
-            BracketEvent::Cleared { .. } => exit.then_some(if from == Firing { Guarding } else { from }),
+            BracketEvent::Cleared { .. } => exit.then_some(if matches!(from, Firing | Selling) { Guarding } else { from }),
             BracketEvent::Moved { to } => {
                 let ok = matches!(
                     (from, to),
-                    (Guarding, ToTarget) | (Guarding, Target) | (ToTarget, Target) | (ToTarget, Guarding) | (Target, ToMarket) | (Target, BackToStop) | (Target, Guarding) | (BackToStop, Guarding) | (ToMarket, Firing) | (ToMarket, Guarding) | (Firing, Guarding)
+                    (Guarding, ToTarget) | (Guarding, Target) | (ToTarget, Target) | (ToTarget, Guarding) | (Target, ToMarket) | (Target, BackToStop) | (Target, Guarding) | (BackToStop, Guarding) | (ToMarket, Firing) | (ToMarket, Guarding) | (Firing, Guarding) | (Selling, ToMarket) | (Selling, Guarding)
                 );
                 ok.then_some(*to)
             }
             BracketEvent::Ended { .. } => (!matches!(from, Closing | Ended)).then_some(if exit { Closing } else { Ended }),
             BracketEvent::Done => (from == Closing && !exit).then_some(Ended),
             BracketEvent::Halted { .. } => (live && !matches!(from, Closing | Waiting)).then_some(Halted),
-            BracketEvent::SaleAsked { .. } => (!matches!(from, Waiting | Closing | Ended | ClosingForSale)).then_some(ClosingForSale),
+            BracketEvent::SaleAsked { .. } => (!matches!(from, Waiting | Closing | Ended | ClosingForSale | Selling)).then_some(ClosingForSale),
             BracketEvent::Sold { .. } => (from == ClosingForSale).then_some(Guarding),
             BracketEvent::SaleDropped { .. } => (from == ClosingForSale).then_some(Guarding),
             BracketEvent::PositionRead { .. } => (live && from != Waiting).then_some(from),
+            BracketEvent::SaleSent { .. } => (from == ClosingForSale && !exit).then_some(Selling),
+            BracketEvent::Grown { .. } => (live && !matches!(from, Waiting | Closing)).then_some(from),
+            BracketEvent::Resized { .. } => exit.then_some(from),
+            BracketEvent::OffBroker { .. } => live.then_some(from),
         }
     }
 
