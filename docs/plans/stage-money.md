@@ -4,22 +4,34 @@ Brief 15, stage 1 ("the money"): every hole its section 2 lists, built in six na
 
 ## For the owner to decide
 
-Three changes alter how the app responds to you, so each comes to you as one line before it is built (`CLAUDE.md`, the gate's last rule). My recommendation comes first in each.
+Nothing open. The owner took all three changes on 2026-10-04 (`docs/decisions.md`, 2026-10-04), in the form brief 19 put them:
+1. A stop that can never succeed is told once and watched here; one that could succeed later is placed again when what blocks it changes; a send with no answer is repeated when the connection or sign-in is back. Never a timer.
+2. A stop goes on for the shares already bought from the first partial fill and grows with each fill, and the rest of the entry is cancelled if the stop fires first.
+3. Every problem with a Wealthsimple row is said in the header's existing sentence.
 
-1. **A stop that Wealthsimple rejects is not resent on a timer.** Today it is resent after 1, 5 and 15 minutes, then every hour (`SPEC.md`, the order ticket's *Failures*). A rejection Wealthsimple answered (for example a price it won't take, or shares that aren't there) comes back the same way every time. **Recommended:**
-   - Such a rejection is told once, with Wealthsimple's reason. This already happens: the notification and the `Retrying · <reason>` row both exist.
-   - The row then reads `Watching · <reason>`, and the app keeps watching your stop level itself, selling at market the moment the price crosses it, with no wait.
-   - Only a send that got no answer (connection lost, timeout, sign-in lapsed, too many requests) is sent again, as soon as the cause clears: the connection back, a fresh sign-in, the next session for a stop refused outside one.
-   - If you keep today's rule instead, only the market-sell delay is fixed.
-2. **A stop protects the shares already bought, from the first partial fill.** Today an entry that fills in parts gets no stop until the whole order ends: hours for a Day order, up to 90 days for one good till cancelled. Interactive Brokers and Alpaca document attached stops activating once the parent fills (sources below). Neither says that already-bought shares wait unprotected for the rest of a long order. **Recommended:** the stop is placed for what has filled so far and grows with each fill. If you prefer the brokers' documented rule, the stop waits for the whole entry, as today.
-3. **Every problem the app finds with one of Wealthsimple's rows reaches the header, not only rows it could not place.** Since 2.0.12 the header names rows the mapping has no rule for. A row the mapping read but could not finish (no amount stated, a security it was not sent) still drops out of every figure in silence. **Recommended:** the same sentence covers every problem, in the mapping's words. This follows your rule that a failure is always visible (2026-09-22). The list of such rows that you asked to see designed first stays out of this plan.
+## Brief 19 applied (Go with changes)
+
+Each required change, and where it lands:
+1. **Refusals are classed by whether the same request can succeed later** (part A): *invalid* (wrong price step or decimal count, an order type the security does not take): told once, never resent, watched here; *depends on state* (shares committed to another order, outside the session, a price outside the band): asked again on the event that changes the answer (the working-order list or a holding changes, the session opens, the quote crosses), never on a timer; *no answer* (transport, timeout, 401/403/429): resent when the cause clears. An answer of a shape not on record is *depends on state*, with a bounded number of event-driven retries (a named constant), then watched here and said. The first release after part A shows, in its PR, every refusal answer in the order log and its class.
+2. **Arming while the entry still works** (part A), three states with a test each in `core/tests/brackets.rs`: (a) the stop fires while the entry works: the entry is cancelled at once; (b) the stop's quantity follows the fills by a modify, coalesced (at most one per interval and per material change, both named constants), never a cancel and place; (c) the entry ends: the stop's quantity is checked once against the filled quantity.
+3. **Recorded as the owner's decision with accurate sources:** done (`docs/decisions.md` 2026-10-04). The "departs from Interactive Brokers and Alpaca" argument is dropped: their pages are silent on a partly filled parent. `SPEC.md` *Arming*'s "or ended with a partial fill" is the sentence that changes.
+4. **The signal comes after the commit** (part E): SQLite's `commit_hook` runs before the commit completes (its documented veto turns a non-zero return into a rollback); `wal_hook` runs after the commit and after the write lock is released. The book and the cache both signal from `wal_hook` (or from `atomically` after `commit()` returns). The route test runs with each write delayed, so a signal before the commit fails it.
+5. **No `arbitrary_precision`** (part B): Cargo unifies it across every crate and it breaks internally tagged enums and `flatten` on numbers (serde-rs/json issue 505). Prices and quantities go out as `serde_json::value::RawValue` (feature `raw_value`) in those fields only.
+6. **The import slot is taken before the body is read** (part D): a second import is refused (409, in the page's own words) before its body is accepted. The test sends twelve imports at the same instant and measures memory flat.
+7. **A failed market-data read** (part B): the ticket offers the order types last read for that security, marked with when, and refuses any never read; with none ever read, market and limit only, saying stop types could not be checked. The failure is said either way.
+8. **A repeat submit while the first is in flight** (part B) answers "in flight" with the same id, never a second send; the page disables Submit from the click to the answer.
+9. **A refresh consumed without a reply** (part C): a refusal that came on the first try is told apart from `invalid_grant` after a lost reply; the second is said as "sign in again", never "refused". A test for each.
+10. **The sign-in browser's port** (part C, moved from stage 5): a free port, or a pipe; only the endpoint the launched child names in its own `DevToolsActivePort` file is accepted; the sign-in fails if that port is taken. A test with a foreign listener on the port. The headless sign-in stays in stage 5.
+11. **Snapshots are transient** (part D): a pre-migration snapshot exists only until the new version has started and answered, then is removed; a Clear while one exists clears the same kinds inside it; `prune` keeps `snapshots/` bounded.
+
+Open question 4 is answered by the brief: **every account's return is measured between the same pair of dates.** The combined days are those on which every started account states a value. The combined return chains over consecutive such days, each account's return over exactly that interval from its own two stated values and its net deposits on those days. An account whose statements stop leaves the weighting at its last stated day, and the gap is said. GIPS' composite provisions are read before part F is built.
 
 ## Scope
 
 The six parts below. On screen: the three lines above, if taken, and wording where a failure is told. No layout changes.
 
 Out of scope on purpose:
-- The sign-in browser's fixed port and the headless sign-in (stage 5, remote access).
+- The headless sign-in (stage 5, remote access). The sign-in browser's fixed port is in part C (brief 19, change 10).
 - Execution behind a broker trait, and the `ws` crate's removal (stage 2).
 - Costs at your size (stage 3).
 - The list of unplaced rows (decided 2026-09-30: designed first).
@@ -33,7 +45,7 @@ The old app had brackets with the same five-second loop and no recovery for a sa
 - **Attached stops.**
   - Interactive Brokers: an attached stop "will be created, but will not be submitted until the parent order fills" ([IBKR guide, Attached Orders](https://www.ibkrguides.com/ipad/attached.htm), read 2026-10-04).
   - Alpaca: "The second and third orders won't be active until the first order is completely filled", and "if the take-profit order is partially filled, the stop-loss order will be adjusted to the remaining quantity" ([Alpaca, Orders](https://docs.alpaca.markets/docs/orders-at-alpaca), read 2026-10-04).
-  - Neither covers shares already bought while the rest of a long order works. Decision 2 departs for that reason.
+  - Neither page says what happens to a partly filled parent, so neither is a rule this plan departs from (brief 19). NinjaTrader's ATM strategies: when scaling into a position "all of the Stop Loss and Profit Target orders will be automatically updated to reflect the new position size" (NinjaTrader help, ATM strategies, as read by the reviewer 2026-10-04).
 - **A rejected order.** Alpaca rejects a price with too many decimals with a stated code (same page). The rejection is the answer; it is shown, and the order is not resent. The one rejection on your account (2026-09-10) was exactly that case: "Limit price has too many decimal places. Max allowed: 2".
 - **Repeat submissions.**
   - FIX: the client's order id "must be guaranteed [unique] within a single trading day" ([FIX 4.4, ClOrdID tag 11](https://www.onixs.biz/fix-dictionary/4.4/tagnum_11.html), read 2026-10-04).
@@ -89,8 +101,8 @@ Each part names the code it changes and the test that holds it. Every new state 
 ### Part B: the ticket sends exactly what was confirmed, once
 - **The id is made at Review.** The page makes the order id when it opens Review and sends it with Submit. The server writes the order under that id. A repeat with the same id returns the first answer, and the same id with different contents is refused (`ticket.rs:602-621, 700`; `gate.rs:100-129`).
 - **Review shows the price that will be sent.** The tick is applied when Review is built (`orders/preview.rs:141-143, 198-205`), and a price off the grid is refused there, never rounded after confirming (`ticket.rs:655, 660, 675, 695`). This follows the owner's "the order ticket refuses what it cannot send" (2026-09-30).
-- **Exact decimals on the wire.** Prices and quantities go out as decimal text in the JSON number position, through `serde_json`'s arbitrary-precision number, never `to_f64` (`ticket.rs:706-714`, `brackets.rs:147-155`, `gate.rs:204-207, 448-451`). The recorded web-app request remains the golden.
-- **A failed market-data read offers no order type.** Today it offers all four (`ticket.rs:508-511, 529`). The type control shows nothing to choose, with the failure said in the ticket, until a read answers. This also follows the 2026-09-30 decision.
+- **Exact decimals on the wire.** Prices and quantities go out as decimal text in the JSON number position, as `serde_json::value::RawValue` in those fields only (brief 19, change 5), never `to_f64` (`ticket.rs:706-714`, `brackets.rs:147-155`, `gate.rs:204-207, 448-451`). The recorded web-app request remains the golden.
+- **A failed market-data read** (brief 19, change 7): today it offers all four types (`ticket.rs:508-511, 529`). The ticket offers the types last read for the security, marked with when, and refuses any never read. With none ever read it offers market and limit only, saying stop types could not be checked. The failure is said either way, which follows the 2026-09-30 decision.
 - **401/403/429 are "not sent", not "rejected"** (`gate.rs:261`, `ws/src/session.rs:729-731`).
 - **Every failure on the order path is an event on the order, shown.** The log-only paths become events on their bracket's card: `Held::InFlight/Dry/NotNow`, failed read-backs, a failed book read, not armed yet, and a disallowed bracket move (`brackets.rs:177, 231-233, 257, 264, 288, 299, 390, 417`; `ticket.rs:510, 930`).
 
@@ -106,10 +118,10 @@ Each part names the code it changes and the test that holds it. Every new state 
 - **Body limits per route, and one import at a time.** Import rows are streamed and written in batches with a cancellation check (`http/mod.rs:80, 232`; `model.rs:257-264`; `csv_import.rs:68`).
 - **A ceiling on every upstream body.** It is checked while reading, never after, including the gzip-inflated size. The model and the release archive stream to disk (`net/src/client.rs:379, 396, 433, 462, 644-650`; `update.rs:22, 339`).
 - **The rollback restores the stores or refuses to roll back.** It restores the stores' snapshots taken by the update it undoes (`update.rs:471, 575, 593`; `sqlite/src/migrate.rs:164`).
-  - A Clear clears the same kinds inside each snapshot instead of deleting the snapshots (`clear.rs:164`). A snapshot then never brings back what was cleared, and a rollback still has its stores.
+  - Snapshots are transient (brief 19, change 11): one exists only until the new version has started and answered. A Clear while one exists clears the same kinds inside it (`clear.rs:164`).
 
 ### Part E: every write to the book reaches the screens
-- The book's connections register the same commit hook the cache has (`figures.rs:206` beside `figures.rs:214`, `app.rs:161`), so a journal note, a grade, a manual trade or an import signals the stream by construction (`http/model.rs:192, 223, 257`; `entries.rs:243`).
+- The book and the cache signal from SQLite's `wal_hook`, after the commit (brief 19, change 4; today the cache uses `commit_hook`, `figures.rs:214`, `app.rs:161`). A journal note, a grade, a manual trade or an import then signals the stream by construction (`http/model.rs:192, 223, 257`; `entries.rs:243`).
 - One server test walks every writing route and asserts a stream message follows each.
 
 ### Part F: the book's own correctness holes on the money path
@@ -117,7 +129,7 @@ Each part names the code it changes and the test that holds it. Every new state 
 - **A CSV re-import links by movement identity for every kind.** Account, day, kind, instrument and signed amounts; feed first, then statement. Today only exact fills and bare cash link, so dividends and other kinds double (`csv_import.rs:227-262`).
 - **A combined return keeps every account's day.**
   - A day one account did not state no longer drops every account's return from the chain (`engine/src/scope.rs:987-997`), and an account whose statements stop ends its own series, not the combined one.
-  - How the missing day is filled is open question 4. `SPEC.md` §2 changes with the method and its source. The expected figures come from an agent that has not read the engine.
+  - Every account's return is measured between the same pair of combined dates (open question 4, answered by brief 19). `SPEC.md` §2 changes with the method and its source, GIPS' composite provisions. The expected figures come from an agent that has not read the engine.
 
 `SPEC.md` changes: the order ticket's *Arming* (decision 2), *Failures* (decision 1) and *Nothing left behind* (a ticket sale ends the bracket on its fill), the header's problem sentence (decision 3), and §2's combined return. Each change names its source.
 
@@ -169,4 +181,4 @@ To fill when built.
 
 ## Handoff
 
-Plan written 2026-10-04 from brief 15 §2 and the two surveys. Build order: A, B, C, D, E, F. Nothing is built before the verdict.
+Plan written 2026-10-04 from brief 15 §2 and the two surveys; brief 19 (Go with changes) applied, owner decisions recorded. Build order: A, B, C, D, E, F.
