@@ -3,7 +3,7 @@ import type { Position } from '../model'
 import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live.svelte'
 import { symText } from '../sym'
-import { px, qty as qtyFmt } from '../fmt'
+import { orderPx, qty as qtyFmt } from '../fmt'
 import { view, previewRequest, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
 import type { Preview } from '../generated/orders'
 import { call } from '../api'
@@ -266,8 +266,8 @@ export function fetchQuote() {
 function notice(v: ReturnType<typeof view>, status: string | undefined) {
   const t = ticketStore.t!
   const head = status === 'dry' ? 'Not sent (orders are off) · ' : status === 'unconfirmed' || status === 'sending' ? 'Sent, not confirmed · ' : 'Order placed · '
-  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : px(v.entry) + ' ' + v.typeWord.toLowerCase()) +
-    (v.slOn ? ', stop ' + px(v.slPrice) : '') + (v.tpOn ? ', target ' + px(v.tpPrice) : '')
+  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : orderPx(v.entry) + ' ' + v.typeWord.toLowerCase()) +
+    (v.slOn ? ', stop ' + orderPx(v.slPrice) : '') + (v.tpOn ? ', target ' + orderPx(v.tpPrice) : '')
 }
 
 export async function submit() {

@@ -131,6 +131,16 @@ export function px(v: Amount): string {
   const dp = s === 0 ? 2 : absBelow(v, '0.01') ? 5 : absBelow(v, '1') ? (digits(v, 3).endsWith('0') ? 2 : 3) : 2
   return (s < 0 ? '-' : '') + digits(v, dp)
 }
+/** A price an order carries, as `px` writes it but never with fewer decimals than the
+ * price holds: the review shows the price that is sent, digit for digit (SPEC §6, Review). */
+export function orderPx(v: Amount): string {
+  if (v == null || typeof v === 'number' || waits(v)) return px(v)
+  const dot = (v as string).indexOf('.')
+  const held = dot < 0 ? 0 : (v as string).slice(dot + 1).replace(/0+$/, '').length
+  const shown = px(v)
+  const dp = shown.indexOf('.') < 0 ? 0 : shown.length - shown.indexOf('.') - 1
+  return held <= dp ? shown : (sign(v) < 0 ? '-' : '') + digits(v, held)
+}
 export function hold(d: number | null | undefined): string {
   return d == null ? '—' : Math.round(d).toLocaleString('en-US') + 'd'
 }

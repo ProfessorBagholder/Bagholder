@@ -3,7 +3,7 @@
   import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty, refreshPreview, switchSide } from './ticket.svelte'
   import { neg, sign, ticketNumber, waits } from '../dec'
   import { plain, parseNum, amt as tkAmt, sAmt as tkSAmt } from './vals'
-  import { px, pct, pctPlain, waiting, money, qty as qtyFmt, num } from '../fmt'
+  import { px, orderPx, pct, pctPlain, waiting, money, qty as qtyFmt, num } from '../fmt'
   import { symText } from '../sym'
   import { ICONS } from '../icons'
 
@@ -31,16 +31,16 @@
   const size = (n: number | null | undefined) => (n == null ? '' : ' × ' + num(n, 0))
 
   // the stop field reads the trail or the stop in the unit chosen
-  const slText = $derived(v.isTrail ? (t.sl.unit === 'pct' ? plain(v.trail) : px(v.trail)) : t.sl.priceUnit === 'pct' ? plain(v.slPctIn) : px(v.slPrice))
-  const tpText = $derived(t.tp.unit === 'pct' ? plain(v.tpPctIn) : px(v.tpPrice))
+  const slText = $derived(v.isTrail ? (t.sl.unit === 'pct' ? plain(v.trail) : orderPx(v.trail)) : t.sl.priceUnit === 'pct' ? plain(v.slPctIn) : orderPx(v.slPrice))
+  const tpText = $derived(t.tp.unit === 'pct' ? plain(v.tpPctIn) : orderPx(v.tpPrice))
   const slRead = $derived.by(() => {
     const verb = v.buy ? 'Sells at ' : 'Buys at '
-    return [v.isTrail ? 'Starts at ' + px(v.slPrice) : verb + px(v.slPrice), v.risk == null ? '—' : tkSAmt(neg(v.risk)) + ' (' + pct(v.slPct) + ')']
+    return [v.isTrail ? 'Starts at ' + orderPx(v.slPrice) : verb + orderPx(v.slPrice), v.risk == null ? '—' : tkSAmt(neg(v.risk)) + ' (' + pct(v.slPct) + ')']
   })
-  const tpRead = $derived.by(() => [(v.buy ? 'Sells at ' : 'Buys at ') + px(v.tpPrice), v.gain == null ? '—' : tkSAmt(v.gain) + ' (' + pct(v.tpPct) + ')'])
+  const tpRead = $derived.by(() => [(v.buy ? 'Sells at ' : 'Buys at ') + orderPx(v.tpPrice), v.gain == null ? '—' : tkSAmt(v.gain) + ' (' + pct(v.tpPct) + ')'])
   const rrStr = $derived(v.rr == null ? '—' : '1:' + plain(+v.rr.toFixed(1)))
-  const line = $derived(v.typeWord + (t.type === 'MARKET' ? '' : ' ' + px(v.entry) + ' · ' + v.tifWord) + ' · ' + (v.acct ? v.acct.name : ''))
-  const slLine = $derived(!v.slOn ? 'None' : v.isTrail ? 'Trails ' + v.trailWord + (v.buy ? ' under the high' : ' over the low') + ' · starts at ' + px(v.slPrice) : 'Market at ' + px(v.slPrice))
+  const line = $derived(v.typeWord + (t.type === 'MARKET' ? '' : ' ' + orderPx(v.entry) + ' · ' + v.tifWord) + ' · ' + (v.acct ? v.acct.name : ''))
+  const slLine = $derived(!v.slOn ? 'None' : v.isTrail ? 'Trails ' + v.trailWord + (v.buy ? ' under the high' : ' over the low') + ' · starts at ' + orderPx(v.slPrice) : 'Market at ' + orderPx(v.slPrice))
 
   // --- input / change handlers, mirroring tkInputEvent / tkBlur / tkChange ---
   function onInput(id: string, value: string) {
@@ -127,10 +127,10 @@
             <span class="tk-sel"><select class="tk-in" id="tk-type" bind:value={t.type}>{#each TK_TYPES.filter((x) => types.indexOf(x[0]) >= 0) as [k, l] (k)}<option value={k}>{l}</option>{/each}</select><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.caretDown} /></svg></span>
           </label>
           {#if showLimit}
-            <label class="tk-f"><span class="tk-l">Limit price</span><input class="tk-in num" id="tk-limit" inputmode="decimal" autocomplete="off" value={val('limit', px(v.limit))} oninput={(e) => onInput('tk-limit', (e.target as HTMLInputElement).value)} onblur={() => onBlur('tk-limit')} /></label>
+            <label class="tk-f"><span class="tk-l">Limit price</span><input class="tk-in num" id="tk-limit" inputmode="decimal" autocomplete="off" value={val('limit', orderPx(v.limit))} oninput={(e) => onInput('tk-limit', (e.target as HTMLInputElement).value)} onblur={() => onBlur('tk-limit')} /></label>
           {/if}
           {#if showStop}
-            <label class="tk-f"><span class="tk-l">Stop price</span><input class="tk-in num" id="tk-stop" inputmode="decimal" autocomplete="off" value={val('stop', px(v.stop))} oninput={(e) => onInput('tk-stop', (e.target as HTMLInputElement).value)} onblur={() => onBlur('tk-stop')} /></label>
+            <label class="tk-f"><span class="tk-l">Stop price</span><input class="tk-in num" id="tk-stop" inputmode="decimal" autocomplete="off" value={val('stop', orderPx(v.stop))} oninput={(e) => onInput('tk-stop', (e.target as HTMLInputElement).value)} onblur={() => onBlur('tk-stop')} /></label>
           {/if}
           {#if showTif}
             <label class="tk-f"><span class="tk-l">Time in force</span>
@@ -204,7 +204,7 @@
         {#if v.buy}
           <div style="display:flex;flex-direction:column;gap:10px">
             <div class="tk-row"><span class="l">Stop loss</span><span class="num" style="text-align:right">{slLine}</span></div>
-            <div class="tk-row"><span class="l">Take profit</span><span class="num" style="text-align:right">{v.tpOn ? 'Limit at ' + px(v.tpPrice) : 'None'}</span></div>
+            <div class="tk-row"><span class="l">Take profit</span><span class="num" style="text-align:right">{v.tpOn ? 'Limit at ' + orderPx(v.tpPrice) : 'None'}</span></div>
           </div>
         {/if}
         <div style="display:flex;flex-direction:column;gap:10px;padding-top:16px;box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.10)">
