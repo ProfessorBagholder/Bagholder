@@ -446,6 +446,7 @@ pub fn refresh_orders(app: &Arc<App>) -> RefreshOrdersAnswer {
             log(&format!("bagholder orders: the pending-order feed could not be read: {e}"));
         }
     }
+    probe_orders_once(app, &book, &sess);
     super::learn_units(app, &book, &sess);
     *app.orders.refreshed_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
     app.events.signal();
@@ -453,6 +454,69 @@ pub fn refresh_orders(app: &Arc<App>) -> RefreshOrdersAnswer {
         log(&format!("bagholder orders: {read} read, {failed} failed"));
     }
     RefreshOrdersAnswer { ok: failed == 0, skipped: None, read, failed }
+}
+
+/// Where the dry order probe writes what Wealthsimple answered, once per version
+/// (`docs/plans/broker-check-reserved-cash.md`, open question 4, brief 17 item 1).
+pub const PROBE_FILE: &str = "probe-orders";
+
+/// At an orders read, on the same session and only once a version: each activity
+/// row the book keeps as not yet final that names an order, read back by each id
+/// it states (`FetchSoOrdersExtendedOrder`: its status, duration and when it
+/// lapsed), and the working-order feed as it came, read only and written beside
+/// the book for the plan's question. A probe that cannot be written is logged; it
+/// moves nothing and is no failure of the read.
+fn probe_orders_once(app: &Arc<App>, book: &Book, sess: &bagholder_ws::session::Session) {
+    let path = app.home.join(format!("{PROBE_FILE}-{}.json", crate::app::APP_VERSION));
+    // a test's fake broker answers only what its test asks; the probe is a one-off
+    // question to the real one
+    if cfg!(test) || path.exists() {
+        return;
+    }
+    let answer = |r: Result<Value, bagholder_ws::session::CallError>| match r {
+        Ok(v) => json!({ "data": v }),
+        Err(e) => json!({ "error": super::err_text(&e) }),
+    };
+    let records = match book.live_records(&bagholder_core::SourceName::named("wealthsimple")) {
+        Ok(r) => r,
+        Err(e) => return log(&format!("bagholder: the order probe could not list the records: {e}")),
+    };
+    let mut rows = Vec::new();
+    for r in records {
+        let payload = match book.revisions(r) {
+            Ok(mut v) => match v.pop() {
+                Some((_, _, p)) => p,
+                None => continue,
+            },
+            Err(e) => return log(&format!("bagholder: the order probe could not read a record: {e}")),
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&payload) else { continue };
+        let a = &v["activity"];
+        if a["unifiedStatus"].as_str().is_some_and(|s| s == "COMPLETED" || s == "CANCELLED" || s == "REJECTED" || s == "EXPIRED" || s == "FAILED" || s == "DECLINED") {
+            continue;
+        }
+        let ids: Vec<String> = ["canonicalId", "externalCanonicalId"].iter().filter_map(|k| a[*k].as_str()).filter(|i| i.starts_with("order-")).map(String::from).collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let mut read = serde_json::Map::new();
+        for id in &ids {
+            read.insert(id.clone(), answer(gql_as::<Value>(app, sess, "FetchSoOrdersExtendedOrder", json!({"branchId": "TR", "externalId": id}))));
+        }
+        rows.push(json!({ "activity": a, "read_back": read }));
+    }
+    let identity = sess.identity();
+    let all_statuses: Vec<&str> = gate::WS_STATUSES.iter().map(|(w, _)| *w).collect();
+    let feed = answer(gql_as::<Value>(app, sess, "OrderServiceExtendedOrderFeed", json!({"identityId": identity, "statuses": FEED_STATUSES, "first": 100, "cursor": null})));
+    let feed_all = answer(gql_as::<Value>(app, sess, "OrderServiceExtendedOrderFeed", json!({"identityId": identity, "statuses": all_statuses, "first": 100, "cursor": null})));
+    let out = json!({ "at": Timestamp::now().to_string(), "pending_rows": rows, "working_feed": feed, "feed_every_status": feed_all });
+    let text = match serde_json::to_string_pretty(&out) {
+        Ok(t) => t,
+        Err(e) => return log(&format!("bagholder: the order probe could not be written out: {e}")),
+    };
+    if let Err(e) = std::fs::write(&path, text) {
+        log(&format!("bagholder: the order probe could not be written to {}: {e}", path.display()));
+    }
 }
 
 /// Whether anything is open that the broker may still move: an order of the app's in

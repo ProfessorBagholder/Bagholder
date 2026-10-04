@@ -37,7 +37,6 @@ fn doc(name: &str) -> &'static str {
         "FetchMonthlyStatementWithTransactions" => include_str!("../graphql/FetchMonthlyStatementWithTransactions.graphql"),
         "FetchTradingBalanceBuyingPower" => include_str!("../graphql/FetchTradingBalanceBuyingPower.graphql"),
         // the probe's only: the enum's values where Wealthsimple answers introspection
-        "ProbeBalanceType" => include_str!("../graphql/ProbeBalanceType.graphql"),
         other => panic!("no document named {other}"),
     }
 }
@@ -170,52 +169,6 @@ impl<'n> Client<'n> {
             }
             return n.obj("data").map(|d| d.value().clone()).map_err(|m| mismatch(op, m));
         }
-    }
-
-    /// A dry probe of what Wealthsimple states about an account's cash, read only
-    /// (`docs/plans/broker-check-reserved-cash.md`, open question 1): the values
-    /// `BalanceType` takes (an invalid value is answered with them), each such
-    /// balance for `accounts`, and `tradingBalanceViewV2`'s cash and buying power
-    /// in CAD and USD for each. Every answer and every refusal is kept as it came.
-    pub fn probe_balances(&mut self, accounts: &[String]) -> Value {
-        let ids = Value::Array(accounts.iter().map(|a| text(a)).collect());
-        let answer = |r: Answer<Value>| match r {
-            Ok(v) => obj(vec![("data", v)]),
-            Err(f) => obj(vec![("error", text(&format!("{f:?}")))]),
-        };
-        let invalid = self.graphql("FetchAccountsWithBalance", obj(vec![("ids", ids.clone()), ("type", text("BAGHOLDER_PROBE_NOT_A_TYPE"))]));
-        let said = match &invalid {
-            Err(f) => format!("{f:?}"),
-            Ok(_) => String::new(),
-        };
-        let introspected = self.graphql("ProbeBalanceType", obj(vec![]));
-        // an answer of another shape names no values; it is kept as it came below
-        let named: Vec<String> = match introspected.as_ref().map(|d| Node::root(d).obj("__type").and_then(|t| t.list("enumValues"))) {
-            Ok(Ok(l)) => l.iter().filter_map(|e| e.text("name").ok().map(str::to_string)).collect(),
-            _ => vec![],
-        };
-        // every upper-case word the refusal names is a value to ask with, and every value introspection names
-        let mut values: Vec<String> = said.split(|c: char| !(c.is_ascii_uppercase() || c == '_')).filter(|w| w.len() > 2 && *w != "BAGHOLDER_PROBE_NOT_A_TYPE").map(str::to_string).collect();
-        values.extend(named);
-        values.sort();
-        values.dedup();
-        if !values.iter().any(|v| v == "TRADING") {
-            values.push("TRADING".into());
-        }
-        let mut by_type = Vec::new();
-        for v in &values {
-            let r = self.graphql("FetchAccountsWithBalance", obj(vec![("ids", ids.clone()), ("type", text(v))]));
-            by_type.push((v.clone(), answer(r)));
-        }
-        let mut view = Vec::new();
-        for a in accounts {
-            for ccy in ["CAD", "USD"] {
-                let r = self.graphql("FetchTradingBalanceBuyingPower", obj(vec![("accountCanonicalId", text(a)), ("currency", text(ccy)), ("securityId", Value::Null)]));
-                view.push((format!("{a} {ccy}"), answer(r)));
-            }
-        }
-        let pairs = |v: Vec<(String, Value)>| Value::Object(v.into_iter().collect());
-        obj(vec![("invalid_type_answer", text(&said)), ("introspection", answer(introspected)), ("balances_by_type", pairs(by_type)), ("trading_balance_view", pairs(view))])
     }
 
     /// Every page of a connection, each page's nodes from `at(data)`.
