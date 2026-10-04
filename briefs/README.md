@@ -25,4 +25,5 @@ Read from any checkout without switching branches:
 | 14 | [Brief 13 as built: accepted, one fix](14-brief-13-as-built.md) | Current |
 | 15 | [The app against the standard](15-the-app-against-the-standard.md) | Current; full findings in [15/](15/) |
 | 16 | [Verdict on the reserved-cash plan (#339): Go with changes](16-reserved-cash-verdict.md) | Superseded by 17 |
-| 17 | [The reserved-cash plan resubmitted (#339): Go with changes](17-reserved-cash-resubmitted.md) | Current |
+| 17 | [The reserved-cash plan resubmitted (#339): Go with changes](17-reserved-cash-resubmitted.md) | Current; source question settled by 18 |
+| 18 | [The reserved-cash plan at eb7a0f05: no objection to the source, one addition](18-reserved-cash-source.md) | Current |
