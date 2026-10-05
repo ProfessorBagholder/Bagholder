@@ -831,6 +831,12 @@ pub fn seconds_until_token_refresh(sess: &Session, now: f64) -> f64 {
     }
 }
 
+/// The access token's own stated expiry has passed; a token that states none is not
+/// taken to have expired.
+pub fn token_expired(sess: &Session, now: f64) -> bool {
+    expires_at_unix(sess).is_some_and(|exp| now >= exp)
+}
+
 pub fn token_refresh_needed(sess: &Session, now: f64) -> bool {
     match expires_at_unix(sess) {
         None => true,
