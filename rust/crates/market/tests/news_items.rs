@@ -155,10 +155,10 @@ fn answers() -> Value {
     let clock = Clock::at(now);
     let both = tmx_post(false);
     let one = tmx_post(true);
-    let tmx_net = Net { get: &no_get, post: &both, pace: false };
-    let tmx_half = Net { get: &no_get, post: &one, pace: false };
-    let us_net = Net { get: &nasdaq_get, post: &no_post, pace: false };
-    let dead = Net { get: &no_get, post: &no_post, pace: false };
+    let tmx_net = Net { get: &no_get, post: &both, article: &news::no_article, pace: false };
+    let tmx_half = Net { get: &no_get, post: &one, article: &news::no_article, pace: false };
+    let us_net = Net { get: &nasdaq_get, post: &no_post, article: &news::no_article, pace: false };
+    let dead = Net { get: &no_get, post: &no_post, article: &news::no_article, pace: false };
     out.insert("wire_tmx".into(), wire(&news::fetch_symbol(&conn, &tmx_net, "PNG", "TSX-V", "CAD", &clock).1));
     out.insert("wire_tmx_media_down".into(), wire(&news::fetch_symbol(&conn, &tmx_half, "PNG", "TSX-V", "CAD", &clock).1));
     out.insert("wire_us".into(), wire(&news::fetch_symbol(&conn, &us_net, "SHOP", "NASDAQ", "USD", &clock).1));

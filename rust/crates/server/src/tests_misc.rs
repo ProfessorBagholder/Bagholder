@@ -327,7 +327,7 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
         seen.lock().unwrap().1 = Some(body["variables"]["symbol"].as_str().unwrap_or("").to_string());
         Ok(json!({"data": {"news": [{"newsid": "3", "headline": "QIMC Engages", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}))
     };
-    let net = Net { get: &get, post: &post, pace: false };
+    let net = Net { get: &get, post: &post, article: &news::no_article, pace: false };
     let wire = |c: &Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, s, e, cc, cl);
     let extra = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };
     let readers = Readers { wire: &wire, extra: &extra };

@@ -111,10 +111,15 @@ impl std::fmt::Display for NetError {
 pub type GetFn<'a> = dyn Fn(&str, &[(&str, &str)]) -> Result<String, NetError> + Sync + 'a;
 pub type PostFn<'a> = dyn Fn(&str, &Value, &[(&str, &str)]) -> Result<Value, NetError> + Sync + 'a;
 
+/// The page behind a Google item, as its publisher states it.
+pub type ArticleFn<'a> = dyn Fn(&str) -> Result<Article, NetError> + Sync + 'a;
+
 /// The requests a read makes, so a test can answer them.
 pub struct Net<'a> {
     pub get: &'a GetFn<'a>,
     pub post: &'a PostFn<'a>,
+    /// The article a Google item's link stands for (`read_article`).
+    pub article: &'a ArticleFn<'a>,
     /// Whether hosts are paced; a test's answers are not.
     pub pace: bool,
 }
@@ -132,7 +137,12 @@ fn live_post(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result<Val
 }
 
 /// The internet.
-pub const LIVE: Net<'static> = Net { get: &live_get, post: &live_post, pace: true };
+pub const LIVE: Net<'static> = Net { get: &live_get, post: &live_post, article: &read_article, pace: true };
+
+/// No article is read: for a test whose Google items are not its subject.
+pub fn no_article(link: &str) -> Result<Article, NetError> {
+    Err(NetError { code: None, text: format!("no article is read here: {link}") })
+}
 
 /// Now, and the day it is.
 #[derive(Debug, Clone)]
@@ -1184,7 +1194,8 @@ pub fn google_queries(symbol: &str, exchange: &str, currency: &str, name: &str) 
 }
 
 /// `None` when there is nothing to search for.
-pub fn fetch_google(net: &Net, symbol: &str, exchange: &str, currency: &str, name: &str) -> Result<Option<Vec<NewsItem>>, NetError> {
+pub fn fetch_google(net: &Net, ask: &Ask) -> Result<Option<Vec<NewsItem>>, NetError> {
+    let (symbol, exchange, currency, name) = (ask.symbol.as_str(), ask.exchange.as_str(), ask.currency.as_str(), ask.name.as_str());
     let us = tmx_form(exchange, currency) == Some(":US");
     let queries = google_queries(symbol, exchange, currency, name);
     if queries.is_empty() {
@@ -1200,7 +1211,173 @@ pub fn fetch_google(net: &Net, symbol: &str, exchange: &str, currency: &str, nam
             }
         }
     }
+    // Google's title is the publisher's page title, which some publishers cut
+    // (GlobeNewswire's near sixty characters), and it gives no summary: each new
+    // item carries its article's own headline and summary, read once and kept
+    // after. Reading one takes two of Google's turns, so what the listing held
+    // before, and the back catalogue of a first read, stand as Google states them
+    for r in rows.iter_mut() {
+        if let Some(k) = ask.articles.get(&r.id) {
+            (r.headline, r.summary, r.url) = (k.headline.clone(), k.summary.clone(), k.url.clone());
+            continue;
+        }
+        let unread = UNREAD.lock().unwrap_or_else(|e| e.into_inner()).contains(&r.id);
+        if !unread && (ask.first_read || ask.held.contains(&r.id)) {
+            continue;
+        }
+        match (net.article)(&r.url) {
+            Ok(a) => {
+                UNREAD.lock().unwrap_or_else(|e| e.into_inner()).remove(&r.id);
+                if !a.headline.is_empty() {
+                    r.headline = a.headline;
+                }
+                r.summary = summary_text(&a.summary, &r.headline);
+                r.url = a.url;
+            }
+            // the item stands as Google states it, and its article is asked for again next time
+            Err(e) => {
+                UNREAD.lock().unwrap_or_else(|e| e.into_inner()).insert(r.id.clone());
+                log(&format!("bagholder news: the article behind a Google item for {symbol} could not be read: {e}"));
+            }
+        }
+    }
     Ok(Some(rows))
+}
+
+/// New Google items whose article could not be read, by id: asked for again at
+/// the next pass though the listing now holds them.
+static UNREAD: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// What a publisher's own page states of an article: where it is, its
+/// headline and its summary, from the page's Open Graph tags (`og:title`,
+/// `og:description`; https://ogp.me), which carry them whole where the page's
+/// `<title>` may be cut.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Article {
+    pub url: String,
+    pub headline: String,
+    pub summary: String,
+}
+
+/// Where Google's link for an item (`https://news.google.com/rss/articles/<id>`)
+/// leads: Google answers it with a page carrying a signature and a time
+/// (`data-n-a-sg`, `data-n-a-ts`), and its own decoding request
+/// (`batchexecute`, `Fbv4je`) with them answers the publisher's URL; then that
+/// page, read with a browser's handshake, which publishers' gates ask for.
+pub fn read_article(link: &str) -> Result<Article, NetError> {
+    let fail = |text: String| NetError { code: None, text };
+    let id = google_article_id(link).ok_or_else(|| fail(format!("{link} is not a Google News article link")))?;
+    // one session for every article, kept: its cookies are Google's consent, and a
+    // helper process is not started per item
+    static SESSION: Mutex<Option<bagholder_net::browser::Session>> = Mutex::new(None);
+    let mut slot = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        *slot = Some(bagholder_net::browser::Session::new().ok_or_else(|| fail("the browser helper is not there".into()))?);
+    }
+    let session = slot.as_mut().expect("opened above");
+    let got = read_article_in(session, id);
+    // a session that did not carry a request is replaced at the next one
+    if got.as_ref().is_err_and(|e| e.code.is_none()) {
+        *slot = None;
+    }
+    got
+}
+
+fn read_article_in(session: &mut bagholder_net::browser::Session, id: &str) -> Result<Article, NetError> {
+    let fail = |text: String| NetError { code: None, text };
+    let timeout = std::time::Duration::from_secs(crate::http::TIMEOUT_SEC);
+    let turn = |host: &str, gap: f64| bagholder_net::machine::turn(host, std::time::Duration::from_secs_f64(gap)).map_err(|r| fail(format!("{host} refused a request and is resting until {}", r.until)));
+    turn("news.google.com", 1.5)?;
+    let page = session.get(&format!("https://news.google.com/articles/{id}"), timeout).map_err(fail)?;
+    if page.status != 200 {
+        return Err(NetError { code: Some(page.status), text: format!("Google News answered {} for an article", page.status) });
+    }
+    let (sg, ts) = decode_tokens(&page.text()).ok_or_else(|| fail("Google's article page carries no signature to decode it with".into()))?;
+    turn("news.google.com", 1.5)?;
+    let headers = [("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")];
+    let answer = session.request("POST", GNEWS_DECODE_URL, &headers, Some(&decode_request(id, &ts, &sg)), timeout, false).map_err(fail)?;
+    if answer.status != 200 {
+        return Err(NetError { code: Some(answer.status), text: format!("Google News answered {} to its decoding request", answer.status) });
+    }
+    let url = decode_answer(&answer.text()).map_err(fail)?;
+    let host = url.split("://").nth(1).and_then(|r| r.split(['/', '?', '#']).next()).unwrap_or("").to_string();
+    turn(&host, 0.0)?;
+    let page = session.get(&url, timeout).map_err(fail)?;
+    if page.status != 200 {
+        return Err(NetError { code: Some(page.status), text: format!("{host} answered {} for the article", page.status) });
+    }
+    let (headline, summary) = open_graph(&page.text());
+    Ok(Article { url: if page.url.is_empty() { url } else { page.url.clone() }, headline, summary })
+}
+
+/// Google's decoding endpoint for an article link.
+pub const GNEWS_DECODE_URL: &str = "https://news.google.com/_/DotsSplashUi/data/batchexecute";
+
+/// The article id in a Google News link: the path's last part, query off.
+pub fn google_article_id(link: &str) -> Option<&str> {
+    let rest = link.strip_prefix("https://news.google.com/")?.split("articles/").nth(1)?;
+    let id = rest.split(['?', '#', '/']).next()?;
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).then_some(id)
+}
+
+/// The signature and time Google's article page carries for decoding it.
+pub fn decode_tokens(html: &str) -> Option<(String, String)> {
+    static SG: OnceLock<Regex> = OnceLock::new();
+    static TS: OnceLock<Regex> = OnceLock::new();
+    let sg = re(&SG, r#"data-n-a-sg="([^"]+)""#).captures(html)?[1].to_string();
+    let ts = re(&TS, r#"data-n-a-ts="(\d+)""#).captures(html)?[1].to_string();
+    Some((sg, ts))
+}
+
+/// The form body of Google's decoding request for one article.
+pub fn decode_request(id: &str, ts: &str, sg: &str) -> String {
+    let ts: i64 = ts.parse().unwrap_or(0);
+    let inner = json!(["garturlreq", [["X", "X", ["X", "X"], null, null, 1, 1, "CA:en", null, 1, null, null, null, null, null, 0, 1], "X", "X", 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0], id, ts, sg]);
+    let payload = json!([[["Fbv4je", inner.to_string(), null, "generic"]]]);
+    format!("f.req={}", quote(&payload.to_string(), ""))
+}
+
+/// The publisher's URL in Google's answer to its decoding request: a line
+/// `[["wrb.fr","Fbv4je","[\"garturlres\",\"<url>\",1]",...]]` after its `)]}'` guard.
+pub fn decode_answer(text: &str) -> Result<String, String> {
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        let Some(rows) = v.as_array() else { continue };
+        for row in rows {
+            if row.get(0).and_then(|x| x.as_str()) != Some("wrb.fr") || row.get(1).and_then(|x| x.as_str()) != Some("Fbv4je") {
+                continue;
+            }
+            let inner: Value = serde_json::from_str(row.get(2).and_then(|x| x.as_str()).unwrap_or("")).map_err(|e| format!("Google's decoding answer is not the shape read: {e}"))?;
+            return match (inner.get(0).and_then(|x| x.as_str()), inner.get(1).and_then(|x| x.as_str())) {
+                (Some("garturlres"), Some(url)) if url.starts_with("https://") || url.starts_with("http://") => Ok(url.to_string()),
+                _ => Err(format!("Google's decoding answer names no article: {inner}")),
+            };
+        }
+    }
+    Err("Google's decoding answer carries no Fbv4je row".into())
+}
+
+/// A page's Open Graph title and description, entities resolved; empty where
+/// the page states none.
+pub fn open_graph(html: &str) -> (String, String) {
+    static META: OnceLock<Regex> = OnceLock::new();
+    static PROP: OnceLock<Regex> = OnceLock::new();
+    static CONTENT: OnceLock<Regex> = OnceLock::new();
+    let meta = re(&META, r"(?is)<meta\b[^>]*>");
+    let prop = re(&PROP, r#"(?i)\b(?:property|name)\s*=\s*["']([^"']+)["']"#);
+    let content = re(&CONTENT, r#"(?is)\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')"#);
+    let (mut title, mut description) = (String::new(), String::new());
+    for m in meta.find_iter(html) {
+        let tag = m.as_str();
+        let Some(p) = prop.captures(tag).map(|c| c[1].to_ascii_lowercase()) else { continue };
+        let Some(c) = content.captures(tag).map(|c| c.get(1).or(c.get(2)).map(|g| g.as_str().to_string()).unwrap_or_default()) else { continue };
+        match p.as_str() {
+            "og:title" if title.is_empty() => title = clean_text(&c),
+            "og:description" if description.is_empty() => description = clean_text(&c),
+            _ => {}
+        }
+    }
+    (title, description)
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,6 +1410,13 @@ pub struct Ask {
     pub name: String,
     /// The Yahoo ticker, "" when Yahoo has none for the listing.
     pub yahoo: String,
+    /// The Google items whose article was read before, by id: their headline,
+    /// summary and publisher's URL as kept.
+    pub articles: HashMap<String, Article>,
+    /// Every Google item the listing holds already, by id, its article read or not.
+    pub held: HashSet<String>,
+    /// Google has not been read for the listing before: what it answers is its back catalogue.
+    pub first_read: bool,
 }
 
 /// A wire's rows, and the feeds of it that failed or answered nothing this
@@ -1274,7 +1458,7 @@ pub fn read_extra(net: &Net, key: Feed, ask: &Ask) -> Result<Option<Vec<NewsItem
     match key {
         Feed::Yahoo => fetch_yahoo(net, ask),
         Feed::Sa => fetch_sa(net, &ask.symbol, &ask.exchange, &ask.currency),
-        _ => fetch_google(net, &ask.symbol, &ask.exchange, &ask.currency, &ask.name),
+        _ => fetch_google(net, ask),
     }
 }
 
@@ -1363,6 +1547,9 @@ pub fn fetch_listing(
         currency: currency.to_string(),
         name: name.to_string(),
         yahoo: if extras.contains(&Feed::Yahoo) { yahoo_form(conn, symbol, exchange, currency)? } else { String::new() },
+        articles: read_articles(conn, symbol, exchange)?,
+        held: sf::news_for(conn, symbol, exchange)?.into_iter().filter(|r| Feed::of_id(&r.id) == Some(Feed::Gnews)).map(|r| r.id).collect(),
+        first_read: meta(conn, &stamp_key(Feed::Gnews, symbol, exchange))?.is_empty(),
     };
     let mut results: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let (src, primary) = std::thread::scope(|scope| {
@@ -1450,6 +1637,19 @@ pub fn fetch_listing(
     merged.sort_by(|a, b| b.published_at.cmp(&a.published_at));
     merged.truncate(PER_LISTING);
     Ok((src, Some(merged), answered))
+}
+
+/// The Google items of a listing whose article was read: kept with the
+/// publisher's URL in place of Google's link.
+fn read_articles(conn: &Connection, symbol: &str, exchange: &str) -> rusqlite::Result<HashMap<String, Article>> {
+    let mut out = HashMap::new();
+    for r in sf::news_for(conn, symbol, exchange)? {
+        let Some(item) = r.item() else { continue };
+        if item.via == Feed::Gnews && google_article_id(&item.url).is_none() {
+            out.insert(item.id.clone(), Article { url: item.url, headline: item.headline, summary: item.summary });
+        }
+    }
+    Ok(out)
 }
 
 pub type OnNew<'a> = dyn Fn(&Connection, &str, &str, &[NewsItem], &[String]) + Sync + 'a;

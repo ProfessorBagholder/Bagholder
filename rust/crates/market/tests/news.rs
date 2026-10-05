@@ -148,7 +148,7 @@ fn test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue() 
         asked.lock().unwrap().push(form.clone());
         Ok(if form == "QIMC:CNX" || form == "CH" { json!({"data": {"news": [item]}}) } else { json!({"data": {"news": []}}) })
     };
-    let net = Net { get: &no_get, post: &post, pace: false };
+    let net = Net { get: &no_get, post: &post, article: &news::no_article, pace: false };
     let clock = Clock::at(at(2026, 9, 16, 12, 0));
     let (src, rows) = news::fetch_symbol(&d.conn, &net, "QIMC", "CSE", "CAD", &clock);
     news::fetch_symbol(&d.conn, &net, "CH", "TSX-V", "CAD", &clock);
@@ -212,7 +212,7 @@ fn test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases(
         tabs.lock().unwrap().push(media);
         Ok(json!({"data": {"news": [if media { kraken_story() } else { kraken_release() }]}}))
     };
-    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &post, pace: false }, "PNG", "TSX-V", "CAD", &clock);
+    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &post, article: &news::no_article, pace: false }, "PNG", "TSX-V", "CAD", &clock);
     assert_eq!((src, tabs.lock().unwrap().clone()), (Feed::Tmx, vec![false, true]));
     let mut got: Vec<(String, &str)> = rows.unwrap().rows.iter().map(|r| (r.id.clone(), r.kind.as_str())).collect();
     got.sort();
@@ -223,7 +223,7 @@ fn test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases(
         }
         Ok(json!({"data": {"news": [kraken_release()]}}))
     };
-    let (_, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &failing, pace: false }, "PNG", "TSX-V", "CAD", &clock);
+    let (_, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &failing, article: &news::no_article, pace: false }, "PNG", "TSX-V", "CAD", &clock);
     assert_eq!(ids(&rows.unwrap().rows), vec!["tmx:10"], "the releases still arrive when the stories tab fails");
 }
 
@@ -556,7 +556,7 @@ fn test_a_wire_feed_that_fails_keeps_its_stored_items() {
     };
     let nothing = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(None) };
     let read = |post: &news::PostFn<'_>, minutes: i64| {
-        let net = Net { get: &no_get, post, pace: false };
+        let net = Net { get: &no_get, post, article: &news::no_article, pace: false };
         let wire = |c: &Connection, sy: &str, ex: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, sy, ex, cc, cl);
         news::read_listing(&d.conn, &Readers { wire: &wire, extra: &nothing }, "PNG", "TSX-V", "CAD", "", false, &Clock::at(now + minutes * 60), None).unwrap().1.unwrap()
     };
@@ -581,7 +581,7 @@ fn test_a_source_with_nothing_to_ask_does_not_count_as_an_answer() {
     let got = news::read_listing(&d.conn, &Readers { wire: &none, extra: &failing }, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.", true, &Clock::at(at(2026, 9, 16, 12, 0)), None).unwrap();
     assert_eq!((got.0, got.1), (Feed::Tmx, None), "nothing answered, so the listing is asked again next pass");
     assert!(!asked.lock().unwrap().contains("sa"));
-    assert!(news::fetch_sa(&Net { get: &no_get, post: &no_post, pace: false }, "HG", "CSE", "CAD").unwrap().is_none());
+    assert!(news::fetch_sa(&Net { get: &no_get, post: &no_post, article: &news::no_article, pace: false }, "HG", "CSE", "CAD").unwrap().is_none());
 }
 
 #[test]
@@ -667,7 +667,7 @@ fn test_a_ticker_with_no_venue_is_never_asked_of_tmx() {
     let get = |_: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
         Ok(r#"{"data": {"rows": [{"id": 5, "title": "Ford declares dividend", "publisher": "PR Newswire", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/a", "related_symbols": ["f|stocks"]}]}}"#.into())
     };
-    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, pace: false }, "F", "", "", &Clock::at(at(2026, 9, 15, 12, 0)));
+    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, article: &news::no_article, pace: false }, "F", "", "", &Clock::at(at(2026, 9, 15, 12, 0)));
     assert_eq!(src, Feed::Nasdaq, "no venue: TMX is never asked");
     let got: Vec<(&str, &str)> = rows.as_ref().unwrap().rows.iter().map(|r| (r.kind.as_str(), r.headline.as_str())).collect();
     assert_eq!(got, vec![("release", "Ford declares dividend")]);
@@ -685,7 +685,7 @@ fn test_a_us_listing_reads_its_releases_beside_its_news_each_once() {
             r#"{"data": {"rows": [{"id": 1, "title": "Why SHOP", "publisher": "Zacks", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/a", "related_symbols": ["shop|stocks"]}, {"id": 2, "title": "Shopify Delivers Big", "publisher": "GlobeNewswire", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/articles/b", "related_symbols": ["shop|stocks"]}]}}"#
         }.into())
     };
-    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, pace: false }, "SHOP", "NASDAQ", "USD", &Clock::at(at(2026, 9, 15, 12, 0)));
+    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, article: &news::no_article, pace: false }, "SHOP", "NASDAQ", "USD", &Clock::at(at(2026, 9, 15, 12, 0)));
     assert_eq!(src, Feed::Nasdaq);
     let got: Vec<(&str, &str, &str)> = rows.as_ref().unwrap().rows.iter().map(|r| (r.id.as_str(), r.kind.as_str(), r.source.as_str())).collect();
     assert_eq!(got, vec![("nasdaq:1", "story", "Zacks"), ("nasdaq:2", "release", "GlobeNewswire"), ("nasdaq:3", "release", "Nasdaq")],
@@ -715,4 +715,112 @@ fn test_a_summary_is_what_the_source_said_beneath_its_headline() {
     let sentences = format!("{}and it ends here. {}.", "filler words ".repeat(25), "more words ".repeat(30));
     let cut = news::summary_text(&sentences, head);
     assert!(cut.ends_with("ends here."), "cut at the last sentence end before the limit");
+}
+
+// ---------------------------------------------------------------------------
+// the article behind a Google item
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_google_item_carries_its_articles_own_headline_and_summary() {
+    let cut = "ASTS Shareholder Alert: Investors With Losses May Seek to";
+    let full = "ASTS Shareholder Alert: Investors With Losses May Seek to Lead the Class Action in AST SpaceMobile, Inc. Securities Lawsuit";
+    let xml = format!(
+        "<rss><channel>{}{}</channel></rss>",
+        format_args!("<item><title>{cut} - GlobeNewswire</title><link>https://news.google.com/rss/articles/CBMiA1?oc=5</link><pubDate>Mon, 05 Oct 2026 15:34:16 GMT</pubDate><source url=\"x\">GlobeNewswire</source></item>"),
+        "<item><title>AST SpaceMobile ships three more satellites - Seeking Alpha</title><link>https://news.google.com/rss/articles/CBMiB2?oc=5</link><pubDate>Mon, 05 Oct 2026 12:00:00 GMT</pubDate><source url=\"x\">Seeking Alpha</source></item>",
+    );
+    let get = move |_: &str, _: &[(&str, &str)]| Ok::<_, NetError>(xml.clone());
+    let read: Mutex<Vec<String>> = Mutex::new(vec![]);
+    let article = |link: &str| {
+        read.lock().unwrap().push(link.to_string());
+        match news::google_article_id(link) {
+            Some("CBMiA1") => Ok(news::Article { url: "https://www.globenewswire.com/news-release/x.html".into(), headline: full.into(), summary: "Time-Sensitive: allegations focus on the company's statements about its service and its users.".into() }),
+            _ => Err(NetError { code: Some(403), text: "the publisher turned the page away".into() }),
+        }
+    };
+    let net = Net { get: &get, post: &no_post, article: &article, pace: false };
+    let ask = Ask { symbol: "ASTS".into(), exchange: "NASDAQ".into(), currency: "USD".into(), name: "AST SpaceMobile, Inc.".into(), ..Default::default() };
+    let rows = news::fetch_google(&net, &ask).unwrap().unwrap();
+    let by = |id_of: &str| rows.iter().find(|r| r.published_at.starts_with(id_of)).unwrap();
+    // read whole from its own page: the headline the publisher's title cut, a summary Google gives none of, and its own address
+    let alert = by("2026-10-05T15:34");
+    assert_eq!(alert.headline, full);
+    assert!(alert.summary.starts_with("Time-Sensitive"), "{:?}", alert.summary);
+    assert_eq!(alert.url, "https://www.globenewswire.com/news-release/x.html");
+    // a page that could not be read: the item stands as Google states it
+    let story = by("2026-10-05T12:00");
+    assert_eq!((story.headline.as_str(), story.summary.as_str()), ("AST SpaceMobile ships three more satellites", ""));
+    assert!(news::google_article_id(&story.url).is_some(), "still Google's link, read again next time");
+    // an item whose article was read before is not read again
+    read.lock().unwrap().clear();
+    let mut known = Ask { ..ask.clone() };
+    known.articles.insert(alert.id.clone(), news::Article { url: alert.url.clone(), headline: alert.headline.clone(), summary: alert.summary.clone() });
+    let again = news::fetch_google(&net, &known).unwrap().unwrap();
+    assert_eq!(read.lock().unwrap().clone(), vec!["https://news.google.com/rss/articles/CBMiB2?oc=5".to_string()]);
+    assert_eq!(again.iter().find(|r| r.id == alert.id).unwrap().headline, full);
+    // an item the listing held before, and a first read's back catalogue, stand as Google states them
+    read.lock().unwrap().clear();
+    let mut held = ask.clone();
+    held.held = rows.iter().map(|r| r.id.clone()).collect();
+    let as_held = news::fetch_google(&net, &held).unwrap().unwrap();
+    let back = news::fetch_google(&net, &Ask { first_read: true, ..ask.clone() }).unwrap().unwrap();
+    // only the item whose page could not be read is asked for again
+    assert_eq!(read.lock().unwrap().clone(), vec!["https://news.google.com/rss/articles/CBMiB2?oc=5".to_string(); 2]);
+    for got in [as_held, back] {
+        assert!(got.iter().any(|r| r.headline == cut));
+    }
+}
+
+#[test]
+fn test_googles_link_is_decoded_as_its_own_answers_state_it() {
+    assert_eq!(news::google_article_id("https://news.google.com/rss/articles/CBMi_x-9?oc=5"), Some("CBMi_x-9"));
+    assert_eq!(news::google_article_id("https://news.google.com/articles/CBMi_x-9"), Some("CBMi_x-9"));
+    assert_eq!(news::google_article_id("https://example.com/articles/a-story"), None, "a publisher's own address is not Google's link");
+    let page = r#"<c-wiz><div jscontroller="x" data-n-a-id="CBMi" data-n-a-ts="1791216906" data-n-a-sg="AbIaSL_soF2v7fzX"></div></c-wiz>"#;
+    assert_eq!(news::decode_tokens(page), Some(("AbIaSL_soF2v7fzX".to_string(), "1791216906".to_string())));
+    assert_eq!(news::decode_tokens("<html>no tokens</html>"), None);
+    // the request names the article, its time and its signature, form-encoded
+    let body = news::decode_request("CBMi", "1791216906", "AbIa");
+    assert!(body.starts_with("f.req=") && body.contains("Fbv4je") && body.contains("CBMi") && body.contains("1791216906") && body.contains("AbIa"), "{body}");
+    // Google's answer as it comes, guard line and all
+    let answer = ")]}'\n\n[[\"wrb.fr\",\"Fbv4je\",\"[\\\"garturlres\\\",\\\"https://www.globenewswire.com/news-release/x.html\\\",1]\",null,null,null,\"generic\"],[\"di\",11]]";
+    assert_eq!(news::decode_answer(answer), Ok("https://www.globenewswire.com/news-release/x.html".to_string()));
+    assert!(news::decode_answer(")]}'\n\n[[\"wrb.fr\",\"Fbv4je\",\"[\\\"garturlerr\\\",null]\"]]").is_err(), "an answer naming no article is said, not read as one");
+    assert!(news::decode_answer("<html>sorry</html>").is_err());
+}
+
+#[test]
+fn test_a_pages_open_graph_title_and_description_are_read_whatever_their_attribute_order() {
+    let page = r#"<head><title>Cut at sixty characters by the publisher for its own</title>
+        <meta property="og:title" content="A Headline &amp; Its Whole Length" />
+        <meta content='What it says beneath, in full.' property='og:description'>
+        <meta name="og:title" content="a second title is not read"></head>"#;
+    assert_eq!(news::open_graph(page), ("A Headline & Its Whole Length".to_string(), "What it says beneath, in full.".to_string()));
+    assert_eq!(news::open_graph("<head><title>only a title</title></head>"), (String::new(), String::new()));
+}
+
+#[test]
+fn test_a_google_item_whose_article_was_read_is_handed_back_as_kept() {
+    let d = db();
+    let now = at(2026, 10, 5, 16, 0);
+    let mut read = row("gnews:1", "The whole headline, as its publisher states it", "2026-10-05T15:34:00Z", "GlobeNewswire", "release");
+    read.url = "https://www.globenewswire.com/news-release/x.html".into();
+    read.summary = "What it says beneath.".into();
+    let mut unread = row("gnews:2", "A story Google's link still stands for", "2026-10-05T12:00:00Z", "Pub", "story");
+    unread.url = "https://news.google.com/rss/articles/CBMiB2?oc=5".into();
+    let both = (read.clone(), unread.clone());
+    let first = move |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(if k == Feed::Gnews { vec![both.0.clone(), both.1.clone()] } else { vec![] })) };
+    let wire = wire_of(Some(vec![]));
+    news::read_listing(&d.conn, &Readers { wire: &wire, extra: &first }, "ASTS", "NASDAQ", "USD", "AST SpaceMobile", true, &Clock::at(now), None).unwrap();
+    let handed: Mutex<Vec<(String, news::Article)>> = Mutex::new(vec![]);
+    let later = |k: Feed, ask: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
+        if k == Feed::Gnews {
+            handed.lock().unwrap().extend(ask.articles.iter().map(|(id, a)| (id.clone(), a.clone())));
+        }
+        Ok(Some(vec![]))
+    };
+    news::read_listing(&d.conn, &Readers { wire: &wire, extra: &later }, "ASTS", "NASDAQ", "USD", "AST SpaceMobile", true, &Clock::at(now + 3600), None).unwrap();
+    let want = news::Article { url: read.url.clone(), headline: read.headline.clone(), summary: read.summary.clone() };
+    assert_eq!(handed.lock().unwrap().clone(), vec![("gnews:1".to_string(), want)], "the item read is handed back as kept; the one still behind Google's link is read again");
 }
