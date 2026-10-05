@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   rust:
@@ -73,3 +74,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" dist/bagholder-* --clobber
+
+  # the release's image, built beside the archives
+  docker:
+    uses: ./.github/workflows/docker.yml
+    secrets: inherit
+
+  # The release is created as a prerelease, which GitHub's latest release (the one
+  # every installed copy checks) leaves out; it becomes the latest only once every
+  # platform's archive and the image are there, so no copy is ever offered a
+  # release it cannot take.
+  publish:
+    needs: [rust, docker]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Publish the release as the latest
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest

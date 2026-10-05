@@ -190,9 +190,14 @@ pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
             if !rel.html_url.is_empty() {
                 record.url = rel.html_url.clone();
             }
-            let available = Some(latest) > parse_version(APP_VERSION);
-            record.update_available = available;
             record.assets = release_assets(&rel);
+            // newer, and ready for this copy to take: a copy that installs archives
+            // waits until this platform's archive and its checksum are attached (the
+            // release is published before its archives are built), so nothing is
+            // offered that cannot be pressed; the next check offers it
+            let installable = updates_off() || update_mode(app) == "git" || record.assets.is_some();
+            let available = Some(latest) > parse_version(APP_VERSION) && installable;
+            record.update_available = available;
             if available {
                 // a notice that could not be recorded is said in the header until one is
                 crate::notify::tell(
