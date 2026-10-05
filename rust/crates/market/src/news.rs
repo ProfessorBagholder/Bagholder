@@ -1267,47 +1267,90 @@ pub struct Article {
 pub fn read_article(link: &str) -> Result<Article, NetError> {
     let fail = |text: String| NetError { code: None, text };
     let id = google_article_id(link).ok_or_else(|| fail(format!("{link} is not a Google News article link")))?;
-    // one session for every article, kept: its cookies are Google's consent, and a
-    // helper process is not started per item
+    let timeout = std::time::Duration::from_secs(crate::http::TIMEOUT_SEC);
+    // Google's steps go as a plain client: it answers a browser's full handshake
+    // and User-Agent with 429, and a bare `Mozilla/5.0` with the page
+    let page = google(&format!("https://news.google.com/rss/articles/{id}"), None, timeout)?;
+    let (sg, ts) = decode_tokens(&page).ok_or_else(|| fail("Google's article page carries no signature to decode it with".into()))?;
+    let answer = google(GNEWS_DECODE_URL, Some(&decode_request(id, &ts, &sg)), timeout)?;
+    let url = decode_answer(&answer).map_err(fail)?;
+    // the publisher's page with a browser's handshake, which publishers' gates ask for
     static SESSION: Mutex<Option<bagholder_net::browser::Session>> = Mutex::new(None);
     let mut slot = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     if slot.is_none() {
         *slot = Some(bagholder_net::browser::Session::new().ok_or_else(|| fail("the browser helper is not there".into()))?);
     }
-    let session = slot.as_mut().expect("opened above");
-    let got = read_article_in(session, id);
-    // a session that did not carry a request is replaced at the next one
-    if got.as_ref().is_err_and(|e| e.code.is_none()) {
-        *slot = None;
-    }
-    got
-}
-
-fn read_article_in(session: &mut bagholder_net::browser::Session, id: &str) -> Result<Article, NetError> {
-    let fail = |text: String| NetError { code: None, text };
-    let timeout = std::time::Duration::from_secs(crate::http::TIMEOUT_SEC);
-    let turn = |host: &str, gap: f64| bagholder_net::machine::turn(host, std::time::Duration::from_secs_f64(gap)).map_err(|r| fail(format!("{host} refused a request and is resting until {}", r.until)));
-    turn("news.google.com", 1.5)?;
-    let page = session.get(&format!("https://news.google.com/articles/{id}"), timeout).map_err(fail)?;
-    if page.status != 200 {
-        return Err(NetError { code: Some(page.status), text: format!("Google News answered {} for an article", page.status) });
-    }
-    let (sg, ts) = decode_tokens(&page.text()).ok_or_else(|| fail("Google's article page carries no signature to decode it with".into()))?;
-    turn("news.google.com", 1.5)?;
-    let headers = [("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")];
-    let answer = session.request("POST", GNEWS_DECODE_URL, &headers, Some(&decode_request(id, &ts, &sg)), timeout, false).map_err(fail)?;
-    if answer.status != 200 {
-        return Err(NetError { code: Some(answer.status), text: format!("Google News answered {} to its decoding request", answer.status) });
-    }
-    let url = decode_answer(&answer.text()).map_err(fail)?;
     let host = url.split("://").nth(1).and_then(|r| r.split(['/', '?', '#']).next()).unwrap_or("").to_string();
-    turn(&host, 0.0)?;
-    let page = session.get(&url, timeout).map_err(fail)?;
+    bagholder_net::machine::turn(&host, std::time::Duration::ZERO).map_err(|r| fail(format!("{host} refused a request and is resting until {}", r.until)))?;
+    let got = slot.as_mut().expect("opened above").get(&url, timeout);
+    let page = match got {
+        Ok(p) => p,
+        Err(e) => {
+            // a session that did not carry a request is replaced at the next one
+            *slot = None;
+            return Err(fail(e));
+        }
+    };
     if page.status != 200 {
+        if page.status == 429 {
+            bagholder_net::machine::refused_now(&host, None);
+        }
         return Err(NetError { code: Some(page.status), text: format!("{host} answered {} for the article", page.status) });
     }
     let (headline, summary) = open_graph(&page.text());
     Ok(Article { url: if page.url.is_empty() { url } else { page.url.clone() }, headline, summary })
+}
+
+/// Google's cookies, as its answers set them: an article page is answered only to
+/// a client that holds them, after a redirect that sets them.
+static GOOGLE_COOKIES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// One of Google's answers, a GET or (with a body) a form POST, on Google's turn,
+/// with its cookies, each redirect followed by hand so the cookies it sets go
+/// with the next; a redirect back to a URL already asked is a failure, as is any
+/// answer but 200. A 429 rests Google for every reader of it.
+fn google(url: &str, form: Option<&str>, timeout: std::time::Duration) -> Result<String, NetError> {
+    let fail = |code: Option<u16>, text: String| NetError { code, text };
+    let mut url = url.to_string();
+    let mut asked: HashSet<String> = HashSet::new();
+    loop {
+        if !asked.insert(url.clone()) {
+            return Err(fail(None, format!("Google News redirected back to {url}")));
+        }
+        bagholder_net::machine::turn("news.google.com", std::time::Duration::from_secs_f64(1.5)).map_err(|r| fail(None, format!("Google News refused a request and is resting until {}", r.until)))?;
+        let cookie = GOOGLE_COOKIES.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ");
+        let mut headers: Vec<(&str, &str)> = vec![("User-Agent", "Mozilla/5.0")];
+        if !cookie.is_empty() {
+            headers.push(("Cookie", &cookie));
+        }
+        if form.is_some() {
+            headers.push(("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"));
+        }
+        let (method, body) = match form { Some(f) => ("POST", Some(f.as_bytes())), None => ("GET", None) };
+        let r = bagholder_net::client::request_once(method, &url, &headers, body, timeout).map_err(|e| fail(None, format!("Google News: {e}")))?;
+        {
+            let mut jar = GOOGLE_COOKIES.lock().unwrap_or_else(|e| e.into_inner());
+            for (_, v) in r.headers.iter().filter(|(k, _)| k == "set-cookie") {
+                if let Some((name, value)) = v.split(';').next().and_then(|nv| nv.split_once('=')) {
+                    jar.retain(|(k, _)| k != name.trim());
+                    jar.push((name.trim().to_string(), value.trim().to_string()));
+                }
+            }
+        }
+        match r.status {
+            200 => return Ok(r.text()),
+            301..=308 if form.is_none() => {
+                let to = r.headers.iter().find(|(k, _)| k == "location").map(|(_, v)| v.clone()).ok_or_else(|| fail(Some(r.status), "Google News redirected to nowhere".into()))?;
+                url = if to.starts_with('/') { format!("https://news.google.com{to}") } else { to };
+            }
+            429 => {
+                let after = r.headers.iter().find(|(k, _)| k == "retry-after").and_then(|(_, v)| v.trim().parse::<u64>().ok()).map(std::time::Duration::from_secs);
+                bagholder_net::machine::refused_now("news.google.com", after);
+                return Err(fail(Some(429), "Google News answered 429: asked too often".into()));
+            }
+            code => return Err(fail(Some(code), format!("Google News answered {code}"))),
+        }
+    }
 }
 
 /// Google's decoding endpoint for an article link.
