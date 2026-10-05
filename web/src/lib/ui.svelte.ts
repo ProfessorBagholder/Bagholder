@@ -315,21 +315,25 @@ async function importFiles(list: FileList | null): Promise<void> {
   const files = Array.from(list || []).filter((f) => /\.csv$/i.test(f.name) && !/^\._/.test(f.name))
   if (!files.length) return
   ui.busy = 'import'
+  importStopped = false
   const report: ImportReport = { files: [] }
   for (const file of files) {
-    let text: string
-    try {
-      text = await file.text()
-    } catch (e) {
-      report.files.push({ file: file.name, error: String(e) })
-      continue
-    }
-    const r = await call('POST /api/import', { body: { name: file.name, text, account: ui.importAccount } })
+    // a file stopped is the last: the ones after it are not started
+    if (importStopped) break
+    const r = await call('POST /api/import', { query: { name: file.name, account: ui.importAccount }, body: file })
     if (!r.ok) report.files.push({ file: file.name, error: r.error })
     else report.files.push({ file: file.name, report: r })
   }
   ui.busy = ''
   ui.importReport = report
+}
+
+let importStopped = false
+/** Stop the import running: its file ends at its next row (the rows kept stay), and no further file starts. */
+export async function stopImport(): Promise<void> {
+  importStopped = true
+  const r = await call('POST /api/import/stop')
+  if (!r.ok) flash(r.error, 'err')
 }
 
 export function openFolder(): void {

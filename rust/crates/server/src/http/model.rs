@@ -26,14 +26,15 @@ pub fn routes() -> Routed {
     };
     // `/api/watch`'s GET and POST share one path, which `api_routes!` cannot
     // declare twice; their entries are read from the handlers all the same
-    // the import alone takes a file's worth of body, and one at a time: a second is
-    // refused before its body is read (brief 19, change 6)
+    // one import at a time: a second is refused before its body is read (brief 19, change 6)
     routed.router = routed
         .router
-        .merge(axum::Router::new().route("/api/import", axum::routing::post(import)).layer(axum::middleware::from_fn(import_slot)).layer(axum::extract::DefaultBodyLimit::max(super::IMPORT_BODY_LIMIT)))
+        .merge(axum::Router::new().route("/api/import", axum::routing::post(import)).layer(axum::middleware::from_fn(import_slot)))
+        .route("/api/import/stop", axum::routing::post(import_stop))
         .route("/api/watch", get(watch_status).post(watch_set))
         .route("/api/watch/scan", axum::routing::post(watch_scan));
     routed.table.push(super::RouteEntry::of(import, "post", "/api/import"));
+    routed.table.push(super::RouteEntry::of(import_stop, "post", "/api/import/stop"));
     routed.table.push(super::RouteEntry::of(watch_status, "get", "/api/watch"));
     routed.table.push(super::RouteEntry::of(watch_set, "post", "/api/watch"));
     routed.table.push(super::RouteEntry::of(watch_scan, "post", "/api/watch/scan"));
@@ -280,15 +281,157 @@ async fn import_slot(req: axum::extract::Request, next: axum::middleware::Next) 
     next.run(req).await
 }
 
-/// `POST /api/import`: a file's rows kept, and what they did.
-async fn import(State(state): State<AppState>, Body(i): Body<crate::csv_import::ImportRequest>) -> Api<crate::csv_import::ImportReport> {
+/// `POST /api/import`'s query: the file's name and the account its rows go to.
+#[derive(Debug, Default, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct ImportQuery {
+    pub name: String,
+    /// Empty is the Manual account.
+    pub account: String,
+}
+
+/// The file an import is receiving, removed once its import is over, however it ended.
+struct Incoming(std::path::PathBuf);
+
+impl Drop for Incoming {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.0) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                crate::app::log(&format!("bagholder import: {} could not be removed: {e}", self.0.display()));
+            }
+        }
+    }
+}
+
+/// `POST /api/import`: the file as it is, its rows kept, and what they did. The file
+/// is written to the data folder as it arrives and read from there a row at a time,
+/// so a file of any size is taken in bounded memory; how far it has come is the
+/// header's status (`importing`), for the import window, and `POST /api/import/stop`
+/// ends it: rows already kept stay, and the answer says the import was stopped.
+async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, upload: super::extract::Upload) -> Api<crate::csv_import::ImportReport> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
     let app = state.app;
+    let name = if q.name.trim().is_empty() { "upload.csv".to_string() } else { q.name.trim().to_string() };
+    let account = account_of(&q.account)?;
+    let dir = app.home.join("incoming");
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
+    let incoming = Incoming(dir.join(format!("{}.csv", crate::app::uuid4())));
+    {
+        let mut st = app.state.lock().unwrap();
+        // a reading whose request is gone still runs until it stops: the slot is its too
+        if st.importing.is_some() {
+            return Err(ApiError::Conflict(IMPORT_BUSY.into()));
+        }
+        st.import_stop = false;
+        st.importing = Some(crate::csv_import::Importing { file: name.clone(), received: 0, size: upload.size, checked: 0, rows: 0, total: None });
+    }
+    // gone with the import, whichever way it ends
+    struct Done(std::sync::Arc<crate::app::App>);
+    impl Drop for Done {
+        fn drop(&mut self) {
+            let mut st = self.0.state.lock().unwrap();
+            st.importing = None;
+            st.import_stop = false;
+        }
+    }
+    let done = Done(app.clone());
+    let mut out = tokio::fs::File::create(&incoming.0).await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
+    let mut stream = upload.body.into_data_stream();
+    let mut received: u64 = 0;
+    let mut said: Option<u64> = None;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ApiError::BadRequest(format!("The file did not arrive whole: {e}")))?;
+        out.write_all(&chunk).await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
+        received += chunk.len() as u64;
+        // told when the whole percent arrived moves, or by the megabyte where no size is stated
+        let step = match upload.size {
+            Some(size) if size > 0 => received * 100 / size,
+            _ => received >> 20,
+        };
+        if said != Some(step) {
+            said = Some(step);
+            let mut st = app.state.lock().unwrap();
+            if st.import_stop {
+                return Err(ApiError::Conflict(crate::csv_import::IMPORT_STOPPED.into()));
+            }
+            if let Some(i) = st.importing.as_mut() {
+                i.received = received;
+            }
+        }
+    }
+    out.flush().await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
+    drop(out);
+    // the whole file arrived: what it is checked against
+    if let Some(i) = app.state.lock().unwrap().importing.as_mut() {
+        i.received = received;
+    }
+    // the page gone before the rows are kept (the tab closed, the request given up):
+    // the import stops at its next row, as at Stop, and says so in the status until then
+    struct Abandoned(std::sync::Arc<crate::app::App>);
+    impl Drop for Abandoned {
+        fn drop(&mut self) {
+            // under the lock the reading's end clears it under: a reading over is never told to stop
+            let mut st = self.0.state.lock().unwrap();
+            if st.importing.is_some() {
+                st.import_stop = true;
+            }
+        }
+    }
+    let _abandoned = Abandoned(app.clone());
+    let a2 = app.clone();
     blocking(move || -> Result<crate::csv_import::ImportReport, ApiError> {
-        let name = if i.name.trim().is_empty() { "upload.csv" } else { i.name.trim() };
-        crate::csv_import::import(open_figures(&app)?, name, &i.text, account_of(&i.account)?, bagholder_core::jiff::Timestamp::now()).map_err(refused)
+        // the status is the reading's now: it goes when the reading ends, not the request
+        let _done = done;
+        let path = incoming.0.clone();
+        let open = || std::fs::File::open(&path).map(|f| Box::new(std::io::BufReader::new(f)) as Box<dyn std::io::BufRead>);
+        let mut said: Option<(bool, u64)> = None;
+        let mut progress = |step: crate::csv_import::Step| {
+            let mut st = a2.state.lock().unwrap();
+            if st.import_stop {
+                return crate::csv_import::Go::Stop;
+            }
+            // told when the whole percent moves, of the bytes checked, then of the rows
+            // kept; the status is written then only, each write telling the page
+            let received = st.importing.as_ref().map_or(0, |i| i.received);
+            let at = match step {
+                crate::csv_import::Step::Checked(bytes) => (false, bytes * 100 / received.max(1)),
+                crate::csv_import::Step::Kept { rows, total } => (true, rows * 100 / total.max(1)),
+            };
+            if said != Some(at) {
+                said = Some(at);
+                if let Some(i) = st.importing.as_mut() {
+                    match step {
+                        crate::csv_import::Step::Checked(bytes) => i.checked = bytes,
+                        crate::csv_import::Step::Kept { rows, total } => {
+                            i.checked = i.received;
+                            i.rows = rows;
+                            i.total = Some(total);
+                        }
+                    }
+                }
+            }
+            crate::csv_import::Go::On
+        };
+        let r = match crate::csv_import::import_from(open_figures(&a2)?, &name, &open, account, bagholder_core::jiff::Timestamp::now(), &mut progress) {
+            // stopped before a row was kept: refused as a stop while the file arrives is
+            Err(crate::entries::Refused::Entry(why)) if why == crate::csv_import::IMPORT_STOPPED => Err(ApiError::Conflict(why)),
+            other => other.map_err(refused),
+        };
+        drop(incoming);
+        r
     })
     .await?
     .map(Json)
+}
+
+/// `POST /api/import/stop`: the running import ends at its next row; the rows it kept stay.
+async fn import_stop(State(state): State<AppState>) -> Api<super::OkOr> {
+    let mut st = state.app.state.lock().unwrap();
+    if st.importing.is_some() {
+        st.import_stop = true;
+    }
+    Ok(Json(super::OkOr::ok()))
 }
 
 async fn watch_status(State(state): State<AppState>) -> Api<crate::csv_import::WatchStatus> {

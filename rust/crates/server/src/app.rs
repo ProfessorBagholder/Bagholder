@@ -45,6 +45,10 @@ pub struct State {
     pub chrome_pid: u32,
     pub updating: String,
     pub update_error: String,
+    /// The import running now, and how far it has come; none when none runs.
+    pub importing: Option<crate::csv_import::Importing>,
+    /// The person asked for the running import to stop.
+    pub import_stop: bool,
 }
 
 struct Job {

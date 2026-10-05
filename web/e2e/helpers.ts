@@ -128,6 +128,10 @@ export async function openWithStatus(
   change(model)
   // a document is sent with every (re)connection, so one the page asks for later reaches it on the next
   await standIn(page, streamBody(model, docs))
+  // a page already open is left first: a `goto` to the URL it is on, differing at
+  // most by its hash, moves within the page and keeps whatever stream it holds,
+  // which may be the real server's, reached between a test's unroute and this
+  if (page.url() !== 'about:blank') await page.goto('about:blank')
   await page.goto('/' + hash)
 }
 

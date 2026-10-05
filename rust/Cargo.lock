@@ -301,7 +301,6 @@ dependencies = [
  "bagholder-wealthsimple",
  "bagholder-ws",
  "futures-util",
- "http-body-util",
  "jiff",
  "openssl",
  "regex",

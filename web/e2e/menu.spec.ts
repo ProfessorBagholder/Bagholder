@@ -155,14 +155,17 @@ async function importFiles(page: Page, files: { name: string; text: string }[], 
 
 test('Import CSV sends each file with the account chosen and reports what its rows did', async ({ page }) => {
   const csv = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
-  const sent: Record<string, unknown>[] = []
-  await page.route('**/api/import', (route) => {
-    sent.push(route.request().postDataJSON())
+  const sent: { query: Record<string, string>; body: string | null; type: string | undefined }[] = []
+  await page.route('**/api/import?*', (route) => {
+    const r = route.request()
+    // the file goes as it is, its name and account in the query, never wrapped in JSON
+    sent.push({ query: Object.fromEntries(new URL(r.url()).searchParams), body: r.postData(), type: r.headers()['content-type'] })
     return route.fulfill({
       json: {
         file: 'trades.csv', layout: 'simple', account: 'Trading', rows: 3, added: 2, unchanged: 1, linked: 1,
-        ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }],
-        problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }],
+        ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }], ambiguousRows: 1,
+        // the first rows by line, and how many there are
+        problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }], problemRows: 9030,
       },
     })
   })
@@ -172,16 +175,45 @@ test('Import CSV sends each file with the account chosen and reports what its ro
   const account = m.accounts.find((a: { name: string; brokerAccount: string }) => a.name && a.brokerAccount !== 'manual')
   await importFiles(page, [{ name: 'trades.csv', text: csv }], account.name)
   await expect.poll(() => sent.length).toBe(1)
-  expect(sent[0]).toEqual({ name: 'trades.csv', text: csv, account: account.id })
+  expect(sent[0]).toEqual({ query: { name: 'trades.csv', account: account.id }, body: csv, type: 'text/csv' })
   const dlg = page.locator('#modalDlg')
   await expect(dlg).toContainText('1 file · 2 new · 1 linked · 1 already stored')
   await expect(dlg).toContainText('Trading · simple · 3 rows · 2 new · 1 linked · 1 already stored')
   await expect(dlg).toContainText('1 not linked')
   await expect(dlg).toContainText("line 3: the same fill as 2 of the broker's rows: not linked")
-  await expect(dlg).toContainText('1 with a problem')
+  await expect(dlg).toContainText('9,030 with a problem (first 1 shown)')
   await expect(dlg).toContainText('line 4: the date "01/05/2026" is not a day written YYYY-MM-DD')
   await page.getByRole('button', { name: 'Done' }).click()
   await expect(page.getByRole('heading', { name: 'Import CSV' })).toHaveCount(0)
+})
+
+test('while a file is imported its button says how far it has come, and Stop stops it', async ({ page, request }) => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  let stopped = false
+  await page.route('**/api/import/stop', (route) => { stopped = true; release(); return route.fulfill({ json: { ok: true } }) })
+  await page.route('**/api/import?*', async (route) => {
+    await held
+    // the requests of the states before the last went with their page
+    return route.fulfill({ status: 409, json: { ok: false, error: 'Stopped: nothing from this file was kept.' } }).catch(() => {})
+  })
+  const csv = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
+  // the header's status while the import runs, as it moves: the file arriving, read
+  // through to check it, then its rows kept of the rows counted
+  const dlg = page.locator('#modalDlg')
+  for (const [importing, says] of [
+    [{ file: 'big.csv', received: 500, size: 2000, checked: 0, rows: 0, total: null }, 'Sending big.csv · 25%'],
+    [{ file: 'big.csv', received: 2000, size: 2000, checked: 800, rows: 0, total: null }, 'Checking big.csv · 40%'],
+    [{ file: 'big.csv', received: 2000, size: 2000, checked: 2000, rows: 1240, total: 5000 }, 'Reading big.csv · 1,240 of 5,000 rows'],
+  ] as const) {
+    await openWithStatus(page, request, { importing })
+    await ready(page)
+    await importFiles(page, [{ name: 'big.csv', text: csv }])
+    await expect(dlg.getByRole('button', { name: says })).toBeVisible()
+  }
+  await dlg.getByRole('button', { name: 'Stop' }).click()
+  await expect.poll(() => stopped).toBe(true)
+  await expect(dlg).toContainText('Stopped: nothing from this file was kept.')
 })
 
 test('Import CSV keeps a file\'s rows in the Manual account, and says why a file it cannot read was refused', async ({ page }) => {
@@ -207,12 +239,12 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await page.getByRole('button', { name: 'Watch folder' }).click()
   await expect(page.locator('#modalDlg .status-err')).toHaveText('/nowhere/at/all is not a folder')
 
-  const report = { file: 'a.csv', layout: 'activities', account: 'Manual', rows: 3, added: 2, unchanged: 1, linked: 0, ambiguous: [], problems: [] }
+  const report = { file: 'a.csv', layout: 'activities', account: 'Manual', rows: 3, added: 2, unchanged: 1, linked: 0, ambiguous: [], ambiguousRows: 0, problems: [], problemRows: 0 }
   const watched = {
     path: '/some/watched/folder', watching: true, account: '', lastScan: '2026-09-20T12:00:00Z', scanError: '', lastScanAdded: 2,
     files: [
       { file: 'a.csv', size: 10, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'imported', report } },
-      { file: 'b.csv', size: 3, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'failed', error: 'the file is not UTF-8 text' } },
+      { file: 'b.csv', size: 3, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'failed', error: 'line 1 is not UTF-8 text' } },
     ],
   }
   let sent: unknown = null
@@ -227,7 +259,7 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   const dlg = page.locator('#modalDlg')
   await expect(dlg).toContainText('Watching /some/watched/folder')
   await expect(dlg).toContainText('Manual · activities · 3 rows · 2 new · 0 linked · 1 already stored')
-  await expect(dlg).toContainText('the file is not UTF-8 text')
+  await expect(dlg).toContainText('line 1 is not UTF-8 text')
   // the header says what the scan brought in, for four seconds, not in red
   const notice = page.locator('#syncline')
   await expect(notice).toHaveText('2 new activities imported')

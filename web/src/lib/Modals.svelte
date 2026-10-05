@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { book } from './subs.svelte'
+  import { book, status } from './subs.svelte'
   // The three menu modals — Add trade, Import CSV report, Load folder — ported
   // from tradeModalHtml / importModalHtml / folderModalHtml + modalShell.
-  import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch } from './ui.svelte'
+  import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch, stopImport } from './ui.svelte'
   import type { ImportReport as FileReport } from './generated/model_api'
   import { symText } from './sym'
   import { relTime } from './fmt'
@@ -18,13 +18,21 @@
   const w = $derived(ui.watch)
   const width = $derived(ui.modal === 'trade' ? 460 : 520)
   const total = (k: 'added' | 'linked' | 'unchanged') => (r?.files ?? []).reduce((n, x) => n + ('report' in x ? x.report[k] : 0), 0)
-  const fileLine = (x: FileReport) => x.account + ' · ' + x.layout + ' · ' + x.rows + ' rows · ' + x.added + ' new · ' + x.linked + ' linked · ' + x.unchanged + ' already stored'
+  const fileLine = (x: FileReport) => (x.stopped ? 'Stopped · ' : '') + x.account + ' · ' + x.layout + ' · ' + qty(x.rows) + ' rows · ' + qty(x.added) + ' new · ' + qty(x.linked) + ' linked · ' + qty(x.unchanged) + ' already stored'
+  // how far the import running has come, on its busy button
+  const importing = $derived.by(() => {
+    const i = status.data?.importing
+    if (!i) return 'Reading…'
+    if (i.total != null) return 'Reading ' + i.file + ' · ' + qty(i.rows) + ' of ' + qty(i.total) + ' rows'
+    if (i.checked > 0) return 'Checking ' + i.file + ' · ' + Math.floor((i.checked * 100) / Math.max(i.received, 1)) + '%'
+    return 'Sending ' + i.file + (i.size ? ' · ' + Math.floor((i.received * 100) / i.size) + '%' : '')
+  })
 </script>
 
 {#snippet notes(x: FileReport)}
-  {#each [{ what: 'not linked', rows: x.ambiguous }, { what: 'with a problem', rows: x.problems }] as { what, rows } (what)}
-    {#if rows.length}
-      <div class="muted" style="font-size:11px;margin-top:4px">{rows.length} {what}{rows.length > 8 ? ' (first 8 shown)' : ''}<ul style="margin:4px 0 0;padding-left:16px">{#each rows.slice(0, 8) as n, i (i)}<li>line {n.line}: {n.message}</li>{/each}</ul></div>
+  {#each [{ what: 'not linked', rows: x.ambiguous, count: x.ambiguousRows }, { what: 'with a problem', rows: x.problems, count: x.problemRows }] as { what, rows, count } (what)}
+    {#if count}
+      <div class="muted" style="font-size:11px;margin-top:4px">{qty(count)} {what}{count > rows.length ? ' (first ' + rows.length + ' shown)' : ''}<ul style="margin:4px 0 0;padding-left:16px">{#each rows as n, i (i)}<li>line {n.line}: {n.message}</li>{/each}</ul></div>
     {/if}
   {/each}
 {/snippet}
@@ -101,14 +109,14 @@
           </select>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-          <button class="btn btn-secondary" onclick={closeModal}>Cancel</button>
-          <button class="btn btn-primary" disabled={ui.busy === 'import'} onclick={chooseFiles}>{#if ui.busy === 'import'}<span class="spin"></span>Reading…{:else}Choose files{/if}</button>
+          <button class="btn btn-secondary" onclick={() => (ui.busy === 'import' ? stopImport() : closeModal())}>{ui.busy === 'import' ? 'Stop' : 'Cancel'}</button>
+          <button class="btn btn-primary" disabled={ui.busy === 'import'} onclick={chooseFiles}>{#if ui.busy === 'import'}<span class="spin"></span>{importing}{:else}Choose files{/if}</button>
         </div>
       {:else}
-        <div style="font-size:12.5px">{r.files.length}{r.files.length === 1 ? ' file' : ' files'} · {total('added')} new · {total('linked')} linked · {total('unchanged')} already stored</div>
+        <div style="font-size:12.5px">{r.files.length}{r.files.length === 1 ? ' file' : ' files'} · {qty(total('added'))} new · {qty(total('linked'))} linked · {qty(total('unchanged'))} already stored</div>
         {#each r.files as x, i (i)}
           <div style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08)">
-            <div style="display:flex;gap:10px;font-size:12.5px"><span style="font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class="muted" style="margin-left:auto;white-space:nowrap">{'error' in x ? x.error : fileLine(x.report)}</span></div>
+            <div style="display:flex;gap:10px;font-size:12.5px"><span style="font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class="muted" style="margin-left:auto;min-width:0;text-align:right">{'error' in x ? x.error : fileLine(x.report)}</span></div>
             {#if 'report' in x}{@render notes(x.report)}{/if}
           </div>
         {/each}
@@ -136,7 +144,7 @@
       {#if w && w.watching}<div class="muted" style="font-size:11px;margin-top:12px">Watching {w.path}{w.lastScan ? ' · last scan ' + relTime(w.lastScan) : ''}</div>{/if}
       {#if w && w.files.length}
         <div class="scroll" style="max-height:220px;margin-top:6px">
-          {#each w.files as x (x.file)}<div style="font-size:12px;padding:6px 0;border-top:1px solid rgba(var(--ink-rgb),.08)"><div style="display:flex;gap:10px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class="muted" style="margin-left:auto;white-space:nowrap">{x.read.outcome === 'failed' ? x.read.error : fileLine(x.read.report)}</span></div>{#if x.read.outcome === 'imported'}{@render notes(x.read.report)}{/if}</div>{/each}
+          {#each w.files as x (x.file)}<div style="font-size:12px;padding:6px 0;border-top:1px solid rgba(var(--ink-rgb),.08)"><div style="display:flex;gap:10px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class="muted" style="margin-left:auto;min-width:0;text-align:right">{x.read.outcome === 'failed' ? x.read.error : fileLine(x.read.report)}</span></div>{#if x.read.outcome === 'imported'}{@render notes(x.read.report)}{/if}</div>{/each}
         </div>
       {/if}
     {/if}

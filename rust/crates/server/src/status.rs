@@ -46,6 +46,8 @@ pub struct Status {
     pub updating: String,
     pub update_error: String,
     pub notify: NotifyStatus,
+    /// The import running now and how far it has come, for the import window.
+    pub importing: Option<crate::csv_import::Importing>,
 }
 
 /// `GET /api/status`: `Status` plus the two version strings the legacy
@@ -123,6 +125,7 @@ pub fn status(app: &Arc<App>) -> Status {
         open_orders,
         updating: st.updating.clone(),
         update_error: st.update_error.clone(),
+        importing: st.importing.clone(),
         notify: notify_status,
     }
 }

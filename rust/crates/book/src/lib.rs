@@ -117,8 +117,9 @@ impl Book {
     /// Run `work` as one transaction: all of it, or none of it (an error or a
     /// panic rolls it back). Nested calls join the transaction already open. As
     /// `bagholder_sqlite::atomically`, it begins IMMEDIATE, so a writer waits for
-    /// its turn at the start rather than failing half way.
-    pub(crate) fn atomically<T>(&self, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    /// its turn at the start rather than failing half way. A caller that writes many
+    /// records in a row commits them a group at a time with it.
+    pub fn atomically<T>(&self, work: impl FnOnce() -> Result<T>) -> Result<T> {
         if !self.conn.is_autocommit() {
             return work();
         }

@@ -115,8 +115,8 @@ Each part names the code it changes and the test that holds it. Every new state 
 - **One parser for every boolean switch.** It takes `1/true/yes/on` and `0/false/no/off` and refuses anything else at start (`orders/mod.rs:109`, `app.rs:401-403`, `main.rs:290`, `net/src/client.rs:501, 522`, `market/src/pdftext.rs:17`). A start line says `orders: live` or `orders: dry`. This is behaviour on the terminal, not the screen.
 - **One app per data folder.** An advisory lock on the data folder is taken before anything opens (`main.rs:165-169`); a second start on the same folder is refused, naming the first.
 - **The port.** A port that was asked for is taken, or the start fails (`main.rs:183-190`).
-- **Body limits per route, and one import at a time.** Import rows are streamed and written in batches with a cancellation check (`http/mod.rs:80, 232`; `model.rs:257-264`; `csv_import.rs:68`).
-- **A ceiling on every upstream body.** It is checked while reading, never after, including the gzip-inflated size. The model and the release archive stream to disk (`net/src/client.rs:379, 396, 433, 462, 644-650`; `update.rs:22, 339`).
+- **One import at a time, streamed.** Import rows are streamed and written in batches with a cancellation check (`http/mod.rs:80, 232`; `model.rs:257-264`; `csv_import.rs:68`). No body is cut at a size (owner, 2026-10-05, `docs/decisions.md`): the import shows its progress and can be stopped.
+- **Files stream to disk, held to the size their source states.** The model and the release archive stream to disk, each held to its published size and showing its progress (`net/src/client.rs`; `update.rs`). No answer is cut at a size of the app's choosing (owner, 2026-10-05, `docs/decisions.md`).
 - **The rollback restores the stores or refuses to roll back.** It restores the stores' snapshots taken by the update it undoes (`update.rs:471, 575, 593`; `sqlite/src/migrate.rs:164`).
   - Snapshots are transient (brief 19, change 11): one exists only until the new version has started and answered. A Clear while one exists clears the same kinds inside it (`clear.rs:164`).
 
@@ -154,7 +154,7 @@ What stays: the order and bracket state machines and their event log (brief 15: 
 - [ ] The price on Review is the price on the wire (test over generated prices on every tick band). The wire carries decimal text (golden).
 - [ ] A failed read beside the quote is said in the ticket, and the order types stay Wealthsimple's four (server test; browser test).
 - [ ] The switch parser refuses `maybe`, and the start line names the order mode; a second app on one data folder is refused; an asked-for port in use fails the start (tests).
-- [ ] An upstream body over its ceiling is refused while being read, at the ceiling plus one chunk at most (test with a generated stream). Twelve concurrent imports run one at a time with flat memory, measured and pasted.
+- [ ] A download past its source's stated size is refused while being read, at that size plus one chunk at most (test with a generated stream). Twelve concurrent imports run one at a time with flat memory, measured and pasted.
 - [ ] An update that migrated and then dies rolls back to a starting app with its stores (test). A Clear leaves snapshots that hold none of what was cleared (test).
 - [ ] Every writing route produces a stream message (one test over the route list).
 - [ ] Every record problem code reaches the header sentence (a test over every code the mappings can raise, generated from their code tables). A dividend re-imported from CSV into a connected account counts once (test). The combined-return engine case passes, its expected figures written blind.

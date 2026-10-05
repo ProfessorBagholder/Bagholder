@@ -25,17 +25,6 @@ use bagholder_engine::Engine;
 use crate::entries::{contract_of, held_by_symbol, manual_account, Refused};
 use crate::figures::Figures;
 
-/// A file the page read from one the person chose.
-#[derive(Clone, Debug, Default, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ImportRequest {
-    pub name: String,
-    pub text: String,
-    /// The account its rows go to; empty is the Manual account. A row naming
-    /// an account of its own goes there.
-    pub account: String,
-}
-
 /// A row the report names: its line in the file and what it says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct RowNote {
@@ -58,20 +47,97 @@ pub struct ImportReport {
     pub unchanged: u32,
     /// Rows linked to the broker's own row for the same fill.
     pub linked: u32,
-    /// Rows with more than one broker row they could be: not linked.
+    /// Rows with more than one broker row they could be: not linked. The first
+    /// `REPORT_NOTES` by line, and how many there are.
     pub ambiguous: Vec<RowNote>,
-    /// Rows kept with a problem, counted in no figure until it is resolved.
+    pub ambiguous_rows: u32,
+    /// Rows kept with a problem, counted in no figure until it is resolved: the first
+    /// `REPORT_NOTES` by line, and how many there are. Every one is in the book, and
+    /// the header says them (`status::unread_rows`).
     pub problems: Vec<RowNote>,
+    pub problem_rows: u32,
+    /// The person stopped it after `rows` of the file's rows: those are kept, and
+    /// importing the file again goes on from them (a row kept already is unchanged).
+    #[serde(default)]
+    pub stopped: bool,
 }
+
+/// The import running now, as the import window shows it: the file, how much of it
+/// has arrived of the size its request stated, and how many rows have been read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Importing {
+    pub file: String,
+    /// Bytes received of the file, and its size where the request states it.
+    pub received: u64,
+    pub size: Option<u64>,
+    /// Bytes of the file read through once it has arrived, to check every line
+    /// reads and to count its rows.
+    pub checked: u64,
+    /// Rows kept so far, of the file's rows once they are counted.
+    pub rows: u64,
+    pub total: Option<u64>,
+}
+
+/// How far an import has come, as it tells the one it reports to.
+#[derive(Clone, Copy)]
+pub enum Step {
+    /// The bytes read through so far, checking every line reads and counting rows.
+    Checked(u64),
+    /// The rows kept so far, of the rows the file holds.
+    Kept { rows: u64, total: u64 },
+}
+
+/// What an import is told by the one it reports to: go on, or stop.
+pub enum Go {
+    On,
+    Stop,
+}
+
+/// The rows a report lists by line, of each kind; the rest are counted. The answer
+/// to a file of any size stays the size of a page's list.
+pub const REPORT_NOTES: usize = 8;
+
+/// What an import is told when the person stops it: nothing it read is kept.
+pub const IMPORT_STOPPED: &str = "Stopped: nothing from this file was kept.";
 
 /// Imports run one at a time in the process, from the page and from the watched
 /// folder alike: one whose request was given up on still finishes before the next.
 static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Read a file and keep its rows in `account` (the Manual account when `None`).
+/// Read a file held in memory and keep its rows in `account` (the Manual account when `None`).
+#[cfg(test)]
 pub fn import(f: &Figures, file: &str, text: &str, account: Option<AccountId>, now: bagholder_core::jiff::Timestamp) -> Result<ImportReport, Refused> {
+    import_from(f, file, &|| Ok(Box::new(std::io::Cursor::new(text.as_bytes().to_vec())) as Box<dyn std::io::BufRead>), account, now, &mut |_| Go::On)
+}
+
+/// Read a file from `open` and keep its rows in `account` (the Manual account when
+/// `None`), in bounded memory whatever its size: read once to check every line reads
+/// and to count its rows (a file that does not read keeps nothing), then again to
+/// keep each row in turn. `progress` is told the bytes checked after each row of the
+/// first reading, and the rows kept of the rows counted after each of the second; a
+/// `Go::Stop` from it ends the import there: stopped while checking, it keeps
+/// nothing; while keeping, the rows kept stay.
+pub fn import_from(
+    f: &Figures,
+    file: &str,
+    open: &dyn Fn() -> std::io::Result<Box<dyn std::io::BufRead>>,
+    account: Option<AccountId>,
+    now: bagholder_core::jiff::Timestamp,
+    progress: &mut dyn FnMut(Step) -> Go,
+) -> Result<ImportReport, Refused> {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-    let read = csv::read_file(text).map_err(Refused::Entry)?;
+    let unread = |e: std::io::Error| Refused::Failed(format!("{file} could not be read: {e}"));
+    let mut total: u64 = 0;
+    let mut check = csv::read_rows(open().map_err(unread)?).map_err(Refused::Entry)?;
+    while let Some(row) = check.next() {
+        row.map_err(Refused::Entry)?;
+        total += 1;
+        if let Go::Stop = progress(Step::Checked(check.bytes_read())) {
+            return Err(Refused::Entry(IMPORT_STOPPED.into()));
+        }
+    }
+    let mut read = csv::read_rows(open().map_err(unread)?).map_err(Refused::Entry)?;
     let account = match account {
         Some(a) => a,
         None => manual_account(f, now)?,
@@ -93,47 +159,90 @@ pub fn import(f: &Figures, file: &str, text: &str, account: Option<AccountId>, n
         file: file.to_string(),
         layout: read.layout.as_str().to_string(),
         account: accounts.iter().find(|a| a.id == account).and_then(|a| a.nickname.clone()).unwrap_or_else(|| account.to_string()),
-        rows: read.rows.len() as u32,
+        rows: 0,
         added: 0,
         unchanged: 0,
         linked: 0,
         ambiguous: vec![],
+        ambiguous_rows: 0,
         problems: vec![],
+        problem_rows: 0,
+        stopped: false,
     };
+    let layout = read.layout;
     let mut lines: BTreeMap<RecordId, u32> = BTreeMap::new();
-    for row in &read.rows {
-        let stated = csv::state(read.layout, &row.cells);
-        let (placed, unplaced) = match stated.as_ref().ok().and_then(|s| s.account.as_deref()) {
-            None => (account, None),
-            Some(named) => match by_ref.get(named) {
-                Some(a) => (*a, None),
-                None => (account, Some(format!("the row names account {named:?}, which is none of the book's"))),
-            },
-        };
-        let instrument = match &stated {
-            Ok(s) => match (&s.instrument, s.currency) {
-                (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, *kind, currency)? {
-                    Some(t) => Some(book.name(placed, &t).map_err(|e| match e {
-                        bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
-                        other => Refused::Failed(other.to_string()),
-                    })?),
-                    None => None,
-                },
-                _ => None,
-            },
-            Err(_) => None,
-        };
-        let r = book.account_ref(placed).map_err(fail)?;
-        let payload = Payload { layout: read.layout, cells: row.cells.clone(), occurrence: row.occurrence, account: (r.broker.to_string(), r.value), unplaced, instrument };
-        let text = serde_json::to_string(&payload).map_err(|e| Refused::Failed(e.to_string()))?;
-        let stored = book.store(&CsvMapping, &Incoming { connection: None, source_key: &payload.key(), payload: &text, refs: vec![] }, now).map_err(fail)?;
-        match stored.outcome {
-            Outcome::Unchanged => report.unchanged += 1,
-            Outcome::New | Outcome::Revised(_) => report.added += 1,
-        }
-        lines.insert(stored.record, row.line as u32);
-        for p in book.problems_of(stored.record).map_err(fail)? {
-            report.problems.push(RowNote { line: row.line as u32, message: p.detail });
+    // kept a group at a time, each group one transaction ending where the whole
+    // percent of the file's rows moves (or at the end, or a stop), so a file of any
+    // size costs a hundred commits at most; a failure inside a group keeps none of
+    // that group, and every group before it stays
+    let mut failed: Option<Refused> = None;
+    loop {
+        let more = book.atomically(|| {
+            let keep = |row: Result<csv::RowRead, String>| -> Result<(bagholder_book::records::Stored, u32, Vec<RowNote>), Refused> {
+                // the file changed between the two readings: the groups kept before stay, and why is said
+                let row = row.map_err(|e| Refused::Failed(format!("{file} changed while it was imported: {e}")))?;
+                let row = &row;
+                let stated = csv::state(layout, &row.cells);
+                let (placed, unplaced) = match stated.as_ref().ok().and_then(|s| s.account.as_deref()) {
+                    None => (account, None),
+                    Some(named) => match by_ref.get(named) {
+                        Some(a) => (*a, None),
+                        None => (account, Some(format!("the row names account {named:?}, which is none of the book's"))),
+                    },
+                };
+                let instrument = match &stated {
+                    Ok(s) => match (&s.instrument, s.currency) {
+                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, *kind, currency)? {
+                            Some(t) => Some(book.name(placed, &t).map_err(|e| match e {
+                                bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
+                                other => Refused::Failed(other.to_string()),
+                            })?),
+                            None => None,
+                        },
+                        _ => None,
+                    },
+                    Err(_) => None,
+                };
+                let r = book.account_ref(placed).map_err(fail)?;
+                let payload = Payload { layout, cells: row.cells.clone(), occurrence: row.occurrence, account: (r.broker.to_string(), r.value), unplaced, instrument };
+                let text = serde_json::to_string(&payload).map_err(|e| Refused::Failed(e.to_string()))?;
+                let stored = book.store(&CsvMapping, &Incoming { connection: None, source_key: &payload.key(), payload: &text, refs: vec![] }, now).map_err(fail)?;
+                let problems = book.problems_of(stored.record).map_err(fail)?.into_iter().map(|p| RowNote { line: row.line as u32, message: p.detail }).collect();
+                Ok((stored, row.line as u32, problems))
+            };
+            while let Some(row) = read.next() {
+                let (stored, line, problems) = match keep(row) {
+                    Ok(kept) => kept,
+                    Err(e) => {
+                        failed = Some(e);
+                        return Err(bagholder_book::BookError::Refused("the group is not kept".into()));
+                    }
+                };
+                match stored.outcome {
+                    Outcome::Unchanged => report.unchanged += 1,
+                    Outcome::New | Outcome::Revised(_) => report.added += 1,
+                }
+                lines.insert(stored.record, line);
+                report.problem_rows += problems.len() as u32;
+                let room = REPORT_NOTES.saturating_sub(report.problems.len());
+                report.problems.extend(problems.into_iter().take(room));
+                report.rows += 1;
+                let rows = report.rows as u64;
+                if let Go::Stop = progress(Step::Kept { rows, total }) {
+                    report.stopped = rows < total;
+                    return Ok(false);
+                }
+                if rows * 100 / total.max(1) != (rows - 1) * 100 / total.max(1) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        });
+        match (more, failed.take()) {
+            (_, Some(e)) => return Err(e),
+            (Err(e), None) => return Err(fail(e)),
+            (Ok(true), None) => {}
+            (Ok(false), None) => break,
         }
     }
     f.record_changed(now).map_err(Refused::Failed)?;
@@ -143,12 +252,10 @@ pub fn import(f: &Figures, file: &str, text: &str, account: Option<AccountId>, n
             report.linked += 1;
         }
     }
-    for (record, candidates) in &linking.ambiguous {
-        if let Some(line) = lines.get(record) {
-            report.ambiguous.push(RowNote { line: *line, message: format!("the same fill as {candidates} of the broker's rows: not linked") });
-        }
-    }
-    report.problems.sort_by_key(|n| n.line);
+    let mut ambiguous: Vec<(u32, usize)> = linking.ambiguous.iter().filter_map(|(record, candidates)| lines.get(record).map(|line| (*line, *candidates))).collect();
+    ambiguous.sort();
+    report.ambiguous_rows = ambiguous.len() as u32;
+    report.ambiguous = ambiguous.into_iter().take(REPORT_NOTES).map(|(line, candidates)| RowNote { line, message: format!("the same fill as {candidates} of the broker's rows: not linked") }).collect();
     Ok(report)
 }
 
@@ -455,16 +562,13 @@ fn scan_folder(f: &Figures, all: bool, now: bagholder_core::jiff::Timestamp) -> 
         if !all && kept.get(&name).is_some_and(|w| w.size == meta.len() && w.modified == modified) {
             continue;
         }
-        let read = match std::fs::read(entry.path()) {
-            Err(e) => FileOutcome::Failed { error: e.to_string() },
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Err(_) => FileOutcome::Failed { error: "the file is not UTF-8 text".into() },
-                Ok(text) => match import(f, &name, &text, account, now) {
-                    Ok(report) => FileOutcome::Imported { report },
-                    Err(Refused::Entry(error)) => FileOutcome::Failed { error },
-                    Err(Refused::Failed(why)) => return Err(why),
-                },
-            },
+        // read from the file as it is, a line at a time, whatever its size
+        let path = entry.path();
+        let open = || std::fs::File::open(&path).map(|f| Box::new(std::io::BufReader::new(f)) as Box<dyn std::io::BufRead>);
+        let read = match import_from(f, &name, &open, account, now, &mut |_| Go::On) {
+            Ok(report) => FileOutcome::Imported { report },
+            Err(Refused::Entry(error)) => FileOutcome::Failed { error },
+            Err(Refused::Failed(why)) => return Err(why),
         };
         kept.insert(name.clone(), WatchedFile { file: name, size: meta.len(), modified, scanned_at: now.to_string(), read });
     }
@@ -721,6 +825,98 @@ mod tests {
         assert_eq!(count(&f), before, "a second import of it counts nothing more: {again:?}");
     }
 
+    #[test]
+    fn an_import_stopped_part_way_keeps_the_rows_read_and_goes_on_when_imported_again() {
+        let (_h, f) = figures();
+        let mut file = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
+        for n in 1..=5 {
+            file.push_str(&format!("2025-11-0{n},Buy,ZZPART,{n},1.00,-{n},USD\n"));
+        }
+        let open = || Ok(Box::new(std::io::Cursor::new(file.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+        let mut told = vec![];
+        let r = import_from(&f, "part.csv", &open, None, now(), &mut |step| match step {
+            Step::Checked(_) => Go::On,
+            Step::Kept { rows, total } => {
+                told.push((rows, total));
+                if rows == 2 { Go::Stop } else { Go::On }
+            }
+        })
+        .unwrap();
+        assert_eq!((r.rows, r.added, r.stopped), (2, 2, true), "{r:?}");
+        assert_eq!(told, vec![(1, 5), (2, 5)], "told each row of the rows counted");
+        let again = import_from(&f, "part.csv", &open, None, now(), &mut |_| Go::On).unwrap();
+        assert_eq!((again.rows, again.added, again.unchanged, again.stopped), (5, 3, 2, false), "{again:?}");
+    }
+
+    #[test]
+    fn an_import_stopped_while_its_file_is_checked_keeps_nothing() {
+        let (_h, f) = figures();
+        let file = "Date,Action,Symbol,Quantity,Price,Amount,Currency\n2025-11-03,Buy,ZZCHK,1,1.00,-1,USD\n2025-11-04,Buy,ZZCHK,2,1.00,-2,USD\n";
+        let open = || Ok(Box::new(std::io::Cursor::new(file.as_bytes().to_vec())) as Box<dyn std::io::BufRead>);
+        let mut checked = vec![];
+        let r = import_from(&f, "chk.csv", &open, None, now(), &mut |step| match step {
+            Step::Checked(bytes) => {
+                checked.push(bytes);
+                Go::Stop
+            }
+            Step::Kept { .. } => Go::On,
+        });
+        assert!(matches!(&r, Err(Refused::Entry(why)) if why == IMPORT_STOPPED), "{r:?}");
+        // told the bytes read through its first row, the header's included
+        assert_eq!(checked, vec![(file.find("\n2025-11-04").unwrap() + 1) as u64]);
+        assert!(csv_records(&f).is_empty());
+    }
+
+    #[test]
+    fn rows_are_kept_a_whole_percent_at_a_time_and_a_failure_keeps_every_group_before_it() {
+        let (_h, f) = figures();
+        let rows = |broken: Option<usize>| {
+            let mut file = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
+            for n in 1..=200 {
+                let symbol = if broken == Some(n) { "\"ZZ\"GROUP".to_string() } else { "ZZGROUP".to_string() };
+                file.push_str(&format!("2025-11-03,Buy,{symbol},{n},1.00,-{n},USD\n"));
+            }
+            file
+        };
+        // read whole the first time, changed at row 150 by the second reading
+        let readings = std::cell::Cell::new(0);
+        let open = || {
+            readings.set(readings.get() + 1);
+            let text = rows(if readings.get() == 1 { None } else { Some(150) });
+            Ok(Box::new(std::io::Cursor::new(text.into_bytes())) as Box<dyn std::io::BufRead>)
+        };
+        match import_from(&f, "group.csv", &open, None, now(), &mut |_| Go::On) {
+            Err(Refused::Failed(why)) => assert!(why.starts_with("group.csv changed while it was imported"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        // a group is one percent of the file's 200 rows: the one holding rows 149
+        // and 150 is not kept, every one before it is
+        assert_eq!(csv_records(&f).len(), 148);
+    }
+
+    #[test]
+    fn the_report_lists_the_first_rows_with_a_problem_by_line_and_counts_them_all() {
+        let (_h, f) = figures();
+        // no currency stated: each row is kept with that problem
+        let mut file = String::from("Date,Action,Symbol,Quantity,Price,Amount\n");
+        for n in 1..=20 {
+            file.push_str(&format!("2025-11-03,Sell,ZZNOTE,{n},1.00,{n}\n"));
+        }
+        let r = import(&f, "notes.csv", &file, None, now()).unwrap();
+        assert_eq!((r.rows, r.problem_rows), (20, 20), "{r:?}");
+        assert_eq!(r.problems.iter().map(|n| n.line).collect::<Vec<_>>(), (2..2 + REPORT_NOTES as u32).collect::<Vec<_>>());
+        assert_eq!(csv_records(&f).len(), 20, "every row is kept");
+    }
+
+    #[test]
+    fn a_file_with_a_line_that_does_not_read_keeps_nothing() {
+        let (_h, f) = figures();
+        let file = "Date,Action,Symbol,Quantity,Price,Amount,Currency\n2025-11-03,Buy,ZZBAD,1,1.00,-1,USD\n2025-11-04,Buy,\"ZZ\"BAD,1,1.00,-1,USD\n";
+        let before = csv_records(&f).len();
+        assert!(matches!(import(&f, "bad.csv", file, None, now()), Err(Refused::Entry(_))));
+        assert_eq!(csv_records(&f).len(), before, "the line before the bad one is not kept either");
+    }
+
     fn simple_row(account: &str) -> String {
         format!("Date,Action,Symbol,Quantity,Price,Amount,Currency,Account\n2025-11-03,Buy,ZZQQ,5,20.00,100,USD,{account}\n")
     }
@@ -790,7 +986,7 @@ mod tests {
         let s = scan(&f, false, now()).unwrap();
         assert_eq!(s.files.iter().map(|w| w.file.as_str()).collect::<Vec<_>>(), vec!["a.csv", "b.CSV"]);
         assert!(matches!(&s.files[0].read, FileOutcome::Imported { report } if report.added == 1));
-        assert!(matches!(&s.files[1].read, FileOutcome::Failed { error } if error == "the file is not UTF-8 text"));
+        assert!(matches!(&s.files[1].read, FileOutcome::Failed { error } if error == "line 1 is not UTF-8 text"), "{:?}", s.files[1].read);
         // the scan says what it added over every file it read, a file that failed adding none
         assert_eq!(s.last_scan_added, 1);
         // unchanged: not read again, and a scan that read nothing added nothing
@@ -811,3 +1007,4 @@ mod tests {
         assert!(!s.watching && s.scan_error.is_empty() && s.files.is_empty());
     }
 }
+

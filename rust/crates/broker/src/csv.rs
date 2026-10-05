@@ -111,60 +111,108 @@ pub fn header(h: &str) -> String {
 /// The file's lines as CSV records (RFC 4180), each with the line it starts on.
 /// A quote left open, or one inside a cell that is not quoted, is a file that
 /// does not read.
-fn records(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
-    let mut out = Vec::new();
-    let mut row: Vec<String> = Vec::new();
-    let mut cell = String::new();
-    let (mut line, mut start) = (1usize, 1usize);
-    let mut chars = text.chars().peekable();
-    let mut quoted = false;
-    let mut was_quoted = false;
-    while let Some(c) = chars.next() {
-        if quoted {
-            match c {
-                '"' if chars.peek() == Some(&'"') => {
-                    chars.next();
-                    cell.push('"');
-                }
-                '"' => quoted = false,
-                '\n' => {
-                    line += 1;
-                    cell.push(c);
-                }
-                _ => cell.push(c),
-            }
-            continue;
+/// A file's records as they are read, each with the line it starts on: RFC 4180's
+/// quoting (a quoted cell may hold commas, doubled quotes and line breaks), `\r\n`
+/// or `\n` line ends. Read a physical line at a time, so a file of any size is
+/// read in the memory of its longest record.
+pub struct Records<R: std::io::BufRead> {
+    input: R,
+    line: usize,
+    /// Bytes of the file read so far.
+    bytes: u64,
+    first: bool,
+    done: bool,
+}
+
+impl<R: std::io::BufRead> Records<R> {
+    pub fn new(input: R) -> Records<R> {
+        Records { input, line: 0, bytes: 0, first: true, done: false }
+    }
+}
+
+impl<R: std::io::BufRead> Iterator for Records<R> {
+    type Item = Result<(usize, Vec<String>), String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
         }
-        match c {
-            '"' if cell.is_empty() && !was_quoted => {
-                quoted = true;
-                was_quoted = true;
+        let mut row: Vec<String> = Vec::new();
+        let mut cell = String::new();
+        let (mut quoted, mut was_quoted) = (false, false);
+        let start = self.line + 1;
+        let mut text = String::new();
+        loop {
+            text.clear();
+            let got = match self.input.read_line(&mut text) {
+                Ok(n) => n,
+                Err(e) => {
+                    self.done = true;
+                    let line = self.line + 1;
+                    return Some(Err(if e.kind() == std::io::ErrorKind::InvalidData {
+                        format!("line {line} is not UTF-8 text")
+                    } else {
+                        format!("line {line} could not be read: {e}")
+                    }));
+                }
+            };
+            self.bytes += got as u64;
+            if got == 0 {
+                // the end of the file
+                self.done = true;
+                if quoted {
+                    return Some(Err(format!("the quote opened on line {start} is never closed")));
+                }
+                if !cell.is_empty() || !row.is_empty() || was_quoted {
+                    row.push(cell);
+                    return Some(Ok((start, row)));
+                }
+                return None;
             }
-            '"' => return Err(format!("line {line} has a quote inside a cell that is not quoted")),
-            ',' => {
-                row.push(std::mem::take(&mut cell));
-                was_quoted = false;
+            self.line += 1;
+            let mut chars = if self.first { text.strip_prefix('\u{feff}').unwrap_or(&text) } else { text.as_str() }.chars().peekable();
+            self.first = false;
+            let line = self.line;
+            while let Some(c) = chars.next() {
+                if quoted {
+                    match c {
+                        '"' if chars.peek() == Some(&'"') => {
+                            chars.next();
+                            cell.push('"');
+                        }
+                        '"' => quoted = false,
+                        _ => cell.push(c),
+                    }
+                    continue;
+                }
+                match c {
+                    '"' if cell.is_empty() && !was_quoted => {
+                        quoted = true;
+                        was_quoted = true;
+                    }
+                    '"' => {
+                        self.done = true;
+                        return Some(Err(format!("line {line} has a quote inside a cell that is not quoted")));
+                    }
+                    ',' => {
+                        row.push(std::mem::take(&mut cell));
+                        was_quoted = false;
+                    }
+                    '\r' if chars.peek() == Some(&'\n') => {}
+                    '\n' => {
+                        row.push(std::mem::take(&mut cell));
+                        return Some(Ok((start, row)));
+                    }
+                    _ if was_quoted => {
+                        self.done = true;
+                        return Some(Err(format!("line {line} has text after a quoted cell's closing quote")));
+                    }
+                    _ => cell.push(c),
+                }
             }
-            '\r' if chars.peek() == Some(&'\n') => {}
-            '\n' => {
-                row.push(std::mem::take(&mut cell));
-                was_quoted = false;
-                out.push((start, std::mem::take(&mut row)));
-                line += 1;
-                start = line;
-            }
-            _ if was_quoted => return Err(format!("line {line} has text after a quoted cell's closing quote")),
-            _ => cell.push(c),
+            // a quoted cell running on past this line, or the file's last line without its line end
         }
     }
-    if quoted {
-        return Err(format!("the quote opened on line {start} is never closed"));
-    }
-    if !cell.is_empty() || !row.is_empty() || was_quoted {
-        row.push(cell);
-        out.push((start, row));
-    }
-    Ok(out)
 }
 
 /// A line that is an export's note rather than a row: `As of YYYY-MM-DD…` in its
@@ -176,12 +224,32 @@ fn is_note(cells: &[String]) -> bool {
     rest_empty && after.get(..10).is_some_and(|d| d.parse::<jiff::civil::Date>().is_ok())
 }
 
-/// Read a file: its layout from its header row, then every row. A file whose
-/// header is no layout's, or that does not read as CSV, is refused with why.
-pub fn read_file(text: &str) -> Result<FileRead, String> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut lines = records(text)?.into_iter().filter(|(_, cells)| cells.iter().any(|c| !c.trim().is_empty()));
-    let Some((_, head)) = lines.next() else { return Err("the file is empty".into()) };
+/// A file's rows as they are read: its layout from its header row, then each row in
+/// turn, so a file of any size is read in bounded memory. A file whose header is no
+/// layout's is refused with why; a row that does not read as CSV ends the reading
+/// with why.
+pub struct Rows<R: std::io::BufRead> {
+    records: Records<R>,
+    headers: Vec<String>,
+    pub layout: Layout,
+    /// Lines that are the export's notes (`As of 2024-01-31`), not rows, met so far.
+    pub notes: Vec<usize>,
+    /// How many rows so far had each set of cells, by a digest of them: an
+    /// occurrence numbers a row among the identical rows before it.
+    seen: std::collections::HashMap<u128, u32>,
+}
+
+/// The rows of `input` as they are read, after its header row.
+pub fn read_rows<R: std::io::BufRead>(input: R) -> Result<Rows<R>, String> {
+    let mut records = Records::new(input);
+    let head = loop {
+        match records.next() {
+            None => return Err("the file is empty".into()),
+            Some(Err(e)) => return Err(e),
+            Some(Ok((_, cells))) if cells.iter().any(|c| !c.trim().is_empty()) => break cells,
+            Some(Ok(_)) => {}
+        }
+    };
     let headers: Vec<String> = head.iter().map(|h| header(h)).collect();
     for (i, h) in headers.iter().enumerate() {
         if headers[..i].contains(h) {
@@ -200,24 +268,64 @@ pub fn read_file(text: &str) -> Result<FileRead, String> {
         }
         more => return Err(format!("its headers fit more than one layout: {}", more.iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", "))),
     };
-    let mut rows: Vec<RowRead> = Vec::new();
-    let mut notes = Vec::new();
-    for (line, cells) in lines {
-        if is_note(&cells) {
-            notes.push(line);
-            continue;
-        }
-        let mut by: BTreeMap<String, String> = BTreeMap::new();
-        for (i, v) in cells.into_iter().enumerate() {
-            let key = headers.get(i).cloned().unwrap_or_else(|| extra(i + 1));
-            if !(key.starts_with('#') && v.trim().is_empty()) {
-                by.insert(key, v);
-            }
-        }
-        let occurrence = rows.iter().filter(|r| r.cells == by).count() as u32;
-        rows.push(RowRead { line, cells: by, occurrence });
+    Ok(Rows { records, headers, layout, notes: vec![], seen: std::collections::HashMap::new() })
+}
+
+/// A row's cells as a 128-bit digest: two independent 64-bit hashes of them.
+fn digest(cells: &BTreeMap<String, String>) -> u128 {
+    use std::hash::{Hash, Hasher};
+    let half = |salt: u8| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        salt.hash(&mut h);
+        cells.hash(&mut h);
+        h.finish() as u128
+    };
+    (half(0) << 64) | half(1)
+}
+
+impl<R: std::io::BufRead> Rows<R> {
+    /// Bytes of the file read so far, its header's included.
+    pub fn bytes_read(&self) -> u64 {
+        self.records.bytes
     }
-    Ok(FileRead { layout, rows, notes })
+}
+
+impl<R: std::io::BufRead> Iterator for Rows<R> {
+    type Item = Result<RowRead, String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (line, cells) = match self.records.next()? {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            if !cells.iter().any(|c| !c.trim().is_empty()) {
+                continue;
+            }
+            if is_note(&cells) {
+                self.notes.push(line);
+                continue;
+            }
+            let mut by: BTreeMap<String, String> = BTreeMap::new();
+            for (i, v) in cells.into_iter().enumerate() {
+                let key = self.headers.get(i).cloned().unwrap_or_else(|| extra(i + 1));
+                if !(key.starts_with('#') && v.trim().is_empty()) {
+                    by.insert(key, v);
+                }
+            }
+            let n = self.seen.entry(digest(&by)).or_insert(0);
+            let occurrence = *n;
+            *n += 1;
+            return Some(Ok(RowRead { line, cells: by, occurrence }));
+        }
+    }
+}
+
+/// Read a whole file held in memory: its layout, every row and its notes.
+pub fn read_file(text: &str) -> Result<FileRead, String> {
+    let mut rows = read_rows(std::io::Cursor::new(text))?;
+    let read: Vec<RowRead> = rows.by_ref().collect::<Result<_, _>>()?;
+    Ok(FileRead { layout: rows.layout, rows: read, notes: rows.notes })
 }
 
 /// What a row states, read strictly.

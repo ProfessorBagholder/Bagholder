@@ -236,13 +236,15 @@ impl Default for Bus {
     }
 }
 
-/// Wait for the next signal; then let the signals that follow it close behind
-/// settle (`GATHER`), so a burst reaches the page as one message.
+/// Wait for the next signal; then gather the signals that follow it for `GATHER`,
+/// so a burst reaches the page as one message. The window is counted from the first
+/// signal, never pushed back by the next: signals that never stop (a long import
+/// telling its progress) still reach the page once a window.
 pub async fn changed(rx: &mut tokio::sync::watch::Receiver<u64>) {
     if rx.changed().await.is_err() {
         return std::future::pending().await; // the sender lives as long as its app: this cannot happen
     }
-    while let Ok(Ok(())) = tokio::time::timeout(GATHER, rx.changed()).await {}
+    tokio::time::sleep(GATHER).await;
 }
 
 pub(crate) struct Watching(Arc<Bus>);
@@ -546,6 +548,38 @@ impl Feed {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    /// Signals that never stop (a long import telling its progress) still reach the
+    /// page: the gathering ends a window after the first signal, never pushed back.
+    #[test]
+    fn signals_that_never_stop_still_reach_the_page_once_a_window() {
+        let bus = Arc::new(Bus::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let (b2, s2) = (bus.clone(), stop.clone());
+        let ringing = std::thread::spawn(move || {
+            while !s2.load(Ordering::SeqCst) {
+                b2.signal();
+                std::thread::yield_now();
+            }
+        });
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let mut rx = bus.subscribe();
+        let (tx, told) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            rt.block_on(async {
+                for _ in 0..3 {
+                    changed(&mut rx).await;
+                    rx.borrow_and_update();
+                }
+            });
+            let _ = tx.send(());
+        });
+        // under a gathering pushed back by each signal this never comes
+        let came = told.recv_timeout(Duration::from_secs(10));
+        stop.store(true, Ordering::SeqCst);
+        ringing.join().unwrap();
+        assert!(came.is_ok(), "the page was never told while the signals went on");
+    }
 
     /// Work that waits for someone to look does nothing until a page connects, and
     /// starts the moment one does.

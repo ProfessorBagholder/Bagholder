@@ -63,6 +63,15 @@ fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap()
 }
 
+/// A file sent to the import as it is, the way the page sends one.
+fn upload(app: &Arc<App>, name: &str, account: &str, body: Body) -> Request<Body> {
+    let uri = format!("/api/import?name={}&account={}", name, account);
+    let mut req = from_the_page(app, Method::POST, &uri, None);
+    *req.body_mut() = body;
+    req.headers_mut().insert(header::CONTENT_TYPE, "text/csv".parse().unwrap());
+    req
+}
+
 fn from_the_page(app: &Arc<App>, method: Method, uri: &str, body: Option<Value>) -> Request<Body> {
     let host = format!("127.0.0.1:{}", *app.port.lock().unwrap());
     let mut req = Request::builder().method(method).uri(uri).header(header::HOST, host).header("sec-fetch-site", "same-origin");
@@ -94,7 +103,7 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
         ("watch_set_no_path", req(Method::POST, "/api/watch", Some(json!({"path": "", "account": ""})))),
         ("watch_scan_no_folder", req(Method::POST, "/api/watch/scan", None)),
         ("watch_clear", req(Method::POST, "/api/watch/clear", None)),
-        ("import_no_text", req(Method::POST, "/api/import", Some(json!({"name": "a.csv", "text": "", "account": ""})))),
+        ("import_no_text", upload(app, "a.csv", "", Body::empty())),
         ("notifications_list", req(Method::GET, "/api/notifications", None)),
         ("notifications_settings", req(Method::POST, "/api/notifications/settings", Some(json!({"fills": true})))),
         ("notifications_test", req(Method::POST, "/api/notifications/test", None)),
@@ -283,7 +292,7 @@ fn test_orders_routes_golden() {
 /// Body limits per route, and one import at a time with its slot taken before its
 /// body is read (`docs/plans/stage-money.md`, part D; brief 19, change 6).
 #[test]
-fn test_a_second_import_is_refused_before_its_body_is_read_and_each_route_has_its_own_body_limit() {
+fn test_a_second_import_is_refused_before_its_body_is_read_and_no_body_is_cut_at_a_size() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let _g = crate::tests_common::guard();
     let app = crate::tests_common::app();
@@ -293,26 +302,20 @@ fn test_a_second_import_is_refused_before_its_body_is_read_and_each_route_has_it
     let r2 = read.clone();
     let body = Body::from_stream(futures_util::stream::once(async move {
         r2.store(true, Ordering::SeqCst);
-        Ok::<_, std::io::Error>(axum::body::Bytes::from_static(br#"{"name":"a.csv","text":"x","account":""}"#))
+        Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"Date,Action,Symbol,Quantity,Price,Amount\n"))
     }));
     crate::http::model::IMPORTING.store(true, Ordering::SeqCst);
-    let mut req = from_the_page(&app, Method::POST, "/api/import", None);
-    *req.body_mut() = body;
-    req.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-    let got = rt.block_on(json_of(app.clone(), req));
+    let got = rt.block_on(json_of(app.clone(), upload(&app, "a.csv", "", body)));
     crate::http::model::IMPORTING.store(false, Ordering::SeqCst);
     assert_eq!(got, json!({"status": 409, "body": {"ok": false, "error": crate::http::model::IMPORT_BUSY}}));
     assert!(!read.load(Ordering::SeqCst), "the refused import's body was never read");
-    // a body over a JSON route's limit is refused; the import takes a file's worth
-    let big = "x".repeat(2 * 1024 * 1024);
-    let got = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/journal", Some(json!({"key": "k", "note": big.clone()})))));
-    assert_eq!(got["status"], json!(413), "{got}");
-    let got = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import", Some(json!({"name": "a.csv", "text": big, "account": ""})))));
-    assert!(!got.to_string().contains("length limit"), "an import of two megabytes is read: {got}");
-    // past the import's own limit: told in words, as too large
-    let huge = "x".repeat(crate::http::IMPORT_BODY_LIMIT + 1);
-    let got = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import", Some(json!({"name": "a.csv", "text": huge, "account": ""})))));
-    assert_eq!(got, json!({"status": 413, "body": {"ok": false, "error": "The request is larger than this action takes."}}));
+    // what the person sends is never cut at a size: a forty-megabyte file is read whole,
+    // here a file of one header and blank lines, which keeps nothing
+    let mut big = String::from("Date,Action,Symbol,Quantity,Price,Amount\n");
+    big.push_str(&"\n".repeat(40 * 1024 * 1024));
+    let got = rt.block_on(json_of(app.clone(), upload(&app, "big.csv", "", Body::from(big))));
+    assert_eq!(got["status"], json!(200), "read whole: {got}");
+    assert_eq!(got["body"]["rows"], json!(0));
     assert!(!crate::http::model::IMPORTING.load(Ordering::SeqCst), "the slot is given back once the answer has gone");
 }
 
@@ -332,7 +335,6 @@ fn test_every_write_to_the_book_reaches_the_stream() {
     let writes: Vec<(&str, Method, &str, Option<Value>)> = vec![
         ("a journal note and grade", Method::POST, "/api/journal", Some(json!({"id": trade, "thesis": "a note", "grade": "B", "tags": ["setup"]}))),
         ("a trade typed in", Method::POST, "/api/entries", Some(json!({"entry": "trade", "account": "", "instrument": null, "symbol": "ZZWRITE", "currency": "CAD", "day": "2026-09-01", "side": "BUY", "quantity": "10", "price": "1.50", "fee": "0"}))),
-        ("an import", Method::POST, "/api/import", Some(json!({"name": "a.csv", "account": "", "text": "transaction_date,activity_type,activity_sub_type,account_id,symbol,currency,quantity,unit_price,net_cash_amount\n2026-09-02,Trade,BUY,,ZZIMPORT,CAD,5,2.00,-10\n"}))),
         ("the tiles chosen", Method::POST, "/api/tiles/set", Some(json!({"tiles": []}))),
         ("the notification settings", Method::POST, "/api/notifications/settings", Some(json!({"fills": true}))),
         ("a folder watched", Method::POST, "/api/watch", Some(json!({"path": watched.to_string_lossy(), "account": ""}))),
@@ -344,4 +346,100 @@ fn test_every_write_to_the_book_reaches_the_stream() {
         assert_eq!(got["status"], json!(200), "{what}: {got}");
         assert!(stamp() > before, "{what} reached no stream: {got}");
     }
+    let before = stamp();
+    let file = "transaction_date,activity_type,activity_sub_type,account_id,symbol,currency,quantity,unit_price,net_cash_amount\n2026-09-02,Trade,BUY,,ZZIMPORT,CAD,5,2.00,-10\n";
+    let got = rt.block_on(json_of(app.clone(), upload(&app, "a.csv", "", Body::from(file))));
+    assert_eq!(got["status"], json!(200), "an import: {got}");
+    assert!(stamp() > before, "an import reached no stream: {got}");
+}
+
+/// An import's progress is the header's status while it runs, and Stop ends it: the
+/// file still arriving is not read, and nothing of it is kept.
+#[test]
+fn test_an_import_says_how_far_it_has_come_and_stops_when_asked() {
+    use futures_util::StreamExt;
+    let _g = crate::tests_common::guard();
+    let app = crate::tests_common::app();
+    let rt = runtime();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let head = axum::body::Bytes::from_static(b"Date,Action,Symbol,Quantity,Price,Amount\n");
+    let body = Body::from_stream(futures_util::stream::iter(vec![Ok::<_, std::io::Error>(head)]).chain(futures_util::stream::once(async move {
+        let _ = rx.await;
+        Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"2026-01-02,Buy,ZZSTOP,1,1.00,-1\n"))
+    })));
+    let mut req = upload(&app, "slow.csv", "", body);
+    req.headers_mut().insert(header::CONTENT_LENGTH, "200".parse().unwrap());
+    let mut bell = app.events.subscribe();
+    bell.borrow_and_update();
+    let a2 = app.clone();
+    let running = rt.spawn(async move { json_of(a2, req).await });
+    // the first part arrived: the status says so, of the size the request stated. The
+    // status is read only after the bus rings, as the page's stream reads it: a write
+    // to it that did not ring would leave this waiting, as it would leave the page
+    let seen = rt.block_on(async {
+        loop {
+            bell.changed().await.expect("the bus");
+            if let Some(i) = app.state.lock().unwrap().importing.clone().filter(|i| i.received > 0) {
+                return i;
+            }
+        }
+    });
+    assert_eq!((seen.file.as_str(), seen.received, seen.size, seen.total), ("slow.csv", 41, Some(200), None));
+    // Stop, then the rest arrives: it is not read, and the answer says it stopped
+    let stop = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import/stop", None)));
+    assert_eq!(stop["status"], json!(200));
+    tx.send(()).unwrap();
+    let got = rt.block_on(running).unwrap();
+    assert_eq!(got, json!({"status": 409, "body": {"ok": false, "error": crate::csv_import::IMPORT_STOPPED}}));
+    assert!(app.state.lock().unwrap().importing.is_none(), "no import running");
+}
+
+/// An import whose page went away while its rows were kept (the tab closed, the
+/// request given up) stops at its next row as at Stop, keeping what it kept, and
+/// holds the import's slot and status until it has: it never runs on unseen.
+#[test]
+fn test_an_import_whose_request_is_gone_stops_and_holds_the_slot_until_it_has() {
+    let _g = crate::tests_common::guard();
+    let app = crate::tests_common::app();
+    let rt = runtime();
+    let mut file = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
+    for n in 1..=20_000 {
+        file.push_str(&format!("2026-01-02,Buy,ZZGONE,{n},1.00,-{n},USD\n"));
+    }
+    let mut bell = app.events.subscribe();
+    bell.borrow_and_update();
+    let a2 = app.clone();
+    let req = upload(&app, "gone.csv", "", Body::from(file));
+    let running = rt.spawn(async move { json_of(a2, req).await });
+    // its rows are being kept: the request goes
+    rt.block_on(async {
+        loop {
+            bell.changed().await.expect("the bus");
+            if app.state.lock().unwrap().importing.as_ref().is_some_and(|i| i.total.is_some()) {
+                return;
+            }
+        }
+    });
+    running.abort();
+    assert!(rt.block_on(running).unwrap_err().is_cancelled());
+    // still reading: another import is refused, its body never read
+    let busy = rt.block_on(json_of(app.clone(), upload(&app, "next.csv", "", Body::from("Date,Action,Symbol,Quantity,Price,Amount\n"))));
+    let ended = app.state.lock().unwrap().importing.is_none();
+    if !ended {
+        assert_eq!(busy, json!({"status": 409, "body": {"ok": false, "error": crate::http::model::IMPORT_BUSY}}));
+    }
+    // then it stops, its status gone with it
+    rt.block_on(async {
+        loop {
+            if app.state.lock().unwrap().importing.is_none() {
+                return;
+            }
+            bell.changed().await.expect("the bus");
+        }
+    });
+    let kept = app.figures.get().unwrap().book().unwrap().live_records(&bagholder_broker::csv::source()).unwrap().len();
+    assert!(kept > 0 && kept < 20_000, "stopped part way, what it kept kept: {kept}");
+    // and the next import is taken
+    let next = rt.block_on(json_of(app.clone(), upload(&app, "next.csv", "", Body::from("Date,Action,Symbol,Quantity,Price,Amount\n"))));
+    assert_eq!(next["status"], json!(200), "{next}");
 }
