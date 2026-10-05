@@ -247,7 +247,7 @@ fn test_a_row_moves_both_and_the_same_row_read_again_moves_neither() {
 fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
     let rel = |names: &[String]| update::GithubRelease {
         tag_name: "v2.0.0".into(),
-        assets: names.iter().map(|n| update::GithubAsset { name: n.clone(), browser_download_url: format!("https://x/{}", n) }).collect(),
+        assets: names.iter().map(|n| update::GithubAsset { name: n.clone(), browser_download_url: format!("https://x/{}", n), size: n.len() as u64 }).collect(),
         ..Default::default()
     };
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
@@ -257,7 +257,8 @@ fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
     let bare = format!("bagholder-v2.0.0-{}.{}", update::target_triple(), ext);
     assert_eq!(update::release_assets(&rel(&[bare.clone(), format!("{}.sha256", bare)])), None);
     let got = update::release_assets(&rel(&["bagholder-v2.0.0-android.apk".into(), "bagholder-v2.0.0-web.zip".into(), mine.clone(), format!("{}.sha256", mine), "bagholder-v2.0.0-web.zip.sha256".into()]));
-    assert_eq!(got, Some(update::ReleaseAssets { archive: format!("https://x/{}", mine), sha: format!("https://x/{}.sha256", mine) }));
+    let sha_name = format!("{}.sha256", mine);
+    assert_eq!(got, Some(update::ReleaseAssets { archive: format!("https://x/{}", mine), sha: format!("https://x/{}", sha_name), archive_bytes: Some(mine.len() as u64), sha_bytes: Some(sha_name.len() as u64) }), "each with the size GitHub states");
     assert_eq!(update::release_assets(&rel(&["bagholder-v2.0.0-web.zip".into(), "bagholder-v2.0.0-web.zip.sha256".into()])), None, "another platform's archive is not this one's");
     assert_eq!(update::release_assets(&rel(&[mine.clone(), "bagholder-v2.0.0-android.apk".into()])), None, "nothing without its checksum");
 }
@@ -271,7 +272,7 @@ fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
     let _fakes = UpdateFakes::new(Some(update::GithubRelease {
         tag_name: newer.clone(),
         html_url: format!("https://github.com/x/y/releases/tag/{}", newer),
-        assets: vec![update::GithubAsset { name: format!("bagholder-{}-web.zip", newer), browser_download_url: "u".into() }],
+        assets: vec![update::GithubAsset { name: format!("bagholder-{}-web.zip", newer), browser_download_url: "u".into(), size: 1 }],
     }));
     std::env::set_var("BAGHOLDER_NO_UPDATE", "1");
     let rec = update::check_for_update(&app());
@@ -390,7 +391,7 @@ const TIMED_WAITS: [(&str, usize, &str); 18] = [
     ("server/src/broker_reads.rs", 1, "Wealthsimple's reads: until the next pull window (weekdays 2 PM Mountain), the next balances read while a page is open, or a failed read's rest ending"),
     ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
-    ("server/src/events.rs", 6, "`park_until_or` itself, the 40 ms gather; three in its tests (the day turning is the scheduler's, `due.rs`)"),
+    ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather; four in its tests (the day turning is the scheduler's, `due.rs`; signals that never stop, bounded so the old gathering fails rather than hangs)"),
     ("server/src/feeds.rs", 13, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/http/stream.rs", 1, "the event stream's keep-alive comment, every fifteen seconds while it is idle, so a connection that died is noticed: the transport's, not a poll"),

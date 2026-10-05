@@ -27,25 +27,27 @@ impl<S: Send + Sync, T: DeserializeOwned + Default> FromRequest<S> for Body<T> {
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
-        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| {
-            // a body wrapped by a route's own middleware hides the limit's error one
-            // level deeper than axum looks for it: the whole chain of causes is asked
-            let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&e);
-            let mut over = false;
-            while let Some(c) = cause {
-                over |= c.is::<http_body_util::LengthLimitError>();
-                cause = c.source();
-            }
-            if over || e.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
-                ApiError::TooLarge("The request is larger than this action takes.".into())
-            } else {
-                ApiError::BadRequest(e.body_text())
-            }
-        })?;
+        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| ApiError::BadRequest(e.body_text()))?;
         if bytes.iter().all(|b| b.is_ascii_whitespace()) {
             return Ok(Body(T::default()));
         }
         serde_json::from_slice(&bytes).map(Body).map_err(|e| ApiError::BadRequest(format!("the body is not what this route reads: {}", e)))
+    }
+}
+
+/// A file the page sends as it is, never held whole: its body, read a chunk at a
+/// time by the route, and the size the request states, where it states one.
+pub struct Upload {
+    pub body: axum::body::Body,
+    pub size: Option<u64>,
+}
+
+impl<S: Send + Sync> FromRequest<S> for Upload {
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, _state: &S) -> Result<Self, ApiError> {
+        let size = req.headers().get(axum::http::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok());
+        Ok(Upload { body: req.into_body(), size })
     }
 }
 

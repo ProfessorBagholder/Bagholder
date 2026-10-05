@@ -72,6 +72,10 @@ A test in the old crates that records one of these as it behaves today is named 
 
 - **A write to the book never reached the stream**: the book's connections carried no commit hook, and the cache's signalled from SQLite's commit hook, which runs before the commit completes, so a reader it woke read the rows as they were. A note, a grade, a trade typed in or an import stayed stale on every other screen until an unrelated change. Guarded: `sqlite/src/lib.rs` `a_reader_woken_by_the_signal_sees_what_the_commit_wrote`, `the_log_is_checkpointed_as_sqlite_would`; `tests_routes_golden.rs` `test_every_write_to_the_book_reaches_the_stream`.
 
+- **A row placed with a problem, or one that gave nothing, was never said**: only rows the mapping could not place reached the header. Guarded: `wire/build.rs` `every_problem_code_a_mapping_raises_reaches_the_header`, over every code the mappings raise, read from their source.
+- **A CSV re-imported into a connected account counted every dividend twice**: only fills and bare cash linked to the broker's rows. Guarded: `csv_import.rs` `a_dividend_the_broker_already_reported_is_linked_and_counted_once`.
+- **A day one account did not state dropped every account's return for that day, and an account whose statements stopped ended the combined series.** Guarded: `engine/tests/cases/combined_returns.json`, written blind.
+
 ## Running it (stage 5)
 
 - **With the container's port published beyond loopback, anyone on the network can place orders**: access is a loopback check. Not guarded yet.

@@ -12,7 +12,7 @@
 //! Around the routes, outermost first: a panic becomes a 500 rather than a
 //! dropped connection; every answer is `no-store` and `nosniff` unless it says
 //! otherwise; the gate (`gate`) turns away anything that is not the page on this
-//! machine; a body is at most `BODY_LIMIT`. Routes that answer once are given
+//! machine; a body is never cut at a size. Routes that answer once are given
 //! `ROUTE_TIMEOUT`; the three that stream are not.
 
 pub(crate) mod assets;
@@ -76,12 +76,6 @@ impl OkOr {
 /// route's own answer type once it is converted (stage 5d7d).
 pub type Api<T> = Result<Json<T>, ApiError>;
 
-/// The most a request body may be, every route but the import: the page's largest
-/// is a journal note or a trade typed in, a few kilobytes (`docs/plans/stage-money.md`,
-/// part D: body limits per route).
-const BODY_LIMIT: usize = 1024 * 1024;
-/// The most a CSV import's body may be: a broker's whole activity export.
-pub const IMPORT_BODY_LIMIT: usize = 32 * 1024 * 1024;
 /// The most an answer is read back into memory to tag it (`conditional`).
 const ANSWER_LIMIT: usize = 128 * 1024 * 1024;
 /// The longest a route that answers once may take: the slowest are a forced
@@ -162,6 +156,19 @@ where
     }
 }
 
+/// A route that takes a file as it is (`extract::Upload`): its query, and the body
+/// the page sends as the file itself (`Blob`).
+impl<F, Fut, Q: ts_rs::TS> Signature<(State<AppState>, Params<Q>, extract::Upload)> for F
+where
+    F: Fn(State<AppState>, Params<Q>, extract::Upload) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    fn names() -> (Option<String>, Option<String>, String) {
+        (Some(ts_name::<Q>()), Some("Blob".to_string()), ts_name::<<Fut::Output as Answered>::Answer>())
+    }
+}
+
 /// One module's routes, and the table entries it contributes.
 pub struct Routed {
     pub router: Router<AppState>,
@@ -235,7 +242,9 @@ pub fn router(state: AppState) -> Router {
         .merge(streams)
         .merge(assets::routes())
         .fallback(not_found)
-        .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        // what the person sends is theirs, however large: never cut at a size; what keeps
+        // memory bounded is one import at a time (`http::model`, `import_slot`)
+        .layer(DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn_with_state(state.clone(), gate))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))

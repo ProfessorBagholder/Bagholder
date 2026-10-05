@@ -36,7 +36,12 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
         let terms = book.option_terms(i.id).map_err(err)?;
         instruments.insert(i.id, InstrumentInfo { instrument: i, names, terms });
     }
-    let mut records: BTreeMap<_, RecordInfo> = book.live_record_keys().map_err(err)?.into_iter().map(|(id, key)| (id, RecordInfo { source_key: key, problems: vec![] })).collect();
+    let mut records: BTreeMap<_, RecordInfo> = book
+        .live_record_facts()
+        .map_err(err)?
+        .into_iter()
+        .map(|(id, key, connection, at)| (id, RecordInfo { source_key: key, problems: vec![], connection, first_received_at: Some(at) }))
+        .collect();
     for (id, p) in book.problems().map_err(err)? {
         if let Some(r) = records.get_mut(&id) {
             r.problems.push(p);

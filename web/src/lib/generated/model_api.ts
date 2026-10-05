@@ -78,10 +78,9 @@ export type ChildShare = { instrument: string, costShare: string, };
 
 export type EntryAnswer = { ok: true, };
 
-export type ImportRequest = { name: string, text: string, 
+export type ImportQuery = { name: string, 
 /**
- * The account its rows go to; empty is the Manual account. A row naming
- * an account of its own goes there.
+ * Empty is the Manual account.
  */
 account: string, };
 
@@ -105,13 +104,21 @@ unchanged: number,
  */
 linked: number, 
 /**
- * Rows with more than one broker row they could be: not linked.
+ * Rows with more than one broker row they could be: not linked. The first
+ * `REPORT_NOTES` by line, and how many there are.
  */
-ambiguous: Array<RowNote>, 
+ambiguous: Array<RowNote>, ambiguousRows: number, 
 /**
- * Rows kept with a problem, counted in no figure until it is resolved.
+ * Rows kept with a problem, counted in no figure until it is resolved: the first
+ * `REPORT_NOTES` by line, and how many there are. Every one is in the book, and
+ * the header says them (`status::unread_rows`).
  */
-problems: Array<RowNote>, };
+problems: Array<RowNote>, problemRows: number, 
+/**
+ * The person stopped it after `rows` of the file's rows: those are kept, and
+ * importing the file again goes on from them (a row kept already is unchanged).
+ */
+stopped: boolean, };
 
 export type WatchRequest = { path: string, account: string, };
 

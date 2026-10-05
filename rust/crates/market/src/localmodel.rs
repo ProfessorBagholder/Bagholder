@@ -413,7 +413,7 @@ pub fn download(path: &PathBuf) -> Result<(), String> {
     // streamed to disk as it arrives, never held in memory, no larger than the pinned file
     let got = std::fs::File::create(&tmp)
         .map_err(|e| e.to_string())
-        .and_then(|mut f| bagholder_net::client::download(&url, &[("User-Agent", "Bagholder")], DOWNLOAD_TIMEOUT, &mut f, llamafile_bytes(), &allowed_host).map_err(|e| e.to_string()))
+        .and_then(|mut f| bagholder_net::client::download(&url, &[("User-Agent", "Bagholder")], DOWNLOAD_TIMEOUT, &mut f, llamafile_bytes(), &allowed_host, &mut |_| true).map_err(|e| e.to_string()))
         .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
     if let Err(e) = got {
         // a part never written is nothing to remove

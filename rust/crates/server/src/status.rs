@@ -46,6 +46,8 @@ pub struct Status {
     pub updating: String,
     pub update_error: String,
     pub notify: NotifyStatus,
+    /// The import running now and how far it has come, for the import window.
+    pub importing: Option<crate::csv_import::Importing>,
 }
 
 /// `GET /api/status`: `Status` plus the two version strings the legacy
@@ -123,6 +125,7 @@ pub fn status(app: &Arc<App>) -> Status {
         open_orders,
         updating: st.updating.clone(),
         update_error: st.update_error.clone(),
+        importing: st.importing.clone(),
         notify: notify_status,
     }
 }
@@ -190,35 +193,91 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
     out
 }
 
-/// Each account's rows the book could not place (a broker's kind of activity its
-/// mapping has no rule for, a file's row naming an account the book does not
-/// hold): kept as received, counted in no figure, and so said in the header until
-/// they are placed (`docs/decisions.md` 2026-09-22, a failure is always visible).
-/// One sentence an account: how many rows, and why, in the mapping's words, each
-/// reason with the first day it occurs.
+/// Every problem the book found with a source's row, said until it is resolved
+/// (`docs/decisions.md` 2026-10-04: every problem with a Wealthsimple row is said
+/// in the header, not only rows it has no rule for), in the existing sentence:
+/// how many, why in the mapping's words, and the first day each reason occurs.
+/// - a row the mapping could not place (`Kind::Unclassified`): counted in no figure;
+/// - a row placed with a problem: kept, the problem said;
+/// - a row that gave no transaction at all (one that could not be read): counted
+///   in no figure, said by its source and when it first arrived.
 pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
     use bagholder_core::transaction::Kind;
-    use std::collections::BTreeMap;
-    // account → why → (rows, first day)
-    let mut by: BTreeMap<bagholder_core::AccountId, BTreeMap<String, (usize, bagholder_core::jiff::civil::Date)>> = BTreeMap::new();
-    for t in inputs.ledger.transactions.iter().filter(|t| t.kind == Kind::Unclassified) {
-        let why = inputs.ledger.records.get(&t.id.record).and_then(|r| r.problems.first()).map(|p| p.detail.trim().trim_end_matches('.').to_string()).unwrap_or_else(|| "a row its mapping does not place".to_string());
-        let e = by.entry(t.account).or_default().entry(why).or_insert((0, t.trade_date));
+    use std::collections::{BTreeMap, BTreeSet};
+    type Whys = BTreeMap<String, (usize, bagholder_core::jiff::civil::Date)>;
+    let note = |m: &mut Whys, why: String, day: bagholder_core::jiff::civil::Date| {
+        let e = m.entry(why).or_insert((0, day));
         e.0 += 1;
+        e.1 = e.1.min(day);
+    };
+    let why_of = |r: Option<&bagholder_engine::input::RecordInfo>, default: &str| -> Vec<String> {
+        match r.map(|r| &r.problems) {
+            Some(ps) if !ps.is_empty() => ps.iter().map(|p| p.detail.trim().trim_end_matches('.').to_string()).collect(),
+            _ => vec![default.to_string()],
+        }
+    };
+    // account → why → (rows, first day), for rows not placed and rows placed with a problem
+    let mut unplaced: BTreeMap<bagholder_core::AccountId, Whys> = BTreeMap::new();
+    let mut flawed: BTreeMap<bagholder_core::AccountId, Whys> = BTreeMap::new();
+    // a record is said once, by its first transaction's account and its earliest day
+    let mut first: BTreeMap<bagholder_core::RecordId, (bagholder_core::AccountId, bagholder_core::jiff::civil::Date, bool)> = BTreeMap::new();
+    for t in &inputs.ledger.transactions {
+        let e = first.entry(t.id.record).or_insert((t.account, t.trade_date, false));
         e.1 = e.1.min(t.trade_date);
+        e.2 |= t.kind == Kind::Unclassified;
     }
-    let mut out: Vec<(String, String)> = by
-        .into_iter()
-        .map(|(account, whys)| {
-            let n: usize = whys.values().map(|(c, _)| c).sum();
-            let list = whys.iter().map(|(why, (c, first))| if *c == 1 { format!("{why}, on {first}") } else { format!("{why}, {c} rows, the first on {first}") }).collect::<Vec<_>>().join("; ");
-            let what = if n == 1 { "A row".to_string() } else { format!("{n} rows") };
-            let verb = if n == 1 { "could not be placed and counts" } else { "could not be placed and count" };
-            (crate::wire::build::account_name(inputs, account), format!("{what} in {} {verb} in no figure: {list}.", in_account(inputs, account)))
-        })
-        .collect();
+    for (record, (account, day, unclassified)) in &first {
+        let info = inputs.ledger.records.get(record);
+        if *unclassified {
+            for why in why_of(info, "a row its mapping does not place") {
+                note(unplaced.entry(*account).or_default(), why, *day);
+            }
+        } else if info.is_some_and(|r| !r.problems.is_empty()) {
+            for why in why_of(info, "") {
+                note(flawed.entry(*account).or_default(), why, *day);
+            }
+        }
+    }
+    // records that gave no transaction: said by their source, on the day they arrived
+    let placed: BTreeSet<_> = first.keys().collect();
+    let mut unread: BTreeMap<Option<bagholder_core::ConnectionId>, Whys> = BTreeMap::new();
+    for (record, info) in &inputs.ledger.records {
+        if placed.contains(record) || info.problems.is_empty() {
+            continue;
+        }
+        let day = info.first_received_at.map(|t| t.to_zoned(inputs.clock.home.clone()).date()).unwrap_or(inputs.clock.today);
+        for why in why_of(Some(info), "") {
+            note(unread.entry(info.connection).or_default(), why, day);
+        }
+    }
+    let list = |whys: &Whys| whys.iter().map(|(why, (c, first))| if *c == 1 { format!("{why}, on {first}") } else { format!("{why}, {c} rows, the first on {first}") }).collect::<Vec<_>>().join("; ");
+    let count = |whys: &Whys| -> usize { whys.values().map(|(c, _)| c).sum() };
+    let rows = |n: usize| if n == 1 { "A row".to_string() } else { format!("{n} rows") };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (account, whys) in &unplaced {
+        let n = count(whys);
+        let verb = if n == 1 { "could not be placed and counts" } else { "could not be placed and count" };
+        out.push((crate::wire::build::account_name(inputs, *account), format!("{} in {} {verb} in no figure: {}.", rows(n), in_account(inputs, *account), list(whys))));
+    }
+    for (account, whys) in &flawed {
+        let n = count(whys);
+        let verb = if n == 1 { "was kept with a problem" } else { "were kept with a problem" };
+        out.push((crate::wire::build::account_name(inputs, *account), format!("{} in {} {verb}: {}.", rows(n), in_account(inputs, *account), list(whys))));
+    }
+    for (connection, whys) in &unread {
+        out.push((String::new(), format!("{} from {} gave nothing the book can count: {}.", rows(count(whys)), from(inputs, *connection), list(whys))));
+    }
     out.sort();
     out.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Where a record came from, as the person knows it: its connection's broker, by
+/// the label the book keeps for it; a file imported by hand has none.
+fn from(inputs: &bagholder_engine::input::Inputs, connection: Option<bagholder_core::ConnectionId>) -> String {
+    match connection {
+        None => "an imported file".into(),
+        Some(c) => inputs.ledger.accounts.values().find(|a| a.account.connection == c).map(|a| a.broker_label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "a connected broker".into()),
+    }
 }
 
 /// Where the book keeps what the last pull's statements said, for a restart.

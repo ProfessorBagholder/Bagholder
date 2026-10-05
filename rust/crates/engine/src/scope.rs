@@ -986,17 +986,8 @@ fn in_currency_live(inputs: &Inputs, amount: Money, currency: Currency) -> Fig<M
 /// by a range over its days inside it.
 fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>, today: Date) -> EquityBlock {
     let accounts: Vec<&AccountEquity> = equity.values().filter(|e| f.accounts.is_empty() || f.accounts.contains(&e.account)).collect();
-    // each day's accounts' values and flows, summed in the statistics' own arithmetic
-    let mut values: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = BTreeMap::new();
-    for e in &accounts {
-        for p in &e.points {
-            values.entry(p.day).or_default().push((p.value, p.flow));
-        }
-    }
-    let begun = |d: Date| accounts.iter().filter(|e| e.points.first().is_some_and(|p| p.day <= d)).count();
-    let complete: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = values.into_iter().filter(|(d, v)| v.len() == begun(*d)).collect();
-    let per_account: Vec<&[(Date, Ratio, Dec)]> = accounts.iter().map(|e| e.returns.as_slice()).collect();
-    let whole = returns::combine(&complete, &per_account);
+    let points: Vec<&[crate::equity::DayValue]> = accounts.iter().map(|e| e.points.as_slice()).collect();
+    let whole = returns::combine(&points);
     let floor = returns::floor(&whole);
     let benchmark = benchmarks.get(&f.benchmark);
     let years = returns::yearly_returns(&whole, today, benchmark, floor, |y| year_span(f, today, y));

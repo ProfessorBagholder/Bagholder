@@ -19,7 +19,6 @@ use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, APP_VERSION,
 pub const RESTART_CODE: i32 = 3;
 /// A restarted server alive this long is a good update.
 pub const UPDATE_HEALTHY_SEC: u64 = 20;
-pub const UPDATE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub const UPDATE_CHECK_HOURS: f64 = 1.0;
 pub const UPDATES_OFF_MESSAGE: &str = "This copy is updated with docker compose pull; a new release is a new image.";
 
@@ -108,6 +107,8 @@ pub fn parse_version(tag: &str) -> Option<(u64, u64, u64)> {
 pub(crate) struct GithubAsset {
     pub(crate) name: String,
     pub(crate) browser_download_url: String,
+    /// Its size in bytes, as GitHub states it: what its download is held to.
+    pub(crate) size: u64,
 }
 
 /// The GitHub release reply, the fields Bagholder reads; the rest of the
@@ -127,6 +128,11 @@ pub struct GithubRelease {
 pub struct ReleaseAssets {
     pub archive: String,
     pub sha: String,
+    /// Each one's size as GitHub states it; none in a record an earlier build kept.
+    #[serde(default)]
+    pub archive_bytes: Option<u64>,
+    #[serde(default)]
+    pub sha_bytes: Option<u64>,
 }
 
 /// The last check against GitHub, stored as `update_check` and echoed to the page.
@@ -231,14 +237,17 @@ pub(crate) fn release_assets(rel: &GithubRelease) -> Option<ReleaseAssets> {
     let stem = archive_name(&rel.tag_name);
     let mut archive = String::new();
     let mut sha = String::new();
+    let (mut archive_bytes, mut sha_bytes) = (None, None);
     for a in &rel.assets {
         if a.name == stem {
             archive = a.browser_download_url.clone();
+            archive_bytes = Some(a.size);
         } else if a.name == format!("{}.sha256", stem) {
             sha = a.browser_download_url.clone();
+            sha_bytes = Some(a.size);
         }
     }
-    if !archive.is_empty() && !sha.is_empty() { Some(ReleaseAssets { archive, sha }) } else { None }
+    if !archive.is_empty() && !sha.is_empty() { Some(ReleaseAssets { archive, sha, archive_bytes, sha_bytes }) } else { None }
 }
 
 // --------------------------------------------------------------------------
@@ -339,11 +348,21 @@ fn github_host(host: &str) -> bool {
     ["github.com", "githubusercontent.com"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
-/// A release asset streamed to disk as it arrives, no larger than `max_bytes`.
-fn download(url: &str, dest: &Path, max_bytes: usize) -> Result<(), String> {
+/// A release asset streamed to disk as it arrives, no larger than `max_bytes`, the
+/// header told how much of it has come (`Downloading v2.2.6… 34%`).
+fn download(app: &Arc<App>, tag: &str, url: &str, dest: &Path, max_bytes: u64) -> Result<(), String> {
     let ua = format!("Bagholder/{}", APP_VERSION);
     let mut f = std::fs::File::create(dest).map_err(|e| format!("{} could not be written: {e}", dest.display()))?;
-    bagholder_net::client::download(url, &[("User-Agent", &ua), ("Accept", "application/octet-stream")], Duration::from_secs(120), &mut f, max_bytes as u64, &github_host).map_err(|e| e.to_string())?;
+    let mut said: Option<u64> = None;
+    let mut progress = |written: u64| {
+        let pct = if max_bytes > 0 { written * 100 / max_bytes } else { 0 };
+        if said != Some(pct) {
+            said = Some(pct);
+            set_updating(app, &format!("Downloading {tag}… {pct}%"));
+        }
+        true
+    };
+    bagholder_net::client::download(url, &[("User-Agent", &ua), ("Accept", "application/octet-stream")], Duration::from_secs(120), &mut f, max_bytes, &github_host, &mut progress).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -678,8 +697,12 @@ fn install_release(app: &Arc<App>, tag: &str, rec: &UpdateRecord) -> Result<(), 
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let archive = home.join(format!("bagholder-{}.{}", tag, archive_ext()));
     let sha_file = home.join("release.sha256");
-    download(&assets.archive, &archive, UPDATE_MAX_BYTES)?;
-    download(&assets.sha, &sha_file, 4096)?;
+    // each held to the size GitHub states for it: never a size of the app's choosing
+    let stated = |b: Option<u64>| b.ok_or("The release does not state its download's size: check for the update again.".to_string());
+    download(app, tag, &assets.archive, &archive, stated(assets.archive_bytes)?)?;
+    let mut f = std::fs::File::create(&sha_file).map_err(|e| format!("{} could not be written: {e}", sha_file.display()))?;
+    let ua = format!("Bagholder/{}", APP_VERSION);
+    bagholder_net::client::download(&assets.sha, &[("User-Agent", &ua)], Duration::from_secs(120), &mut f, stated(assets.sha_bytes)?, &github_host, &mut |_| true).map_err(|e| e.to_string())?;
     let want = std::fs::read_to_string(&sha_file).map_err(|e| e.to_string())?.split_whitespace().next().unwrap_or("").trim().to_lowercase();
     let got = sha256_hex(&std::fs::read(&archive).map_err(|e| e.to_string())?);
     if want != got {

@@ -64,7 +64,11 @@ export function query(params: Record<string, Param>): string {
 export function request<T = Record<string, unknown>>(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal): Promise<Answer<T>> {
   const headers: Record<string, string> = { 'X-Bagholder': '1' }
   const opts: RequestInit = { method, headers, signal }
-  if (body !== undefined) {
+  if (body instanceof Blob) {
+    // a file goes as it is, read by the server as it arrives, never wrapped in JSON
+    headers['Content-Type'] = body.type || 'application/octet-stream'
+    opts.body = body
+  } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
   }
