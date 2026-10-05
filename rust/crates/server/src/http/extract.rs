@@ -27,7 +27,21 @@ impl<S: Send + Sync, T: DeserializeOwned + Default> FromRequest<S> for Body<T> {
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
-        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| {
+            // a body wrapped by a route's own middleware hides the limit's error one
+            // level deeper than axum looks for it: the whole chain of causes is asked
+            let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+            let mut over = false;
+            while let Some(c) = cause {
+                over |= c.is::<http_body_util::LengthLimitError>();
+                cause = c.source();
+            }
+            if over || e.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+                ApiError::TooLarge("The request is larger than this action takes.".into())
+            } else {
+                ApiError::BadRequest(e.body_text())
+            }
+        })?;
         if bytes.iter().all(|b| b.is_ascii_whitespace()) {
             return Ok(Body(T::default()));
         }

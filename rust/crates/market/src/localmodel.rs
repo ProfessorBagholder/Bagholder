@@ -110,7 +110,23 @@ fn chat_timeout() -> Duration {
     Duration::from_secs_f64(env("BAGHOLDER_LLM_CHAT_TIMEOUT", "40").parse().unwrap_or(40.0))
 }
 
-const ALLOWED_HOSTS: [&str; 3] = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co"];
+/// The domains the model is fetched from: Hugging Face's own, and their subdomains,
+/// on every hop of the download's redirects (the pinned file answers with a
+/// redirect to `us.aws.cdn.hf.co`, observed 2026-10-04). The pinned SHA-256 is what
+/// makes the file trusted; this keeps the request from going anywhere else.
+const ALLOWED_DOMAINS: [&str; 2] = ["huggingface.co", "hf.co"];
+
+/// Whether `host` is one of `ALLOWED_DOMAINS` or under one.
+pub fn allowed_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    ALLOWED_DOMAINS.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+/// The pinned file's size, as its host states it (`x-linked-size`, 2026-10-04): the
+/// most the download may write.
+pub fn llamafile_bytes() -> u64 {
+    env("BAGHOLDER_LLAMAFILE_BYTES", "1951420702").trim().parse().unwrap_or(0)
+}
 
 /// Phases that finish in seconds, unlike a download.
 pub const COMING_UP: [&str; 2] = ["detecting", "starting"];
@@ -390,13 +406,14 @@ pub fn verified(path: &PathBuf) -> bool {
 pub fn download(path: &PathBuf) -> Result<(), String> {
     let url = llamafile_url();
     let host = url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("").split(':').next().unwrap_or("").to_string();
-    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+    if !allowed_host(&host) {
         return Err(format!("{host} is not a host the model is fetched from"));
     }
     let tmp = path.with_extension("part");
-    let got = bagholder_net::client::request("GET", &url, &[("User-Agent", "Bagholder")], None, DOWNLOAD_TIMEOUT)
+    // streamed to disk as it arrives, never held in memory, no larger than the pinned file
+    let got = std::fs::File::create(&tmp)
         .map_err(|e| e.to_string())
-        .and_then(|r| std::fs::write(&tmp, &r.body).map_err(|e| e.to_string()))
+        .and_then(|mut f| bagholder_net::client::download(&url, &[("User-Agent", "Bagholder")], DOWNLOAD_TIMEOUT, &mut f, llamafile_bytes(), &allowed_host).map_err(|e| e.to_string()))
         .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
     if let Err(e) = got {
         // a part never written is nothing to remove
@@ -584,5 +601,20 @@ mod rest_tests {
         assert_eq!(probes.get(), 1, "with nothing under way, one check probes once");
         hooks::clear();
         reset_state();
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    #[test]
+    fn the_model_is_fetched_only_from_hugging_faces_own_domains_on_every_hop() {
+        // the pinned file's own host, and the CDN it redirects to (observed 2026-10-04)
+        for ok in ["huggingface.co", "us.aws.cdn.hf.co", "cas-bridge.xethub.hf.co", "cdn-lfs.huggingface.co"] {
+            assert!(super::allowed_host(ok), "{ok}");
+        }
+        for no in ["evil.co", "huggingface.co.evil.com", "nothf.co", "hf.com"] {
+            assert!(!super::allowed_host(no), "{no}");
+        }
+        assert_eq!(super::llamafile_bytes(), 1_951_420_702);
     }
 }

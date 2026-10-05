@@ -16,6 +16,8 @@ pub enum ApiError {
     NotFound(String),
     /// Not now: something else is under way. 409.
     Conflict(String),
+    /// The body is larger than the route takes. 413.
+    TooLarge(String),
     /// The store failed. 500; the cause is logged, not sent.
     Store(rusqlite::Error),
     /// An outside source failed. 502.
@@ -38,6 +40,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
+            ApiError::TooLarge(m) => (StatusCode::PAYLOAD_TOO_LARGE, m),
             ApiError::Store(e) => {
                 log(&format!("bagholder: {}", e));
                 (StatusCode::INTERNAL_SERVER_ERROR, "store failed".to_string())

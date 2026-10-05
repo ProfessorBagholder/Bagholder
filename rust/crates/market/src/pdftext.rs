@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn disabled() -> bool {
-    std::env::var("BAGHOLDER_NO_PDF").map(|v| !v.is_empty()).unwrap_or(false)
+    bagholder_net::switch::switch_on("BAGHOLDER_NO_PDF")
 }
 
 /// An engine can read a PDF now. The built-in one always

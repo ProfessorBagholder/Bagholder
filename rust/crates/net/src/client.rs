@@ -376,7 +376,42 @@ impl Head {
     }
 }
 
-fn read_exact_n(conn: &mut Conn, n: usize, out: &mut Vec<u8>) -> Result<(), Error> {
+/// The most an answer read into memory may be, before or after its content coding
+/// is undone: a reply larger than this is refused while it is read, never after
+/// (`docs/plans/stage-money.md`, part D). A file larger than this comes through
+/// `download`, to disk.
+pub const ANSWER_CEILING: usize = 64 * 1024 * 1024;
+
+/// Where a body goes as it is read, counted: past its ceiling the read stops,
+/// at the ceiling plus one chunk at most.
+struct Capped<'a> {
+    out: &'a mut dyn Write,
+    left: u64,
+    ceiling: u64,
+    written: u64,
+}
+
+impl<'a> Capped<'a> {
+    fn new(out: &'a mut dyn Write, ceiling: u64) -> Capped<'a> {
+        Capped { out, left: ceiling, ceiling, written: 0 }
+    }
+
+    fn put(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        if bytes.len() as u64 > self.left {
+            return Err(Error::Transport(format!("an answer larger than the {} bytes it may be", self.ceiling)));
+        }
+        self.out.write_all(bytes).map_err(|e| Error::Transport(format!("the answer could not be kept: {e}")))?;
+        self.left -= bytes.len() as u64;
+        self.written += bytes.len() as u64;
+        Ok(())
+    }
+}
+
+fn read_exact_n(conn: &mut Conn, n: usize, out: &mut Capped<'_>) -> Result<(), Error> {
+    if n as u64 > out.left {
+        // announced larger than it may be: nothing of it is read
+        return Err(Error::Transport(format!("an answer of {n} bytes, larger than the {} it may be", out.ceiling)));
+    }
     let mut left = n;
     let mut chunk = [0u8; 16 * 1024];
     while left > 0 {
@@ -387,21 +422,21 @@ fn read_exact_n(conn: &mut Conn, n: usize, out: &mut Vec<u8>) -> Result<(), Erro
             // off, never a whole one
             return Err(Error::Transport(format!("connection closed {} bytes before the end of the body", left)));
         }
-        out.extend_from_slice(&chunk[..got]);
+        out.put(&chunk[..got])?;
         left -= got;
     }
     Ok(())
 }
 
-fn read_to_close(conn: &mut Conn, out: &mut Vec<u8>) {
+fn read_to_close(conn: &mut Conn, out: &mut Capped<'_>) -> Result<(), Error> {
     let mut chunk = [0u8; 16 * 1024];
     loop {
         match conn.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Ok(0) => return Ok(()),
+            Ok(n) => out.put(&chunk[..n])?,
             // a host that closes without a clean TLS shutdown has still sent
             // its body, and that body is kept
-            Err(_) => break,
+            Err(_) => return Ok(()),
         }
     }
 }
@@ -430,7 +465,7 @@ fn read_line(conn: &mut Conn) -> Result<Vec<u8>, Error> {
 /// size zero, then any trailer fields and the empty line that closes the body.
 /// That line has to be read too, or it stays on a kept connection and the next
 /// reply read there starts with it: an empty status line.
-fn read_chunked(conn: &mut Conn, out: &mut Vec<u8>) -> Result<(), Error> {
+fn read_chunked(conn: &mut Conn, out: &mut Capped<'_>) -> Result<(), Error> {
     loop {
         let line = read_line(conn)?;
         let text = String::from_utf8_lossy(&line);
@@ -447,6 +482,21 @@ fn read_chunked(conn: &mut Conn, out: &mut Vec<u8>) -> Result<(), Error> {
     }
 }
 
+/// A body read to its end, however the reply frames it, into `out`; whether the
+/// connection can be kept.
+fn read_body(conn: &mut Conn, head: &Head, out: &mut Capped<'_>) -> Result<bool, Error> {
+    let chunked = head.get("transfer-encoding").map(|v| v.to_lowercase().contains("chunked")).unwrap_or(false);
+    let length: Option<usize> = head.get("content-length").and_then(|v| v.trim().parse().ok());
+    if chunked {
+        read_chunked(conn, out)?;
+    } else if let Some(n) = length {
+        read_exact_n(conn, n, out)?;
+    } else {
+        read_to_close(conn, out)?;
+    }
+    Ok(head.get("connection").map(|v| !v.to_lowercase().contains("close")).unwrap_or(true) && (chunked || length.is_some()))
+}
+
 /// The body as the server meant it, undoing the content coding its
 /// `Content-Encoding` header names (RFC 9110 §8.4). The body is never judged by
 /// its own bytes: a file that is itself gzip (a `.tar.gz` release archive) is
@@ -459,20 +509,28 @@ fn decoded(raw: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, Error>
         "" | "identity" => Ok(raw),
         "gzip" | "x-gzip" => {
             let mut out = Vec::new();
-            let r = flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut out);
-            undo(r, out, "gzip")
+            let r = flate2::read::GzDecoder::new(&raw[..]).take(ANSWER_CEILING as u64 + 1).read_to_end(&mut out);
+            inflated(undo(r, out, "gzip"))
         }
         // HTTP's deflate is zlib-wrapped (RFC 9110 §8.4.1.2); some servers send the bare stream
         "deflate" => {
             let mut out = Vec::new();
-            if flate2::read::ZlibDecoder::new(&raw[..]).read_to_end(&mut out).is_ok() {
-                return Ok(out);
+            if flate2::read::ZlibDecoder::new(&raw[..]).take(ANSWER_CEILING as u64 + 1).read_to_end(&mut out).is_ok() {
+                return inflated(Ok(out));
             }
             let mut out = Vec::new();
-            let r = flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut out);
-            undo(r, out, "deflate")
+            let r = flate2::read::DeflateDecoder::new(&raw[..]).take(ANSWER_CEILING as u64 + 1).read_to_end(&mut out);
+            inflated(undo(r, out, "deflate"))
         }
         other => Err(Error::Transport(format!("a body in a coding not asked for: {other}"))),
+    }
+}
+
+/// An inflated body past the ceiling is refused, however small it came.
+fn inflated(r: Result<Vec<u8>, Error>) -> Result<Vec<u8>, Error> {
+    match r {
+        Ok(out) if out.len() > ANSWER_CEILING => Err(Error::Transport(format!("an answer that inflates past the {ANSWER_CEILING} bytes it may be"))),
+        other => other,
     }
 }
 
@@ -498,7 +556,7 @@ static OUTBOUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 /// client whose requests share one path names what each asks for beside it.
 pub fn logging_requests() -> bool {
     static LOGGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *LOGGED.get_or_init(|| std::env::var_os("BAGHOLDER_LOG_REQUESTS").is_some_and(|v| !v.to_string_lossy().trim().is_empty()))
+    *LOGGED.get_or_init(|| crate::switch::switch_on("BAGHOLDER_LOG_REQUESTS"))
 }
 
 /// How many requests this process has tried to send off the machine.
@@ -519,7 +577,7 @@ pub fn is_offline_refusal(detail: &str) -> bool {
 /// Whether the process was told to stay off the network (`BAGHOLDER_OFFLINE`).
 pub fn offline() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| std::env::var_os("BAGHOLDER_OFFLINE").is_some_and(|v| !v.to_string_lossy().trim().is_empty()))
+    *OFF.get_or_init(|| crate::switch::switch_on("BAGHOLDER_OFFLINE"))
 }
 
 /// One request, following redirects, with the connection given back when the
@@ -560,6 +618,38 @@ fn send(
     lenient: bool,
     once: bool,
 ) -> Result<Response, Error> {
+    send_into(method, url, headers, body, timeout, lenient, once, None).map(|(r, _)| r)
+}
+
+/// Where a download's body goes: the file, how large it may be, and the hosts it
+/// may come from, asked of every hop of a redirect.
+struct ToFile<'a> {
+    file: &'a mut std::fs::File,
+    ceiling: u64,
+    allow: &'a dyn Fn(&str) -> bool,
+}
+
+/// A file fetched to disk as it arrives, never held in memory: at most `ceiling`
+/// bytes, from hosts `allow` takes on every hop of a redirect, with no content
+/// coding to undo. The bytes written, or why it stopped (a part written is the
+/// caller's to remove).
+pub fn download(url: &str, headers: &[(&str, &str)], timeout: Duration, file: &mut std::fs::File, ceiling: u64, allow: &dyn Fn(&str) -> bool) -> Result<u64, Error> {
+    let mut to = ToFile { file, ceiling, allow };
+    let (_, written) = send_into("GET", url, headers, None, timeout, false, false, Some(&mut to))?;
+    Ok(written.unwrap_or(0))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_into(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    timeout: Duration,
+    lenient: bool,
+    once: bool,
+    mut to_file: Option<&mut ToFile<'_>>,
+) -> Result<(Response, Option<u64>), Error> {
     let mut url = url.to_string();
     for _ in 0..=REDIRECT_MAX {
         let u = parse_url(&url)?;
@@ -567,6 +657,11 @@ fn send(
         // BAGHOLDER_OFFLINE=1: nothing leaves this machine. The browser tests run the
         // real server on a made-up book this way, so they read the same on any
         // machine and ask nothing of anyone.
+        if let Some(t) = to_file.as_ref() {
+            if !(t.allow)(&u.host) {
+                return Err(Error::Transport(format!("{} is not a host this file is fetched from", u.host)));
+            }
+        }
         let loopback = matches!(u.host.as_str(), "127.0.0.1" | "localhost" | "::1");
         if !loopback {
             OUTBOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -641,22 +736,23 @@ fn send(
             }
         }
 
+        let redirect = (301..=308).contains(&head.status) && !once && head.get("location").is_some();
         let mut raw: Vec<u8> = Vec::new();
-        let chunked = head.get("transfer-encoding").map(|v| v.to_lowercase().contains("chunked")).unwrap_or(false);
-        let length: Option<usize> = head.get("content-length").and_then(|v| v.trim().parse().ok());
-        if chunked {
-            read_chunked(&mut c, &mut raw)?;
-        } else if let Some(n) = length {
-            read_exact_n(&mut c, n, &mut raw)?;
-        } else {
-            read_to_close(&mut c, &mut raw);
-        }
-
-        let keep = head
-            .get("connection")
-            .map(|v| !v.to_lowercase().contains("close"))
-            .unwrap_or(true)
-            && (chunked || length.is_some());
+        let mut written: Option<u64> = None;
+        let keep = match to_file.as_mut() {
+            // a download's own body goes to its file, as it is: a coding is not undone there
+            Some(t) if !redirect && head.status < 400 => {
+                let coding = head.get("content-encoding").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+                if !coding.is_empty() && coding != "identity" {
+                    return Err(Error::Transport(format!("a file sent in a coding not asked for: {coding}")));
+                }
+                let mut sink = Capped::new(&mut *t.file, t.ceiling);
+                let keep = read_body(&mut c, &head, &mut sink)?;
+                written = Some(sink.written);
+                keep
+            }
+            _ => read_body(&mut c, &head, &mut Capped::new(&mut raw, ANSWER_CEILING as u64))?,
+        };
         if keep {
             let mut p = pool().lock().unwrap();
             let v = p.entry(key).or_default();
@@ -678,7 +774,9 @@ fn send(
         if head.status >= 400 && !lenient {
             return Err(Error::Status(head.status));
         }
-        return Ok(Response { status: head.status, body: decoded(raw, &head.headers)?, headers: head.headers.clone() });
+        // a download's body is in its file: the answer carries the bytes written
+        let body = if written.is_some() { Vec::new() } else { decoded(raw, &head.headers)? };
+        return Ok((Response { status: head.status, body, headers: head.headers.clone() }, written));
     }
     Err(Error::Transport("too many redirects".into()))
 }
@@ -714,5 +812,89 @@ mod coding_tests {
         // what cannot be undone is the error, never the raw bytes
         assert!(decoded(b"not gzip".to_vec(), &h("gzip")).is_err());
         assert!(decoded(b"x".to_vec(), &h("br")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ceiling_tests {
+    use super::{decoded, download, ANSWER_CEILING};
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    /// A host on 127.0.0.1 that answers every request with `head` then `body_bytes`
+    /// bytes of `x` (chunked when `head` says so), counting what it was able to send.
+    fn host(head: &'static str, body_bytes: usize, chunked: bool) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let s2 = sent.clone();
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(mut c) = c else { return };
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                let _ = c.write_all(head.as_bytes());
+                let chunk = vec![b'x'; 16 * 1024];
+                let mut left = body_bytes;
+                while left > 0 {
+                    let n = left.min(chunk.len());
+                    let ok = if chunked { c.write_all(format!("{n:x}\r\n").as_bytes()).and_then(|_| c.write_all(&chunk[..n])).and_then(|_| c.write_all(b"\r\n")) } else { c.write_all(&chunk[..n]) };
+                    if ok.is_err() {
+                        break;
+                    }
+                    s2.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+                    left -= n;
+                }
+                if chunked {
+                    let _ = c.write_all(b"0\r\n\r\n");
+                }
+            }
+        });
+        (port, sent)
+    }
+
+    #[test]
+    fn a_download_past_its_ceiling_stops_while_it_is_read_and_never_after() {
+        let dir = std::env::temp_dir().join(format!("bh-net-ceiling-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.part");
+        // a reply that does not say its length, in chunks, far past the ceiling
+        let (port, _) = host("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n", 4 * 1024 * 1024, true);
+        let mut f = std::fs::File::create(&path).unwrap();
+        let e = download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 100 * 1024, &|_| true).unwrap_err();
+        assert!(e.to_string().contains("larger than"), "{e}");
+        assert!(std::fs::metadata(&path).unwrap().len() <= 100 * 1024, "nothing past the ceiling is written");
+        // one that announces a length past the ceiling: refused before any of it is read
+        let (port, _) = host("HTTP/1.1 200 OK\r\nContent-Length: 4194304\r\nConnection: close\r\n\r\n", 4 * 1024 * 1024, false);
+        let mut f = std::fs::File::create(&path).unwrap();
+        assert!(download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 100 * 1024, &|_| true).is_err());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        // within it: written whole, counted
+        let (port, _) = host("HTTP/1.1 200 OK\r\nContent-Length: 50000\r\nConnection: close\r\n\r\n", 50_000, false);
+        let mut f = std::fs::File::create(&path).unwrap();
+        assert_eq!(download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 100 * 1024, &|_| true).unwrap(), 50_000);
+    }
+
+    #[test]
+    fn a_download_redirected_to_a_host_it_does_not_take_goes_no_further() {
+        let (port, _) = host("HTTP/1.1 302 Found\r\nLocation: http://elsewhere.example/f\r\nContent-Length: 0\r\n\r\n", 0, false);
+        let dir = std::env::temp_dir().join(format!("bh-net-redirect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = std::fs::File::create(dir.join("f")).unwrap();
+        let e = download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 1024, &|h| h == "127.0.0.1").unwrap_err();
+        assert!(e.to_string().contains("elsewhere.example is not a host"), "{e}");
+    }
+
+    #[test]
+    fn a_body_that_inflates_past_the_ceiling_is_refused_however_small_it_came() {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let zeros = vec![0u8; 1024 * 1024];
+        for _ in 0..(ANSWER_CEILING / zeros.len() + 1) {
+            e.write_all(&zeros).unwrap();
+        }
+        let small = e.finish().unwrap();
+        assert!(small.len() < 1024 * 1024, "{} bytes on the wire", small.len());
+        let r = decoded(small, &[("content-encoding".into(), "gzip".into())]);
+        assert!(r.unwrap_err().to_string().contains("inflates past"));
     }
 }

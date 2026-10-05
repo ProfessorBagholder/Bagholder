@@ -22,15 +22,18 @@ pub fn routes() -> Routed {
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
         post "/api/entries" => entries;
-        post "/api/import" => import;
         post "/api/watch/clear" => watch_clear;
     };
     // `/api/watch`'s GET and POST share one path, which `api_routes!` cannot
     // declare twice; their entries are read from the handlers all the same
+    // the import alone takes a file's worth of body, and one at a time: a second is
+    // refused before its body is read (brief 19, change 6)
     routed.router = routed
         .router
+        .merge(axum::Router::new().route("/api/import", axum::routing::post(import)).layer(axum::middleware::from_fn(import_slot)).layer(axum::extract::DefaultBodyLimit::max(super::IMPORT_BODY_LIMIT)))
         .route("/api/watch", get(watch_status).post(watch_set))
         .route("/api/watch/scan", axum::routing::post(watch_scan));
+    routed.table.push(super::RouteEntry::of(import, "post", "/api/import"));
     routed.table.push(super::RouteEntry::of(watch_status, "get", "/api/watch"));
     routed.table.push(super::RouteEntry::of(watch_set, "post", "/api/watch"));
     routed.table.push(super::RouteEntry::of(watch_scan, "post", "/api/watch/scan"));
@@ -251,6 +254,30 @@ fn account_of(text: &str) -> Result<Option<bagholder_core::AccountId>, ApiError>
         "" => Ok(None),
         a => bagholder_core::AccountId::parse(a).map(Some).map_err(|_| ApiError::BadRequest(format!("{a:?} is not an account"))),
     }
+}
+
+/// Whether an import request is being answered now.
+pub(crate) static IMPORTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What a second import is told while one runs.
+pub const IMPORT_BUSY: &str = "An import is already running: try again when it has finished.";
+
+/// The import's slot, taken before its body is read and given back when its answer
+/// has gone: a second import while one runs is refused at once, its body never read.
+async fn import_slot(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use std::sync::atomic::Ordering;
+    if IMPORTING.swap(true, Ordering::SeqCst) {
+        return ApiError::Conflict(IMPORT_BUSY.into()).into_response();
+    }
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            IMPORTING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _held = Release;
+    next.run(req).await
 }
 
 /// `POST /api/import`: a file's rows kept, and what they did.

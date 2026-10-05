@@ -47,6 +47,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # routing, query parsing and chunked writes.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+# the length-limit error axum's body limit raises, to tell a body over its route's
+# limit (413) from one that failed to arrive; already in the tree under axum
+http-body-util = "0.1.5"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic", "limit", "set-header", "timeout"] }
 # streams for response bodies (the event stream, the sign-in frames)

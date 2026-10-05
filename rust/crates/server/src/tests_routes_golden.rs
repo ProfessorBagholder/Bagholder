@@ -279,3 +279,39 @@ fn test_orders_routes_golden() {
     let asked: Vec<String> = book.order_log("golden-order-1").unwrap().into_iter().map(|l| format!("{} {}", l.asker.to_text(), l.event.kind())).collect();
     assert_eq!(asked, ["person written", "person accepted", "person cancel-asked"]);
 }
+
+/// Body limits per route, and one import at a time with its slot taken before its
+/// body is read (`docs/plans/stage-money.md`, part D; brief 19, change 6).
+#[test]
+fn test_a_second_import_is_refused_before_its_body_is_read_and_each_route_has_its_own_body_limit() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _g = crate::tests_common::guard();
+    let app = crate::tests_common::app();
+    let rt = runtime();
+    // an import while one runs: refused, and its body never read
+    let read = Arc::new(AtomicBool::new(false));
+    let r2 = read.clone();
+    let body = Body::from_stream(futures_util::stream::once(async move {
+        r2.store(true, Ordering::SeqCst);
+        Ok::<_, std::io::Error>(axum::body::Bytes::from_static(br#"{"name":"a.csv","text":"x","account":""}"#))
+    }));
+    crate::http::model::IMPORTING.store(true, Ordering::SeqCst);
+    let mut req = from_the_page(&app, Method::POST, "/api/import", None);
+    *req.body_mut() = body;
+    req.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    let got = rt.block_on(json_of(app.clone(), req));
+    crate::http::model::IMPORTING.store(false, Ordering::SeqCst);
+    assert_eq!(got, json!({"status": 409, "body": {"ok": false, "error": crate::http::model::IMPORT_BUSY}}));
+    assert!(!read.load(Ordering::SeqCst), "the refused import's body was never read");
+    // a body over a JSON route's limit is refused; the import takes a file's worth
+    let big = "x".repeat(2 * 1024 * 1024);
+    let got = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/journal", Some(json!({"key": "k", "note": big.clone()})))));
+    assert_eq!(got["status"], json!(413), "{got}");
+    let got = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import", Some(json!({"name": "a.csv", "text": big, "account": ""})))));
+    assert!(!got.to_string().contains("length limit"), "an import of two megabytes is read: {got}");
+    // past the import's own limit: told in words, as too large
+    let huge = "x".repeat(crate::http::IMPORT_BODY_LIMIT + 1);
+    let got = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import", Some(json!({"name": "a.csv", "text": huge, "account": ""})))));
+    assert_eq!(got, json!({"status": 413, "body": {"ok": false, "error": "The request is larger than this action takes."}}));
+    assert!(!crate::http::model::IMPORTING.load(Ordering::SeqCst), "the slot is given back once the answer has gone");
+}
