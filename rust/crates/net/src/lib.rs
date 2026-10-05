@@ -7,6 +7,7 @@ pub mod client;
 pub mod clock;
 pub mod limiter;
 pub mod machine;
+pub mod switch;
 mod net;
 
 pub use clock::{Clock, ManualClock};

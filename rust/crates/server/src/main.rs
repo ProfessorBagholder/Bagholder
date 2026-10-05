@@ -75,12 +75,18 @@ fn checkout_of(dir: &Path) -> Option<PathBuf> {
 // start
 // --------------------------------------------------------------------------
 
+/// The port asked for, alone, or the app's own range when none was: an asked-for port
+/// that does not read is refused, never swapped for another.
 fn port_choices() -> Result<Vec<u16>, String> {
     let env = app::env_text("BAGHOLDER_PORT")?.unwrap_or_default();
-    Ok(match env.trim().parse::<u16>() {
-        Ok(p) if p >= 1024 && env.trim().bytes().all(|c| c.is_ascii_digit()) => vec![p],
-        _ => PORTS.to_vec(),
-    })
+    let asked = env.trim();
+    if asked.is_empty() {
+        return Ok(PORTS.to_vec());
+    }
+    match asked.parse::<u16>() {
+        Ok(p) if p >= 1024 && asked.bytes().all(|c| c.is_ascii_digit()) => Ok(vec![p]),
+        _ => Err(format!("BAGHOLDER_PORT is set to {asked:?}: it takes a port from 1024 to 65535")),
+    }
 }
 
 fn open_browser(url: &str) {
@@ -108,6 +114,8 @@ fn serve() -> i32 {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("the data folder {} could not be kept private: {e}", home.display()))?;
         }
+        // one app per data folder: a second start on it is refused, naming the first
+        app::hold_home(&home)?;
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
         Ok((home, root_dir()?, bind_host, port_choices()?))
@@ -198,6 +206,21 @@ fn serve() -> i32 {
         }
     };
     *a.port.lock().unwrap() = port;
+    app::note_home_port(port);
+    // started and answering: the copies a migration kept of the stores are only for
+    // putting a failed update back, which the updater does inside its window, so with
+    // no update waiting on this start they go (brief 19, change 11)
+    if !a.home.join("update-pending").exists() {
+        match std::fs::remove_dir_all(a.home.join("snapshots")) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                let said = format!("The copies kept of the data before an update could not be removed: {e}");
+                log(&format!("bagholder: {said}"));
+                a.state.lock().unwrap().error = said;
+            }
+        }
+    }
 
     // from here on a change reaches an open page because it happened: every commit
     // on any connection (wired to the bus when the app was built), every write to
@@ -225,6 +248,7 @@ fn serve() -> i32 {
 
     let url = format!("http://127.0.0.1:{}", port);
     println!("Bagholder  {}", url);
+    println!("orders: {}", if orders::orders_live(&a) { "live" } else { "dry" });
     // a second instance run for verification must not open anyone's browser
     if !app::env_on("BAGHOLDER_NO_BROWSER") {
         open_browser(&url);
@@ -287,7 +311,12 @@ fn main() {
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));
     }
-    let child = std::env::var("BAGHOLDER_CHILD").map(|v| v == "1").unwrap_or(false);
+    // a setting that does not read stops the start, naming it: never a guess at what it meant
+    if let Err(e) = bagholder_net::switch::check() {
+        log(&format!("bagholder: {e}"));
+        std::process::exit(1);
+    }
+    let child = app::env_on("BAGHOLDER_CHILD");
     if child || update::updates_off() {
         // the supervisor exists to restart an updated server; a copy that never updates runs plain
         std::process::exit(serve());
@@ -313,6 +342,41 @@ mod tests {
 
     /// Where the Rust build keeps its data: ~/.bagholder-rust, or wherever BAGHOLDER_HOME says.
     static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_an_asked_for_port_that_does_not_read_fails_the_start_never_roams() {
+        let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("BAGHOLDER_PORT");
+        let choices = |v: Option<&str>| {
+            match v {
+                Some(v) => std::env::set_var("BAGHOLDER_PORT", v),
+                None => std::env::remove_var("BAGHOLDER_PORT"),
+            }
+            crate::port_choices()
+        };
+        let got = (choices(Some("8798")), choices(Some("abc")), choices(Some("80")), choices(Some("70000")), choices(None));
+        match previous {
+            Some(v) => std::env::set_var("BAGHOLDER_PORT", v),
+            None => std::env::remove_var("BAGHOLDER_PORT"),
+        }
+        assert_eq!(got.0, Ok(vec![8798]), "an asked-for port is the only one tried");
+        for e in [got.1, got.2, got.3] {
+            assert!(e.unwrap_err().starts_with("BAGHOLDER_PORT is set to"), "refused, never swapped for the app's range");
+        }
+        assert_eq!(got.4, Ok(crate::PORTS.to_vec()));
+    }
+
+    #[test]
+    fn test_a_second_app_on_one_data_folder_is_refused_naming_the_first() {
+        use std::io::Write;
+        let d = tempfile::tempdir().unwrap();
+        // the first app's hold, as `hold_home` leaves it
+        let mut first = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(d.path().join(crate::app::HOME_LOCK_FILE)).unwrap();
+        first.try_lock().unwrap();
+        write!(first, "pid 4242, http://127.0.0.1:8765").unwrap();
+        let e = crate::app::hold_home(d.path()).unwrap_err();
+        assert!(e.starts_with("another Bagholder is using the data folder") && e.contains("pid 4242, http://127.0.0.1:8765"), "{e}");
+    }
 
     #[test]
     fn test_the_default_folder_is_dot_bagholder_rust() {

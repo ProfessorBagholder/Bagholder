@@ -76,8 +76,14 @@ impl OkOr {
 /// route's own answer type once it is converted (stage 5d7d).
 pub type Api<T> = Result<Json<T>, ApiError>;
 
-/// The most a request body may be. The page's largest is a CSV import.
-const BODY_LIMIT: usize = 32 * 1024 * 1024;
+/// The most a request body may be, every route but the import: the page's largest
+/// is a journal note or a trade typed in, a few kilobytes (`docs/plans/stage-money.md`,
+/// part D: body limits per route).
+const BODY_LIMIT: usize = 1024 * 1024;
+/// The most a CSV import's body may be: a broker's whole activity export.
+pub const IMPORT_BODY_LIMIT: usize = 32 * 1024 * 1024;
+/// The most an answer is read back into memory to tag it (`conditional`).
+const ANSWER_LIMIT: usize = 128 * 1024 * 1024;
 /// The longest a route that answers once may take: the slowest are a forced
 /// re-read of a listing's filings and an order's round trip to Wealthsimple.
 const ROUTE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -250,7 +256,7 @@ async fn conditional(req: Request, next: Next) -> Response {
         return res;
     }
     let (mut parts, body) = res.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, BODY_LIMIT * 4).await else {
+    let Ok(bytes) = axum::body::to_bytes(body, ANSWER_LIMIT).await else {
         return ApiError::Internal.into_response();
     };
     let tag = format!("\"{:016x}\"", crate::views::version_of_bytes(&bytes));

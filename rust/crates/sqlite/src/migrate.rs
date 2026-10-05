@@ -266,6 +266,13 @@ fn snapshot(schema: &Schema, conn: &Connection, path: &Path, from: u32, at: jiff
     Ok(target)
 }
 
+/// The first snapshot taken of the store whose file is called `stem` at or after
+/// `since`: the file as an update found it, before that update's migrations.
+pub fn snapshot_since(dir: &Path, stem: &str, since: jiff::Timestamp) -> std::io::Result<Option<PathBuf>> {
+    let from = since.strftime("%Y%m%dT%H%M%SZ").to_string();
+    Ok(listed(dir, stem)?.into_iter().find(|(stamp, _, _)| *stamp >= from).map(|(_, _, p)| p))
+}
+
 /// The snapshots of the store whose file is called `stem`, oldest first, each
 /// with the version it was taken from.
 pub fn snapshots(dir: &Path, stem: &str) -> std::io::Result<Vec<PathBuf>> {

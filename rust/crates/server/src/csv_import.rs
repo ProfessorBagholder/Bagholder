@@ -64,8 +64,13 @@ pub struct ImportReport {
     pub problems: Vec<RowNote>,
 }
 
+/// Imports run one at a time in the process, from the page and from the watched
+/// folder alike: one whose request was given up on still finishes before the next.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read a file and keep its rows in `account` (the Manual account when `None`).
 pub fn import(f: &Figures, file: &str, text: &str, account: Option<AccountId>, now: bagholder_core::jiff::Timestamp) -> Result<ImportReport, Refused> {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let read = csv::read_file(text).map_err(Refused::Entry)?;
     let account = match account {
         Some(a) => a,

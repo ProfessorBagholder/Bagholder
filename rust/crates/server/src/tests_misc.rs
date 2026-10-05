@@ -85,7 +85,7 @@ fn test_port_can_be_chosen_for_a_second_instance() {
     std::env::set_var("BAGHOLDER_PORT", "8799");
     assert_eq!(crate::port_choices().unwrap(), vec![8799]);
     std::env::set_var("BAGHOLDER_PORT", "80");
-    assert_eq!(crate::port_choices().unwrap(), crate::PORTS.to_vec(), "a privileged or nonsense port is ignored");
+    assert!(crate::port_choices().is_err(), "a privileged or nonsense port is refused, never swapped for the app's range");
     std::env::remove_var("BAGHOLDER_PORT");
     assert_eq!(crate::port_choices().unwrap(), crate::PORTS.to_vec());
     if let Some(p) = saved {
@@ -483,11 +483,50 @@ fn test_a_new_version_that_dies_in_the_window_is_rolled_back_and_the_header_says
     let home = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let ran = update_stand_in(home.path(), dir.path());
-    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: None }).unwrap();
+    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: None, at: None }).unwrap();
     assert_eq!(supervise_stand_in(home.path(), dir.path()), 0, "the previous version is started again and runs");
     assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "previous");
     assert!(std::fs::read_to_string(dir.path().join("bagholder")).unwrap().contains("previous-ran"), "the previous executable is in place");
     assert_failure_said(home.path(), "v99.0.0");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_new_version_that_migrated_and_died_gets_the_stores_back_as_the_update_found_them() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let ran = update_stand_in(home.path(), dir.path());
+    let at = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(2);
+    // the new version's migration: the book as it found it in snapshots/, the migrated one in place
+    let snaps = home.path().join("snapshots");
+    std::fs::create_dir_all(&snaps).unwrap();
+    let stamp = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ").to_string();
+    std::fs::write(snaps.join(format!("book-v24-{stamp}.db")), "the book as the update found it").unwrap();
+    std::fs::write(home.path().join("book.db"), "the book the new version migrated").unwrap();
+    std::fs::write(home.path().join("book.db-wal"), "the migrated version's log").unwrap();
+    std::fs::write(home.path().join("market.db"), "not migrated: no snapshot of it").unwrap();
+    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: None, at: Some(at.to_string()) }).unwrap();
+    assert_eq!(supervise_stand_in(home.path(), dir.path()), 0);
+    assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "previous");
+    assert_eq!(std::fs::read_to_string(home.path().join("book.db")).unwrap(), "the book as the update found it");
+    assert!(!home.path().join("book.db-wal").exists(), "the migrated version's log goes with it");
+    assert_eq!(std::fs::read_to_string(home.path().join("market.db")).unwrap(), "not migrated: no snapshot of it");
+    assert_failure_said(home.path(), "v99.0.0");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_new_version_whose_stores_cannot_be_put_back_is_left_in_place_and_said() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let _ran = update_stand_in(home.path(), dir.path());
+    // the snapshots folder is not a folder: what the update migrated cannot be known
+    std::fs::write(home.path().join("snapshots"), "not a folder").unwrap();
+    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: None, at: Some(jiff::Timestamp::now().to_string()) }).unwrap();
+    supervise_stand_in(home.path(), dir.path());
+    assert!(!std::fs::read_to_string(dir.path().join("bagholder")).unwrap().contains("previous-ran"), "the previous executable is not put over stores it cannot read");
+    let said = std::fs::read_to_string(home.path().join("update-failed")).unwrap();
+    assert!(said.contains("the new version is left in place"), "{said}");
 }
 
 #[test]
@@ -519,7 +558,7 @@ fn test_a_git_checkout_goes_back_to_its_commit_when_the_new_version_dies() {
     git(&["commit", "-q", "-am", "after"]);
     let ran = update_stand_in(home.path(), &dir);
     let back = update::GitRestore { root: root.path().to_path_buf(), commit: before.clone() };
-    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: Some(back) }).unwrap();
+    update::write_pending(home.path(), &update::Pending { tag: "v99.0.0".into(), git: Some(back), at: None }).unwrap();
     assert_eq!(supervise_stand_in(home.path(), &dir), 0, "the previous version is started again, not left stopped");
     assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "previous");
     assert_eq!(git(&["rev-parse", "HEAD"]), before, "the checkout is back on the commit before the pull");

@@ -58,8 +58,8 @@ export interface Routes {
   'POST /api/data/clear': { body: Clear; answer: ClearAnswer }
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
   'POST /api/entries': { body: EntryRequest; answer: EntryAnswer }
-  'POST /api/import': { body: ImportRequest; answer: ImportReport }
   'POST /api/watch/clear': { answer: WatchStatus }
+  'POST /api/import': { body: ImportRequest; answer: ImportReport }
   'GET /api/watch': { answer: WatchStatus }
   'POST /api/watch': { body: WatchRequest; answer: WatchStatus }
   'POST /api/watch/scan': { answer: WatchStatus }

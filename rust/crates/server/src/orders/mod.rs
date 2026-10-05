@@ -111,7 +111,7 @@ pub struct OrdersState {
 
 impl OrdersState {
     pub fn from_env() -> OrdersState {
-        let live = std::env::var("BAGHOLDER_DRY_ORDERS").map(|v| v.trim() != "1").unwrap_or(true);
+        let live = !bagholder_net::switch::switch_on("BAGHOLDER_DRY_ORDERS");
         OrdersState {
             live: AtomicBool::new(live),
             refreshed_at: Mutex::new(None),

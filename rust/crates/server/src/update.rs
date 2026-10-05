@@ -332,14 +332,19 @@ pub fn can_update(app: &Arc<App>, rec: &UpdateRecord) -> bool {
     rec.assets.is_some()
 }
 
+/// GitHub's hosts a release asset comes from: the API and the download host it
+/// redirects to (`objects.githubusercontent.com`, `release-assets.githubusercontent.com`).
+fn github_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    ["github.com", "githubusercontent.com"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+/// A release asset streamed to disk as it arrives, no larger than `max_bytes`.
 fn download(url: &str, dest: &Path, max_bytes: usize) -> Result<(), String> {
     let ua = format!("Bagholder/{}", APP_VERSION);
-    let resp = bagholder_net::client::request("GET", url, &[("User-Agent", &ua), ("Accept", "application/octet-stream")], None, Duration::from_secs(120))
-        .map_err(|e| format!("{:?}", e))?;
-    if resp.body.len() > max_bytes {
-        return Err("release archive is larger than expected".into());
-    }
-    std::fs::write(dest, &resp.body).map_err(|e| e.to_string())
+    let mut f = std::fs::File::create(dest).map_err(|e| format!("{} could not be written: {e}", dest.display()))?;
+    bagholder_net::client::download(url, &[("User-Agent", &ua), ("Accept", "application/octet-stream")], Duration::from_secs(120), &mut f, max_bytes as u64, &github_host).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn rel_name(p: &Path, root: &Path) -> Option<String> {
@@ -502,7 +507,7 @@ fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) ->
             });
         }
     }
-    write_pending(home, &Pending { tag: tag.to_string(), git: None })
+    write_pending(home, &Pending { tag: tag.to_string(), git: None, at: Some(jiff::Timestamp::now().to_string()) })
 }
 
 /// The marker an update leaves for the supervisor (HOME/update-pending): the
@@ -514,6 +519,37 @@ pub(crate) struct Pending {
     /// A git checkout's way back: its root and the commit before the pull.
     #[serde(default)]
     pub git: Option<GitRestore>,
+    /// When the update was put in place: a store snapshot taken since is the store
+    /// as the update found it, before its migrations. None in a marker an earlier
+    /// build wrote.
+    #[serde(default)]
+    pub at: Option<String>,
+}
+
+/// The stores a migration may change, by their files in the data folder.
+const STORE_FILES: [&str; 3] = [bagholder_book::BOOK_FILE, crate::figures::CACHE_FILE, crate::figures::OLD_FILE];
+
+/// The stores put back as the update found them, from the snapshots its migrations
+/// took (`docs/plans/stage-money.md`, part D): a store the update migrated goes back
+/// to the version the previous build reads. A store no snapshot covers was not
+/// migrated and stays. Err when one cannot be put back: the previous build would
+/// refuse that store, so nothing of it is put back either.
+fn restore_stores(home: &Path, pending: &Pending) -> Result<(), String> {
+    let Some(at) = &pending.at else { return Ok(()) };
+    let at: jiff::Timestamp = at.parse().map_err(|e| format!("the update's marker names a time that does not read: {e}"))?;
+    let dir = home.join("snapshots");
+    for file in STORE_FILES {
+        let stem = file.trim_end_matches(".db");
+        let snap = bagholder_sqlite::migrate::snapshot_since(&dir, stem, at).map_err(|e| format!("the snapshots could not be read: {e}"))?;
+        let Some(snap) = snap else { continue };
+        let target = home.join(file);
+        // the log beside the file belongs to the migrated version: it goes with it
+        for side in ["-wal", "-shm"] {
+            remove_left(&home.join(format!("{file}{side}")))?;
+        }
+        put_in_place(&snap, &target, true).map_err(|e| format!("{file} could not be put back as it was before the update: {e}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
@@ -531,7 +567,7 @@ pub(crate) fn write_pending(home: &Path, p: &Pending) -> Result<(), String> {
 /// cannot be read is the error.
 fn read_pending(home: &Path) -> Result<Pending, String> {
     let text = std::fs::read_to_string(home.join("update-pending")).map_err(|e| format!("the update's marker could not be read: {e}"))?;
-    Ok(serde_json::from_str(&text).unwrap_or_else(|_| Pending { tag: text.trim().to_string(), git: None }))
+    Ok(serde_json::from_str(&text).unwrap_or_else(|_| Pending { tag: text.trim().to_string(), git: None, at: None }))
 }
 
 /// Where a failed update is written for the server the supervisor starts next,
@@ -573,6 +609,11 @@ pub fn rollback(app: &Arc<App>) -> Result<bool, String> {
 /// kept; a part that could not be put back is the error, every other part put
 /// back all the same.
 fn restore_previous(home: &Path, dir: &Path, pending: &Pending) -> Result<bool, String> {
+    // the stores first: a previous build put back over stores it cannot read would
+    // not start either, so a store that cannot be put back keeps the new version
+    if let Err(e) = restore_stores(home, pending) {
+        return Err(format!("{e}; the new version is left in place"));
+    }
     let mut failed = vec![];
     if let Some(g) = &pending.git {
         // the checkout named, whatever repository the environment points at
@@ -696,7 +737,7 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
         }
         return Err(if back.is_empty() { why } else { format!("{why}; and the previous version could not be put back: {}", back.join("; ")) });
     }
-    write_pending(&app.home, &Pending { tag: tag.to_string(), git: Some(GitRestore { root: app.root.clone(), commit: before }) })
+    write_pending(&app.home, &Pending { tag: tag.to_string(), git: Some(GitRestore { root: app.root.clone(), commit: before }), at: Some(jiff::Timestamp::now().to_string()) })
 }
 
 /// Bring this copy to `tag`, then restart. Never
@@ -820,7 +861,9 @@ pub(crate) fn supervise_child(home: &Path, dir: &Path, healthy_sec: u64, command
                 // alive past the window: the update took. A marker left would have the
                 // next crash in a window roll a good version back: the supervisor has no
                 // header, so its console is where that is said
-                if let Err(e) = remove_left(&marker).and_then(|()| remove_left_dir(&home.join("previous"))) {
+                // the snapshots the update's migrations took are only for putting it back:
+                // once it took they go (brief 19, change 11)
+                if let Err(e) = remove_left(&marker).and_then(|()| remove_left_dir(&home.join("previous"))).and_then(|()| remove_left_dir(&home.join("snapshots"))) {
                     log(&format!("bagholder update: the update took, but what it kept could not be cleared: {e}"));
                 }
                 pending = false;
@@ -874,4 +917,18 @@ pub fn check_for_update_if_due(app: &Arc<App>) -> UpdateRecord {
         Err(e) => crate::feeds::feed_failed(app, UPDATE_CHECK, e),
     }
     check_for_update(app)
+}
+
+#[cfg(test)]
+mod host_tests {
+    #[test]
+    fn a_release_asset_is_fetched_only_from_github_on_every_hop() {
+        // the release page and the asset host it redirects to (observed 2026-10-04)
+        for ok in ["github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"] {
+            assert!(super::github_host(ok), "{ok}");
+        }
+        for no in ["github.com.evil.io", "evilgithub.com", "githubusercontent.co"] {
+            assert!(!super::github_host(no), "{no}");
+        }
+    }
 }

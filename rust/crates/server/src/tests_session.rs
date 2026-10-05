@@ -132,3 +132,35 @@ fn a_refresh_with_no_answer_while_the_token_held_is_live_stays_connected_and_one
     assert!(!a.ok && !a.connected, "refused: connect again");
     assert_eq!(a.error, bagholder_wealthsimple::session::LOST_REFRESH, "the refusal follows a post whose answer was lost");
 }
+
+/// Every on/off setting is read by the one parser: no crate reads one of them on its own.
+#[test]
+fn every_on_off_setting_is_read_by_the_one_parser() {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut readers = Vec::new();
+    let mut stack = vec![crates];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            if p.is_dir() {
+                if name != "target" && name != "tests" {
+                    stack.push(p);
+                }
+                continue;
+            }
+            if !name.ends_with(".rs") || name.starts_with("tests_") || p.ends_with("net/src/switch.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&p).unwrap();
+            for s in bagholder_net::switch::SWITCHES {
+                for form in [format!("var(\"{s}\")"), format!("var_os(\"{s}\")")] {
+                    if text.contains(&form) {
+                        readers.push(format!("{}: {s}", p.display()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(readers.is_empty(), "read outside bagholder_net::switch: {readers:?}");
+}

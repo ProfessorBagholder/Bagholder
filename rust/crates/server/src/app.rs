@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.2.2";
+pub const APP_VERSION: &str = "2.2.3";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -397,9 +397,53 @@ pub fn env_text(name: &str) -> Result<Option<String>, String> {
     }
 }
 
-/// A switch in the environment: set to anything but blanks, it is on.
+/// The data folder's lock, held for the life of the process.
+static HOME_LOCK: std::sync::OnceLock<std::sync::Mutex<std::fs::File>> = std::sync::OnceLock::new();
+
+/// The file in the data folder whose lock is the app's hold on it.
+pub const HOME_LOCK_FILE: &str = "bagholder.lock";
+
+/// Take the data folder for this process alone (`docs/plans/stage-money.md`, part
+/// D): an advisory lock on a file in it, held until the process ends, so two apps
+/// never replace the same stop or book the same fill. One already held is refused,
+/// naming the app that holds it as it wrote itself into the file.
+pub fn hold_home(home: &std::path::Path) -> Result<(), String> {
+    use std::io::{Read, Seek, Write};
+    let path = home.join(HOME_LOCK_FILE);
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| format!("the data folder's lock {} could not be opened: {e}", path.display()))?;
+    match f.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let mut held = String::new();
+            // who holds it is said when it can be read; the refusal stands either way
+            if f.read_to_string(&mut held).is_err() {
+                held.clear();
+            }
+            let who = held.trim();
+            return Err(format!("another Bagholder is using the data folder {} ({}); stop it first, or give this one its own folder with BAGHOLDER_HOME", home.display(), if who.is_empty() { "it has not said which" } else { who }));
+        }
+        Err(std::fs::TryLockError::Error(e)) => return Err(format!("the data folder's lock {} could not be taken: {e}", path.display())),
+    }
+    f.set_len(0).and_then(|_| f.rewind()).and_then(|_| write!(f, "pid {}", std::process::id())).map_err(|e| format!("the data folder's lock {} could not be written: {e}", path.display()))?;
+    HOME_LOCK.set(std::sync::Mutex::new(f)).map_err(|_| "the data folder was taken twice in one process".to_string())
+}
+
+/// The address this app answers on, written beside its pid in the data folder's lock,
+/// so a second start can name it.
+pub fn note_home_port(port: u16) {
+    use std::io::{Seek, Write};
+    if let Some(m) = HOME_LOCK.get() {
+        let mut f = m.lock().unwrap_or_else(|e| e.into_inner());
+        let wrote = f.set_len(0).and_then(|_| f.rewind()).and_then(|_| write!(f, "pid {}, http://127.0.0.1:{port}", std::process::id()));
+        if let Err(e) = wrote {
+            log(&format!("bagholder: the data folder's lock could not name this app's address: {e}"));
+        }
+    }
+}
+
+/// An on/off setting in the environment (`bagholder_net::switch`).
 pub fn env_on(name: &str) -> bool {
-    std::env::var_os(name).is_some_and(|v| !v.to_string_lossy().trim().is_empty())
+    bagholder_net::switch::switch_on(name)
 }
 
 pub fn log(line: &str) {

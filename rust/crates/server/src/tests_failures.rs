@@ -143,7 +143,7 @@ fn test_a_rollback_that_cannot_put_the_previous_version_back_is_said_and_keeps_i
     std::fs::write(home.path().join("previous").join("bagholder"), "exit 0\n").unwrap();
     // the new version dies at once, inside the healthy window
     std::fs::write(dir.path().join("bagholder"), "exit 7\n").unwrap();
-    crate::update::write_pending(home.path(), &crate::update::Pending { tag: "v99.0.0".into(), git: None }).unwrap();
+    crate::update::write_pending(home.path(), &crate::update::Pending { tag: "v99.0.0".into(), git: None, at: None }).unwrap();
     // nothing can be written where the executable lives
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
     let exe = dir.path().join("bagholder");
