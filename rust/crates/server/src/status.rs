@@ -212,6 +212,74 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
 /// - a row placed with a problem: kept, the problem said;
 /// - a row that gave no transaction at all (one that could not be read): counted
 ///   in no figure, said by its source and when it first arrived.
+/// The problem a conversion's record carries while the side paid is not stated by it.
+const CONVERSION_SIDE_UNSTATED: &str = "conversion-side-unstated";
+
+/// The conversions whose record states only the side received, and whose side paid
+/// another of the book's records states: a conversion leg paying out, from a record
+/// that pays only (a statement's row booked for it, or the side read from the
+/// broker's stated cash), in the same account on the same day, in another currency.
+/// Each paying leg settles one conversion: on a day of several, they are paired one
+/// to one wherever the currencies allow it (a matching), and a conversion left over
+/// stays unsettled.
+fn settled_conversions(inputs: &bagholder_engine::input::Inputs) -> std::collections::BTreeSet<bagholder_core::RecordId> {
+    use bagholder_core::transaction::Kind;
+    use bagholder_core::{AccountId, Currency, RecordId};
+    use std::collections::{BTreeMap, BTreeSet};
+    type Day = (AccountId, bagholder_core::jiff::civil::Date);
+    // each record's conversion legs: the currencies it receives and pays
+    let mut legs: BTreeMap<RecordId, (Day, BTreeSet<Currency>, BTreeSet<Currency>, bool)> = BTreeMap::new();
+    for t in &inputs.ledger.transactions {
+        let e = legs.entry(t.id.record).or_insert(((t.account, t.trade_date), BTreeSet::new(), BTreeSet::new(), true));
+        match (t.kind, t.cash) {
+            (Kind::CurrencyConversion, Some(c)) if c.amount.is_negative() => {
+                e.2.insert(c.currency);
+            }
+            (Kind::CurrencyConversion, Some(c)) => {
+                e.1.insert(c.currency);
+            }
+            _ => e.3 = false,
+        }
+    }
+    let flagged = |r: &RecordId| inputs.ledger.records.get(r).is_some_and(|i| i.problems.iter().any(|p| p.code == CONVERSION_SIDE_UNSTATED));
+    // per account and day: the one-sided conversions (the currency received) and the paying legs
+    let mut days: BTreeMap<Day, (Vec<(RecordId, Currency)>, Vec<Currency>)> = BTreeMap::new();
+    for (record, (day, received, paid, only_conversion)) in &legs {
+        if !only_conversion {
+            continue;
+        }
+        match (received.iter().collect::<Vec<_>>().as_slice(), paid.is_empty()) {
+            ([one], true) if flagged(record) => days.entry(*day).or_default().0.push((*record, **one)),
+            ([], false) => days.entry(*day).or_default().1.extend(paid.iter().copied()),
+            _ => {}
+        }
+    }
+    let mut settled = BTreeSet::new();
+    for (conversions, paying) in days.values() {
+        // the largest pairing of conversions to paying legs in another currency
+        // (Kuhn's augmenting paths; a day holds a handful)
+        let mut taken: Vec<Option<usize>> = vec![None; paying.len()];
+        fn place(i: usize, conversions: &[(RecordId, Currency)], paying: &[Currency], taken: &mut [Option<usize>], seen: &mut [bool]) -> bool {
+            for j in 0..paying.len() {
+                if paying[j] == conversions[i].1 || seen[j] {
+                    continue;
+                }
+                seen[j] = true;
+                if taken[j].is_none_or(|k| place(k, conversions, paying, taken, seen)) {
+                    taken[j] = Some(i);
+                    return true;
+                }
+            }
+            false
+        }
+        for i in 0..conversions.len() {
+            place(i, conversions, paying, &mut taken, &mut vec![false; paying.len()]);
+        }
+        settled.extend(taken.iter().flatten().map(|i| conversions[*i].0));
+    }
+    settled
+}
+
 pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
     use bagholder_core::transaction::Kind;
     use std::collections::{BTreeMap, BTreeSet};
@@ -221,10 +289,11 @@ pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
         e.0 += 1;
         e.1 = e.1.min(day);
     };
-    let why_of = |r: Option<&bagholder_engine::input::RecordInfo>, default: &str| -> Vec<String> {
-        match r.map(|r| &r.problems) {
-            Some(ps) if !ps.is_empty() => ps.iter().map(|p| p.detail.trim().trim_end_matches('.').to_string()).collect(),
-            _ => vec![default.to_string()],
+    let why_of = |ps: &[&bagholder_core::record::Problem], default: &str| -> Vec<String> {
+        if ps.is_empty() {
+            vec![default.to_string()]
+        } else {
+            ps.iter().map(|p| p.detail.trim().trim_end_matches('.').to_string()).collect()
         }
     };
     // account → why → (rows, first day), for rows not placed and rows placed with a problem
@@ -237,14 +306,18 @@ pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
         e.1 = e.1.min(t.trade_date);
         e.2 |= t.kind == Kind::Unclassified;
     }
+    let settled = settled_conversions(inputs);
+    let open = |r: &bagholder_core::record::Problem, record: &bagholder_core::RecordId| !(r.code == CONVERSION_SIDE_UNSTATED && settled.contains(record));
     for (record, (account, day, unclassified)) in &first {
-        let info = inputs.ledger.records.get(record);
+        // a problem the book has since settled is not said (a conversion's side paid
+        // booked from another of the broker's records)
+        let problems: Vec<&bagholder_core::record::Problem> = inputs.ledger.records.get(record).map(|r| r.problems.iter().filter(|p| open(p, record)).collect()).unwrap_or_default();
         if *unclassified {
-            for why in why_of(info, "a row its mapping does not place") {
+            for why in why_of(&problems, "a row its mapping does not place") {
                 note(unplaced.entry(*account).or_default(), why, *day);
             }
-        } else if info.is_some_and(|r| !r.problems.is_empty()) {
-            for why in why_of(info, "") {
+        } else if !problems.is_empty() {
+            for why in why_of(&problems, "") {
                 note(flawed.entry(*account).or_default(), why, *day);
             }
         }
@@ -257,7 +330,7 @@ pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
             continue;
         }
         let day = info.first_received_at.map(|t| t.to_zoned(inputs.clock.home.clone()).date()).unwrap_or(inputs.clock.today);
-        for why in why_of(Some(info), "") {
+        for why in why_of(&info.problems.iter().collect::<Vec<_>>(), "") {
             note(unread.entry(info.connection).or_default(), why, day);
         }
     }

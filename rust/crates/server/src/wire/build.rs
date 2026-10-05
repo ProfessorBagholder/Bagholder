@@ -863,6 +863,51 @@ mod record_problem_tests {
     /// sentence, whatever its code, whether the row was placed, placed with a
     /// problem, or gave nothing (`docs/decisions.md` 2026-10-04).
     #[test]
+    fn a_conversion_whose_side_paid_another_record_states_is_not_said_as_a_problem() {
+        let conv = |id: &str, day: &str, cash: &str, ccy: &str, problem: bool| {
+            let mut t = serde_json::json!({"id": id, "account": "A", "day": day, "kind": "currency-conversion", "cash": cash, "cash_currency": ccy});
+            if problem {
+                t["problems"] = serde_json::json!(["conversion-side-unstated"]);
+            }
+            t
+        };
+        let txs = vec![
+            // two received in USD, two paid in CAD by the statement's rows: both settled
+            conv("r1", "2026-03-02", "21.57", "USD", true),
+            conv("r2", "2026-03-02", "100.04", "USD", true),
+            conv("p1", "2026-03-02", "-30", "CAD", false),
+            conv("p2", "2026-03-02", "-139.17", "CAD", false),
+            // one received in each currency, one paid in each: the pairing crosses them
+            conv("r3", "2026-03-05", "3755.93", "CAD", true),
+            conv("r4", "2026-03-05", "2697.19", "USD", true),
+            conv("p3", "2026-03-05", "-3745.42", "CAD", false),
+            conv("p4", "2026-03-05", "-2811", "USD", false),
+            // nothing paid that day: said
+            conv("r5", "2026-03-03", "50", "CAD", true),
+            // paid in the currency received: not its side paid, said
+            conv("r6", "2026-03-04", "10", "USD", true),
+            conv("p5", "2026-03-04", "-5", "USD", false),
+            // three received, two paid: one is left over, said
+            conv("r7", "2026-03-06", "1", "CAD", true),
+            conv("r8", "2026-03-06", "2", "CAD", true),
+            conv("r9", "2026-03-06", "3", "CAD", true),
+            conv("p6", "2026-03-06", "-1", "USD", false),
+            conv("p7", "2026-03-06", "-2", "USD", false),
+        ];
+        let case = serde_json::json!({"today": "2026-04-01", "accounts": [{"id": "A"}], "instruments": [], "transactions": txs});
+        let mut b = cc::build(&case);
+        for info in b.inputs.ledger.records.values_mut() {
+            for p in info.problems.iter_mut() {
+                p.detail = "the side paid is not stated".into();
+            }
+        }
+        let e = cc::engine(&mut b);
+        let said = crate::status::unread_rows(e.inputs());
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("the side paid is not stated, 3 rows, the first on 2026-03-03"), "{said:?}");
+    }
+
+    #[test]
     fn every_problem_code_a_mapping_raises_reaches_the_header() {
         let codes = codes();
         assert!(codes.len() > 10, "the codes read from the mappings: {codes:?}");
