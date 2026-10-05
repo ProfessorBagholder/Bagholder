@@ -8,6 +8,10 @@ name: Release archives
 on:
   push:
     tags: ["v*.*.*"]
+    # every merge builds the same archives, nothing attached or published, so the
+    # build a release tag makes starts from master's compiled dependencies and
+    # Windows' OpenSSL (a tag's run may read master's caches, never another tag's)
+    branches: [master]
   workflow_dispatch:
     inputs:
       tag:
@@ -39,18 +43,37 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - name: The app's version is the tag's
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: |
           have="$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)"
           test "$have" = "${TAG#v}" || { echo "rust/crates/server/src/app.rs says $have, the tag says $TAG"; exit 1; }
       - name: Build tools (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
+      # OpenSSL for Windows, built by vcpkg once and kept: building it took five of
+      # the release's thirteen minutes
+      - name: OpenSSL for Windows, kept
+        if: runner.os == 'Windows'
+        id: openssl
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed/x64-windows-static-md
+          key: vcpkg-openssl-x64-windows-static-md-${{ matrix.os }}-v1
       - name: Build tools (Windows)
         if: runner.os == 'Windows'
-        run: choco install -y nasm && vcpkg install openssl:x64-windows-static-md && echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> "$GITHUB_ENV"
+        run: |
+          choco install -y nasm
+          if [ "${{ steps.openssl.outputs.cache-hit }}" != "true" ]; then vcpkg install openssl:x64-windows-static-md; fi
+          echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # the compiled dependencies, kept per platform from master's builds
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          shared-key: release-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       # the page is built first: the server's build carries it (rust/crates/server/build.rs)
       - name: Build the page
         working-directory: web
@@ -59,6 +82,7 @@ jobs:
         working-directory: rust
         run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
       - name: Package
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: |
           name="bagholder-${TAG}-rust-${{ matrix.target }}"
           mkdir -p dist/pkg
@@ -70,14 +94,27 @@ jobs:
           else
             tar -czf "../$name.tar.gz" *; cd .. && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           fi
+      # the Linux binaries, for the release's image (docker.yml), which is built from them
+      - name: Keep the Linux binaries for the image
+        if: runner.os == 'Linux' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@v4
+        with:
+          name: bins-${{ matrix.target }}
+          path: dist/pkg/*
+          retention-days: 1
       - name: Attach to the release
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" dist/bagholder-* --clobber
 
-  # the release's image, built beside the archives
+  # the release's image, made from the Linux archives' own binaries
   docker:
+    needs: rust
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/docker.yml
+    with:
+      prebuilt: true
     secrets: inherit
 
   # The release is created as a prerelease, which GitHub's latest release (the one
@@ -86,6 +123,7 @@ jobs:
   # release it cannot take.
   publish:
     needs: [rust, docker]
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}

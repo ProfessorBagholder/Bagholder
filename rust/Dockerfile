@@ -1,6 +1,10 @@
 # Bagholder's web app in a container: the server built from source, then a slim
 # Debian image with Chromium for the sign-in. Data lives in /data, mounted from the host.
 # Built from the repository root: docker build -f rust/Dockerfile .
+# A release builds it from the binaries its Linux archives carry
+# (`--build-arg BINARIES=prebuilt`, the binaries under rust/prebuilt/<arch>/),
+# so the image is never a second compile of what the release already built.
+ARG BINARIES=build
 FROM rust:1-bookworm AS build
 # BoringSSL (the browser helper's TLS) builds with cmake and clang; the market
 # client links the system OpenSSL
@@ -10,6 +14,13 @@ WORKDIR /src
 COPY rust/rust-toolchain.toml rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/crates crates
 RUN cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
+
+# The release's own binaries, for the platform being built.
+FROM scratch AS prebuilt
+ARG TARGETARCH
+COPY rust/prebuilt/${TARGETARCH}/ /src/target/release/
+
+FROM ${BINARIES} AS binaries
 
 # The Svelte frontend, built to web/dist and served by the binary.
 FROM node:22-slim AS web
@@ -29,7 +40,7 @@ COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
 WORKDIR /app
-COPY --from=build /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/disclosures-mcp /src/target/release/sedar ./
+COPY --from=binaries /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/disclosures-mcp /src/target/release/sedar ./
 COPY --from=web /web/dist ./web/dist
 
 RUN mkdir -p /data
