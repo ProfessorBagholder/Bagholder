@@ -193,3 +193,24 @@ fn a_refusal_after_a_lost_answer_is_said_as_the_lost_answer_not_as_a_refusal() {
     assert!(matches!(refresh(&n, &file, &held("lost-one")), Err(Failure::Unreachable(_))));
     assert_eq!(refresh(&n, &file, &held("lost-one")), Err(Failure::Lapsed(LOST_REFRESH.into())), "the first post was taken and its answer lost");
 }
+
+/// What the app knows of each refresh token is kept per token: a second token posted
+/// meanwhile (a sign-in captured) neither hides the first's lost answer nor lets a
+/// refused one be posted again.
+#[test]
+fn a_second_token_posted_meanwhile_hides_nothing_known_of_the_first() {
+    let (_d, file) = session_file("per-token-a");
+    // the first token's post goes unanswered; a captured sign-in's goes unanswered too
+    let q = queue(&[(0, "the connection dropped"), (0, "the connection dropped"), (400, INVALID_GRANT)]);
+    let n = net(&q);
+    assert!(matches!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Unreachable(_))));
+    assert!(matches!(take_over(&n, &held("per-token-b"), |_| Ok(())), Err(Failure::Unreachable(_))));
+    // the first refused now: its answer was lost, not refused at first sight
+    assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(LOST_REFRESH.into())));
+    // another token refused after it: the first is still never posted again
+    let q = queue(&[(400, INVALID_GRANT)]);
+    let n = net(&q);
+    assert_eq!(take_over(&n, &held("per-token-c"), |_| Ok(())), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
+    assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
+    assert_eq!(q.asked.lock().unwrap().len(), 1, "the refused first token was not posted again");
+}

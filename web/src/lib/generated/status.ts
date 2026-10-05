@@ -20,6 +20,8 @@ checked: number,
  */
 rows: number, total: number | null, };
 
+export type ModelDownload = { received: number, size: number, };
+
 export type Status = { ok: true, connected: boolean, email: string, lastSync: string, activityCount: number, accountCount: number, capturing: boolean, syncing: boolean, listingsFilling: boolean, syncStep: string, error: string, summaryReady: boolean, protocol: string, startedAt: string, version: string, latestVersion: string, updateAvailable: boolean, updateUrl: string, canUpdate: boolean, updateBy: string, 
 /**
  * `true` while `BAGHOLDER_LOGIN_VIEW` asks for the sign-in window shown
@@ -29,7 +31,11 @@ loginView: boolean, ordersLive: boolean, openOrders: number, updating: string, u
 /**
  * The import running now and how far it has come, for the import window.
  */
-importing: Importing | null, };
+importing: Importing | null, 
+/**
+ * The language model's file while it downloads, and how far it has come.
+ */
+modelDownload: ModelDownload | null, };
 
 export type StatusAnswer = { dataVersion: string, coreVersion: string, ok: true, connected: boolean, email: string, lastSync: string, activityCount: number, accountCount: number, capturing: boolean, syncing: boolean, listingsFilling: boolean, syncStep: string, error: string, summaryReady: boolean, protocol: string, startedAt: string, version: string, latestVersion: string, updateAvailable: boolean, updateUrl: string, canUpdate: boolean, updateBy: string, 
 /**
@@ -40,4 +46,8 @@ loginView: boolean, ordersLive: boolean, openOrders: number, updating: string, u
 /**
  * The import running now and how far it has come, for the import window.
  */
-importing: Importing | null, };
+importing: Importing | null, 
+/**
+ * The language model's file while it downloads, and how far it has come.
+ */
+modelDownload: ModelDownload | null, };
