@@ -18,7 +18,6 @@ use crate::app::{f, log, spawn, App};
 use crate::http::OkOr;
 
 pub const CAPTURE_WAIT: Duration = Duration::from_secs(180);
-pub const DEBUG_PORT: u16 = 18765;
 pub const OAUTH_COOKIE: &str = "_oauth2_access_v2";
 pub const DEVICE_COOKIE: &str = "wssdi";
 pub const LOGIN_URL: &str = "https://my.wealthsimple.com/app/login";
@@ -132,6 +131,39 @@ fn cdp_list(port: u16, timeout: Duration) -> Vec<CdpTarget> {
 /// The login Chrome's open windows and tabs.
 fn cdp_pages(port: u16) -> Vec<CdpTarget> {
     cdp_list(port, WINDOW_CHECK).into_iter().filter(|t| t.kind == "page" && !t.id.is_empty()).collect()
+}
+
+/// The file the sign-in window's own Chromium writes its DevTools endpoint to, in
+/// the app's profile: the port it chose, then its browser socket's path.
+fn devtools_file(app: &App) -> std::path::PathBuf {
+    app.home.join("chrome").join("DevToolsActivePort")
+}
+
+/// The DevTools endpoint of the sign-in window this app launched, as its own
+/// Chromium named it (a free port it chose itself, `--remote-debugging-port=0`):
+/// accepted only when the listener on that port names the same browser socket, so
+/// another browser or process on the port is never taken for it (brief 19, change
+/// 10). None while the window has not started, or when the port answers as another.
+fn devtools(app: &App) -> Option<(u16, String)> {
+    let text = std::fs::read_to_string(devtools_file(app)).ok()?;
+    let (port, path) = parse_devtools_file(&text)?;
+    let raw = http_get_local(port, "/json/version", Duration::from_secs(2))?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    let ws = f(&v, "webSocketDebuggerUrl");
+    ws.ends_with(&path).then_some((port, ws))
+}
+
+/// `DevToolsActivePort`'s two lines: the port, and the browser socket's path.
+pub(crate) fn parse_devtools_file(text: &str) -> Option<(u16, String)> {
+    let mut lines = text.lines();
+    let port: u16 = lines.next()?.trim().parse().ok().filter(|p| *p != 0)?;
+    let path = lines.next()?.trim().to_string();
+    path.starts_with("/devtools/browser/").then_some((port, path))
+}
+
+/// The sign-in window's pages, on its own endpoint; none without one.
+fn pages(app: &App) -> Vec<CdpTarget> {
+    devtools(app).map(|(port, _)| cdp_pages(port)).unwrap_or_default()
 }
 
 // --- a WebSocket client, enough for DevTools --------------------------------------
@@ -546,8 +578,9 @@ fn capture_loop(app: &Arc<App>, pid: u32, attempt: i64) {
         if !capturing(app) {
             return;
         }
-        let body = if !cdp_pages(DEBUG_PORT).is_empty() {
-            match try_capture(app, DEBUG_PORT) {
+        let port = devtools(app).map(|(p, _)| p).filter(|p| !cdp_pages(*p).is_empty());
+        let body = if let Some(port) = port {
+            match try_capture(app, port) {
                 Ok(b) => b,
                 Err(e) => {
                     // said in the header while the window is watched on: the person may sign in again
@@ -567,13 +600,20 @@ fn capture_loop(app: &Arc<App>, pid: u32, attempt: i64) {
                 if !capturing(app) {
                     return;
                 }
-                if crate::session::capture_tokens(app, &capture).ok {
-                    log("bagholder captured Wealthsimple session");
-                    close_login_browser(app, Some(pid));
-                    return;
+                match crate::session::take_capture(app, &capture) {
+                    crate::session::Taken::Taken => {
+                        log("bagholder captured Wealthsimple session");
+                        close_login_browser(app, Some(pid));
+                        return;
+                    }
+                    // a refusal of this login: not asked again; the window stays watched
+                    crate::session::Taken::Refused(why) => {
+                        refused = Some(rt);
+                        log(&format!("bagholder login: Wealthsimple refused the captured session: {why}; still watching the window"));
+                    }
+                    // no answer: asked again at the next capture while the window is up
+                    crate::session::Taken::NotAsked(why) => log(&format!("bagholder login: the captured session could not be taken over yet: {why}; trying again")),
                 }
-                refused = Some(rt);
-                log("bagholder login: Wealthsimple refused the captured session on refresh; still watching the window");
             }
         }
         std::thread::sleep(CAPTURE_EVERY);
@@ -601,7 +641,7 @@ fn poll_session(app: &Arc<App>, pid: u32, attempt: i64) {
             return;
         }
         let alive = proc_alive(app, pid);
-        let pages = if alive { cdp_pages(DEBUG_PORT) } else { vec![] };
+        let pages = if alive { pages(app) } else { vec![] };
         seen_page = seen_page || !pages.is_empty();
         let gone = !alive || (pages.is_empty() && (seen_page || start.elapsed() > Duration::from_secs(10)));
         if gone {
@@ -634,11 +674,8 @@ fn poll_session(app: &Arc<App>, pid: u32, attempt: i64) {
     close_login_browser(app, Some(pid));
 }
 
-fn browser_ws() -> Option<String> {
-    let raw = http_get_local(DEBUG_PORT, "/json/version", Duration::from_secs(2))?;
-    let v: Value = serde_json::from_str(&raw).ok()?;
-    let u = f(&v, "webSocketDebuggerUrl");
-    if u.is_empty() { None } else { Some(u) }
+fn browser_ws(app: &App) -> Option<String> {
+    devtools(app).map(|(_, ws)| ws)
 }
 
 fn wait_child(child: &mut Child, d: Duration) -> bool {
@@ -672,7 +709,7 @@ pub fn close_login_browser(app: &Arc<App>, only: Option<u32>) {
         return;
     }
     let mut child = match child.take() { Some(c) => c, None => return };
-    if let Some(u) = browser_ws() {
+    if let Some(u) = browser_ws(app) {
         match Ws::connect(&u, Duration::from_secs(5)) {
             Ok(mut ws) => {
                 ws.call("Browser.close", None, Duration::from_secs(8));
@@ -695,7 +732,7 @@ fn browser_alive(app: &Arc<App>) -> bool {
         let mut st = app.state.lock().unwrap();
         match st.chrome_proc.as_mut() { Some(c) => matches!(c.try_wait(), Ok(None)), None => false }
     };
-    alive && browser_ws().is_some() && !cdp_pages(DEBUG_PORT).is_empty()
+    alive && browser_ws(app).is_some() && !pages(app).is_empty()
 }
 
 // --- the streamed window ----------------------------------------------------------
@@ -722,7 +759,7 @@ pub struct LoginState {
 }
 
 fn with_view<T>(app: &App, f_: impl FnOnce(&mut Ws) -> Option<T>) -> Option<T> {
-    let pages = cdp_pages(DEBUG_PORT);
+    let pages = pages(app);
     let mut v = app.login.view.lock().unwrap();
     let page = match pages.first() {
         Some(p) => p.clone(),
@@ -811,7 +848,7 @@ fn screenshot_loop(app: &Arc<App>, attempt: i64) {
             continue;
         }
         if ws.is_none() {
-            ws = cdp_pages(DEBUG_PORT).first().and_then(|p| Ws::connect(&p.web_socket_debugger_url, CAPTURE_CALL).ok());
+            ws = pages(app).first().and_then(|p| Ws::connect(&p.web_socket_debugger_url, CAPTURE_CALL).ok());
         }
         let shot = ws.as_mut().and_then(|w| w.call("Page.captureScreenshot", Some(json!({"format": "jpeg", "quality": 60})), CAPTURE_CALL));
         match shot.as_ref().and_then(|r| r.pointer("/result/data")).and_then(|d| d.as_str()) {
@@ -831,7 +868,7 @@ fn screencast_loop(app: &Arc<App>, attempt: i64) {
         if !capturing(app) {
             return;
         }
-        let pages = cdp_pages(DEBUG_PORT);
+        let pages = pages(app);
         let page = match pages.first() { Some(p) => p.clone(), None => { std::thread::sleep(Duration::from_millis(500)); continue } };
         let mut ws = match Ws::connect(&page.web_socket_debugger_url, CAPTURE_CALL) { Ok(w) => w, Err(_) => { std::thread::sleep(Duration::from_millis(500)); continue } };
         // A passkey sign-in opens Chromium's own passkey dialog, which is drawn
@@ -1030,7 +1067,7 @@ pub fn login_input(app: &App, ev: &LoginInput) -> OkOr {
     }
     match r {
         Some(()) => OkOr::ok(),
-        None if cdp_pages(DEBUG_PORT).is_empty() => OkOr::err("No login window."),
+        None if pages(app).is_empty() => OkOr::err("No login window."),
         None => OkOr::err("The login window did not take that."),
     }
 }
@@ -1087,10 +1124,10 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
     }
     log("bagholder login: connect requested");
     if browser_alive(app) {
-        if let Some(u) = browser_ws() {
+        if let Some(u) = browser_ws(app) {
             match Ws::connect(&u, Duration::from_secs(5)) {
                 Ok(mut ws) => {
-                    if let Some(p) = cdp_pages(DEBUG_PORT).first() {
+                    if let Some(p) = pages(app).first() {
                         ws.call("Target.activateTarget", Some(json!({"targetId": p.id})), Duration::from_secs(8));
                     }
                     ws.close();
@@ -1149,7 +1186,8 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
     }
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={}", profile.to_string_lossy()),
-        format!("--remote-debugging-port={}", DEBUG_PORT),
+        // a free port of its own choosing, named in its profile's DevToolsActivePort
+        "--remote-debugging-port=0".into(),
         "--remote-debugging-address=127.0.0.1".into(),
         "--remote-allow-origins=http://127.0.0.1".into(),
         "--no-first-run".into(),
@@ -1162,6 +1200,12 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
                      format!("--window-size={},{}", LOGIN_VIEW_SIZE.0, LOGIN_VIEW_SIZE.1)]);
     }
     args.push(LOGIN_URL.into());
+    // the endpoint an earlier window named is not this one's
+    match std::fs::remove_file(devtools_file(app)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return StartLoginAnswer::err(format!("The sign-in window's earlier endpoint file could not be cleared: {e}")),
+    }
     let mut cmd = Command::new(&chrome);
     cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
@@ -1203,6 +1247,43 @@ mod tests {
 
     fn cookie(name: &str, value: &str) -> Value {
         json!({"name": name, "value": value})
+    }
+
+    /// A listener on 127.0.0.1 answering every request with `body` as JSON.
+    fn answering(body: String) -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(mut s) = s else { return };
+                let mut buf = [0u8; 2048];
+                let _ = std::io::Read::read(&mut s, &mut buf);
+                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                let _ = std::io::Write::write_all(&mut s, reply.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn test_only_the_endpoint_the_launched_window_names_is_taken_for_it() {
+        let _g = guard();
+        let app = app();
+        std::fs::create_dir_all(app.home.join("chrome")).unwrap();
+        let path = "/devtools/browser/0b1f6c3e-ours";
+        // the port the window named answers as another browser: not ours
+        let stranger = answering(json!({"webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/someone-else"}).to_string());
+        std::fs::write(devtools_file(&app), format!("{stranger}\n{path}\n")).unwrap();
+        assert_eq!(devtools(&app), None, "a listener naming another browser socket is never the sign-in window");
+        // the port answers with the socket the window named: ours
+        let ours = answering(json!({"webSocketDebuggerUrl": format!("ws://127.0.0.1:1{path}")}).to_string());
+        std::fs::write(devtools_file(&app), format!("{ours}\n{path}\n")).unwrap();
+        assert_eq!(devtools(&app).map(|(p, _)| p), Some(ours));
+        // no file: no window of ours, whatever listens anywhere
+        std::fs::remove_file(devtools_file(&app)).unwrap();
+        assert_eq!(devtools(&app), None);
+        assert_eq!(parse_devtools_file("0\n/devtools/browser/x\n"), None, "port 0 is no port");
+        assert_eq!(parse_devtools_file("9222\n/json\n"), None, "a path that is not a browser socket");
     }
 
     #[test]

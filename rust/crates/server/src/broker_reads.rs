@@ -425,9 +425,10 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     if lapsed {
         return Ok(Read::Lapsed);
     }
+    // Wealthsimple answered requests signed with the token held
+    crate::session::heard(app, crate::session::Heard::Issued);
     {
         let mut st = app.state.lock().unwrap();
-        st.connected = true;
         st.last_sync = now.to_string();
         st.error = if said.is_empty() { String::new() } else { format!("Sync failed: {said}") };
     }

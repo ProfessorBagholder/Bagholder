@@ -9,7 +9,7 @@ use bagholder_broker::Failure;
 use bagholder_core::json::{self, Value};
 use bagholder_net::{Ask, Limiter, ManualClock, Net, NetError, Transport};
 use bagholder_wealthsimple::client::Client;
-use bagholder_wealthsimple::session::{refresh, SessionFile, Tokens};
+use bagholder_wealthsimple::session::{refresh, take_over, SessionFile, Tokens, LOST_REFRESH, REFUSED_SIGN_IN};
 
 /// Answers each request with the next reply queued, and fails a test on a
 /// request with none left.
@@ -27,6 +27,10 @@ impl Transport for Shared {
         let mut r = self.0.replies.lock().unwrap();
         assert!(!r.is_empty(), "a request nothing answers: {}", ask.url);
         let (status, body) = r.remove(0);
+        // status 0: the request went out and no answer came back
+        if status == 0 {
+            return Err(NetError::Unreachable(body));
+        }
         Ok((status, ask.url.to_string(), vec![], body.into_bytes()))
     }
 }
@@ -156,4 +160,36 @@ fn two_refreshes_at_once_post_the_refresh_token_once() {
     });
     assert_eq!(q.asked.lock().unwrap().len(), 1, "the refresh token is posted once");
     assert!(got.iter().all(|t| t.refresh == "fresh-refresh"), "{got:?}");
+}
+
+const NEW_TOKENS: &str = r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":1800,"token_type":"Bearer"}"#;
+const INVALID_GRANT: &str = r#"{"error":"invalid_grant","error_description":"The provided authorization grant is invalid"}"#;
+
+#[test]
+fn a_captured_sign_in_is_written_only_once_wealthsimple_has_answered_with_new_tokens() {
+    let (_d, file) = session_file("the-saved-one");
+    let before = std::fs::read_to_string(&file.path).unwrap();
+    let write = |t: &Tokens| file.save(&json::parse(&before).unwrap(), t);
+    // refused at first sight: the saved sign-in stays, and the reason is the refusal
+    let q = queue(&[(400, INVALID_GRANT)]);
+    assert_eq!(take_over(&net(&q), &held("captured-refused"), write), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
+    assert_eq!(std::fs::read_to_string(&file.path).unwrap(), before, "nothing written for a refused capture");
+    // no answer: nothing written either
+    let q = queue(&[(0, "the connection dropped")]);
+    assert!(matches!(take_over(&net(&q), &held("captured-unanswered"), write), Err(Failure::Unreachable(_))));
+    assert_eq!(std::fs::read_to_string(&file.path).unwrap(), before);
+    // answered: written, with Wealthsimple's tokens
+    let q = queue(&[(200, NEW_TOKENS)]);
+    let got = take_over(&net(&q), &held("captured-good"), write).unwrap();
+    assert_eq!(got.refresh, "new-refresh");
+    assert!(std::fs::read_to_string(&file.path).unwrap().contains("new-refresh"));
+}
+
+#[test]
+fn a_refusal_after_a_lost_answer_is_said_as_the_lost_answer_not_as_a_refusal() {
+    let (_d, file) = session_file("lost-one");
+    let q = queue(&[(0, "the connection dropped"), (400, INVALID_GRANT)]);
+    let n = net(&q);
+    assert!(matches!(refresh(&n, &file, &held("lost-one")), Err(Failure::Unreachable(_))));
+    assert_eq!(refresh(&n, &file, &held("lost-one")), Err(Failure::Lapsed(LOST_REFRESH.into())), "the first post was taken and its answer lost");
 }

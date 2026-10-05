@@ -65,10 +65,17 @@ pub fn read_tokens(v: &Value) -> Read<Tokens> {
     Ok(Tokens { access: n.text("access_token")?.to_string(), refresh: n.text("refresh_token")?.to_string(), client_id: n.text("client_id")?.to_string(), identity: identity.to_string(), expires_at, device })
 }
 
+/// What the person is told when Wealthsimple refused a refresh token whose earlier
+/// post got no answer: the token was taken and its answer lost, not refused at first
+/// sight (brief 19, change 9).
+pub const LOST_REFRESH: &str = "The sign-in lapsed: Wealthsimple's answer to a refresh was lost on the way. Connect Wealthsimple again.";
+
 /// Refreshes run one at a time, in the process.
 static REFRESH: Mutex<()> = Mutex::new(());
 /// The refresh token Wealthsimple last refused: never posted again.
 static REFUSED: Mutex<Option<String>> = Mutex::new(None);
+/// The refresh token last posted with no answer back: Wealthsimple may have taken it.
+static UNANSWERED: Mutex<Option<String>> = Mutex::new(None);
 
 /// The session file in the data folder.
 pub struct SessionFile {
@@ -124,6 +131,25 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
         // rotated by another caller while this one waited: adopt it, post nothing
         return Ok(on_disk);
     }
+    let fresh = post_refresh(net, held)?;
+    file.save(&previous, &fresh)?;
+    Ok(fresh)
+}
+
+/// A sign-in just captured, taken over: its refresh token posted under the same lock
+/// as every refresh, and Wealthsimple's new tokens handed to `keep`, which writes the
+/// sign-in, still under the lock. Nothing is written before Wealthsimple has answered
+/// with new tokens: a refusal or no answer leaves the saved sign-in as it was
+/// (`docs/plans/stage-money.md`, part C).
+pub fn take_over(net: &Net, captured: &Tokens, keep: impl FnOnce(&Tokens) -> Result<(), Failure>) -> Result<Tokens, Failure> {
+    let _one_at_a_time = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = post_refresh(net, captured)?;
+    keep(&fresh)?;
+    Ok(fresh)
+}
+
+/// Wealthsimple's answer to `held`'s refresh token, under the caller's lock.
+fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
     if REFUSED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(held.refresh.as_str()) {
         return Err(Failure::Lapsed(REFUSED_SIGN_IN.into()));
     }
@@ -133,14 +159,25 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
     body.insert("client_id".to_string(), Value::String(held.client_id.clone()));
     let body = Value::Object(body).canonical();
     let headers = [("Content-Type", "application/json"), ("Accept", "application/json")];
-    let reply = net.send(&Ask::post(TOKEN_URL, &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
+    let reply = match net.send(&Ask::post(TOKEN_URL, &headers, body.as_bytes())) {
+        Ok(r) => r,
+        Err(e) => {
+            // sent with no answer back, it may have reached Wealthsimple and been taken: a
+            // refusal of it later is the lost answer's (a host left resting was sent nothing)
+            if matches!(e, bagholder_net::NetError::Unreachable(_)) {
+                *UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()) = Some(held.refresh.clone());
+            }
+            return Err(Failure::Unreachable(e.to_string()));
+        }
+    };
     let v = json::parse(&String::from_utf8_lossy(&reply.body)).map_err(|e| Failure::Mismatch(format!("the token answer is not JSON: {e}")))?;
     let n = Node::root(&v);
     if reply.status != 200 {
         let code = n.opt_text("error").ok().flatten().unwrap_or("");
         if code == "invalid_grant" || reply.status == 401 {
             *REFUSED.lock().unwrap_or_else(|e| e.into_inner()) = Some(held.refresh.clone());
-            return Err(Failure::Lapsed(REFUSED_SIGN_IN.into()));
+            let lost = UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(held.refresh.as_str());
+            return Err(Failure::Lapsed(if lost { LOST_REFRESH } else { REFUSED_SIGN_IN }.into()));
         }
         return Err(Failure::Refused(format!("the token refresh answered {}: {code}", reply.status)));
     }
@@ -148,7 +185,5 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
     let refresh = n.text("refresh_token").map_err(|m| Failure::Mismatch(m.to_string()))?.to_string();
     let expires_in = n.int("expires_in").map_err(|m| Failure::Mismatch(m.to_string()))?;
     let expires_at = reply.received_at.checked_add(jiff::Span::new().seconds(expires_in)).ok();
-    let fresh = Tokens { access, refresh, client_id: held.client_id.clone(), identity: held.identity.clone(), expires_at, device: held.device.clone() };
-    file.save(&previous, &fresh)?;
-    Ok(fresh)
+    Ok(Tokens { access, refresh, client_id: held.client_id.clone(), identity: held.identity.clone(), expires_at, device: held.device.clone() })
 }

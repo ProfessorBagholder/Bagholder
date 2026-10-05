@@ -40,14 +40,111 @@ fn set_error(app: &Arc<App>, msg: &str) {
     app.state.lock().unwrap().error = msg.to_string();
 }
 
-/// The refresh grant. A failure says why on the header.
-pub fn refresh_session(app: &Arc<App>, sess: &mut Session, adopt: bool) -> bool {
-    match one_refresh(app, sess, adopt) {
-        Ok(()) => true,
-        Err(msg) => {
-            set_error(app, &msg);
+/// What the session code is told of the sign-in. It alone sets "connected", which
+/// means it holds a token Wealthsimple issued that has not lapsed
+/// (`docs/plans/stage-money.md`, part C: one writer).
+pub enum Heard {
+    /// Wealthsimple issued a token, or answered a request signed with one.
+    Issued,
+    /// Wealthsimple refused the sign-in, or there is none: connect again.
+    Lapsed(String),
+    /// Wealthsimple could not be asked (no answer, a refusal of the request, not of
+    /// the sign-in): connected stays while the token held has not expired.
+    NotAsked(String),
+}
+
+/// The one writer of "connected", and of the error the sign-in leaves.
+pub fn heard(app: &Arc<App>, h: Heard) {
+    let held_live = || load_session(app).ok().flatten().is_some_and(|s| !s.access_token.is_empty() && !bagholder_ws::session::token_expired(&s, now_unix()));
+    let live = matches!(h, Heard::NotAsked(_)) && held_live();
+    let mut st = app.state.lock().unwrap();
+    match h {
+        Heard::Issued => st.connected = true,
+        Heard::Lapsed(why) => {
+            st.connected = false;
+            st.error = why;
+        }
+        Heard::NotAsked(why) => {
+            st.connected = st.connected && live;
+            st.error = why;
+        }
+    }
+}
+
+/// A refresh that did not give a new token: refused (connect again), or not asked.
+#[derive(Debug, PartialEq)]
+pub enum RefreshFailed {
+    Lapsed(String),
+    NotAsked(String),
+}
+
+impl RefreshFailed {
+    pub fn why(&self) -> &str {
+        match self {
+            RefreshFailed::Lapsed(w) | RefreshFailed::NotAsked(w) => w,
+        }
+    }
+}
+
+impl From<bagholder_broker::Failure> for RefreshFailed {
+    fn from(f: bagholder_broker::Failure) -> Self {
+        match f {
+            bagholder_broker::Failure::Lapsed(why) => RefreshFailed::Lapsed(why),
+            other => RefreshFailed::NotAsked(other.to_string()),
+        }
+    }
+}
+
+/// The refresh grant on the saved sign-in, told to `heard`.
+pub fn refresh_session(app: &Arc<App>, sess: &mut Session) -> bool {
+    match one_refresh(app, sess) {
+        Ok(()) => {
+            heard(app, Heard::Issued);
+            true
+        }
+        Err(RefreshFailed::Lapsed(why)) => {
+            heard(app, Heard::Lapsed(why));
             false
         }
+        Err(RefreshFailed::NotAsked(why)) => {
+            heard(app, Heard::NotAsked(why));
+            false
+        }
+    }
+}
+
+/// The tokens a refresh posts, from a login: its client id (the cached one where it
+/// names none) and whose login it is.
+fn held_tokens(app: &Arc<App>, sess: &mut Session) -> Result<bagholder_wealthsimple::session::Tokens, RefreshFailed> {
+    let home = app.ws_home();
+    let client_id = Client { home: &home }.client_id_for(sess).map_err(|e| RefreshFailed::NotAsked(format!("Could not read the cached Wealthsimple client id: {e}")))?;
+    if client_id.is_empty() {
+        return Err(RefreshFailed::Lapsed("The Wealthsimple login has no client id; connect again".into()));
+    }
+    sess.client_id = client_id.clone();
+    if sess.identity().is_empty() {
+        // the adapter asks for the accounts by it: a login without it cannot be read
+        return Err(RefreshFailed::Lapsed("Wealthsimple did not say whose login this is; connect again".into()));
+    }
+    if sess.refresh_token.is_empty() {
+        return Err(RefreshFailed::Lapsed("missing refresh token".into()));
+    }
+    Ok(bagholder_wealthsimple::session::Tokens {
+        access: sess.access_token.clone(),
+        refresh: sess.refresh_token.clone(),
+        client_id,
+        identity: sess.identity(),
+        expires_at: None,
+        device: (!sess.wssdi.is_empty()).then(|| sess.wssdi.clone()),
+    })
+}
+
+fn adopt(sess: &mut Session, fresh: bagholder_wealthsimple::session::Tokens) {
+    sess.access_token = fresh.access;
+    sess.refresh_token = fresh.refresh;
+    sess.client_id = fresh.client_id;
+    if let Some(at) = fresh.expires_at {
+        sess.expires_at = Some(bagholder_ws::session::Expiry::Text(at.to_string()));
     }
 }
 
@@ -56,44 +153,12 @@ pub fn refresh_session(app: &Arc<App>, sess: &mut Session, adopt: bool) -> bool 
 /// a token another caller rotated is adopted without a post, and a refresh token
 /// Wealthsimple refused never posted again. The reads, the orders and the sign-in
 /// share it, so two of them at once post a refresh token once
-/// (`docs/plans/stage-3c-switch.md`, §3, "One session"). A login newer than the
-/// file (`adopt` false, a sign-in just captured) is written to the file first.
-fn one_refresh(app: &Arc<App>, sess: &mut Session, adopt: bool) -> Result<(), String> {
-    let home = app.ws_home();
-    let client_id = Client { home: &home }.client_id_for(sess).map_err(|e| format!("Could not read the cached Wealthsimple client id: {e}"))?;
-    if client_id.is_empty() {
-        return Err("session has no client id".into());
-    }
-    sess.client_id = client_id.clone();
-    if !adopt {
-        home.save_session(sess).map_err(|e| format!("Could not save the Wealthsimple login: {e}"))?;
-    }
-    if sess.identity().is_empty() {
-        // the adapter asks for the accounts by it: a login without it cannot be read
-        return Err("Wealthsimple did not say whose login this is; connect again".into());
-    }
-    let held = bagholder_wealthsimple::session::Tokens {
-        access: sess.access_token.clone(),
-        refresh: sess.refresh_token.clone(),
-        client_id,
-        identity: sess.identity(),
-        expires_at: None,
-        device: (!sess.wssdi.is_empty()).then(|| sess.wssdi.clone()),
-    };
-    if held.refresh.is_empty() {
-        return Err("missing refresh token".into());
-    }
-    let file = bagholder_wealthsimple::session::SessionFile { path: home.session_path() };
-    let fresh = bagholder_wealthsimple::session::refresh(&app.net, &file, &held).map_err(|f| match f {
-        bagholder_broker::Failure::Lapsed(why) => why,
-        other => other.to_string(),
-    })?;
-    sess.access_token = fresh.access;
-    sess.refresh_token = fresh.refresh;
-    sess.client_id = fresh.client_id;
-    if let Some(at) = fresh.expires_at {
-        sess.expires_at = Some(bagholder_ws::session::Expiry::Text(at.to_string()));
-    }
+/// (`docs/plans/stage-3c-switch.md`, §3, "One session").
+fn one_refresh(app: &Arc<App>, sess: &mut Session) -> Result<(), RefreshFailed> {
+    let held = held_tokens(app, sess)?;
+    let file = bagholder_wealthsimple::session::SessionFile { path: app.ws_home().session_path() };
+    let fresh = bagholder_wealthsimple::session::refresh(&app.net, &file, &held)?;
+    adopt(sess, fresh);
     Ok(())
 }
 
@@ -168,17 +233,14 @@ pub fn scrape_client_id(app: &Arc<App>) -> String {
     }
 }
 
-/// Refresh ahead of the expiry. Connected means
-/// this grant produced a new token.
+/// Refresh ahead of the expiry; what came of it is told to `heard`.
 pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Session>) -> bool {
     let sess = match sess {
         Some(s) => Some(s),
         None => match load_session(app) {
             Ok(s) => s,
             Err(e) => {
-                let mut st = app.state.lock().unwrap();
-                st.connected = false;
-                st.error = e;
+                heard(app, Heard::NotAsked(e));
                 return false;
             }
         },
@@ -186,9 +248,7 @@ pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Session>) -> bool {
     let mut sess = match sess {
         Some(s) if !s.refresh_token.is_empty() => s,
         _ => {
-            let mut st = app.state.lock().unwrap();
-            st.connected = false;
-            st.error = "missing refresh token".into();
+            heard(app, Heard::Lapsed("missing refresh token".into()));
             return false;
         }
     };
@@ -196,27 +256,22 @@ pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Session>) -> bool {
     if connected && !bagholder_ws::session::token_refresh_needed(&sess, now_unix()) {
         return true;
     }
-    let ok = refresh_session(app, &mut sess, true);
-    let mut st = app.state.lock().unwrap();
-    st.connected = ok;
-    if ok {
-        st.error.clear();
-    } else if st.error.trim().is_empty() {
-        st.error = "Wealthsimple token refresh failed".into();
+    if refresh_session(app, &mut sess) {
+        app.state.lock().unwrap().error.clear();
+        return true;
     }
-    ok
+    false
 }
 
 /// The login only; stored rows stay. A login file that cannot be removed is
 /// still there: nothing is marked disconnected, and the caller answers why.
 pub fn delete_session(app: &Arc<App>) -> Result<(), String> {
     app.ws_home().delete_session().map_err(|e| format!("Could not remove the Wealthsimple login: {e}"))?;
+    heard(app, Heard::Lapsed(String::new()));
     let mut st = app.state.lock().unwrap();
-    st.connected = false;
     st.email.clear();
     st.last_sync.clear();
     st.capturing = false;
-    st.error.clear();
     st.portfolio_error.clear();
     Ok(())
 }
@@ -227,22 +282,20 @@ pub fn boot_session(app: &Arc<App>) {
     let mut sess = match load_session(app) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            app.state.lock().unwrap().connected = false;
+            heard(app, Heard::Lapsed(String::new()));
             return;
         }
         Err(e) => {
-            let mut st = app.state.lock().unwrap();
-            st.connected = false;
-            st.error = e;
+            heard(app, Heard::NotAsked(e));
             return;
         }
     };
-    let mut info_ok = false;
     let mut saved = Ok(());
+    let mut answered = false;
     if !sess.access_token.is_empty() {
         let info = token_info(app, &sess);
-        info_ok = info.is_ok();
-        if info_ok {
+        if info.is_ok() {
+            answered = true;
             apply_token_info_client_id(app, &mut sess, Some(&info));
             let identity = info.identity();
             if !identity.is_empty() && sess.identity().is_empty() {
@@ -252,24 +305,24 @@ pub fn boot_session(app: &Arc<App>) {
                 sess.email = info.email.clone();
             }
             saved = save_session(app, &sess);
+            // Wealthsimple answered a request signed with the token held
+            heard(app, Heard::Issued);
+            app.state.lock().unwrap().error.clear();
         }
     }
-    let mut ok = info_ok;
-    if !ok && !sess.refresh_token.is_empty() {
-        ok = refresh_session(app, &mut sess, true);
-        match load_session(app) {
-            Ok(Some(s)) => sess = s,
-            Ok(None) => {}
-            Err(e) => saved = Err(e),
+    if !answered {
+        if sess.refresh_token.is_empty() {
+            heard(app, Heard::Lapsed("missing refresh token".into()));
+        } else if refresh_session(app, &mut sess) {
+            app.state.lock().unwrap().error.clear();
+            match load_session(app) {
+                Ok(Some(s)) => sess = s,
+                Ok(None) => {}
+                Err(e) => saved = Err(e),
+            }
         }
     }
     let mut st = app.state.lock().unwrap();
-    st.connected = ok;
-    if ok {
-        st.error.clear();
-    } else if st.error.trim().is_empty() {
-        st.error = if sess.refresh_token.is_empty() { "missing refresh token".into() } else { "Wealthsimple token refresh failed".into() };
-    }
     if let Err(e) = saved {
         st.error = e;
     }
@@ -278,13 +331,8 @@ pub fn boot_session(app: &Arc<App>) {
 
 /// Told once per expiry.
 pub fn note_session_expired(app: &Arc<App>) {
-    let was = {
-        let mut st = app.state.lock().unwrap();
-        let was = st.connected;
-        st.connected = false;
-        st.error = "Session expired. Connect again.".into();
-        was
-    };
+    let was = app.state.lock().unwrap().connected;
+    heard(app, Heard::Lapsed("Session expired. Connect again.".into()));
     if was {
         // a notice that could not be recorded is said in the header until one is
         crate::notify::tell(app, "connection", &format!("session:{}", now_iso()), "Sign in needed", "The Wealthsimple session expired. Connect again from the menu.", None);
@@ -331,25 +379,20 @@ pub fn refresh_now(app: &Arc<App>) -> RefreshAnswer {
     let mut sess = match load_session(app) {
         Ok(Some(s)) if !s.refresh_token.is_empty() => s,
         Ok(_) => {
-            let mut st = app.state.lock().unwrap();
-            st.connected = false;
-            st.error = "not connected".into();
+            heard(app, Heard::Lapsed("not connected".into()));
             return RefreshAnswer { ok: false, error: "not connected".into(), connected: false };
         }
         Err(e) => {
-            let mut st = app.state.lock().unwrap();
-            st.connected = false;
-            st.error = e.clone();
-            return RefreshAnswer { ok: false, error: e, connected: false };
+            heard(app, Heard::NotAsked(e.clone()));
+            return RefreshAnswer { ok: false, error: e, connected: app.state.lock().unwrap().connected };
         }
     };
-    let ok = refresh_session(app, &mut sess, true);
+    let ok = refresh_session(app, &mut sess);
     let mut st = app.state.lock().unwrap();
-    st.connected = ok;
     if ok {
         st.error.clear();
     }
-    RefreshAnswer { ok, error: st.error.trim().to_string(), connected: ok }
+    RefreshAnswer { ok, error: st.error.trim().to_string(), connected: st.connected }
 }
 
 /// The token kept fresh, backing off on failure. The pull and the balances are
@@ -427,18 +470,37 @@ pub struct Capture {
     pub ids: bagholder_ws::session::IdentityKeys,
 }
 
-/// Keep the captured login and take it over.
+/// What became of a captured login.
+#[derive(Debug, PartialEq)]
+pub enum Taken {
+    /// Wealthsimple answered with new tokens: the login is the app's, and saved.
+    Taken,
+    /// Wealthsimple refused it, or it says nothing of whose it is: not tried again.
+    Refused(String),
+    /// It could not be asked, or not read or written: tried again while the window is up.
+    NotAsked(String),
+}
+
+/// `POST /api/capture`: a captured login handed over, taken over or refused in words.
 pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
+    match take_capture(app, capture) {
+        Taken::Taken => OkOr::ok(),
+        Taken::Refused(why) | Taken::NotAsked(why) => OkOr::err(why),
+    }
+}
+
+/// Keep the captured login in memory and take it over.
+pub fn take_capture(app: &Arc<App>, capture: &Capture) -> Taken {
     let capture = capture.clone();
     if capture.access_token.is_empty() {
-        return OkOr::err("missing access_token");
+        return Taken::Refused("missing access_token".into());
     }
     // a new login is taken over the saved one; a saved one that cannot be read is said, not overwritten unseen
     let mut sess = match load_session(app) {
         Ok(s) => s.unwrap_or_default(),
         Err(e) => {
             app.state.lock().unwrap().error = e.clone();
-            return OkOr::err(e);
+            return Taken::NotAsked(e);
         }
     };
     sess.access_token = capture.access_token;
@@ -481,7 +543,7 @@ pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
         let why = info.error.as_ref().map(|e| e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())).unwrap_or_else(|| "no answer".into());
         let err = format!("Wealthsimple did not say whose login this is: {why}");
         app.state.lock().unwrap().error = err.clone();
-        return OkOr::err(err);
+        return Taken::Refused(err);
     }
     sess.ids.identity_canonical_id = ident;
     if sess.session_id.is_empty() {
@@ -500,33 +562,50 @@ pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
             Err(e) => {
                 let err = format!("Could not read the cached browser user agent: {e}");
                 set_error(app, &err);
-                return OkOr::err(err);
+                return Taken::NotAsked(err);
             }
         };
         if !ua.is_empty() {
             sess.user_agent = ua;
         }
     }
-    // take the login over: rotate its refresh token now, so the copy the
-    // browser holds goes stale instead of ours
-    if !refresh_session(app, &mut sess, false) {
-        let mut st = app.state.lock().unwrap();
-        st.connected = false;
-        let err = if st.error.is_empty() { "Wealthsimple refused the captured login".to_string() } else { st.error.clone() };
-        return OkOr::err(err);
+    // take the login over: rotate its refresh token now, so the copy the browser
+    // holds goes stale instead of ours. Nothing is written until Wealthsimple has
+    // answered with new tokens: a refused or unanswered capture leaves the saved
+    // login as it was (`docs/plans/stage-money.md`, part C)
+    let held = match held_tokens(app, &mut sess) {
+        Ok(h) => h,
+        Err(f) => return refused_capture(app, f),
+    };
+    let keep = |t: &bagholder_wealthsimple::session::Tokens| {
+        let mut taken = sess.clone();
+        adopt(&mut taken, t.clone());
+        save_session(app, &taken).map_err(bagholder_broker::Failure::Refused)
+    };
+    match bagholder_wealthsimple::session::take_over(&app.net, &held, keep) {
+        Ok(fresh) => adopt(&mut sess, fresh),
+        Err(f) => return refused_capture(app, f.into()),
     }
-    if let Err(e) = save_session(app, &sess) {
-        app.state.lock().unwrap().error = e.clone();
-        return OkOr::err(e);
-    }
+    heard(app, Heard::Issued);
     {
         let mut st = app.state.lock().unwrap();
-        st.connected = true;
         st.capturing = false;
         st.error.clear();
     }
     // the first read with the new sign-in
     app.pull_asked.store(true, std::sync::atomic::Ordering::SeqCst);
     app.events.signal();
-    OkOr::ok()
+    Taken::Taken
+}
+
+/// A capture not taken over. Refused (the sign-in is not good): that token is not
+/// tried again. Not asked (no answer, or the login could not be read or written):
+/// tried again while the window is up. Either way the saved login stands as it was,
+/// and `connected` is left to what the saved login is.
+fn refused_capture(app: &Arc<App>, f: RefreshFailed) -> Taken {
+    set_error(app, f.why());
+    match f {
+        RefreshFailed::Lapsed(why) => Taken::Refused(why),
+        RefreshFailed::NotAsked(why) => Taken::NotAsked(why),
+    }
 }

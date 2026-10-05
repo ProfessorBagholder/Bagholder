@@ -428,4 +428,6 @@ mod tests_universes;
 #[cfg(test)]
 mod tests_failures;
 #[cfg(test)]
+mod tests_session;
+#[cfg(test)]
 mod tests_failures_lower;
