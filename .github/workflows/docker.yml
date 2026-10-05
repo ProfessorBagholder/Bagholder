@@ -1,12 +1,13 @@
-# Publishes the app's image to GitHub's container registry on every release tag, as
+# Publishes the app's image to GitHub's container registry for every release tag, as
 # ghcr.io/professorbagholder/bagholder:<version> and :latest, and under the tags
 # :rust-<version> and :rust too. A Docker user updates with
 # `docker compose pull && docker compose up -d`. Built from the repository root.
 name: Docker image
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  # a release tag runs it from `release.yml`, whose publishing of the release waits
+  # for it, so a release is never shown before its image is there
+  workflow_call:
   # a run started by hand publishes :rust only, so a copy of master never goes
   # out as the image a release tag put there
   workflow_dispatch:
