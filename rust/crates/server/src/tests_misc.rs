@@ -263,6 +263,36 @@ fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
     assert_eq!(update::release_assets(&rel(&[mine.clone(), "bagholder-v2.0.0-android.apk".into()])), None, "nothing without its checksum");
 }
 
+/// A copy that installs archives is offered a release only once this platform's
+/// archive and its checksum are attached: GitHub publishes the release before its
+/// archives are built, and an offer that cannot be pressed is not made.
+#[test]
+fn test_a_release_whose_archive_is_not_attached_yet_is_not_offered() {
+    let _g = guard();
+    let (home, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let release_copy = app::App::new(home.path().to_path_buf(), root.path().to_path_buf(), "127.0.0.1".into());
+    assert_eq!(update::update_mode(&release_copy), "release", "no checkout: this copy installs archives");
+    let mine = update::parse_version(app::APP_VERSION).unwrap();
+    let newer = format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1);
+    let archive = update::archive_name(&newer);
+    let asset = |name: &str| update::GithubAsset { name: name.into(), browser_download_url: format!("https://github.com/x/{name}"), size: 10 };
+    let release = |assets: Vec<update::GithubAsset>| update::GithubRelease { tag_name: newer.clone(), html_url: "https://github.com/x/y/releases/latest".into(), assets };
+    // only another platform's archive so far: not offered, here or in the status
+    let fakes = UpdateFakes::new(Some(release(vec![asset("bagholder-v9.9.9-rust-some-other-target.tar.gz")])));
+    let rec = update::check_for_update(&release_copy);
+    assert_eq!((rec.ok, rec.update_available, rec.latest.as_str()), (true, false, newer.as_str()));
+    let st = crate::status::status(&release_copy);
+    assert_eq!((st.update_available, st.can_update), (false, false));
+    // the archive without its checksum: still not
+    fakes.answer(Some(release(vec![asset(&archive)])));
+    assert!(!update::check_for_update(&release_copy).update_available);
+    // both attached: offered, and pressable
+    fakes.answer(Some(release(vec![asset(&archive), asset(&format!("{archive}.sha256"))])));
+    assert!(update::check_for_update(&release_copy).update_available);
+    let st = crate::status::status(&release_copy);
+    assert_eq!((st.update_available, st.can_update), (true, true));
+}
+
 /// The update-off half: the Host check takes a live request and is not reachable here.
 #[test]
 fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
