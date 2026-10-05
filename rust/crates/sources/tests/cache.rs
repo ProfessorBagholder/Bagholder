@@ -262,7 +262,8 @@ fn a_commit_to_the_cache_is_heard() {
     let h = heard.clone();
     c.on_commit(std::sync::Arc::new(move || {
         h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }));
+    }))
+    .unwrap();
     c.record(&outcome("a", OutcomeKind::Unreachable, t("2026-09-24T12:00:00Z"))).unwrap();
     assert_eq!(heard.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

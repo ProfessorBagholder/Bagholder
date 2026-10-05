@@ -161,6 +161,8 @@ pub struct Figures {
     /// app's bus, `App::set_figures`): a source's outcome recorded is a change
     /// the header may show.
     heard: std::sync::OnceLock<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    /// Told after every commit to the book, on any connection `book` opens.
+    book_heard: std::sync::OnceLock<std::sync::Arc<dyn Fn() + Send + Sync>>,
     /// The connection the header's source failures are read on, opened once.
     failures_conn: std::sync::Mutex<Option<MarketCache>>,
 }
@@ -177,7 +179,7 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None) };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
@@ -204,7 +206,22 @@ impl Figures {
 
     /// A connection to the book, of this thread's own.
     pub fn book(&self) -> Result<Book, String> {
-        Book::open_in(&self.home, crate::app::APP_VERSION, Timestamp::now()).map(|(b, _)| b).map_err(err)
+        let (b, _) = Book::open_in(&self.home, crate::app::APP_VERSION, Timestamp::now()).map_err(err)?;
+        // every write to the book reaches the screens once it has landed: a note, a
+        // grade, a trade typed in, an import (`docs/plans/stage-money.md`, part E)
+        if let Some(heard) = self.book_heard.get() {
+            b.on_commit(heard.clone()).map_err(|e| format!("the book's commits could not be heard: {e}"))?;
+        }
+        Ok(b)
+    }
+
+    /// Have `heard` told after every commit to the book from now on. Once: the app's bus.
+    pub fn hear_book(&self, heard: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        match self.book_heard.set(heard) {
+            Ok(()) => {}
+            // a second call leaves the first
+            Err(_second) => {}
+        }
     }
 
     /// A connection to the market cache, of this thread's own; its commits are
@@ -212,7 +229,7 @@ impl Figures {
     pub fn cache(&self) -> Result<MarketCache, String> {
         let (c, _) = MarketCache::open(&self.home.join(CACHE_FILE), crate::app::APP_VERSION, Timestamp::now()).map_err(err)?;
         if let Some(heard) = self.heard.get() {
-            c.on_commit(heard.clone());
+            c.on_commit(heard.clone()).map_err(|e| format!("the market cache's commits could not be heard: {e}"))?;
         }
         Ok(c)
     }

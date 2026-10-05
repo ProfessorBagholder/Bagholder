@@ -70,6 +70,8 @@ A test in the old crates that records one of these as it behaves today is named 
 - **Every answer from outside was read whole with no ceiling**, the 1.95 GB model and the release archive into memory, and a download's redirect could go to any host. Guarded: `net/src/client.rs` `ceiling_tests`; `market/src/localmodel.rs` and `server/src/update.rs` `host_tests`.
 - **A failed update after a migration left no starting app**: the rollback put the old binaries back over stores they could not read. Guarded: `tests_misc.rs` `test_a_new_version_that_migrated_and_died_gets_the_stores_back_as_the_update_found_them`, `test_a_new_version_whose_stores_cannot_be_put_back_is_left_in_place_and_said`.
 
+- **A write to the book never reached the stream**: the book's connections carried no commit hook, and the cache's signalled from SQLite's commit hook, which runs before the commit completes, so a reader it woke read the rows as they were. A note, a grade, a trade typed in or an import stayed stale on every other screen until an unrelated change. Guarded: `sqlite/src/lib.rs` `a_reader_woken_by_the_signal_sees_what_the_commit_wrote`, `the_log_is_checkpointed_as_sqlite_would`; `tests_routes_golden.rs` `test_every_write_to_the_book_reaches_the_stream`.
+
 ## Running it (stage 5)
 
 - **With the container's port published beyond loopback, anyone on the network can place orders**: access is a loopback check. Not guarded yet.

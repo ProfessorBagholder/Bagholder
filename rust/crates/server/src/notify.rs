@@ -332,8 +332,7 @@ pub fn book(app: &App) -> Result<NoticesBook<'_>> {
         Some(b) => b,
         None => {
             let b = app.figures.get().ok_or_else(|| said("the book is not open yet".into()))?.book().map_err(said)?;
-            let events = app.events.clone();
-            b.on_commit(Arc::new(move || events.signal_from(crate::events::Source::Store)));
+            b.on_commit(app.store_signal.clone()).map_err(|e| said(e.to_string()))?;
             b
         }
     };

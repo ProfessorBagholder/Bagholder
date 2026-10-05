@@ -70,9 +70,11 @@ pub struct Bus {
 /// Where a change came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// A commit to what the earlier store kept, in its new places: the earlier
-    /// readers' tables in the market cache (feeds, the market's context tables,
-    /// on the app's pool of it) and the notices in the book (`notify::book`).
+    /// A commit to the book on any connection the app opens (a note, a grade, a
+    /// trade typed in, an import, the notices, the settings) and to what the
+    /// earlier store kept in the market cache (feeds, the market's context tables,
+    /// on the app's pool of it), told once the commit has landed
+    /// (`bagholder_sqlite::on_commit`).
     Store = 0,
     /// A commit to the market cache by the figure path (`market.db`): quotes,
     /// closes, sources' outcomes.
