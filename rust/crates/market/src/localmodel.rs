@@ -69,6 +69,7 @@ pub fn reset_state() {
     st.endpoint.clear();
     st.model.clear();
     st.rest = None;
+    st.received = 0;
 }
 
 fn env(name: &str, default: &str) -> String {
@@ -142,6 +143,8 @@ struct State {
     model: String,
     /// After a failure, how long the next attempt waits, and from when.
     rest: Option<(std::time::Instant, Duration)>,
+    /// Bytes of the model file written while it downloads.
+    received: u64,
 }
 
 /// The first rest after a failed provisioning, doubled on each failure after it, up to the most.
@@ -155,7 +158,7 @@ pub fn next_rest(before: Option<Duration>) -> Duration {
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { folder: None, phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new(), rest: None }))
+    S.get_or_init(|| Mutex::new(State { folder: None, phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new(), rest: None, received: 0 }))
 }
 
 /// Turn the model on for the app whose data folder is `home`: the model file is
@@ -195,6 +198,12 @@ fn detect_running() -> Option<(String, String)> {
         return Some((ollama, ollama_model()));
     }
     None
+}
+
+/// While the model file downloads, the bytes written of the pinned file's size.
+pub fn downloading() -> Option<(u64, u64)> {
+    let st = state().lock().unwrap();
+    (st.phase == "downloading").then(|| (st.received, llamafile_bytes()))
 }
 
 /// Off, detecting, downloading, starting, ready, failed.
@@ -354,6 +363,7 @@ fn provision() {
         }
     };
     if !verified(&path) {
+        state().lock().unwrap().received = 0;
         set("downloading", "");
         if let Err(e) = download(&path) {
             set("failed", &format!("download failed: {e}"));
@@ -402,6 +412,21 @@ pub fn verified(path: &PathBuf) -> bool {
     hex == pin.to_lowercase()
 }
 
+/// How far the download has come, kept for `downloading` and told when the whole
+/// percent of `size` moves.
+fn told(size: u64) -> impl FnMut(u64) -> bool {
+    let mut said: Option<u64> = None;
+    move |written: u64| {
+        let pct = written * 100 / size.max(1);
+        if said != Some(pct) {
+            said = Some(pct);
+            state().lock().unwrap().received = written;
+            changed();
+        }
+        true
+    }
+}
+
 /// The model file fetched from its pinned host and made runnable, or why not.
 pub fn download(path: &PathBuf) -> Result<(), String> {
     let url = llamafile_url();
@@ -410,10 +435,12 @@ pub fn download(path: &PathBuf) -> Result<(), String> {
         return Err(format!("{host} is not a host the model is fetched from"));
     }
     let tmp = path.with_extension("part");
+    let size = llamafile_bytes();
+    let mut progress = told(size);
     // streamed to disk as it arrives, never held in memory, no larger than the pinned file
     let got = std::fs::File::create(&tmp)
         .map_err(|e| e.to_string())
-        .and_then(|mut f| bagholder_net::client::download(&url, &[("User-Agent", "Bagholder")], DOWNLOAD_TIMEOUT, &mut f, llamafile_bytes(), &allowed_host, &mut |_| true).map_err(|e| e.to_string()))
+        .and_then(|mut f| bagholder_net::client::download(&url, &[("User-Agent", "Bagholder")], DOWNLOAD_TIMEOUT, &mut f, size, &allowed_host, &mut progress).map_err(|e| e.to_string()))
         .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
     if let Err(e) = got {
         // a part never written is nothing to remove
@@ -564,6 +591,29 @@ mod rest_tests {
         assert_eq!(next_rest(Some(Duration::from_secs(30))), Duration::from_secs(60));
         assert_eq!(next_rest(Some(Duration::from_secs(20 * 60))), REST_MOST);
         assert_eq!(next_rest(Some(REST_MOST)), REST_MOST);
+    }
+
+    /// While the file downloads, how far it has come is there to show, moved at each
+    /// whole percent; once it has, nothing is.
+    #[test]
+    fn a_download_says_how_far_it_has_come_by_the_whole_percent() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_state();
+        assert_eq!(downloading(), None);
+        set("downloading", "");
+        let size = llamafile_bytes();
+        let mut progress = told(size);
+        assert_eq!(downloading(), Some((0, size)));
+        let at = (size * 34).div_ceil(100); // the first byte of the 34th percent
+        progress(at);
+        assert_eq!(downloading(), Some((at, size)));
+        progress(at + 1); // the same percent: not told again
+        assert_eq!(downloading(), Some((at, size)));
+        progress(size);
+        assert_eq!(downloading(), Some((size, size)));
+        set("starting", "");
+        assert_eq!(downloading(), None);
+        reset_state();
     }
 
     #[test]

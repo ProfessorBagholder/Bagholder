@@ -430,6 +430,7 @@
         {:else if ui.busy === 'refresh'}<span class="spin"></span>Refreshing session…
         {:else if status?.syncing}<span class="spin"></span>{status.syncStep || 'Syncing…'}
         {:else if status?.error && !showingEmpty}<span class="status-err">{status.error}</span>
+        {:else if status?.modelDownload}<span class="spin"></span>Downloading the language model… {Math.floor((status.modelDownload.received * 100) / Math.max(status.modelDownload.size, 1))}%
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>

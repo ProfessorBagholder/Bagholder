@@ -195,7 +195,7 @@ fn status_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::status::Status, crate::status::StatusAnswer];
+    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
     let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\n");
     for d in decls {
         out.push_str("export ");

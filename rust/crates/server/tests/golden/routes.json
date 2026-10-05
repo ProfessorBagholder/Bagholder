@@ -16,7 +16,7 @@
       "summaryReady": false,
       "protocol": "2026-09-26.2",
       "startedAt": "<startedAt>",
-      "version": "2.2.5",
+      "version": "2.3.0",
       "latestVersion": "",
       "updateAvailable": false,
       "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
@@ -42,6 +42,7 @@
         "unread": 0
       },
       "importing": null,
+      "modelDownload": null,
       "dataVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|quotes:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|<today>",
       "coreVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|<today>"
     }

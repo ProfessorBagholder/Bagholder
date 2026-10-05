@@ -48,6 +48,16 @@ pub struct Status {
     pub notify: NotifyStatus,
     /// The import running now and how far it has come, for the import window.
     pub importing: Option<crate::csv_import::Importing>,
+    /// The language model's file while it downloads, and how far it has come.
+    pub model_download: Option<ModelDownload>,
+}
+
+/// The language model's file downloading: the bytes written of its pinned size.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDownload {
+    pub received: u64,
+    pub size: u64,
 }
 
 /// `GET /api/status`: `Status` plus the two version strings the legacy
@@ -126,6 +136,7 @@ pub fn status(app: &Arc<App>) -> Status {
         updating: st.updating.clone(),
         update_error: st.update_error.clone(),
         importing: st.importing.clone(),
+        model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
     }
 }

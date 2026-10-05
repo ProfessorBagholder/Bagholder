@@ -72,10 +72,13 @@ pub const LOST_REFRESH: &str = "The sign-in lapsed: Wealthsimple's answer to a r
 
 /// Refreshes run one at a time, in the process.
 static REFRESH: Mutex<()> = Mutex::new(());
-/// The refresh token Wealthsimple last refused: never posted again.
-static REFUSED: Mutex<Option<String>> = Mutex::new(None);
-/// The refresh token last posted with no answer back: Wealthsimple may have taken it.
-static UNANSWERED: Mutex<Option<String>> = Mutex::new(None);
+/// Every refresh token Wealthsimple refused: none is posted again. Each is a token the
+/// app held, so the set grows only by sign-ins that lapsed.
+static REFUSED: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+/// Every refresh token posted with no answer back: Wealthsimple may have taken it. One
+/// is forgotten once Wealthsimple settles it, taking it or refusing it. Kept per token, so a second token posted
+/// meanwhile (a sign-in captured) never hides the first's lost answer.
+static UNANSWERED: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
 
 /// The session file in the data folder.
 pub struct SessionFile {
@@ -150,7 +153,7 @@ pub fn take_over(net: &Net, captured: &Tokens, keep: impl FnOnce(&Tokens) -> Res
 
 /// Wealthsimple's answer to `held`'s refresh token, under the caller's lock.
 fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
-    if REFUSED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(held.refresh.as_str()) {
+    if REFUSED.lock().unwrap_or_else(|e| e.into_inner()).contains(&held.refresh) {
         return Err(Failure::Lapsed(REFUSED_SIGN_IN.into()));
     }
     let mut body = BTreeMap::new();
@@ -165,7 +168,7 @@ fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
             // sent with no answer back, it may have reached Wealthsimple and been taken: a
             // refusal of it later is the lost answer's (a host left resting was sent nothing)
             if matches!(e, bagholder_net::NetError::Unreachable(_)) {
-                *UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()) = Some(held.refresh.clone());
+                UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()).insert(held.refresh.clone());
             }
             return Err(Failure::Unreachable(e.to_string()));
         }
@@ -175,8 +178,9 @@ fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
     if reply.status != 200 {
         let code = n.opt_text("error").ok().flatten().unwrap_or("");
         if code == "invalid_grant" || reply.status == 401 {
-            *REFUSED.lock().unwrap_or_else(|e| e.into_inner()) = Some(held.refresh.clone());
-            let lost = UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(held.refresh.as_str());
+            REFUSED.lock().unwrap_or_else(|e| e.into_inner()).insert(held.refresh.clone());
+            // settled: refused now, whatever became of the post that went unanswered
+            let lost = UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()).remove(&held.refresh);
             return Err(Failure::Lapsed(if lost { LOST_REFRESH } else { REFUSED_SIGN_IN }.into()));
         }
         return Err(Failure::Refused(format!("the token refresh answered {}: {code}", reply.status)));
@@ -185,5 +189,7 @@ fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
     let refresh = n.text("refresh_token").map_err(|m| Failure::Mismatch(m.to_string()))?.to_string();
     let expires_in = n.int("expires_in").map_err(|m| Failure::Mismatch(m.to_string()))?;
     let expires_at = reply.received_at.checked_add(jiff::Span::new().seconds(expires_in)).ok();
+    // settled: taken, so no earlier post of it matters any more
+    UNANSWERED.lock().unwrap_or_else(|e| e.into_inner()).remove(&held.refresh);
     Ok(Tokens { access, refresh, client_id: held.client_id.clone(), identity: held.identity.clone(), expires_at, device: held.device.clone() })
 }

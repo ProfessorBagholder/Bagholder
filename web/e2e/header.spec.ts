@@ -35,6 +35,14 @@ test('the status line says what the update is doing, then that it failed', async
   await expect(page.locator('#syncline .status-err')).toHaveText('The update could not be verified.')
 })
 
+test('while the language model downloads, the status line says how far it has come, behind a sync under way', async ({ page, request }) => {
+  const modelDownload = { received: 663483039, size: 1951420702 }
+  await openWithStatus(page, request, { modelDownload })
+  await expect(page.locator('#syncline')).toHaveText('Downloading the language model… 34%')
+  await openWithStatus(page, request, { modelDownload, syncing: true, syncStep: 'Reading activity' })
+  await expect(page.locator('#syncline')).toHaveText('Reading activity')
+})
+
 test('a server of another protocol is told apart: restart to finish the update', async ({ page, request }) => {
   await openWithStatus(page, request, { protocol: '1999-01-01.1' })
   await expect(page.locator('#syncline')).toHaveText('Restart Bagholder to finish the update')
