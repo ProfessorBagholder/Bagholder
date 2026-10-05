@@ -1,99 +1,151 @@
-# Plan: three figures defined as the category defines them (brief 15, decisions 6, 7 and 9)
+# Plan: a holding's cost, a trade's result and a past range (brief 15, decisions 6, 7 and 9)
 
 ## For the owner to decide
 
-Nothing open. The owner ruled on 2026-10-04 that these three are not choices: "There is a right and wrong way, it shouldn't be a matter of personal preference" (`docs/decisions.md`, 2026-10-04). Each is settled below from the category's own documentation and goes into `SPEC.md` as a correctness fix.
+Nothing open. The owner ruled on 2026-10-04 that these are not matters of preference ("There is a right and wrong way", `docs/decisions.md`, 2026-10-04). Decisions 6 and 9 are settled by the category's own documentation. Decision 7 is not settled by the category: the leading journals score in the base currency, and none documents scoring a trade in its own. It follows from the owner's standing rule instead, as set out below (brief 20).
+
+## Brief 20 applied (Go with changes)
+
+Each of the nine required changes, and where it lands:
+1. **Fees are in the average** (cost includes the commission, as at the CRA and IBKR): Approach §6; an engine case with a commission on a buy.
+2. **One place changes lots, and the average is derived there**: Approach §6. There is no second running figure. An invariant test runs over generated sequences (transfers, splits, return of capital, stock dividends, option expiry and assignment, a short). Cases cover a short's average (what it brought in) and an option's (premium per contract).
+3. **A holding transferred between accounts keeps the journal's cost**: `SPEC.md` §1 says so, and the broker-book acceptance check is scoped to holdings with no transferred-in lot. A mismatch on a transferred holding does not trigger the Right to refuse.
+4. **The broker's stated book value is read and stored**: Approach §6. `wealthsimple/src/read.rs` and `broker/src/pull.rs` keep it, strictly. No new header sentence.
+5. **Realized (FIFO) and unrealized (average cost) do not sum for a partly sold position**: `SPEC.md` says so. Every screen and export is checked for such a sum. There is a property test: for any sequence that ends flat, Σ realized under FIFO = Σ realized at average cost.
+6. **Decision 7's basis is stated as it is**: the owner's rule, not the category. See *How the leading products do it* and `SPEC.md`.
+7. **One definition of a win**: one function used by the Result filter (`scope.rs` `outcome`), the KPIs and the by-symbol rows. One test holds the Dashboard's counts to the Trades list under Result = Win / Loss for every filter state. Gross W and Avg win keep a negative CAD amount as it stands, never clamped (one case).
+8. **The close of a range's last day is the last close on or before it**, with the Bank of Canada rate found the same way. This is the engine's own convention, stated in `SPEC.md`.
+9. **No figure on Portfolio mixes dates**: Approach §9 lists every figure, as of the range's end or `—`. A row's page and its Buy and Sell are covered too. Replaying the ledger to the end day is measured at the owner's size and kept by end date until the book moves.
 
 ## Scope
 
-Three definitions in `SPEC.md` and the engine:
+Three definitions, in `SPEC.md` and the engine:
 
-1. **A holding's cost after a partial sale.** This is the average cost of the units still held. Today it is what is left of the lots after the oldest are sold first.
-2. **Whether a trade won or lost.** This is judged in the trade's own currency, so the Dashboard, the Trades list and the trade's page always agree. Today the Dashboard judges it in CAD.
-3. **Portfolio under a past date range.** It shows the positions held on the range's last day, valued at that day's closes. Today it shows anything held at any time in the range, valued at today's price.
+1. **A holding's cost after a partial sale.** It becomes the average cost of the units still held, fees in. Today it is the remainder of the lots once the oldest are sold.
+2. **A trade's win or loss.** It is judged by the sign of its P&L in its own currency, the figure its own page shows. Every sum stays in CAD.
+3. **Portfolio under a past date range.** It shows the positions held at the close of the range's last day (the last close on or before it), with every figure as of that day or `—`.
 
-Out of scope, on purpose:
-- An "include sold positions" switch for a past range. Sharesight has one; it is a new feature and waits (`docs/decisions.md` 2026-10-04: no new features until the bugs are fixed).
-- How trades match sells to buys for their own P&L. It stays oldest-first (FIFO).
+Out of scope:
+- An "include sold positions" switch (a later feature, `docs/decisions.md` 2026-10-04).
+- The trades' FIFO matching, which stays.
+- Any header sentence about cost.
 
 ## The old app here
 
-1. **Cost.** The Python app, and the Rust engine after it (`engine/src/positions.rs`, a holding's `book` built from `matched.books[..].lots`), give a partly sold holding the cost of the lots still unsold, oldest sold first. Wealthsimple, Questrade and the CRA all state the average cost of everything still held. So after a partial sale the holding's Avg, Book and unrealized P&L differ from the broker's own screen. Entry to add to `docs/old-app-mistakes.md`: "A partly sold holding's cost was the FIFO remainder, not the average cost the broker and the CRA state."
-2. **Win or loss.** `engine/src/scope.rs` `kpi` classifies a closed trade by the sign of `pnl_cad`. A USD trade that gained in USD while the Canadian dollar moved against it is a loss on the Dashboard and a gain on its own page, which shows the instrument's currency (`docs/decisions.md`: "Per-instrument figures in the instrument's own currency; aggregates in CAD"). Entry to add: "A trade's win or loss was judged after conversion to CAD, so its own page and the Dashboard disagreed."
-3. **Date range.** `SPEC.md` §5 Filters: a holding answers the dates "when it was held at some time in them, still valued today, so a range ending today narrows nothing" (`engine/src/scope.rs:267`). No leading product does this. Entry to add: "Portfolio under a past range listed anything held at any time in it, valued today."
+1. **Cost.**
+   - Today: the Python app, and the Rust engine after it, give a partly sold holding the cost of its unsold lots (`engine/src/positions.rs`: the book as Σ lot value).
+   - What the category does: Wealthsimple and the CRA state the average cost.
+   - Wealthsimple's stated book value is in its positions reply (`bookValue`, `marketBookValue`) and is dropped today: `wealthsimple/src/read.rs:137` and `broker/src/pull.rs:352` store `book_value: None`.
+   - New entry in `docs/old-app-mistakes.md`.
+2. **Win or loss.**
+   - Today: the Result filter (`scope.rs:174`), the KPIs (`scope.rs:511-540`) and the by-symbol rows (`scope.rs:602`) each decide a win on `pnl_cad`. So a trade can read "Loss" while its own page shows +$50 in USD.
+   - New entry.
+3. **Date range.**
+   - Today: `SPEC.md` §5 keeps any holding "held at some time in them, still valued today" (`scope.rs:267`).
+   - New entry.
 
-Carried over unchanged:
-- **FIFO matching for trades' P&L.** Tradervue: "Realized P&L calculations use a First-in, First-out (FIFO) methodology" (help.tradervue.com/article/3437-swing-trades, read 2026-10-04). TradeZella recommends FIFO as its default (help.tradezella.com/en/articles/6826141, read 2026-10-04).
-- **CAD totals.** These follow from the owner's rule, aggregates in CAD.
+Carried over, and why it is right:
+- **FIFO for trades' P&L.** Tradervue: "Realized P&L calculations use a First-in, First-out (FIFO) methodology" (help.tradervue.com/article/3437, read 2026-10-04); TradeZella recommends FIFO (help.tradezella.com/en/articles/6826141).
+- **Lots moving between accounts with their cost and dates** (`ledger.rs` `apply_transfer`). It is the same round trip, as a journal keeps it; the broker resets the cost, and the journal deliberately does not.
+- **CAD totals**, by the owner's rule.
 
 ## How the leading products do it
 
-All pages below were read on 2026-10-04. Pages that refused a direct fetch are marked as read through a search summary only; the rule rests on the fetched ones.
+Every source was read on 2026-10-04.
 
-**1. A holding's cost after a partial sale: average cost.**
-- **CRA.** Identical shares are held at their average cost: "dividing the total cost of identical properties purchased by the total number", and "Dispositions of identical properties do not affect the ACB" (canada.ca, line 12700, special rules).
-- **IBKR TWS.** The average price is "your cost … by the quantity of your position", and unrealized P&L is "the difference between the current market value and the average price" (ibkrguides.com/tws/usersguidebook/realtimeactivitymonitoring/profitloss.htm).
-- **Sharesight (Canada).** Uses the "'Adjusted Cost Base' sale allocation method" (help.sharesight.com/ca/capital_gains/).
-- **Wealthsimple and Questrade.** Their help pages show a sale lowering the total cost while the cost per share is unchanged (search summary only; the pages refused a direct fetch).
+**6. Average cost, fees in.**
+- Wealthsimple (help article 4409775037083): "Your cost base/share hasn't changed, it's still $10/share. This is always the case for any sales you make."
+- Wealthsimple (37274145854875): "Unrealized Return ($) = Current market value - Book cost".
+- CRA, identical properties: the average is the total cost, acquisition expenses included, over the number owned.
+- IBKR TWS: average price = "your cost (execution price + commission)" over the position (ibkrguides.com/tws/usersguidebook/realtimeactivitymonitoring/profitloss.htm).
+- Sharesight (Canada): "'Adjusted Cost Base' sale allocation method".
+- On a transfer between accounts, Wealthsimple resets the cost: "the asset's book cost in the new account is updated to reflect its current market value" (24667492921883). The journal keeps the lots' own cost (above).
 
-So the holding's cost is the average cost per unit. A sale removes cost in proportion and leaves the per-unit cost as it was. Book is the units held × that cost, and unrealized P&L is Market − Book.
+**7. Win or loss: the category does not settle it.**
+- Tradervue: "the reports will use the converted P&L in the base currency to aggregate and compare performance across all trades" (help.tradervue.com/article/3425). No journal documents scoring in the trade's own currency.
+- This plan scores in the trade's own currency, on the owner's rule ("Per-instrument figures in the instrument's own currency"). A trade's page shows its P&L in that currency, so its Win or Loss must read from the same figure: the alternative would put a green +$50 under "Loss".
+- The performance-attribution literature and Sharesight ("the currency gain purely in relation to the currency movement", help.sharesight.com/us/components-return/) separate local return from currency return.
+- It matters only for a trade the currency moved against by more than its own gain.
 
-The trade keeps FIFO for its own realized P&L, as the journals do. The two methods agree once a position is closed in full. While it is open, the trade's realized part and the holding's unrealized part are each the category's own figure. IBKR shows the same split between TWS and its statements.
-
-**2. Win or loss: in the trade's own currency.**
-- None of TradeZella, Tradervue, TraderSync or Edgewonk documents which currency decides a win.
-- Tradervue and TradeZella aggregate P&L converted to the base currency (help.tradervue.com/article/3425-pl-reporting-modes; TradeZella's display-currency article).
-- The performance-attribution standard separates a holding's local-currency return from its currency return ("currency return = total return − total return (local)", the GIPS draft guide to return attribution, read through a search summary only).
-- Sharesight reports "the currency gain purely in relation to the currency movement" as its own column (help.sharesight.com/us/components-return/).
-
-The trade's decision is its local result. The currency's move is a separate effect. The owner's standing rule puts per-instrument figures in the instrument's own currency, and a trade is per-instrument.
-
-So a closed trade is a win, a loss or breakeven by the sign of its P&L in its own currency. Every sum stays in CAD: Realized P&L, Gross W and L, Profit factor, and the average win and loss. A trade won in USD whose CAD P&L is negative therefore counts as a win and adds its negative CAD amount to Gross W, exactly. This case is rare (the currency must move more than the trade's own gain) and is named in `SPEC.md`.
-
-**3. Portfolio under a past date range: held on the range's last day, valued at that day's close.**
-- **Sharesight, Portfolio overview.** Values at "The current price or the closing price of the selected end date" (help.sharesight.com/show_portfolio/). Its performance report states "The price, quantity and value figures are as of the end date selected" (help.sharesight.com/us/performance_report/).
-- **IBKR PortfolioAnalyst.** Its Open Position Summary "shows all open positions in your portfolio at the end of the period", valued at the period's end (ibkrguides.com/reportingreference/reportguide/openpositionsummary.htm).
-- **Wealthsimple.** Its holdings report shows holdings "as of the date you choose" (search summary only).
-- No journal (Tradervue, TradeZella, TraderSync) has an open-positions view by date range: open trades count only when realized.
-
-So under a range that ends before today, Portfolio shows the positions held at the close of the range's last day, at that day's close in their own currency, and CAD at the Bank of Canada's rate for that day. A range ending today is today's Portfolio, as now.
+**9. Past range: as of its end.**
+- Sharesight values at "the current price or the closing price of the selected end date" (help.sharesight.com/show_portfolio/).
+- IBKR's Open Position Summary lists "all open positions in your portfolio at the end of the period" (ibkrguides.com/reportingreference/reportguide/openpositionsummary.htm).
+- Neither says what happens when the end date is not a trading day. Here the last close on or before it is taken: the engine's convention for today (`positions.rs:99`) and for rates (`fx::rate`).
 
 ## Open questions
 
-None. The one judgement, a won-in-USD trade with a negative CAD P&L in Gross W, follows from the two rules above and is stated in `SPEC.md`, not left open.
+None.
 
 ## Approach
 
-- **Cost.** `engine/src/positions.rs`: a position's `book` becomes units × average cost. The average is kept per position as lots arrive: a buy adds its cost; a sale removes cost in proportion to the units sold. Corporate events adjust it as they adjust lots today (`SPEC.md` §1, return of capital and spin-off). Lots stay as they are for Hold (quantity-weighted days) and for the trades' FIFO. `SPEC.md` §1 Position: `Avg cost` and `Book` re-defined, with the sources above.
-- **Win or loss.** `engine/src/scope.rs` `kpi` and the by-symbol rows classify on the trade's own-currency P&L (`TradeFig`'s native P&L) and sum `pnl_cad`. `SPEC.md` §6 Dashboard: the tile table's Win rate, and a sentence under it.
-- **Date range.** `engine/src/scope.rs`: a holding in scope for a past range is a position open at the close of the range's last day, from the ledger as of that day, valued from the daily closes the market cache already holds, at that day's Bank of Canada rate (`engine/src/fx.rs`). A day with no close for an instrument is the gap the engine already has for that, never today's price. `SPEC.md` §5 Filters: the holding sentence.
-- **Wire.** No new types: the Portfolio document's fields keep their meaning (Avg, Book, Market, P&L), now as of the range's end.
+**§6 Cost.**
+- The lot primitives in `engine/src/ledger.rs` (`open_lot`, `take`, `close`, the corporate-event adjustments, `apply_transfer`, option expiry and assignment) are the only code that changes lots. The average-cost basis is kept by those same primitives on the position they act on: total cost and units, a sale removing cost in proportion. No other code updates it.
+- Fees go into a buy's cost.
+- A short's average is what it brought in. An option's is the premium per contract.
+- `positions.rs`: Avg = total cost ÷ (units × multiplier); Book = total cost; P&L = Market − Book.
+- `SPEC.md` §1 Position re-defines Avg cost and Book, and says:
+  - a transferred holding keeps the journal's cost, not the broker's reset;
+  - a partly sold position's realized (FIFO, the trade) and unrealized (average cost, the holding) figures are each the category's own and are not added together.
+- The broker's stated book value is read strictly. Which of `bookValue` and `marketBookValue` is the cost, and in which currency, is settled from the recorded replies in `wealthsimple/tests`. It is stored in the statements table's existing column.
+
+**§7 Win or loss.**
+- One function, `engine/src/scope.rs` `result(trade)`, judges on the trade's own-currency P&L. `outcome()`, `kpi` and the by-symbol rows all call it.
+- The sums stay `pnl_cad`, unclamped.
+- `SPEC.md` §6 Dashboard states the basis as above.
+
+**§9 Past range.**
+- A position is in scope if it is open at the close of the range's last day, from the ledger replayed to that day.
+- Closes come from the stored daily closes, the last on or before that day; rates come from `fx::rate` the same way.
+- Every Portfolio figure under a past range:
+  - **As of the range's end:**
+    - Qty, Avg, Book;
+    - Last (that close) and Market (Qty × Last);
+    - P&L;
+    - the day's Change (that session's close against the one before);
+    - Net asset value (the accounts' stated value that day);
+    - Cash (the book as of that day);
+    - Allocation, Sectors and Regions (from those values).
+  - **`—`:** Margin used and Available margin (stated only now).
+- A row's page opens as of that day and offers no Buy or Sell.
+- The replay is cached by end date until the book moves. Its cost is measured at the owner's size.
 
 ## Acceptance criteria
 
-- [ ] `RUSTFLAGS="-D warnings" cargo test --workspace` green, `cargo clippy --workspace --lib --bins` clean.
-- [ ] Engine cases written blind (by an agent given `SPEC.md` and the case format, not the engine), for the following, all green:
-  - a partial sale at several prices, held at average cost;
+- [ ] `RUSTFLAGS="-D warnings" cargo test --workspace` green; `cargo clippy --workspace --lib --bins` clean.
+- [ ] Blind engine cases, all green, covering:
+  - partial sales at several prices;
+  - a commission on a buy;
   - a partial sale after a return of capital;
-  - a USD trade won in USD and lost in CAD, counted as a win with its CAD amount in Gross W;
-  - a past range ending on a day a position was held, and one ending after it was sold;
-  - a past range whose last day lacks a close.
-- [ ] Generated cases: the average cost of a position equals total cost ÷ units, over random buy and sell sequences in several currencies.
-- [ ] On a copy of the owner's book (scratch server), a partly sold holding's Avg equals Wealthsimple's stated book value ÷ units, for every such holding the statements give.
-- [ ] Browser test: Portfolio under a past range shows the positions of its last day, valued at that day's close.
-- [ ] States and screenshots of Portfolio under today and a past range, at 1200, 1340, 1440 and 1680 px.
+  - a short;
+  - an option;
+  - a won-in-USD, down-in-CAD trade (counted a win, its negative CAD amount in Gross W);
+  - a past range ending on a weekend;
+  - a past range ending after a sale;
+  - a past range whose instrument has no close on or before its end.
+- [ ] Generated sequences (transfers, splits, return of capital, stock dividends, option expiry and assignment, shorts):
+  - units = the open lots' units;
+  - total cost = Σ lot value − cost removed;
+  - for every sequence that ends flat, Σ realized FIFO = Σ realized at average cost.
+- [ ] One test over every filter state: the Dashboard's win and loss counts equal the Trades list's lengths under Result = Win and Result = Loss.
+- [ ] Wealthsimple's book value is read and stored (a reply test).
+- [ ] On a copy of the owner's book, Avg = the stated book value ÷ units, for every partly sold holding with no transferred-in lot.
+- [ ] No screen or export adds a trade's realized P&L to a holding's unrealized P&L (checked by reading every place both are shown).
+- [ ] Browser test: Portfolio under a past range shows the end day's positions and figures, and `—` for margin.
+- [ ] States and screenshots at 1200, 1340, 1440 and 1680 px.
+- [ ] The cost of the end-day replay at the owner's size, pasted in the PR.
 
 ## Surfaces to check beyond the diff
 
 - `docs/old-app-mistakes.md` (three entries).
-- `SPEC.md` §1 Position, §5 Filters, §6 Dashboard.
-- The heatmap's holdings (they answer the same filter).
-- The broker check, which compares units only and is unaffected.
-- The daily-close store's reads under a past range: a cost at the owner's size, measured.
+- `SPEC.md` §1, §5 and §6.
+- The heatmap's holdings.
+- The holding page (open trade and unrealized P&L shown together).
+- Exports.
+- The broker check (units only).
 
 ## Right to refuse
 
-If Wealthsimple's stated book value disagrees with average cost on the owner's book for a reason the sources do not cover, stop and report the case before building on.
+If Wealthsimple's stated book value disagrees with average cost on a holding with no transferred-in lot, stop and report that holding.
 
 ## Anti-stub self-check
 
@@ -105,4 +157,6 @@ To fill when built.
 
 ## Handoff
 
-Plan written 2026-10-04 from brief 15 decisions 6, 7 and 9, after the owner ruled them correctness (`docs/decisions.md`). Research by three read-only web surveys; the fetched sources were cited above, and the summary-only ones are marked. Nothing built.
+- Plan written 2026-10-04 from brief 15 decisions 6, 7 and 9.
+- Brief 20 (Go with changes) applied above.
+- Nothing built.
