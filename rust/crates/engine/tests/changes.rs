@@ -122,7 +122,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     sale.trade_date = day("2026-03-10");
     sale.occurred_at = Some("2026-03-10T15:00:00Z".parse().unwrap());
     ledger.transactions.push(sale);
-    ledger.records.insert(b.ids.record("late-sale"), bagholder_engine::input::RecordInfo { source_key: "late-sale".into(), problems: vec![] });
+    ledger.records.insert(b.ids.record("late-sale"), bagholder_engine::input::RecordInfo { source_key: "late-sale".into(), ..Default::default() });
     let trade = e.figures().trades.iter().find_map(|t| t.trade).expect("a trade with an id");
     let second = e.figures().positions.iter().find_map(|p| p.trade).expect("a position with an id");
     let groups = vec![Group { id: b.ids.group("G"), locked: true, members: vec![trade, second] }];

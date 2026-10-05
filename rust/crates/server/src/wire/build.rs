@@ -833,6 +833,70 @@ fn delivery_row(engine: &Engine, tx: &bagholder_core::transaction::Transaction, 
 #[allow(dead_code, unused_imports, clippy::all)]
 mod case_common;
 
+
+#[cfg(test)]
+mod record_problem_tests {
+    use super::case_common as cc;
+
+    /// Every problem code a mapping raises, read from the mappings' own source, so a
+    /// code added later is held here without a list to keep.
+    fn codes() -> Vec<String> {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut out = std::collections::BTreeSet::new();
+        for dir in ["wealthsimple/src", "broker/src", "book/src"] {
+            for e in std::fs::read_dir(root.join(dir)).unwrap() {
+                let p = e.unwrap().path();
+                if p.extension().is_some_and(|x| x == "rs") {
+                    let text = std::fs::read_to_string(&p).unwrap();
+                    for part in text.split("Problem::new(\"").skip(1) {
+                        if let Some(code) = part.split('"').next() {
+                            out.insert(code.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Every problem the book finds with a source's row reaches the header's
+    /// sentence, whatever its code, whether the row was placed, placed with a
+    /// problem, or gave nothing (`docs/decisions.md` 2026-10-04).
+    #[test]
+    fn every_problem_code_a_mapping_raises_reaches_the_header() {
+        let codes = codes();
+        assert!(codes.len() > 10, "the codes read from the mappings: {codes:?}");
+        let mut txs = vec![];
+        for (n, code) in codes.iter().enumerate() {
+            txs.push(serde_json::json!({"id": format!("u{n}"), "account": "A", "day": "2026-03-02", "kind": "unclassified", "problems": [code]}));
+            txs.push(serde_json::json!({"id": format!("p{n}"), "account": "A", "day": "2026-03-03", "kind": "interest", "cash": "1", "problems": [code]}));
+        }
+        let case = serde_json::json!({"today": "2026-04-01", "accounts": [{"id": "A"}], "instruments": [], "transactions": txs});
+        let mut b = cc::build(&case);
+        // each problem in its own words, so each one's arrival can be seen
+        for info in b.inputs.ledger.records.values_mut() {
+            for p in info.problems.iter_mut() {
+                p.detail = format!("detail of {}", p.code);
+            }
+        }
+        // and a row of each code that gave no transaction at all
+        for code in &codes {
+            let record = b.ids.record(&format!("nothing-{code}"));
+            b.inputs.ledger.records.insert(record, bagholder_engine::input::RecordInfo { problems: vec![bagholder_core::record::Problem::new(code, format!("detail of {code}"))], ..Default::default() });
+        }
+        let e = cc::engine(&mut b);
+        let said = crate::status::unread_rows(e.inputs());
+        let sentence = |starts: &str| said.iter().find(|s| s.contains(starts)).cloned().unwrap_or_else(|| panic!("no sentence with {starts:?}: {said:?}"));
+        let (unplaced, kept, nothing) = (sentence("could not be placed"), sentence("kept with a problem"), sentence("gave nothing the book can count"));
+        for code in &codes {
+            let detail = format!("detail of {code}");
+            for (what, s) in [("unplaced", &unplaced), ("placed with a problem", &kept), ("giving nothing", &nothing)] {
+                assert!(s.contains(&detail), "{code} on a row {what} is not said: {s}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

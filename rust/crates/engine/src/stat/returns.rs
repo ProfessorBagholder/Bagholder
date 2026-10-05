@@ -58,29 +58,70 @@ pub struct Drawdown {
     pub peak_at: Option<Date>,
 }
 
-/// The series in scope from each complete day's accounts' values and flows
-/// (the day's flow known when every account's is), and each account's daily
-/// returns weighted by the value each is over.
-pub fn combine(values: &BTreeMap<Date, Vec<(Dec, Option<Dec>)>>, accounts: &[&[(Date, f64, Dec)]]) -> Vec<Day> {
-    let mut rets: BTreeMap<Date, (f64, f64)> = BTreeMap::new();
-    for a in accounts {
-        for (d, r, w) in a.iter() {
-            let w = w.to_f64();
-            let x = rets.entry(*d).or_insert((0.0, 0.0));
-            x.0 += r * w;
-            x.1 += w;
+/// The accounts' combined series (`SPEC.md` §2, Equity series). A combined day is
+/// one on which every account that has begun and whose statements have not ended
+/// states a value: an account counts from its first stated day to its last, so one
+/// whose statements stop leaves the series from its last day, never ends it. Each
+/// combined day's return chains from the combined day before it: every account
+/// stating a value on both days is measured over exactly that interval, its value
+/// on the later day less the money moved in or out between them, over its value on
+/// the earlier day, and the accounts' returns are weighted by their values on the
+/// earlier day (GIPS 2010, I.2.A.6: composite returns asset-weighted by beginning-
+/// of-period values). An account whose deposits over the interval are not all known
+/// forms no return for it; a day one account did not state drops nobody's return,
+/// since the interval runs over it. Each account's points are its stated days, oldest
+/// first, with the money moved since its stated day before.
+pub fn combine(accounts: &[&[crate::equity::DayValue]]) -> Vec<Day> {
+    use std::collections::BTreeSet;
+    // each account's span: its first and last stated day
+    let spans: Vec<Option<(Date, Date)>> = accounts.iter().map(|p| Some((p.first()?.day, p.last()?.day))).collect();
+    let on = |a: usize, d: Date| accounts[a].binary_search_by_key(&d, |p| p.day).ok().map(|i| &accounts[a][i]);
+    let days: BTreeSet<Date> = accounts.iter().flat_map(|p| p.iter().map(|x| x.day)).collect();
+    let combined: Vec<Date> = days
+        .into_iter()
+        .filter(|d| (0..accounts.len()).all(|a| match spans[a] {
+            Some((first, last)) if first <= *d && *d <= last => on(a, *d).is_some(),
+            _ => true,
+        }))
+        .collect();
+    let mut out = Vec::with_capacity(combined.len());
+    let mut before: Option<Date> = None;
+    for d in combined {
+        let here: Vec<usize> = (0..accounts.len()).filter(|a| on(*a, d).is_some()).collect();
+        // what moved in or out of each account since the combined day before, where every step of it is known
+        let moved = |a: usize, from: Date| -> Option<Dec> {
+            accounts[a].iter().filter(|p| from < p.day && p.day <= d).try_fold(Dec::ZERO, |sum, p| sum.checked_add(p.flow?).ok())
+        };
+        let (mut weighted, mut weights) = (0.0, 0.0);
+        let mut flow: Option<f64> = Some(0.0);
+        for &a in &here {
+            let now = on(a, d).expect("here");
+            match before.and_then(|b| on(a, b).map(|p| (b, p))) {
+                Some((b, then)) => match moved(a, b) {
+                    Some(f) => {
+                        if let Some(r) = crate::stat::day_return(then.value, now.value, f) {
+                            weighted += r * then.value.to_f64();
+                            weights += then.value.to_f64();
+                        }
+                        flow = flow.map(|x| x + f.to_f64());
+                    }
+                    None => flow = None,
+                },
+                // its first day in the series: it forms no return yet, and the money it
+                // came in with is not known as a movement of the whole, as on any first day
+                None => flow = None,
+            }
         }
+        out.push(Day {
+            day: d,
+            value: here.iter().map(|a| on(*a, d).expect("here").value.to_f64()).sum(),
+            exact: here.iter().try_fold(Dec::ZERO, |sum, a| sum.checked_add(on(*a, d).expect("here").value)).ok(),
+            ret: (before.is_some() && weights > 0.0).then(|| weighted / weights),
+            flow: if before.is_some() { flow } else { None },
+        });
+        before = Some(d);
     }
-    values
-        .iter()
-        .map(|(d, each)| Day {
-            day: *d,
-            value: each.iter().map(|(v, _)| v.to_f64()).sum(),
-            exact: each.iter().try_fold(Dec::ZERO, |a, (v, _)| a.checked_add(*v)).ok(),
-            ret: rets.get(d).and_then(|(s, w)| (*w > 0.0).then(|| s / w)),
-            flow: each.iter().map(|(_, f)| f.map(|x| x.to_f64())).sum(),
-        })
-        .collect()
+    out
 }
 
 /// The pre-history floor: a balance under 1 % of the series' peak. Always

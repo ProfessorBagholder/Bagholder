@@ -56,6 +56,10 @@ pub struct RecordInfo {
     /// so storing a record again never reorders the book.
     pub source_key: String,
     pub problems: Vec<Problem>,
+    /// The connection it came through (none for an imported file), and when it
+    /// first arrived: what a record that gave no transaction is said by.
+    pub connection: Option<bagholder_core::ConnectionId>,
+    pub first_received_at: Option<Timestamp>,
 }
 
 /// The book's record: accounts, instruments, the live transactions, and what the

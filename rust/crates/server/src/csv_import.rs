@@ -249,8 +249,36 @@ fn candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<R
             out.push((c.id.record, vec![records]));
         }
     }
-    // cash moved with no instrument: a deposit, a withdrawal, a transfer, a tax
     let statement = bagholder_wealthsimple::statement::source();
+    // every other movement on an instrument (a dividend, a distribution, an
+    // interest payment on a holding, units in or out): the same account, kind,
+    // instrument, units and cash, on its trade or settle day, the feed's before
+    // the statement's (`docs/plans/stage-money.md`, part F: by movement identity)
+    let movement = |t: &Transaction| t.instrument.is_some() && !fill(t) && t.kind != Kind::Unclassified && (t.cash.is_some_and(|c| !c.amount.is_zero()) || t.quantity.is_some_and(|q| !q.is_zero()));
+    for c in ledger.transactions.iter().filter(|t| csv_rows.contains(&t.id.record) && movement(t)) {
+        let same = |b: &&Transaction| {
+            !not_broker.contains(&b.id.record)
+                && !taken.contains(&b.id.record)
+                && movement(b)
+                && b.account == c.account
+                && b.kind == c.kind
+                && b.instrument == c.instrument
+                && b.quantity == c.quantity
+                && b.cash == c.cash
+                && (b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date || b.settle_date == Some(c.trade_date))
+        };
+        let tier = |from_statement: bool| {
+            let mut r: Vec<RecordId> = ledger.transactions.iter().filter(same).filter(|b| (b.mapping.source == statement) == from_statement).map(|b| b.id.record).collect();
+            r.sort();
+            r.dedup();
+            r
+        };
+        let tiers = vec![tier(false), tier(true)];
+        if tiers.iter().any(|t| !t.is_empty()) {
+            out.push((c.id.record, tiers));
+        }
+    }
+    // cash moved with no instrument: a deposit, a withdrawal, a transfer, a tax
     let moved = |t: &Transaction| t.instrument.is_none() && t.cash.is_some_and(|c| !c.amount.is_zero());
     for c in ledger.transactions.iter().filter(|t| csv_rows.contains(&t.id.record) && moved(t)) {
         let same = |b: &&Transaction| !not_broker.contains(&b.id.record) && !taken.contains(&b.id.record) && moved(b) && b.account == c.account && b.cash == c.cash && (b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date);
@@ -667,6 +695,30 @@ mod tests {
         let stored = book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: key, payload: &payload, refs: vec![] }, now()).unwrap();
         f.record_changed(now()).unwrap();
         stored.record
+    }
+
+    #[test]
+    fn a_dividend_the_broker_already_reported_is_linked_and_counted_once() {
+        let (_h, f) = figures();
+        let (account, day, symbol, currency, cash) = f
+            .read(|e| {
+                let l = &e.inputs().ledger;
+                l.transactions.iter().filter(|t| t.kind == Kind::Dividend).find_map(|t| {
+                    let n = l.instruments.get(&t.instrument?)?.current_name()?;
+                    Some((t.account, t.trade_date, n.symbol.clone(), t.cash?.currency, t.cash?.amount))
+                })
+            })
+            .unwrap()
+            .expect("a dividend in the pulled book");
+        let broker_account = f.book().unwrap().account_ref(account).unwrap().value;
+        let count = |f: &Figures| f.read(|e| e.inputs().ledger.transactions.iter().filter(|t| t.kind == Kind::Dividend && t.account == account && t.trade_date == day).count()).unwrap();
+        let before = count(&f);
+        let file = format!("Date,Action,Symbol,Quantity,Price,Amount,Currency,Account\n{day},Dividend,{symbol},,,{},{},{broker_account}\n", cash.to_text(), currency.as_str());
+        let r = import(&f, "dividends.csv", &file, None, now()).unwrap();
+        assert_eq!((r.rows, r.linked, r.ambiguous.len()), (1, 1, 0), "{r:?}");
+        assert_eq!(count(&f), before, "the dividend counts once: the broker's");
+        let again = import(&f, "dividends (1).csv", &file, None, now()).unwrap();
+        assert_eq!(count(&f), before, "a second import of it counts nothing more: {again:?}");
     }
 
     fn simple_row(account: &str) -> String {

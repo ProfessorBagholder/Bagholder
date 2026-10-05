@@ -672,6 +672,22 @@ impl Book {
 
     /// Every live record's source key: what orders the transactions no instant
     /// separates (`bagholder_engine::ledger`).
+    /// Every live record: its source's key, the connection it came through (none
+    /// for a file imported by hand), and when it first arrived.
+    pub fn live_record_facts(&self) -> Result<Vec<(RecordId, String, Option<bagholder_core::ConnectionId>, jiff::Timestamp)>> {
+        let mut stmt = self.conn().prepare_cached("SELECT id, source_key, connection_id, first_received_at FROM source_records WHERE state = 'live'")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, key, connection, at) = row?;
+            let id = text::parsed("source_records", "id", &id, RecordId::parse)?;
+            let connection = text::opt_parsed("source_records", "connection_id", connection, bagholder_core::ConnectionId::parse)?;
+            let at = text::parsed("source_records", "first_received_at", &at, |t: &str| t.parse::<jiff::Timestamp>())?;
+            out.push((id, key, connection, at));
+        }
+        Ok(out)
+    }
+
     pub fn live_record_keys(&self) -> Result<BTreeMap<RecordId, String>> {
         let mut stmt = self.conn().prepare_cached("SELECT id, source_key FROM source_records WHERE state = 'live'")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;

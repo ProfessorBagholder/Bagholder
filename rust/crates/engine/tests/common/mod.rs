@@ -183,7 +183,7 @@ pub fn build(case: &Value) -> Built {
             paid_on: s(&t, "paid_on").map(dec),
             value: money(s(&t, "value"), Some(s(&t, "value_currency").unwrap_or(&default_ccy))),
         };
-        let info = records.entry(record).or_insert_with(|| RecordInfo { source_key: record_label.clone(), problems: vec![] });
+        let info = records.entry(record).or_insert_with(|| RecordInfo { source_key: record_label.clone(), ..Default::default() });
         for p in arr(&t, "problems") {
             info.problems.push(Problem::new(p.as_str().unwrap(), "stated by the case"));
         }

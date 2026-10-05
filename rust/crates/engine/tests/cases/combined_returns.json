@@ -1,0 +1,92 @@
+[
+  {
+    "name": "all accounts combined: a day one account does not state is not a combined day, and the next combined day's return measures every account over the whole interval",
+    "spec": "SPEC.md §2 Equity and returns: Equity series (All accounts combined); Yearly return; Max drawdown",
+    "working": [
+      "both accounts begin on 2025-12-31 and state through 2026-01-07 (today), so both count on every day from 12-31 to 01-07",
+      "combined days: a day counts once every account that has begun and not ended states a value for it: 12-31 (both), 01-02 (both), 01-06 (both), 01-07 (both); 01-05 is not a combined day, since B states nothing for it though A does",
+      "net deposits stay 1000 for each account on every stated day, so every flow is 0",
+      "pre-history floor: combined balances 2000, 2000, 2110, 1688; all-time peak 2110 (A's own highest 1210, B's 1000, so no reading of the peak exceeds 2210), 1 % ≤ 22.10; every balance clears it, so nothing is cut and 2026 is measured from 1 January over 2025-12-31 (the last stated day before it)",
+      "01-02 (from 12-31): A 1000 ÷ 1000 − 1 = 0; B 1000 ÷ 1000 − 1 = 0; combined 0",
+      "01-06 (from 01-02, the combined day before it; 01-05 is passed over): A 1210 ÷ 1000 − 1 = 0.21; B 900 ÷ 1000 − 1 = −0.1; weighted by values on 01-02 (1000, 1000): (1000 × 0.21 + 1000 × −0.1) ÷ 2000 = 0.055",
+      "01-07 (from 01-06): A 968 ÷ 1210 − 1 = −0.2; B 720 ÷ 900 − 1 = −0.2; weighted (1210 × −0.2 + 900 × −0.2) ÷ 2110 = −0.2",
+      "2026: 1 × 1.055 × 0.8 − 1 = −0.156",
+      "flow-adjusted index 1 (12-31), 1 (01-02), 1.055 (01-06), 0.844 (01-07): peak 1.055, trough 0.844 on 01-07, 0.844 ÷ 1.055 − 1 = −0.2",
+      "benchmark: flat closes of 100, so 0 over the same span"
+    ],
+    "today": "2026-01-07",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "brokers": {
+      "A": {
+        "net_value": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-05": "1100", "2026-01-06": "1210", "2026-01-07": "968"},
+        "net_deposits": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-05": "1000", "2026-01-06": "1000", "2026-01-07": "1000"}
+      },
+      "B": {
+        "net_value": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-06": "900", "2026-01-07": "720"},
+        "net_deposits": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-06": "1000", "2026-01-07": "1000"}
+      }
+    },
+    "benchmarks": {"SP500": {"currency": "CAD", "closes": {"2025-12-31": "100", "2026-01-02": "100", "2026-01-05": "100", "2026-01-06": "100", "2026-01-07": "100"}}},
+    "expect": {"kpi": {"years": [{"year": 2026, "r": -0.156, "benchmark": 0, "from": "2026-01-01"}], "drawdown": -0.2, "drawdown_at": "2026-01-07"}}
+  },
+  {
+    "name": "all accounts combined: an account whose statements stop leaves the series from its last stated day, and the series continues on the others",
+    "spec": "SPEC.md §2 Equity and returns: Equity series (All accounts combined); Yearly return; Max drawdown",
+    "working": [
+      "A states 2025-12-31 through 2026-01-06 (today); B states 2025-12-31 and 2026-01-02 only: B's last stated day is 01-02, so it counts from 12-31 to 01-02 and not after",
+      "combined days: 12-31 (both), 01-02 (both), 01-05 (A alone: B has ended), 01-06 (A alone); B's ending does not end the series",
+      "net deposits stay 1000 for each account on every stated day, so every flow is 0",
+      "pre-history floor: combined balances 2000, 1900, 1210, 1331; all-time peak 2000, 1 % = 20; every balance clears it (B leaving the combined balance at 1210 is far above 20), so nothing is cut and 2026 is measured from 1 January over 2025-12-31",
+      "01-02 (from 12-31): A 1100 ÷ 1000 − 1 = 0.1; B 800 ÷ 1000 − 1 = −0.2; weighted by values on 12-31 (1000, 1000): (100 − 200) ÷ 2000 = −0.05",
+      "01-05 (from 01-02): only A states both days: 1210 ÷ 1100 − 1 = 0.1; B's leaving is not a loss (the combined balance falling 1900 → 1210 is not read as a return)",
+      "01-06 (from 01-05): A 1331 ÷ 1210 − 1 = 0.1",
+      "2026: 0.95 × 1.1 × 1.1 − 1 = 0.1495",
+      "flow-adjusted index 1 (12-31), 0.95 (01-02), 1.045 (01-05), 1.1495 (01-06): peak 1 on 12-31, trough 0.95 on 01-02, 0.95 ÷ 1 − 1 = −0.05; later highs never fall",
+      "benchmark: flat closes of 100, so 0 over the same span"
+    ],
+    "today": "2026-01-06",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "brokers": {
+      "A": {
+        "net_value": {"2025-12-31": "1000", "2026-01-02": "1100", "2026-01-05": "1210", "2026-01-06": "1331"},
+        "net_deposits": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-05": "1000", "2026-01-06": "1000"}
+      },
+      "B": {
+        "net_value": {"2025-12-31": "1000", "2026-01-02": "800"},
+        "net_deposits": {"2025-12-31": "1000", "2026-01-02": "1000"}
+      }
+    },
+    "benchmarks": {"SP500": {"currency": "CAD", "closes": {"2025-12-31": "100", "2026-01-02": "100", "2026-01-05": "100", "2026-01-06": "100"}}},
+    "expect": {"kpi": {"years": [{"year": 2026, "r": 0.1495, "benchmark": 0, "from": "2026-01-01"}], "drawdown": -0.05, "drawdown_at": "2026-01-02"}}
+  },
+  {
+    "name": "all accounts combined: each account's return is net of the money moved into it over the interval, and the returns are weighted by the accounts' values on the earlier day",
+    "spec": "SPEC.md §2 Equity and returns: Equity series (All accounts combined; weighted by beginning values, GIPS 2010 I.2.A.6); Yearly return; Max drawdown",
+    "working": [
+      "both accounts state 2025-12-31, 2026-01-02 and 2026-01-06 (today); A also states 01-05, B does not, so 01-05 is not a combined day",
+      "combined days: 12-31, 01-02, 01-06",
+      "A's net deposits: 1000, 1000, 1200 (01-05), 1500 (01-06): 200 deposited on 01-05 and 300 on 01-06; B's stay 3000",
+      "pre-history floor: combined balances 4000, 4000, 4350; all-time peak 4350, 1 % = 43.50; every balance clears it, so nothing is cut and 2026 is measured from 1 January over 2025-12-31",
+      "01-02 (from 12-31): A 1000 ÷ 1000 − 1 = 0; B 3000 ÷ 3000 − 1 = 0; combined 0",
+      "01-06 (from 01-02): money moved into A over the interval = 1500 − 1000 = 500 (200 + 300, all known); A (1650 − 500) ÷ 1000 − 1 = 0.15; B 2700 ÷ 3000 − 1 = −0.1",
+      "weighted by values on 01-02 (A 1000, B 3000): (1000 × 0.15 + 3000 × −0.1) ÷ 4000 = (150 − 300) ÷ 4000 = −0.0375 (an equal weighting would give 0.025; the deposit read as a gain would give (1650 + 2700) ÷ 4000 − 1 = 0.0875)",
+      "2026: 1 × 1 × 0.9625 − 1 = −0.0375",
+      "flow-adjusted index 1, 1, 0.9625: peak 1, trough 0.9625 on 01-06, −0.0375",
+      "benchmark: flat closes of 100, so 0 over the same span"
+    ],
+    "today": "2026-01-06",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "brokers": {
+      "A": {
+        "net_value": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-05": "1250", "2026-01-06": "1650"},
+        "net_deposits": {"2025-12-31": "1000", "2026-01-02": "1000", "2026-01-05": "1200", "2026-01-06": "1500"}
+      },
+      "B": {
+        "net_value": {"2025-12-31": "3000", "2026-01-02": "3000", "2026-01-06": "2700"},
+        "net_deposits": {"2025-12-31": "3000", "2026-01-02": "3000", "2026-01-06": "3000"}
+      }
+    },
+    "benchmarks": {"SP500": {"currency": "CAD", "closes": {"2025-12-31": "100", "2026-01-02": "100", "2026-01-05": "100", "2026-01-06": "100"}}},
+    "expect": {"kpi": {"years": [{"year": 2026, "r": -0.0375, "benchmark": 0, "from": "2026-01-01"}], "drawdown": -0.0375, "drawdown_at": "2026-01-06"}}
+  }
+]
