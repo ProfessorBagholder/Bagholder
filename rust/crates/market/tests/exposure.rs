@@ -425,3 +425,26 @@ fn test_watch_rows_carry_the_quote_the_sector_and_the_holding() {
         vec![json!("RKLB"), Value::Null, Value::Null, json!("Not classified"), Value::Null],
     ]);
 }
+
+#[test]
+fn test_a_name_is_searched_as_its_issuer_writes_it_before_its_bare_form() {
+    use bagholder_market::exposure::name_queries;
+    // TSX's directory matches by contained text: "Harvest Strategy Inc. Enhanced" finds
+    // the fund, "Harvest Strategy Enhanced" does not (tsx.com company directory, 2026-10-04)
+    assert_eq!(name_queries("Harvest Strategy Inc. Enhanced High Income Shares ETF"), vec!["Harvest Strategy Inc. Enhanced High Inco".to_string(), "Harvest Strategy Enhanced High Income Sh".to_string()]);
+    // a name with nothing to strip is searched once
+    assert_eq!(name_queries("Harvest Circle Enhanced High Income Shares ETF"), vec!["Harvest Circle Enhanced High Income Shar".to_string()]);
+    assert!(name_queries("  ").is_empty());
+}
+
+#[test]
+fn test_a_fund_no_directory_names_asks_no_source_and_is_the_remainder() {
+    let conn = db();
+    hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(|_| None)));
+    hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(|_, symbol, _, _| panic!("an issuer asked for {symbol:?} with no ticker"))));
+    hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|symbol, _, _| panic!("Yahoo asked for {symbol:?} with no ticker"))));
+    set_classify(classified());
+    let rows = vec![holding("", "A Fund No Directory Lists ETF", 2.0, "", "", "", "", true), holding("RY", "Royal Bank", 98.0, "", "", "TSX", "CAD", false)];
+    let agg = lookthrough(&ctx(&conn), &rows);
+    close(agg.coverage, 0.98);
+}

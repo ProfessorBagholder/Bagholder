@@ -1029,26 +1029,43 @@ fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchEr
 
 // --- the look-through ------------------------------------------------------------
 
-/// A holding named without a ticker, the directories'
-/// first match on the name.
+/// The texts a holding's name is searched for in the directories, in order: the
+/// name as its issuer writes it, then without the words a company's name carries
+/// beside its own (Inc., Ltd., Class A, …). The exchanges' directories match a name
+/// by the text it contains, so the name as written goes first: stripped of a word
+/// the directory's name has ("Harvest Strategy Inc. Enhanced …"), it matches nothing.
+/// Each is cut to the forty characters a search takes.
+pub fn name_queries(name: &str) -> Vec<String> {
+    static SUFFIX: OnceLock<Regex> = OnceLock::new();
+    static JUNK: OnceLock<Regex> = OnceLock::new();
+    static WS: OnceLock<Regex> = OnceLock::new();
+    let ws = WS.get_or_init(|| Regex::new(r"\s+").unwrap());
+    let junk = JUNK.get_or_init(|| Regex::new(r"[^A-Za-z0-9 &.-]").unwrap());
+    let tidy = |t: &str| -> String { trim_space(&ws.replace_all(&junk.replace_all(t, " "), " ")).chars().take(40).collect::<String>().trim_end().to_string() };
+    let written = tidy(name);
+    let bare = tidy(&SUFFIX.get_or_init(|| Regex::new(r"(?i)\b(inc|corp|corporation|ltd|limited|plc|co|class [a-z]|common shares?|common stock|the)\b\.?").unwrap()).replace_all(name, " "));
+    let mut out = Vec::new();
+    for q in [written, bare] {
+        if !q.is_empty() && !out.contains(&q) {
+            out.push(q);
+        }
+    }
+    out
+}
+
+/// A holding named without a ticker: the directories' first match on its name,
+/// searched as `name_queries` gives it.
 pub fn resolve_name(ctx: &Ctx, name: &str) -> Result<Option<Listed>, String> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
         return Ok(v);
     }
-    static SUFFIX: OnceLock<Regex> = OnceLock::new();
-    static JUNK: OnceLock<Regex> = OnceLock::new();
-    static WS: OnceLock<Regex> = OnceLock::new();
-    let clean = SUFFIX
-        .get_or_init(|| Regex::new(r"(?i)\b(inc|corp|corporation|ltd|limited|plc|co|class [a-z]|common shares?|common stock|the)\b\.?").unwrap())
-        .replace_all(name, " ");
-    let clean = JUNK.get_or_init(|| Regex::new(r"[^A-Za-z0-9 &.-]").unwrap()).replace_all(&clean, " ");
-    let clean = WS.get_or_init(|| Regex::new(r"\s+").unwrap()).replace_all(&clean, " ");
-    let clean = trim_space(&clean).to_string();
-    if clean.is_empty() {
-        return Ok(None);
+    for q in name_queries(name) {
+        let rows = crate::search::symbol_search(&ctx.pool, &q)?;
+        if let Some(m) = rows.first() {
+            return Ok(Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() }));
+        }
     }
-    let rows = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>())?;
-    Ok(rows.first().map(|m| Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() }))
+    Ok(None)
 }
 
 fn stored(e: rusqlite::Error) -> String {
@@ -1139,7 +1156,9 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
             }
         }
         let mut sub: Option<ExposureRecord> = None;
-        if h.fund && depth < MAX_DEPTH && (!tk.is_empty() || !name.is_empty()) {
+        // every fund source is asked by ticker: a fund no directory names is the
+        // remainder no record covers, never a request for an empty symbol
+        if h.fund && depth < MAX_DEPTH && !tk.is_empty() {
             sub = fund_exposure(ctx, &tk, &name, &ex, depth + 1, seen)?;
         }
         if let Some(sb) = sub.as_ref() {
@@ -1184,7 +1203,11 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
 /// covers its family or the source answered nothing. A source that failed,
 /// with none after it answering, is the failure.
 pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Result<Option<ExposureRecord>, String> {
-    let key = format!("{}{}", FUND_KEY, bagholder_model::venues::tmx_symbol(if symbol.is_empty() { name } else { symbol }));
+    // every source is asked by ticker: with none there is nothing to ask
+    if symbol.trim().is_empty() {
+        return Ok(None);
+    }
+    let key = format!("{}{}", FUND_KEY, bagholder_model::venues::tmx_symbol(symbol));
     if seen.contains(&key) {
         return Ok(None);
     }
@@ -1226,7 +1249,7 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
     let data = match data {
         Some(d) => d,
         None if failures.is_empty() => return Ok(None),
-        None => return Err(format!("{}: {}", if symbol.is_empty() { name } else { symbol }, failures.join("; "))),
+        None => return Err(format!("{symbol}: {}", failures.join("; "))),
     };
     let scale = |w: Weights| -> Weights { Weights(w.0.into_iter().map(|(n, x)| (n, x / 100.0)).collect()) };
     let mut sectors = scale(data.sectors);
