@@ -315,3 +315,33 @@ fn test_a_second_import_is_refused_before_its_body_is_read_and_each_route_has_it
     assert_eq!(got, json!({"status": 413, "body": {"ok": false, "error": "The request is larger than this action takes."}}));
     assert!(!crate::http::model::IMPORTING.load(Ordering::SeqCst), "the slot is given back once the answer has gone");
 }
+
+/// Every write to the book reaches the stream: the bus is told after each one has
+/// landed, by the book's own commits (`docs/plans/stage-money.md`, part E).
+#[test]
+fn test_every_write_to_the_book_reaches_the_stream() {
+    let _g = crate::tests_common::guard();
+    let app = crate::tests_common::app();
+    let rt = runtime();
+    let call = |method: Method, uri: &str, body: Option<Value>| rt.block_on(json_of(app.clone(), from_the_page(&app, method, uri, body)));
+    let trades = call(Method::GET, "/api/figures/trades", None);
+    let trade = trades["body"]["trades"].as_array().and_then(|t| t.first()).and_then(|t| t["id"].as_str()).unwrap_or_else(|| panic!("a trade in the made-up book: {trades}")).to_string();
+    let stamp = || app.events.stamp()[crate::events::Source::Store as usize];
+    let watched = std::env::temp_dir().join(format!("bh-watched-{}", std::process::id()));
+    std::fs::create_dir_all(&watched).unwrap();
+    let writes: Vec<(&str, Method, &str, Option<Value>)> = vec![
+        ("a journal note and grade", Method::POST, "/api/journal", Some(json!({"id": trade, "thesis": "a note", "grade": "B", "tags": ["setup"]}))),
+        ("a trade typed in", Method::POST, "/api/entries", Some(json!({"entry": "trade", "account": "", "instrument": null, "symbol": "ZZWRITE", "currency": "CAD", "day": "2026-09-01", "side": "BUY", "quantity": "10", "price": "1.50", "fee": "0"}))),
+        ("an import", Method::POST, "/api/import", Some(json!({"name": "a.csv", "account": "", "text": "transaction_date,activity_type,activity_sub_type,account_id,symbol,currency,quantity,unit_price,net_cash_amount\n2026-09-02,Trade,BUY,,ZZIMPORT,CAD,5,2.00,-10\n"}))),
+        ("the tiles chosen", Method::POST, "/api/tiles/set", Some(json!({"tiles": []}))),
+        ("the notification settings", Method::POST, "/api/notifications/settings", Some(json!({"fills": true}))),
+        ("a folder watched", Method::POST, "/api/watch", Some(json!({"path": watched.to_string_lossy(), "account": ""}))),
+        ("the watched folder cleared", Method::POST, "/api/watch/clear", None),
+    ];
+    for (what, method, uri, body) in writes {
+        let before = stamp();
+        let got = call(method, uri, body);
+        assert_eq!(got["status"], json!(200), "{what}: {got}");
+        assert!(stamp() > before, "{what} reached no stream: {got}");
+    }
+}

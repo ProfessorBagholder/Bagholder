@@ -45,14 +45,10 @@ impl Book {
         self.conn()
     }
 
-    /// Have `heard` run at each commit on this connection. It runs inside
-    /// SQLite's commit, on the writer's thread: it must only signal a waiter and
-    /// return, never touch the database.
-    pub fn on_commit(&self, heard: std::sync::Arc<dyn Fn() + Send + Sync>) {
-        self.conn().commit_hook(Some(move || {
-            heard();
-            false // never veto the commit
-        }));
+    /// Have `heard` run after each commit on this connection has landed
+    /// (`bagholder_sqlite::on_commit`): it must only signal a waiter and return.
+    pub fn on_commit(&self, heard: std::sync::Arc<dyn Fn() + Send + Sync>) -> rusqlite::Result<()> {
+        bagholder_sqlite::on_commit(self.conn(), heard)
     }
 
     /// Whether the earlier store's notices were carried.

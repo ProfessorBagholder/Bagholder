@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.2.3";
+pub const APP_VERSION: &str = "2.2.4";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -117,6 +117,9 @@ pub struct App {
     /// Every page's live connection to this app: what changed, who is looking,
     /// what each open stream is showing.
     pub events: Arc<crate::events::Bus>,
+    /// The bus told that a store changed, from the commit on: the one signal every
+    /// store connection is heard by (`bagholder_sqlite::on_commit`).
+    pub store_signal: Arc<dyn Fn() + Send + Sync>,
     /// The open ticket's quote, kept while some page shows it.
     pub docs: crate::docs::DocsState,
     /// The streamed Wealthsimple login window: the socket to it and its casts.
@@ -173,6 +176,7 @@ impl App {
             }) as bagholder_sqlite::pool::Prepare
         };
         Arc::new(App {
+            store_signal: hook.clone(),
             cache: Arc::new(bagholder_sqlite::pool::Pool::with_hook(&cache_file, hook).with_schema(bagholder_sources::cache::SCHEMA.latest() as i32, migrate)),
             home,
             root,
@@ -220,6 +224,7 @@ impl App {
     pub fn set_figures(&self, f: crate::figures::Figures) {
         let events = self.events.clone();
         f.hear(Arc::new(move || events.signal_from(crate::events::Source::Cache)));
+        f.hear_book(self.store_signal.clone());
         match self.figures.set(f) {
             Ok(()) => {}
             // a second call leaves the first, as said: the path already held stays
