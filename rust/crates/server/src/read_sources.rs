@@ -116,6 +116,12 @@ pub(crate) fn needs_of(book: &Book, n: &FactNeeds, today: Date) -> Result<Needs,
             out.closes.extend(days.iter().map(|d| CloseNeed { listing: listing.clone(), from: *d, to: *d }));
         }
     }
+    // a past day's holdings: each one's closes from the day it was first held to that day
+    for (id, spans) in &n.spans {
+        if let Some(listing) = listing(book, *id)? {
+            out.closes.extend(spans.iter().map(|(from, to)| CloseNeed { listing: listing.clone(), from: *from, to: *to }));
+        }
+    }
     for id in &n.held {
         let from = first.get(id).copied().unwrap_or(today);
         if let Some(c) = contract(book, &events, *id, from, today)? {
@@ -147,6 +153,12 @@ fn new_in(now: &FactNeeds, before: &FactNeeds) -> FactNeeds {
             .filter(|(_, days)| !days.is_empty())
             .collect(),
         held: Default::default(),
+        spans: now
+            .spans
+            .iter()
+            .map(|(i, spans)| (*i, spans.iter().filter(|s| before.spans.get(i).is_none_or(|b| !b.contains(s))).copied().collect::<std::collections::BTreeSet<_>>()))
+            .filter(|(_, spans)| !spans.is_empty())
+            .collect(),
         payers: now.payers.difference(&before.payers).copied().collect(),
         first_day: now.first_day.filter(|d| before.first_day.is_none_or(|b| *d < b)),
     }
@@ -358,6 +370,7 @@ mod tests {
         let before = FactNeeds {
             rates: [(Currency::USD, date(2024, 1, 2))].into(),
             closes: [(i(1), [date(2026, 6, 19)].into())].into(),
+            spans: [(i(4), [(date(2025, 1, 2), date(2025, 6, 30))].into())].into(),
             held: [i(1)].into(),
             payers: [i(1)].into(),
             first_day: Some(date(2024, 1, 2)),
@@ -365,6 +378,7 @@ mod tests {
         let now = FactNeeds {
             rates: [(Currency::USD, date(2024, 1, 2)), (Currency::parse("EUR").unwrap(), date(2025, 3, 3))].into(),
             closes: [(i(1), [date(2026, 6, 19), date(2026, 7, 17)].into()), (i(2), [date(2026, 6, 19)].into())].into(),
+            spans: [(i(4), [(date(2025, 1, 2), date(2025, 6, 30)), (date(2025, 1, 2), date(2025, 9, 30))].into())].into(),
             held: [i(1), i(3)].into(),
             payers: [i(1), i(3)].into(),
             first_day: Some(date(2024, 1, 2)),
@@ -372,6 +386,7 @@ mod tests {
         let todo = new_in(&now, &before);
         assert_eq!(todo.rates, [(Currency::parse("EUR").unwrap(), date(2025, 3, 3))].into());
         assert_eq!(todo.closes, [(i(1), [date(2026, 7, 17)].into()), (i(2), [date(2026, 6, 19)].into())].into());
+        assert_eq!(todo.spans, [(i(4), [(date(2025, 1, 2), date(2025, 9, 30))].into())].into(), "a past day's span not asked before");
         assert_eq!(todo.payers, [i(3)].into());
         assert!(todo.held.is_empty(), "what is held is priced once after the passes");
         assert_eq!(todo.first_day, None);

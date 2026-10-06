@@ -329,7 +329,8 @@ pub struct Portfolio {
     pub nav: Option<Fig<Dec>>,
     pub nav_accounts: usize,
     pub has_margin: bool,
-    pub margin_used: Fig<Dec>,
+    /// None under a past range: no broker statement says what was borrowed then.
+    pub margin_used: Option<Fig<Dec>>,
     pub margin_used_pct: Fig<Option<f64>>,
     pub available_margin: Option<Fig<Dec>>,
     /// The margin accounts whose buying power the broker did not state.
@@ -339,6 +340,9 @@ pub struct Portfolio {
     pub day_change: Option<Partial>,
     pub day_change_pct: Fig<Option<f64>>,
     pub allocation: Vec<Slice>,
+    /// The day the holdings are as of, under dates that end before today
+    /// (`SPEC.md` §5); none for the holdings now.
+    pub as_of: Option<String>,
 }
 
 /// An account, for the ticket and Add trade.
@@ -585,4 +589,7 @@ pub struct TradeDoc {
     pub id: String,
     pub trade: Option<Trade>,
     pub position: Option<Position>,
+    /// The day the holding is as of, when it is opened from a past range: its
+    /// figures are that day's, and it offers no order.
+    pub as_of: Option<String>,
 }

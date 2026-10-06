@@ -25,7 +25,8 @@
   import ShortInterest from './trade/ShortInterest.svelte'
   import Disclosures from './trade/Disclosures.svelte'
 
-  let { trade }: { trade: Trade } = $props()
+  // `asOf`: the past day a holding opened from the Portfolio is as of, if any
+  let { trade, asOf = null }: { trade: Trade; asOf?: string | null } = $props()
 
   // a corporate event this holding waits on, and that only the person can say what it did
   // this page's holding, to sell from: the holdings are shown while it is
@@ -141,6 +142,8 @@
   // ---- ticket buttons (ticketButtonsHtml) ----
   interface TkBtn { side: 'BUY' | 'SELL'; on: boolean; open?: () => void }
   const tkButtons = $derived.by<TkBtn[] | null>(() => {
+    // a holding as of a past day is that day's: nothing on it can be ordered
+    if (asOf) return null
     if (String(trade.kind || 'Shares') !== 'Shares') return null
     if (trade.listing) {
       return [

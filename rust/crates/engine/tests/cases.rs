@@ -516,7 +516,7 @@ fn run(path: &Path) -> Vec<String> {
                 }
             }
             if let Some(v) = k.get("margin_used") {
-                c.money("portfolio margin used", v, &sc.portfolio.margin_used);
+                c.money("portfolio margin used", v, &sc.portfolio.margin_used.clone().expect("margin used, as the broker states it now"));
             }
             if let Some(v) = k.get("margin_used_pct") {
                 c.ratio_fig("portfolio margin used %", v, &sc.portfolio.margin_used_pct);
@@ -721,6 +721,92 @@ fn run(path: &Path) -> Vec<String> {
                 let got = found.and_then(|t| t.trade).or(pos.and_then(|p| p.trade));
                 if got != Some(b.ids.trade(trade.as_str().unwrap())) {
                     c.fail(format!("round trip opened by {label}: expected trade {trade}, got {got:?}"));
+                }
+            }
+        }
+        // the Portfolio under dates that end before today (`SPEC.md` §4 Portfolio, A past
+        // range): [{"to": day, "accounts": [...], "positions": [...], "held": ["A/X"], totals}]
+        for want in arr(&expect, "past") {
+            let to = day(s(&want, "to").unwrap());
+            let f = Filters { dates: Dates::Range { from: None, to: Some(to) }, accounts: arr(&want, "accounts").iter().map(|a| b.ids.account(a.as_str().unwrap())).collect(), ..Filters::default() };
+            let pf = e.holdings(&f);
+            let label = format!("past {to}");
+            if pf.past.as_ref().map(|p| p.day) != Some(to) {
+                c.fail(format!("{label}: not the holdings of {to}"));
+                continue;
+            }
+            let held = pf.held(&[]);
+            if let Some(v) = want.get("held") {
+                let got: BTreeSet<String> = pf.positions.iter().map(|i| format!("{}/{}", b.ids.account_name(held[*i].account), b.ids.instrument_name(held[*i].instrument))).collect();
+                c.words(&format!("{label} holdings"), v, got);
+            }
+            for w in arr(&want, "positions") {
+                let account = b.ids.account(s(&w, "account").unwrap());
+                let instrument = b.ids.instrument(s(&w, "instrument").unwrap());
+                let direction = if s(&w, "direction") == Some("short") { Direction::Short } else { Direction::Long };
+                let pl = format!("{label} position {} {}", s(&w, "account").unwrap(), s(&w, "instrument").unwrap());
+                let Some(p) = held.iter().find(|p| p.account == account && p.instrument == instrument && p.direction == direction) else {
+                    c.fail(format!("no {pl}"));
+                    continue;
+                };
+                let k = |x: &str| format!("{pl} {x}");
+                for (field, got) in [("qty", &p.qty), ("avg", &p.avg)] {
+                    if let Some(v) = w.get(field) {
+                        c.figure(&k(field), v, got);
+                    }
+                }
+                for (field, got) in [("book", &p.book), ("market", &p.market), ("unrealized", &p.unrealized), ("market_cad", &p.market_cad), ("unrealized_cad", &p.unrealized_cad)] {
+                    if let Some(v) = w.get(field) {
+                        c.money(&k(field), v, got);
+                    }
+                }
+                if let Some(v) = w.get("last") {
+                    c.figure(&k("last"), v, &p.mark.clone().map(|m| m.price));
+                }
+                if let Some(v) = w.get("last_day") {
+                    let got = p.mark.as_ref().ok().map(|m| match m.source {
+                        bagholder_engine::positions::PriceSource::Close(d) => d.to_string(),
+                        bagholder_engine::positions::PriceSource::Quote => "quote".into(),
+                    });
+                    if got.as_deref() != v.as_str() {
+                        c.fail(format!("{}: expected {v}, got {got:?}", k("last_day")));
+                    }
+                }
+                if let Some(v) = w.get("change") {
+                    c.figure(&k("change"), v, &p.mark.clone().and_then(|m| m.change.ok_or_else(Gaps::none)));
+                }
+                if let Some(v) = w.get("held_days") {
+                    if p.held_days != Ok(v.as_i64().unwrap()) {
+                        c.fail(format!("{}: expected {v}, got {:?}", k("held_days"), p.held_days));
+                    }
+                }
+                if let Some(v) = w.get("gaps") {
+                    c.words(&k("gaps"), v, gaps_words(&p.gaps));
+                }
+            }
+            for (field, got) in [("market_value", &pf.market_value.total), ("cost_basis", &pf.cost_basis.total), ("unrealized", &pf.unrealized.total), ("cash", &pf.cash)] {
+                if let Some(v) = want.get(field) {
+                    c.money(&format!("{label} {field}"), v, got);
+                }
+            }
+            if let Some(v) = want.get("net_value") {
+                match (v.is_null(), &pf.net_value) {
+                    (true, None) => {}
+                    (false, Some(n)) => c.money(&format!("{label} net_value"), v, n),
+                    (_, n) => c.fail(format!("{label} net_value: expected {v}, got {n:?}")),
+                }
+            }
+            if want.get("margin_used").is_some_and(Value::is_null) && pf.margin_used.is_some() {
+                c.fail(format!("{label} margin used: expected none, got {:?}", pf.margin_used));
+            }
+            if want.get("available_margin").is_some_and(Value::is_null) && pf.available_margin.is_some() {
+                c.fail(format!("{label} available margin: expected none, got {:?}", pf.available_margin));
+            }
+            if let Some(v) = want.get("day_change") {
+                match (v.is_null(), &pf.day_change) {
+                    (true, None) => {}
+                    (false, Some(d)) => c.money(&format!("{label} day_change"), v, &d.total),
+                    (_, d) => c.fail(format!("{label} day_change: expected {v}, got {d:?}")),
                 }
             }
         }

@@ -450,6 +450,44 @@ mod tests {
         assert!(asked() > 0, "a page showing the holdings: the chain of each held contract is asked for");
     }
 
+    /// A past day's holdings a screen holds are priced by their closes on or before
+    /// that day: the needs name each one's closes from the day it was first held to
+    /// that day, the reader asks for them, and nothing is named once no screen holds it.
+    #[test]
+    fn a_past_days_holdings_ask_for_their_closes_while_a_screen_holds_them() {
+        crate::tests_common::home(); // offline: the closes are asked for and nothing leaves the machine
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        app.set_figures(f);
+        let f = app.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let today = now.to_zoned(TimeZone::get("America/Toronto").unwrap()).date();
+        let day: bagholder_core::jiff::civil::Date = "2025-11-14".parse().unwrap();
+        let spans = |f: &crate::figures::Figures| -> Vec<(InstrumentId, bagholder_core::jiff::civil::Date)> {
+            let n = f.read(|e| e.needs()).unwrap();
+            crate::read_sources::needs_of(&book, &n, today).unwrap().closes.iter().filter(|c| c.to == day).map(|c| (c.listing.id, c.from)).collect()
+        };
+        assert!(spans(f).is_empty(), "no screen holds a past day");
+        let held = f.read(|e| e.past(day)).unwrap();
+        assert!(!held.positions.is_empty(), "the test book held something that day");
+        assert_eq!(f.read(|e| e.past_built()), Some(true), "a past day worked out is said once");
+        assert_eq!(f.read(|e| e.past_built()), Some(false));
+        let want: BTreeSet<(InstrumentId, bagholder_core::jiff::civil::Date)> = held.positions.iter().filter_map(|p| crate::read_sources::needs_of(&book, &bagholder_engine::needs::FactNeeds { spans: [(p.instrument, [(p.opened_on, day)].into())].into(), ..Default::default() }, today).unwrap().closes.first().map(|c| (c.listing.id, c.from))).collect();
+        assert!(!want.is_empty());
+        assert_eq!(spans(f).into_iter().collect::<BTreeSet<_>>(), want, "each holding's closes from its first day held to that day");
+        let cache = f.cache().unwrap();
+        let asked = || -> usize { want.iter().map(|(i, _)| cache.reads(&i.to_string(), bagholder_sources::contract::DataKind::DailyClose).unwrap().len()).sum() };
+        let before = asked();
+        pass(&app, f, now).unwrap();
+        assert!(asked() > before, "the reader asked for them");
+        drop(held);
+        assert!(spans(f).is_empty(), "no screen holds it any more: nothing is named");
+    }
+
     fn t(s: &str) -> Timestamp {
         s.parse().unwrap()
     }

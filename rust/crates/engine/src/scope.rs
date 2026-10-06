@@ -117,6 +117,18 @@ impl Filters {
         }
     }
 
+    /// The last day of dates that end before today: the day a past range's
+    /// holdings are as of (`SPEC.md` §5). None while the dates reach today (no
+    /// date filter, a preset, a range or a list of years that does).
+    pub fn past_end(&self, today: Date) -> Option<Date> {
+        let end = match &self.dates {
+            Dates::Range { to: Some(to), .. } => *to,
+            Dates::Years(ys) => Date::new(*ys.iter().max()?, 12, 31).ok()?,
+            _ => return None,
+        };
+        (end < today).then_some(end)
+    }
+
     /// Whether any day from `from` to `to` is in the dates chosen.
     pub fn overlaps(&self, today: Date, from: Date, to: Date) -> bool {
         if let Some((lo, hi)) = self.bounds(today) {
@@ -386,7 +398,9 @@ pub struct Portfolio {
     pub net_value_accounts: usize,
     /// The negative cash balances the broker states, per currency, shown positive.
     pub margin_used_by: BTreeMap<Currency, Fig<Dec>>,
-    pub margin_used: Fig<Money>,
+    /// What is borrowed, as the broker states it now; none for a past day, which
+    /// no broker statement describes.
+    pub margin_used: Option<Fig<Money>>,
     pub margin_used_pct: Fig<Option<Ratio>>,
     pub available_margin: Option<Fig<Money>>,
     /// Margin accounts whose buying power the broker could not state, and why.
@@ -397,6 +411,20 @@ pub struct Portfolio {
     pub day_change: Option<Partial>,
     pub day_change_pct: Fig<Option<Ratio>>,
     pub allocation: Vec<Allocation>,
+    /// The past day the holdings are as of, with them (`Engine::holdings`); none
+    /// for the holdings now, which are the engine's own positions.
+    pub past: Option<std::sync::Arc<crate::engine::Past>>,
+}
+
+impl Portfolio {
+    /// The positions `positions` and `allocation` index: the past day's, or
+    /// those now (`now`, the engine's).
+    pub fn held<'a>(&'a self, now: &'a [PositionFig]) -> &'a [PositionFig] {
+        match &self.past {
+            Some(p) => &p.positions,
+            None => now,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -807,7 +835,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         net_value_accounts: navs.len(),
         net_value,
         margin_used_by: used,
-        margin_used,
+        margin_used: Some(margin_used),
         available_margin: match (unread.first(), available.is_empty()) {
             (Some(a), _) => Some(Err(Gaps::of(Gap::BuyingPowerUnread(*a)))),
             (None, false) => Some(money_sum(available.iter().copied())),
@@ -819,7 +847,53 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         day_change,
         day_change_pct,
         allocation,
+        past: None,
     }
+}
+
+/// The Portfolio as of the close of a past day (`SPEC.md` §5): the positions
+/// then, at that day's close and rate; what the accounts were worth that day,
+/// as the broker stated it; the book's cash that day; nothing borrowed or
+/// available to borrow, which the broker states only now.
+pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate::engine::Past>) -> Portfolio {
+    let day = past.day;
+    let mut p = portfolio(f, inputs, &past.positions);
+    let accounts: Vec<AccountId> = inputs.ledger.accounts.keys().copied().filter(|a| f.accounts.is_empty() || f.accounts.contains(a)).collect();
+    // each account's value that day: its last stated on or before it
+    let navs: Vec<Money> = accounts.iter().filter_map(|a| inputs.market.brokers.get(a)?.net_value.range(..=day).next_back().map(|(_, v)| Money::new(*v, Currency::CAD))).collect();
+    p.net_value_accounts = navs.len();
+    p.net_value = (!navs.is_empty()).then(|| money_sum(navs.iter().copied()));
+    // the book's cash that day, each currency's positive balance at that day's rate
+    let mut by: BTreeMap<(AccountId, Currency), Fig<Dec>> = BTreeMap::new();
+    for t in inputs.ledger.transactions.iter().filter(|t| t.trade_date <= day && accounts.contains(&t.account)) {
+        if let Some(c) = t.cash {
+            let e = by.entry((t.account, c.currency)).or_insert(Ok(Dec::ZERO));
+            if let Ok(v) = e {
+                *e = v.checked_add(c.amount).map_err(Gaps::from);
+            }
+        }
+    }
+    let mut cash = Ok(Money::zero(Currency::CAD));
+    for ((_, c), v) in by {
+        cash = crate::gap::both(cash, v, |total, v| {
+            if !v.is_positive() {
+                return Ok(total);
+            }
+            Ok(total.add_to_fit(crate::fx::to_cad(&inputs.facts.rates, &inputs.clock, Money::new(v, c), day)?)?)
+        });
+    }
+    p.cash_pct = match &p.net_value {
+        Some(n) => ratio_of(&cash, n),
+        None => Ok(None),
+    };
+    p.cash = cash;
+    p.margin_used_by = BTreeMap::new();
+    p.margin_used = None;
+    p.margin_used_pct = Ok(None);
+    p.available_margin = None;
+    p.margin_unavailable = Vec::new();
+    p.past = Some(past);
+    p
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -905,7 +979,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
         let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge).collect();
         let charged: BTreeSet<(i16, i8)> = charges.iter().map(|i| (rows[*i].day.year(), rows[*i].day.month())).collect();
         let total = partial(&mut charges.iter().copied()).total.map(Money::neg);
-        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone(), interest_per_month: avg_money(&total, charged.len()), interest_months: charged.len() });
+        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone().unwrap_or(Ok(Money::zero(Currency::CAD))), interest_per_month: avg_money(&total, charged.len()), interest_months: charged.len() });
     } else {
         let since = today.checked_sub(365.days()).unwrap_or(Date::MIN);
         let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day > since && rows[*i].day <= today).collect();
