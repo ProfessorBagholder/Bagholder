@@ -1234,10 +1234,11 @@ pub fn fetch_google(net: &Net, ask: &Ask) -> Result<Option<Vec<NewsItem>>, NetEr
                 r.summary = summary_text(&a.summary, &r.headline);
                 r.url = a.url;
             }
-            // the item stands as Google states it, and its article is asked for again next time
-            Err(e) => {
+            // no answer yet (the site down, or asking it to slow down): the item stands as
+            // Google states it, which is what the page shows, and its article is asked
+            // for again at the next pass; nothing for the person to do, so nothing is said
+            Err(_) => {
                 UNREAD.lock().unwrap_or_else(|e| e.into_inner()).insert(r.id.clone());
-                log(&format!("bagholder news: the article behind a Google item for {symbol} could not be read: {e}"));
             }
         }
     }
@@ -1291,11 +1292,18 @@ pub fn read_article(link: &str) -> Result<Article, NetError> {
             return Err(fail(e));
         }
     };
-    if page.status != 200 {
-        if page.status == 429 {
+    match page.status {
+        200 => {}
+        // asked too often, or the site is down: the article is asked for again later
+        429 => {
             bagholder_net::machine::refused_now(&host, None);
+            return Err(NetError { code: Some(429), text: format!("{host} answered 429 for the article") });
         }
-        return Err(NetError { code: Some(page.status), text: format!("{host} answered {} for the article", page.status) });
+        s if s >= 500 => return Err(NetError { code: Some(s), text: format!("{host} answered {s} for the article") }),
+        // the publisher turns the page away (a paywall, a bot gate: 401, 403, 451),
+        // or it is gone: an answer that will not change, so it is the article as far
+        // as it can be read, its own address and nothing else, never asked again
+        _ => return Ok(Article { url, headline: String::new(), summary: String::new() }),
     }
     let (headline, summary) = open_graph(&page.text());
     Ok(Article { url: if page.url.is_empty() { url } else { page.url.clone() }, headline, summary })
