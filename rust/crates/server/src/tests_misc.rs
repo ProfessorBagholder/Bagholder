@@ -155,10 +155,10 @@ fn test_update_check_flags_only_a_newer_release() {
         html_url: format!("https://github.com/ProfessorBagholder/Bagholder/releases/tag/{}", newer),
         ..Default::default()
     }));
-    set_checked_at(30.0 * 60.0);
+    set_checked_at(update::UPDATE_EVERY.as_secs_f64() / 2.0);
     update::check_for_update_if_due(&app());
-    assert_eq!(fakes.calls(), 0, "checked half an hour ago: GitHub is not asked again");
-    set_checked_at(2.0 * 3600.0);
+    assert_eq!(fakes.calls(), 0, "checked a minute ago: GitHub is not asked again");
+    set_checked_at(update::UPDATE_EVERY.as_secs_f64() + 1.0);
     let rec = update::check_for_update_if_due(&app());
     assert_eq!((rec.update_available, rec.latest.as_str()), (true, newer.as_str()));
     let st = crate::status::status(&app());
@@ -261,6 +261,30 @@ fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
     assert_eq!(got, Some(update::ReleaseAssets { archive: format!("https://x/{}", mine), sha: format!("https://x/{}", sha_name), archive_bytes: Some(mine.len() as u64), sha_bytes: Some(sha_name.len() as u64) }), "each with the size GitHub states");
     assert_eq!(update::release_assets(&rel(&["bagholder-v2.0.0-web.zip".into(), "bagholder-v2.0.0-web.zip.sha256".into()])), None, "another platform's archive is not this one's");
     assert_eq!(update::release_assets(&rel(&[mine.clone(), "bagholder-v2.0.0-android.apk".into()])), None, "nothing without its checksum");
+}
+
+/// GitHub is asked with the ETag of the answer kept: the same release asked again
+/// is a 304 that changes nothing but when it was checked, and a changed one (its
+/// archives attached, a newer tag) is read whole and offered.
+#[test]
+fn test_the_update_check_asks_with_its_etag_and_an_unchanged_release_is_kept() {
+    let _g = guard();
+    let mine = update::parse_version(app::APP_VERSION).unwrap();
+    let newer = format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1);
+    let release = update::GithubRelease { tag_name: newer.clone(), html_url: "https://github.com/x/y/releases/latest".into(), ..Default::default() };
+    let _fakes = UpdateFakes::new(Some(release));
+    let first = update::check_for_update(&app());
+    assert!(first.ok && !first.etag.is_empty(), "{first:?}");
+    let again = update::check_for_update(&app());
+    assert_eq!((again.ok, again.latest.as_str(), again.etag.as_str(), again.update_available), (true, newer.as_str(), first.etag.as_str(), first.update_available), "a 304: the release kept");
+    assert!(crate::app::parse_instant(&again.checked_at) >= crate::app::parse_instant(&first.checked_at));
+    // what was offered is said again by this build: a release no newer than it is not offered
+    let conn = app_ref().cache().unwrap();
+    let mut kept: serde_json::Value = serde_json::to_value(&again).unwrap();
+    kept["latest"] = json!(format!("v{}", app::APP_VERSION));
+    kept["updateAvailable"] = json!(true);
+    bagholder_store::tables::set_meta(&conn, "update_check", &kept.to_string()).unwrap();
+    assert!(!update::check_for_update(&app()).update_available, "the kept release is this build's own: not offered");
 }
 
 /// A copy that installs archives is offered a release only once this platform's

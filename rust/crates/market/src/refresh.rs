@@ -158,7 +158,6 @@ pub fn refresh_all(conn: &Connection, symbols: &[Listing]) -> Result<(), String>
 
 pub const RECORD_STALE_HOURS: f64 = 20.0;
 pub const MARKET_ATTEMPT_HOURS: f64 = 6.0;
-pub const MARKET_CHECK_MINUTES: u64 = 60;
 /// 16:30 Eastern.
 pub const BOC_PUBLISH_MINUTE_ET: i64 = 16 * 60 + 30;
 

@@ -19,7 +19,14 @@ use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, APP_VERSION,
 pub const RESTART_CODE: i32 = 3;
 /// A restarted server alive this long is a good update.
 pub const UPDATE_HEALTHY_SEC: u64 = 20;
-pub const UPDATE_CHECK_HOURS: f64 = 1.0;
+/// How often GitHub is asked for the latest release. Each ask is conditional (its
+/// ETag), so an unchanged release answers 304 with nothing in it; unauthenticated,
+/// a 304 still counts against the sixty requests an hour GitHub allows an address
+/// (observed 2026-10-06: `x-ratelimit-remaining` fell by one per 304), so every
+/// two minutes is thirty an hour, half the allowance. A release is published by
+/// `release.yml` the moment its files are all attached, so it is offered within
+/// two minutes of being installable.
+pub const UPDATE_EVERY: Duration = Duration::from_secs(2 * 60);
 pub const UPDATES_OFF_MESSAGE: &str = "This copy is updated with docker compose pull; a new release is a new image.";
 
 pub fn repo_url() -> String {
@@ -146,33 +153,58 @@ pub struct UpdateRecord {
     pub update_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assets: Option<ReleaseAssets>,
+    /// GitHub's ETag for the answer this record was made from: the next ask sends
+    /// it, and an unchanged release answers 304.
+    pub etag: String,
 }
 
 /// Tests stand in for GitHub here: `(calls, answer)`, `None` answering as offline.
+/// A release's ETag is its tag and its assets' names, so a fake answers 304 to
+/// the same release asked again, as GitHub does.
 #[cfg(test)]
 pub static FAKE_RELEASE: std::sync::Mutex<Option<(usize, Option<GithubRelease>)>> = std::sync::Mutex::new(None);
 
-/// The latest release as GitHub describes it, `None` when it cannot be read.
-fn fetch_release() -> Option<GithubRelease> {
+/// What GitHub answered for the latest release.
+enum Fetched {
+    /// The release, and the ETag to ask with next time.
+    Release(GithubRelease, String),
+    /// Unchanged since the ETag asked with (a 304).
+    Same,
+    Failed,
+}
+
+/// The latest release as GitHub describes it, asked conditionally with `etag`.
+fn fetch_release(etag: &str) -> Fetched {
     #[cfg(test)]
     {
         if let Some((calls, answer)) = FAKE_RELEASE.lock().unwrap().as_mut() {
             *calls += 1;
-            return answer.clone();
+            return match answer {
+                Some(r) => {
+                    let tag = format!("\"{}|{}\"", r.tag_name, r.assets.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(","));
+                    if !etag.is_empty() && etag == tag { Fetched::Same } else { Fetched::Release(r.clone(), tag) }
+                }
+                None => Fetched::Failed,
+            };
         }
-        return None;
+        return Fetched::Failed;
     }
     #[allow(unreachable_code)]
     {
         let ua = format!("Bagholder/{}", APP_VERSION);
-        let got = bagholder_net::client::request(
-            "GET",
-            &release_url(),
-            &[("Accept", "application/vnd.github+json"), ("User-Agent", &ua)],
-            None,
-            Duration::from_secs(30),
-        );
-        got.ok().and_then(|r| serde_json::from_slice(&r.body).ok())
+        let mut headers = vec![("Accept", "application/vnd.github+json"), ("User-Agent", ua.as_str())];
+        if !etag.is_empty() {
+            headers.push(("If-None-Match", etag));
+        }
+        let Ok(r) = bagholder_net::client::request_any("GET", &release_url(), &headers, None, Duration::from_secs(30)) else { return Fetched::Failed };
+        match r.status {
+            304 => Fetched::Same,
+            200 => match serde_json::from_slice(&r.body) {
+                Ok(rel) => Fetched::Release(rel, r.headers.iter().find(|(k, _)| k == "etag").map(|(_, v)| v.clone()).unwrap_or_default()),
+                Err(_) => Fetched::Failed,
+            },
+            _ => Fetched::Failed,
+        }
     }
 }
 
@@ -180,17 +212,35 @@ fn fetch_release() -> Option<GithubRelease> {
 /// record stored in meta. Never fails: a record that could not be kept is said
 /// in the header until one is.
 pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
-    let mut record = UpdateRecord { checked_at: now_iso(), ok: false, latest: String::new(), url: format!("{}/releases/latest", repo_url()), update_available: false, assets: None };
-    let rel = fetch_release();
-    if let Some(rel) = rel {
-        if let Some(latest) = parse_version(&rel.tag_name) {
-            let tag = rel.tag_name.clone();
+    let mut record = UpdateRecord { checked_at: now_iso(), ok: false, latest: String::new(), url: format!("{}/releases/latest", repo_url()), update_available: false, assets: None, etag: String::new() };
+    // the record kept is asked with its ETag: an unchanged release is that record, checked now
+    let kept = update_status(app).ok().filter(|r| r.ok && !r.etag.is_empty());
+    let rel = match fetch_release(kept.as_ref().map(|r| r.etag.as_str()).unwrap_or("")) {
+        Fetched::Release(rel, etag) => {
+            record.etag = etag;
+            Some(rel)
+        }
+        Fetched::Same => {
+            // the release is the one kept; whether it is newer is this build's to say
+            // (a copy that has just updated runs it), so it is said again below
+            record = UpdateRecord { checked_at: now_iso(), update_available: false, ..kept.expect("asked with its ETag") };
+            None
+        }
+        Fetched::Failed => None,
+    };
+    if let Some(rel) = &rel {
+        if parse_version(&rel.tag_name).is_some() {
             record.ok = true;
-            record.latest = tag.clone();
+            record.latest = rel.tag_name.clone();
             if !rel.html_url.is_empty() {
                 record.url = rel.html_url.clone();
             }
-            record.assets = release_assets(&rel);
+            record.assets = release_assets(rel);
+        }
+    }
+    if let Some(latest) = parse_version(&record.latest).filter(|_| record.ok) {
+        let tag = record.latest.clone();
+        {
             // newer, and ready for this copy to take: a copy that installs archives
             // waits until this platform's archive and its checksum are attached (the
             // release is published before its archives are built), so nothing is
@@ -936,7 +986,7 @@ pub fn check_for_update_if_due(app: &Arc<App>) -> UpdateRecord {
     match update_status(app) {
         Ok(rec) => {
             if let Some(last) = parse_instant(&rec.checked_at) {
-                if now_unix() - last < UPDATE_CHECK_HOURS * 3600.0 {
+                if now_unix() - last < UPDATE_EVERY.as_secs_f64() {
                     return rec;
                 }
             }

@@ -280,14 +280,23 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
     // a fill of Bagholder's own order is in the book once Wealthsimple's own row
     // for it is: until then it is pulled for again, soon at first
     let fill_due = fill_pull_due(app, &book, conn, last_pull, now)?;
-    let pull = asked || pull_due(last_pull, now, &zone) || fill_due.is_some_and(|d| d <= now);
+    // the day's window is met by a whole pull, never by one of the activity alone
+    // (a book from before the mark: its last pull of any kind)
+    let last_daily = book.last_read(conn, bagholder_broker::pull::DAILY_READ).map_err(|e| e.to_string())?.or(last_pull);
+    let pull = asked || pull_due(last_daily, now, &zone) || fill_due.is_some_and(|d| d <= now);
     let read = due(pull, open, opened != *served, last_cash, now);
     // every opening up to here is served by this pass, whatever the read's outcome
     // (a failed one is read again after its rest)
     *served = opened;
     let outcome = match read {
-        Some(Due::Pull) => Some(pull_now(app, f, &book, conn, file, now)?),
-        Some(Due::Balances) => Some(balances_now(app, f, &book, conn, file, now)?),
+        Some(Due::Pull) => Some(pull_now(app, f, &book, conn, file, now, true)?),
+        Some(Due::Balances) => match balances_now(app, f, &book, conn, file, now)? {
+            // cash moved at Wealthsimple since its activity was last read: the
+            // movement (a distribution paid, interest, a deposit) is read now, the
+            // activity alone, the day's holdings and history left to the day's pull
+            (Read::Done, true) => Some(pull_now(app, f, &book, conn, session_file(app), now, false)?),
+            (read, _) => Some(read),
+        },
         None => None,
     };
     match outcome {
@@ -301,10 +310,6 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         None => {}
     }
     let mut next = next_window(now, &zone);
-    // a pull asked during this pass (the balances found cash moved) runs at once
-    if app.pull_asked.load(Ordering::SeqCst) {
-        next = Some(now);
-    }
     let last_pull = book.last_read(conn, "accounts").map_err(|e| e.to_string())?;
     if let Some(d) = fill_pull_due(app, &book, conn, last_pull, now)? {
         next = Some(next.map_or(d, |n| n.min(d)));
@@ -370,7 +375,8 @@ fn failures(parts: &[(String, Failure)]) -> (String, bool) {
     (parts.iter().map(|(p, f)| format!("{p}: {f}")).collect::<Vec<_>>().join("; "), lapsed)
 }
 
-fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, now: Timestamp) -> Result<Read, String> {
+/// A pull: `daily`, the whole of it; else the activity alone (`pull::pull_activity`).
+fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, now: Timestamp, daily: bool) -> Result<Read, String> {
     {
         let mut st = app.state.lock().unwrap();
         st.syncing = true;
@@ -379,7 +385,11 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     set_step(app, "Checking session…");
     let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
     let today = adapter.day(now);
-    let pulled = bagholder_broker::pull::pull(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)));
+    let pulled = if daily {
+        bagholder_broker::pull::pull(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)))
+    } else {
+        bagholder_broker::pull::pull_activity(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)))
+    };
     let report = match pulled {
         Ok(r) => r,
         Err(e) => {
@@ -474,7 +484,8 @@ pub(crate) fn sync_went(app: &Arc<App>, failed: Option<&str>) {
     }
 }
 
-fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, now: Timestamp) -> Result<Read, String> {
+/// The balances read, and whether an account's cash moved since its activity was read.
+fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, now: Timestamp) -> Result<(Read, bool), String> {
     let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
     let read = bagholder_broker::pull::balances(book, &mut adapter, conn, now).map_err(|e| e.to_string())?;
     for a in &read.accounts {
@@ -482,21 +493,16 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     }
     let (failed, lapsed) = failures(&read.failures);
     if lapsed {
-        return Ok(Read::Lapsed);
+        return Ok((Read::Lapsed, false));
     }
     let mut st = app.state.lock().unwrap();
     if failed.is_empty() {
         st.portfolio_error.clear();
-        // cash moved at Wealthsimple since its activity was last read: the movement
-        // (a distribution paid, interest, a deposit) is read now, not at the next window
-        if !read.cash_moved.is_empty() {
-            app.pull_asked.store(true, Ordering::SeqCst);
-        }
-        Ok(Read::Done)
+        Ok((Read::Done, !read.cash_moved.is_empty()))
     } else {
         st.portfolio_error = format!("Balances could not be read: {failed}");
         log(&format!("bagholder: balances could not be read: {failed}"));
-        Ok(Read::Failed)
+        Ok((Read::Failed, false))
     }
 }
 

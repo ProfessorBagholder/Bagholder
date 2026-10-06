@@ -3063,9 +3063,9 @@ pub fn archive_loop(app: Arc<App>) {
     }
 }
 
-/// The update check, hourly (`SPEC.md` §2, Versions).
+/// The update check, every `update::UPDATE_EVERY` (`SPEC.md` §2, Versions).
 pub fn market_loop(app: Arc<App>) {
-    while !app.wait(Duration::from_secs(60 * bagholder_market::refresh::MARKET_CHECK_MINUTES)) {
+    while !app.wait(crate::update::UPDATE_EVERY) {
         crate::update::check_for_update_if_due(&app);
     }
 }

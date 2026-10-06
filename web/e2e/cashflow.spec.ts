@@ -94,11 +94,28 @@ test('a bar hover reads the month, Distributions, Margin interest and Net cashfl
   // the interest charged is shown with a minus sign (SPEC.md "### Cashflow", hover)
   await expect(line('Margin interest')).toHaveText(signedMoney(negate(b.interest), 0))
   await expect(line('Net cashflow')).toHaveText(signedMoney(b.net, 0))
-  // the negative colour's bar rises higher than the accent's when interest wins the month
-  const bars = await bar.locator('div').all()
-  expect(bars.length).toBeGreaterThanOrEqual(1)
-  const heights = await Promise.all(bars.map((x) => x.boundingBox()))
-  expect(Math.max(...heights.map((h) => h?.height ?? 0))).toBeGreaterThan(0)
+  // the interest is drawn in front of the distributions from the same baseline, in
+  // every month: here it rises above them, so the bar reads the negative colour to its top
+  const fills = await bar.locator('div').evaluateAll((els) => els.map((e) => ({ bg: (e as HTMLElement).style.background, h: e.getBoundingClientRect().height, bottom: e.getBoundingClientRect().bottom })))
+  expect(fills.map((f) => f.bg)).toEqual(['var(--accent-bar)', 'var(--neg)'])
+  expect(fills[1].h).toBeGreaterThan(fills[0].h)
+  expect(fills[1].bottom).toBe(fills[0].bottom)
+})
+
+test('in every month the margin interest is drawn in front of the distributions, from the same baseline', async ({ page, request }) => {
+  const m = await figures(request)
+  const months = m.cashflow.months as { key: string; value: string; interest: string }[]
+  await page.goto('/#cashflow')
+  await ready(page)
+  let both = 0
+  for (const [i, b] of months.entries()) {
+    const fills = await page.locator(`.bar-col[data-i="${i}"] div`).evaluateAll((els) => els.map((e) => (e as HTMLElement).style.background))
+    if (cmp(b.interest, '0') > 0) {
+      both++
+      expect(fills.at(-1), b.key).toBe('var(--neg)')
+    }
+  }
+  expect(both).toBeGreaterThan(1) // months on both sides of the interest outweighing the distributions
 })
 
 test('Cashflow Positions carries Qty, Avg, Book, Market, Distribution, YTD, All time, Projected, Yield on cost and Current yield', async ({ page, request }) => {
