@@ -728,7 +728,8 @@ fn test_a_google_item_carries_its_articles_own_headline_and_summary() {
     let xml = format!(
         "<rss><channel>{}{}</channel></rss>",
         format_args!("<item><title>{cut} - GlobeNewswire</title><link>https://news.google.com/rss/articles/CBMiA1?oc=5</link><pubDate>Mon, 05 Oct 2026 15:34:16 GMT</pubDate><source url=\"x\">GlobeNewswire</source></item>"),
-        "<item><title>AST SpaceMobile ships three more satellites - Seeking Alpha</title><link>https://news.google.com/rss/articles/CBMiB2?oc=5</link><pubDate>Mon, 05 Oct 2026 12:00:00 GMT</pubDate><source url=\"x\">Seeking Alpha</source></item>",
+        "<item><title>AST SpaceMobile ships three more satellites - Seeking Alpha</title><link>https://news.google.com/rss/articles/CBMiB2?oc=5</link><pubDate>Mon, 05 Oct 2026 12:00:00 GMT</pubDate><source url=\"x\">Seeking Alpha</source></item>\
+         <item><title>AST SpaceMobile is down on a short report - Seeking Alpha</title><link>https://news.google.com/rss/articles/CBMiC3?oc=5</link><pubDate>Mon, 05 Oct 2026 11:00:00 GMT</pubDate><source url=\"x\">Seeking Alpha</source></item>",
     );
     let get = move |_: &str, _: &[(&str, &str)]| Ok::<_, NetError>(xml.clone());
     let read: Mutex<Vec<String>> = Mutex::new(vec![]);
@@ -736,6 +737,8 @@ fn test_a_google_item_carries_its_articles_own_headline_and_summary() {
         read.lock().unwrap().push(link.to_string());
         match news::google_article_id(link) {
             Some("CBMiA1") => Ok(news::Article { url: "https://www.globenewswire.com/news-release/x.html".into(), headline: full.into(), summary: "Time-Sensitive: allegations focus on the company's statements about its service and its users.".into() }),
+            // a publisher that turns its page away: its address and nothing else
+            Some("CBMiC3") => Ok(news::Article { url: "https://seekingalpha.com/news/x".into(), headline: String::new(), summary: String::new() }),
             _ => Err(NetError { code: Some(403), text: "the publisher turned the page away".into() }),
         }
     };
@@ -752,10 +755,16 @@ fn test_a_google_item_carries_its_articles_own_headline_and_summary() {
     let story = by("2026-10-05T12:00");
     assert_eq!((story.headline.as_str(), story.summary.as_str()), ("AST SpaceMobile ships three more satellites", ""));
     assert!(news::google_article_id(&story.url).is_some(), "still Google's link, read again next time");
+    // a page its publisher turns away: Google's headline stands, the item goes to the
+    // publisher's own address, and it is read: never asked again
+    let refused = by("2026-10-05T11:00");
+    assert_eq!((refused.headline.as_str(), refused.summary.as_str(), refused.url.as_str()), ("AST SpaceMobile is down on a short report", "", "https://seekingalpha.com/news/x"));
     // an item whose article was read before is not read again
     read.lock().unwrap().clear();
     let mut known = Ask { ..ask.clone() };
-    known.articles.insert(alert.id.clone(), news::Article { url: alert.url.clone(), headline: alert.headline.clone(), summary: alert.summary.clone() });
+    for kept in [alert, refused] {
+        known.articles.insert(kept.id.clone(), news::Article { url: kept.url.clone(), headline: kept.headline.clone(), summary: kept.summary.clone() });
+    }
     let again = news::fetch_google(&net, &known).unwrap().unwrap();
     assert_eq!(read.lock().unwrap().clone(), vec!["https://news.google.com/rss/articles/CBMiB2?oc=5".to_string()]);
     assert_eq!(again.iter().find(|r| r.id == alert.id).unwrap().headline, full);
