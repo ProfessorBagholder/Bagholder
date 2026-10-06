@@ -1048,3 +1048,23 @@ fn every_status_the_web_app_lists_is_placed_and_any_other_is_a_mismatch() {
     }
     assert_eq!(settled("PROCESSING"), None);
 }
+
+/// Cash Wealthsimple states between syncs that is not what it stated when the
+/// activity was last read is a movement the book has not read (a distribution
+/// paid, interest, a deposit): the balances read names the account, and the
+/// activity is read at once. The same cash names nothing.
+#[test]
+fn balances_read_between_syncs_name_an_account_whose_cash_moved_since_its_activity_was_read() {
+    let p = pulled(Op::Balances, &[body("wealthsimple-pull/edited-balances.json")]);
+    let connection = p.book.accounts().unwrap()[0].connection;
+    let read_at = |later: &str, answer: String| {
+        let f = answering(&[answer]);
+        let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op: Op::Balances });
+        bagholder_broker::pull::balances(&p.book, &mut ws, connection, later.parse().unwrap()).unwrap()
+    };
+    let same = read_at("2025-11-19T20:05:00Z", body("wealthsimple-pull/edited-balances.json"));
+    assert!(same.failures.is_empty(), "{:?}", same.failures);
+    assert_eq!(same.cash_moved, vec![], "the cash it stated at the read: nothing moved");
+    let paid = read_at("2025-11-19T20:10:00Z", body("wealthsimple-pull/edited-balances.json").replace("36434.77", "36614.77"));
+    assert_eq!(paid.cash_moved, vec![p.account().unwrap()], "CAD cash rose: a movement not read yet");
+}

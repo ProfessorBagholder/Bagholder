@@ -608,6 +608,10 @@ pub struct BalancesRead {
     /// The book's accounts a statement was stored for.
     pub accounts: Vec<AccountId>,
     pub failures: Vec<(String, Failure)>,
+    /// The accounts whose cash, as the broker states it now, is not what it stated
+    /// when the activity was last read: a movement the book has not read yet (a
+    /// distribution paid, interest, a deposit), so the activity is due.
+    pub cash_moved: Vec<AccountId>,
 }
 
 /// The balances now, apart from a pull (`docs/plans/stage-3c-switch.md`, §3: every
@@ -639,7 +643,18 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         Err(f) => failures.push(("accounts".into(), f)),
     }
     accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
-    Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures })
+    let mut cash_moved = Vec::new();
+    for a in &accounts {
+        let stated = book.stated(*a)?;
+        if let (Some((_, now_cash)), Some((_, at_read))) = (&stated.cash, &stated.cash_read) {
+            // a currency stated at nothing is the same as one not stated
+            let held = |m: &BTreeMap<bagholder_core::Currency, bagholder_core::Dec>| m.iter().filter(|(_, v)| !v.is_zero()).map(|(c, v)| (*c, *v)).collect::<BTreeMap<_, _>>();
+            if held(now_cash) != held(at_read) {
+                cash_moved.push(*a);
+            }
+        }
+    }
+    Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures, cash_moved })
 }
 
 /// What each account is worth now, as the broker states it, where every account of
