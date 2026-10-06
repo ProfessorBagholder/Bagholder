@@ -533,6 +533,10 @@ impl Feed {
             }
             now_at
         });
+        // a past day's holdings worked out for a screen: their closes are read
+        if f.read(|e| e.past_built()) == Some(true) {
+            f.wake();
+        }
         match done {
             Some(now_at) => {
                 self.at = now_at;

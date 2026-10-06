@@ -22,6 +22,10 @@ pub struct FactNeeds {
     /// underlying on the expiry day of each contract held into it, whose close
     /// says whether the contract expired worthless.
     pub closes: BTreeMap<InstrumentId, BTreeSet<Date>>,
+    /// Each instrument a past day's holdings price (`crate::engine::Past`), and
+    /// the spans of days they do: from the day the holding was first held to that
+    /// day, whose last close on or before it is its price then.
+    pub spans: BTreeMap<InstrumentId, BTreeSet<(Date, Date)>>,
     /// Each instrument held today in some account: its price is quoted.
     pub held: BTreeSet<InstrumentId>,
     /// Each security held now: its distributions and schedule are read.

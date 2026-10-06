@@ -621,7 +621,7 @@ pub fn exposure_doc(engine: &Engine, names: &Names, pf: &Portfolio, t: &dyn Tabl
     let (mut sectors, mut countries) = (Spread::default(), Spread::default());
     let mut total = bagholder_core::Dec::ZERO;
     for a in &pf.allocation {
-        let p = &figs.positions[a.position];
+        let p = &pf.held(figs.positions)[a.position];
         let v: Money = a.value;
         if !v.amount.is_positive() {
             continue;

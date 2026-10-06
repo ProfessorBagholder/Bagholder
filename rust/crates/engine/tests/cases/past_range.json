@@ -1,0 +1,413 @@
+[
+ {
+  "name": "a past range ending on a weekend: the holdings at the last session's close and rate",
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A",
+    "kind": "margin"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "U",
+    "currency": "USD"
+   }
+  ],
+  "quotes": {
+   "X": {
+    "price": "20"
+   },
+   "U": {
+    "price": "150"
+   }
+  },
+  "closes": {
+   "X": {
+    "2026-02-05": "11",
+    "2026-02-06": "12",
+    "2026-02-09": "13"
+   },
+   "U": {
+    "2026-02-05": "101",
+    "2026-02-06": "104",
+    "2026-02-09": "108"
+   }
+  },
+  "brokers": {
+   "A": {
+    "net_value": {
+     "2026-02-06": "5000",
+     "2026-02-09": "5100"
+    },
+    "now": "9000",
+    "cash": {
+     "CAD": "-500"
+    },
+    "buying_power": "1000"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t0",
+    "account": "A",
+    "day": "2026-02-01",
+    "at": "2026-02-01T15:00:00Z",
+    "kind": "deposit",
+    "cash": "3000"
+   },
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "U",
+    "qty": "10",
+    "cash": "-1000"
+   }
+  ],
+  "asked": "under a date range ending 2026-02-08 (a Sunday), no account filter: the holdings held (as account/instrument), and for A X and A U: qty, avg, book, last, last_day, change (per unit), market, unrealized, market_cad, held_days; the totals market_value (CAD), cost_basis (CAD), unrealized (CAD), day_change (CAD), net_value, cash; and margin_used and available_margin (null where SPEC says they are not shown)",
+  "rates": {
+   "USD": {
+    "2026-02-05": "1.36",
+    "2026-02-06": "1.35",
+    "2026-02-09": "1.34",
+    "2026-04-30": "1.30"
+   }
+  },
+  "covered": {
+   "USD": [
+    [
+     "2026-02-01",
+     "2026-04-30"
+    ]
+   ]
+  },
+  "series": {
+   "USD": [
+    [
+     "2017-01-03",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "spec": "SPEC.md §4 Portfolio, A past range (and the tiles table); §5 Filters (the dates for a holding); §2 Position (Qty, Avg cost, Book at average cost, Market, P&L, Hold) and the paragraph after it; §2 Market data (a USD amount at the Bank of Canada's rate, a day it did not publish taking the last published day before it)",
+  "working": [
+   "The range ends 2026-02-08, a Sunday, before today 2026-05-01: the tab is the holdings at the close of 2026-02-08, the ledger worked to that day as though it were today. The quotes (prices now) have no bearing.",
+   "Rows on or before 2026-02-08: t0 deposit 3,000 CAD; t1 buy 100 X for 1,000 CAD; t2 buy 10 U for 1,000 USD. Held: A/X and A/U.",
+   "The last session on or before 2026-02-08 is 2026-02-06 (Friday; no close on 02-07 or 02-08). The rate for 02-08, not published, is the last published before it: 02-06, 1.35.",
+   "A X: qty 100, book 1,000.00, avg 1,000 / 100 = 10. Last = close 2026-02-06 = 12; change = 12 - 11 (close 02-05) = 1. Market 100 x 12 = 1,200.00; unrealized 1,200 - 1,000 = 200.00; CAD instrument, market_cad 1,200.00.",
+   "A U (USD): qty 10, book 1,000.00 USD, avg 100. Last = close 2026-02-06 = 104; change = 104 - 101 = 3. Market 10 x 104 = 1,040.00 USD; unrealized 40.00 USD; market_cad 1,040 x 1.35 = 1,404.00.",
+   "Hold: one lot each, opened 2026-02-02, counted to the range's last day 2026-02-08 (that day standing as today): 6 days each.",
+   "Market value (CAD) = 1,200 + 1,404 = 2,604.00.",
+   "Cost basis (CAD), in CAD at that day's rate as the past range states for the totals: 1,000 + 1,000 x 1.35 = 2,350.00.",
+   "Unrealized (CAD) = 200 + 40 x 1.35 = 254.00 = 2,604 - 2,350.",
+   "Day change (CAD): that session's move, quantity x change: X 100 x 1 = 100; U 10 x 3 = 30 USD x 1.35 = 40.50; total 140.50.",
+   "Net value: the accounts' value that day in Wealthsimple's daily history; the history states no value on 02-08 (a weekend), so the last stated day on or before it, 02-06: 5,000.00 (read the same way as the close and the rate; SPEC does not say this for the daily history explicitly). The broker's 'now' (9,000) has no bearing.",
+   "Cash: the book's cash that day: CAD 3,000 - 1,000 = 2,000; USD -1,000. Read with the Cash tile's own rule (the positive balances, one per currency, in CAD): 2,000.00. (SPEC's past-range sentence says only 'the book's cash that day'; a net reading would be 2,000 - 1,000 x 1.35 = 650.00.) The broker's cash now (-500) has no bearing.",
+   "Margin used and Available margin read '—' under a past range (Wealthsimple states them only for now): null; buying power now (1,000) has no bearing."
+  ],
+  "expect": {
+   "past": [
+    {
+     "to": "2026-02-08",
+     "held": [
+      "A/U",
+      "A/X"
+     ],
+     "positions": [
+      {
+       "account": "A",
+       "instrument": "X",
+       "qty": "100",
+       "avg": "10",
+       "book": "1000.00",
+       "last": "12",
+       "last_day": "2026-02-06",
+       "change": "1",
+       "market": "1200.00",
+       "unrealized": "200.00",
+       "market_cad": "1200.00",
+       "held_days": 6
+      },
+      {
+       "account": "A",
+       "instrument": "U",
+       "qty": "10",
+       "avg": "100",
+       "book": "1000.00",
+       "last": "104",
+       "last_day": "2026-02-06",
+       "change": "3",
+       "market": "1040.00",
+       "unrealized": "40.00",
+       "market_cad": "1404.00",
+       "held_days": 6
+      }
+     ],
+     "market_value": "2604.00",
+     "cost_basis": "2350.00",
+     "unrealized": "254.00",
+     "day_change": "140.50",
+     "net_value": "5000.00",
+     "cash": "2000.00",
+     "margin_used": null,
+     "available_margin": null
+    }
+   ]
+  }
+ },
+ {
+  "name": "a past range ending after a partial sale: the holding then, at its average cost then, and nothing bought after or sold before",
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "Y"
+   },
+   {
+    "id": "Z"
+   }
+  ],
+  "quotes": {
+   "X": {
+    "price": "30"
+   },
+   "Z": {
+    "price": "5"
+   }
+  },
+  "closes": {
+   "X": {
+    "2026-03-02": "25",
+    "2026-03-03": "24"
+   },
+   "Y": {
+    "2026-03-03": "9"
+   },
+   "Z": {
+    "2026-03-03": "4",
+    "2026-03-10": "5"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-09",
+    "at": "2026-02-09T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-2000"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-150",
+    "cash": "3750"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Y",
+    "qty": "10",
+    "cash": "-100"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2026-02-20",
+    "at": "2026-02-20T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Y",
+    "qty": "-10",
+    "cash": "120"
+   },
+   {
+    "id": "t6",
+    "account": "A",
+    "day": "2026-03-10",
+    "at": "2026-03-10T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Z",
+    "qty": "10",
+    "cash": "-50"
+   }
+  ],
+  "asked": "under a date range ending 2026-03-03: the holdings held; for A X: qty, avg, book, last, last_day, change, market, unrealized; the totals market_value, cost_basis, unrealized",
+  "spec": "SPEC.md §4 Portfolio, A past range (and the tiles table); §5 Filters (the dates for a holding); §2 Position (Qty, Avg cost, Book at average cost, Market, P&L, Hold) and the paragraph after it; §2 Market data (a USD amount at the Bank of Canada's rate, a day it did not publish taking the last published day before it)",
+  "working": [
+   "The range ends 2026-03-03, before today: the ledger worked to 2026-03-03; rows after it (t6, Z bought 03-10) do not exist yet. The quotes now have no bearing.",
+   "Y: bought 10 on 02-02, sold 10 on 02-20: flat before the day, not held. Z: first bought 03-10, after the day, not held. Held: A/X only.",
+   "A X at average cost: t1 100 for 1,000 and t2 100 for 2,000: 200 units, book 3,000, avg 15. t3 sells 150: takes 150 x 15 = 2,250 off the cost (the average stays): 50 units, book 750.00, avg 15.",
+   "Last = close on 2026-03-03 = 24 (last_day 2026-03-03); change = 24 - 25 (close 03-02) = -1.",
+   "Market 50 x 24 = 1,200.00; unrealized 1,200 - 750 = 450.00 (the trade's FIFO realized P&L is a separate figure and is not added).",
+   "Totals, all CAD: market_value 1,200.00, cost_basis 750.00, unrealized 450.00."
+  ],
+  "expect": {
+   "past": [
+    {
+     "to": "2026-03-03",
+     "held": [
+      "A/X"
+     ],
+     "positions": [
+      {
+       "account": "A",
+       "instrument": "X",
+       "qty": "50",
+       "avg": "15",
+       "book": "750.00",
+       "last": "24",
+       "last_day": "2026-03-03",
+       "change": "-1",
+       "market": "1200.00",
+       "unrealized": "450.00"
+      }
+     ],
+     "market_value": "1200.00",
+     "cost_basis": "750.00",
+     "unrealized": "450.00"
+    }
+   ]
+  }
+ },
+ {
+  "name": "a past range whose holding has no close on or before its end: no price, and what waits on it",
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "W"
+   },
+   {
+    "id": "X"
+   }
+  ],
+  "quotes": {
+   "W": {
+    "price": "7"
+   },
+   "X": {
+    "price": "10"
+   }
+  },
+  "closes": {
+   "W": {
+    "2026-02-10": "6"
+   },
+   "X": {
+    "2026-02-05": "9"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "W",
+    "qty": "10",
+    "cash": "-50"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-80"
+   }
+  ],
+  "asked": "under a date range ending 2026-02-06: the holdings held; for A W: qty, book, avg, gaps (the words for what its market value waits on, as SPEC and the examples name them), held_days; for A X: market; the totals market_value and its left-out count",
+  "spec": "SPEC.md §4 Portfolio, A past range (and the tiles table); §5 Filters (the dates for a holding); §2 Position (Qty, Avg cost, Book at average cost, Market, P&L, Hold) and the paragraph after it; §2 Market data (a USD amount at the Bank of Canada's rate, a day it did not publish taking the last published day before it); example_price_unknown.json (the word price-unknown; a total of the priced holdings with a left-out count)",
+  "working": [
+   "The range ends 2026-02-06, before today: the holdings at the close of 2026-02-06. Held: A/W and A/X (both bought 02-02). The quotes now (W 7, X 10) have no bearing.",
+   "A W: qty 10, book 50.00, avg 5. Its only close is 2026-02-10, after the day: no close on or before it, so no price: market waits, gaps [price-unknown]. Hold: one lot opened 02-02, to 02-06 = 4 days.",
+   "A X: no close on 02-06; the last on or before it is 02-05, 9: market 10 x 9 = 90.00.",
+   "Market value: the priced holdings, 90.00, with W left out: left-out count 1 (the shape example_price_unknown.json uses for a total that leaves a holding out)."
+  ],
+  "expect": {
+   "past": [
+    {
+     "to": "2026-02-06",
+     "held": [
+      "A/W",
+      "A/X"
+     ],
+     "positions": [
+      {
+       "account": "A",
+       "instrument": "W",
+       "qty": "10",
+       "book": "50.00",
+       "avg": "5",
+       "market": {
+        "gaps": [
+         "price-unknown"
+        ]
+       },
+       "gaps": [
+        "price-unknown"
+       ],
+       "held_days": 4
+      },
+      {
+       "account": "A",
+       "instrument": "X",
+       "market": "90.00"
+      }
+     ],
+     "market_value": "90.00",
+     "market_value_left_out": 1
+    }
+   ]
+  }
+ }
+]

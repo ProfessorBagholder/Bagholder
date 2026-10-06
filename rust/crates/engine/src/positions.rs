@@ -105,6 +105,27 @@ pub fn mark_of(inputs: &Inputs, instrument: InstrumentId, kind: InstrumentKind, 
     Err(Gaps::of(Gap::PriceUnknown(instrument)))
 }
 
+/// The instrument's price at the close of `day`: its last stored close on or
+/// before it (the engine's walk-back for today and for rates, `SPEC.md` §5), with
+/// that session's move from the close before it. A close in another currency is
+/// converted at its own day's rate.
+pub fn close_mark(inputs: &Inputs, instrument: InstrumentId, currency: Currency, day: Date) -> Fig<Mark> {
+    let closes = inputs.market.closes.get(&instrument);
+    let mut last = closes.into_iter().flat_map(|c| c.range(..=day).rev());
+    let Some((d, close)) = last.next() else { return Err(Gaps::of(Gap::PriceUnknown(instrument))) };
+    let price = crate::fx::convert(&inputs.facts.rates, &inputs.clock, *close, currency, *d)?;
+    let (change, change_pct) = match last.next() {
+        Some((d0, c0)) => {
+            let before = crate::fx::convert(&inputs.facts.rates, &inputs.clock, *c0, currency, *d0)?;
+            let change = price.checked_sub(before)?;
+            let pct = if before.is_zero() { None } else { Some(change.checked_mul(Dec::new(100, 0)?)?.div_rounded(before, PRICE_PLACES, Rounding::HalfEven)?) };
+            (Some(change), pct)
+        }
+        None => (None, None),
+    };
+    Ok(Mark { price, source: PriceSource::Close(*d), change, change_pct })
+}
+
 /// The instrument's price now, as a holding of it is marked; none where none is known.
 pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
     let info = inputs.ledger.instruments.get(&instrument)?;
@@ -112,7 +133,9 @@ pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
 }
 
 /// The open positions, in the order of their holdings; `only` one instrument's.
-pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, only: Option<InstrumentId>) -> Vec<PositionFig> {
+/// Marked now, or, `as_of` a past day, at that day's close and that day's rate,
+/// from a match of the ledger to that day (`crate::engine::Past`).
+pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, only: Option<InstrumentId>, as_of: Option<Date>) -> Vec<PositionFig> {
     let today = inputs.clock.today;
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
@@ -150,7 +173,10 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 (Ok(_), Ok(_)) => Ok(Dec::ZERO),
                 (Err(g), _) | (_, Err(g)) => Err(g.clone()),
             };
-            let mark = mark_of(inputs, *instrument, kind, currency);
+            let mark = match as_of {
+                Some(day) => close_mark(inputs, *instrument, currency, day),
+                None => mark_of(inputs, *instrument, kind, currency),
+            };
             let market = match (&mark, &units) {
                 (Ok(m), Ok(u)) => with_taint(m.price.mul_to_fit(*u).map(|v| Money::new(v, currency)).map_err(Gaps::from)),
                 (Err(g), _) | (_, Err(g)) => Err(g.clone()),
@@ -182,9 +208,13 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 },
                 (Err(g), _) | (_, Err(g)) => Err(g.clone()),
             };
-            let cad = |f: &Fig<Money>| f.clone().and_then(|m| live_to_cad(rates, clock, m));
+            let to_cad = |m: Money| match as_of {
+                Some(day) => crate::fx::to_cad(rates, clock, m, day),
+                None => live_to_cad(rates, clock, m),
+            };
+            let cad = |f: &Fig<Money>| f.clone().and_then(to_cad);
             let day_change_cad = match &day_change {
-                Ok(Some(m)) => live_to_cad(rates, clock, *m).map(Some),
+                Ok(Some(m)) => to_cad(*m).map(Some),
                 Ok(None) => Ok(None),
                 Err(g) => Err(g.clone()),
             };
@@ -247,7 +277,8 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 gaps,
                 flags,
                 journal,
-                broker_qty: inputs.market.brokers.get(account).and_then(|b| b.held.get(instrument)).copied(),
+                // what the broker holds now says nothing of a past day
+                broker_qty: if as_of.is_some() { None } else { inputs.market.brokers.get(account).and_then(|b| b.held.get(instrument)).copied() },
                 lots,
             });
         }

@@ -540,7 +540,7 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
     let figs = engine.figures();
     let allocation = slices(
         pf.allocation.iter().map(|a| {
-            let p = &figs.positions[a.position];
+            let p = &pf.held(figs.positions)[a.position];
             (shown(inputs, p.instrument).symbol, a.value, a.share.clone().unwrap_or(0.0), Some(position_id(p)))
         }).collect(),
         10,
@@ -555,7 +555,7 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         nav: pf.net_value.as_ref().map(fig_money),
         nav_accounts: pf.net_value_accounts,
         has_margin: pf.has_margin,
-        margin_used: fig_money(&pf.margin_used),
+        margin_used: pf.margin_used.as_ref().map(fig_money),
         margin_used_pct: pf.margin_used_pct.clone().into_wire(),
         available_margin: pf.available_margin.as_ref().map(fig_money),
         available_margin_unavailable: pf.margin_unavailable.iter().map(|(a, _)| account_name(inputs, *a)).collect(),
@@ -564,6 +564,7 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         day_change: pf.day_change.as_ref().map(partial),
         day_change_pct: pf.day_change_pct.clone().into_wire(),
         allocation,
+        as_of: pf.past.as_ref().map(|p| p.day.to_string()),
     }
 }
 

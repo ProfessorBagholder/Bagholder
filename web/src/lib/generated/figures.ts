@@ -168,11 +168,20 @@ export type Slice = { label: string, value: Fig<Dec>, share: number,
  */
 id: string | null, };
 
-export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, hasMargin: boolean, marginUsed: Fig<Dec>, marginUsedPct: Fig<number | null>, availableMargin: Fig<Dec> | null, 
+export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, hasMargin: boolean, 
+/**
+ * None under a past range: no broker statement says what was borrowed then.
+ */
+marginUsed: Fig<Dec> | null, marginUsedPct: Fig<number | null>, availableMargin: Fig<Dec> | null, 
 /**
  * The margin accounts whose buying power the broker did not state.
  */
-availableMarginUnavailable: Array<string>, cash: Fig<Dec>, cashPct: Fig<number | null>, dayChange: Partial | null, dayChangePct: Fig<number | null>, allocation: Array<Slice>, };
+availableMarginUnavailable: Array<string>, cash: Fig<Dec>, cashPct: Fig<number | null>, dayChange: Partial | null, dayChangePct: Fig<number | null>, allocation: Array<Slice>, 
+/**
+ * The day the holdings are as of, under dates that end before today
+ * (`SPEC.md` §5); none for the holdings now.
+ */
+asOf: string | null, };
 
 export type Account = { id: string, name: string, 
 /**
@@ -303,7 +312,12 @@ export type TradeDoc = {
 /**
  * The id asked for: a document for it with neither is one the figures do not have.
  */
-id: string, trade: Trade | null, position: Position | null, };
+id: string, trade: Trade | null, position: Position | null, 
+/**
+ * The day the holding is as of, when it is opened from a past range: its
+ * figures are that day's, and it offers no order.
+ */
+asOf: string | null, };
 
 export type MarketTile = { id: string, symbol: string, exchange: string, 
 /**
@@ -523,4 +537,10 @@ symbol: string | null, exchange: string | null,
 /**
  * What is typed in the News card's box.
  */
-query: string | null, };
+query: string | null, 
+/**
+ * The holdings now, whatever the dates: the Markets tab's, a view of the
+ * market today (`SPEC.md` §5). Without it, `positions` is the Portfolio's,
+ * as of the last day of dates that end before today.
+ */
+now: boolean | null, };

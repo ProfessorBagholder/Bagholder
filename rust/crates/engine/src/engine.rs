@@ -64,6 +64,67 @@ pub enum Entity {
     /// An instrument's quote, held or not: what a screen showing a listing's own
     /// price reads (a watched listing, a tile).
     Quote(InstrumentId),
+    /// The holdings as of a past day a screen shows (`Past`): what they are
+    /// worked out from moved.
+    Past,
+}
+
+/// The holdings as they stood at the close of a past day (`SPEC.md` §5, a range
+/// ending before today): the ledger matched to that day, as though it were
+/// today, and its positions marked at that day's close and that day's rate.
+#[derive(Debug, PartialEq)]
+pub struct Past {
+    pub day: Date,
+    pub matched: Matched,
+    pub positions: Vec<PositionFig>,
+}
+
+/// Each past day's holdings, kept while a screen holds them and until what
+/// they are worked out from moves (`Engine::apply`): matching the ledger again
+/// for every reading would cost a whole match each time.
+#[derive(Default)]
+struct PastCache {
+    days: std::sync::Mutex<BTreeMap<Date, std::sync::Weak<Past>>>,
+    /// A day was worked out since `Engine::past_built` last asked.
+    built: std::sync::atomic::AtomicBool,
+}
+
+impl PastCache {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<Date, std::sync::Weak<Past>>> {
+        self.days.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The days a screen holds.
+    fn held(&self) -> Vec<std::sync::Arc<Past>> {
+        self.lock().values().filter_map(std::sync::Weak::upgrade).collect()
+    }
+
+    /// Every day from `from` on dropped; whether a screen held one of them.
+    fn forget_from(&self, from: Date) -> bool {
+        let mut c = self.lock();
+        let held = c.range(from..).any(|(_, w)| w.strong_count() > 0);
+        c.retain(|d, w| *d < from && w.strong_count() > 0);
+        held
+    }
+}
+
+/// A copy of the engine works its own past days out again.
+impl Clone for PastCache {
+    fn clone(&self) -> PastCache {
+        PastCache::default()
+    }
+}
+
+impl Debug for PastCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PastCache({:?})", self.lock().keys().collect::<Vec<_>>())
+    }
+}
+
+/// The first key at which two maps differ.
+fn first_difference<K: Ord + Copy, V: PartialEq>(a: &BTreeMap<K, V>, b: &BTreeMap<K, V>) -> Option<K> {
+    let missing = |x: &BTreeMap<K, V>, y: &BTreeMap<K, V>| x.iter().find(|(k, v)| y.get(k) != Some(v)).map(|(k, _)| *k);
+    [missing(a, b), missing(b, a)].into_iter().flatten().min()
 }
 
 /// The entities whose figures moved, each with the fields that did; an entity
@@ -190,6 +251,7 @@ pub struct Engine {
     checks: Vec<BrokerCheck>,
     /// Each benchmark's total return in CAD, as a level per session.
     benchmarks: BTreeMap<String, crate::stat::benchmark::Levels>,
+    past: PastCache,
 }
 
 /// The figures, read.
@@ -208,7 +270,7 @@ impl Engine {
     pub fn build(inputs: Inputs) -> Engine {
         let matched = match_lots(&inputs);
         let identity = identify(&inputs.ledger, &matched);
-        let mut e = Engine { inputs, matched, identity, trades: vec![], positions: vec![], cash: vec![], payers: BTreeMap::new(), equity: BTreeMap::new(), checks: vec![], benchmarks: BTreeMap::new() };
+        let mut e = Engine { inputs, matched, identity, trades: vec![], positions: vec![], cash: vec![], payers: BTreeMap::new(), equity: BTreeMap::new(), checks: vec![], benchmarks: BTreeMap::new(), past: PastCache::default() };
         e.benchmarks = build_benchmarks(&e.inputs.market.benchmarks, &e.inputs.facts.rates, &e.inputs.clock);
         e.derive();
         e
@@ -218,7 +280,7 @@ impl Engine {
     fn derive(&mut self) {
         let i = &self.inputs;
         self.trades = build_trades(i, &self.matched, &self.identity);
-        self.positions = build_positions(i, &self.matched, &self.identity, None);
+        self.positions = build_positions(i, &self.matched, &self.identity, None, None);
         self.cash = build_cashflow(i, &self.matched);
         self.payers = payer_rates(i, &self.cash, &self.matched);
         self.equity = build_equity(i, None);
@@ -231,6 +293,47 @@ impl Engine {
         self.derive();
     }
 
+    /// The holdings at the close of `day`, a day before today.
+    pub fn past(&self, day: Date) -> std::sync::Arc<Past> {
+        let mut cache = self.past.lock();
+        if let Some(p) = cache.get(&day).and_then(std::sync::Weak::upgrade) {
+            return p;
+        }
+        cache.retain(|_, w| w.strong_count() > 0);
+        let i = &self.inputs;
+        let kept: Vec<_> = i.ledger.transactions.iter().filter(|t| t.trade_date <= day).cloned().collect();
+        let ids: BTreeSet<&TransactionId> = kept.iter().map(|t| &t.id).collect();
+        let ledger = Ledger {
+            accounts: i.ledger.accounts.clone(),
+            instruments: i.ledger.instruments.clone(),
+            transfer_links: i.ledger.transfer_links.iter().filter(|(o, n)| ids.contains(o) && ids.contains(n)).cloned().collect(),
+            records: i.ledger.records.clone(),
+            trades: i.ledger.trades.clone(),
+            groups: i.ledger.groups.clone(),
+            journal: i.ledger.journal.clone(),
+            transactions: kept,
+        };
+        // that day as today: nothing after it is known, and no quote is of it
+        let mut market = i.market.clone();
+        market.quotes.clear();
+        let inputs = Inputs { ledger, facts: i.facts.clone(), market, clock: Clock { today: day, ..i.clock.clone() } };
+        let matched = match_lots(&inputs);
+        let positions = build_positions(&inputs, &matched, &self.identity, None, Some(day));
+        let p = std::sync::Arc::new(Past { day, matched, positions });
+        cache.insert(day, std::sync::Arc::downgrade(&p));
+        self.past.built.store(true, std::sync::atomic::Ordering::SeqCst);
+        p
+    }
+
+    /// The holdings `filters` shows on the Portfolio: those held now, or, under
+    /// dates that end before today, those held at the close of their last day.
+    pub fn holdings(&self, filters: &Filters) -> crate::scope::Portfolio {
+        match filters.past_end(self.inputs.clock.today) {
+            Some(day) => crate::scope::portfolio_as_of(filters, &self.inputs, self.past(day)),
+            None => self.portfolio(filters),
+        }
+    }
+
     pub fn inputs(&self) -> &Inputs {
         &self.inputs
     }
@@ -241,7 +344,20 @@ impl Engine {
 
     /// The facts the figures use: what the readers read.
     pub fn needs(&self) -> crate::needs::FactNeeds {
-        crate::needs::fact_needs(&self.inputs, &self.matched)
+        let mut n = crate::needs::fact_needs(&self.inputs, &self.matched);
+        // each past day a screen holds: the closes its holdings are priced by
+        for p in self.past.held() {
+            for h in &p.positions {
+                n.spans.entry(h.instrument).or_default().insert((h.opened_on, p.day));
+            }
+        }
+        n
+    }
+
+    /// Whether a past day's holdings were worked out since this was last asked:
+    /// their closes are then among the needs (`needs`), to be read.
+    pub fn past_built(&self) -> bool {
+        self.past.built.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn figures(&self) -> Figures<'_> {
@@ -281,6 +397,27 @@ impl Engine {
     /// only the figures recomputed are compared.
     pub fn apply(&mut self, change: Change) -> Moved {
         let mut moved = Moved::default();
+        // the first day whose past holdings this change can move: the record and
+        // the trades and notes move every day's; rates and closes the days from
+        // the first they changed on
+        let stale: Option<Date> = match &change {
+            Change::Ledger(_) | Change::Adjustments(_) | Change::Trades(_) | Change::Journal(_) => Some(Date::MIN),
+            Change::Rates(r) => {
+                let was = &self.inputs.facts.rates;
+                if r.covered != was.covered || r.series != was.series || r.holidays != was.holidays {
+                    Some(Date::MIN)
+                } else {
+                    let currencies: BTreeSet<_> = r.by_currency.keys().chain(was.by_currency.keys()).collect();
+                    let empty = BTreeMap::new();
+                    currencies.into_iter().filter_map(|c| first_difference(r.by_currency.get(c).unwrap_or(&empty), was.by_currency.get(c).unwrap_or(&empty))).min()
+                }
+            }
+            Change::Closes(i, c) => first_difference(c, self.inputs.market.closes.get(i).unwrap_or(&BTreeMap::new())),
+            _ => None,
+        };
+        if stale.is_some_and(|d| self.past.forget_from(d)) {
+            moved.0.entry(Entity::Past).or_default().insert("*");
+        }
         match change {
             Change::Ledger(l) => {
                 let before = self.snapshot(Parts::ALL);
@@ -313,7 +450,7 @@ impl Engine {
                 self.inputs.ledger.trades = t;
                 self.identity = identify(&self.inputs.ledger, &self.matched);
                 self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None);
+                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None, None);
                 self.compare(&before, &mut moved);
             }
             Change::Groups(g) => {
@@ -326,7 +463,7 @@ impl Engine {
                 let before = self.snapshot(Parts { trades: true, positions: true, ..Parts::NONE });
                 self.inputs.ledger.journal = j;
                 self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None);
+                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None, None);
                 self.compare(&before, &mut moved);
             }
             Change::Declared(i, d) => {
@@ -423,7 +560,7 @@ impl Engine {
     /// A price moved: that instrument's positions.
     fn reprice(&mut self, instrument: InstrumentId, moved: &mut Moved) {
         let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.instrument == instrument).cloned().collect();
-        let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument));
+        let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument), None);
         self.positions.retain(|p| p.instrument != instrument);
         self.positions.extend(fresh);
         self.positions.sort_by(|a, b| (a.account, a.instrument, a.direction).cmp(&(b.account, b.instrument, b.direction)));

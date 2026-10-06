@@ -84,6 +84,10 @@ pub struct Params {
     pub exchange: Option<String>,
     /// What is typed in the News card's box.
     pub query: Option<String>,
+    /// The holdings now, whatever the dates: the Markets tab's, a view of the
+    /// market today (`SPEC.md` §5). Without it, `positions` is the Portfolio's,
+    /// as of the last day of dates that end before today.
+    pub now: Option<bool>,
 }
 
 /// How many rows of a long list are sent before the page asks for more.
@@ -113,7 +117,7 @@ pub fn open(key: &str, params: &Value) -> Option<Result<Box<dyn View>, String>> 
             "exposure" => {
                 let f = filters()?;
                 Box::new(Whole::<ExposureDoc>::new(Reads::Holdings, move |cx: &Cx| {
-                    let pf = cx.engine.portfolio(&f);
+                    let pf = cx.engine.holdings(&f);
                     markets::exposure_doc(cx.engine, cx.names, &pf, cx.tables)
                 }))
             }
@@ -163,9 +167,11 @@ pub fn open(key: &str, params: &Value) -> Option<Result<Box<dyn View>, String>> 
             }
             "trade" => {
                 let id = key.strip_prefix("trade:").unwrap_or_default().to_string();
-                Box::new(Whole::<TradeDoc>::new(Reads::TradesAndHoldings, move |cx: &Cx| one_trade(cx, &id)))
+                // opened from the Portfolio under a past range, the holding is that day's
+                let f = filters()?;
+                Box::new(Whole::<TradeDoc>::new(Reads::TradesAndHoldings, move |cx: &Cx| one_trade(cx, &id, &f)))
             }
-            "positions" => Box::new(Positions { filters: filters()?, sent: None }),
+            "positions" => Box::new(Positions { filters: filters()?, now: p.now.unwrap_or(false), sent: None, past: None }),
             "trades" => Box::new(Trades::new(filters()?, p.sort.clone().unwrap_or(Sort { key: "activity".into(), dir: Dir::Desc }), p.limit.unwrap_or(FIRST_ROWS))?),
             "cashflow" => Box::new(CashflowView::new(filters()?, p.sort.clone().unwrap_or(Sort { key: "date".into(), dir: Dir::Desc }), p.limit.unwrap_or(FIRST_ROWS))?),
             _ => unreachable!("matched above"),
@@ -228,6 +234,8 @@ impl Reads {
             (Reads::Dashboard(b), Entity::Benchmark(k)) => k == b,
             (Reads::Holdings, Entity::Position(..) | Entity::Equity(_) | Entity::Trade(_) | Entity::Broker(_)) => true,
             (Reads::TradesAndHoldings, Entity::Trade(_) | Entity::Position(..)) => true,
+            // the holdings of a past day a screen shows
+            (Reads::Holdings | Reads::TradesAndHoldings, Entity::Past) => true,
             _ => false,
         }) || (base && matches!(self, Reads::Holdings))
     }
@@ -362,7 +370,7 @@ impl Headlines {
         let figs = engine.figures();
         let mut known: HashMap<(String, String), Known> = HashMap::new();
         for i in &pf.positions {
-            let p = &figs.positions[*i];
+            let p = &pf.held(figs.positions)[*i];
             let s = build::shown(inputs, p.instrument);
             let k = known.entry(news::listing_key(&s.symbol, &s.exchange)).or_insert_with(|| Known { exchange: s.exchange.clone(), ..Known::default() });
             if k.held.is_none() {
@@ -418,13 +426,15 @@ impl View for Headlines {
     }
 }
 
-fn one_trade(cx: &Cx, id: &str) -> TradeDoc {
+fn one_trade(cx: &Cx, id: &str, filters: &bagholder_engine::scope::Filters) -> TradeDoc {
     let figs = cx.engine.figures();
     let inputs = cx.engine.inputs();
     let links = build::links(cx.engine);
     let trade = figs.trades.iter().find(|t| build::trade_wire_id(t) == id).map(|t| build::trade_row(inputs, cx.names, &links, t));
-    let position = figs.positions.iter().find(|p| build::position_id(p) == id).map(|p| build::position_row(inputs, cx.names, &links, p));
-    TradeDoc { id: id.to_string(), trade, position }
+    let past = filters.past_end(inputs.clock.today).map(|day| cx.engine.past(day));
+    let held: &[bagholder_engine::positions::PositionFig] = past.as_ref().map(|p| p.positions.as_slice()).unwrap_or(figs.positions);
+    let position = held.iter().find(|p| build::position_id(p) == id).map(|p| build::position_row(inputs, cx.names, &links, p));
+    TradeDoc { id: id.to_string(), trade, position, as_of: past.map(|p| p.day.to_string()) }
 }
 
 // --- lists of rows -----------------------------------------------------------------
@@ -480,15 +490,22 @@ fn moved_trades(cx: &Cx, moved: &Moved) -> BTreeSet<String> {
     cx.engine.figures().trades.iter().filter(|t| keys.contains(&t.key) || held.contains(&(t.account, t.instrument))).map(build::trade_wire_id).collect()
 }
 
-/// The holdings under the filters, and their totals.
+/// The holdings under the filters, and their totals: those now, or those of
+/// the last day of dates that end before today.
 struct Positions {
     filters: bagholder_engine::scope::Filters,
+    /// The holdings now, whatever the dates (`Params::now`).
+    now: bool,
     sent: Option<PositionsDoc>,
+    /// The past day's holdings the rows were built from, kept while they are
+    /// shown so every screen reading them shares one working-out.
+    past: Option<std::sync::Arc<bagholder_engine::engine::Past>>,
 }
 
 impl Positions {
-    fn build(&self, cx: &Cx, keep: Option<(&PositionsDoc, &BTreeSet<String>)>) -> PositionsDoc {
-        let pf = cx.engine.portfolio(&self.filters);
+    fn build(&mut self, cx: &Cx, keep: Option<(&PositionsDoc, &BTreeSet<String>)>) -> PositionsDoc {
+        let pf = if self.now { cx.engine.portfolio(&self.filters) } else { cx.engine.holdings(&self.filters) };
+        self.past = pf.past.clone();
         let figs = cx.engine.figures();
         let inputs = cx.engine.inputs();
         let links = build::links(cx.engine);
@@ -496,7 +513,7 @@ impl Positions {
         let positions = pf
             .positions
             .iter()
-            .map(|i| &figs.positions[*i])
+            .map(|i| &pf.held(figs.positions)[*i])
             .map(|p| {
                 let id = build::position_id(p);
                 match (kept.get(id.as_str()), keep) {
@@ -512,7 +529,12 @@ impl Positions {
 
 impl View for Positions {
     fn reads(&self, moved: &Moved, _base: bool) -> bool {
-        Reads::Holdings.reads(moved, false)
+        match self.past {
+            // a past day's holdings move with what they are worked out from, and
+            // its totals with the accounts' stated values: never with a quote
+            Some(_) => moved.0.keys().any(|e| matches!(e, Entity::Book | Entity::Past | Entity::Broker(_) | Entity::Equity(_))),
+            None => Reads::Holdings.reads(moved, false),
+        }
     }
     fn snapshot(&mut self, cx: &Cx) -> Value {
         let d = self.build(cx, None);
@@ -525,8 +547,9 @@ impl View for Positions {
             let v = self.snapshot(cx);
             return vec![json!(["set", [], v])];
         };
-        // a change to the record renames and relinks every row: each is built again
-        let changed: BTreeSet<String> = if moved.0.contains_key(&Entity::Book) { was.positions.iter().map(|p| p.id.clone()).chain(moved_positions(cx, moved)).collect() } else { moved_positions(cx, moved).into_iter().chain(moved_trades_links(cx, moved)).collect() };
+        // a change to the record renames and relinks every row, and a past day's
+        // rows are all that day's: each is built again
+        let changed: BTreeSet<String> = if moved.0.contains_key(&Entity::Book) || self.past.is_some() || moved.0.contains_key(&Entity::Past) { was.positions.iter().map(|p| p.id.clone()).chain(moved_positions(cx, moved)).collect() } else { moved_positions(cx, moved).into_iter().chain(moved_trades_links(cx, moved)).collect() };
         let now = self.build(cx, Some((&was, &changed)));
         let mut ops = bagholder_diff::typed_under(&["portfolio"], &was.portfolio, &now.portfolio);
         let w: Vec<(String, &Position)> = was.positions.iter().map(|p| (p.id.clone(), p)).collect();
