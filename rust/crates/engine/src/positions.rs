@@ -52,7 +52,8 @@ pub struct PositionFig {
     /// Σ lot quantity, exact.
     pub qty: Fig<Dec>,
     pub multiplier: Fig<Dec>,
-    /// Σ lot value: what the open units cost (long) or brought in (short).
+    /// The average cost of the open units, fees in: what they cost (long) or
+    /// brought in less the fees (short) (`crate::ledger::Basis`).
     pub book: Fig<Money>,
     pub fees: Fig<Money>,
     /// Book ÷ (qty × multiplier).
@@ -110,19 +111,6 @@ pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
     mark_of(inputs, instrument, info.instrument.kind, info.instrument.currency).ok().map(|m| m.price)
 }
 
-fn lot_sum(currency: Currency, lots: &[Lot]) -> Fig<Money> {
-    let mut total = Money::zero(currency);
-    let mut gaps = Gaps::none();
-    for l in lots {
-        match &l.value {
-            Ok(v) if gaps.is_empty() => total = total.add_to_fit(*v)?,
-            Ok(_) => {}
-            Err(g) => gaps.merge(g),
-        }
-    }
-    gaps.or(total)
-}
-
 /// The open positions, in the order of their holdings; `only` one instrument's.
 pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, only: Option<InstrumentId>) -> Vec<PositionFig> {
     let today = inputs.clock.today;
@@ -154,7 +142,8 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                     Err(g)
                 }
             };
-            let book_value = with_taint(lot_sum(currency, &lots));
+            let cost = book.basis.get(&direction).map(|b| b.cost.clone()).unwrap_or(Ok(Money::zero(currency)));
+            let book_value = with_taint(cost);
             let units: Fig<Dec> = crate::gap::both(qty.clone(), mult.clone(), |q, m| Ok(q.checked_mul(m)?));
             let avg = match (&book_value, &units) {
                 (Ok(b), Ok(u)) if !u.is_zero() => b.amount.div_rounded(*u, PRICE_PLACES, Rounding::HalfEven).map_err(Gaps::from),

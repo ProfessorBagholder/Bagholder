@@ -46,6 +46,10 @@ pub struct Stated {
     /// What that statement states each instrument's units are worth, where it
     /// states every line of it in one currency.
     pub unit_values: BTreeMap<InstrumentId, Money>,
+    /// What that statement states each instrument's book value is, the same way:
+    /// the broker's own, kept to check the book's average cost against, never a
+    /// cost the book takes.
+    pub unit_books: BTreeMap<InstrumentId, Money>,
     /// When the account's activity was last read in full.
     pub activity_read_at: Option<jiff::Timestamp>,
     /// The newest statement of what it can borrow, when it was stated: an
@@ -413,10 +417,11 @@ impl Book {
             let mut m: BTreeMap<InstrumentId, Dec> = BTreeMap::new();
             // each instrument's value, none once a line of it states none or another currency
             let mut values: BTreeMap<InstrumentId, Option<Money>> = BTreeMap::new();
-            let mut st = self.conn().prepare("SELECT instrument_id, quantity, value, value_currency FROM statement_units WHERE statement_id = ?1")?;
-            type Line = (String, String, Option<String>, Option<String>);
-            for r in st.query_map(params![id], |r| -> rusqlite::Result<Line> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)) })? {
-                let (i, q, v, vc) = r?;
+            let mut books: BTreeMap<InstrumentId, Option<Money>> = BTreeMap::new();
+            let mut st = self.conn().prepare("SELECT instrument_id, quantity, value, value_currency, book_value, book_value_currency FROM statement_units WHERE statement_id = ?1")?;
+            type Line = (String, String, Option<String>, Option<String>, Option<String>, Option<String>);
+            for r in st.query_map(params![id], |r| -> rusqlite::Result<Line> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })? {
+                let (i, q, v, vc, b, bc) = r?;
                 let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
                 let q = text::dec("statement_units", "quantity", &q)?;
                 let head = joined.get(&i).copied().unwrap_or(i);
@@ -431,8 +436,18 @@ impl Book {
                     (Some(a), Some(v)) if a.currency == v.currency => a.amount.checked_add(v.amount).ok().map(|x| Money::new(x, a.currency)),
                     _ => None,
                 };
+                let book = match (b, bc) {
+                    (Some(b), Some(c)) => Some(Money::new(text::dec("statement_units", "book_value", &b)?, text::parsed("statement_units", "book_value_currency", &c, Currency::parse)?)),
+                    _ => None,
+                };
+                let slot = books.entry(head).or_insert(Some(Money::zero(book.map(|v| v.currency).unwrap_or(Currency::CAD))));
+                *slot = match (*slot, book) {
+                    (Some(a), Some(v)) if a.currency == v.currency => a.amount.checked_add(v.amount).ok().map(|x| Money::new(x, a.currency)),
+                    _ => None,
+                };
             }
             out.unit_values = values.into_iter().filter_map(|(i, v)| v.map(|v| (i, v))).collect();
+            out.unit_books = books.into_iter().filter_map(|(i, v)| v.map(|v| (i, v))).collect();
             out.units = Some((text::date("statements", "as_of_day", &d)?, m));
         }
         let bp: Option<(String, Option<String>, Option<String>, Option<String>)> = self

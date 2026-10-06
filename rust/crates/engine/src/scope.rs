@@ -168,13 +168,17 @@ fn chosen(f: &Filters, inputs: &Inputs, instruments: &[InstrumentId]) -> bool {
     f.instruments.is_empty() || instruments.iter().any(|i| f.instruments.contains(i) || f.instruments.contains(&underlying_of(inputs, *i)))
 }
 
-/// A closed trade's result; an open trade has none, since its closed-trade
-/// figures count once it has closed (decision 2026-09-24).
-fn outcome(t: &TradeFig) -> Option<Outcome> {
-    if t.status == TradeStatus::Open {
+/// A closed trade's result, the one definition the Result filter, the
+/// Dashboard's statistics and the by-symbol rows all read (`SPEC.md` §6
+/// Dashboard): the sign of its P&L in its own currency, the figure its own page
+/// shows. An open trade has none, since its closed-trade figures count once it
+/// has closed (decision 2026-09-24), and neither has one whose P&L, or the CAD
+/// amount its sums take, waits.
+pub fn result(t: &TradeFig) -> Option<Outcome> {
+    if t.status == TradeStatus::Open || t.pnl_cad.is_err() {
         return None;
     }
-    sign_of(t.pnl_cad.as_ref().ok()?)
+    sign_of(t.pnl.as_ref().ok()?)
 }
 
 fn sign_of(p: &Money) -> Option<Outcome> {
@@ -231,7 +235,7 @@ pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
     if !f.venues.is_empty() && !venue_of(inputs, t.instrument).is_some_and(|v| f.venues.contains(&v)) {
         return false;
     }
-    if !f.outcomes.is_empty() && !outcome(t).is_some_and(|o| f.outcomes.contains(&o)) {
+    if !f.outcomes.is_empty() && !result(t).is_some_and(|o| f.outcomes.contains(&o)) {
         return false;
     }
     if !bound_keeps(f.price, t.entry.as_ref().ok().copied())
@@ -508,16 +512,18 @@ fn ratio_of(part: &Fig<Money>, whole: &Fig<Money>) -> Fig<Option<Ratio>> {
 /// The closed-trade statistics over `closed`, and the realized P&L over `parts`.
 fn kpi(closed: &[&TradeFig], parts: &[&Fig<Money>]) -> Kpi {
     let trades = closed;
-    let stated: Vec<(&TradeFig, Money)> = trades.iter().filter_map(|t| t.pnl_cad.as_ref().ok().map(|p| (*t, *p))).collect();
-    let wins: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_positive()).collect();
-    let losses: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_negative()).collect();
+    // each with a result, and the CAD amount its sums take as it stands: a win
+    // the currency turned negative in CAD stays negative in the gross wins
+    let stated: Vec<(&TradeFig, Money, Outcome)> = trades.iter().filter_map(|t| Some((*t, *t.pnl_cad.as_ref().ok()?, result(t)?))).collect();
+    let wins: Vec<Money> = stated.iter().filter(|(_, _, o)| *o == Outcome::Win).map(|(_, p, _)| *p).collect();
+    let losses: Vec<Money> = stated.iter().filter(|(_, _, o)| *o == Outcome::Loss).map(|(_, p, _)| *p).collect();
     let gross_win = money_sum(wins.iter().copied());
     let gross_loss = money_sum(losses.iter().copied()).map(Money::neg);
-    let closed_total = money_sum(stated.iter().map(|(_, p)| *p));
+    let closed_total = money_sum(stated.iter().map(|(_, p, _)| *p));
     let realized = money_sum(parts.iter().filter_map(|p| p.as_ref().ok().copied()));
     let realized_left_out = parts.iter().filter(|p| p.is_err()).count();
     let n = stated.len();
-    let fees = money_sum(stated.iter().filter_map(|(t, _)| t.fees_cad.as_ref().ok().copied()));
+    let fees = money_sum(stated.iter().filter_map(|(t, _, _)| t.fees_cad.as_ref().ok().copied()));
     let profit_factor = crate::gap::both(gross_win.clone(), gross_loss.clone(), |w, l| {
         Ok(if !l.amount.is_zero() {
             money_ratio(w, l)
@@ -544,7 +550,7 @@ fn kpi(closed: &[&TradeFig], parts: &[&Fig<Money>]) -> Kpi {
         gross_win,
         gross_loss,
         fees,
-        avg_hold: count_ratio(stated.iter().map(|(t, _)| t.hold_days.max(0) as usize).sum(), n),
+        avg_hold: count_ratio(stated.iter().map(|(t, _, _)| t.hold_days.max(0) as usize).sum(), n),
     }
 }
 
@@ -573,7 +579,7 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
     let in_scope: Vec<&TradeFig> = trades.iter().filter(|t| trade_matches(f, inputs, t)).collect();
     // closed trades whose close is in the dates: what the statistics count
     let closed: Vec<&TradeFig> = in_scope.iter().copied().filter(|t| closed_in(f, today, t)).collect();
-    let stated: Vec<&&TradeFig> = closed.iter().filter(|t| t.pnl_cad.is_ok()).collect();
+    let stated: Vec<&&TradeFig> = closed.iter().filter(|t| result(t).is_some()).collect();
     // each sale in the dates, of an open or a closed trade, on its own day
     let parts: Vec<(&TradeFig, &crate::trades::Realized)> = in_scope.iter().flat_map(|t| t.realized.iter().filter(|r| f.in_dates(today, r.day)).map(move |r| (*t, r))).collect();
 
@@ -597,9 +603,8 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
         }
     }
     for t in &stated {
-        let p = *t.pnl_cad.as_ref().expect("stated");
         let e = by.entry(underlying_of(inputs, t.instrument)).or_default();
-        e.1 += usize::from(p.amount.is_positive());
+        e.1 += usize::from(result(t) == Some(Outcome::Win));
         e.2 += t.hold_days;
         e.3 += t.slices.len();
         e.4.push(t.key.clone());

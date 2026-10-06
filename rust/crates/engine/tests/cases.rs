@@ -336,7 +336,13 @@ fn run(path: &Path) -> Vec<String> {
             c.figure(&format!("rate {currency} {d}"), want.get("value").unwrap(), &got);
         }
         let scoped = |f: Filters| e.scope(&f);
-        if let Some(k) = expect.get("kpi") {
+        // "kpi": one object, or several, each under its own filters
+        let kpis: Vec<Value> = match expect.get("kpi") {
+            Some(Value::Array(a)) => a.clone(),
+            Some(v) => vec![v.clone()],
+            None => Vec::new(),
+        };
+        for k in kpis.iter() {
             let filters = match s(k, "preset") {
                 Some("ytd") => Filters { dates: Dates::Preset(Preset::YearToDate), ..Filters::default() },
                 _ => Filters::default(),
@@ -445,6 +451,21 @@ fn run(path: &Path) -> Vec<String> {
                 if let Some(v) = k.get(field) {
                     if v.as_u64() != Some(got as u64) {
                         c.fail(format!("kpi {field}: expected {v}, got {got}"));
+                    }
+                }
+            }
+            // the sums of the wins and the losses as they stand, in CAD (a loss's as a positive amount)
+            for (field, got) in [("gross_win", &sc.kpi.gross_win), ("gross_loss", &sc.kpi.gross_loss)] {
+                if let Some(v) = k.get(field) {
+                    c.money(&format!("kpi {field}"), v, got);
+                }
+            }
+            for (field, got) in [("avg_win", &sc.kpi.avg_win), ("avg_loss", &sc.kpi.avg_loss)] {
+                if let Some(v) = k.get(field) {
+                    match (v.is_null(), got) {
+                        (true, Ok(None)) => {}
+                        (false, Ok(Some(m))) => c.money(&format!("kpi {field}"), v, &Ok(*m)),
+                        (_, g) => c.fail(format!("kpi {field}: expected {v}, got {g:?}")),
                     }
                 }
             }
@@ -724,6 +745,7 @@ fn run(path: &Path) -> Vec<String> {
             c.words("price and cash disagree", v, got);
         }
         invariants(&mut c, &b, &f);
+        results_agree(&mut c, &b, &e);
         // the same book listed in another order gives the same figures
         let mut reversed = e.inputs().clone();
         reversed.ledger.transactions.reverse();
@@ -810,6 +832,41 @@ fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
         let held = f.matched.units_on(*account, *instrument, today);
         if held != Ok(sum) {
             c.fail(format!("invariant: {account} holds {held:?} {instrument} against its transactions' {}", sum.to_text()));
+        }
+    }
+}
+
+/// One definition of a win (`SPEC.md` §6 Dashboard, brief 20): under every
+/// filter state a case's book gives, the Dashboard counts as wins and losses the
+/// trades the Trades list shows under Result = Win and Result = Loss, and the
+/// by-symbol rows' wins add up to the same. The dates are the whole book and
+/// each range ending today: a range ending earlier keeps on the list a trade
+/// open in it that closed after it, whose statistics count on its close
+/// (`SPEC.md` §5), so the two differ there by definition.
+fn results_agree(c: &mut Check, b: &Built, e: &Engine) {
+    let ins = &b.inputs;
+    let mut states: Vec<Filters> = vec![Filters::default()];
+    let dates = [Dates::Preset(Preset::Day), Dates::Preset(Preset::Week), Dates::Preset(Preset::Month), Dates::Preset(Preset::Quarter), Dates::Preset(Preset::HalfYear), Dates::Preset(Preset::YearToDate), Dates::Preset(Preset::Year), Dates::Preset(Preset::FiveYears)];
+    states.extend(dates.into_iter().map(|d| Filters { dates: d, ..Filters::default() }));
+    let days: BTreeSet<_> = ins.ledger.transactions.iter().map(|t| t.trade_date).collect();
+    states.extend(days.into_iter().map(|d| Filters { dates: Dates::Range { from: Some(d), to: None }, ..Filters::default() }));
+    let accounts: BTreeSet<_> = ins.ledger.transactions.iter().map(|t| t.account).collect();
+    states.extend(accounts.into_iter().map(|a| Filters { accounts: BTreeSet::from([a]), ..Filters::default() }));
+    states.extend(ins.ledger.instruments.keys().map(|i| Filters { instruments: BTreeSet::from([*i]), ..Filters::default() }));
+    let kinds: BTreeSet<_> = ins.ledger.instruments.values().map(|i| i.instrument.kind).collect();
+    states.extend(kinds.into_iter().map(|k| Filters { kinds: BTreeSet::from([k]), ..Filters::default() }));
+    states.extend([Direction::Long, Direction::Short].map(|d| Filters { sides: BTreeSet::from([d]), ..Filters::default() }));
+    states.extend([None, Some(Grade::A), Some(Grade::F)].map(|g| Filters { grades: BTreeSet::from([g]), ..Filters::default() }));
+    for f in states {
+        let d = e.dashboard(&f);
+        let listed = |o: Outcome| e.trades_in_scope(&Filters { outcomes: BTreeSet::from([o]), ..f.clone() }).len();
+        let (wins, losses) = (listed(Outcome::Win), listed(Outcome::Loss));
+        if d.kpi.wins != wins || d.kpi.losses != losses {
+            c.fail(format!("one definition of a win: under {f:?} the Dashboard counts {} W {} L, the Trades list shows {wins} W {losses} L", d.kpi.wins, d.kpi.losses));
+        }
+        let by_symbol: usize = d.by_underlying.iter().map(|r| r.win_rate.map_or(0.0, |w| w * r.count as f64).round() as usize).sum();
+        if by_symbol != d.kpi.wins {
+            c.fail(format!("one definition of a win: under {f:?} the by-symbol rows count {by_symbol} wins against the Dashboard's {}", d.kpi.wins));
         }
     }
 }

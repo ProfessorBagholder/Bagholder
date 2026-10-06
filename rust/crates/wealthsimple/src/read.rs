@@ -107,9 +107,12 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
 /// An account's positions as of a day (`FetchHoldingsExportPositionsAsOfDate`'s
 /// nodes): each security's units, a short's as a negative quantity. Cash is
 /// stated apart, and each position's value now (`totalValue`), which decides
-/// whether a coin's amount is dust by the broker's own figure. The book value
-/// beside them is not read: no figure uses it (brief 07 §5). Both are written to
-/// more digits than a decimal holds: the value is taken to the places that fit.
+/// whether a coin's amount is dust by the broker's own figure, and its book
+/// value (`bookValue`, the cost Wealthsimple states for it, in the currency it
+/// states), which the average cost the book keeps is checked against (brief 20
+/// §4). `marketBookValue` beside it is not read: in every recorded reply it is
+/// the same amount in the same currency. Both are written to more digits than a
+/// decimal holds: each is taken to the places that fit.
 ///
 /// Wealthsimple writes a short's quantity negative and a long's not (every
 /// recorded reply): a quantity whose sign contradicts its direction is a
@@ -130,11 +133,15 @@ pub fn units(nodes: &Value) -> Read<Vec<Units>> {
         if !agrees {
             return Err(n.field("quantity")?.mismatch(format!("{} units held {}", quantity.to_text(), n.text("direction")?)));
         }
-        let v = n.obj("totalValue")?;
-        let amount = Dec::parse_to_fit(v.text("amount")?).map_err(|e| v.field("amount").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
-        let currency = Currency::parse(v.text("currency")?).map_err(|e| v.field("currency").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
-        let value = Some(Money::new(amount, currency));
-        out.push(Units { instrument: Reference::new(RefScheme::BrokerSecurity(broker()), id), quantity, book_value: None, value });
+        let money = |key: &str| -> Read<Money> {
+            let v = n.obj(key)?;
+            let amount = Dec::parse_to_fit(v.text("amount")?).map_err(|e| v.field("amount").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+            let currency = Currency::parse(v.text("currency")?).map_err(|e| v.field("currency").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+            Ok(Money::new(amount, currency))
+        };
+        let value = Some(money("totalValue")?);
+        let book_value = Some(money("bookValue")?);
+        out.push(Units { instrument: Reference::new(RefScheme::BrokerSecurity(broker()), id), quantity, book_value, value });
     }
     Ok(out)
 }
