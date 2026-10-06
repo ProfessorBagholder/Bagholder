@@ -1,0 +1,735 @@
+[
+ {
+  "name": "a holding partly sold at several prices keeps the average cost of what is left",
+  "spec": "SPEC.md §2 Trade (FIFO lots; P&L; Entry; Exit; Qty); SPEC.md §2 Position (Qty; Book at average cost, commissions in; Avg cost; Market; P&L) and the paragraph after its table; §4 Dashboard (Realized P&L tile, closed-trade count)",
+  "working": [
+   "CAD book, no fees. Lots: t1 100 for 1,000 (10 each); t2 100 for 2,000 (20 each).",
+   "Trade (FIFO): t3 sells 100 for 3,000 against lot t1 cost 1,000 -> 2,000; t4 sells 50 for 1,250 against 50 of lot t2 at 20 = 1,000 -> 250. P&L realized so far = 2,000 + 250 = 2,250.00.",
+   "Qty = units opened = 200; Entry = (1,000 + 2,000) / 200 = 15; Exit = (3,000 + 1,250) / 150 = 28.3333... (does not terminate; written to 4 places as the example's entry is, 28.3333).",
+   "50 units still held, so the trade is open: closed = open.",
+   "Position (average cost): after the buys Book 3,000 on 200 units, average 15. t3 takes 100/200 of the cost: Book 1,500 on 100. t4 takes 50/100 of that: Book 750.00 on 50 (average still 15).",
+   "Avg = 750 / 50 = 15; Market = 50 x 30 = 1,500.00; unrealized = 1,500 - 750 = 750.00.",
+   "KPI, no filter: realized = 2,250.00 (open trades' partial sales count); no closed trade: count 0, wins 0, losses 0."
+  ],
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "quotes": {
+   "X": {
+    "price": "30"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-09",
+    "at": "2026-02-09T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-2000"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-100",
+    "cash": "3000"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-03-16",
+    "at": "2026-03-16T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-50",
+    "cash": "1250"
+   }
+  ],
+  "expect": {
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "X",
+     "pnl": "2250.00",
+     "entry": "15",
+     "exit": "28.3333",
+     "qty": "200",
+     "closed": "open"
+    }
+   ],
+   "positions": [
+    {
+     "account": "A",
+     "instrument": "X",
+     "qty": "50",
+     "book": "750.00",
+     "avg": "15",
+     "market": "1500.00",
+     "unrealized": "750.00"
+    }
+   ],
+   "kpi": {
+    "realized": "2250.00",
+    "count": 0,
+    "wins": 0,
+    "losses": 0
+   }
+  }
+ },
+ {
+  "name": "commissions are in a holding's cost, and a sale leaves the average where it was",
+  "spec": "SPEC.md §2 Trade (FIFO lots; P&L; Entry; Exit; Qty); SPEC.md §2 Position (Qty; Book at average cost, commissions in; Avg cost; Market; P&L) and the paragraph after its table",
+  "working": [
+   "t1: cash -509.99, fee 9.99 -> value 500, 10 at 50. t2: cash -609.99, fee 9.99 -> value 600, 10 at 60. t3: cash +340.01, fee 9.99 -> value 350, 5 at 70.",
+   "Trade (FIFO): t3 closes 5 of lot t1. (70 - 50) x 5 = 100, less the exit commission 9.99 and the closed units' share of the entry commission 9.99 x 5/10 = 4.995: P&L = 100 - 9.99 - 4.995 = 85.015 = cash check 340.01 - 509.99 x 5/10. Written to 2 places half-even: 85.02.",
+   "Position Book: purchases with commissions 509.99 + 609.99 = 1,119.98 on 20 units (average 55.999). t3 takes 5/20 of it: Book = 1,119.98 x 15/20 = 839.985, written half-even 839.98.",
+   "Avg = 839.985 / 15 = 55.999 (exact), unchanged by the sale.",
+   "Market = 15 x 70 = 1,050.00; unrealized = 1,050 - 839.985 = 210.015, written half-even 210.02 (also 210.02 if Book is first held to cents as 839.98)."
+  ],
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "quotes": {
+   "X": {
+    "price": "70"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-509.99",
+    "fee": "9.99"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-09",
+    "at": "2026-02-09T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-609.99",
+    "fee": "9.99"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-5",
+    "cash": "340.01",
+    "fee": "9.99"
+   }
+  ],
+  "expect": {
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "X",
+     "pnl": "85.02"
+    }
+   ],
+   "positions": [
+    {
+     "account": "A",
+     "instrument": "X",
+     "qty": "15",
+     "book": "839.98",
+     "avg": "55.999",
+     "market": "1050.00",
+     "unrealized": "210.02"
+    }
+   ]
+  }
+ },
+ {
+  "name": "a return of capital lowers the average cost, a later partial sale keeps it, and capital returned beyond the cost is realized",
+  "spec": "SPEC.md §2 Trade (FIFO lots; P&L; Entry; Exit; Qty); SPEC.md §2 What you enter (return of capital: lowers cost of units held on the day paid; beyond a lot's cost is realized that day, cost then zero); SPEC.md §2 Position (Qty; Book at average cost, commissions in; Avg cost; Market; P&L) and the paragraph after its table",
+  "working": [
+   "X lots: t1 100 for 1,000 (10 each); t2 100 for 1,400 (14 each). Book 2,400 on 200, average 12.",
+   "t3 (2026-03-02) returns 1.00 per unit on the 200 held: lot t1 cost 1,000 - 100 = 900, lot t2 1,400 - 100 = 1,300; nothing beyond cost, nothing realized. Book 2,400 - 200 = 2,200, average 11.",
+   "t4 sells 150 for 2,250 (15 each). Trade FIFO: 100 of lot t1 cost 900 -> 1,500 - 900 = 600; 50 of lot t2 cost 1,300 x 50/100 = 650 -> 750 - 650 = 100. Trade t1 P&L = 700.00 (50 still held, open).",
+   "Position X (average cost): t4 takes 150/200 of 2,200: Book = 2,200 x 50/200 = 550.00; Avg = 550 / 50 = 11; Market = 50 x 15 = 750.00; unrealized = 750 - 550 = 200.00.",
+   "W: t5 10 for 20 (2 each). t6 returns 3.00 x 10 = 30 against cost 20: 10 beyond the cost is realized that day, the cost then 0. Trade t5 P&L = 10.00; its 10 units are still held, so the trade is open: closed = open.",
+   "Position W: qty 10, Book 0.00, Avg 0 / 10 = 0, Market 10 x 4 = 40.00, unrealized 40 - 0 = 40.00."
+  ],
+  "today": "2026-06-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "W"
+   }
+  ],
+  "quotes": {
+   "X": {
+    "price": "15"
+   },
+   "W": {
+    "price": "4"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-09",
+    "at": "2026-02-09T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1400"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "corporate-event",
+    "instrument": "X"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-04-01",
+    "at": "2026-04-01T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-150",
+    "cash": "2250"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "W",
+    "qty": "10",
+    "cash": "-20"
+   },
+   {
+    "id": "t6",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "corporate-event",
+    "instrument": "W"
+   }
+  ],
+  "adjustments": [
+   {
+    "applies_to": "t3",
+    "legs": [
+     {
+      "from": "X",
+      "to": "X",
+      "cash_per_unit": "1.00"
+     }
+    ]
+   },
+   {
+    "applies_to": "t6",
+    "legs": [
+     {
+      "from": "W",
+      "to": "W",
+      "cash_per_unit": "3.00"
+     }
+    ]
+   }
+  ],
+  "expect": {
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "X",
+     "pnl": "700.00"
+    },
+    {
+     "opened_by": "t5",
+     "instrument": "W",
+     "pnl": "10.00",
+     "closed": "open"
+    }
+   ],
+   "positions": [
+    {
+     "account": "A",
+     "instrument": "X",
+     "qty": "50",
+     "book": "550.00",
+     "avg": "11",
+     "market": "750.00",
+     "unrealized": "200.00"
+    },
+    {
+     "account": "A",
+     "instrument": "W",
+     "qty": "10",
+     "book": "0.00",
+     "avg": "0",
+     "market": "40.00",
+     "unrealized": "40.00"
+    }
+   ]
+  }
+ },
+ {
+  "name": "a short's average is what it brought in, less its commission",
+  "spec": "SPEC.md §2 Trade (FIFO lots; P&L; Entry; Exit; Qty) (reversed for shorts); SPEC.md §2 Position (Qty; Book at average cost, commissions in; Avg cost; Market; P&L) and the paragraph after its table (a short's Book is what it brought in less its commission; P&L = Book - Market)",
+  "working": [
+   "t1 short sale: cash +4,995, fee 5 -> value 5,000, 100 at 50. t2 short sale: 100 for 4,000, at 40. t3 buy to close: cash -2,255, fee 5 -> value 2,250, 50 at 45.",
+   "Trade (FIFO): t3 closes 50 of lot t1: (50 - 45) x 50 = 250, less exit commission 5 and the closed units' share of the entry commission 5 x 50/100 = 2.50: P&L = 242.50 = cash check 4,995 x 50/100 - 2,255. Direction short; 150 still short, open.",
+   "Position Book: what the shorts brought in less commission 4,995 + 4,000 = 8,995 on 200 (average 44.975). t3 takes 50/200: Book = 8,995 x 150/200 = 6,746.25.",
+   "Avg = 6,746.25 / 150 = 44.975; Market = 150 x 45 = 6,750.00; unrealized (short) = Book - Market = 6,746.25 - 6,750 = -3.75."
+  ],
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A",
+    "kind": "margin"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "Z"
+   }
+  ],
+  "quotes": {
+   "Z": {
+    "price": "45"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Z",
+    "qty": "-100",
+    "cash": "4995",
+    "effect": "open",
+    "fee": "5"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-02-09",
+    "at": "2026-02-09T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Z",
+    "qty": "-100",
+    "cash": "4000",
+    "effect": "open"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Z",
+    "qty": "50",
+    "cash": "-2255",
+    "effect": "close",
+    "fee": "5"
+   }
+  ],
+  "expect": {
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "Z",
+     "pnl": "242.50",
+     "direction": "short"
+    }
+   ],
+   "positions": [
+    {
+     "account": "A",
+     "instrument": "Z",
+     "direction": "short",
+     "qty": "150",
+     "book": "6746.25",
+     "avg": "44.975",
+     "market": "6750.00",
+     "unrealized": "-3.75"
+    }
+   ]
+  }
+ },
+ {
+  "name": "an option's average is its premium per share of the underlying, as its quote is",
+  "spec": "SPEC.md §2 Trade (FIFO lots; P&L; Entry; Exit; Qty) (options matched per contract, multiplier as stated); SPEC.md §2 Position (Qty; Book at average cost, commissions in; Avg cost; Market; P&L) and the paragraph after its table (Avg cost per share of the underlying; a contract written: what it brought in less commission)",
+  "working": [
+   "C (multiplier 100): t1 writes 2, cash +598, fee 2 -> value 600 = 3.00 per share. t2 buys 1 back for 150 = 1.50 per share.",
+   "Trade t1: (3.00 - 1.50) x 1 x 100 = 150, less the closed contract's share of the entry commission 2 x 1/2 = 1, exit commission 0: P&L = 149.00 = cash check 598 / 2 - 150.",
+   "Position C short: qty 1; Book = 598 x 1/2 = 299.00; Avg = 299 / (1 x 100) = 2.99; Market = 1 x 1.20 x 100 = 120.00; unrealized = Book - Market = 179.00.",
+   "P (multiplier 100): t3 buys 3, cash -603, fee 3 -> value 600 = 2.00 per share. t4 sells 1 for 400 = 4.00 per share.",
+   "Trade t3: (4.00 - 2.00) x 1 x 100 = 200, less entry commission share 3 x 1/3 = 1: P&L = 199.00 = cash check 400 - 603 / 3.",
+   "Position P: qty 2; Book = 603 x 2/3 = 402.00; Avg = 402 / (2 x 100) = 2.01; Market = 2 x 3 x 100 = 600.00; unrealized = 600 - 402 = 198.00."
+  ],
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A",
+    "kind": "margin"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   },
+   {
+    "id": "C",
+    "kind": "option",
+    "underlying": "X",
+    "expiry": "2026-12-18",
+    "strike": "50",
+    "right": "call",
+    "multiplier": "100"
+   },
+   {
+    "id": "P",
+    "kind": "option",
+    "underlying": "X",
+    "expiry": "2026-12-18",
+    "strike": "40",
+    "right": "put",
+    "multiplier": "100"
+   }
+  ],
+  "quotes": {
+   "X": {
+    "price": "45"
+   },
+   "C": {
+    "price": "1.20",
+    "source": "option"
+   },
+   "P": {
+    "price": "3",
+    "source": "option"
+   }
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "C",
+    "qty": "-2",
+    "cash": "598",
+    "effect": "open",
+    "fee": "2"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "C",
+    "qty": "1",
+    "cash": "-150",
+    "effect": "close"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "P",
+    "qty": "3",
+    "cash": "-603",
+    "effect": "open",
+    "fee": "3"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "P",
+    "qty": "-1",
+    "cash": "400",
+    "effect": "close"
+   }
+  ],
+  "expect": {
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "C",
+     "pnl": "149.00"
+    },
+    {
+     "opened_by": "t3",
+     "instrument": "P",
+     "pnl": "199.00"
+    }
+   ],
+   "positions": [
+    {
+     "account": "A",
+     "instrument": "C",
+     "direction": "short",
+     "qty": "1",
+     "book": "299.00",
+     "avg": "2.99",
+     "market": "120.00",
+     "unrealized": "179.00"
+    },
+    {
+     "account": "A",
+     "instrument": "P",
+     "qty": "2",
+     "book": "402.00",
+     "avg": "2.01",
+     "market": "600.00",
+     "unrealized": "198.00"
+    }
+   ]
+  }
+ },
+ {
+  "name": "a trade up in its own currency and down in CAD is a win, its negative CAD amount kept in the gross wins",
+  "spec": "SPEC.md §2 Trade (FIFO lots; P&L; Entry; Exit; Qty) (P&L (CAD): each leg's notional converted on its own fill date); SPEC.md §4 Dashboard (KPI tiles; win/loss judged in the trade's own currency, sums in CAD, a negative CAD amount kept in Gross W, Avg win and Profit factor); §5 Filters (Result)",
+  "working": [
+   "U (USD): bought 10 for 1,000 on 02-02, sold for 1,040 on 03-02: P&L = 40.00 USD, a win. P&L (CAD) = 1,040 x 1.30 - 1,000 x 1.40 = 1,352 - 1,400 = -48.00.",
+   "X (CAD): 500 -> 560: P&L = P&L (CAD) = 60.00, a win. Y (CAD): 500 -> 400: P&L = P&L (CAD) = -100.00, a loss.",
+   "All three closed: count 3; wins 2 (U, X), losses 1 (Y), breakeven 0; win rate 2/3 = 0.666... (written as the nearest double).",
+   "Gross W = -48 + 60 = 12.00 (U's negative CAD amount kept, not clamped); Gross L = 100.00 (written positive); Avg win = 12 / 2 = 6.00; Avg loss = -100 / 1 = -100.00.",
+   "Realized = -48 + 60 - 100 = -88.00; Expectancy = -88 / 3 = -29.333... -> -29.33; Profit factor = 12 / 100 = 0.12.",
+   "Result = Win keeps closed trades winning in their own currency: t1 (U), t3 (X): wins 2, losses 0. Result = Loss: t5 (Y): wins 0, losses 1."
+  ],
+  "today": "2026-05-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "U",
+    "currency": "USD"
+   },
+   {
+    "id": "X"
+   },
+   {
+    "id": "Y"
+   }
+  ],
+  "rates": {
+   "USD": {
+    "2026-02-02": "1.40",
+    "2026-03-02": "1.30"
+   }
+  },
+  "covered": {
+   "USD": [
+    [
+     "2026-02-01",
+     "2026-04-30"
+    ]
+   ]
+  },
+  "series": {
+   "USD": [
+    [
+     "2017-01-03",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "U",
+    "qty": "10",
+    "cash": "-1000"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "U",
+    "qty": "-10",
+    "cash": "1040"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-500"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-10",
+    "cash": "560"
+   },
+   {
+    "id": "t5",
+    "account": "A",
+    "day": "2026-02-02",
+    "at": "2026-02-02T15:00:00Z",
+    "kind": "buy",
+    "instrument": "Y",
+    "qty": "10",
+    "cash": "-500"
+   },
+   {
+    "id": "t6",
+    "account": "A",
+    "day": "2026-03-02",
+    "at": "2026-03-02T15:00:00Z",
+    "kind": "sell",
+    "instrument": "Y",
+    "qty": "-10",
+    "cash": "400"
+   }
+  ],
+  "expect": {
+   "trades": [
+    {
+     "opened_by": "t1",
+     "instrument": "U",
+     "pnl": "40.00",
+     "pnl_cad": "-48.00"
+    },
+    {
+     "opened_by": "t3",
+     "instrument": "X",
+     "pnl": "60.00",
+     "pnl_cad": "60.00"
+    },
+    {
+     "opened_by": "t5",
+     "instrument": "Y",
+     "pnl": "-100.00",
+     "pnl_cad": "-100.00"
+    }
+   ],
+   "kpi": [
+    {
+     "count": 3,
+     "wins": 2,
+     "losses": 1,
+     "breakeven": 0,
+     "win_rate": 0.6666666666666666,
+     "gross_win": "12.00",
+     "gross_loss": "100.00",
+     "avg_win": "6.00",
+     "avg_loss": "-100.00",
+     "expectancy": "-29.33",
+     "profit_factor": 0.12,
+     "realized": "-88.00"
+    },
+    {
+     "trades": [
+      "t1",
+      "t3"
+     ],
+     "wins": 2,
+     "losses": 0,
+     "filters": {
+      "results": [
+       "win"
+      ]
+     }
+    },
+    {
+     "trades": [
+      "t5"
+     ],
+     "wins": 0,
+     "losses": 1,
+     "filters": {
+      "results": [
+       "loss"
+      ]
+     }
+    }
+   ]
+  }
+ }
+]

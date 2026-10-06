@@ -94,7 +94,7 @@ fn capture(old_status: &str) -> tempfile::TempDir {
     edit_file(dir.path(), "positions@anon-tfsa-1@2025-11-18.json", |v| {
         let accounts = list(obj(obj(v, "data"), "accounts"));
         let edges = list(obj(obj(obj(obj(&mut accounts[0], "financials"), "current"), "positionsAsOfDate"), "edges"));
-        edges.push(parse(&format!(r#"{{"node": {{"direction": "LONG", "quantity": "600", "security": {{"id": "{NEW}"}}, "totalValue": {{"amount": "1800", "currency": "CAD"}}}}}}"#)));
+        edges.push(parse(&format!(r#"{{"node": {{"direction": "LONG", "quantity": "600", "security": {{"id": "{NEW}"}}, "totalValue": {{"amount": "1800", "currency": "CAD"}}, "bookValue": {{"amount": "1500", "currency": "CAD"}}}}}}"#)));
     });
     dir
 }

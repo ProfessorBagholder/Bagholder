@@ -256,10 +256,30 @@ pub struct StockDividend {
     pub value: Money,
 }
 
+/// The average cost of a holding's open units one way (`SPEC.md` §1 Position:
+/// Book), as Wealthsimple, IBKR and the CRA state it: kept beside the lots by
+/// the same code that changes them, never worked out again from them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Basis {
+    /// What the open units cost (a long) or brought in (a short), fees in: an
+    /// opening adds its value and its fee (a short's value less it), a removal
+    /// takes its share by units, an event lowers or moves it. Nothing once the
+    /// holding is flat.
+    pub cost: Fig<Money>,
+    /// What the holding has realized at average cost over its life: each
+    /// close's proceeds less its fee and the cost it took off, and capital
+    /// returned beyond the cost. No screen shows it, since a trade's P&L is
+    /// matched first in first out (`SPEC.md` §1); over a holding that ends flat
+    /// the two come to one total, which holds this to the lots.
+    pub realized: Fig<Money>,
+}
+
 /// The lots of one account in one instrument.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Book {
     pub lots: VecDeque<Lot>,
+    /// Each direction's average cost, from its first opening.
+    pub basis: BTreeMap<Direction, Basis>,
     /// What this holding has been waiting on since a transaction it could not
     /// apply: every figure matched in it from then on carries it.
     pub taint: Gaps,
@@ -277,6 +297,25 @@ struct Closed {
     /// The part of the closing value and fee that is the unmet quantity's.
     value_left: Fig<Money>,
     fee_left: Money,
+}
+
+/// A holding's long cost as it stood before an event.
+#[derive(Clone, Debug)]
+struct Before {
+    /// Each long lot's value, oldest first.
+    lots: Vec<Fig<Money>>,
+    /// The average cost of them all.
+    cost: Fig<Money>,
+}
+
+/// What `take` took off a holding.
+#[derive(Clone, Debug)]
+struct Taken {
+    lots: Vec<Lot>,
+    /// The quantity no open lot met.
+    left: Dec,
+    /// The share by units of the holding's average cost the lots took with them.
+    cost: Fig<Money>,
 }
 
 /// The whole match.
@@ -374,6 +413,20 @@ fn fig_sub(a: &Fig<Money>, b: &Fig<Money>) -> Fig<Money> {
         (Ok(a), Ok(b)) => Ok(a.checked_sub(*b)?),
         (Err(g), _) | (_, Err(g)) => Err(g.clone()),
     }
+}
+
+/// What an opening adds to its holding's cost: a long's value and fee, a
+/// short's value less its fee.
+fn opening_cost(value: &Fig<Money>, fee: Money, direction: Direction) -> Fig<Money> {
+    let v = value.clone()?;
+    Ok(match direction {
+        Direction::Long => v.add_to_fit(fee)?,
+        Direction::Short => v.checked_sub(fee)?,
+    })
+}
+
+fn fig_add(a: &Fig<Money>, b: &Fig<Money>) -> Fig<Money> {
+    crate::gap::both(a.clone(), b.clone(), |a, b| Ok(a.add_to_fit(b)?))
 }
 
 fn dec_sum(items: impl IntoIterator<Item = Dec>) -> Result<Dec, Gaps> {
@@ -843,7 +896,19 @@ impl<'a> Matcher<'a> {
         self.inputs.facts.adjustments.get(t).is_some_and(|a| a.source == bagholder_core::SourceName::person())
     }
 
-    fn open_lot(&mut self, account: AccountId, instrument: InstrumentId, opened_by: &TransactionId, day: Date, at: Option<Timestamp>, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, mut flags: BTreeSet<Flag>, joins: Option<TripKey>) {
+    /// A lot opened, its value and fee added to the holding's cost.
+    #[allow(clippy::too_many_arguments)]
+    fn open_lot(&mut self, account: AccountId, instrument: InstrumentId, opened_by: &TransactionId, day: Date, at: Option<Timestamp>, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, flags: BTreeSet<Flag>, joins: Option<TripKey>) {
+        let cost = opening_cost(&value, fee, direction);
+        self.push_lot(account, instrument, opened_by, day, at, direction, qty, value, fee, flags, joins);
+        self.basis_add(account, instrument, direction, &cost);
+    }
+
+    /// A lot opened whose cost the caller adds to the holding's as a whole:
+    /// units moved in with the average cost they left with, a spin-off's
+    /// share of its parent's.
+    #[allow(clippy::too_many_arguments)]
+    fn push_lot(&mut self, account: AccountId, instrument: InstrumentId, opened_by: &TransactionId, day: Date, at: Option<Timestamp>, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, mut flags: BTreeSet<Flag>, joins: Option<TripKey>) {
         if self.entered(opened_by) {
             flags.insert(Flag::Entered);
         }
@@ -871,9 +936,50 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    /// The holding's current trips cleared once none of their lots remain.
+    /// The units a holding holds one way.
+    fn held(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction) -> Result<Dec, Gaps> {
+        dec_sum(self.book(account, instrument).lots.iter().filter(|l| l.direction == direction).map(|l| l.qty))
+    }
+
+    fn basis_mut(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction) -> &mut Basis {
+        let zero = Money::zero(self.currency(instrument));
+        self.book(account, instrument).basis.entry(direction).or_insert(Basis { cost: Ok(zero), realized: Ok(zero) })
+    }
+
+    /// Cost added to a holding's.
+    fn basis_add(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, cost: &Fig<Money>) {
+        let b = self.basis_mut(account, instrument, direction);
+        b.cost = fig_add(&b.cost, cost);
+    }
+
+    /// The share by units of a holding's cost that `n` of its `held` units
+    /// take with them, taken off it: all of it when they are all it holds.
+    fn basis_take(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, n: Dec, held: Dec) -> Fig<Money> {
+        let b = self.basis_mut(account, instrument, direction);
+        if !n.is_positive() || !held.is_positive() {
+            return Ok(Money::zero(self.currency(instrument)));
+        }
+        let taken = fig_share(&b.cost, n, held);
+        b.cost = fig_sub(&b.cost, &taken);
+        taken
+    }
+
+    /// A gain realized at average cost.
+    fn basis_realize(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, gain: &Fig<Money>) {
+        let b = self.basis_mut(account, instrument, direction);
+        b.realized = fig_add(&b.realized, gain);
+    }
+
+    /// The holding's current trips cleared once none of their lots remain, and
+    /// the cost of a side it no longer holds back to nothing.
     fn settle(&mut self, account: AccountId, instrument: InstrumentId) {
+        let zero = Money::zero(self.currency(instrument));
         let book = self.book(account, instrument);
+        for (d, b) in book.basis.iter_mut() {
+            if !book.lots.iter().any(|l| l.direction == *d) {
+                b.cost = Ok(zero);
+            }
+        }
         if book.lots.iter().all(|l| l.flags.contains(&Flag::Deposited)) {
             book.trip = None;
         }
@@ -887,6 +993,8 @@ impl<'a> Matcher<'a> {
     /// left unclosed with the part of the value and fee that is left to it.
     #[allow(clippy::too_many_arguments)]
     fn close(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, closer: &Closer, day: Date, at: Option<Timestamp>, extra: &BTreeSet<Flag>) -> Result<Closed, Gaps> {
+        let held = self.held(account, instrument, direction)?;
+        let value_in = value.clone();
         let mut left = qty;
         let mut value_left = value;
         let mut fee_left = fee;
@@ -944,6 +1052,21 @@ impl<'a> Matcher<'a> {
                 tr.open_lots -= 1;
             }
         }
+        // at average cost: the closed units' share of the cost against what
+        // closing them brought in (a long) or cost (a short), fees in
+        let closed = qty.checked_sub(left)?;
+        if closed.is_positive() {
+            let cost = self.basis_take(account, instrument, direction, closed, held);
+            let paid = fee.checked_sub(fee_left)?;
+            let proceeds = fig_sub(&value_in, &value_left);
+            let gain = crate::gap::both(proceeds, cost, |p, c| {
+                Ok(match direction {
+                    Direction::Long => p.checked_sub(paid)?.checked_sub(c)?,
+                    Direction::Short => c.checked_sub(p)?.checked_sub(paid)?,
+                })
+            });
+            self.basis_realize(account, instrument, direction, &gain);
+        }
         self.settle(account, instrument);
         Ok(Closed { left, value_left, fee_left })
     }
@@ -961,12 +1084,13 @@ impl<'a> Matcher<'a> {
     /// Take `qty` of longs off the front of a holding with their cost and no
     /// P&L; returns the lots taken (for a linked transfer) and what could not be
     /// taken.
-    fn take(&mut self, account: AccountId, instrument: InstrumentId, qty: Dec) -> Result<(Vec<Lot>, Dec), Gaps> {
+    fn take(&mut self, account: AccountId, instrument: InstrumentId, qty: Dec) -> Result<Taken, Gaps> {
         self.take_side(account, instrument, Direction::Long, qty)
     }
 
     /// Take `qty` of `direction`'s lots off the front of a holding, as `take`.
-    fn take_side(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec) -> Result<(Vec<Lot>, Dec), Gaps> {
+    fn take_side(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec) -> Result<Taken, Gaps> {
+        let held = self.held(account, instrument, direction)?;
         let mut left = qty;
         let mut taken = Vec::new();
         let mut emptied = Vec::new();
@@ -989,11 +1113,12 @@ impl<'a> Matcher<'a> {
                 book.lots.pop_front();
             }
         }
+        let cost = self.basis_take(account, instrument, direction, qty.checked_sub(left)?, held);
         self.settle(account, instrument);
         for trip in emptied {
             self.trip_mut(&trip).open_lots -= 1;
         }
-        Ok((taken, left))
+        Ok(Taken { lots: taken, left, cost })
     }
 
     /// Lots placed into a holding in date order, keeping their round trips.
@@ -1456,7 +1581,7 @@ impl<'a> Matcher<'a> {
         // what the holding waits on goes with what leaves it
         let waiting = self.book(account, instrument).taint.clone();
         match self.take(account, instrument, qty) {
-            Ok((lots, left)) => {
+            Ok(Taken { lots, left, cost }) => {
                 if left.is_positive() {
                     self.beyond(t, account, instrument, left);
                 }
@@ -1485,15 +1610,18 @@ impl<'a> Matcher<'a> {
                         })
                         .collect();
                     self.place(dest, dest_instr, lots);
+                    self.basis_add(dest, dest_instr, Direction::Long, &cost);
                 } else {
                     // part of it moved: a round trip of its own in the receiving
-                    // account, each lot keeping its cost and the day it was bought
+                    // account, each lot keeping its cost and the day it was bought, the
+                    // units bringing their share of the average cost
                     self.moved_out(&lots);
                     for mut l in lots {
                         l.flags.insert(Flag::Transferred);
                         let own = TripKey { opening: to.clone(), instrument: dest_instr };
-                        self.open_lot(dest, dest_instr, &to, l.day, l.at, l.direction, l.qty, l.value, l.fee, l.flags, Some(own));
+                        self.push_lot(dest, dest_instr, &to, l.day, l.at, l.direction, l.qty, l.value, l.fee, l.flags, Some(own));
                     }
+                    self.basis_add(dest, dest_instr, Direction::Long, &cost);
                 }
             }
             Err(g) => {
@@ -1597,7 +1725,7 @@ impl<'a> Matcher<'a> {
                     let currency = self.currency(instrument);
                     let flags = BTreeSet::from([Flag::FromEvent]);
                     self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, q, Err(unknown.clone()), Money::zero(currency), flags, None);
-                } else if let Ok((lots, left)) = self.take(account, instrument, q.abs()) {
+                } else if let Ok(Taken { lots, left, .. }) = self.take(account, instrument, q.abs()) {
                     self.moved_out(&lots);
                     if left.is_positive() {
                         self.beyond(t, account, instrument, left);
@@ -1634,14 +1762,15 @@ impl<'a> Matcher<'a> {
         let lieu: BTreeSet<InstrumentId> = adjustment.legs.iter().filter(|l| l.to.is_none() && l.cash_per_unit.is_some()).filter_map(|l| l.from).collect();
         let day = t.trade_date;
         let at = t.occurred_at;
-        // each holding's lots' cost before the event: every leg's share of a cost
-        // is a share of the cost as it stood, whatever the legs before it moved
-        let before: BTreeMap<InstrumentId, Vec<Fig<Money>>> = adjustment
-            .legs
-            .iter()
-            .filter_map(|l| l.from)
-            .map(|i| (i, self.book(account, i).lots.iter().filter(|l| l.direction == Direction::Long).map(|l| l.value.clone()).collect()))
-            .collect();
+        // each holding's lots' cost and average cost before the event: every leg's
+        // share of a cost is a share of the cost as it stood, whatever the legs
+        // before it moved
+        let mut before: BTreeMap<InstrumentId, Before> = BTreeMap::new();
+        for i in adjustment.legs.iter().filter_map(|l| l.from) {
+            let lots = self.book(account, i).lots.iter().filter(|l| l.direction == Direction::Long).map(|l| l.value.clone()).collect();
+            let cost = self.basis_mut(account, i, Direction::Long).cost.clone();
+            before.insert(i, Before { lots, cost });
+        }
         for leg in &adjustment.legs {
             if let Err(g) = self.apply_leg(account, &anchor, day, at, leg, &stated, &before, &lieu) {
                 for i in [leg.from, leg.to].into_iter().flatten() {
@@ -1653,7 +1782,7 @@ impl<'a> Matcher<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn apply_leg(&mut self, account: AccountId, anchor: &TransactionId, day: Date, at: Option<Timestamp>, leg: &AdjustmentLeg, stated: &BTreeMap<InstrumentId, Dec>, before: &BTreeMap<InstrumentId, Vec<Fig<Money>>>, lieu: &BTreeSet<InstrumentId>) -> Result<(), Gaps> {
+    fn apply_leg(&mut self, account: AccountId, anchor: &TransactionId, day: Date, at: Option<Timestamp>, leg: &AdjustmentLeg, stated: &BTreeMap<InstrumentId, Dec>, before: &BTreeMap<InstrumentId, Before>, lieu: &BTreeSet<InstrumentId>) -> Result<(), Gaps> {
         let unknown = || Gaps::of(Gap::EventUnknown(anchor.clone()));
         let Some(from) = leg.from else {
             // a stated cost belongs to a deposit, applied where the deposit is
@@ -1733,7 +1862,7 @@ impl<'a> Matcher<'a> {
                 let cost_share = leg.cost_share.unwrap_or(Dec::ONE);
                 if cost_share == Dec::ONE {
                     // the same holding under a new instrument: its lots move whole
-                    let (lots, _) = self.take(account, from, held)?;
+                    let Taken { lots, cost, .. } = self.take(account, from, held)?;
                     let taint = self.book(account, from).taint.clone();
                     let scaled = scale_lots(lots, held, units)?;
                     let moved = scaled
@@ -1745,11 +1874,12 @@ impl<'a> Matcher<'a> {
                         .collect();
                     self.book(account, to).taint.merge(&taint);
                     self.place(account, to, moved);
+                    self.basis_add(account, to, Direction::Long, &cost);
                     return Ok(());
                 }
                 // a spin-off: the child takes part of each lot's cost and keeps its dates
                 let currency = self.currency(to);
-                let costs_before = before.get(&from).cloned().unwrap_or_default();
+                let costs_before = before.get(&from).map(|b| b.lots.clone()).unwrap_or_default();
                 let parents: Vec<(Dec, Fig<Money>, Date, Option<Timestamp>)> = self
                     .book(account, from)
                     .lots
@@ -1775,7 +1905,7 @@ impl<'a> Matcher<'a> {
                     };
                     let flags = BTreeSet::from([Flag::FromEvent]);
                     let own = TripKey { opening: anchor.clone(), instrument: to };
-                    self.open_lot(account, to, anchor, pday, pat, Direction::Long, child_qty, value, Money::zero(currency), flags, Some(own));
+                    self.push_lot(account, to, anchor, pday, pat, Direction::Long, child_qty, value, Money::zero(currency), flags, Some(own));
                     child_left = child_left.checked_sub(child_qty)?;
                     held_left = held_left.checked_sub(pq)?;
                 }
@@ -1783,6 +1913,16 @@ impl<'a> Matcher<'a> {
                 for (lot, moved) in book.lots.iter_mut().filter(|l| l.direction == Direction::Long).zip(moved_values) {
                     lot.value = fig_sub(&lot.value, &moved);
                 }
+                // the child takes the same share of the parent's average cost
+                let parent = before.get(&from).map(|b| b.cost.clone()).unwrap_or(Ok(Money::zero(self.currency(from))));
+                let moved: Fig<Money> = parent.and_then(|c| Ok(c.times(cost_share)?));
+                let child = match &moved {
+                    Ok(m) if m.currency != currency => Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone()))),
+                    m => m.clone(),
+                };
+                self.basis_add(account, to, Direction::Long, &child);
+                let b = self.basis_mut(account, from, Direction::Long);
+                b.cost = fig_sub(&b.cost, &moved);
                 Ok(())
             }
             // a merger for cash, cash in lieu: units out at the cash per unit; how
@@ -1864,6 +2004,23 @@ impl<'a> Matcher<'a> {
             tr.slices.push(slice);
             tr.fills.insert(anchor.clone());
         }
+        // at average cost: the capital returned on every unit held comes off the
+        // holding's cost, and what it returns beyond that cost is realized
+        let held = self.held(account, instrument, Direction::Long)?;
+        if held.is_positive() {
+            let back = cash.times(held)?;
+            let b = self.basis_mut(account, instrument, Direction::Long);
+            let (cost, gain) = match &b.cost {
+                Ok(c) if c.currency != back.currency => (Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone()))), Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone())))),
+                Ok(c) => match c.checked_sub(back)? {
+                    left if left.amount.is_negative() => (Ok(Money::zero(c.currency)), Ok(left.neg())),
+                    left => (Ok(left), Ok(Money::zero(c.currency))),
+                },
+                Err(g) => (Err(g.clone()), Err(g.clone())),
+            };
+            b.cost = cost;
+            self.basis_realize(account, instrument, Direction::Long, &gain);
+        }
         Ok(())
     }
 
@@ -1896,7 +2053,7 @@ impl<'a> Matcher<'a> {
             return Err(waits());
         }
         let total = held.checked_mul(ratio)?;
-        let (lots, _) = self.take_side(account, from, Direction::Short, held)?;
+        let Taken { lots, cost, .. } = self.take_side(account, from, Direction::Short, held)?;
         let flag = if to == from { Flag::Split } else { Flag::Continued };
         let moved: Vec<Lot> = scale_side(lots, Direction::Short, held, total)?
             .into_iter()
@@ -1910,6 +2067,7 @@ impl<'a> Matcher<'a> {
             self.book(account, to).taint.merge(&taint);
         }
         self.place(account, to, moved);
+        self.basis_add(account, to, Direction::Short, &cost);
         Ok(())
     }
 

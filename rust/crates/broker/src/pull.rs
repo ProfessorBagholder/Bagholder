@@ -306,6 +306,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         step(Step::Holdings { account: name, n: n + 1, of });
         let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
         let mut valued: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
+        let mut costed: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
         let mut complete = true;
         for k in ks {
             match adapter.units(k, as_of) {
@@ -348,6 +349,12 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                                     (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
                                     _ => None,
                                 };
+                                // its book value the same way
+                                let c = costed.entry(i).or_insert(u.book_value.map(|v| bagholder_core::Money::zero(v.currency)));
+                                *c = match (*c, u.book_value) {
+                                    (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
+                                    _ => None,
+                                };
                             }
                             // a statement is kept only whole
                             None => complete = false,
@@ -363,7 +370,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         // a statement of units is stored only whole: every account behind it read
         if complete {
             let read = book.broker_read(connection, "units", now)?;
-            let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: None, value: valued.get(&instrument).copied().flatten() }).collect();
+            let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: costed.get(&instrument).copied().flatten(), value: valued.get(&instrument).copied().flatten() }).collect();
             book.store_units(*id, as_of, &lines, &read, now)?;
         }
     }

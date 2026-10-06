@@ -159,4 +159,4 @@ To fill when built.
 
 - Plan written 2026-10-04 from brief 15 decisions 6, 7 and 9.
 - Brief 20 (Go with changes) applied above.
-- Nothing built.
+- 2026-10-06: decisions 6 and 7 built (average cost kept by the lot primitives, `Basis`; one `result`; Wealthsimple's book value read and stored), with `engine/tests/basis.rs`, `results_agree` and the blind `average_cost.json`. Decision 9, Portfolio under a past range, is the next change. The check against Wealthsimple's book value runs on the owner's book once a pull has stored it, before decision 9 lands.

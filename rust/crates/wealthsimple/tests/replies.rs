@@ -932,6 +932,41 @@ fn positions_state_what_each_holding_is_worth_and_one_that_states_none_writes_no
     assert_eq!(p.stated().units, None);
 }
 
+/// Each holding's book value is read as Wealthsimple states it (`bookValue`, in
+/// the currency it states: CAD on every line of every recorded reply, a short's
+/// negative, what it brought in) and stored with the units (brief 20 §4); a line
+/// without one is a reply of another shape, and nothing of it is kept.
+#[test]
+fn positions_state_each_holding_s_book_value_and_one_that_states_none_writes_no_units() {
+    let p = pulled(Op::Positions, &[body("wealthsimple-pull/positions@anon-tfsa-1@2025-11-18.json")]);
+    let s = p.stated();
+    let (_, units) = s.units.clone().expect("the units stated");
+    assert_eq!(s.unit_books.len(), units.len(), "every holding's book value, as Wealthsimple states it");
+    let of = |id: &str| s.unit_books[&p.book.instrument_by_ref(&Reference::new(RefScheme::BrokerSecurity(Broker::named("wealthsimple")), id)).unwrap().unwrap()];
+    assert_eq!(of("sec-s-0611ed76cd8445138631597d171d986f"), Money::new(dec("2572.5"), Currency::CAD));
+    assert_eq!(of(CONTRACT).currency, Currency::CAD);
+    assert!(of(CONTRACT).amount.is_negative(), "a short's book value is what it brought in");
+    let mut v = json::parse(&body("wealthsimple-pull/positions@anon-tfsa-1@2025-11-18.json")).unwrap();
+    strip_key(&mut v, "bookValue");
+    let p = pulled(Op::Positions, &[v.canonical()]);
+    let [(part, why)] = p.failures().try_into().unwrap();
+    assert_eq!(part, "units:anon-tfsa-1");
+    assert!(why.contains("bookValue"), "{why}");
+    assert_eq!(p.stated().units, None);
+}
+
+/// `key` taken out of every object in `v`.
+fn strip_key(v: &mut Value, key: &str) {
+    match v {
+        Value::Object(m) => {
+            m.remove(key);
+            m.values_mut().for_each(|x| strip_key(x, key));
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| strip_key(x, key)),
+        _ => {}
+    }
+}
+
 #[test]
 fn positions_answered_empty_write_that_nothing_is_held() {
     let p = pulled(Op::Positions, &[edited("edited-empty-positions.json")]);
