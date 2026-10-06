@@ -47,7 +47,7 @@
 
   const c = $derived(model.cashflow)
   const ms = $derived(c.months || [])
-  const peak = $derived(Math.max(...ms.map((x) => Math.max(at(x.value), at(x.interest))), 0))
+  const peak = $derived(Math.max(...ms.map((x) => at(x.value) + at(x.interest)), 0))
   const head = $derived(Math.max(100, Math.ceil(peak / 100) * 100))
   const axis = $derived.by(() => {
     const want = Math.min(6, ms.length)
@@ -86,15 +86,13 @@
   let cfH = $state<number | null>(null)
   let pieH = $state<number>(-1)
 
+  // one bar a month: its margin interest at the bottom and its distributions on
+  // top of it, each its own height, so neither ever covers the other
   function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; count: number }) {
-    const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
     const hi = (at(b.interest) / head) * 94
-    const dist = { h: hd, color: 'var(--accent-bar)' }
-    const intr = { h: hi, color: 'var(--neg)' }
-    // the interest is drawn over the distributions from the same baseline, always
-    // in front, so the accent left showing above it is the net; a month whose
-    // interest exceeds its distributions is the negative colour to its top (SPEC.md §3, Cashflow)
-    return [dist, ...(hi > 0 ? [intr] : [])]
+    const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
+    const parts = [...(hi > 0 ? [{ h: hi, at: 0, color: 'var(--neg)' }] : []), ...(hd > 0 ? [{ h: hd, at: hi, color: 'var(--accent-bar)' }] : [])]
+    return parts.map((p, k) => ({ ...p, radius: k === parts.length - 1 ? '2px 2px 0 0' : '0' }))
   }
 </script>
 
@@ -144,7 +142,7 @@
           {#each ms as b, i (b.key)}
             <div class="bar-col" data-i={i} style="cursor:default" onmouseenter={() => (cfH = i)} role="presentation">
               {#each barOrder(b) as bar (bar.color)}
-                <div style="position:absolute;left:0;right:0;bottom:6%;height:{bar.h.toFixed(1)}%;background:{bar.color};border-radius:2px 2px 0 0"></div>
+                <div style="position:absolute;left:0;right:0;bottom:{(6 + bar.at).toFixed(2)}%;height:{bar.h.toFixed(2)}%;background:{bar.color};border-radius:{bar.radius}"></div>
               {/each}
             </div>
           {/each}
