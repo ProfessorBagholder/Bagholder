@@ -1068,3 +1068,32 @@ fn balances_read_between_syncs_name_an_account_whose_cash_moved_since_its_activi
     let paid = read_at("2025-11-19T20:10:00Z", body("wealthsimple-pull/edited-balances.json").replace("36434.77", "36614.77"));
     assert_eq!(paid.cash_moved, vec![p.account().unwrap()], "CAD cash rose: a movement not read yet");
 }
+
+/// A pull of the activity alone (the cash moved during the day) reads the
+/// activity and the balances, not the holdings or the daily history, and does not
+/// meet the day's window; a whole pull reads them and marks the day done.
+#[test]
+fn a_pull_of_the_activity_alone_reads_no_holdings_or_history_and_leaves_the_days_pull_due() {
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let read = |whole: bool| {
+        let home = tempfile::tempdir().unwrap();
+        let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
+        let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
+        let mut ws = Wealthsimple::new(Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements());
+        let report = if whole {
+            pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap()
+        } else {
+            bagholder_broker::pull::pull_activity(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap()
+        };
+        drop(ws);
+        let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+        let stated = book.stated(account).unwrap();
+        let daily = book.last_read(connection, bagholder_broker::pull::DAILY_READ).unwrap();
+        (report.rows_read, stated.cash.is_some(), stated.units.is_some(), report.days_stored, daily, home)
+    };
+    let (rows, cash, units, days, daily, _h) = read(false);
+    assert!(rows > 0 && cash, "the activity and the cash are read");
+    assert_eq!((units, days, daily), (false, 0, None), "no holdings, no daily history, the day's pull still due");
+    let (_, _, units, days, daily, _h) = read(true);
+    assert!(units && days > 0 && daily == Some(now), "the whole pull reads them and marks the day");
+}

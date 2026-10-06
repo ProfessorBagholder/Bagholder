@@ -85,6 +85,20 @@ impl BookMoves for Index {
 /// broker files rows under now; `now` the instant. `step` is told where the
 /// pull is as it goes.
 pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
+    pull_in(book, adapter, connection, today, now, step, true)
+}
+
+/// A pull of what moved since the last: the accounts, each account's activity
+/// from its last full read, the balances, and the statements where the cash
+/// disagrees. Not the holdings or the daily history, which are as of the last
+/// full day and are read by the day's pull: for a movement seen during the day
+/// (the cash moving at the broker), the rows that moved, quickly.
+pub fn pull_activity(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
+    pull_in(book, adapter, connection, today, now, step, false)
+}
+
+/// `daily`: the holdings and the daily history as of the last full day are read too.
+fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step), daily: bool) -> Result<Report> {
     let mut report = Report::default();
     let broker = adapter.broker();
     step(Step::Accounts);
@@ -271,7 +285,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     // held goes by no name yet (its description is read with them), or the
     // statement kept predates the broker's stated worth of each
     let mut holdings = Vec::new();
-    for (id, ks) in &keys_of {
+    for (id, ks) in keys_of.iter().filter(|_| daily) {
         let current = match book.stated(*id)?.units {
             Some((d, lines)) if d == as_of && lines.keys().all(|i| book.stated(*id).map(|s| s.unit_values.contains_key(i)).unwrap_or(false)) => {
                 let mut named = true;
@@ -360,7 +374,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
     // an account whose days are stated up to the last full day has none new
     let mut dated = Vec::new();
-    for a in &stated {
+    for a in stated.iter().filter(|_| daily) {
         let last = book.last_account_day(ids[&a.key])?;
         if !(last.is_some_and(|d| d >= as_of) || (!a.open && last.is_some())) {
             dated.push((a, last));
@@ -405,8 +419,16 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         report.days_stored += days.len();
         report.days_restated += book.store_account_days(id, &days, &read)?.len();
     }
+    // the day's pull is done: what the window asks of it (`DAILY_READ`) is read
+    if daily {
+        book.broker_read(connection, DAILY_READ, now)?;
+    }
     Ok(report)
 }
+
+/// The read a whole pull marks itself with: the day's window is met by it, never
+/// by a pull of the activity alone.
+pub const DAILY_READ: &str = "daily";
 
 /// More final rows than this gone from one account in one read makes the read
 /// suspect.
