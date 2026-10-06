@@ -91,8 +91,10 @@
     const hi = (at(b.interest) / head) * 94
     const dist = { h: hd, color: 'var(--accent-bar)' }
     const intr = { h: hi, color: 'var(--neg)' }
-    const bars = hi > hd ? [intr, dist] : [dist, ...(hi > 0 ? [intr] : [])]
-    return bars
+    // the interest is drawn over the distributions from the same baseline, always
+    // in front, so the accent left showing above it is the net; a month whose
+    // interest exceeds its distributions is the negative colour to its top (SPEC.md §3, Cashflow)
+    return [dist, ...(hi > 0 ? [intr] : [])]
   }
 </script>
 
