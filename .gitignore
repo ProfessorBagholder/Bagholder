@@ -34,3 +34,4 @@ rust/target/
 
 # the compose data folder: the database and the login
 data/
+rust/prebuilt
