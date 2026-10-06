@@ -301,6 +301,10 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         None => {}
     }
     let mut next = next_window(now, &zone);
+    // a pull asked during this pass (the balances found cash moved) runs at once
+    if app.pull_asked.load(Ordering::SeqCst) {
+        next = Some(now);
+    }
     let last_pull = book.last_read(conn, "accounts").map_err(|e| e.to_string())?;
     if let Some(d) = fill_pull_due(app, &book, conn, last_pull, now)? {
         next = Some(next.map_or(d, |n| n.min(d)));
@@ -483,6 +487,11 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     let mut st = app.state.lock().unwrap();
     if failed.is_empty() {
         st.portfolio_error.clear();
+        // cash moved at Wealthsimple since its activity was last read: the movement
+        // (a distribution paid, interest, a deposit) is read now, not at the next window
+        if !read.cash_moved.is_empty() {
+            app.pull_asked.store(true, Ordering::SeqCst);
+        }
         Ok(Read::Done)
     } else {
         st.portfolio_error = format!("Balances could not be read: {failed}");
