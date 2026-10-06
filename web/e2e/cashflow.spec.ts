@@ -94,25 +94,33 @@ test('a bar hover reads the month, Distributions, Margin interest and Net cashfl
   // the interest charged is shown with a minus sign (SPEC.md "### Cashflow", hover)
   await expect(line('Margin interest')).toHaveText(signedMoney(negate(b.interest), 0))
   await expect(line('Net cashflow')).toHaveText(signedMoney(b.net, 0))
-  // the interest is drawn in front of the distributions from the same baseline, in
-  // every month: here it rises above them, so the bar reads the negative colour to its top
-  const fills = await bar.locator('div').evaluateAll((els) => els.map((e) => ({ bg: (e as HTMLElement).style.background, h: e.getBoundingClientRect().height, bottom: e.getBoundingClientRect().bottom })))
-  expect(fills.map((f) => f.bg)).toEqual(['var(--accent-bar)', 'var(--neg)'])
-  expect(fills[1].h).toBeGreaterThan(fills[0].h)
-  expect(fills[1].bottom).toBe(fills[0].bottom)
+  // the interest at the bottom and the distributions on top of it: a month whose
+  // interest outweighs its distributions still shows both
+  const fills = await bar.locator('div').evaluateAll((els) => els.map((e) => ({ bg: (e as HTMLElement).style.background, top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom, h: e.getBoundingClientRect().height })))
+  expect(fills[0].bg).toBe('var(--neg)')
+  if (b.count > 0) {
+    expect(fills.map((f) => f.bg)).toEqual(['var(--neg)', 'var(--accent-bar)'])
+    expect(fills[1].h).toBeGreaterThan(0)
+    expect(fills[0].h).toBeGreaterThan(fills[1].h)
+    expect(Math.abs(fills[1].bottom - fills[0].top)).toBeLessThan(1)
+  } else {
+    expect(fills).toHaveLength(1) // nothing paid that month: the interest alone
+  }
 })
 
-test('in every month the margin interest is drawn in front of the distributions, from the same baseline', async ({ page, request }) => {
+test('in every month the margin interest is at the bottom and the distributions sit on top of it, both showing', async ({ page, request }) => {
   const m = await figures(request)
-  const months = m.cashflow.months as { key: string; value: string; interest: string }[]
+  const months = m.cashflow.months as { key: string; value: string; interest: string; count: number }[]
   await page.goto('/#cashflow')
   await ready(page)
   let both = 0
   for (const [i, b] of months.entries()) {
-    const fills = await page.locator(`.bar-col[data-i="${i}"] div`).evaluateAll((els) => els.map((e) => (e as HTMLElement).style.background))
-    if (cmp(b.interest, '0') > 0) {
+    const fills = await page.locator(`.bar-col[data-i="${i}"] div`).evaluateAll((els) => els.map((e) => ({ bg: (e as HTMLElement).style.background, top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom, h: e.getBoundingClientRect().height })))
+    if (cmp(b.interest, '0') > 0 && b.count > 0) {
       both++
-      expect(fills.at(-1), b.key).toBe('var(--neg)')
+      expect(fills.map((f) => f.bg), b.key).toEqual(['var(--neg)', 'var(--accent-bar)'])
+      expect(fills[1].h, b.key).toBeGreaterThan(0)
+      expect(Math.abs(fills[1].bottom - fills[0].top), b.key).toBeLessThan(1)
     }
   }
   expect(both).toBeGreaterThan(1) // months on both sides of the interest outweighing the distributions
