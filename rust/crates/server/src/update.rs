@@ -262,6 +262,8 @@ pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
         }
     }
     let kept = app.cache().and_then(|c| bagholder_store::tables::set_meta(&c, CHECK_KEY, &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap())));
+    // the header shows what the check found as soon as it is kept
+    app.events.signal();
     match kept {
         Ok(()) => crate::feeds::feed_answered(app, UPDATE_CHECK),
         Err(e) => crate::feeds::feed_failed(app, UPDATE_CHECK, format!("The update check could not be kept: {e}")),
@@ -277,7 +279,11 @@ pub const CHECK_KEY: &str = "update_check";
 pub fn update_status(app: &Arc<App>) -> Result<UpdateRecord, String> {
     let raw = app.cache().and_then(|c| bagholder_store::tables::get_meta(&c, CHECK_KEY, "")).map_err(|e| format!("The update check could not be read: {e}"))?;
     if raw.is_empty() { return Ok(UpdateRecord::default()); }
-    serde_json::from_str(&raw).map_err(|e| format!("The update check could not be read: {e}"))
+    let mut rec: UpdateRecord = serde_json::from_str(&raw).map_err(|e| format!("The update check could not be read: {e}"))?;
+    // a record kept by an earlier build offers what this build already runs: a copy
+    // that has just updated reads it before its first check, and is offered nothing
+    rec.update_available &= parse_version(&rec.latest) > parse_version(APP_VERSION);
+    Ok(rec)
 }
 
 /// This platform's archive in the release `tag`: `bagholder-vX.Y.Z-rust-<target>.tar.gz`

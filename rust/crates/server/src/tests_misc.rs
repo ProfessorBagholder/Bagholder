@@ -287,6 +287,25 @@ fn test_the_update_check_asks_with_its_etag_and_an_unchanged_release_is_kept() {
     assert!(!update::check_for_update(&app()).update_available, "the kept release is this build's own: not offered");
 }
 
+/// A copy that has just updated reads the record its earlier build kept, which
+/// offered the version it now runs: before its first check it is offered nothing.
+#[test]
+fn test_a_record_kept_by_an_earlier_build_offers_nothing_this_build_runs() {
+    let _g = guard();
+    let _fakes = UpdateFakes::new(None);
+    let conn = app_ref().cache().unwrap();
+    let kept = json!({"ok": true, "updateAvailable": true, "latest": format!("v{}", app::APP_VERSION), "assets": {"archive": "a", "sha": "s"}});
+    bagholder_store::tables::set_meta(&conn, "update_check", &kept.to_string()).unwrap();
+    assert!(!update::update_status(&app()).unwrap().update_available);
+    let st = crate::status::status(&app());
+    assert_eq!((st.update_available, st.can_update), (false, false), "no Update button for the running version");
+    // a newer one kept is still offered
+    let mine = update::parse_version(app::APP_VERSION).unwrap();
+    let newer = json!({"ok": true, "updateAvailable": true, "latest": format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1), "assets": {"archive": "a", "sha": "s"}});
+    bagholder_store::tables::set_meta(&conn, "update_check", &newer.to_string()).unwrap();
+    assert!(update::update_status(&app()).unwrap().update_available);
+}
+
 /// A copy that installs archives is offered a release only once this platform's
 /// archive and its checksum are attached: GitHub publishes the release before its
 /// archives are built, and an offer that cannot be pressed is not made.
