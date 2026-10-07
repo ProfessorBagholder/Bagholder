@@ -552,9 +552,18 @@ pub fn env_on(name: &str) -> bool {
     bagholder_net::switch::switch_on(name)
 }
 
-/// A line said by the app: on stderr, and in its log on disk (`logfile`).
+/// A line said by the app as it runs: to its log on disk (`logfile`), never the
+/// terminal, where nothing waits to act on it; before the log is open (a start
+/// that fails, a command-line tool), to stderr.
 pub fn log(line: &str) {
-    eprintln!("{}", line);
+    bagholder_core::log::line(line);
+}
+
+/// A line the person needs on the terminal they started the app from: where to
+/// open it, whether orders are live. Kept in the log as well. Nothing else is said
+/// there (`tests_misc::test_the_terminal_says_only_what_the_person_needs`).
+pub fn say(line: &str) {
+    println!("{line}");
     crate::logfile::write(line, bagholder_core::jiff::Timestamp::now());
 }
 

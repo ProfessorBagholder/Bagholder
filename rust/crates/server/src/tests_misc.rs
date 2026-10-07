@@ -708,3 +708,56 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
     assert!(why.contains("npm is not on the PATH"), "{why}");
     assert!(calls().is_empty());
 }
+
+/// Each place the running app writes to the terminal, and why the person needs it
+/// there; every other line the app says goes to its log (`app::log`). Command-line
+/// tools (`src/bin`, and the server's own subcommands) print their output, which is
+/// what they are for.
+const TERMINAL: [(&str, usize, &str); 8] = [
+    ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
+    ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
+    ("server/src/main.rs", 3, "the browser could not be opened (open the address yourself), no port could be bound, `--version`"),
+    ("server/src/read_sources.rs", 8, "the `read-sources` and `health` subcommands' own output"),
+    ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),
+    ("server/src/legacy_import.rs", 3, "the `import-book` subcommand's own output"),
+    ("server/src/compare.rs", 6, "the `compare` subcommand's own output"),
+    ("server/src/demo_facts.rs", 3, "the `demo-facts` subcommand's own output"),
+];
+
+/// The terminal the app was started from says only what the person needs there
+/// (owner, 2026-10-07: "WHY do you keep printing this crap?"): every other line goes
+/// to the log on disk, through `app::log` and `bagholder_core::log`. The request
+/// tracer (`BAGHOLDER_LOG_REQUESTS`, a developer's switch, off by default) and the
+/// core log's own fallback before a sink is set are the only other writers.
+#[test]
+fn test_the_terminal_says_only_what_the_person_needs() {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let print = regex::Regex::new(r"\b(e?println!|e?print!)\(").unwrap();
+    let allowed_elsewhere = ["net/src/client.rs", "wealthsimple/src/client.rs", "core/src/log.rs"];
+    let mut found: Vec<(String, usize)> = Vec::new();
+    let mut dirs = vec![crates.clone()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            let rel = p.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/");
+            if p.is_dir() {
+                if !rel.ends_with("/bin") && !rel.ends_with("/tests") && !rel.contains("target") {
+                    dirs.push(p);
+                }
+                continue;
+            }
+            if !rel.ends_with(".rs") || !rel.contains("/src/") || rel.contains("/src/tests") || rel.ends_with("build.rs") || allowed_elsewhere.contains(&rel.as_str()) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&p).unwrap();
+            let n = text.lines().filter(|l| !l.trim_start().starts_with("//") && print.is_match(l)).count();
+            if n > 0 {
+                found.push((rel, n));
+            }
+        }
+    }
+    found.sort();
+    let mut want: Vec<(String, usize)> = TERMINAL.iter().map(|(f, n, _)| (f.to_string(), *n)).collect();
+    want.sort();
+    assert_eq!(found, want, "a line written to the terminal was added or removed: route it through `app::log`, or argue for it in TERMINAL");
+}
