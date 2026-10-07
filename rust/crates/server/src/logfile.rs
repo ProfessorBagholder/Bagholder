@@ -62,7 +62,10 @@ pub fn start(dir: &Path, now: Timestamp) -> std::io::Result<()> {
         rotate(dir)?;
     }
     let file = open(dir)?;
-    let _ = LOG.set(Mutex::new(Log { dir: dir.to_path_buf(), week, file }));
+    // one log a process: a second start keeps the first, and says so
+    if LOG.set(Mutex::new(Log { dir: dir.to_path_buf(), week, file })).is_err() {
+        eprintln!("bagholder: the log was started twice; the first stands");
+    }
     Ok(())
 }
 

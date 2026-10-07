@@ -159,12 +159,16 @@ impl Wall {
                 return;
             }
             *slept = Some((before + slice, after));
-            let at = |t: std::time::SystemTime| bagholder_core::jiff::Timestamp::try_from(t).map(|t| t.to_string()).unwrap_or_default();
+            let at = |t: std::time::SystemTime| match bagholder_core::jiff::Timestamp::try_from(t) {
+                Ok(t) => t.to_string(),
+                Err(e) => format!("a moment the clock cannot state ({e})"),
+            };
             log(&format!("bagholder: this machine was asleep from about {} to {}: what came due meanwhile is read now", at(before + slice), at(after)));
         }
     }
 
-    /// The last time the machine was seen to have slept.
+    /// The last time the machine was seen to have slept. Tests only.
+    #[cfg(test)]
     pub fn last_sleep(&self) -> Option<(std::time::SystemTime, std::time::SystemTime)> {
         *self.slept.lock().unwrap_or_else(|e| e.into_inner())
     }
