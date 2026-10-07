@@ -15,6 +15,7 @@ pub mod ids;
 pub mod json;
 pub mod instrument;
 pub mod journal;
+pub mod log;
 pub mod money;
 pub mod order;
 pub mod names;

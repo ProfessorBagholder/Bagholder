@@ -6,6 +6,7 @@
 //! `http`.
 
 mod app;
+mod logfile;
 mod carry;
 mod compare;
 mod demo_facts;
@@ -116,6 +117,10 @@ fn serve() -> i32 {
         }
         // one app per data folder: a second start on it is refused, naming the first
         app::hold_home(&home)?;
+        // its log, kept beside its data from here on
+        logfile::start(&home, bagholder_core::jiff::Timestamp::now()).map_err(|e| format!("the log in {} could not be opened: {e}", home.display()))?;
+        // every line the app says from here on goes to the log, not the terminal
+        bagholder_core::log::set_sink(|line| logfile::write(line, bagholder_core::jiff::Timestamp::now()));
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
         Ok((home, root_dir()?, bind_host, port_choices()?))
@@ -247,8 +252,8 @@ fn serve() -> i32 {
     a.spawn_with("bagholder-shorts-sweep", feeds::shorts_sweep_loop);
 
     let url = format!("http://127.0.0.1:{}", port);
-    println!("Bagholder  {}", url);
-    println!("orders: {}", if orders::orders_live(&a) { "live" } else { "dry" });
+    app::say(&format!("Bagholder  {}", url));
+    app::say(&format!("orders: {}", if orders::orders_live(&a) { "live" } else { "dry" }));
     // a second instance run for verification must not open anyone's browser
     if !app::env_on("BAGHOLDER_NO_BROWSER") {
         open_browser(&url);

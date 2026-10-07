@@ -162,7 +162,7 @@ impl Clock {
 }
 
 fn log(line: &str) {
-    eprintln!("{}", line);
+    bagholder_core::log::line(line);
 }
 
 /// Space this host's requests at least `seconds` apart. The request itself

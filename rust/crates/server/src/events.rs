@@ -160,9 +160,11 @@ impl Bus {
 
     /// As `park_until`, but no longer than `most`: true when `ready`, false when the
     /// time ran out or the app is stopping.
+    /// `most` is measured on the wall clock (`crate::app::Wall`), so a deadline a
+    /// machine slept through is met on its waking.
     pub fn park_until_or(&self, app: &App, most: Duration, ready: impl Fn() -> bool) -> bool {
         let (m, c) = &self.bell;
-        let until = std::time::Instant::now() + most;
+        let until = app.wall.now() + most;
         loop {
             if app.stopping() {
                 return false;
@@ -171,12 +173,11 @@ impl Bus {
             if ready() {
                 return true;
             }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return false;
-            }
+            let Some(slice) = app.wall.slice(until) else { return false };
             let g = m.lock().unwrap_or_else(|e| e.into_inner());
-            drop(c.wait_timeout_while(g, left, |n| *n == seen && !app.stopping()));
+            let before = app.wall.now();
+            drop(c.wait_timeout_while(g, slice, |n| *n == seen && !app.stopping()));
+            app.wall.waited(before, slice, app.wall.now());
         }
     }
 
