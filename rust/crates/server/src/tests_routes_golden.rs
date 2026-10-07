@@ -84,6 +84,21 @@ fn from_the_page(app: &Arc<App>, method: Method, uri: &str, body: Option<Value>)
     req
 }
 
+/// The import an upload started, once it has ended: what the status says it did. Read
+/// only after the bus rings, as the page's stream reads the status.
+fn ended(rt: &tokio::runtime::Runtime, app: &Arc<App>, answer: &Value) -> crate::csv_import::Imported {
+    let id = answer["body"]["id"].as_str().unwrap_or_else(|| panic!("an import's id: {answer}")).to_string();
+    let mut bell = app.events.subscribe();
+    rt.block_on(async {
+        loop {
+            if let Some(done) = app.state.lock().unwrap().imported.clone().filter(|d| d.id == id) {
+                return done;
+            }
+            bell.changed().await.expect("the bus");
+        }
+    })
+}
+
 async fn json_of(app: Arc<App>, req: Request<Body>) -> Value {
     let res = router(AppState { app }).oneshot(req).await.unwrap();
     let status = res.status().as_u16();
@@ -315,7 +330,8 @@ fn test_a_second_import_is_refused_before_its_body_is_read_and_no_body_is_cut_at
     big.push_str(&"\n".repeat(40 * 1024 * 1024));
     let got = rt.block_on(json_of(app.clone(), upload(&app, "big.csv", "", Body::from(big))));
     assert_eq!(got["status"], json!(200), "read whole: {got}");
-    assert_eq!(got["body"]["rows"], json!(0));
+    let done = ended(&rt, &app, &got);
+    assert_eq!(done.report.map(|r| r.rows), Some(0), "{:?}", done.error);
     assert!(!crate::http::model::IMPORTING.load(Ordering::SeqCst), "the slot is given back once the answer has gone");
 }
 
@@ -350,6 +366,8 @@ fn test_every_write_to_the_book_reaches_the_stream() {
     let file = "transaction_date,activity_type,activity_sub_type,account_id,symbol,currency,quantity,unit_price,net_cash_amount\n2026-09-02,Trade,BUY,,ZZIMPORT,CAD,5,2.00,-10\n";
     let got = rt.block_on(json_of(app.clone(), upload(&app, "a.csv", "", Body::from(file))));
     assert_eq!(got["status"], json!(200), "an import: {got}");
+    let done = ended(&rt, &app, &got);
+    assert_eq!(done.report.map(|r| r.added), Some(1), "{:?}", done.error);
     assert!(stamp() > before, "an import reached no stream: {got}");
 }
 
@@ -394,52 +412,65 @@ fn test_an_import_says_how_far_it_has_come_and_stops_when_asked() {
     assert!(app.state.lock().unwrap().importing.is_none(), "no import running");
 }
 
-/// An import whose page went away while its rows were kept (the tab closed, the
-/// request given up) stops at its next row as at Stop, keeping what it kept, and
-/// holds the import's slot and status until it has: it never runs on unseen.
+/// An import runs on as a job once its file has arrived: the upload is answered at
+/// once, a request that then goes (a reverse proxy's timeout, the tab closed) stops
+/// nothing, another import is refused while it reads, and what it did is the status's
+/// `imported` (issue #361; Sharesight and Tradervue take an upload the same way). Stop
+/// still ends it, keeping the rows it kept.
 #[test]
-fn test_an_import_whose_request_is_gone_stops_and_holds_the_slot_until_it_has() {
+fn test_an_import_runs_on_after_its_request_and_says_what_it_did_in_the_status() {
     let _g = crate::tests_common::guard();
     let app = crate::tests_common::app();
     let rt = runtime();
-    let mut file = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
-    for n in 1..=20_000 {
-        file.push_str(&format!("2026-01-02,Buy,ZZGONE,{n},1.00,-{n},USD\n"));
-    }
+    let file = |sym: &str, n: u32| {
+        let mut f = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
+        for k in 1..=n {
+            f.push_str(&format!("2026-01-02,Buy,{sym},{k},1.00,-{k},USD\n"));
+        }
+        f
+    };
     let mut bell = app.events.subscribe();
     bell.borrow_and_update();
-    let a2 = app.clone();
-    let req = upload(&app, "gone.csv", "", Body::from(file));
-    let running = rt.spawn(async move { json_of(a2, req).await });
-    // its rows are being kept: the request goes
-    rt.block_on(async {
-        loop {
-            bell.changed().await.expect("the bus");
-            if app.state.lock().unwrap().importing.as_ref().is_some_and(|i| i.total.is_some()) {
-                return;
-            }
-        }
-    });
-    running.abort();
-    assert!(rt.block_on(running).unwrap_err().is_cancelled());
-    // still reading: another import is refused, its body never read
+    // answered once the file has arrived, before its rows are kept
+    let got = rt.block_on(json_of(app.clone(), upload(&app, "job.csv", "", Body::from(file("ZZJOB", 2_000)))));
+    assert_eq!(got["status"], json!(200), "{got}");
+    let id = got["body"]["id"].as_str().unwrap().to_string();
+    // the request is long gone; while the job reads, another import is refused
     let busy = rt.block_on(json_of(app.clone(), upload(&app, "next.csv", "", Body::from("Date,Action,Symbol,Quantity,Price,Amount\n"))));
-    let ended = app.state.lock().unwrap().importing.is_none();
-    if !ended {
+    if app.state.lock().unwrap().importing.as_ref().is_some_and(|i| i.id == id) {
         assert_eq!(busy, json!({"status": 409, "body": {"ok": false, "error": crate::http::model::IMPORT_BUSY}}));
     }
-    // then it stops, its status gone with it
+    // and it reads every row, its report in the status
+    let done = ended(&rt, &app, &got);
+    let report = done.report.unwrap_or_else(|| panic!("{:?}", done.error));
+    assert_eq!((report.rows, report.added, report.stopped), (2_000, 2_000, false));
+    // a page has shown it: no page says it again, on any device
+    assert!(!done.told);
+    let told = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import/told", Some(json!({"id": id})))));
+    assert_eq!(told["status"], json!(200), "{told}");
+    assert!(app.state.lock().unwrap().imported.as_ref().is_some_and(|d| d.id == id && d.told));
+    assert!(app.state.lock().unwrap().importing.is_none(), "the slot given back");
+    // Stop while the job reads: it ends at its next row, what it kept kept
+    let got = rt.block_on(json_of(app.clone(), upload(&app, "stop.csv", "", Body::from(file("ZZJOBSTOP", 20_000)))));
+    assert_eq!(got["status"], json!(200), "{got}");
     rt.block_on(async {
         loop {
-            if app.state.lock().unwrap().importing.is_none() {
+            if app.state.lock().unwrap().importing.as_ref().is_some_and(|i| i.total.is_some()) || app.state.lock().unwrap().imported.as_ref().is_some_and(|d| Some(d.id.as_str()) == got["body"]["id"].as_str()) {
                 return;
             }
             bell.changed().await.expect("the bus");
         }
     });
-    let kept = app.figures.get().unwrap().book().unwrap().live_records(&bagholder_broker::csv::source()).unwrap().len();
-    assert!(kept > 0 && kept < 20_000, "stopped part way, what it kept kept: {kept}");
+    let stop = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import/stop", None)));
+    assert_eq!(stop["status"], json!(200));
+    let done = ended(&rt, &app, &got);
+    match (done.report, done.error) {
+        (Some(r), _) => assert!(r.stopped && r.rows < 20_000, "stopped part way: {} rows", r.rows),
+        (None, Some(why)) => assert_eq!(why, crate::csv_import::IMPORT_STOPPED),
+        other => panic!("{other:?}"),
+    }
     // and the next import is taken
     let next = rt.block_on(json_of(app.clone(), upload(&app, "next.csv", "", Body::from("Date,Action,Symbol,Quantity,Price,Amount\n"))));
     assert_eq!(next["status"], json!(200), "{next}");
+    ended(&rt, &app, &next);
 }

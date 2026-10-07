@@ -26,14 +26,14 @@ use crate::entries::{contract_of, held_by_symbol, manual_account, Refused};
 use crate::figures::Figures;
 
 /// A row the report names: its line in the file and what it says.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
 pub struct RowNote {
     pub line: u32,
     pub message: String,
 }
 
 /// What one file did.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportReport {
     pub file: String,
@@ -67,6 +67,8 @@ pub struct ImportReport {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct Importing {
+    /// The import's own id, the one `POST /api/import` answered with.
+    pub id: String,
     pub file: String,
     /// Bytes received of the file, and its size where the request states it.
     pub received: u64,
@@ -77,6 +79,29 @@ pub struct Importing {
     /// Rows kept so far, of the file's rows once they are counted.
     pub rows: u64,
     pub total: Option<u64>,
+}
+
+/// An import once it has ended, as the status says it until the next one ends:
+/// its id, its file, and what it did or why nothing of it was kept. It is the
+/// import's answer, carried apart from the request that sent the file, so it
+/// reaches the page whatever happened to that request.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Imported {
+    pub id: String,
+    pub file: String,
+    pub report: Option<ImportReport>,
+    pub error: Option<String>,
+    /// A page has shown it (`POST /api/import/told`): no page says it again.
+    pub told: bool,
+}
+
+/// What `POST /api/import` answers once the file has arrived whole: the import it
+/// started, which runs on as a job (`Importing`, then `Imported`).
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportAccepted {
+    pub id: String,
 }
 
 /// How far an import has come, as it tells the one it reports to.

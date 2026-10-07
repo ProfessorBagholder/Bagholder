@@ -153,23 +153,24 @@ async function importFiles(page: Page, files: { name: string; text: string }[], 
   await (await chooser).setFiles(files.map((f) => ({ name: f.name, mimeType: 'text/csv', buffer: Buffer.from(f.text) })))
 }
 
-test('Import CSV sends each file with the account chosen and reports what its rows did', async ({ page }) => {
+test('Import CSV sends each file with the account chosen and reports what its rows did', async ({ page, request }) => {
   const csv = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
   const sent: { query: Record<string, string>; body: string | null; type: string | undefined }[] = []
   await page.route('**/api/import?*', (route) => {
     const r = route.request()
     // the file goes as it is, its name and account in the query, never wrapped in JSON
     sent.push({ query: Object.fromEntries(new URL(r.url()).searchParams), body: r.postData(), type: r.headers()['content-type'] })
-    return route.fulfill({
-      json: {
-        file: 'trades.csv', layout: 'simple', account: 'Trading', rows: 3, added: 2, unchanged: 1, linked: 1,
-        ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }], ambiguousRows: 1,
-        // the first rows by line, and how many there are
-        problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }], problemRows: 9030,
-      },
-    })
+    // answered once the file has arrived: the job it started
+    return route.fulfill({ json: { id: 'job-1' } })
   })
-  await page.goto('/')
+  // what the job did, as the status says it once the job has ended
+  const report = {
+    file: 'trades.csv', layout: 'simple', account: 'Trading', rows: 3, added: 2, unchanged: 1, linked: 1,
+    ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }], ambiguousRows: 1,
+    // the first rows by line, and how many there are
+    problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }], problemRows: 9030,
+  }
+  await openWithStatus(page, request, { imported: { id: 'job-1', file: 'trades.csv', report, error: null, told: false } })
   await ready(page)
   const m = await figures(page.request)
   const account = m.accounts.find((a: { name: string; brokerAccount: string }) => a.name && a.brokerAccount !== 'manual')
@@ -187,33 +188,55 @@ test('Import CSV sends each file with the account chosen and reports what its ro
   await expect(page.getByRole('heading', { name: 'Import CSV' })).toHaveCount(0)
 })
 
-test('while a file is imported its button says how far it has come, and Stop stops it', async ({ page, request }) => {
-  let release: () => void = () => {}
-  const held = new Promise<void>((r) => (release = r))
+test('while an import runs, the import window says how far it has come, and Stop stops it', async ({ page, request }) => {
   let stopped = false
-  await page.route('**/api/import/stop', (route) => { stopped = true; release(); return route.fulfill({ json: { ok: true } }) })
-  await page.route('**/api/import?*', async (route) => {
-    await held
-    // the requests of the states before the last went with their page
-    return route.fulfill({ status: 409, json: { ok: false, error: 'Stopped: nothing from this file was kept.' } }).catch(() => {})
-  })
-  const csv = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
-  // the header's status while the import runs, as it moves: the file arriving, read
-  // through to check it, then its rows kept of the rows counted
+  await page.route('**/api/import/stop', (route) => { stopped = true; return route.fulfill({ json: { ok: true } }) })
+  // the header's status while an import runs, as it moves: the file arriving, read
+  // through to check it, then its rows kept of the rows counted. A page opened while
+  // one runs shows it too, with Stop: the import is the server's job, not the page's
   const dlg = page.locator('#modalDlg')
   for (const [importing, says] of [
-    [{ file: 'big.csv', received: 500, size: 2000, checked: 0, rows: 0, total: null }, 'Sending big.csv · 25%'],
-    [{ file: 'big.csv', received: 2000, size: 2000, checked: 800, rows: 0, total: null }, 'Checking big.csv · 40%'],
-    [{ file: 'big.csv', received: 2000, size: 2000, checked: 2000, rows: 1240, total: 5000 }, 'Reading big.csv · 1,240 of 5,000 rows'],
+    [{ id: 'job-1', file: 'big.csv', received: 500, size: 2000, checked: 0, rows: 0, total: null }, 'Sending big.csv · 25%'],
+    [{ id: 'job-1', file: 'big.csv', received: 2000, size: 2000, checked: 800, rows: 0, total: null }, 'Checking big.csv · 40%'],
+    [{ id: 'job-1', file: 'big.csv', received: 2000, size: 2000, checked: 2000, rows: 1240, total: 5000 }, 'Reading big.csv · 1,240 of 5,000 rows'],
   ] as const) {
     await openWithStatus(page, request, { importing })
     await ready(page)
-    await importFiles(page, [{ name: 'big.csv', text: csv }])
-    await expect(dlg.getByRole('button', { name: says })).toBeVisible()
+    await openMenu(page)
+    await page.getByText('Import CSV').click()
+    await expect(dlg.getByRole('button', { name: says })).toBeDisabled()
   }
   await dlg.getByRole('button', { name: 'Stop' }).click()
   await expect.poll(() => stopped).toBe(true)
-  await expect(dlg).toContainText('Stopped: nothing from this file was kept.')
+})
+
+test('an import runs on when its page goes, and the next page opened says what it did, once', async ({ browser }) => {
+  // the page sends the file and goes before it hears the answer: the server has the file
+  const first = await browser.newPage()
+  await first.goto('/')
+  await ready(first)
+  let rows = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n'
+  for (let n = 1; n <= 40; n++) rows += `2026-01-06,Buy,ZZZQ,${n},1.00,-${n},USD\n`
+  let delivered: () => void = () => {}
+  const arrived = new Promise<void>((r) => (delivered = r))
+  await first.route('**/api/import?*', async (route) => {
+    await route.fetch()
+    delivered()
+    // never answered: the page is gone first
+  })
+  await importFiles(first, [{ name: 'gone.csv', text: rows }])
+  await arrived
+  await first.close()
+  // the import ran on; the page opened next says what it did
+  const next = await browser.newPage()
+  await next.goto('/')
+  await ready(next)
+  await expect(next.locator('#syncline')).toHaveText('gone.csv · 40 new activities imported')
+  // once: the page after that says nothing of it
+  await next.reload()
+  await ready(next)
+  await expect(next.locator('#syncline')).not.toContainText('gone.csv')
+  await next.close()
 })
 
 test('Import CSV keeps a file\'s rows in the Manual account, and says why a file it cannot read was refused', async ({ page }) => {

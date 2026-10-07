@@ -48,6 +48,8 @@ pub struct Status {
     pub notify: NotifyStatus,
     /// The import running now and how far it has come, for the import window.
     pub importing: Option<crate::csv_import::Importing>,
+    /// The last import that ended: what it did, or why nothing of it was kept.
+    pub imported: Option<crate::csv_import::Imported>,
     /// The language model's file while it downloads, and how far it has come.
     pub model_download: Option<ModelDownload>,
 }
@@ -136,6 +138,7 @@ pub fn status(app: &Arc<App>) -> Status {
         updating: st.updating.clone(),
         update_error: st.update_error.clone(),
         importing: st.importing.clone(),
+        imported: st.imported.clone(),
         model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
     }

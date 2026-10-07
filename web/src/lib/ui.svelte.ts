@@ -5,11 +5,12 @@ import { applied } from './subs.svelte'
 import { sort } from './sort.svelte'
 import { call } from './api'
 import { held, read } from './reads.svelte'
-import { localDay, waiting } from './fmt'
+import { localDay, qty, waiting } from './fmt'
 import { waits } from './dec'
 
 // the server's own types, generated
 import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/model_api'
+import type { Imported } from './generated/status'
 import type { LoginInput } from './generated/session'
 import type { EntryRequest, Kind as DataKind } from './generated/model_api'
 
@@ -311,6 +312,50 @@ export function chooseFiles(): void {
   })
   input.click()
 }
+// An import runs on as a job once its file has arrived (issue #361): the upload is
+// answered with its id, and what it did is the status's `imported`, whatever happens
+// to the request or the page meanwhile.
+const importWaits = new Map<string, (done: Imported) => void>()
+/** The server keeps that a page has shown an import's report, for every page on every device. */
+function told(id: string): void {
+  call('POST /api/import/told', { body: { id } }).then((r) => {
+    // not kept: the next page opened may say the report again, so this one says why
+    if (!r.ok) flash(r.error, 'err')
+  })
+}
+function fileReport(done: Imported): ImportFileReport {
+  return done.report ? { file: done.file, report: done.report } : { file: done.file, error: done.error ?? '' }
+}
+// each import's end is handled once by this page, whatever else makes the effect run
+const handled = new Set<string>()
+$effect.root(() => {
+  $effect(() => {
+    const done = status.data?.imported
+    if (!done || handled.has(done.id)) return
+    const wait = importWaits.get(done.id)
+    if (wait) {
+      handled.add(done.id)
+      importWaits.delete(done.id)
+      told(done.id)
+      wait(done)
+      return
+    }
+    // while this page imports, an end it has not been answered for yet is its own
+    if (ui.busy === 'import' || done.told) return
+    // an import no page has shown (its page went first): said once, here
+    handled.add(done.id)
+    told(done.id)
+    if (ui.modal === 'import') {
+      ui.importReport = { files: [fileReport(done)] }
+    } else if (done.report) {
+      const n = done.report.added
+      flash(`${done.file} · ${qty(n)} new ${n === 1 ? 'activity' : 'activities'} imported${done.report.stopped ? ' (stopped)' : ''}`)
+    } else {
+      flash(`${done.file}: ${done.error ?? ''}`, 'err')
+    }
+  })
+})
+
 async function importFiles(list: FileList | null): Promise<void> {
   const files = Array.from(list || []).filter((f) => /\.csv$/i.test(f.name) && !/^\._/.test(f.name))
   if (!files.length) return
@@ -321,8 +366,16 @@ async function importFiles(list: FileList | null): Promise<void> {
     // a file stopped is the last: the ones after it are not started
     if (importStopped) break
     const r = await call('POST /api/import', { query: { name: file.name, account: ui.importAccount }, body: file })
-    if (!r.ok) report.files.push({ file: file.name, error: r.error })
-    else report.files.push({ file: file.name, report: r })
+    if (!r.ok) {
+      report.files.push({ file: file.name, error: r.error })
+      continue
+    }
+    // its end, from the status: already there, or when it comes
+    const now = status.data?.imported
+    const done = now?.id === r.id ? now : await new Promise<Imported>((resolve) => importWaits.set(r.id, resolve))
+    handled.add(r.id)
+    told(r.id)
+    report.files.push(fileReport(done))
   }
   ui.busy = ''
   ui.importReport = report

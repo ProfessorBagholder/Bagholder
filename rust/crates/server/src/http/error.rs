@@ -26,6 +26,20 @@ pub enum ApiError {
     Internal,
 }
 
+impl ApiError {
+    /// What the page is told: the message its answer would carry.
+    pub fn message(self) -> String {
+        match self {
+            ApiError::BadRequest(m) | ApiError::NotFound(m) | ApiError::Conflict(m) | ApiError::Upstream(m) | ApiError::Failed(m) => m,
+            ApiError::Store(e) => {
+                log(&format!("bagholder: {}", e));
+                "store failed".to_string()
+            }
+            ApiError::Internal => "internal error".to_string(),
+        }
+    }
+}
+
 impl From<rusqlite::Error> for ApiError {
     fn from(e: rusqlite::Error) -> ApiError {
         ApiError::Store(e)
