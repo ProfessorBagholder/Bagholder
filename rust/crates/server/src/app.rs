@@ -102,6 +102,86 @@ impl<T> Drop for WatchedGuard<'_, T> {
     }
 }
 
+/// The clock the app's waits are measured on: the wall clock, which goes on through
+/// a machine's sleep, where every timer an OS offers does not (Linux's monotonic
+/// clock, macOS's awake time and Windows' unbiased interrupt time all stop while the
+/// machine is suspended). A wait measured by the OS would end however long the
+/// machine slept after it was due; measured here, a deadline that passed while the
+/// machine slept is met within `check` of its waking, the same on every device.
+pub struct Wall {
+    /// Added to the system's clock: none outside tests, which move it to stand for
+    /// a machine that slept.
+    offset_ms: std::sync::atomic::AtomicI64,
+    /// How often a wait longer than it looks at the wall clock again, in ms.
+    check_ms: std::sync::atomic::AtomicU64,
+    /// The last time the machine was seen to have slept: from, to.
+    slept: Mutex<Option<(std::time::SystemTime, std::time::SystemTime)>>,
+}
+
+/// How often a long wait looks at the wall clock: a minute, as cron looks for the
+/// jobs that are due (cronie and Vixie cron wake each minute), the established
+/// way a scheduler meets the deadlines a suspend passed over. A deadline that came
+/// due while the machine slept is met at most this long after it wakes.
+pub const WALL_CHECK: Duration = Duration::from_secs(60);
+
+impl Default for Wall {
+    fn default() -> Wall {
+        Wall { offset_ms: std::sync::atomic::AtomicI64::new(0), check_ms: std::sync::atomic::AtomicU64::new(WALL_CHECK.as_millis() as u64), slept: Mutex::new(None) }
+    }
+}
+
+impl Wall {
+    pub fn now(&self) -> std::time::SystemTime {
+        let off = self.offset_ms.load(Ordering::SeqCst);
+        let now = std::time::SystemTime::now();
+        if off >= 0 { now + Duration::from_millis(off as u64) } else { now - Duration::from_millis(off.unsigned_abs()) }
+    }
+
+    pub fn check(&self) -> Duration {
+        Duration::from_millis(self.check_ms.load(Ordering::SeqCst))
+    }
+
+    /// What is left of a wait until `until`, and how long to sleep in the kernel for
+    /// before looking at the clock again; none once it has come.
+    pub fn slice(&self, until: std::time::SystemTime) -> Option<Duration> {
+        let left = until.duration_since(self.now()).ok().filter(|l| !l.is_zero())?;
+        Some(left.min(self.check()))
+    }
+
+    /// A wait of `slice` that began at `before` and ended at `after` on the wall
+    /// clock: where the clock moved on by more than the wait and a check besides,
+    /// the machine was asleep in between, and the log says so once, whichever of
+    /// the waiting threads saw it first.
+    pub fn waited(&self, before: std::time::SystemTime, slice: Duration, after: std::time::SystemTime) {
+        if after.duration_since(before).is_ok_and(|d| d > slice + self.check()) {
+            let mut slept = self.slept.lock().unwrap_or_else(|e| e.into_inner());
+            if slept.is_some_and(|(_, to)| after.duration_since(to).map_or(true, |d| d <= self.check())) {
+                return;
+            }
+            *slept = Some((before + slice, after));
+            let at = |t: std::time::SystemTime| bagholder_core::jiff::Timestamp::try_from(t).map(|t| t.to_string()).unwrap_or_default();
+            log(&format!("bagholder: this machine was asleep from about {} to {}: what came due meanwhile is read now", at(before + slice), at(after)));
+        }
+    }
+
+    /// The last time the machine was seen to have slept.
+    pub fn last_sleep(&self) -> Option<(std::time::SystemTime, std::time::SystemTime)> {
+        *self.slept.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A machine that slept for `d`: the wall clock moves on and no timer does. Tests only.
+    #[cfg(test)]
+    pub fn sleep_through(&self, d: Duration) {
+        self.offset_ms.fetch_add(d.as_millis() as i64, Ordering::SeqCst);
+    }
+
+    /// How often waits look at the clock. Tests only.
+    #[cfg(test)]
+    pub fn set_check(&self, d: Duration) {
+        self.check_ms.store(d.as_millis() as u64, Ordering::SeqCst);
+    }
+}
+
 pub struct App {
     pub home: PathBuf,
     pub root: PathBuf,
@@ -111,6 +191,8 @@ pub struct App {
     pub state: Watched<State>,
     pub stop: AtomicBool,
     stop_bell: (Mutex<()>, std::sync::Condvar),
+    /// The clock every wait is measured on (`Wall`).
+    pub wall: Wall,
     pub exit_code: AtomicI32,
     market: crate::market_context::MarketContext,
     /// The market cache (`market.db`), for the earlier readers' tables it holds
@@ -190,6 +272,7 @@ impl App {
             state: Watched::new(State::default(), events.clone()),
             stop: AtomicBool::new(false),
             stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
+            wall: Wall::default(),
             exit_code: AtomicI32::new(0),
             market: crate::market_context::MarketContext::new(),
             jobs: Mutex::new(HashMap::new()),
@@ -252,16 +335,26 @@ impl App {
         self.stop.load(Ordering::SeqCst)
     }
 
-    /// Wait `d`, or until the app stops: true when it stopped. The thread sleeps in
-    /// the kernel until one or the other -- it does not wake to look. (It used to
-    /// sleep in quarter-second slices to check a flag, and with some seventeen loops
-    /// waiting that was about seventy wake-ups a second from an app doing nothing.)
+    /// Wait `d` by the wall clock (`Wall`), or until the app stops: true when it
+    /// stopped. The thread sleeps in the kernel until one or the other, looking at
+    /// the wall clock again once a minute in a longer wait, so a machine that slept
+    /// through the deadline meets it on waking. The stop wakes it at once. (It used
+    /// to sleep in quarter-second slices to check a flag, and with some seventeen
+    /// loops waiting that was about seventy wake-ups a second from an app doing
+    /// nothing; a minute is one wake-up each for a loop waiting longer than that.)
     pub fn wait(&self, d: Duration) -> bool {
+        let until = self.wall.now() + d;
         let (m, c) = &self.stop_bell;
-        let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        // woken by the stop or by the time running out: either way the answer is whether it stopped
-        let (_g, _timed_out) = c.wait_timeout_while(g, d, |_| !self.stopping()).unwrap_or_else(|e| e.into_inner());
-        self.stopping()
+        let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if self.stopping() {
+                return true;
+            }
+            let Some(slice) = self.wall.slice(until) else { return false };
+            let before = self.wall.now();
+            g = c.wait_timeout_while(g, slice, |_| !self.stopping()).unwrap_or_else(|e| e.into_inner()).0;
+            self.wall.waited(before, slice, self.wall.now());
+        }
     }
 
     /// Stop: every waiter wakes at once.
@@ -455,8 +548,47 @@ pub fn env_on(name: &str) -> bool {
     bagholder_net::switch::switch_on(name)
 }
 
+/// A line said by the app: on stderr, and in its log on disk (`logfile`).
 pub fn log(line: &str) {
     eprintln!("{}", line);
+    crate::logfile::write(line, bagholder_core::jiff::Timestamp::now());
 }
 
 
+
+#[cfg(test)]
+mod wall_tests {
+    use super::*;
+
+    /// A deadline the machine slept through is met when it wakes, on every device:
+    /// the app's waits are measured on the wall clock, which goes on through a
+    /// sleep, where every timer an OS offers stops. Here the wall clock is moved on
+    /// an hour with no time passing, as a machine asleep for that hour sees it.
+    #[test]
+    fn a_wait_whose_deadline_passed_while_the_machine_slept_ends_when_it_wakes() {
+        let home = tempfile::tempdir().unwrap();
+        let app = App::new(home.path().to_path_buf(), home.path().to_path_buf(), "127.0.0.1".into());
+        app.wall.set_check(Duration::from_millis(20));
+        for which in ["wait", "park_until_or"] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let a = app.clone();
+            std::thread::spawn(move || {
+                let hour = Duration::from_secs(3600);
+                let stopped = if which == "wait" { a.wait(hour) } else { a.events.park_until_or(&a, hour, || false) };
+                tx.send(stopped).unwrap();
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "{which}: still waiting, its hour not come");
+            app.wall.sleep_through(Duration::from_secs(3600));
+            let stopped = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("{which}: its deadline passed while the machine slept, and it did not end on waking"));
+            assert!(!stopped, "{which}: the time came; nothing stopped");
+            let (from, to) = app.wall.last_sleep().unwrap_or_else(|| panic!("{which}: the sleep was not seen"));
+            assert!(to.duration_since(from).unwrap() >= Duration::from_secs(3500), "{which}: about the hour slept");
+            *app.wall.slept.lock().unwrap() = None;
+        }
+        // and a stop still ends a wait at once
+        let a = app.clone();
+        let waiting = std::thread::spawn(move || a.wait(Duration::from_secs(3600)));
+        app.request_stop();
+        assert!(waiting.join().unwrap(), "stopped");
+    }
+}

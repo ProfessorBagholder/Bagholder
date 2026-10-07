@@ -6,6 +6,7 @@
 //! `http`.
 
 mod app;
+mod logfile;
 mod carry;
 mod compare;
 mod demo_facts;
@@ -116,6 +117,8 @@ fn serve() -> i32 {
         }
         // one app per data folder: a second start on it is refused, naming the first
         app::hold_home(&home)?;
+        // its log, kept beside its data from here on
+        logfile::start(&home, bagholder_core::jiff::Timestamp::now()).map_err(|e| format!("the log in {} could not be opened: {e}", home.display()))?;
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
         Ok((home, root_dir()?, bind_host, port_choices()?))
