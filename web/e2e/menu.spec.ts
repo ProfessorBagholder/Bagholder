@@ -170,7 +170,7 @@ test('Import CSV sends each file with the account chosen and reports what its ro
     // the first rows by line, and how many there are
     problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }], problemRows: 9030,
   }
-  await openWithStatus(page, request, { imported: { id: 'job-1', file: 'trades.csv', report, error: null } })
+  await openWithStatus(page, request, { imported: { id: 'job-1', file: 'trades.csv', report, error: null, told: false } })
   await ready(page)
   const m = await figures(page.request)
   const account = m.accounts.find((a: { name: string; brokerAccount: string }) => a.name && a.brokerAccount !== 'manual')

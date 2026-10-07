@@ -316,20 +316,12 @@ export function chooseFiles(): void {
 // answered with its id, and what it did is the status's `imported`, whatever happens
 // to the request or the page meanwhile.
 const importWaits = new Map<string, (done: Imported) => void>()
-const SEEN = 'bh2.importSeen'
-function seenImport(): string {
-  try {
-    return localStorage.getItem(SEEN) || ''
-  } catch {
-    return ''
-  }
-}
-function markImportSeen(id: string): void {
-  try {
-    localStorage.setItem(SEEN, id)
-  } catch {
-    // this browser keeps nothing: the import may be said again on the next open
-  }
+/** The server keeps that a page has shown an import's report, for every page on every device. */
+function told(id: string): void {
+  call('POST /api/import/told', { body: { id } }).then((r) => {
+    // not kept: the next page opened may say the report again, so this one says why
+    if (!r.ok) flash(r.error, 'err')
+  })
 }
 function fileReport(done: Imported): ImportFileReport {
   return done.report ? { file: done.file, report: done.report } : { file: done.file, error: done.error ?? '' }
@@ -341,14 +333,14 @@ $effect.root(() => {
     const wait = importWaits.get(done.id)
     if (wait) {
       importWaits.delete(done.id)
-      markImportSeen(done.id)
+      told(done.id)
       wait(done)
       return
     }
     // while this page imports, an end it has not been answered for yet is its own
-    if (ui.busy === 'import' || done.id === seenImport()) return
-    // an import this page did not see end (the page opened since, or another page's): said once
-    markImportSeen(done.id)
+    if (ui.busy === 'import' || done.told) return
+    // an import no page has shown (its page went first): said once, here
+    told(done.id)
     if (ui.modal === 'import') {
       ui.importReport = { files: [fileReport(done)] }
     } else if (done.report) {
@@ -376,7 +368,7 @@ async function importFiles(list: FileList | null): Promise<void> {
     }
     // its end, from the status: already there, or when it comes
     const done = status.data?.imported?.id === r.id ? status.data.imported : await new Promise<Imported>((resolve) => importWaits.set(r.id, resolve))
-    markImportSeen(r.id)
+    told(r.id)
     report.files.push(fileReport(done))
   }
   ui.busy = ''

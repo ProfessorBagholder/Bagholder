@@ -92,6 +92,8 @@ pub struct Imported {
     pub file: String,
     pub report: Option<ImportReport>,
     pub error: Option<String>,
+    /// A page has shown it (`POST /api/import/told`): no page says it again.
+    pub told: bool,
 }
 
 /// What `POST /api/import` answers once the file has arrived whole: the import it

@@ -26,7 +26,11 @@ checked: number,
  */
 rows: number, total: number | null, };
 
-export type Imported = { id: string, file: string, report: ImportReport | null, error: string | null, };
+export type Imported = { id: string, file: string, report: ImportReport | null, error: string | null, 
+/**
+ * A page has shown it (`POST /api/import/told`): no page says it again.
+ */
+told: boolean, };
 
 export type ModelDownload = { received: number, size: number, };
 

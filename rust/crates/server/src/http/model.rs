@@ -21,6 +21,7 @@ pub fn routes() -> Routed {
         get "/api/view" => view;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
+        post "/api/import/told" => import_told;
         post "/api/entries" => entries;
         post "/api/watch/clear" => watch_clear;
     };
@@ -337,7 +338,7 @@ async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, u
         fn drop(&mut self) {
             let mut st = self.0.state.lock().unwrap();
             if let Some((id, file)) = self.1.take() {
-                st.imported = Some(crate::csv_import::Imported { id, file, report: None, error: Some("The import failed part way: the rows it kept stay, and importing the file again goes on from them.".into()) });
+                st.imported = Some(crate::csv_import::Imported { id, file, report: None, error: Some("The import failed part way: the rows it kept stay, and importing the file again goes on from them.".into()), told: false });
             }
             st.importing = None;
             st.import_stop = false;
@@ -427,7 +428,7 @@ async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, u
             Ok(r) => (Some(r), None),
             Err(why) => (None, Some(why)),
         };
-        st.imported = Some(crate::csv_import::Imported { id: job, file: name, report, error });
+        st.imported = Some(crate::csv_import::Imported { id: job, file: name, report, error, told: false });
         st.importing = None;
         st.import_stop = false;
         drop(st);
@@ -436,6 +437,24 @@ async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, u
         drop(done);
     });
     Ok(Json(crate::csv_import::ImportAccepted { id }))
+}
+
+/// `POST /api/import/told`'s body: the import a page has shown the report of.
+#[derive(Debug, Default, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ImportTold {
+    pub id: String,
+}
+
+/// `POST /api/import/told`: a page has shown what the import did, so no page says
+/// it again. Kept by the server, so it holds for every page on every device, never
+/// per browser.
+async fn import_told(State(state): State<AppState>, Body(t): Body<ImportTold>) -> Api<super::OkOr> {
+    let mut st = state.app.state.lock().unwrap();
+    if let Some(done) = st.imported.as_mut().filter(|d| d.id == t.id && !d.told) {
+        done.told = true;
+    }
+    Ok(Json(super::OkOr::ok()))
 }
 
 /// `POST /api/import/stop`: the running import ends at its next row; the rows it kept stay.

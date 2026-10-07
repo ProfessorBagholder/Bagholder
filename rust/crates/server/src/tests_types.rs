@@ -324,7 +324,7 @@ fn model_api_declarations() -> String {
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer,
         crate::http::stream::Resync, crate::http::model::TradesQuery, crate::http::model::ViewQuery, crate::http::model::ViewAnswer,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
-        crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport, crate::csv_import::ImportAccepted,
+        crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport, crate::csv_import::ImportAccepted, crate::http::model::ImportTold,
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
     ];
     let mut out = String::from(
@@ -361,7 +361,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
         "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "WatchRequest" | "WatchStatus" => "model_api",
+        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",

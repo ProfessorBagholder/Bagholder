@@ -444,6 +444,11 @@ fn test_an_import_runs_on_after_its_request_and_says_what_it_did_in_the_status()
     let done = ended(&rt, &app, &got);
     let report = done.report.unwrap_or_else(|| panic!("{:?}", done.error));
     assert_eq!((report.rows, report.added, report.stopped), (2_000, 2_000, false));
+    // a page has shown it: no page says it again, on any device
+    assert!(!done.told);
+    let told = rt.block_on(json_of(app.clone(), from_the_page(&app, Method::POST, "/api/import/told", Some(json!({"id": id})))));
+    assert_eq!(told["status"], json!(200), "{told}");
+    assert!(app.state.lock().unwrap().imported.as_ref().is_some_and(|d| d.id == id && d.told));
     assert!(app.state.lock().unwrap().importing.is_none(), "the slot given back");
     // Stop while the job reads: it ends at its next row, what it kept kept
     let got = rt.block_on(json_of(app.clone(), upload(&app, "stop.csv", "", Body::from(file("ZZJOBSTOP", 20_000)))));
