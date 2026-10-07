@@ -216,7 +216,7 @@ test('an import runs on when its page goes, and the next page opened says what i
   await first.goto('/')
   await ready(first)
   let rows = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n'
-  for (let n = 1; n <= 40; n++) rows += `2026-01-05,Buy,ZZGONE,${n},1.00,-${n},USD\n`
+  for (let n = 1; n <= 40; n++) rows += `2026-01-06,Buy,ZZZQ,${n},1.00,-${n},USD\n`
   let delivered: () => void = () => {}
   const arrived = new Promise<void>((r) => (delivered = r))
   await first.route('**/api/import?*', async (route) => {
