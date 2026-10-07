@@ -326,12 +326,15 @@ function told(id: string): void {
 function fileReport(done: Imported): ImportFileReport {
   return done.report ? { file: done.file, report: done.report } : { file: done.file, error: done.error ?? '' }
 }
+// each import's end is handled once by this page, whatever else makes the effect run
+const handled = new Set<string>()
 $effect.root(() => {
   $effect(() => {
     const done = status.data?.imported
-    if (!done) return
+    if (!done || handled.has(done.id)) return
     const wait = importWaits.get(done.id)
     if (wait) {
+      handled.add(done.id)
       importWaits.delete(done.id)
       told(done.id)
       wait(done)
@@ -340,6 +343,7 @@ $effect.root(() => {
     // while this page imports, an end it has not been answered for yet is its own
     if (ui.busy === 'import' || done.told) return
     // an import no page has shown (its page went first): said once, here
+    handled.add(done.id)
     told(done.id)
     if (ui.modal === 'import') {
       ui.importReport = { files: [fileReport(done)] }
@@ -367,7 +371,9 @@ async function importFiles(list: FileList | null): Promise<void> {
       continue
     }
     // its end, from the status: already there, or when it comes
-    const done = status.data?.imported?.id === r.id ? status.data.imported : await new Promise<Imported>((resolve) => importWaits.set(r.id, resolve))
+    const now = status.data?.imported
+    const done = now?.id === r.id ? now : await new Promise<Imported>((resolve) => importWaits.set(r.id, resolve))
+    handled.add(r.id)
     told(r.id)
     report.files.push(fileReport(done))
   }
