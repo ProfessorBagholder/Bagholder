@@ -6,7 +6,7 @@ import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
-import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportQuery, ImportReport, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
+import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
 import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
@@ -59,7 +59,7 @@ export interface Routes {
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
   'POST /api/entries': { body: EntryRequest; answer: EntryAnswer }
   'POST /api/watch/clear': { answer: WatchStatus }
-  'POST /api/import': { query: ImportQuery; body: Blob; answer: ImportReport }
+  'POST /api/import': { query: ImportQuery; body: Blob; answer: ImportAccepted }
   'POST /api/import/stop': { answer: OkOr }
   'GET /api/watch': { answer: WatchStatus }
   'POST /api/watch': { body: WatchRequest; answer: WatchStatus }

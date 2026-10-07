@@ -153,23 +153,24 @@ async function importFiles(page: Page, files: { name: string; text: string }[], 
   await (await chooser).setFiles(files.map((f) => ({ name: f.name, mimeType: 'text/csv', buffer: Buffer.from(f.text) })))
 }
 
-test('Import CSV sends each file with the account chosen and reports what its rows did', async ({ page }) => {
+test('Import CSV sends each file with the account chosen and reports what its rows did', async ({ page, request }) => {
   const csv = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
   const sent: { query: Record<string, string>; body: string | null; type: string | undefined }[] = []
   await page.route('**/api/import?*', (route) => {
     const r = route.request()
     // the file goes as it is, its name and account in the query, never wrapped in JSON
     sent.push({ query: Object.fromEntries(new URL(r.url()).searchParams), body: r.postData(), type: r.headers()['content-type'] })
-    return route.fulfill({
-      json: {
-        file: 'trades.csv', layout: 'simple', account: 'Trading', rows: 3, added: 2, unchanged: 1, linked: 1,
-        ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }], ambiguousRows: 1,
-        // the first rows by line, and how many there are
-        problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }], problemRows: 9030,
-      },
-    })
+    // answered once the file has arrived: the job it started
+    return route.fulfill({ json: { id: 'job-1' } })
   })
-  await page.goto('/')
+  // what the job did, as the status says it once the job has ended
+  const report = {
+    file: 'trades.csv', layout: 'simple', account: 'Trading', rows: 3, added: 2, unchanged: 1, linked: 1,
+    ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }], ambiguousRows: 1,
+    // the first rows by line, and how many there are
+    problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }], problemRows: 9030,
+  }
+  await openWithStatus(page, request, { imported: { id: 'job-1', file: 'trades.csv', report, error: null } })
   await ready(page)
   const m = await figures(page.request)
   const account = m.accounts.find((a: { name: string; brokerAccount: string }) => a.name && a.brokerAccount !== 'manual')
@@ -214,6 +215,24 @@ test('while a file is imported its button says how far it has come, and Stop sto
   await dlg.getByRole('button', { name: 'Stop' }).click()
   await expect.poll(() => stopped).toBe(true)
   await expect(dlg).toContainText('Stopped: nothing from this file was kept.')
+})
+
+test('an import runs on when its page closes, and the next page opened says what it did, once', async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  let rows = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n'
+  for (let n = 1; n <= 5000; n++) rows += `2026-01-05,Buy,ZZJOB,${n},1.00,-${n},USD\n`
+  await importFiles(page, [{ name: 'job.csv', text: rows }])
+  // its rows are being kept: the page goes
+  await expect(page.locator('#modalDlg').getByRole('button', { name: /^Reading job\.csv/ })).toBeVisible()
+  await page.reload()
+  await ready(page)
+  // the import ran on; the page opened next says what it did
+  await expect(page.locator('#syncline')).toHaveText('job.csv · 5,000 new activities imported', { timeout: 60_000 })
+  // once: the page after that says nothing of it
+  await page.reload()
+  await ready(page)
+  await expect(page.locator('#syncline')).not.toContainText('job.csv')
 })
 
 test('Import CSV keeps a file\'s rows in the Manual account, and says why a file it cannot read was refused', async ({ page }) => {

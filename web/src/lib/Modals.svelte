@@ -19,6 +19,8 @@
   const width = $derived(ui.modal === 'trade' ? 460 : 520)
   const total = (k: 'added' | 'linked' | 'unchanged') => (r?.files ?? []).reduce((n, x) => n + ('report' in x ? x.report[k] : 0), 0)
   const fileLine = (x: FileReport) => (x.stopped ? 'Stopped · ' : '') + x.account + ' · ' + x.layout + ' · ' + qty(x.rows) + ' rows · ' + qty(x.added) + ' new · ' + qty(x.linked) + ' linked · ' + qty(x.unchanged) + ' already stored'
+  // an import running, this page's or one that runs on from before it opened
+  const busy = $derived(ui.busy === 'import' || !!status.data?.importing)
   // how far the import running has come, on its busy button
   const importing = $derived.by(() => {
     const i = status.data?.importing
@@ -109,8 +111,8 @@
           </select>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-          <button class="btn btn-secondary" onclick={() => (ui.busy === 'import' ? stopImport() : closeModal())}>{ui.busy === 'import' ? 'Stop' : 'Cancel'}</button>
-          <button class="btn btn-primary" disabled={ui.busy === 'import'} onclick={chooseFiles}>{#if ui.busy === 'import'}<span class="spin"></span>{importing}{:else}Choose files{/if}</button>
+          <button class="btn btn-secondary" onclick={() => (busy ? stopImport() : closeModal())}>{busy ? 'Stop' : 'Cancel'}</button>
+          <button class="btn btn-primary" disabled={busy} onclick={chooseFiles}>{#if busy}<span class="spin"></span>{importing}{:else}Choose files{/if}</button>
         </div>
       {:else}
         <div style="font-size:12.5px">{r.files.length}{r.files.length === 1 ? ' file' : ' files'} · {qty(total('added'))} new · {qty(total('linked'))} linked · {qty(total('unchanged'))} already stored</div>

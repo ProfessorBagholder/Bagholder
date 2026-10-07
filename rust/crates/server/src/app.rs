@@ -49,6 +49,8 @@ pub struct State {
     pub importing: Option<crate::csv_import::Importing>,
     /// The person asked for the running import to stop.
     pub import_stop: bool,
+    /// The last import that ended, and what it did.
+    pub imported: Option<crate::csv_import::Imported>,
 }
 
 struct Job {

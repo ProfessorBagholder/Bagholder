@@ -195,8 +195,8 @@ fn status_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
-    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\n");
+    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::csv_import::Imported, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
+    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\nimport type { ImportReport } from './model_api'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -324,7 +324,7 @@ fn model_api_declarations() -> String {
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer,
         crate::http::stream::Resync, crate::http::model::TradesQuery, crate::http::model::ViewQuery, crate::http::model::ViewAnswer,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
-        crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport,
+        crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport, crate::csv_import::ImportAccepted,
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
     ];
     let mut out = String::from(
@@ -361,7 +361,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
         "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "WatchRequest" | "WatchStatus" => "model_api",
+        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "WatchRequest" | "WatchStatus" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",

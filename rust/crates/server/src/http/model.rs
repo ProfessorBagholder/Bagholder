@@ -303,12 +303,14 @@ impl Drop for Incoming {
     }
 }
 
-/// `POST /api/import`: the file as it is, its rows kept, and what they did. The file
-/// is written to the data folder as it arrives and read from there a row at a time,
-/// so a file of any size is taken in bounded memory; how far it has come is the
-/// header's status (`importing`), for the import window, and `POST /api/import/stop`
-/// ends it: rows already kept stay, and the answer says the import was stopped.
-async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, upload: super::extract::Upload) -> Api<crate::csv_import::ImportReport> {
+/// `POST /api/import`: the file as it is, then its rows kept as a job. The file is
+/// written to the data folder as it arrives and read from there a row at a time, so a
+/// file of any size is taken in bounded memory. The answer is the import's id, once
+/// the file has arrived whole: the reading then runs on whatever happens to the
+/// request (a reverse proxy's timeout, the tab closed), as Sharesight and Tradervue
+/// run an upload. How far it has come is the status's `importing`, what it did its
+/// `imported`, and `POST /api/import/stop` ends it: rows already kept stay.
+async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, upload: super::extract::Upload) -> Api<crate::csv_import::ImportAccepted> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
     let app = state.app;
@@ -317,25 +319,31 @@ async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, u
     let dir = app.home.join("incoming");
     tokio::fs::create_dir_all(&dir).await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
     let incoming = Incoming(dir.join(format!("{}.csv", crate::app::uuid4())));
+    let id = crate::app::uuid4();
     {
         let mut st = app.state.lock().unwrap();
-        // a reading whose request is gone still runs until it stops: the slot is its too
+        // a job still reading holds the slot past its request
         if st.importing.is_some() {
             return Err(ApiError::Conflict(IMPORT_BUSY.into()));
         }
         st.import_stop = false;
-        st.importing = Some(crate::csv_import::Importing { file: name.clone(), received: 0, size: upload.size, checked: 0, rows: 0, total: None });
+        st.importing = Some(crate::csv_import::Importing { id: id.clone(), file: name.clone(), received: 0, size: upload.size, checked: 0, rows: 0, total: None });
     }
-    // gone with the import, whichever way it ends
-    struct Done(std::sync::Arc<crate::app::App>);
+    // the slot given back with the import, whichever way it ends: the request's while
+    // the file arrives, the job's once it reads. A job that ends without saying what
+    // it did (it panicked) says that, so nothing waits on it for ever
+    struct Done(std::sync::Arc<crate::app::App>, Option<(String, String)>);
     impl Drop for Done {
         fn drop(&mut self) {
             let mut st = self.0.state.lock().unwrap();
+            if let Some((id, file)) = self.1.take() {
+                st.imported = Some(crate::csv_import::Imported { id, file, report: None, error: Some("The import failed part way: the rows it kept stay, and importing the file again goes on from them.".into()) });
+            }
             st.importing = None;
             st.import_stop = false;
         }
     }
-    let done = Done(app.clone());
+    let mut done = Done(app.clone(), None);
     let mut out = tokio::fs::File::create(&incoming.0).await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
     let mut stream = upload.body.into_data_stream();
     let mut received: u64 = 0;
@@ -362,27 +370,19 @@ async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, u
     }
     out.flush().await.map_err(|e| ApiError::Failed(format!("The file could not be received: {e}")))?;
     drop(out);
+    // nothing arrived: refused now, with the request, as a file that cannot be read
+    if received == 0 {
+        return Err(ApiError::BadRequest("the file is empty".into()));
+    }
     // the whole file arrived: what it is checked against
     if let Some(i) = app.state.lock().unwrap().importing.as_mut() {
         i.received = received;
     }
-    // the page gone before the rows are kept (the tab closed, the request given up):
-    // the import stops at its next row, as at Stop, and says so in the status until then
-    struct Abandoned(std::sync::Arc<crate::app::App>);
-    impl Drop for Abandoned {
-        fn drop(&mut self) {
-            // under the lock the reading's end clears it under: a reading over is never told to stop
-            let mut st = self.0.state.lock().unwrap();
-            if st.importing.is_some() {
-                st.import_stop = true;
-            }
-        }
-    }
-    let _abandoned = Abandoned(app.clone());
     let a2 = app.clone();
-    blocking(move || -> Result<crate::csv_import::ImportReport, ApiError> {
-        // the status is the reading's now: it goes when the reading ends, not the request
-        let _done = done;
+    let job = id.clone();
+    done.1 = Some((id.clone(), name.clone()));
+    // the reading, as a job of its own: nothing waits on it, and its end is the status's
+    tokio::task::spawn_blocking(move || {
         let path = incoming.0.clone();
         let open = || std::fs::File::open(&path).map(|f| Box::new(std::io::BufReader::new(f)) as Box<dyn std::io::BufRead>);
         let mut said: Option<(bool, u64)> = None;
@@ -413,16 +413,29 @@ async fn import(State(state): State<AppState>, Params(q): Params<ImportQuery>, u
             }
             crate::csv_import::Go::On
         };
-        let r = match crate::csv_import::import_from(open_figures(&a2)?, &name, &open, account, bagholder_core::jiff::Timestamp::now(), &mut progress) {
-            // stopped before a row was kept: refused as a stop while the file arrives is
-            Err(crate::entries::Refused::Entry(why)) if why == crate::csv_import::IMPORT_STOPPED => Err(ApiError::Conflict(why)),
-            other => other.map_err(refused),
+        let outcome = match open_figures(&a2) {
+            Ok(f) => crate::csv_import::import_from(f, &name, &open, account, bagholder_core::jiff::Timestamp::now(), &mut progress).map_err(|e| match e {
+                crate::entries::Refused::Entry(why) => why,
+                other => refused(other).message(),
+            }),
+            Err(e) => Err(e.message()),
         };
         drop(incoming);
-        r
-    })
-    .await?
-    .map(Json)
+        // what it did, said with the slot given back, in one write
+        let mut st = a2.state.lock().unwrap();
+        let (report, error) = match outcome {
+            Ok(r) => (Some(r), None),
+            Err(why) => (None, Some(why)),
+        };
+        st.imported = Some(crate::csv_import::Imported { id: job, file: name, report, error });
+        st.importing = None;
+        st.import_stop = false;
+        drop(st);
+        let mut done = done;
+        done.1 = None;
+        drop(done);
+    });
+    Ok(Json(crate::csv_import::ImportAccepted { id }))
 }
 
 /// `POST /api/import/stop`: the running import ends at its next row; the rows it kept stay.

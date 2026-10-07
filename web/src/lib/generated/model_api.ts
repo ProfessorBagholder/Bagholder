@@ -120,6 +120,8 @@ problems: Array<RowNote>, problemRows: number,
  */
 stopped: boolean, };
 
+export type ImportAccepted = { id: string, };
+
 export type WatchRequest = { path: string, account: string, };
 
 export type WatchStatus = { path: string, watching: boolean, 
