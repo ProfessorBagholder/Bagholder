@@ -9,7 +9,7 @@ Nothing open. The owner ruled on 2026-10-04 that these are not matters of prefer
 Each of the nine required changes, and where it lands:
 1. **Fees are in the average** (cost includes the commission, as at the CRA and IBKR): Approach §6; an engine case with a commission on a buy.
 2. **One place changes lots, and the average is derived there**: Approach §6. There is no second running figure. An invariant test runs over generated sequences (transfers, splits, return of capital, stock dividends, option expiry and assignment, a short). Cases cover a short's average (what it brought in) and an option's (premium per contract).
-3. **A holding transferred between accounts keeps the journal's cost**: `SPEC.md` §1 says so, and the broker-book acceptance check is scoped to holdings with no transferred-in lot. A mismatch on a transferred holding does not trigger the Right to refuse.
+3. **A transfer keeps its cost within one tax class and is a disposition at the stated value across two** (brief 20 item 3, corrected 2026-10-08): `SPEC.md` §2 Moves between your accounts states the rule with its sources; the engine's cases cover each pair of classes, with and without a stated value; the broker-book acceptance check holds for every holding, transferred or not.
 4. **The broker's stated book value is read and stored**: Approach §6. `wealthsimple/src/read.rs` and `broker/src/pull.rs` keep it, strictly. No new header sentence.
 5. **Realized (FIFO) and unrealized (average cost) do not sum for a partly sold position**: `SPEC.md` says so. Every screen and export is checked for such a sum. There is a property test: for any sequence that ends flat, Σ realized under FIFO = Σ realized at average cost.
 6. **Decision 7's basis is stated as it is**: the owner's rule, not the category. See *How the leading products do it* and `SPEC.md`.
@@ -46,7 +46,7 @@ Out of scope:
 
 Carried over, and why it is right:
 - **FIFO for trades' P&L.** Tradervue: "Realized P&L calculations use a First-in, First-out (FIFO) methodology" (help.tradervue.com/article/3437, read 2026-10-04); TradeZella recommends FIFO (help.tradezella.com/en/articles/6826141).
-- **Lots moving between accounts with their cost and dates** (`ledger.rs` `apply_transfer`). It is the same round trip, as a journal keeps it; the broker resets the cost, and the journal deliberately does not.
+- **Lots moving between accounts with their cost and dates** (`ledger.rs` `apply_transfer`), between accounts of one tax class only: across two, the sending trade closes at the move's stated value and the receiving account opens a trade at it (`dispose`), as the CRA and every Canadian broker treat it.
 - **CAD totals**, by the owner's rule.
 
 ## How the leading products do it
@@ -59,7 +59,7 @@ Every source was read on 2026-10-04.
 - CRA, identical properties: the average is the total cost, acquisition expenses included, over the number owned.
 - IBKR TWS: average price = "your cost (execution price + commission)" over the position (ibkrguides.com/tws/usersguidebook/realtimeactivitymonitoring/profitloss.htm).
 - Sharesight (Canada): "'Adjusted Cost Base' sale allocation method".
-- On a transfer between accounts, Wealthsimple resets the cost: "the asset's book cost in the new account is updated to reflect its current market value" (24667492921883). The journal keeps the lots' own cost (above).
+- On a transfer between accounts, Wealthsimple keeps the book cost between accounts of the same type and resets it to market value across the registered boundary (24667492921883); the journal does the same (above; sources in `SPEC.md` §2).
 
 **7. Win or loss: the category does not settle it.**
 - Tradervue: "the reports will use the converted P&L in the base currency to aggregate and compare performance across all trades" (help.tradervue.com/article/3425). No journal documents scoring in the trade's own currency.
@@ -84,7 +84,7 @@ None.
 - A short's average is what it brought in. An option's is the premium per contract.
 - `positions.rs`: Avg = total cost ÷ (units × multiplier); Book = total cost; P&L = Market − Book.
 - `SPEC.md` §1 Position re-defines Avg cost and Book, and says:
-  - a transferred holding keeps the journal's cost, not the broker's reset;
+  - a holding transferred within one tax class keeps its cost, and one transferred across two costs its stated value that day;
   - a partly sold position's realized (FIFO, the trade) and unrealized (average cost, the holding) figures are each the category's own and are not added together.
 - The broker's stated book value is read strictly. Which of `bookValue` and `marketBookValue` is the cost, and in which currency, is settled from the recorded replies in `wealthsimple/tests`. It is stored in the statements table's existing column.
 
@@ -128,7 +128,7 @@ None.
   - for every sequence that ends flat, Σ realized FIFO = Σ realized at average cost.
 - [ ] One test over every filter state: the Dashboard's win and loss counts equal the Trades list's lengths under Result = Win and Result = Loss.
 - [ ] Wealthsimple's book value is read and stored (a reply test).
-- [ ] On a copy of the owner's book, Avg = the stated book value ÷ units, for every partly sold holding with no transferred-in lot.
+- [ ] On a copy of the owner's book, Avg = the stated book value ÷ units, for every partly sold holding.
 - [ ] No screen or export adds a trade's realized P&L to a holding's unrealized P&L (checked by reading every place both are shown).
 - [ ] Browser test: Portfolio under a past range shows the end day's positions and figures, and `—` for margin.
 - [ ] States and screenshots at 1200, 1340, 1440 and 1680 px.
@@ -145,7 +145,7 @@ None.
 
 ## Right to refuse
 
-If Wealthsimple's stated book value disagrees with average cost on a holding with no transferred-in lot, stop and report that holding.
+If Wealthsimple's stated book value disagrees with average cost on a holding, stop and report that holding.
 
 ## Anti-stub self-check
 

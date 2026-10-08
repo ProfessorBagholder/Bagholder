@@ -74,6 +74,10 @@ pub enum Gap {
     /// A margin account whose buying power its broker has not stated yet (it is
     /// read with the balances): what can be borrowed waits on it.
     BuyingPowerUnread(bagholder_core::AccountId),
+    /// A holding moved to or from an account of a type Bagholder does not know:
+    /// whether the move kept its cost or sold and bought it again at its value
+    /// that day turns on the type.
+    RegistrationUnknown(bagholder_core::AccountId),
     /// Arithmetic that could not be done exactly (a figure too large to hold),
     /// or a record whose amounts contradict themselves.
     Arithmetic(String),
@@ -105,6 +109,7 @@ impl Gap {
             Gap::ScheduleUnstated(_) => "schedule-unstated",
             Gap::FormUnstated(_) => "form-unstated",
             Gap::BuyingPowerUnread(_) => "buying-power-unread",
+            Gap::RegistrationUnknown(_) => "registration-unknown",
             Gap::Arithmetic(_) => "arithmetic",
         }
     }
@@ -135,6 +140,7 @@ impl fmt::Display for Gap {
             Gap::ScheduleUnstated(i) => write!(f, "no source that can be read states how often {i} pays"),
             Gap::FormUnstated(i) => write!(f, "whether {i}'s latest distribution is paid in cash or in units is not stated, and its payment has not posted"),
             Gap::BuyingPowerUnread(a) => write!(f, "what account {a} can borrow has not been read"),
+            Gap::RegistrationUnknown(a) => write!(f, "account {a} is of a type Bagholder does not know, so whether a holding moved with it kept its cost is not known"),
             Gap::Arithmetic(why) => write!(f, "{why}"),
         }
     }
