@@ -499,49 +499,86 @@ fn a_move_into_or_out_of_staking_states_the_units_it_moved_and_moves_none() {
     assert_eq!(d.paid_on, text(&row, "assetQuantity").map(|q| dec(q).abs()), "the units it moved");
 }
 
-#[test]
-fn a_move_of_one_holding_keeps_the_value_its_row_states() {
-    // the recorded move, its positions made to show one holding moving: ten
-    // units of the fund leave the other account and arrive in this one, and
-    // no cash moves with them
+/// The recorded move, its positions made to show ten units of the fund leaving
+/// the other account and arriving in this one, with no cash, and the book cost
+/// Wealthsimple states either side: the sending account's `sent` before (nothing
+/// after), the receiving account's `held` before and `after` after. The fund's
+/// record says it trades in `currency`; the row states its amount in `row_currency`.
+fn holding_moved(sent: &str, held: &str, after: &str, currency: &str, row_currency: &str) -> Mapped {
     let mut v = asset_movement_record();
-    let amount = dec(Node::root(&v).obj("activity").unwrap().text("amount").unwrap());
     edit(&mut v, "positions", |p| {
         let Value::Array(list) = p else { panic!() };
-        let fund = list.iter().find_map(|x| match Node::root(x).list("nodes").unwrap().into_iter().find(|n| n.obj("security").unwrap().text("id").unwrap().starts_with("sec-s-")) {
-            Some(n) => Some(n.value().clone()),
-            None => None,
-        }).expect("the fund's position");
-        let with_qty = |q: &str| {
+        let fund = list.iter().find_map(|x| Node::root(x).list("nodes").unwrap().into_iter().find(|n| n.obj("security").unwrap().text("id").unwrap().starts_with("sec-s-")).map(|n| n.value().clone())).expect("the fund's position");
+        let at = |q: &str, cost: &str| {
             let mut n = fund.clone();
             if let Value::Object(m) = &mut n {
                 m.insert("quantity".into(), Value::String(q.into()));
+                m.insert("bookValue".into(), Value::Object([("amount".to_string(), Value::String(cost.into())), ("currency".to_string(), Value::String("CAD".into()))].into()));
             }
             n
         };
         for day in list.iter_mut() {
             let (account, d) = (Node::root(day).text("account").unwrap().to_string(), Node::root(day).text("day").unwrap().to_string());
             let nodes = match (account.as_str(), d.as_str()) {
-                ("anon-resp-1", "2025-07-03") => vec![with_qty("10")],
+                ("anon-resp-1", "2025-07-03") => vec![at("10", sent)],
                 ("anon-resp-1", _) => vec![],
-                (_, "2025-07-03") => vec![with_qty("199.2845")],
-                _ => vec![with_qty("209.2845")],
+                (_, "2025-07-03") => vec![at("199.2845", held)],
+                _ => vec![at("209.2845", after)],
             };
             if let Value::Object(m) = day {
                 m.insert("nodes".into(), Value::Array(nodes));
             }
         }
     });
+    edit(&mut v, "activity", |a| {
+        if let Value::Object(m) = a {
+            m.insert("currency".into(), Value::String(row_currency.into()));
+        }
+    });
     // the fund's record, read with the move as a pull reads it for what moved
     let securities = json::parse(&std::fs::read_to_string(fixtures().join("edited-securities.json")).unwrap()).unwrap();
-    let fund = Node::root(&securities).obj("data").unwrap().list("securities").unwrap().into_iter().find(|x| x.text("id").unwrap() == "sec-s-ea6bdb7971df48bb897aae6744c50527").unwrap().value().clone();
+    let mut fund = Node::root(&securities).obj("data").unwrap().list("securities").unwrap().into_iter().find(|x| x.text("id").unwrap() == "sec-s-ea6bdb7971df48bb897aae6744c50527").unwrap().value().clone();
+    if let Value::Object(m) = &mut fund {
+        m.insert("currency".into(), Value::String(currency.into()));
+    }
     if let Value::Object(m) = &mut v {
         m.insert("securities".into(), Value::Object([("sec-s-ea6bdb7971df48bb897aae6744c50527".to_string(), fund)].into()));
     }
-    let m = map_payload(&v);
-    assert!(m.problems.is_empty(), "{:?}", m.problems);
-    assert_eq!(m.legs.len(), 1, "{:?}", m.legs);
-    let d = &m.legs[0];
-    assert_eq!((d.kind, d.quantity), (Kind::TransferIn, Some(dec("10"))));
-    assert_eq!(d.value, Some(bagholder_core::Money::new(amount, Currency::CAD)), "what the move was worth, as its row states it");
+    map_payload(&v)
+}
+
+/// A holding moved in from another of the person's accounts carries the cost
+/// Wealthsimple gave it there (`SPEC.md` §2, Moves between your accounts): kept
+/// where the cost that arrived is the cost that left; reset where it is not, to
+/// the cost Wealthsimple states in the holding's own currency; and where it
+/// states it only in another, the row's amount in the holding's currency, else
+/// said as a problem, never converted at a rate Wealthsimple did not state.
+#[test]
+fn a_holding_moved_in_carries_the_cost_wealthsimple_gave_it_there() {
+    let cad = |a: &str| bagholder_core::Money::new(dec(a), Currency::CAD);
+    let the_move = |m: &Mapped| {
+        assert_eq!(m.legs.len(), 1, "{:?} {:?}", m.legs, m.problems);
+        let d = m.legs[0].clone();
+        assert_eq!((d.kind, d.quantity), (Kind::TransferIn, Some(dec("10"))));
+        d
+    };
+    // kept: 120 left, 120 arrived
+    let kept = holding_moved("120", "1000", "1120", "CAD", "CAD");
+    assert!(kept.problems.is_empty(), "{:?}", kept.problems);
+    assert_eq!(the_move(&kept).value, None, "the units keep their own cost");
+    // reset: 120 left, 150 arrived
+    let reset = holding_moved("120", "1000", "1150", "CAD", "CAD");
+    assert!(reset.problems.is_empty(), "{:?}", reset.problems);
+    assert_eq!(the_move(&reset).value, Some(cad("150")));
+    // a US holding whose cost Wealthsimple states in CAD: kept is still told
+    let kept_usd = holding_moved("120", "1000", "1120", "USD", "CAD");
+    assert!(kept_usd.problems.is_empty() && the_move(&kept_usd).value.is_none());
+    // reset, and the row states the move's amount in USD: that is its cost
+    let reset_usd = holding_moved("120", "1000", "1150", "USD", "USD");
+    let amount = dec(Node::root(&asset_movement_record()).obj("activity").unwrap().text("amount").unwrap());
+    assert_eq!(the_move(&reset_usd).value, Some(bagholder_core::Money::new(amount, Currency::USD)));
+    // reset, and nothing states it in USD: said, and no cost made up
+    let unstated = holding_moved("120", "1000", "1150", "USD", "CAD");
+    assert_eq!(the_move(&unstated).value, None);
+    assert_eq!(unstated.problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), ["moved-cost-unstated"]);
 }

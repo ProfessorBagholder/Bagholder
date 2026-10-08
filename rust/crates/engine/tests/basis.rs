@@ -1,7 +1,6 @@
 //! A holding's average cost (`SPEC.md` §2 Position, Book; brief 20 §2 and §5),
 //! held over generated books: purchases and sales with commissions, shorts,
-//! moves between the person's accounts (within one tax class and across two),
-//! splits, stock dividends, returns of
+//! moves between the person's accounts, splits, stock dividends, returns of
 //! capital, spin-offs, and option contracts written, bought, expired, assigned
 //! and exercised.
 //!
@@ -65,10 +64,6 @@ fn generate(seed: u64) -> Value {
     let mut short_z: i64 = 0;
     let mut written: i64 = 0;
     let mut bought_put: i64 = 0;
-    // the second account's plan, any of them: a move between the two keeps its
-    // cost within one tax class and is a sale and a purchase at its stated
-    // value across two (`SPEC.md` §2, Moves between your accounts)
-    let b_registration = ["none", "tfsa", "resp", "rrsp", "group-rrsp", "rrif", "fhsa", "lira"][r.below(8) as usize];
     let steps = 6 + r.below(30);
     let mut day = 0u32;
     for n in 0..steps {
@@ -136,8 +131,7 @@ fn generate(seed: u64) -> Value {
                 let to = if acct == "A" { "B" } else { "A" };
                 let out = format!("{id}o");
                 let inn = format!("{id}i");
-                let worth = Dec::parse(&r.cents(5, 80)).unwrap().checked_mul(Dec::from_int(q)).unwrap();
-                tx.push(json!({"id": out, "account": acct, "day": date, "at": at(0), "kind": "transfer-out", "instrument": "X", "qty": (-q).to_string(), "value": worth.to_text()}));
+                tx.push(json!({"id": out, "account": acct, "day": date, "at": at(0), "kind": "transfer-out", "instrument": "X", "qty": (-q).to_string()}));
                 tx.push(json!({"id": inn, "account": to, "day": date, "at": at(1), "kind": "transfer-in", "instrument": "X", "qty": q.to_string()}));
                 links.push(json!({"out": out, "in": inn}));
                 *held.get_mut(acct).unwrap() -= q;
@@ -208,7 +202,7 @@ fn generate(seed: u64) -> Value {
     }
     json!({
         "today": "2029-12-31",
-        "accounts": [{"id": "A", "kind": "margin"}, {"id": "B", "registration": b_registration}],
+        "accounts": [{"id": "A", "kind": "margin"}, {"id": "B"}],
         "instruments": [
             {"id": "X"}, {"id": "Y"}, {"id": "Z"},
             {"id": "C", "kind": "option", "underlying": "X", "expiry": "2030-06-21", "strike": "50", "right": "call", "multiplier": "100"},
