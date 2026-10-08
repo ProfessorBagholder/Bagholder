@@ -28,4 +28,5 @@ Read from any checkout without switching branches:
 | 17 | [The reserved-cash plan resubmitted (#339): Go with changes](17-reserved-cash-resubmitted.md) | Current; source question settled by 18 |
 | 18 | [The reserved-cash plan at eb7a0f05: no objection to the source, one addition](18-reserved-cash-source.md) | Current |
 | 19 | [Verdict on the stage 1 plan, the money (#348): Go with changes](19-stage-money-verdict.md) | Current |
-| 20 | [Verdict on the figures plan (#355): Go with changes](20-figures-category-verdict.md) | Current |
+| 20 | [Verdict on the figures plan (#355): Go with changes](20-figures-category-verdict.md) | Current; item 3 corrected 2026-10-08, sources in [20/](20/) |
+| 21 | [Verdict on the Stage P plan (capacity test and the process stage): Go with changes](21-stage-p-verdict.md) | Current |
