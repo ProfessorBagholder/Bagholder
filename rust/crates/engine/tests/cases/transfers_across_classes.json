@@ -1,0 +1,1109 @@
+[
+  {
+    "name": "a holding moved from a non-registered account into a TFSA closes there at the value the transfer-out row states and opens a deposited trade of its own in the TFSA",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is not registered, T is a TFSA: two tax classes, so the move is a disposition at what the holding was worth, never a carry of cost.",
+      "t1 buys 10 X in A for 100 (10 each, no commission) on 2026-01-05.",
+      "t2/t3 (linked) move all 10 from A to T on 2026-02-02. No cost is stated by the person; the transfer-out row t2 states the value 150 (CAD, the instrument's currency): what it was worth = 150, 15 a unit.",
+      "Sending trade (opened by t1): closes on the move's day 2026-02-02 at 150. Qty = 10 opened; Entry = 100/10 = 10; Exit = 150/10 = 15; P&L = (15 - 10) x 10 = 50.00; P&L % = 50/100 = 0.5; Hold = 2026-01-05 to 2026-02-02 = 26 + 2 = 28 days. CAD trade: P&L (CAD) = 50.00. Nothing in SPEC marks the sending side: no flags.",
+      "Receiving trade (opened by t3, its own round trip, the dates not carried): opens 2026-02-02 at 150, flagged deposited. t4 sells the 10 in T for 180 on 2026-03-02: Entry 15, Exit 18, P&L = 180 - 150 = 30.00; P&L % = 30/150 = 0.2; Hold 2026-02-02 to 2026-03-02 = 28 days.",
+      "Two trades, both closed; nothing left held. KPI with no filter: realized = 50 + 30 = 80.00 over 2 closed trades, both wins."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "none"
+      },
+      {
+        "id": "T",
+        "kind": "cash",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "150"
+      },
+      {
+        "id": "t3",
+        "account": "T",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      },
+      {
+        "id": "t4",
+        "account": "T",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "180"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "opened": "2026-01-05",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "entry": "10",
+          "exit": "15",
+          "pnl": "50.00",
+          "pnl_cad": "50.00",
+          "pnl_pct": 0.5,
+          "hold_days": 28,
+          "flags": []
+        },
+        {
+          "opened_by": "t3",
+          "opened": "2026-02-02",
+          "closed": "2026-03-02",
+          "qty": "10",
+          "entry": "15",
+          "exit": "18",
+          "pnl": "30.00",
+          "pnl_cad": "30.00",
+          "pnl_pct": 0.2,
+          "hold_days": 28,
+          "flags": [
+            "deposited"
+          ]
+        }
+      ],
+      "position_count": 0,
+      "kpi": {
+        "realized": "80.00",
+        "count": 2,
+        "wins": 2,
+        "losses": 0
+      }
+    }
+  },
+  {
+    "name": "a holding moved out of a TFSA into a non-registered account takes the value the transfer-in row states, a loss on the sending side",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "T is a TFSA, A is not registered: two classes.",
+      "t1 buys 20 X in T for 200 (10 each) on 2026-01-05.",
+      "t2 (T, out) / t3 (A, in), linked, move all 20 on 2026-02-02. The out row states no value; the in row t3 states 160: either side's row counts, so what it was worth = 160, 8 a unit.",
+      "Sending trade t1: closes 2026-02-02. Entry 10, Exit 8, P&L = (8 - 10) x 20 = -40.00; P&L % = -40/200 = -0.2; Hold 28 days. No flags.",
+      "Receiving trade t3: opens 2026-02-02 at 160, deposited. t4 sells the 20 in A for 170 on 2026-03-02: Exit 8.5, P&L = 170 - 160 = 10.00; P&L % = 10/160 = 0.0625; Hold 28 days.",
+      "KPI: realized = -40 + 10 = -30.00; 2 closed trades, 1 win, 1 loss."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "T",
+        "kind": "cash",
+        "registration": "tfsa"
+      },
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "none"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "T",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "20",
+        "cash": "-200"
+      },
+      {
+        "id": "t2",
+        "account": "T",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-20"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "20",
+        "value": "160"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-20",
+        "cash": "170"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "20",
+          "entry": "10",
+          "exit": "8",
+          "pnl": "-40.00",
+          "pnl_pct": -0.2,
+          "hold_days": 28,
+          "flags": []
+        },
+        {
+          "opened_by": "t3",
+          "opened": "2026-02-02",
+          "closed": "2026-03-02",
+          "qty": "20",
+          "entry": "8",
+          "exit": "8.5",
+          "pnl": "10.00",
+          "pnl_pct": 0.0625,
+          "hold_days": 28,
+          "flags": [
+            "deposited"
+          ]
+        }
+      ],
+      "position_count": 0,
+      "kpi": {
+        "realized": "-30.00",
+        "count": 2,
+        "wins": 1,
+        "losses": 1
+      }
+    }
+  },
+  {
+    "name": "a holding moved from an RRSP into a TFSA crosses two registered classes: the RRSP's trade closes at the stated value, commission in, and the TFSA holds it at that value",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "R is an RRSP (the deferred plans' class), T a TFSA: two classes, both registered.",
+      "t1 buys 10 X in R on 2026-01-05: cash -205 with a 5 commission, so 200 for the units (20 each) and 5 commission; cost 205.",
+      "t2/t3 (linked) move all 10 to T on 2026-02-02; the out row states 250: worth 250, 25 a unit.",
+      "Sending trade t1: closes 2026-02-02. Entry 20, Exit 25; P&L = (25 - 20) x 10 - 5 entry commission = 45.00 (= 250 - 205); P&L % = 45 / (20 x 10) = 0.225; Hold 28 days. No flags.",
+      "Receiving trade t3: opens 2026-02-02 at 250, deposited, not sold: open, Qty 10, Entry 25, P&L 0.00 (nothing realized), Hold 2026-02-02 to today 2026-03-02 = 28 days.",
+      "Position T X: Qty 10, Book = 250.00 (the value it moved at, §4 Book), Avg = 250/10 = 25. R holds nothing: one position."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "R",
+        "kind": "cash",
+        "registration": "rrsp"
+      },
+      {
+        "id": "T",
+        "kind": "cash",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "R",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-205",
+        "fee": "5"
+      },
+      {
+        "id": "t2",
+        "account": "R",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "250"
+      },
+      {
+        "id": "t3",
+        "account": "T",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "entry": "20",
+          "exit": "25",
+          "pnl": "45.00",
+          "pnl_pct": 0.225,
+          "hold_days": 28,
+          "flags": []
+        },
+        {
+          "opened_by": "t3",
+          "opened": "2026-02-02",
+          "closed": "open",
+          "qty": "10",
+          "entry": "25",
+          "pnl": "0.00",
+          "hold_days": 28,
+          "flags": [
+            "deposited"
+          ]
+        }
+      ],
+      "position_count": 1,
+      "positions": [
+        {
+          "account": "T",
+          "instrument": "X",
+          "qty": "10",
+          "book": "250.00",
+          "avg": "25",
+          "opened_by": "t3"
+        }
+      ]
+    }
+  },
+  {
+    "name": "a whole holding moved from an RRSP to a RRIF, one tax class, keeps its trade and cost and ignores the value a row states",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is an RRSP, B is a RRIF: the same tax class (the deferred plans: RRSP, group RRSP, RRIF, FHSA, LIRA), so the move is neither a sale nor a buy.",
+      "t1 buys 10 X in A for 100 on 2026-01-05; t2/t3 (linked) move all 10 to B on 2026-01-10. The out row states a value of 130: within one class a stated value plays no part, the cost 100 and the day 2026-01-05 move with the units.",
+      "t4 sells the 10 in B for 150 on 2026-02-01: one trade opened by t1, P&L = 150 - 100 = 50.00, held 2026-01-05 to 2026-02-01 = 27 days, as the same-account-class case in coins_and_transfers.json (flag transferred, as that case asserts); no deposited trade."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "rrsp"
+      },
+      {
+        "id": "B",
+        "kind": "cash",
+        "registration": "rrif"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-10",
+        "at": "2026-01-10T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "130"
+      },
+      {
+        "id": "t3",
+        "account": "B",
+        "day": "2026-01-10",
+        "at": "2026-01-10T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      },
+      {
+        "id": "t4",
+        "account": "B",
+        "day": "2026-02-01",
+        "at": "2026-02-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "opened": "2026-01-05",
+          "closed": "2026-02-01",
+          "qty": "10",
+          "entry": "10",
+          "exit": "15",
+          "pnl": "50.00",
+          "hold_days": 27,
+          "flags": [
+            "transferred"
+          ]
+        }
+      ],
+      "position_count": 0
+    }
+  },
+  {
+    "name": "a whole holding moved from an RRSP to an FHSA, one tax class, keeps its trade and cost and ignores the value a row states",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is an RRSP, B is an FHSA: the same tax class (the deferred plans: RRSP, group RRSP, RRIF, FHSA, LIRA), so the move is neither a sale nor a buy.",
+      "t1 buys 10 X in A for 100 on 2026-01-05; t2/t3 (linked) move all 10 to B on 2026-01-10. The out row states a value of 130: within one class a stated value plays no part, the cost 100 and the day 2026-01-05 move with the units.",
+      "t4 sells the 10 in B for 150 on 2026-02-01: one trade opened by t1, P&L = 150 - 100 = 50.00, held 2026-01-05 to 2026-02-01 = 27 days, as the same-account-class case in coins_and_transfers.json (flag transferred, as that case asserts); no deposited trade."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "rrsp"
+      },
+      {
+        "id": "B",
+        "kind": "cash",
+        "registration": "fhsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-10",
+        "at": "2026-01-10T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "130"
+      },
+      {
+        "id": "t3",
+        "account": "B",
+        "day": "2026-01-10",
+        "at": "2026-01-10T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      },
+      {
+        "id": "t4",
+        "account": "B",
+        "day": "2026-02-01",
+        "at": "2026-02-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "opened": "2026-01-05",
+          "closed": "2026-02-01",
+          "qty": "10",
+          "entry": "10",
+          "exit": "15",
+          "pnl": "50.00",
+          "hold_days": 27,
+          "flags": [
+            "transferred"
+          ]
+        }
+      ],
+      "position_count": 0
+    }
+  },
+  {
+    "name": "a whole holding moved from a TFSA to another TFSA, one tax class, keeps its trade and cost and ignores the value a row states",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is a TFSA, B is another TFSA: the same tax class (TFSA), so the move is neither a sale nor a buy.",
+      "t1 buys 10 X in A for 100 on 2026-01-05; t2/t3 (linked) move all 10 to B on 2026-01-10. The out row states a value of 130: within one class a stated value plays no part, the cost 100 and the day 2026-01-05 move with the units.",
+      "t4 sells the 10 in B for 150 on 2026-02-01: one trade opened by t1, P&L = 150 - 100 = 50.00, held 2026-01-05 to 2026-02-01 = 27 days, as the same-account-class case in coins_and_transfers.json (flag transferred, as that case asserts); no deposited trade."
+    ],
+    "today": "2026-03-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "tfsa"
+      },
+      {
+        "id": "B",
+        "kind": "cash",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-10",
+        "at": "2026-01-10T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "130"
+      },
+      {
+        "id": "t3",
+        "account": "B",
+        "day": "2026-01-10",
+        "at": "2026-01-10T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      },
+      {
+        "id": "t4",
+        "account": "B",
+        "day": "2026-02-01",
+        "at": "2026-02-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "opened": "2026-01-05",
+          "closed": "2026-02-01",
+          "qty": "10",
+          "entry": "10",
+          "exit": "15",
+          "pnl": "50.00",
+          "hold_days": 27,
+          "flags": [
+            "transferred"
+          ]
+        }
+      ],
+      "position_count": 0
+    }
+  },
+  {
+    "name": "a holding moved from a non-registered account into an RRSP with no value stated anywhere leaves both sides waiting on the person's cost",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is not registered, R an RRSP: two classes.",
+      "t1 buys 10 X in A for 100 on 2026-01-05. t2/t3 (linked) move all 10 to R on 2026-02-02. Neither row states a value and the person has stated no cost of arrival: what it was worth is unknown, and no price is made up.",
+      "Sending trade t1: still closes on the move's day 2026-02-02 (the units left), but its Exit and its P&L wait on the person's cost: gap basis-unknown. Entry 10 is known.",
+      "Receiving trade t3: its own round trip, deposited, open (not sold); its Entry waits: basis-unknown.",
+      "Position R X: Qty 10 (units are known), Book and Avg wait: basis-unknown. A holds nothing: one position."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "none"
+      },
+      {
+        "id": "R",
+        "kind": "cash",
+        "registration": "rrsp"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10"
+      },
+      {
+        "id": "t3",
+        "account": "R",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "entry": "10",
+          "exit": {
+            "gaps": [
+              "basis-unknown"
+            ]
+          },
+          "pnl": {
+            "gaps": [
+              "basis-unknown"
+            ]
+          }
+        },
+        {
+          "opened_by": "t3",
+          "closed": "open",
+          "qty": "10",
+          "entry": {
+            "gaps": [
+              "basis-unknown"
+            ]
+          },
+          "flags": [
+            "deposited"
+          ]
+        }
+      ],
+      "position_count": 1,
+      "positions": [
+        {
+          "account": "R",
+          "instrument": "X",
+          "qty": "10",
+          "book": {
+            "gaps": [
+              "basis-unknown"
+            ]
+          },
+          "avg": {
+            "gaps": [
+              "basis-unknown"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "a value stated in USD for a CAD holding moved into a TFSA is converted at the Bank of Canada rate of the move's day",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is not registered, T a TFSA; X is a CAD instrument.",
+      "t1 buys 10 X in A for 120 CAD (12 each) on 2026-01-05.",
+      "t2/t3 (linked) move all 10 on 2026-02-02; t2 states the value as 100 USD. In the instrument's currency at the day's Bank of Canada rate (USD 2026-02-02 = 1.40 CAD): 100 x 1.40 = 140 CAD, 14 a unit.",
+      "Sending trade t1: closes 2026-02-02. Entry 12, Exit 14, P&L = 140 - 120 = 20.00; P&L % = 20/120 = 0.1666...; Hold 28 days.",
+      "Receiving trade t3: opens 2026-02-02 at 140 CAD, deposited. t4 sells the 10 in T for 150 CAD on 2026-03-02: Exit 15, P&L = 150 - 140 = 10.00; Hold 28 days."
+    ],
+    "today": "2026-06-01",
+    "rates": {
+      "USD": {
+        "2026-01-30": "1.38",
+        "2026-02-02": "1.40",
+        "2026-02-03": "1.41"
+      }
+    },
+    "covered": {
+      "USD": [
+        [
+          "2026-01-02",
+          "2026-05-29"
+        ]
+      ]
+    },
+    "series": {
+      "USD": [
+        [
+          "2017-01-03",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "none"
+      },
+      {
+        "id": "T",
+        "kind": "cash",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-120"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "100",
+        "value_currency": "USD"
+      },
+      {
+        "id": "t3",
+        "account": "T",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      },
+      {
+        "id": "t4",
+        "account": "T",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "entry": "12",
+          "exit": "14",
+          "pnl": "20.00",
+          "pnl_cad": "20.00",
+          "hold_days": 28,
+          "flags": []
+        },
+        {
+          "opened_by": "t3",
+          "opened": "2026-02-02",
+          "closed": "2026-03-02",
+          "entry": "14",
+          "exit": "15",
+          "pnl": "10.00",
+          "pnl_cad": "10.00",
+          "hold_days": 28,
+          "flags": [
+            "deposited"
+          ]
+        }
+      ],
+      "position_count": 0
+    }
+  },
+  {
+    "name": "part of a holding moved from a non-registered account into a TFSA: the moved units realize at their value, the rest stay at their cost",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row",
+    "working": [
+      "A is not registered, T a TFSA. t1 buys 10 X in A for 100 (10 each) on 2026-01-05.",
+      "t2/t3 (linked) move 4 of the 10 on 2026-02-02; t2 states 60 for the 4 (15 each).",
+      "Sending trade t1: the 4 moved units close at 60 against their cost 4 x 10 = 40: P&L realized on 2026-02-02 = 20.00. 6 units are still held, so the trade is open (§2 Trade): Qty = 10 opened, Entry 10, Exit = 60/4 = 15, P&L % = 20/40 = 0.5.",
+      "Position A X: the 6 left keep their cost: Book = 100 x 6/10 = 60.00, Avg = 60/6 = 10.",
+      "Receiving trade t3: opens 2026-02-02 at 60 for 4 units, deposited, open, Entry 15, P&L 0.00. Position T X: Qty 4, Book 60.00, Avg 15.",
+      "KPI: realized 20.00 (an open trade's partial close counts on its day), no closed trade: count 0."
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "none"
+      },
+      {
+        "id": "T",
+        "kind": "cash",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-4",
+        "value": "60"
+      },
+      {
+        "id": "t3",
+        "account": "T",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "4"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "open",
+          "qty": "10",
+          "entry": "10",
+          "exit": "15",
+          "pnl": "20.00",
+          "pnl_pct": 0.5,
+          "flags": []
+        },
+        {
+          "opened_by": "t3",
+          "opened": "2026-02-02",
+          "closed": "open",
+          "qty": "4",
+          "entry": "15",
+          "pnl": "0.00",
+          "flags": [
+            "deposited"
+          ]
+        }
+      ],
+      "position_count": 2,
+      "positions": [
+        {
+          "account": "A",
+          "instrument": "X",
+          "qty": "6",
+          "book": "60.00",
+          "avg": "10",
+          "opened_by": "t1"
+        },
+        {
+          "account": "T",
+          "instrument": "X",
+          "qty": "4",
+          "book": "60.00",
+          "avg": "15",
+          "opened_by": "t3"
+        }
+      ],
+      "kpi": {
+        "realized": "20.00",
+        "count": 0
+      }
+    }
+  },
+  {
+    "name": "the person's stated cost of arrival wins over the value a row states for a move across classes, on both sides",
+    "spec": "SPEC.md §2 Definitions, Moves between your accounts; §4 Book row; §2 What you enter, The cost of units that arrived",
+    "working": [
+      "A is not registered, T a TFSA. t1 buys 10 X in A for 100 on 2026-01-05.",
+      "t2/t3 (linked) move all 10 on 2026-02-02; t2 states 150. The person states the arrival t3 cost them 130 in total, acquired 2026-02-02 (the move's day): what you state comes first, so what it was worth = 130, 13 a unit.",
+      "Sending trade t1: closes 2026-02-02, Exit 13, P&L = 130 - 100 = 30.00 (not 50 from the row's 150).",
+      "Receiving trade t3: opens 2026-02-02 at 130, deposited, and shows its cost as entered by you (§2 What you enter: \"Each shows as entered by you\"): flags deposited, entered. t4 sells the 10 in T for 180 on 2026-03-02: Entry 13, Exit 18, P&L = 180 - 130 = 50.00 (not 30).",
+      "KPI: realized 30 + 50 = 80.00 either way; the split between the two trades is what the stated cost decides."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "cash",
+        "registration": "none"
+      },
+      {
+        "id": "T",
+        "kind": "cash",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "CAD"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-out",
+        "instrument": "X",
+        "qty": "-10",
+        "value": "150"
+      },
+      {
+        "id": "t3",
+        "account": "T",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "10"
+      },
+      {
+        "id": "t4",
+        "account": "T",
+        "day": "2026-03-02",
+        "at": "2026-03-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "180"
+      }
+    ],
+    "transfer_links": [
+      {
+        "out": "t2",
+        "in": "t3"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t3",
+        "source": "person",
+        "legs": [
+          {
+            "to": "X",
+            "cost": "130",
+            "acquired": "2026-02-02"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "entry": "10",
+          "exit": "13",
+          "pnl": "30.00",
+          "flags": []
+        },
+        {
+          "opened_by": "t3",
+          "opened": "2026-02-02",
+          "closed": "2026-03-02",
+          "entry": "13",
+          "exit": "18",
+          "pnl": "50.00",
+          "flags": [
+            "deposited",
+            "entered"
+          ]
+        }
+      ],
+      "position_count": 0,
+      "kpi": {
+        "realized": "80.00",
+        "count": 2
+      }
+    }
+  }
+]

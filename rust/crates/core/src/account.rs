@@ -45,6 +45,38 @@ text_enum! {
     }
 }
 
+/// Which plans a holding can move between without leaving one: a direct
+/// transfer between two accounts of one class is neither a withdrawal nor a
+/// contribution, so the holding keeps its cost and dates; a move between two
+/// classes takes it out of one and into the other at its market value that day
+/// (`SPEC.md` §2 Position, a holding moved between your accounts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaxClass {
+    /// Not in a plan: the person's own name, taxed as it goes.
+    Unregistered,
+    Tfsa,
+    Resp,
+    /// The retirement and home plans the Act lets one fund another by direct
+    /// transfer, with no tax at the time: RRSP to RRSP ("a transfer of funds, not
+    /// a withdrawal", CRA, Making withdrawals), RRSP to RRIF (CRA, Transferring
+    /// to your RRIF), RRSP to FHSA and FHSA to FHSA ("without immediate tax
+    /// consequences, as long as it is a direct transfer", CRA, Transfers into
+    /// your FHSAs), FHSA to RRSP or RRIF, and a locked-in account to another
+    /// locked-in plan.
+    Deferred,
+}
+
+impl Registration {
+    pub fn tax_class(self) -> TaxClass {
+        match self {
+            Registration::Unregistered => TaxClass::Unregistered,
+            Registration::Tfsa => TaxClass::Tfsa,
+            Registration::Resp => TaxClass::Resp,
+            Registration::Fhsa | Registration::Rrsp | Registration::Rrif | Registration::Lira | Registration::GroupRrsp => TaxClass::Deferred,
+        }
+    }
+}
+
 text_enum! {
     AccountStatus "account status" {
         Open = "open",
@@ -79,6 +111,15 @@ pub struct Account {
 }
 
 impl AccountType {
+    /// Its class for a move between the person's accounts; none for a type
+    /// Bagholder does not know.
+    pub fn tax_class(&self) -> Option<TaxClass> {
+        match self {
+            AccountType::Known { registration, .. } => Some(registration.tax_class()),
+            AccountType::Unrecognised(_) => None,
+        }
+    }
+
     /// What the account is, as the screens name it: `TFSA`, `Margin`, `Group RRSP`,
     /// or the broker's own words for a type Bagholder does not know.
     pub fn label(&self) -> String {

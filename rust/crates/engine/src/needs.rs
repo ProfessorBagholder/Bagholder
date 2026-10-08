@@ -79,7 +79,7 @@ pub fn fact_needs(inputs: &Inputs, matched: &Matched) -> FactNeeds {
     let currency = |i: &InstrumentId| ledger.instruments.get(i).map(|x| x.instrument.currency);
     // every amount on the record, and every account's cash from its day on
     for t in &ledger.transactions {
-        for m in [t.cash, t.price, t.fee].into_iter().flatten() {
+        for m in [t.cash, t.price, t.fee, t.value].into_iter().flatten() {
             n.rate(m.currency, t.trade_date);
         }
         n.first_day = Some(n.first_day.map_or(t.trade_date, |d| d.min(t.trade_date)));
