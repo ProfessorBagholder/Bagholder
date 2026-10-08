@@ -1,0 +1,174 @@
+[
+  {
+    "name": "a whole holding moved between the person's accounts with no value stated, then sold there, is one trade whose P&L is the sale against the original cost",
+    "spec": "SPEC.md §2 Moves between your accounts (the move keeps its trade, is neither a sale nor a buy, the trade's P&L is its own fills'); §2 Trade (FIFO lots; P&L; Hold); §2 Position, Book (a holding moved takes its units' share of the cost with it; nothing once flat)",
+    "working": [
+      "t1: 10 X bought in A, cash -1,009.99 with a commission of 9.99: 10 at 100, cost with commission 1,009.99 (avg 100.999).",
+      "t2/t3 (linked, Jan 10): all 10 move from A to B. No value is stated on the arrival, so the units keep their own cost: B's Book 1,009.99, avg 100.999. The move is not a sale (no P&L) and not a buy (no new trade); A is flat.",
+      "t4: B sells 10, cash 1,240.01 with a commission of 9.99: 10 at 125.",
+      "Trade P&L (§2 Trade) = (125 - 100) x 10 - entry commission 9.99 - exit commission 9.99 = 250 - 19.98 = 230.02 (= 1,240.01 - 1,009.99).",
+      "One trade, opened by t1 (the purchase), closed Feb 2; Hold = Jan 5 -> Feb 2 = 28 days. Flat everywhere: no position.",
+      "Mark: the existing whole-move case marks the trade `transferred` (docs/architecture.md, trade marks); SPEC.md defines no mark for a move, and none other (not `deposited`: a move between the person's accounts is not a deposit)."
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1009.99", "fee": "9.99"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10"},
+      {"id": "t4", "account": "B", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "1240.01", "fee": "9.99"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 1,
+      "trades": [{"opened_by": "t1", "instrument": "X", "qty": "10", "entry": "100", "exit": "125", "pnl": "230.02", "closed": "2026-02-02", "hold_days": 28, "flags": ["transferred"]}],
+      "position_count": 0,
+      "positions": []
+    }
+  },
+  {
+    "name": "a whole holding moved with a value stated on its arrival, still held: the receiving holding costs the stated value, the trade keeps its own entry and nothing realized",
+    "spec": "SPEC.md §2 Moves between your accounts (where the broker reset the cost, the units carry the cost it gave them, the move's own amount where its row states it in the holding's currency; the trade's P&L stays its own fills'); §2 Trade (open; P&L 0.00 before a first sale; Entry); §2 Position (Book, Avg cost, Market, P&L)",
+    "working": [
+      "t1: 10 X bought in A for 1,009.99 with a commission of 9.99: 10 at 100, Entry 100.",
+      "t2/t3 (linked, Jan 10): all 10 move to B; the arrival t3 states a value of 1,200 in the holding's currency (CAD): the broker reset the cost, so B's Book = 1,200.00 and Avg = 1,200 / 10 = 120.",
+      "The trade is the same trade (opened by t1), open, no sale: P&L 0.00; Qty 10; Entry stays 100 (its own fill), not 120.",
+      "Quote 130: Market = 10 x 130 = 1,300.00; the holding's P&L = Market - Book = 1,300 - 1,200 = 100.00 (against the reset cost, as the broker states it).",
+      "One position, B / X, the round trip opened by t1; A is flat."
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "130"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1009.99", "fee": "9.99"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10", "value": "1200"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 1,
+      "trades": [{"opened_by": "t1", "instrument": "X", "qty": "10", "entry": "100", "exit": null, "pnl": "0.00", "closed": "open", "flags": ["transferred"]}],
+      "position_count": 1,
+      "positions": [{"account": "B", "instrument": "X", "opened_by": "t1", "qty": "10", "book": "1200.00", "avg": "120", "market": "1300.00", "unrealized": "100.00"}]
+    }
+  },
+  {
+    "name": "a whole holding moved with a value stated on its arrival, then sold: the trade's P&L is the sale against the original cost, never against the stated value",
+    "spec": "SPEC.md §2 Moves between your accounts (the move can change only the holding's cost in the receiving account; the trade's P&L stays the result of its own fills); §2 Trade (P&L); §2 Position, Book (nothing once flat)",
+    "working": [
+      "As the case before: 10 X bought in A at 100 for 1,009.99 (commission 9.99); all 10 moved to B with a stated value of 1,200 (B's Book 1,200 while held).",
+      "t4: B sells 10, cash 1,240.01 with a commission of 9.99: 10 at 125.",
+      "Trade P&L = (125 - 100) x 10 - 9.99 - 9.99 = 230.02 (= 1,240.01 - 1,009.99). The stated value does not enter it: not 1,240.01 - 1,200 = 40.01.",
+      "One trade, opened by t1, closed Feb 2, Hold Jan 5 -> Feb 2 = 28 days. Flat: no position."
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1009.99", "fee": "9.99"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10", "value": "1200"},
+      {"id": "t4", "account": "B", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "1240.01", "fee": "9.99"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 1,
+      "trades": [{"opened_by": "t1", "instrument": "X", "qty": "10", "entry": "100", "exit": "125", "pnl": "230.02", "closed": "2026-02-02", "hold_days": 28, "flags": ["transferred"]}],
+      "position_count": 0,
+      "positions": []
+    }
+  },
+  {
+    "name": "part of a holding moved with a value stated on its arrival: the units left behind keep their own average cost, the units that arrived cost the stated value",
+    "spec": "SPEC.md §2 Moves between your accounts; §2 Trade (Qty counts units moved to another account's round trip; open; P&L 0.00 before a first sale; Open is the earliest entry date of its lots); §2 Position (Book: a holding moved takes its units' share of the cost, or the cost the broker gave it where reset; Avg cost; Market; P&L)",
+    "working": [
+      "t1: 10 X bought in A for 1,009.99 with a commission of 9.99 (10 at 100; avg 100.999).",
+      "t2/t3 (linked, Jan 10): 4 of the 10 move to B; the arrival t3 states a value of 520 in the holding's currency.",
+      "A keeps 6 at their own average cost: Book = 1,009.99 x 6/10 = 605.994, written half-even 605.99; Avg = 605.994 / 6 = 100.999 (unchanged by the move, as by a sale).",
+      "B: the 4 cost the stated value: Book 520.00, Avg = 520 / 4 = 130.",
+      "Quote 140: A Market = 6 x 140 = 840.00, P&L = 840 - 605.994 = 234.006 -> 234.01; B Market = 4 x 140 = 560.00, P&L = 560 - 520 = 40.00.",
+      "Trades: the purchase's trade (t1) is open with 6 held, Qty 10 (the 4 moved to another account's round trip are counted, §2 Qty), nothing sold: P&L 0.00. The 4 in B are a round trip of their own there (per §2 Qty, 'moved to another account's round trip'), opened by the arrival t3, keeping the day their lot was bought: Open Jan 5; nothing sold: P&L 0.00. Two trades, two positions."
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "140"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1009.99", "fee": "9.99"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-4"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "4", "value": "520"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {"opened_by": "t1", "instrument": "X", "qty": "10", "pnl": "0.00", "closed": "open"},
+        {"opened_by": "t3", "instrument": "X", "pnl": "0.00", "closed": "open", "opened": "2026-01-05"}
+      ],
+      "position_count": 2,
+      "positions": [
+        {"account": "A", "instrument": "X", "opened_by": "t1", "qty": "6", "book": "605.99", "avg": "100.999", "market": "840.00", "unrealized": "234.01"},
+        {"account": "B", "instrument": "X", "opened_by": "t3", "qty": "4", "book": "520.00", "avg": "130", "market": "560.00", "unrealized": "40.00"}
+      ]
+    }
+  },
+  {
+    "name": "part of a holding moved with a value stated, then sold in the receiving account: its P&L is against the units' original cost, the units left behind keep theirs",
+    "spec": "SPEC.md §2 Moves between your accounts (a stated value changes only the holding's cost, never the P&L); §2 Trade (FIFO; P&L with the closed units' share of the entry commission; Open; Hold); §2 Position (Book, Avg cost)",
+    "working": [
+      "t1: 10 X bought in A for 1,009.99 with a commission of 9.99 (10 at 100). t2/t3 (linked, Jan 10): 4 move to B with a stated value of 520 (B's Book 520 while held).",
+      "t4 (Feb 2): B sells the 4 for 600, no commission: 4 at 150.",
+      "Trade opened by t3 (the 4's own round trip in B): P&L = (150 - 100) x 4 - the 4 units' share of the entry commission 9.99 x 4/10 = 200 - 3.996 = 196.004 -> 196.00 (= 600 - 1,009.99 x 4/10). Not 600 - 520 = 80.00. Open Jan 5 (the day the lot was bought), closed Feb 2: Hold 28 days.",
+      "Trade opened by t1: 6 still held in A, nothing sold: P&L 0.00, open.",
+      "A keeps 6: Book = 1,009.99 x 6/10 = 605.994 -> 605.99; Avg 100.999. B is flat: one position."
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1009.99", "fee": "9.99"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-4"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "4", "value": "520"},
+      {"id": "t4", "account": "B", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-4", "cash": "600"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {"opened_by": "t3", "instrument": "X", "exit": "150", "pnl": "196.00", "opened": "2026-01-05", "closed": "2026-02-02", "hold_days": 28},
+        {"opened_by": "t1", "instrument": "X", "qty": "10", "pnl": "0.00", "closed": "open"}
+      ],
+      "position_count": 1,
+      "positions": [{"account": "A", "instrument": "X", "opened_by": "t1", "qty": "6", "book": "605.99", "avg": "100.999"}]
+    }
+  },
+  {
+    "name": "a value stated on the arrival only in another currency than the holding's leaves the units their own cost",
+    "spec": "SPEC.md §2 Moves between your accounts (the reset cost is taken as stated in the holding's currency, else the move's own amount where its row states it in that currency; where it is stated only in another currency, the units keep their own cost and the header says so, since no rate it used is stated)",
+    "working": [
+      "X is a CAD holding. t1: 10 X bought in A for 1,009.99 with a commission of 9.99 (10 at 100; avg 100.999).",
+      "t2/t3 (linked, Jan 10): all 10 move to B; the arrival states a value of 880 in USD, not the holding's currency. No rate the broker used is stated, so the value is not converted and not used: the units keep their own cost. B's Book 1,009.99, Avg 100.999.",
+      "Quote 130: Market = 1,300.00; the holding's P&L = 1,300 - 1,009.99 = 290.01.",
+      "The trade (opened by t1) is open, nothing sold: P&L 0.00, Entry 100.",
+      "The header's line saying the stated cost was set aside is not an engine figure this format reads; it is not asserted here."
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "130"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1009.99", "fee": "9.99"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10", "value": "880", "value_currency": "USD"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 1,
+      "trades": [{"opened_by": "t1", "instrument": "X", "qty": "10", "entry": "100", "pnl": "0.00", "closed": "open", "flags": ["transferred"]}],
+      "position_count": 1,
+      "positions": [{"account": "B", "instrument": "X", "opened_by": "t1", "qty": "10", "book": "1009.99", "avg": "100.999", "market": "1300.00", "unrealized": "290.01"}]
+    }
+  }
+]

@@ -24,6 +24,5 @@ export const GAP_WORDS: string[] = [
   'schedule-unstated',
   'form-unstated',
   'buying-power-unread',
-  'registration-unknown',
   'arithmetic',
 ]

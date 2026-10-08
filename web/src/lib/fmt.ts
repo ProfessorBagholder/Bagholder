@@ -48,8 +48,7 @@ const WAITS_FOR: Record<string, string> = {
   'basis-unknown': 'cost', 'event-unknown': 'event', 'event-on-short': 'event', 'no-expiry-record': 'expiry',
   'adjustment-conflict': 'record', 'effect-conflict': 'record', 'beyond-held': 'record',
   'currency-unstated': 'currency', 'value-unstated': 'value', 'payer-not-read': 'payer', 'no-distribution-yet': 'unpaid',
-  'schedule-unstated': 'schedule', 'form-unstated': 'form', 'buying-power-unread': 'unread', 'registration-unknown': 'account',
-  arithmetic: 'overflow',
+  'schedule-unstated': 'schedule', 'form-unstated': 'form', 'buying-power-unread': 'unread', arithmetic: 'overflow',
 }
 
 /** Every gap word the page has a word for (a test holds this to the engine's list). */

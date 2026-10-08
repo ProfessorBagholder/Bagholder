@@ -1578,18 +1578,6 @@ impl<'a> Matcher<'a> {
             return;
         }
         let link = self.link_of(t, instrument);
-        if let Some((to, dest, dest_instr)) = &link {
-            // between two tax classes the holding leaves one plan and enters the
-            // other at its value that day (`SPEC.md` §2 Position)
-            match self.crosses(account, *dest) {
-                Ok(true) => return self.dispose(t, instrument, qty, to.clone(), *dest, *dest_instr),
-                Ok(false) => {}
-                Err(g) => {
-                    self.taint(account, instrument, &g);
-                    self.taint(*dest, *dest_instr, &g);
-                }
-            }
-        }
         // what the holding waits on goes with what leaves it
         let waiting = self.book(account, instrument).taint.clone();
         match self.take(account, instrument, qty) {
@@ -1597,9 +1585,13 @@ impl<'a> Matcher<'a> {
                 if left.is_positive() {
                     self.beyond(t, account, instrument, left);
                 }
-                // the person's own accounts: the lots move with their cost and dates
+                // the person's own accounts: the lots move with their cost and dates,
+                // the same round trip; the holding's average cost in the receiving
+                // account is what the broker gave the units there where it states
+                // it (a cost reset to their value as they moved), else theirs
                 let Some((to, dest, dest_instr)) = link else { return self.moved_out(&lots) };
                 self.consumed.insert(to.clone());
+                let cost = self.cost_on_arrival(&to, dest_instr).unwrap_or(cost);
                 if !waiting.is_empty() {
                     self.taint(dest, dest_instr, &waiting);
                 }
@@ -1651,53 +1643,14 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    /// Whether a move from one of the person's accounts to another crosses
-    /// from one tax class to another (`TaxClass`); a gap where either account's
-    /// type is not one Bagholder knows.
-    fn crosses(&self, from: AccountId, to: AccountId) -> Result<bool, Gaps> {
-        let class = |a: AccountId| {
-            let info = self.inputs.ledger.accounts.get(&a);
-            info.and_then(|i| i.account.account_type.tax_class()).ok_or_else(|| Gaps::of(Gap::RegistrationUnknown(a)))
-        };
-        Ok(class(from)? != class(to)?)
-    }
-
-    /// A holding moved across tax classes: sold in the sending account and
-    /// bought in the receiving one at what it was worth as it moved, on the
-    /// day it moved. The sending side closes its round trip there with its
-    /// P&L; the receiving side opens a round trip of its own, flagged
-    /// `deposited`, at that value. The value is the person's stated cost of
-    /// the arrival, else the value either row states, in the instrument's
-    /// currency at the day's Bank of Canada rate where it is stated in
-    /// another; else it waits on the person's cost, never a price made up.
-    fn dispose(&mut self, t: &Transaction, instrument: InstrumentId, qty: Dec, to: TransactionId, dest: AccountId, dest_instr: InstrumentId) {
-        let account = t.account;
-        self.consumed.insert(to.clone());
-        let recv = self.inputs.ledger.transactions.iter().find(|x| x.id == to).cloned();
-        let currency = self.currency(instrument);
-        let dest_currency = self.currency(dest_instr);
-        let stated = self.inputs.facts.adjustments.get(&to).and_then(|a| a.legs.iter().find(|l| l.from.is_none() && l.to == Some(dest_instr) && l.cost.is_some()).cloned()).and_then(|l| l.cost);
-        let worth: Option<Money> = stated.or_else(|| t.value.or_else(|| recv.as_ref().and_then(|r| r.value)));
-        let in_currency = |me: &Self, c: Currency| -> Fig<Money> {
-            match worth {
-                _ if me.inputs.facts.adjustments.in_conflict(&to) => Err(Gaps::of(Gap::AdjustmentConflict(to.clone()))),
-                Some(v) => crate::fx::convert(&me.inputs.facts.rates, &me.inputs.clock, v, c, t.trade_date).map(|a| Money::new(a, c)),
-                None => Err(Gaps::of(Gap::BasisUnknown(to.clone()))),
-            }
-        };
-        let proceeds = in_currency(self, currency);
-        let cost = in_currency(self, dest_currency);
-        if worth.is_none() {
-            self.out.waiting.insert(to.clone(), Waiting { what: Wanted::CostOfArrival, account: dest, instrument: dest_instr, day: t.trade_date, units: Some(qty) });
-        }
-        let closer = Closer::Transaction(t.id.clone());
-        match self.close(account, instrument, Direction::Long, qty, proceeds, Money::zero(currency), &closer, t.trade_date, t.occurred_at, &BTreeSet::new()) {
-            Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
-            Ok(_) => {}
-            Err(g) => self.taint(account, instrument, &g),
-        }
-        let flags = BTreeSet::from([Flag::Deposited]);
-        self.open_lot(dest, dest_instr, &to, t.trade_date, recv.as_ref().and_then(|r| r.occurred_at).or(t.occurred_at), Direction::Long, qty, cost, Money::zero(dest_currency), flags, None);
+    /// The cost the broker states units moved in from another of the person's
+    /// accounts carry there (`SPEC.md` §2, Moves between your accounts): the
+    /// receiving row's stated value, in the instrument's currency. None where it
+    /// states none, or states it only in another currency (no rate the broker
+    /// used is stated): the units keep their own.
+    fn cost_on_arrival(&self, to: &TransactionId, instrument: InstrumentId) -> Option<Fig<Money>> {
+        let recv = self.inputs.ledger.transactions.iter().find(|x| &x.id == to)?;
+        recv.value.filter(|v| v.currency == self.currency(instrument)).map(Ok)
     }
 
     /// A transfer out's linked receiving side: its id, account and instrument.

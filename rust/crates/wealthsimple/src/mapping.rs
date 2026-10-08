@@ -87,10 +87,13 @@ impl Mapping for WealthsimpleMapping {
     /// 9: a row not yet final states what the broker holds against its account.
     /// 10: a row names the broker's order ids it carries.
     /// 11: a move of one holding between two accounts keeps the value its row
-    ///    states, what it was worth as it moved (`SPEC.md` §2, Moves between your
-    ///    accounts).
+    ///    states, what it was worth as it moved.
+    /// 12: a holding moved in from another of the person's accounts carries the
+    ///    cost Wealthsimple gave it there where it reset it, read from its book
+    ///    cost in both accounts either side of the move (`SPEC.md` §2, Moves
+    ///    between your accounts).
     fn version(&self) -> u32 {
-        11
+        12
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -954,14 +957,25 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     }
     let this_way = |q: &Dec| if incoming { q.is_positive() } else { q.is_negative() };
     let mut n = 0;
-    let first_leg = out.legs.len();
+    let holdings = matched.iter().filter(|((a, id), q)| *a == row.account && !id.starts_with("sec-c-") && this_way(q)).count();
     for ((a, id), q) in &matched {
         if *a != row.account || !this_way(q) {
             continue;
         }
         let mut d = base.draft(nth_leg("move", n), kind);
         n += 1;
-        d.instrument = Some(instrument(root, id, base.day)?);
+        let drafted = instrument(root, id, base.day)?;
+        // arriving from another of the person's accounts: the cost Wealthsimple
+        // gave the units here, where it reset it
+        if incoming {
+            if let Some(from) = change.iter().find(|(b, c)| **b != row.account && c.get(id).is_some_and(|x| x.checked_add(*q).ok() == Some(Dec::ZERO))).map(|(b, _)| *b) {
+                match moved_cost(root, row, from, id, first, last, drafted.currency, holdings)? {
+                    Ok(cost) => d.value = cost,
+                    Err(why) => out.problems.push(Problem::new("moved-cost-unstated", why)),
+                }
+            }
+        }
+        d.instrument = Some(drafted);
         d.quantity = Some(*q);
         out.legs.push(d);
     }
@@ -982,15 +996,88 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     if n == 0 {
         unstated(out, format!("a {kind} the positions do not show moving anything its way"));
     }
-    // the row's amount is what the move was worth: one holding's, where it moved
-    // one and no cash; several are worth what the row does not divide among them
-    let moved = &mut out.legs[first_leg..];
-    if let ([d], Some(amount), Some(currency)) = (moved, row.amount, row.currency) {
-        if d.instrument.is_some() {
-            d.value = Some(Money::new(amount.abs(), currency));
+    Ok(())
+}
+
+/// What a holding moved in from account `from` costs in this account, as
+/// Wealthsimple states it (`SPEC.md` §2, Moves between your accounts): its book
+/// cost in both accounts the day before the move and the day after. Where the
+/// cost that arrived is the cost that left, Wealthsimple kept it, and the units
+/// keep their own (None). Where it differs, Wealthsimple reset it to what the
+/// units were worth as they moved, and that is the cost: as the positions state
+/// it, where they state it in the security's own currency; else the row's
+/// amount, where the row moved this one holding alone and states it in that
+/// currency. Anything else is why the cost cannot be read (Err), never a figure
+/// converted at a rate Wealthsimple did not state.
+#[allow(clippy::too_many_arguments)]
+fn moved_cost(root: &Node, row: &Row, from: &str, id: &str, first: jiff::civil::Date, last: jiff::civil::Date, currency: Currency, holdings: usize) -> Result<Result<Option<Money>, String>, Failed> {
+    let bad = |e: jiff::Error| Failed::from(Problem::new("unreadable", e.to_string()));
+    let (before, after) = (first.yesterday().map_err(bad)?.to_string(), last.tomorrow().map_err(bad)?.to_string());
+    // the days between, on which the book's own transactions of it would move its cost too
+    // (the days after the first positions up to the last, as `changed` nets them)
+    let mut days = Vec::new();
+    let mut d = first;
+    while d.to_string() <= after {
+        days.push(d.to_string());
+        d = d.tomorrow().map_err(bad)?;
+    }
+    for a in [row.account, from] {
+        if booked(root, a, &days)?.get(id).is_some_and(|q| !q.is_zero()) {
+            return Ok(Err(format!("the cost of {id} moved in cannot be told apart from the account's own trades of it on the same days")));
         }
     }
-    Ok(())
+    let cost = |account: &str, day: &str| -> Result<Option<Option<Money>>, Failed> {
+        let Some(costs) = book_costs(root, account, day)? else { return Ok(None) };
+        Ok(Some(costs.get(id).copied()))
+    };
+    let (Some(r0), Some(r1), Some(s0), Some(s1)) = (cost(row.account, &before)?, cost(row.account, &after)?, cost(from, &before)?, cost(from, &after)?) else {
+        return Ok(Err(format!("Wealthsimple's positions either side of the move of {id} are not kept")));
+    };
+    let stated: Vec<Money> = [r0, r1, s0, s1].into_iter().flatten().collect();
+    let Some(in_currency) = stated.first().map(|m| m.currency) else {
+        return Ok(Err(format!("Wealthsimple states no book cost of {id} either side of the move")));
+    };
+    if stated.iter().any(|m| m.currency != in_currency) {
+        return Ok(Err(format!("Wealthsimple states the book cost of {id} in two currencies")));
+    }
+    let amount = |m: Option<Money>| m.map(|m| m.amount).unwrap_or(Dec::ZERO);
+    let sub = |a: Dec, b: Dec| a.checked_sub(b).map_err(|e| Failed::from(Problem::new("unreadable", e.to_string())));
+    let arrived = sub(amount(r1), amount(r0))?;
+    let left = sub(amount(s0), amount(s1))?;
+    if arrived == left {
+        return Ok(Ok(None));
+    }
+    if in_currency == currency {
+        return Ok(Ok(Some(Money::new(arrived, currency))));
+    }
+    match (row.amount, row.currency) {
+        (Some(a), Some(c)) if c == currency && holdings == 1 => Ok(Ok(Some(Money::new(a.abs(), c)))),
+        _ => Ok(Err(format!("Wealthsimple reset the cost of {id} on the move and states it only in {in_currency}, not {currency}"))),
+    }
+}
+
+/// Each security's book cost in one account on a day, as Wealthsimple's
+/// positions state it (`bookValue`). None where that day's positions are not kept.
+fn book_costs(root: &Node, account: &str, day: &str) -> Result<Option<BTreeMap<String, Money>>, Failed> {
+    let Ok(list) = root.list("positions") else { return Ok(None) };
+    for p in list {
+        if p.text("account")? == account && p.text("day")? == day {
+            let mut m: BTreeMap<String, Money> = BTreeMap::new();
+            for node in p.list("nodes")? {
+                let id = node.obj("security")?.text("id")?.to_string();
+                let v = node.obj("bookValue")?;
+                let amount = Dec::parse_to_fit(v.text("amount")?).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+                let currency = Currency::parse(v.text("currency")?).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+                let e = m.entry(id).or_insert(Money::new(Dec::ZERO, currency));
+                if e.currency != currency {
+                    return Err(Problem::new("unreadable", "one security's book cost in two currencies on one day").into());
+                }
+                e.amount = e.amount.add_to_fit(amount).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+            }
+            return Ok(Some(m));
+        }
+    }
+    Ok(None)
 }
 
 /// The days after a move's own within which its cash moves: the sales that
