@@ -498,3 +498,50 @@ fn a_move_into_or_out_of_staking_states_the_units_it_moved_and_moves_none() {
     assert_eq!(d.quantity, None, "no change to the holding");
     assert_eq!(d.paid_on, text(&row, "assetQuantity").map(|q| dec(q).abs()), "the units it moved");
 }
+
+#[test]
+fn a_move_of_one_holding_keeps_the_value_its_row_states() {
+    // the recorded move, its positions made to show one holding moving: ten
+    // units of the fund leave the other account and arrive in this one, and
+    // no cash moves with them
+    let mut v = asset_movement_record();
+    let amount = dec(Node::root(&v).obj("activity").unwrap().text("amount").unwrap());
+    edit(&mut v, "positions", |p| {
+        let Value::Array(list) = p else { panic!() };
+        let fund = list.iter().find_map(|x| match Node::root(x).list("nodes").unwrap().into_iter().find(|n| n.obj("security").unwrap().text("id").unwrap().starts_with("sec-s-")) {
+            Some(n) => Some(n.value().clone()),
+            None => None,
+        }).expect("the fund's position");
+        let with_qty = |q: &str| {
+            let mut n = fund.clone();
+            if let Value::Object(m) = &mut n {
+                m.insert("quantity".into(), Value::String(q.into()));
+            }
+            n
+        };
+        for day in list.iter_mut() {
+            let (account, d) = (Node::root(day).text("account").unwrap().to_string(), Node::root(day).text("day").unwrap().to_string());
+            let nodes = match (account.as_str(), d.as_str()) {
+                ("anon-resp-1", "2025-07-03") => vec![with_qty("10")],
+                ("anon-resp-1", _) => vec![],
+                (_, "2025-07-03") => vec![with_qty("199.2845")],
+                _ => vec![with_qty("209.2845")],
+            };
+            if let Value::Object(m) = day {
+                m.insert("nodes".into(), Value::Array(nodes));
+            }
+        }
+    });
+    // the fund's record, read with the move as a pull reads it for what moved
+    let securities = json::parse(&std::fs::read_to_string(fixtures().join("edited-securities.json")).unwrap()).unwrap();
+    let fund = Node::root(&securities).obj("data").unwrap().list("securities").unwrap().into_iter().find(|x| x.text("id").unwrap() == "sec-s-ea6bdb7971df48bb897aae6744c50527").unwrap().value().clone();
+    if let Value::Object(m) = &mut v {
+        m.insert("securities".into(), Value::Object([("sec-s-ea6bdb7971df48bb897aae6744c50527".to_string(), fund)].into()));
+    }
+    let m = map_payload(&v);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.legs.len(), 1, "{:?}", m.legs);
+    let d = &m.legs[0];
+    assert_eq!((d.kind, d.quantity), (Kind::TransferIn, Some(dec("10"))));
+    assert_eq!(d.value, Some(bagholder_core::Money::new(amount, Currency::CAD)), "what the move was worth, as its row states it");
+}

@@ -86,8 +86,11 @@ impl Mapping for WealthsimpleMapping {
     ///    is its stated cash where the other side's show no holdings moving.
     /// 9: a row not yet final states what the broker holds against its account.
     /// 10: a row names the broker's order ids it carries.
+    /// 11: a move of one holding between two accounts keeps the value its row
+    ///    states, what it was worth as it moved (`SPEC.md` §2, Moves between your
+    ///    accounts).
     fn version(&self) -> u32 {
-        10
+        11
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -951,6 +954,7 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     }
     let this_way = |q: &Dec| if incoming { q.is_positive() } else { q.is_negative() };
     let mut n = 0;
+    let first_leg = out.legs.len();
     for ((a, id), q) in &matched {
         if *a != row.account || !this_way(q) {
             continue;
@@ -977,6 +981,14 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     }
     if n == 0 {
         unstated(out, format!("a {kind} the positions do not show moving anything its way"));
+    }
+    // the row's amount is what the move was worth: one holding's, where it moved
+    // one and no cash; several are worth what the row does not divide among them
+    let moved = &mut out.legs[first_leg..];
+    if let ([d], Some(amount), Some(currency)) = (moved, row.amount, row.currency) {
+        if d.instrument.is_some() {
+            d.value = Some(Money::new(amount.abs(), currency));
+        }
     }
     Ok(())
 }
