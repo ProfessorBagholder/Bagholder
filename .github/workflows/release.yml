@@ -39,7 +39,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.TAG }}
       - name: The app's version is the tag's
@@ -55,7 +55,7 @@ jobs:
       - name: OpenSSL for Windows, kept
         if: runner.os == 'Windows'
         id: openssl
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:/vcpkg/installed/x64-windows-static-md
           key: vcpkg-openssl-x64-windows-static-md-${{ matrix.os }}-v1
@@ -65,11 +65,11 @@ jobs:
           choco install -y nasm
           if [ "${{ steps.openssl.outputs.cache-hit }}" != "true" ]; then vcpkg install openssl:x64-windows-static-md; fi
           echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       # the compiled dependencies, kept per platform from master's builds
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
           shared-key: release-${{ matrix.target }}
@@ -97,7 +97,7 @@ jobs:
       # the Linux binaries, for the release's image (docker.yml), which is built from them
       - name: Keep the Linux binaries for the image
         if: runner.os == 'Linux' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bins-${{ matrix.target }}
           path: dist/pkg/*

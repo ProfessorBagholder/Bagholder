@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use bagholder_book::person::{Contract, Traded, Underlying};
+use bagholder_book::person::Traded;
 use bagholder_book::records::{Incoming, Outcome};
 use bagholder_book::Book;
 use bagholder_broker::csv::{self, CsvMapping, Payload};
@@ -22,7 +22,7 @@ use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, Currency, RecordId, Rounding, SourceName};
 use bagholder_engine::Engine;
 
-use crate::entries::{contract_of, held_by_symbol, manual_account, Refused};
+use crate::entries::{contract_by_terms, held_by_symbol, manual_account, Refused};
 use crate::figures::Figures;
 
 /// A row the report names: its line in the file and what it says.
@@ -291,16 +291,12 @@ pub fn import_from(
 fn traded(f: &Figures, symbol: &str, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
     let symbol = symbol.trim().to_uppercase();
     f.read(|e| {
-        if let Some(id) = held_by_symbol(e, &symbol, currency) {
+        if let Some(id) = held_by_symbol(e, &symbol, currency, |k| k == kind) {
             return Some(Traded::Held(id));
         }
-        match (kind, contract_of(&symbol)) {
-            (InstrumentKind::OptionContract, Some((under, expiry, strike, right))) => {
-                let held = held_by_symbol(e, &under, currency).filter(|u| e.inputs().ledger.instruments[u].instrument.kind != InstrumentKind::OptionContract);
-                let underlying = held.map(Underlying::Held).unwrap_or(Underlying::Named(under));
-                Some(Traded::Named { symbol, currency, contract: Some(Contract { underlying, expiry, strike, right }) })
-            }
-            (InstrumentKind::Security, _) => Some(Traded::Named { symbol, currency, contract: None }),
+        match kind {
+            InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency),
+            InstrumentKind::Security => Some(Traded::Named { symbol, currency, contract: None }),
             _ => None,
         }
     })

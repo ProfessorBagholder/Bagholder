@@ -169,10 +169,10 @@ The part that moves money is built the way order systems are built.
 **One typed interface** for every reader: the page, agents through MCP, the command line. Requests and answers are declared types, and the page's types are generated from the server's.
 
 **Access.**
-- The server answers only its own machine unless the person turns on remote access. Every request is checked for its Host and Origin, and every write carries a token that proves it came from the app's own page, so another website open in the same browser cannot reach it.
+- The server answers only its own machine unless the person turns on remote access. *Not built: remote access with a sign-in (the owner's decision of 2026-10-04: not now).* Every request is checked for its Host and Origin, and every write carries a token that proves it came from the app's own page (*not built: the token is the same on every install; an issue holds it*), so another website open in the same browser cannot reach it.
 - Remote access (from another device) goes through a secure tunnel or reverse proxy the person already trusts; the app does not manage certificates itself.
-- AI agents reach the app through its MCP tools only (§14).
-- **Broker credentials** live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a copied or moved book never carries them.
+- AI agents reach the app through its MCP tools only (§14; *not built*).
+- **Broker credentials** (*not built: today a file in the data folder*) live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a copied or moved book never carries them.
 
 **Notifications** are events from the book, execution and sources, each identified by what it is (a fill, a filing's content, a release's words), so one event is told once, through the operating system's channel or the browser's.
 
@@ -185,8 +185,8 @@ One rule, end to end: **work is done because something changed or something is n
 - **The page follows what is on screen, and has every screen ready.** It subscribes to the data of what it shows: the header, the current tab's cards under the current filters, an open instrument. Every other tab's screen is read once as the book becomes known and kept (below), so no tab ever opens with nothing (`docs/decisions.md`, 2026-09-28); a screen under new parameters shows the last it had until the new one arrives. A tab already visited stays loaded while the app is open, so going back to it is instant. Long lists (trades, news, distribution history, orders) send the rows in view and more as the person scrolls.
 - **After that, only changes are sent.** For each subscription the server sends the entities that moved and their changed fields, keyed by id and numbered. A reader that reconnects resumes from its last number, and after a gap it gets the subscription's state again. A filter change is a new subscription whose rows that stay are kept.
 - **Only the element showing a change changes.** The page holds each entity as one object and writes changed fields into it. One price moving changes that holding's figures and the totals that include them, and nothing else on screen. Switching tabs does not rebuild the header, opening an instrument does not reload the lists behind it, and new bars are added to the chart already drawn.
-- **What was loaded is kept between opens.** The page keeps, in the browser's own database, the last state of each subscription and everything it loaded on demand (an instrument's bars, filings, short interest, document summaries), each with its version, and the page is first drawn once that is read. Every read goes through one read layer (`web/src/lib/reads.svelte.ts`, brief 13): it gives the last answer held at once and asks the server in the background, a placeholder standing only for a question never answered; a scan fails on a read made anywhere else, and a browser walk over every screen the router and the panels can show fails on a placeholder where a value was held. On opening it draws from that at once and asks only for what changed since; with nothing changed, nothing is sent. An on-demand read carries its version, and the server answers "unchanged" when it is. What cannot change, a closed day's bars or a filed document, is never asked for again. The browser keeps the page's own code until a release changes it. What the browser keeps is stored under the book's id and the interface version, cleared when the book is cleared, and never holds a credential.
-- **Opening the page makes the server do nothing new.** The server runs as a service (§15), so its figures are already current, and a page opening is answered from them.
+- **What was loaded is kept between opens.** The page keeps, in the browser's own database, the last state of each subscription and everything it loaded on demand (an instrument's bars, filings, short interest, document summaries), each with its version, and the page is first drawn once that is read. Every read goes through one read layer (`web/src/lib/reads.svelte.ts`): it gives the last answer held at once and asks the server in the background, a placeholder standing only for a question never answered; a scan fails on a read made anywhere else, and a browser walk over every screen the router and the panels can show fails on a placeholder where a value was held. On opening it draws from that at once and asks only for what changed since; with nothing changed, nothing is sent. An on-demand read carries its version, and the server answers "unchanged" when it is. What cannot change, a closed day's bars or a filed document, is never asked for again. The browser keeps the page's own code until a release changes it. What the browser keeps is stored under the book's id and the interface version, cleared when the book is cleared, and never holds a credential.
+- **Opening the page makes the server do nothing new.** While it runs, the server keeps its figures current, so a page opening is answered from them.
 - **Held by tests.**
   1. Opening the app a second time with nothing changed: the screen is drawn from what was kept before any reply arrives, and nothing is sent beyond acknowledging the versions.
   2. A request budget for each interaction: opening each tab, opening an instrument, changing a filter, a price tick, a minute idle. The number and size of requests are recorded, and a test fails when one grows.
@@ -194,6 +194,8 @@ One rule, end to end: **work is done because something changed or something is n
   4. No request asks for data that nothing on screen shows.
 
 ## 14. AI agents
+
+*Not built. The filings server (`disclosures-mcp`) is the one MCP server that exists, on its own; the rest of this section is the design for when agents are taken up, a feature the owner has not asked for yet (`docs/decisions.md`, 2026-09-26).*
 
 The person's AI assistants (Claude, or any other that speaks the Model Context Protocol) reach Bagholder through its MCP tools, and only through them: they ask about the book, the figures and the market around a holding, and keep the journal and the watchlist.
 
@@ -216,10 +218,29 @@ Nothing is logged only to a terminal, and nothing is caught and discarded.
 
 ## 16. Running it
 
-- **One program, run as a service.** A single binary serves the page and runs the engine and background work. It installs itself as the operating system's service (launchd, systemd, a Windows service), so it starts at boot and after a crash; while it runs, brackets are guarded.
-- **Updates are safe.** Releases are signed and the binary checks the signature with a key built into it. An update waits until no order or bracket action is in progress, snapshots the book, swaps the binary, and returns to the previous version and snapshot if the new one does not come up. The container never updates itself; it says a new image is available.
+- **One program.** A single binary serves the page and runs the engine and background work. It never sets itself up to start at login or as a service; whether it runs all the time is the person's choice (the container keeps it running; `docs/decisions.md`, 2026-09-26).
+- **Updates are safe.** An update waits until no order or bracket action is in progress, snapshots the book, swaps the binary, and returns to the previous version and snapshot if the new one does not come up. *Not built: signed releases checked against a key built into the binary; today each archive carries a checksum from the same release.* The container never updates itself; it says a new image is available.
 - **One data folder** holds the book, the market cache and settings.
-- **Resource use is bounded**: work follows §13, each host is paced, every cache has a limit.
+- **Resource use is bounded**: work follows §13, and each host is paced.
+
+### The cost budget
+
+A small machine (a Raspberry Pi) must carry the app at the owner's size and well beyond it. The `capacity` job (`.github/workflows/tests.yml`) holds the server to this budget on every pull request, on an arm64 runner, on a made-up book of the owner's size and on one four times it, built through the real Wealthsimple adapter and pull from replies in Wealthsimple's own shapes (`bagholder capacity`, `rust/crates/server/src/capacity.rs`; the constants there and this table are held equal by a test). An added trade's request is answered once its figures are recomputed, so its measurement is held to the 100 ms row, which covers the 1 s one.
+
+| Operation | Budget on a Pi | Where it comes from |
+| --- | --- | --- |
+| Startup to the first figure | 5 s | RAIL: load "in 5 seconds or less on mid-range mobile devices" (web.dev/articles/rail) |
+| An added trade, its request answered | 100 ms | RAIL: "complete a transition initiated by user input within 100 ms" |
+| An added trade, to its figures on the stream | 1 s | RAIL: past a second the person loses the thread of the task |
+| A small import, to its figures on the stream | 1 s | as the added trade |
+| `engine_inputs::brokers` | `BALANCES_EVERY` ÷ accounts at four times the owner's size | one balances pass touches every account inside its cadence |
+| One `price_changed` | `QUOTES_EVERY` ÷ priced holdings at that size | one quote pass prices every holding inside its minute |
+| One `Feed::step` for one signal | `QUOTES_EVERY` ÷ the signals one quote pass sends at that size | the most signals a pass sends, inside its minute |
+
+- **The growth rule fails a pull request.** For each operation that answers one change (`brokers`, `price_changed`, `Feed::step`, an added trade's write, an import's linking), the work counted at four times the owner's size is under twice the work at the owner's size: SQLite's virtual-machine steps (its progress handler, on every connection), allocations (a counting allocator), and the bytes SQLite reads from the operating system, which are its page reads past its own cache (Linux's `/proc/self/io`; the runner is Linux). Work proportional to the book grows about four times; work through an index grows by a B-tree's depth. Counts are the same on every machine.
+- **Wall time** is the median of seven runs on the runner, times `PI_SLOWDOWN` = 2.1: Raspberry Pi's own Geekbench 6 single-core average for the Pi 5 (764) against published runs of the runner's CPU, Azure Cobalt 100 (1,620 and 1,639). It covers the CPU only and was not measured on hardware; a Pi's storage is slower still, which the page-read count covers. Wall time fails the job only for the operations a person waits on (the first four rows); it is reported for the rest.
+- **What is over budget today** is listed in `capacity.rs` (`OVER_BUDGET`), each with its issue. The job fails when an operation off the list misses its budget, and when one on the list meets it, so the list only shrinks.
+- The cost line of every pull request that touches the server or what the page reads pastes the job's table (`CLAUDE.md`, Verifying a change).
 
 ## 17. How the design is held
 

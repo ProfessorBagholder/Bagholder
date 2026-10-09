@@ -713,7 +713,7 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 /// there; every other line the app says goes to its log (`app::log`). Command-line
 /// tools (`src/bin`, and the server's own subcommands) print their output, which is
 /// what they are for.
-const TERMINAL: [(&str, usize, &str); 8] = [
+const TERMINAL: [(&str, usize, &str); 9] = [
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
     ("server/src/main.rs", 3, "the browser could not be opened (open the address yourself), no port could be bound, `--version`"),
@@ -722,6 +722,7 @@ const TERMINAL: [(&str, usize, &str); 8] = [
     ("server/src/legacy_import.rs", 3, "the `import-book` subcommand's own output"),
     ("server/src/compare.rs", 6, "the `compare` subcommand's own output"),
     ("server/src/demo_facts.rs", 3, "the `demo-facts` subcommand's own output"),
+    ("server/src/capacity.rs", 3, "the `capacity` subcommand's own output: the table row by row as it is measured, then the verdict"),
 ];
 
 /// The terminal the app was started from says only what the person needs there
@@ -760,4 +761,93 @@ fn test_the_terminal_says_only_what_the_person_needs() {
     let mut want: Vec<(String, usize)> = TERMINAL.iter().map(|(f, n, _)| (f.to_string(), *n)).collect();
     want.sort();
     assert_eq!(found, want, "a line written to the terminal was added or removed: route it through `app::log`, or argue for it in TERMINAL");
+}
+
+/// `SPEC.md` keeps one rule a line, each opened by its permanent id, an invisible
+/// anchor (`<a id="…"></a>`, after a list marker or a table's first pipe), so a
+/// rule can be named and linked. Every line that states a rule carries one, no id
+/// is on two lines, and every id ever given is in `docs/spec-ids.md`: listed while
+/// its rule stands, marked retired once it goes, so no id is ever given to a
+/// second rule.
+#[test]
+fn test_every_rule_of_the_spec_has_an_id_given_once() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let spec = std::fs::read_to_string(root.join("SPEC.md")).unwrap();
+    let registry = std::fs::read_to_string(root.join("docs/spec-ids.md")).unwrap();
+    let anchor = regex::Regex::new(r#"^\s*(?:(?:[-*+]|\d+\.)\s+|\|\s*)?<a id="([a-z0-9-]+)"></a>"#).unwrap();
+    let mut ids = std::collections::BTreeSet::new();
+    for (n, line) in spec.lines().enumerate() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || regex::Regex::new(r"^\|[\s:|-]+\|$").unwrap().is_match(t) {
+            continue;
+        }
+        let id = anchor.captures(line).unwrap_or_else(|| panic!("SPEC.md line {} states a rule with no id: {line:.80}", n + 1))[1].to_string();
+        assert!(ids.insert(id.clone()), "SPEC.md line {}: the id {id} is on another line too", n + 1);
+    }
+    let row = regex::Regex::new(r"^- `([a-z0-9-]+)`( retired)?$").unwrap();
+    let (mut standing, mut retired) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    for line in registry.lines().filter_map(|l| row.captures(l)) {
+        let id = line[1].to_string();
+        assert!(!standing.contains(&id) && !retired.contains(&id), "docs/spec-ids.md lists {id} twice");
+        if line.get(2).is_some() { retired.insert(id) } else { standing.insert(id) };
+    }
+    let given_again: Vec<_> = ids.intersection(&retired).collect();
+    assert!(given_again.is_empty(), "ids retired and given again: {given_again:?}");
+    let unlisted: Vec<_> = ids.difference(&standing).collect();
+    assert!(unlisted.is_empty(), "ids in SPEC.md that docs/spec-ids.md does not list: {unlisted:?}");
+    let gone: Vec<_> = standing.difference(&ids).collect();
+    assert!(gone.is_empty(), "ids docs/spec-ids.md lists as standing that SPEC.md no longer has (mark them retired): {gone:?}");
+}
+
+/// CI skips a change to markdown alone, except the markdown a test reads: every
+/// `.md` file a Rust test opens is named in `tests.yml`'s paths, so a change to
+/// it alone still runs the test that holds it.
+#[test]
+fn test_every_markdown_file_a_test_reads_runs_the_tests_when_it_changes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/tests.yml")).unwrap();
+    let named = regex::Regex::new(r#"join\("([A-Za-z0-9_./-]+\.md)"\)"#).unwrap();
+    let mut read = std::collections::BTreeSet::new();
+    let mut stack = vec![root.join("rust/crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().map(Result::unwrap) {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                for c in named.captures_iter(&std::fs::read_to_string(&path).unwrap()) {
+                    read.insert(c[1].to_string());
+                }
+            }
+        }
+    }
+    assert!(read.contains("SPEC.md"), "the scan found no markdown read: {read:?}");
+    for file in &read {
+        assert_eq!(workflow.matches(&format!("      - '{file}'\n")).count(), 2, "tests.yml runs on neither a pull request nor a push that changes only {file}, which a test reads");
+    }
+}
+
+/// The capacity budget in `capacity.rs` is the one `docs/architecture.md` §16 states.
+#[test]
+fn test_the_capacity_budget_is_the_one_the_architecture_states() {
+    use crate::capacity::*;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let arch = std::fs::read_to_string(root.join("docs/architecture.md")).unwrap();
+    for stated in [
+        format!("| Startup to the first figure | {} s |", STARTUP_MS / 1000),
+        format!("| An added trade, its request answered | {ANSWER_MS} ms |"),
+        format!("| An added trade, to its figures on the stream | {} s |", TO_FIGURES_MS / 1000),
+        format!("| A small import, to its figures on the stream | {} s |", TO_FIGURES_MS / 1000),
+        format!("`PI_SLOWDOWN` = {PI_SLOWDOWN}"),
+        "`BALANCES_EVERY` ÷ accounts at four times the owner's size".to_string(),
+        "`QUOTES_EVERY` ÷ priced holdings at that size".to_string(),
+    ] {
+        assert!(arch.contains(&stated), "docs/architecture.md §16 does not state: {stated}");
+    }
+    assert_eq!(GROWTH_LIMIT, 2.0, "§16: the work at four times the owner's size is under twice the work at it");
+    assert!(arch.contains("is under twice the work at the owner's size"));
+    for (op, issue) in OVER_BUDGET {
+        assert!(Op::ALL.iter().any(|o| o.name() == *op), "OVER_BUDGET names no operation: {op}");
+        assert!(regex::Regex::new(r"^#\d+$").unwrap().is_match(issue), "{op}'s entry names its issue as #N: {issue}");
+    }
 }

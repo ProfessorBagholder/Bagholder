@@ -6,6 +6,7 @@
 //! `http`.
 
 mod app;
+mod capacity;
 mod logfile;
 mod carry;
 mod compare;
@@ -286,6 +287,11 @@ fn serve() -> i32 {
     a.exit_code.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// The system's allocator, counting allocations only while a capacity probe
+/// measures (`capacity.rs`).
+#[global_allocator]
+static ALLOCATOR: capacity::Counting = capacity::Counting;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -312,6 +318,10 @@ fn main() {
     // the made-up book's facts and prices, for the browser tests and screenshots
     if args.first().map(String::as_str) == Some("demo-facts") {
         std::process::exit(demo_facts::cli(&args[1..]));
+    }
+    // the server held to its cost budget at the owner's size (docs/architecture.md §16)
+    if args.first().map(String::as_str) == Some("capacity") {
+        std::process::exit(capacity::cli(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));

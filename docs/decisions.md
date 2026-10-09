@@ -1,6 +1,6 @@
 # The owner's decisions
 
-Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
+Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each carries the owner's own words and where they were said; a decision proposed by a brief or a session and not yet confirmed by the owner is marked "unconfirmed" and binds nothing until the owner confirms it. Each names the test that fails if it is broken, quoting what it asserts, or says "review only" where no test can hold it.
 
 ## 2026-10-09
 
