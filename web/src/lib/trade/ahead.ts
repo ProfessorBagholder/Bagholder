@@ -7,7 +7,7 @@
 import type { Trade } from '../model'
 import { read, recall, remember, whenIdle } from '../reads.svelte'
 import { chartTfFor, loadHistory, type History } from './chart'
-import { flash } from '../ui.svelte'
+import { quiet } from '../ui.svelte'
 
 export interface Drawn {
   tf: string
@@ -41,7 +41,8 @@ export async function readAhead(trades: Trade[]): Promise<void> {
   running = true
   await whenIdle()
   const details = await read('GET /api/figures/details', undefined, { ahead: true })
-  if (!details.ok) flash('Could not read the executions: ' + details.error, 'err')
+  // reading ahead only: a page reads its own when opened
+  if (!details.ok) quiet('the executions could not be read ahead', details.error)
   for (const t of trades) {
     if (recall<Drawn>('chart ' + t.id)) continue
     // one at a time, and only while the page reads nothing of its own

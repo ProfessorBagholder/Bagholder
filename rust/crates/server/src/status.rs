@@ -76,33 +76,44 @@ pub struct StatusAnswer {
 }
 
 pub fn status(app: &Arc<App>) -> Status {
-    // what the header reads that fails is said in its error line, never read as nothing
-    let mut unread: Vec<String> = vec![];
+    // what the header reads that fails is said in its error line, never read as
+    // nothing, once it fails again at the next reading, as every failure is
+    // (`feeds::feed_failed`): each of its own reads by name, answered when it reads
+    let read = |key: &str, failed: Option<String>| match failed {
+        Some(why) => crate::feeds::feed_failed(app, key, why),
+        None => crate::feeds::feed_answered(app, key),
+    };
     let notices = crate::notify::book(app).map_err(|e| format!("The book could not be opened: {e}"));
     // the book's counts, as the figures hold them
     let (acts, accounts) = app.figures.get().and_then(|f| f.read(|e| (e.inputs().ledger.transactions.len() as i64, e.inputs().ledger.accounts.len() as i64))).unwrap_or((0, 0));
-    let upd = update::update_status(app).unwrap_or_else(|e| {
-        unread.push(e);
-        update::UpdateRecord::default()
-    });
-    let sess = session::load_session(app).unwrap_or_else(|e| {
-        unread.push(e);
-        None
-    });
+    let upd = update::update_status(app);
+    read("header:update", upd.as_ref().err().cloned());
+    // said above: the header reads on without it
+    let upd = match upd {
+        Ok(u) => u,
+        Err(_) => update::UpdateRecord::default(),
+    };
+    let sess = session::load_session(app);
+    read("header:login", sess.as_ref().err().cloned());
+    let sess = sess.unwrap_or(None);
     let notify_status = match &notices {
-        Ok(b) => notify::status(b).unwrap_or_else(|e| {
-            unread.push(format!("The notifications could not be read: {e}"));
-            NotifyStatus::default()
-        }),
+        Ok(b) => {
+            let s = notify::status(b).map_err(|e| format!("The notifications could not be read: {e}"));
+            read("header:notifications", s.as_ref().err().cloned());
+            match s {
+                Ok(n) => n,
+                Err(_) => NotifyStatus::default(),
+            }
+        }
         Err(e) => {
-            unread.push(e.clone());
+            read("header:notifications", Some(e.clone()));
             NotifyStatus::default()
         }
     };
     let open_orders = orders::open_orders_count(app, None);
     let can_update = update::can_update(app, &upd);
     let off = update::updates_off();
-    let mut sources = unread;
+    let mut sources: Vec<String> = vec![];
     sources.extend(app.figures.get().map(|f| f.source_failures(app.net.started()).unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default());
     sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));

@@ -139,12 +139,19 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
         for c in currencies {
             let (o, br) = (own_cash.get(&c).cloned().unwrap_or(Ok(Dec::ZERO)), stated_cash.get(&c).copied().unwrap_or(Dec::ZERO));
             let unknown = holds.every_currency_unknown || holds.unknown.contains(&c);
+            // a difference is told only once confirmed: a statement of the broker's
+            // made after the read states the same cash again, so nothing the broker
+            // moved since (and the feed may not list yet) can be behind it, and a
+            // difference never shows for a moment and goes (`SPEC.md` §4, the header)
+            let confirmed = b.cash_read.is_some()
+                && matches!((b.as_of, b.activity_read_at), (Some(stated), Some(read)) if stated > read)
+                && b.cash.get(&c).copied().unwrap_or(Dec::ZERO) == br;
             let o = match holds.cash.get(&c) {
                 Some(h) if !unknown => o.and_then(|o| o.checked_sub(*h).map_err(Gaps::from)),
                 _ => o,
             };
             if o != Ok(br) {
-                differences.push(Difference::Cash { currency: c, own: o, broker: br, pending: cash_pending || unknown });
+                differences.push(Difference::Cash { currency: c, own: o, broker: br, pending: cash_pending || unknown || !confirmed });
             }
         }
         // units only where the broker stated them: an account whose holdings it

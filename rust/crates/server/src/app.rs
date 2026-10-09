@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.5.3";
+pub const APP_VERSION: &str = "2.5.4";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -51,6 +51,10 @@ pub struct State {
     pub import_stop: bool,
     /// The last import that ended, and what it did.
     pub imported: Option<crate::csv_import::Imported>,
+    /// The pull's failure, said from the second pull in a row that meets one (`Confirmed`).
+    pub sync_problem: Confirmed,
+    /// The balances read's failure, said from the second read in a row that meets one.
+    pub balances_problem: Confirmed,
 }
 
 struct Job {
@@ -605,5 +609,52 @@ mod wall_tests {
         let waiting = std::thread::spawn(move || a.wait(Duration::from_secs(3600)));
         app.request_stop();
         assert!(waiting.join().unwrap(), "stopped");
+    }
+}
+
+/// A problem a check finds, said in the header only once the next check finds one
+/// too (`SPEC.md` §4, the header): a check the next one answers is no failure the
+/// person needs to know of, and nothing is shown for a moment and gone. Said, it
+/// stays, in the newest check's words, until a check finds none.
+#[derive(Debug, Default)]
+pub(crate) struct Confirmed {
+    /// The last check found a problem.
+    seen: bool,
+    said: Option<String>,
+}
+
+impl Confirmed {
+    /// This check's finding; whether what is said changed.
+    pub(crate) fn check(&mut self, problem: Option<String>) -> bool {
+        let said = match &problem {
+            None => None,
+            Some(p) if self.seen => Some(p.clone()),
+            Some(_) => None,
+        };
+        self.seen = problem.is_some();
+        let changed = said != self.said;
+        self.said = said;
+        changed
+    }
+
+    /// What the header says of it now.
+    pub(crate) fn said(&self) -> Option<String> {
+        self.said.clone()
+    }
+}
+
+#[cfg(test)]
+mod confirmed_tests {
+    use super::Confirmed;
+
+    #[test]
+    fn a_problem_is_said_from_the_second_check_in_a_row_and_until_one_finds_none() {
+        let mut c = Confirmed::default();
+        assert!(!c.check(Some("down".into())) && c.said().is_none(), "one check is not said");
+        assert!(!c.check(None) && c.said().is_none(), "the next check answered it");
+        c.check(Some("down".into()));
+        assert!(c.check(Some("still down".into())));
+        assert_eq!(c.said().as_deref(), Some("still down"), "said from the second, in the newest words");
+        assert!(c.check(None) && c.said().is_none(), "gone once a check finds none");
     }
 }

@@ -60,22 +60,31 @@ fn a_chart_s_daily_read_the_store_refuses_is_said_in_the_header_until_one_goes_t
     let q = HistoryQuery { symbol: "QMET".into(), exchange: "TSXV".into(), currency: "CAD".into(), kind: "Shares".into(), from: today.clone(), to: today, tf: "1d".into() };
     {
         let _broken = Broken::new(&app, REFUSE_MISSES, ALLOW_MISSES);
-        crate::feeds::history_payload(&app, &q);
-        until("the refused read said in the header", || error(&app).contains("daily bars of QMET could not be stored"));
+        // said once the next read fails too (`feeds::feed_failed`): asked again
+        // until a second read has run and failed (one in flight is not asked twice)
+        until("the refused read said in the header", || {
+            crate::feeds::history_payload(&app, &q);
+            error(&app).contains("daily bars of QMET could not be stored")
+        });
     }
     // the refused read left no miss behind, so the chart is due its read again
     crate::feeds::history_payload(&app, &q);
     until("the failure gone once a read went through", || !error(&app).contains("could not be stored"));
 }
 
+/// The archive is the app's own upkeep: a pass the store refuses leaves nothing the
+/// person sees wrong and is done at the next pass, so it is logged, never said
+/// (`SPEC.md` §4, the header).
 #[test]
-fn an_archive_pass_the_store_refuses_is_said_in_the_header_until_one_goes_through() {
+fn an_archive_pass_the_store_refuses_is_logged_and_never_said() {
     let _g = guard();
     let app = app();
     {
         let _broken = Broken::new(&app, REFUSE_MISSES, ALLOW_MISSES);
-        assert_eq!(crate::feeds::archive_intraday_bars(&app, Some(1)), Vec::<String>::new());
-        assert!(error(&app).contains("price bars could not be archived"), "{}", error(&app));
+        for _ in 0..3 {
+            assert_eq!(crate::feeds::archive_intraday_bars(&app, Some(1)), Vec::<String>::new());
+        }
+        assert!(!error(&app).contains("could not be archived"), "{}", error(&app));
     }
     assert!(!crate::feeds::archive_intraday_bars(&app, Some(1)).is_empty(), "the book has listings to archive");
     assert!(!error(&app).contains("could not be archived"), "{}", error(&app));
@@ -87,7 +96,7 @@ fn exposures_whose_store_cannot_be_read_are_said_in_the_header_until_a_pass_read
     let app = app();
     {
         let _broken = Broken::new(&app, "ALTER TABLE exposures RENAME TO exposures_away;", "ALTER TABLE exposures_away RENAME TO exposures;");
-        // said once the next pass fails too (`feeds::source_failed`)
+        // said once the next pass fails too (`feeds::feed_failed`)
         crate::feeds::refresh_exposures(&app);
         crate::feeds::refresh_exposures(&app);
         assert!(error(&app).contains("exposures could not be refreshed"), "{}", error(&app));
@@ -114,7 +123,7 @@ fn short_interest_that_could_not_be_read_is_said_in_the_header_until_the_listing
     {
         // the market's trading days, which days to cover is counted over, cannot be read
         let _broken = Broken::new(&app, "ALTER TABLE benchmark_closes RENAME TO benchmark_closes_away;", "ALTER TABLE benchmark_closes_away RENAME TO benchmark_closes;");
-        // one failed read is not said; the next failing too is (`feeds::source_failed`)
+        // one failed read is not said; the next failing too is (`feeds::feed_failed`)
         assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());
         assert!(!error(&app).contains("short interest of QNC"), "{}", error(&app));
         assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());

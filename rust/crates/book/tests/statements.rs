@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use bagholder_book::statements::{AccountDay, UnitsLine};
-use bagholder_core::{Currency, Dec};
+use bagholder_core::{Currency, Dec, Money};
 use common::*;
 
 fn day(s: &str) -> jiff::civil::Date {
@@ -201,4 +201,59 @@ fn a_working_buy_whose_order_has_another_record_that_moved_something_holds_an_un
     fill["orders"] = serde_json::json!(["order-b"]);
     f.store(&m, "fill-b", &fill);
     assert_eq!(held_at(&f, a, "2026-10-01T16:00:00Z")[0].amount, None);
+}
+
+/// Two statements of an account's cash stated at one instant (a balances read,
+/// then the activity read it prompted, at the same moment): the newest is the
+/// one written last, which holds what the activity read found (here a pending
+/// withdrawal, of no stated size), whatever the ids drawn for them. Held over
+/// many draws, since an id is random.
+#[test]
+fn of_two_statements_at_one_instant_the_one_written_last_is_the_newest() {
+    use bagholder_core::hold::HoldKind;
+    for _ in 0..64 {
+        let f = Fixture::new();
+        let a = f.account(&["cash-1"]);
+        let when = at("2026-10-09T14:13:21.740361Z");
+        let r = f.book.broker_read(f.connection, "cash", when).unwrap();
+        // the balances: the cash after the withdrawal, which the book has not read yet
+        f.book.store_cash(a, when, &BTreeMap::from([(Currency::CAD, d("6896.40"))]), &r).unwrap();
+        // the activity read finds the withdrawal, pending; the pull states the cash again
+        f.store(&Spelled::v(1), "withdrawal", &serde_json::json!({"hold": {"account": "cash-1", "kind": "withdrawal", "currency": "CAD"}}));
+        f.book.note_activity_read(a, when, true).unwrap();
+        let r = f.book.broker_read(f.connection, "cash", when).unwrap();
+        f.book.store_cash(a, when, &BTreeMap::from([(Currency::CAD, d("6896.40"))]), &r).unwrap();
+        let s = f.book.stated(a).unwrap();
+        assert_eq!(s.cash_read_holds.iter().map(|h| h.kind).collect::<Vec<_>>(), [HoldKind::Withdrawal], "the statement the activity read made, with the hold it found");
+        // what the account is worth and can borrow: the one written last
+        let v = f.book.broker_read(f.connection, "net-value", when).unwrap();
+        f.book.store_net_value(a, when, Money::new(d("1"), Currency::CAD), &v).unwrap();
+        f.book.store_net_value(a, when, Money::new(d("2"), Currency::CAD), &v).unwrap();
+        assert_eq!(f.book.stated(a).unwrap().net_value_now.map(|(_, m)| m.amount), Some(d("2")));
+        // (each read its own, as each pass makes one)
+        let b = f.book.broker_read(f.connection, "buying-power", when).unwrap();
+        f.book.store_buying_power(a, when, &Ok(Money::new(d("10"), Currency::CAD)), &b).unwrap();
+        let b = f.book.broker_read(f.connection, "buying-power", when).unwrap();
+        f.book.store_buying_power(a, when, &Ok(Money::new(d("20"), Currency::CAD)), &b).unwrap();
+        assert_eq!(f.book.stated(a).unwrap().buying_power.map(|(_, m)| m.unwrap().amount), Some(d("20")));
+    }
+}
+
+/// An instant's text does not sort as time (its fraction varies in length):
+/// a statement stated later in the same second, whose text sorts first, is
+/// still the newest.
+#[test]
+fn the_newest_statement_is_the_latest_stated_whatever_its_text_sorts_as() {
+    let f = Fixture::new();
+    let a = f.account(&["cash-1"]);
+    // "…21.74Z" sorts after "…21.7403Z" as text, though it is earlier
+    let (earlier, later) = (at("2026-10-09T14:13:21.74Z"), at("2026-10-09T14:13:21.7403Z"));
+    let v = f.book.broker_read(f.connection, "net-value", earlier).unwrap();
+    f.book.store_net_value(a, earlier, Money::new(d("1"), Currency::CAD), &v).unwrap();
+    f.book.store_net_value(a, later, Money::new(d("2"), Currency::CAD), &v).unwrap();
+    assert_eq!(f.book.stated(a).unwrap().net_value_now.map(|(_, m)| m.amount), Some(d("2")));
+    let r = f.book.broker_read(f.connection, "cash", earlier).unwrap();
+    f.book.store_cash(a, earlier, &BTreeMap::from([(Currency::CAD, d("1"))]), &r).unwrap();
+    f.book.store_cash(a, later, &BTreeMap::from([(Currency::CAD, d("2"))]), &r).unwrap();
+    assert_eq!(f.book.stated(a).unwrap().cash.map(|(_, c)| c[&Currency::CAD]), Some(d("2")));
 }

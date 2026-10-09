@@ -49,8 +49,8 @@ export const ui = $state<{
   modal: '' | 'trade' | 'import' | 'folder'
   // '' | 'clear' | 'disconnect' | `cancel:<orderId>` | `bracket:<bracketId>`
   confirm: string
-  notice: string
-  noticeKind: '' | 'ok' | 'err'
+  /** what the header says of the person's own actions, oldest first, the newest showing: each until they close it */
+  notices: Notice[]
   busy: '' | 'trade' | 'import' | 'folder' | 'clearing' | 'refresh'
   tradeForm: TradeForm
   importReport: ImportReport | null
@@ -71,8 +71,7 @@ export const ui = $state<{
   menuOpen: false,
   modal: '',
   confirm: '',
-  notice: '',
-  noticeKind: '',
+  notices: [],
   busy: '',
   tradeForm: freshTradeForm(),
   importReport: null,
@@ -89,16 +88,35 @@ export const ui = $state<{
 })
 
 
-/** Say something in the header's status line for a while. */
-export function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
-  ui.notice = msg
-  ui.noticeKind = kind
-  setTimeout(() => {
-    if (ui.notice === msg) {
-      ui.notice = ''
-      ui.noticeKind = ''
-    }
-  }, ms)
+/** A notice of an action's outcome: what it says, and whether it reports something not done. */
+export type Notice = { msg: string; kind: '' | 'ok' | 'err' }
+
+/** Say the outcome of something the person did in the header's status line, until
+ * they close it (SPEC.md §4, the header): never on a timer, so nothing is gone
+ * before it is read, copied or acted on. The newest shows, since it says what was
+ * just done; one it covers shows again once it is closed, so none is gone unread.
+ * The same words twice in a row are said once. */
+export function tell(msg: string, kind: '' | 'ok' | 'err' = 'ok'): void {
+  const last = ui.notices[ui.notices.length - 1]
+  if (last && last.msg === msg && last.kind === kind) return
+  ui.notices.push({ msg, kind })
+}
+
+/** The person closed the notice showing: the one it covered, if any, shows. */
+export function closeNotice(): void {
+  ui.notices.pop()
+}
+
+/** The notice showing: the newest not yet closed. */
+export function showing(): Notice | undefined {
+  return ui.notices[ui.notices.length - 1]
+}
+
+/** A failure of the page's own background work, which it recovers from by itself
+ * (the next reading or asking answers it) and which leaves nothing the person
+ * sees wrong: logged, never shown (SPEC.md §4, the header). */
+export function quiet(what: string, why: string): void {
+  console.warn(`Bagholder: ${what}: ${why}`)
 }
 
 // Sync: ask for it. Each step, and the end, reach the header as changes to the
@@ -127,15 +145,15 @@ export function refreshSession(): void {
   ui.busy = 'refresh'
   call('POST /api/refresh').then((r) => {
     ui.busy = ''
-    if (r.ok) flash('Session refreshed')
-    else flash(r.error, 'err')
+    if (r.ok) tell('Session refreshed')
+    else tell(r.error, 'err')
   })
 }
 
 /** Install the release on offer. Its progress reaches the header as the status changes. */
 export function updateNow(): void {
   call('POST /api/update').then((r) => {
-    if (!r.ok) flash(r.error, 'err')
+    if (!r.ok) tell(r.error, 'err')
   })
 }
 
@@ -197,13 +215,13 @@ export function cancelConnect(): void {
   if (cur) cur.error = ''
   // the header goes back to its line at once; a cancel the server refused is said there
   call('POST /api/login/cancel').then((r) => {
-    if (!r.ok) flash('Could not cancel the sign-in: ' + r.error, 'err')
+    if (!r.ok) tell('Could not cancel the sign-in: ' + r.error, 'err')
   })
 }
 // One login input event (click/key/wheel/text), forwarded to the streamed browser.
 export function loginInput(ev: LoginInput): void {
   call('POST /api/login/input', { body: ev }).then((r) => {
-    if (!r.ok) flash('The sign-in window did not take that: ' + r.error, 'err')
+    if (!r.ok) tell('The sign-in window did not take that: ' + r.error, 'err')
   })
 }
 
@@ -215,7 +233,7 @@ export function disconnectNow(): void {
   ui.confirm = ''
   // the header says the session is gone when the server's status does; a refusal is said there meanwhile
   call('POST /api/disconnect').then((r) => {
-    if (!r.ok) flash('Could not disconnect: ' + r.error, 'err')
+    if (!r.ok) tell('Could not disconnect: ' + r.error, 'err')
   })
 }
 
@@ -247,7 +265,7 @@ export async function clearDataNow(): Promise<void> {
     return
   }
   ui.confirm = ''
-  flash('Data cleared')
+  tell('Data cleared')
 }
 
 export function openTradeModal(): void {
@@ -288,7 +306,7 @@ export async function saveTrade(): Promise<void> {
     return
   }
   ui.modal = ''
-  flash(f.mode === 'opening' ? 'Opening balance added' : 'Trade added')
+  tell(f.mode === 'opening' ? 'Opening balance added' : 'Trade added')
 }
 
 // Import CSV: the account chosen, then files through the browser's picker, each
@@ -320,7 +338,7 @@ const importWaits = new Map<string, (done: Imported) => void>()
 function told(id: string): void {
   call('POST /api/import/told', { body: { id } }).then((r) => {
     // not kept: the next page opened may say the report again, so this one says why
-    if (!r.ok) flash(r.error, 'err')
+    if (!r.ok) tell(r.error, 'err')
   })
 }
 function fileReport(done: Imported): ImportFileReport {
@@ -349,9 +367,9 @@ $effect.root(() => {
       ui.importReport = { files: [fileReport(done)] }
     } else if (done.report) {
       const n = done.report.added
-      flash(`${done.file} · ${qty(n)} new ${n === 1 ? 'activity' : 'activities'} imported${done.report.stopped ? ' (stopped)' : ''}`)
+      tell(`${done.file} · ${qty(n)} new ${n === 1 ? 'activity' : 'activities'} imported${done.report.stopped ? ' (stopped)' : ''}`)
     } else {
-      flash(`${done.file}: ${done.error ?? ''}`, 'err')
+      tell(`${done.file}: ${done.error ?? ''}`, 'err')
     }
   })
 })
@@ -386,7 +404,7 @@ let importStopped = false
 export async function stopImport(): Promise<void> {
   importStopped = true
   const r = await call('POST /api/import/stop')
-  if (!r.ok) flash(r.error, 'err')
+  if (!r.ok) tell(r.error, 'err')
 }
 
 export function openFolder(): void {
@@ -433,7 +451,7 @@ export function scanNotice(w: WatchStatus): string | null {
 function scanned(w: Awaited<ReturnType<typeof call<'POST /api/watch/scan'>>>): void {
   watched(w)
   const notice = w.ok ? scanNotice(w) : null
-  if (notice) flash(notice)
+  if (notice) tell(notice)
 }
 export function watchFolder(): void {
   ui.busy = 'folder'
@@ -459,7 +477,7 @@ export async function exportCsv(): Promise<void> {
   const s = sort.trades
   const m = await read('GET /api/figures/trades', { query: { filters: JSON.stringify(applied.filters), sort: s.key, dir: s.dir } })
   if (!m.ok) {
-    flash('Could not export the trades: ' + m.error, 'err')
+    tell('Could not export the trades: ' + m.error, 'err')
     return
   }
   const cols = ['Open', 'Close', 'Symbol', 'Name', 'Account', 'Kind', 'Side', 'Status', 'Qty', 'Entry', 'Exit', 'Currency', 'P&L', 'P&L CAD', 'Fees', 'Hold days', 'Grade', 'Tags', 'Thesis']

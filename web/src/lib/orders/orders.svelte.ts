@@ -6,7 +6,7 @@
 
 import { book } from '../subs.svelte'
 import { filters } from '../filters.svelte'
-import { flash } from '../ui.svelte'
+import { tell } from '../ui.svelte'
 import { watchDoc } from '../live.svelte'
 import { draftStore, type TicketDraft } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
@@ -241,7 +241,7 @@ export async function orderEditSave(id: string) {
   panel.busy = ''
   if (!r.ok) { if (panel.orderEdit) panel.orderEdit.error = r.error; return }
   panel.orderEdit = null
-  flash('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice ?? o.limitPrice }), 'ok', 10000)
+  tell('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice ?? o.limitPrice }), 'ok')
 }
 
 export async function bracketEditSave(id: string) {
@@ -267,7 +267,7 @@ export async function bracketEditSave(id: string) {
     if (!r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = r.error; return }
   }
   panel.busy = ''; panel.bracketEdit = null
-  flash('Bracket changed · ' + symText(b.symbol), 'ok', 10000)
+  tell('Bracket changed · ' + symText(b.symbol), 'ok')
 }
 
 export async function bracketRemove(id: string, leg: string) {
@@ -278,20 +278,20 @@ export async function bracketRemove(id: string, leg: string) {
   panel.busy = ''
   if (!r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = r.error; return }
   panel.bracketEdit = null
-  flash((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + symText(b.symbol), 'ok', 10000)
+  tell((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + symText(b.symbol), 'ok')
 }
 
 export async function cancelOrderNow(id: string) {
   const o = orderById(id)
   const r = await call('POST /api/order/cancel', { body: { id } })
-  if (r.ok) flash('Cancel sent · ' + (o ? orderLine(o) : ''), 'ok', 10000)
-  else flash(r.error, 'err', 6000)
+  if (r.ok) tell('Cancel sent · ' + (o ? orderLine(o) : ''), 'ok')
+  else tell(r.error, 'err')
 }
 export async function cancelBracketNow(id: string) {
   const b = bracketById(id)
   const r = await call('POST /api/bracket/cancel', { body: { id } })
-  if (r.ok) flash('Bracket cancelled · ' + (b ? symText(b.symbol) : ''), 'ok', 10000)
-  else flash(r.error, 'err', 6000)
+  if (r.ok) tell('Bracket cancelled · ' + (b ? symText(b.symbol) : ''), 'ok')
+  else tell(r.error, 'err')
 }
 
 export { draftStore }

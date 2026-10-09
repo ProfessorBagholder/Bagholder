@@ -9,7 +9,7 @@
   import { signedPct } from './util'
   import { digits, sign, type Dec } from '../dec'
   import { call } from '../api'
-  import { flash } from '../ui.svelte'
+  import { tell } from '../ui.svelte'
   import { focusOnMount } from '../actions/focus'
   import { escapable } from '../escape'
 
@@ -56,7 +56,7 @@
       const r = await call('POST /api/tiles/set', { body })
       if (r.ok) return
       // refused: said in the header, and the row back to what the server has
-      flash('Could not save the tiles: ' + r.error, 'err')
+      tell('Could not save the tiles: ' + r.error, 'err')
       order = null
     })
     return sending

@@ -1035,6 +1035,11 @@ fn a_bracket_whose_exit_cannot_be_read_back_is_said_in_the_header_until_a_check_
     w.fake.0.lock().unwrap().read_fails.push(stop);
     w.later(5);
     w.tick();
+    // said from the second check in a row that meets it (`app::Confirmed`)
+    let said = crate::orders::order_failures(&w.app);
+    assert!(!said.iter().any(|s| s.contains("could not be read back")), "one check is not said: {said:?}");
+    w.later(5);
+    w.tick();
     let said = crate::orders::order_failures(&w.app);
     assert!(said.iter().any(|s| s.contains("its exit could not be read back from Wealthsimple")), "{said:?}");
     w.fake.0.lock().unwrap().read_fails.clear();

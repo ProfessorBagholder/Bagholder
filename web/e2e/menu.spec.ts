@@ -283,18 +283,23 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(dlg).toContainText('Watching /some/watched/folder')
   await expect(dlg).toContainText('Manual · activities · 3 rows · 2 new · 0 linked · 1 already stored')
   await expect(dlg).toContainText('line 1 is not UTF-8 text')
-  // the header says what the scan brought in, for four seconds, not in red
+  // the header says what the scan brought in, not in red, until it is closed
+  // (docs/decisions.md 2026-10-09: nothing removes itself on a timer)
   const notice = page.locator('#syncline')
+  const close = page.getByRole('button', { name: 'Close notice' })
   await expect(notice).toHaveText('2 new activities imported')
   await expect(notice.locator('.status-err')).toHaveCount(0)
-  await expect(notice).not.toHaveText('2 new activities imported', { timeout: 6000 })
+  // (closed from the header while the dialog is up over the page)
+  await close.dispatchEvent('click')
+  await expect(close).toHaveCount(0)
 
   // Scan now reads every file again: rows held already are nothing new
   const again = { ...report, added: 0, unchanged: 3 }
   await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, lastScanAdded: 0, files: [{ ...watched.files[0], read: { outcome: 'imported', report: again } }, watched.files[1]] } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
   await expect(notice).toHaveText('Folder scanned · nothing new')
-  await expect(notice).not.toHaveText('Folder scanned · nothing new', { timeout: 6000 })
+  await close.dispatchEvent('click')
+  await expect(close).toHaveCount(0)
 
   await page.unroute('**/api/watch/scan')
   await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, scanError: 'the folder: No such file or directory' } }))

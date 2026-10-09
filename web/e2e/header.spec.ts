@@ -198,6 +198,8 @@ test('a sync error cut in the header is read whole in the page\'s own tip on hov
   // and copied whole with the icon beside it
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.getByRole('button', { name: 'Copy error' }).click()
-  await expect(page.locator('#syncline')).toHaveText('Error copied')
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(error)
+  // the copy confirmed by the button's own state, and the error still there to read
+  await expect(page.getByRole('button', { name: 'Copy error' })).toHaveAttribute('data-copied', 'true')
+  await expect(page.locator('#syncline .status-err')).toHaveText(error)
 })

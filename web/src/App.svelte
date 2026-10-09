@@ -23,7 +23,7 @@
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import LoginView from './lib/LoginView.svelte'
-  import { cancelConnect, flash, followConnect, loginInput, updateNow } from './lib/ui.svelte'
+  import { cancelConnect, closeNotice, showing, tell, followConnect, loginInput, quiet, updateNow } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
@@ -153,6 +153,7 @@
       if (ui.confirm) { ui.confirm = ''; return }
       if (ui.modal) { ui.modal = ''; return }
       if (filterOpen || ui.menuOpen) { filterOpen = false; filterField = undefined; ui.menuOpen = false; return }
+      if (ui.notices.length) { closeNotice(); return }
       const el = document.activeElement as HTMLElement | null
       if (route.sub && route.tab === 'trades' && el && el.tagName !== 'TEXTAREA' && el.id !== 'tagInput') { history.back(); return }
       if (activeCount() > 0 && !isFieldFocused()) { resetFilters(); refilter(); return }
@@ -226,7 +227,8 @@
     everyTradeRead = true
     void read('GET /api/figures/trades', { query: { filters: '', sort: '', dir: '' } }, { key: EVERY_TRADE }).then((r) => {
       if (!r.ok) {
-        flash('Could not read the trades: ' + r.error, 'err')
+        // the page's own reading ahead: a trade's page reads its own when opened
+        quiet('every trade could not be read ahead', r.error)
         return
       }
       // then each trade's and holding's page made ready before it is first opened
@@ -270,12 +272,17 @@
     })
   })
 
-  /** The header's error, whole, to the clipboard. */
-  function copyError(): void {
-    const text = status?.error ?? ''
+  /** What the header's line says that can be copied: the notice showing, else the error standing. */
+  const said = $derived(showing()?.msg ?? (status?.error && !showingEmpty ? status.error : ''))
+  /** The text last copied: the copy button shows a check while the line still says it
+   * (a control's state, as Carbon's copy button confirms, never a message). */
+  let copied = $state('')
+  /** The header's line, whole, to the clipboard. */
+  function copySaid(): void {
+    const text = said
     navigator.clipboard.writeText(text).then(
-      () => flash('Error copied'),
-      (e) => flash('The error could not be copied: ' + (e instanceof Error ? e.message : String(e)), 'err'),
+      () => (copied = text),
+      (e) => tell('What the header says could not be copied: ' + (e instanceof Error ? e.message : String(e)), 'err'),
     )
   }
 
@@ -426,7 +433,7 @@
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;min-width:0">
       <!-- one line whatever it says: text past the room it has is cut, and read whole in the tip -->
       <span id="syncline" style="font-size:12px;color:var(--ink55);min-width:0;flex:1 1 auto;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right">
-        {#if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
+        {#if showing()}<span class={showing()!.kind === 'err' ? 'status-err' : ''}>{showing()!.msg}</span>
         {:else if status?.updating}<span class="spin"></span>{status.updating}
         {:else if status?.updateError}<span class="status-err">{status.updateError}</span>
         {:else if status?.protocol && status.protocol !== PROTOCOL}<span class="status-err">Restart Bagholder to finish the update</span>
@@ -438,10 +445,16 @@
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>
-      {#if status?.error && !showingEmpty}
-        <!-- the whole error, whatever the line had room for -->
-        <button class="heat-ghost" aria-label="Copy error" style="color:var(--neg)" onclick={copyError}>
-          <svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.copy} /></svg>
+      {#if said}
+        <!-- the whole of what the line says, whatever room it had -->
+        <button class="heat-ghost" aria-label={showing() ? 'Copy notice' : 'Copy error'} data-copied={copied === said} style={showing()?.kind === 'ok' || showing()?.kind === '' ? '' : 'color:var(--neg)'} onclick={copySaid}>
+          <svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor"><path d={copied === said ? ICONS.check : ICONS.copy} /></svg>
+        </button>
+      {/if}
+      {#if showing()}
+        <!-- a notice stays until closed (SPEC.md §4, the header) -->
+        <button class="heat-ghost" aria-label="Close notice" onclick={closeNotice}>
+          <svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.x} /></svg>
         </button>
       {/if}
       <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative;flex:none" onclick={() => (ui.ordersOpen = true)}>

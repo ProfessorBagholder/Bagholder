@@ -64,31 +64,37 @@ pub struct FeedsState {
     shorts_left: AtomicI64,
 }
 
-/// `feed` has failed: said in the header, in `why`'s words, until it next answers.
-/// A request refused by `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the
-/// feed's and is not said (as the market sources' cache does not record one).
+/// `feed` has failed: said in the header, in `why`'s words, only once it has failed
+/// `SAID_AFTER` times in a row, and then until it next answers (`SPEC.md` §4, the
+/// header): a failure the next asking answers is no failure the person needs to
+/// know of, and nothing is shown for a moment and gone. A request refused by
+/// `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the feed's and is not
+/// said (as the market sources' cache does not record one).
 pub(crate) fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
     if bagholder_net::client::is_offline_refusal(&why) {
         return;
     }
-    let was = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).insert(feed.to_string(), why.clone());
-    if was.as_deref() != Some(why.as_str()) {
-        app.events.signal();
-    }
-}
-
-/// A read from an outside source failed: said in the header (`feed_failed`) only
-/// once the source has failed `SAID_AFTER` times in a row, so a single refused or
-/// lost request, which the next asking answers, is not told to the person.
-pub(crate) fn source_failed(app: &Arc<App>, feed: &str, why: String) {
     let missed = {
         let mut m = app.feeds.missed.lock().unwrap_or_else(|e| e.into_inner());
         let n = m.entry(feed.to_string()).or_insert(0);
         *n += 1;
         *n
     };
+    // logged as a run of failures starts; said once it is confirmed
+    if missed == 1 {
+        log(&format!("bagholder feeds: {feed}: {why}"));
+    }
     if missed >= bagholder_sources::health::SAID_AFTER {
-        feed_failed(app, feed, why);
+        feed_down(app, feed, why);
+    }
+}
+
+/// `feed` is down and no asking again can answer it until something changes (a
+/// thread that ended): said in the header at once, until it next answers.
+pub(crate) fn feed_down(app: &Arc<App>, feed: &str, why: String) {
+    let was = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).insert(feed.to_string(), why.clone());
+    if was.as_deref() != Some(why.as_str()) {
+        app.events.signal();
     }
 }
 
@@ -256,7 +262,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     let (today_s, _, _) = bagholder_market::clock_now();
     let Ok(p) = pool(app) else { return };
     let ctx = exposure::Ctx { conn: &c, pool: p, today: today_s.clone() };
-    let exposure_failed = |e: String| source_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
+    let exposure_failed = |e: String| feed_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
     let stale = |ids: &[String]| exposure::stale(&ctx, ids);
     let mut todo: Vec<String> = match stale(&held) {
         Ok(t) => t.into_iter().filter(|sid| secs.contains_key(sid)).collect(),
@@ -362,11 +368,11 @@ pub fn refresh_exposures(app: &Arc<App>) {
     if stopped > 0 {
         failures.push(format!("{stopped} of the readers stopped short"));
     }
-    // what failed are outside sources' answers: said once the next pass fails too (`source_failed`)
+    // what failed are outside sources' answers: said once the next pass fails too (`feed_failed`)
     if failures.is_empty() {
         feed_answered(app, EXPOSURE);
     } else {
-        source_failed(app, EXPOSURE, format!("The exposure records could not be brought up to date: {}", failures.join("; ")));
+        feed_failed(app, EXPOSURE, format!("The exposure records could not be brought up to date: {}", failures.join("; ")));
     }
 }
 
@@ -427,7 +433,7 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
         let (Ok(c), Ok(p)) = (conn(&a), pool(&a)) else { return }; // said in the header by `conn`
         let ctx = exposure::Ctx { conn: &c, pool: p, today: today() };
         if let Err(e) = exposure::share_exposure(&ctx, &symbol, &exchange, &currency) {
-            source_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
+            feed_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
         }
     });
 }
@@ -518,7 +524,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
             }
             Err(e) => {
                 log(&format!("bagholder news: refresh failed: {}", e));
-                source_failed(app, "news", format!("The news could not be refreshed: {e}"));
+                feed_failed(app, "news", format!("The news could not be refreshed: {e}"));
                 0
             }
         }
@@ -2142,7 +2148,7 @@ fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf:
     });
     match &rec {
         Ok(_) => feed_answered(app, &feed),
-        Err(why) => source_failed(app, &feed, why.clone()),
+        Err(why) => feed_failed(app, &feed, why.clone()),
     }
     app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).remove(&which);
     app.events.signal();
@@ -2297,7 +2303,7 @@ pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str,
         }
         Err(e) => {
             // said with every other listing the same failure stopped (`feed_failures`)
-            source_failed(app, &feed, e.to_string());
+            feed_failed(app, &feed, e.to_string());
             return Ok(None);
         }
     };
@@ -2973,12 +2979,11 @@ pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String
             Ok(out)
         });
         match worked {
-            Ok(out) => {
-                feed_answered(app, "archive");
-                out
-            }
+            Ok(out) => out,
+            // the app's own upkeep, which leaves nothing the person sees wrong and is
+            // done at the next pass: logged, never said (`SPEC.md` §4, the header)
             Err(e) => {
-                feed_failed(app, "archive", format!("The price bars could not be archived: {e}"));
+                log(&format!("bagholder feeds: the price bars could not be archived: {e}"));
                 vec![]
             }
         }
@@ -3036,8 +3041,8 @@ pub fn archive_loop(app: Arc<App>) {
                     match history::archive_next_due_secs(&c, recs, &today_s, now) {
                         Ok(due) => due,
                         Err(e) => {
-                            // said until a pass reads the store again, which the book changing starts
-                            feed_failed(&app, "archive", format!("The price bars could not be archived: {e}"));
+                            // the app's own upkeep: logged, and tried again when the book changes
+                            log(&format!("bagholder feeds: the price bars could not be archived: {e}"));
                             None
                         }
                     }

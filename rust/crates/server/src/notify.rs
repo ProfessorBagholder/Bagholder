@@ -695,7 +695,8 @@ fn enqueue(app: Arc<App>, title: String, body: String, chan: String) {
     // means the thread died, and the system's notifications with it
     match tx.lock().unwrap().send((title, body, chan)) {
         Ok(()) => crate::feeds::feed_answered(&app, SYSTEM_NOTICES),
-        Err(_) => crate::feeds::feed_failed(&app, SYSTEM_NOTICES, "The system's notifications stopped: the thread that shows them ended".into()),
+        // nothing asked again brings it back: said at once
+        Err(_) => crate::feeds::feed_down(&app, SYSTEM_NOTICES, "The system's notifications stopped: the thread that shows them ended".into()),
     }
 }
 
@@ -1645,6 +1646,9 @@ mod tests {
         c.notices().execute_batch("CREATE TRIGGER refuse_told BEFORE INSERT ON told BEGIN SELECT RAISE(ABORT, 'the mark was refused'); END").unwrap();
         note(&[older.clone(), first.clone()], &["tmx:1"]);
         assert!(posted(&app).is_empty(), "nothing is told while its mark cannot be kept");
+        assert!(!crate::status::status(&app).error.contains("press releases"), "one failure, which the next asking may answer, is not said");
+        note(&[older.clone(), first.clone()], &["tmx:1"]);
+        assert!(posted(&app).is_empty());
         let said = crate::status::status(&app).error;
         assert!(said.contains("The press releases could not be told") && said.contains("the mark was refused"), "{said}");
         c.notices().execute_batch("DROP TRIGGER refuse_told").unwrap();

@@ -4,7 +4,7 @@ import { forgetHistory } from './trade/chart'
 import { call } from './api'
 import { askAgain, held, read } from './reads.svelte'
 import { leaveSub, route } from './router.svelte'
-import { flash } from './ui.svelte'
+import { tell } from './ui.svelte'
 import { applyFilters, book, markets, positions, trade, trades } from './subs.svelte'
 
 // The page's data comes over one connection (live.svelte.ts), one document per
@@ -120,7 +120,7 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
   const d = await call('POST /api/journal', { body: { id, thesis: t.thesis ?? '', tags: t.tags ?? [], grade: t.grade ?? '' } })
   if (!d.ok) {
     // said in the header, with the server's reason, and the row put back as the server has it
-    flash('Could not save journal entry: ' + d.error, 'err')
+    tell('Could not save journal entry: ' + d.error, 'err')
     resync()
   }
 }
@@ -135,7 +135,7 @@ export async function addWatch(m: { symbol: string; exchange: string; name: stri
   }
   const d = await call('POST /api/watchlist/add', { body: { symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency } })
   if (!d.ok) {
-    flash('Could not add ' + m.symbol + ' to the watchlist: ' + d.error, 'err')
+    tell('Could not add ' + m.symbol + ' to the watchlist: ' + d.error, 'err')
     resync()
   }
 }
@@ -149,7 +149,7 @@ export async function removeWatch(id: string, symbol: string): Promise<void> {
   mk.watchlist = mk.watchlist.filter((w) => w.id !== id)
   const d = await call('POST /api/watchlist/remove', { body: { id } })
   if (!d.ok) {
-    flash('Could not remove ' + symbol + ' from the watchlist: ' + d.error, 'err')
+    tell('Could not remove ' + symbol + ' from the watchlist: ' + d.error, 'err')
     resync()
   }
 }

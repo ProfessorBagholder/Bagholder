@@ -19,11 +19,10 @@ use jiff::{SignedDuration, Timestamp};
 use super::gate::{self, Held};
 use super::{log, ticket_session, TicketQuoteDetail};
 
-/// Say, for the header, why the brackets' quote cannot be acted on; `None` once it can.
+/// Why the brackets' quote cannot be acted on, this check, for the header (said
+/// once the next check finds it too, `Confirmed`); `None` once it can.
 fn quote_problem(app: &App, problem: Option<String>) {
-    let mut p = app.orders.quote_problem.lock().unwrap_or_else(|e| e.into_inner());
-    if *p != problem {
-        *p = problem;
+    if app.orders.quote_problem.lock().unwrap_or_else(|e| e.into_inner()).check(problem) {
         app.events.signal();
     }
 }
@@ -293,18 +292,18 @@ fn awaited(x: &Exit) -> bool {
     x.fold.state.in_flight()
 }
 
-/// What stands in the way of a bracket's check, said in the header until the bracket's
-/// next check goes through (`SPEC.md` §1: a failure is said until its own next
-/// success); the terminal line stays beside it. `None` clears it.
+/// What stands in the way of a bracket's check, said in the header from the second
+/// check of it in a row that meets it until a check goes through (`Confirmed`;
+/// `SPEC.md` §4, the header); the log line stays beside it. `None` clears it.
 pub(crate) fn trouble(app: &Arc<App>, id: &str, why: Option<String>) {
     let changed = {
         let mut t = app.orders.bracket_trouble.lock().unwrap_or_else(|e| e.into_inner());
-        let before = t.get(id).cloned();
-        match &why {
-            Some(w) => t.insert(id.to_string(), w.clone()),
-            None => t.remove(id),
-        };
-        before != why
+        let cleared = why.is_none();
+        let changed = t.entry(id.to_string()).or_default().check(why);
+        if cleared {
+            t.remove(id);
+        }
+        changed
     };
     if changed {
         app.events.signal();
@@ -542,15 +541,9 @@ pub fn bracket_loop(app: &Arc<App>) {
         if app.wait(Duration::from_secs(BRACKET_POLL_SEC)) {
             return;
         }
-        // a live bracket not checked is said from the first check missed, with why
+        // a live bracket not checked is said from the second check missed in a row, with why
         let blocked = super::tools::watch_blocked(app).map(|why| format!("Brackets are not being watched: {why}."));
-        let changed = {
-            let mut p = app.orders.watch_problem.lock().unwrap_or_else(|e| e.into_inner());
-            let changed = *p != blocked;
-            *p = blocked.clone();
-            changed
-        };
-        if changed {
+        if app.orders.watch_problem.lock().unwrap_or_else(|e| e.into_inner()).check(blocked.clone()) {
             app.events.signal();
         }
         if blocked.is_some() {
