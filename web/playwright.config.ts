@@ -6,6 +6,9 @@ import { defineConfig } from '@playwright/test'
 // placed (BAGHOLDER_DRY_ORDERS).
 // (E2E_PORT: a second run beside the first, each with its own server and book)
 export const PORT = Number(process.env.E2E_PORT) || 8791
+// (E2E_URL: a server already running, the image in CI; only the order test, which
+// stands nothing in, is run against it, and nothing is started here)
+const URL = process.env.E2E_URL
 
 export default defineConfig({
   testDir: 'e2e',
@@ -15,13 +18,14 @@ export default defineConfig({
   outputDir: process.env.E2E_PORT ? `test-results-${process.env.E2E_PORT}` : 'test-results',
   timeout: 30_000,
   use: {
-    baseURL: `http://127.0.0.1:${PORT}`,
+    baseURL: URL ?? `http://127.0.0.1:${PORT}`,
     viewport: { width: 1440, height: 900 },
     colorScheme: 'dark',
     // the viewer's zone, pinned: a machine's own zone never changes an expected time
     timezoneId: 'America/Toronto',
   },
-  webServer: {
+  ...(URL ? { testMatch: 'dryorder.spec.ts' } : {}),
+  webServer: URL ? undefined : {
     command: 'node e2e/serve.mjs',
     url: `http://127.0.0.1:${PORT}/api/status`,
     reuseExistingServer: false,
