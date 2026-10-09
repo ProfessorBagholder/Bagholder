@@ -207,35 +207,6 @@ jobs:
             echo "pin each action above to a full commit SHA"; exit 1
           fi
 
-  # The server held to its cost budget (docs/architecture.md §16) at the owner's size and four
-  # times it, on the arm64 machine the budget is stated against: `bagholder capacity run` builds
-  # both books, measures every operation seven times, prints the table and fails when an operation
-  # off OVER_BUDGET misses its budget or the growth rule, or one on it now meets both. The two books
-  # are cached: the build is deterministic, and the key is every source the build runs through, so
-  # a change to any of them builds them again.
-  capacity:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-        with:
-          workspaces: rust
-          shared-key: capacity
-      - name: The server, as released
-        run: cargo build --release --bin bagholder
-        working-directory: rust
-      - name: The books of the owner's size and four times it
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/capacity
-          key: capacity-books-${{ hashFiles('rust/Cargo.lock', 'rust/crates/core/src/**', 'rust/crates/sqlite/src/**', 'rust/crates/book/src/**', 'rust/crates/broker/src/**', 'rust/crates/wealthsimple/src/**', 'rust/crates/sources/src/**', 'rust/crates/engine/src/**', 'rust/crates/server/src/capacity.rs') }}
-      - name: The cost budget
-        run: |
-          set -o pipefail
-          target/release/bagholder capacity run "$RUNNER_TEMP/capacity" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-        working-directory: rust
-
   # The page driven in a real browser against the real server, on a made-up book
   # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE.
   browser:

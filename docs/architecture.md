@@ -225,7 +225,7 @@ Nothing is logged only to a terminal, and nothing is caught and discarded.
 
 ### The cost budget
 
-A small machine (a Raspberry Pi) must carry the app at the owner's size and well beyond it. The `capacity` job (`.github/workflows/tests.yml`) holds the server to this budget on every pull request, on an arm64 runner, on a made-up book of the owner's size and on one four times it, built through the real Wealthsimple adapter and pull from replies in Wealthsimple's own shapes (`bagholder capacity`, `rust/crates/server/src/capacity.rs`; the constants there and this table are held equal by a test). An added trade's request is answered once its figures are recomputed, so its measurement is held to the 100 ms row, which covers the 1 s one.
+A small machine (a Raspberry Pi) must carry the app at the owner's size and well beyond it. The `capacity` workflow (`.github/workflows/capacity.yml`) holds the server to this budget on every pull request that changes the Rust code, on an arm64 runner, on a made-up book of the owner's size and on one four times it, built through the real Wealthsimple adapter and pull from replies in Wealthsimple's own shapes (`bagholder capacity`, `rust/crates/server/src/capacity.rs`; the constants there and this table are held equal by a test). An added trade's request is answered once its figures are recomputed, so its measurement is held to the 100 ms row, which covers the 1 s one.
 
 | Operation | Budget on a Pi | Where it comes from |
 | --- | --- | --- |
