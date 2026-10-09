@@ -1,6 +1,6 @@
 import { positions, book } from '../subs.svelte'
 import type { Position } from '../model'
-import { ui, flash } from '../ui.svelte'
+import { ui, tell } from '../ui.svelte'
 import { watchDoc } from '../live.svelte'
 import { symText } from '../sym'
 import { orderPx, qty as qtyFmt } from '../fmt'
@@ -296,7 +296,7 @@ export async function submit() {
     cur.submitError = r.error
     return
   }
-  flash(notice(v, r.status), 'ok', 10000) // longer than the other notices: it names the whole order
+  tell(notice(v, r.status), 'ok')
   closeTicket(true)
 }
 

@@ -4,6 +4,13 @@
 //! was last read in full, and the two sides of a move of holdings. Kept as the
 //! broker stated them: a later statement is kept beside an earlier one, never
 //! over it, and the newest is the one read.
+//!
+//! The newest is the one written last. Statements are appended as they are
+//! stated, one read at a time, so the order they were written in is the order
+//! they were stated in: two stated at one instant are told apart by it (a read
+//! made after the other, holding what that one did not), never by an id drawn
+//! at random, nor by an instant's text, whose fraction varies in length and so
+//! does not sort as time.
 
 use std::collections::BTreeMap;
 
@@ -137,7 +144,7 @@ impl Book {
         let mut st = self.conn().prepare(&format!(
             "SELECT r.at, s.id, u.quantity FROM statements s JOIN broker_reads r ON r.id = s.read_id
              LEFT JOIN statement_units u ON u.statement_id = s.id AND u.instrument_id IN {}
-             WHERE s.account_id = ?1 AND s.kind = 'units' AND r.at > ?3 ORDER BY r.at DESC, s.id DESC",
+             WHERE s.account_id = ?1 AND s.kind = 'units' AND r.at > ?3 ORDER BY s.rowid DESC",
             crate::identity::group_sql("?2")
         ))?;
         let rows = st.query_map(params![account.to_string(), head.to_string(), at_text(since)], |r| {
@@ -190,7 +197,7 @@ impl Book {
                 let newest: Option<(String, String, String)> = self
                     .conn()
                     .query_row(
-                        "SELECT net_value, net_deposits, currency FROM account_days a JOIN broker_reads r ON r.id = a.read_id WHERE account_id = ?1 AND day = ?2 ORDER BY r.at DESC, r.id DESC LIMIT 1",
+                        "SELECT net_value, net_deposits, currency FROM account_days a JOIN broker_reads r ON r.id = a.read_id WHERE account_id = ?1 AND day = ?2 ORDER BY a.rowid DESC LIMIT 1",
                         params![account.to_string(), day(d.day)],
                         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
@@ -362,7 +369,7 @@ impl Book {
         let mut out = Stated::default();
         // each day's newest statement
         let mut st = self.conn().prepare(
-            "SELECT d.day, d.net_value, d.net_deposits, d.currency FROM account_days d JOIN broker_reads r ON r.id = d.read_id WHERE d.account_id = ?1 ORDER BY d.day, r.at, r.id",
+            "SELECT d.day, d.net_value, d.net_deposits, d.currency FROM account_days d JOIN broker_reads r ON r.id = d.read_id WHERE d.account_id = ?1 ORDER BY d.day, d.rowid",
         )?;
         let rows = st.query_map(params![a], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
         for r in rows {
@@ -383,32 +390,33 @@ impl Book {
         };
         // newest first, by the instant rather than its text (whose fraction's
         // length varies): the newest, and the newest the last full read covers
-        let mut st = self.conn().prepare("SELECT id, stated_at FROM statements WHERE account_id = ?1 AND kind = 'cash'")?;
-        let mut stated: Vec<(jiff::Timestamp, String)> = vec![];
-        for r in st.query_map(params![a], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-            let (id, at) = r?;
-            stated.push((text::instant("statements", "stated_at", &at)?, id));
+        // two stated at one instant: the one written last (the module's note)
+        let mut st = self.conn().prepare("SELECT id, stated_at, rowid FROM statements WHERE account_id = ?1 AND kind = 'cash'")?;
+        let mut stated: Vec<(jiff::Timestamp, i64, String)> = vec![];
+        for r in st.query_map(params![a], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))? {
+            let (id, at, written) = r?;
+            stated.push((text::instant("statements", "stated_at", &at)?, written, id));
         }
         stated.sort_unstable_by(|x, y| y.cmp(x));
-        if let Some((at, id)) = stated.first() {
+        if let Some((at, _, id)) = stated.first() {
             out.cash = Some((*at, cash_of(id)?));
         }
         if let Some(read) = out.activity_read_at {
-            if let Some((at, id)) = stated.iter().find(|(at, _)| *at <= read) {
+            if let Some((at, _, id)) = stated.iter().find(|(at, _, _)| *at <= read) {
                 out.cash_read = Some((*at, cash_of(id)?));
                 out.cash_read_holds = self.statement_holds(id)?;
             }
         }
         let value: Option<(String, String, String)> = self
             .conn()
-            .query_row("SELECT stated_at, amount, currency FROM account_values WHERE account_id = ?1 ORDER BY stated_at DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT stated_at, amount, currency FROM account_values WHERE account_id = ?1 ORDER BY rowid DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
         if let Some((at, amount, currency)) = value {
             out.net_value_now = Some((text::instant("account_values", "stated_at", &at)?, Money::new(text::dec("account_values", "amount", &amount)?, text::parsed("account_values", "currency", &currency, Currency::parse)?)));
         }
         let units: Option<(String, String)> = self
             .conn()
-            .query_row("SELECT id, as_of_day FROM statements WHERE account_id = ?1 AND kind = 'units' ORDER BY as_of_day DESC, id DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT id, as_of_day FROM statements WHERE account_id = ?1 AND kind = 'units' ORDER BY as_of_day DESC, rowid DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
         if let Some((id, d)) = units {
             // each line under the instrument the book reads it as: the units of
@@ -453,7 +461,7 @@ impl Book {
         let bp: Option<(String, Option<String>, Option<String>, Option<String>)> = self
             .conn()
             .query_row(
-                "SELECT b.stated_at, b.amount, b.currency, b.unavailable FROM buying_power b JOIN broker_reads r ON r.id = b.read_id WHERE b.account_id = ?1 ORDER BY b.stated_at DESC, r.at DESC, r.id DESC LIMIT 1",
+                "SELECT b.stated_at, b.amount, b.currency, b.unavailable FROM buying_power b JOIN broker_reads r ON r.id = b.read_id WHERE b.account_id = ?1 ORDER BY b.rowid DESC LIMIT 1",
                 params![a],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )

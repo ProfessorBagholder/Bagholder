@@ -9,7 +9,7 @@
 // moves with it.
 
 import { heldOnceRead, read } from './reads.svelte'
-import { flash } from './ui.svelte'
+import { tell } from './ui.svelte'
 import { bareSymbol } from './sym'
 import { localDay } from './fmt'
 import type { Dec } from './dec'
@@ -108,7 +108,7 @@ export async function loadListing(id: string, heldBy: (positionId: string) => vo
   const d = await read('GET /api/listing', q, { key: id })
   if (!d.ok) {
     // said in the header; the page shows the listing without executions rather than waiting for ever
-    flash('Could not read ' + l.symbol + ': ' + d.error, 'err')
+    tell('Could not read ' + l.symbol + ': ' + d.error, 'err')
     l.fills = []
     return
   }

@@ -116,7 +116,7 @@
     "working": [
       "each account: 1,000 deposited, 10 X bought for 500 on 01-06: cash 500 CAD and 10 X",
       "E: activity read in full at 01-07 16:00; cash stated then 500 (agrees), stated again at 01-08 10:00 as 480 (a fill the record may not hold yet): the cash is checked against 500, no difference",
-      "F: the same, but the cash stated at the read is 450: one cash difference, not pending, though the newest statement is newer than the read",
+      "F: the same, but the cash stated at the read is 450: one cash difference against the read; the only statement after the read states 480, not 450, so nothing confirms it and it is pending (SPEC: a difference in cash is said only once a statement made after that read states the same cash again)",
       "G: activity read at 01-07 16:00, cash newest at 01-08 10:00 and none at or before the read, units stated as of 01-07 (a day read in full) as 12 X: the cash (500) agrees; the units differ and are not pending; the check is pending",
       "H: as G but units stated as of today (no day given) as 12 X: the difference is pending"
     ],
@@ -275,6 +275,188 @@
         {
           "account": "F",
           "differences": 1,
+          "pending_differences": 1
+        },
+        {
+          "account": "G",
+          "differences": 1,
+          "pending_differences": 0,
+          "pending": true
+        },
+        {
+          "account": "H",
+          "differences": 1,
+          "pending_differences": 1,
+          "pending": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "the broker check says a cash difference once a statement made after the last full read states the same cash again",
+    "spec": "SPEC.md §4 Pages (the header's failures): the broker check's disagreements",
+    "working": [
+      "each account: 1,000 deposited, 10 X bought for 500 on 01-06: cash 500 CAD and 10 X",
+      "E: activity read in full at 01-07 16:00; cash stated then 500 (agrees), stated again at 01-08 10:00 as 480 (a fill the record may not hold yet): the cash is checked against 500, no difference",
+      "F: the cash stated at the read is 450, and the statement made after the read (01-08 10:00) states 450 again: the book's 500 against 450 is one cash difference, confirmed, so said (not pending)",
+      "G: activity read at 01-07 16:00, cash newest at 01-08 10:00 and none at or before the read, units stated as of 01-07 (a day read in full) as 12 X: the cash (500) agrees; the units differ and are not pending; the check is pending",
+      "H: as G but units stated as of today (no day given) as 12 X: the difference is pending"
+    ],
+    "today": "2026-01-08",
+    "accounts": [
+      {
+        "id": "E"
+      },
+      {
+        "id": "F"
+      },
+      {
+        "id": "G"
+      },
+      {
+        "id": "H"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "E1",
+        "account": "E",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "E2",
+        "account": "E",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "F1",
+        "account": "F",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "F2",
+        "account": "F",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "G1",
+        "account": "G",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "G2",
+        "account": "G",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "H1",
+        "account": "H",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "H2",
+        "account": "H",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      }
+    ],
+    "brokers": {
+      "E": {
+        "cash": {
+          "CAD": "480"
+        },
+        "cash_read": {
+          "CAD": "500"
+        },
+        "held": {
+          "X": "10"
+        },
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      },
+      "F": {
+        "cash": {
+          "CAD": "450"
+        },
+        "cash_read": {
+          "CAD": "450"
+        },
+        "held": {
+          "X": "10"
+        },
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      },
+      "G": {
+        "cash": {
+          "CAD": "500"
+        },
+        "held": {
+          "X": "12"
+        },
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      },
+      "H": {
+        "cash": {
+          "CAD": "500"
+        },
+        "held": {
+          "X": "12"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z"
+      }
+    },
+    "expect": {
+      "checks": [
+        {
+          "account": "E",
+          "differences": 0,
+          "pending_differences": 0
+        },
+        {
+          "account": "F",
+          "differences": 1,
           "pending_differences": 0
         },
         {
@@ -303,9 +485,9 @@
       "Q (margin): book USD 2000 (q1). The put sale is secured by buying power, not cash: hold 0. Net 2000 = broker 2000. No difference.",
       "R (TFSA): book USD 2000 - 100 = 1900 (r1, r2), holding 1 long Y. Hold: put sale of 1 Y; contracts opened beyond the 1 long Y held = 0, so nothing is cash-secured: hold 0 (READING: the literal formula 10 x 100 x 0 - 80 = -80 would be a negative hold; a hold is never negative, and a sale against a long held opens nothing). Net 1900 = broker 1900. No difference.",
       "S (TFSA): book USD 1000 - 500 = 500 and 10 X (s1, s2). No holds. Cash 500 = broker 500; units 10 X = broker 10 X as of 2026-01-07. No difference.",
-      "T (cash): book CAD 1000 (t1). Hold: buy stating 100 -> 100. Net 1000 - 100 = 900 vs broker 850: differs, said. own 900.00, broker 850.00. differences 1, pending 0.",
+      "T (cash): book CAD 1000 (t1). Hold: buy stating 100 -> 100. Net 1000 - 100 = 900 vs broker 850: differs. The only statement is the one the read covers (01-07 15:00, before the read at 16:00); none made after the read states 850 again, so it is pending. own 900.00, broker 850.00. differences 1, pending 1.",
       "U (cash): book CAD 1000 (u1). Hold: withdrawal, amount unstated -> CAD check waits. 1000 vs broker 600: differs, pending. own 1000.00, broker 600.00. differences 1, pending 1.",
-      "V: cash 3,000 − 100 (one long W bought) = 2,900 USD; the working sale of 3 W contracts closes the 1 long and opens 2: hold = (3,000 collateral − 150 premium) × 2/3 = 1,900 (SPEC: the premium's share, by contracts, of those it opens); book net 2,900 − 1,900 = 1,000.00 against the broker's 1,100.00: one difference, said."
+      "V: cash 3,000 − 100 (one long W bought) = 2,900 USD; the working sale of 3 W contracts closes the 1 long and opens 2: hold = (3,000 collateral − 150 premium) × 2/3 = 1,900 (SPEC: the premium's share, by contracts, of those it opens); book net 2,900 − 1,900 = 1,000.00 against the broker's 1,100.00: one difference; no statement after the read states 1,100 again, so it is pending."
     ],
     "today": "2026-01-08",
     "accounts": [
@@ -635,6 +817,450 @@
           "USD": "1100"
         },
         "as_of": "2026-01-07T15:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "put-sale",
+            "currency": "USD",
+            "instrument": "W",
+            "amount": "3000",
+            "contracts": "3",
+            "premium": "150"
+          }
+        ]
+      }
+    },
+    "expect": {
+      "checks": [
+        {
+          "account": "L",
+          "differences": 0,
+          "pending_differences": 0,
+          "cash": []
+        },
+        {
+          "account": "M",
+          "differences": 1,
+          "pending_differences": 1,
+          "cash": [
+            {
+              "currency": "USD",
+              "own": "1000.00",
+              "broker": "900.00",
+              "pending": true
+            }
+          ]
+        },
+        {
+          "account": "P",
+          "differences": 0,
+          "pending_differences": 0,
+          "cash": []
+        },
+        {
+          "account": "Q",
+          "differences": 0,
+          "pending_differences": 0,
+          "cash": []
+        },
+        {
+          "account": "R",
+          "differences": 0,
+          "pending_differences": 0,
+          "cash": []
+        },
+        {
+          "account": "S",
+          "differences": 0,
+          "pending_differences": 0,
+          "cash": []
+        },
+        {
+          "account": "T",
+          "differences": 1,
+          "pending_differences": 1,
+          "cash": [
+            {
+              "currency": "CAD",
+              "own": "900.00",
+              "broker": "850.00",
+              "pending": true
+            }
+          ]
+        },
+        {
+          "account": "U",
+          "differences": 1,
+          "pending_differences": 1,
+          "cash": [
+            {
+              "currency": "CAD",
+              "own": "1000.00",
+              "broker": "600.00",
+              "pending": true
+            }
+          ]
+        },
+        {
+          "account": "V",
+          "differences": 1,
+          "pending_differences": 1,
+          "cash": [
+            {
+              "currency": "USD",
+              "own": "1000.00",
+              "broker": "1100.00",
+              "pending": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "the broker check allows for what the broker holds against an account, and says a difference a statement after the read confirms",
+    "spec": "SPEC.md, the header: the broker check, what a broker holds against an account",
+    "working": [
+      "Rule (SPEC.md header, the broker check): compare the book's cash less the holds as they stood when the broker stated its cash (cash_read) with that cash; the sentence gives the book's figure net of the holds. A limit buy holds its stated amount; a put sold without margin holds strike x multiplier x contracts opened beyond the account's longs, less the stated premium; in a margin account a put sale holds no cash; a buy with no stated amount or a withdrawal holds an unstated amount, so its currency's check waits (pending).",
+      "L (TFSA): book USD 1000 (l1). Hold: buy stating 70, read as a limit buy working in full -> 70. Net 1000 - 70 = 930 = broker 930. No difference.",
+      "M (cash): book USD 1000 (m1). Hold: buy with no stated amount -> unstated, USD check waits. Net of known holds 1000 vs broker 900: differs, pending. own 1000.00 (no hold amount known to net), broker 900.00. differences 1, pending 1.",
+      "P (TFSA, no margin): book USD 2000 (p1). Hold: put sale of 1 W; P holds no long W, so 1 contract opened beyond longs: 10 x 100 x 1 - 50 = 950. Net 2000 - 950 = 1050 = broker 1050. No difference.",
+      "Q (margin): book USD 2000 (q1). The put sale is secured by buying power, not cash: hold 0. Net 2000 = broker 2000. No difference.",
+      "R (TFSA): book USD 2000 - 100 = 1900 (r1, r2), holding 1 long Y. Hold: put sale of 1 Y; contracts opened beyond the 1 long Y held = 0, so nothing is cash-secured: hold 0 (READING: the literal formula 10 x 100 x 0 - 80 = -80 would be a negative hold; a hold is never negative, and a sale against a long held opens nothing). Net 1900 = broker 1900. No difference.",
+      "S (TFSA): book USD 1000 - 500 = 500 and 10 X (s1, s2). No holds. Cash 500 = broker 500; units 10 X = broker 10 X as of 2026-01-07. No difference.",
+      "T (cash): book CAD 1000 (t1). Hold: buy stating 100 -> 100. Net 1000 - 100 = 900 vs broker 850 (stated at the read): differs; the statement made after the read (01-08 10:00) states 850 again, so it is confirmed and said. own 900.00, broker 850.00. differences 1, pending 0.",
+      "U (cash): book CAD 1000 (u1). Hold: withdrawal, amount unstated -> CAD check waits. 1000 vs broker 600: differs, pending. own 1000.00, broker 600.00. differences 1, pending 1.",
+      "V: cash 3,000 − 100 (one long W bought) = 2,900 USD; the working sale of 3 W contracts closes the 1 long and opens 2: hold = (3,000 collateral − 150 premium) × 2/3 = 1,900 (SPEC: the premium's share, by contracts, of those it opens); book net 2,900 − 1,900 = 1,000.00 against the broker's 1,100.00: one difference; the statement made after the read states 1,100 again, so it is said.",
+      "This copy: every account's newest statement (cash, as_of) is made at 01-08 10:00, after the read at 01-07 16:00, and states the same cash as the read (cash_read). M and U still wait on their unstated holds (pending); T and V are confirmed (said)."
+    ],
+    "today": "2026-01-08",
+    "accounts": [
+      {
+        "id": "L",
+        "registration": "tfsa"
+      },
+      {
+        "id": "M"
+      },
+      {
+        "id": "P",
+        "registration": "tfsa"
+      },
+      {
+        "id": "Q",
+        "kind": "margin"
+      },
+      {
+        "id": "R",
+        "registration": "tfsa"
+      },
+      {
+        "id": "S",
+        "registration": "tfsa"
+      },
+      {
+        "id": "T"
+      },
+      {
+        "id": "U"
+      },
+      {
+        "id": "V",
+        "registration": "tfsa"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X",
+        "currency": "USD"
+      },
+      {
+        "id": "Z",
+        "currency": "USD"
+      },
+      {
+        "id": "Y",
+        "kind": "option",
+        "currency": "USD",
+        "underlying": "Z",
+        "expiry": "2026-06-19",
+        "strike": "10",
+        "right": "put",
+        "multiplier": "100"
+      },
+      {
+        "id": "W",
+        "kind": "option",
+        "currency": "USD",
+        "underlying": "Z",
+        "expiry": "2026-06-19",
+        "strike": "10",
+        "right": "put",
+        "multiplier": "100"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "l1",
+        "account": "L",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "USD"
+      },
+      {
+        "id": "m1",
+        "account": "M",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "USD"
+      },
+      {
+        "id": "p1",
+        "account": "P",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "2000",
+        "currency": "USD"
+      },
+      {
+        "id": "q1",
+        "account": "Q",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "2000",
+        "currency": "USD"
+      },
+      {
+        "id": "r1",
+        "account": "R",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "2000",
+        "currency": "USD"
+      },
+      {
+        "id": "r2",
+        "account": "R",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "Y",
+        "qty": "1",
+        "cash": "-100"
+      },
+      {
+        "id": "s1",
+        "account": "S",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "USD"
+      },
+      {
+        "id": "s2",
+        "account": "S",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      },
+      {
+        "id": "t1",
+        "account": "T",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "CAD"
+      },
+      {
+        "id": "u1",
+        "account": "U",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "CAD"
+      },
+      {
+        "id": "v1",
+        "account": "V",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "3000",
+        "currency": "USD"
+      },
+      {
+        "id": "v2",
+        "account": "V",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "W",
+        "qty": "1",
+        "cash": "-100"
+      }
+    ],
+    "brokers": {
+      "L": {
+        "cash": {
+          "USD": "930"
+        },
+        "cash_read": {
+          "USD": "930"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "buy",
+            "currency": "USD",
+            "amount": "70"
+          }
+        ]
+      },
+      "M": {
+        "cash": {
+          "USD": "900"
+        },
+        "cash_read": {
+          "USD": "900"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "buy",
+            "currency": "USD"
+          }
+        ]
+      },
+      "P": {
+        "cash": {
+          "USD": "1050"
+        },
+        "cash_read": {
+          "USD": "1050"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "put-sale",
+            "currency": "USD",
+            "instrument": "W",
+            "amount": "1000",
+            "contracts": "1",
+            "premium": "50"
+          }
+        ]
+      },
+      "Q": {
+        "cash": {
+          "USD": "2000"
+        },
+        "cash_read": {
+          "USD": "2000"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "put-sale",
+            "currency": "USD",
+            "instrument": "W",
+            "amount": "1000",
+            "contracts": "1",
+            "premium": "50"
+          }
+        ]
+      },
+      "R": {
+        "cash": {
+          "USD": "1900"
+        },
+        "cash_read": {
+          "USD": "1900"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "put-sale",
+            "currency": "USD",
+            "instrument": "Y",
+            "amount": "1000",
+            "contracts": "1",
+            "premium": "80"
+          }
+        ]
+      },
+      "S": {
+        "cash": {
+          "USD": "500"
+        },
+        "cash_read": {
+          "USD": "500"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "held": {
+          "X": "10"
+        },
+        "held_as_of": "2026-01-07"
+      },
+      "T": {
+        "cash": {
+          "CAD": "850"
+        },
+        "cash_read": {
+          "CAD": "850"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "buy",
+            "currency": "CAD",
+            "amount": "100"
+          }
+        ]
+      },
+      "U": {
+        "cash": {
+          "CAD": "600"
+        },
+        "cash_read": {
+          "CAD": "600"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "withdrawal",
+            "currency": "CAD"
+          }
+        ]
+      },
+      "V": {
+        "cash": {
+          "USD": "1100"
+        },
+        "cash_read": {
+          "USD": "1100"
+        },
+        "as_of": "2026-01-08T10:00:00Z",
         "activity_read_at": "2026-01-07T16:00:00Z",
         "cash_read_holds": [
           {

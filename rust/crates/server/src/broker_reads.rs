@@ -131,8 +131,8 @@ pub fn run(app: Arc<App>) {
     });
     match last {
         Ok(t) => app.state.lock().unwrap().last_sync = t.map(|t| t.to_string()).unwrap_or_default(),
-        // said in the header until the next pull, which writes it
-        Err(e) => app.state.lock().unwrap().error = format!("When Wealthsimple was last pulled could not be read: {e}"),
+        // only the header's "last synced" waits on it, and the next pull writes it: logged
+        Err(e) => log(&format!("bagholder: when Wealthsimple was last pulled could not be read: {e}")),
     }
     let mut rest = Rest::default();
     // the page openings the balances have been read for
@@ -143,7 +143,11 @@ pub fn run(app: Arc<App>) {
         let next = match pass(&app, f, now, &mut rest, &mut served) {
             Ok(next) => next,
             Err(e) => {
-                app.state.lock().unwrap().error = format!("Wealthsimple could not be read: {e}");
+                {
+                    let mut st = app.state.lock().unwrap();
+                    st.sync_problem.check(Some(format!("Wealthsimple could not be read: {e}")));
+                    st.error = st.sync_problem.said().unwrap_or_default();
+                }
                 log(&format!("bagholder: Wealthsimple could not be read: {e}"));
                 rest.failed(now);
                 rest.until
@@ -294,7 +298,9 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
             // cash moved at Wealthsimple since its activity was last read: the
             // movement (a distribution paid, interest, a deposit) is read now, the
             // activity alone, the day's holdings and history left to the day's pull
-            (Read::Done, true) => Some(pull_now(app, f, &book, conn, session_file(app), now, false)?),
+            // (at its own instant, after the balances': the cash they stated is
+            // then one the activity read covers, the holds it found with it)
+            (Read::Done, true) => Some(pull_now(app, f, &book, conn, session_file(app), Timestamp::now().max(now.checked_add(SignedDuration::from_micros(1)).map_err(|e| e.to_string())?), false)?),
             (read, _) => Some(read),
         },
         None => None,
@@ -379,8 +385,8 @@ fn failures(parts: &[(String, Failure)]) -> (String, bool) {
 fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, now: Timestamp, daily: bool) -> Result<Read, String> {
     {
         let mut st = app.state.lock().unwrap();
+        // what the last pull said stands until this one's outcome replaces it
         st.syncing = true;
-        st.error.clear();
     }
     set_step(app, "Checking session…");
     let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
@@ -444,7 +450,8 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     {
         let mut st = app.state.lock().unwrap();
         st.last_sync = now.to_string();
-        st.error = if said.is_empty() { String::new() } else { format!("Sync failed: {said}") };
+        st.sync_problem.check((!said.is_empty()).then(|| format!("Sync failed: {said}")));
+        st.error = st.sync_problem.said().unwrap_or_default();
     }
     if !said.is_empty() {
         log(&format!("bagholder: sync failed: {said}"));
@@ -496,11 +503,11 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
         return Ok((Read::Lapsed, false));
     }
     let mut st = app.state.lock().unwrap();
+    st.balances_problem.check((!failed.is_empty()).then(|| format!("Balances could not be read: {failed}")));
+    st.portfolio_error = st.balances_problem.said().unwrap_or_default();
     if failed.is_empty() {
-        st.portfolio_error.clear();
         Ok((Read::Done, !read.cash_moved.is_empty()))
     } else {
-        st.portfolio_error = format!("Balances could not be read: {failed}");
         log(&format!("bagholder: balances could not be read: {failed}"));
         Ok((Read::Failed, false))
     }

@@ -21,7 +21,7 @@
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
   import { call } from '../api'
-  import { flash } from '../ui.svelte'
+  import { tell } from '../ui.svelte'
   import { read, searchSymbols } from '../reads.svelte'
   import { atEnd } from '../actions/atEnd'
   import { tickerKey, bookListing, directoryListing, type Chip } from './newsChip'
@@ -188,7 +188,7 @@
     read('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
       reading = ''
       if (!r.ok) {
-        flash('Could not read the news for ' + only.symbol + ': ' + r.error, 'err')
+        tell('Could not read the news for ' + only.symbol + ': ' + r.error, 'err')
         return
       }
       if (r.exchange && sym === only) sym = { ...only, exchange: String(r.exchange).toUpperCase() }

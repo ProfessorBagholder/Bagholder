@@ -90,13 +90,15 @@ pub struct OrdersState {
     /// Orders Wealthsimple reports that were not placed here (its own app's): they are
     /// Wealthsimple's, not the app's, so they are held here and never in the book.
     pub(crate) elsewhere: Mutex<Vec<Elsewhere>>,
-    /// Why the brackets' quote could not be acted on, until the next good read.
-    pub(crate) quote_problem: Mutex<Option<String>>,
-    /// Why live brackets are not being checked, from the first check missed until one runs.
-    pub(crate) watch_problem: Mutex<Option<String>>,
+    /// Why the brackets' quote could not be acted on, said from the second check in
+    /// a row that finds it until a good read.
+    pub(crate) quote_problem: Mutex<crate::app::Confirmed>,
+    /// Why live brackets are not being checked, said from the second check missed in
+    /// a row until one runs.
+    pub(crate) watch_problem: Mutex<crate::app::Confirmed>,
     /// What stands in the way of each bracket's check, by its id, until a check of it
     /// goes through: said in the header.
-    pub(crate) bracket_trouble: Mutex<std::collections::BTreeMap<String, String>>,
+    pub(crate) bracket_trouble: Mutex<std::collections::BTreeMap<String, crate::app::Confirmed>>,
     /// Whether each bracket's venue was in session at its last check (none: not known).
     pub(crate) session_seen: Mutex<HashMap<String, Option<bool>>>,
     /// Seconds a ticket's sale waits for a bracket's exit to be confirmed cancelled
@@ -119,8 +121,8 @@ impl OrdersState {
             units: Mutex::new(HashMap::new()),
             found: Mutex::new(HashMap::new()),
             elsewhere: Mutex::new(Vec::new()),
-            quote_problem: Mutex::new(None),
-            watch_problem: Mutex::new(None),
+            quote_problem: Mutex::new(crate::app::Confirmed::default()),
+            watch_problem: Mutex::new(crate::app::Confirmed::default()),
             bracket_trouble: Mutex::new(std::collections::BTreeMap::new()),
             session_seen: Mutex::new(HashMap::new()),
             sale_wait: AtomicU32::new(ticket::CANCEL_CONFIRM_SECONDS),
@@ -163,3 +165,4 @@ pub(crate) fn ask_read(app: &App) {
     app.orders.read_asked.store(true, Ordering::SeqCst);
     app.events.signal();
 }
+

@@ -5,7 +5,7 @@
 
 import { status } from '../subs.svelte'
 import { call } from '../api'
-import { flash, ui } from '../ui.svelte'
+import { quiet, tell, ui } from '../ui.svelte'
 import { resyncAll } from '../live.svelte'
 import { panel } from '../orders/orders.svelte'
 import { goSub } from '../router.svelte'
@@ -59,7 +59,7 @@ function save(patch: Record<string, boolean>): void {
   if (cur) Object.assign(cur, patch)
   call('POST /api/notifications/settings', { body: patch }).then((r) => {
     if (r.ok) return
-    flash('Could not save the notification settings: ' + r.error, 'err')
+    tell('Could not save the notification settings: ' + r.error, 'err')
     resyncAll()
   })
 }
@@ -79,7 +79,7 @@ export async function notifyTest(): Promise<void> {
   if (c === 'unavailable' || c === 'denied') return
   if (c === 'default' && !(await ask())) return
   call('POST /api/notifications/test').then((r) => {
-    if (!r.ok) flash('Could not send a test notification: ' + r.error, 'err')
+    if (!r.ok) tell('Could not send a test notification: ' + r.error, 'err')
   })
 }
 
@@ -114,7 +114,8 @@ export function arrived(n: Note): void {
     n.readAt = new Date().toISOString()
     call('POST /api/notifications/read', { body: { ids: [n.id] } }).then((r) => {
       if (r.ok) return
-      flash('Could not mark the notification read: ' + r.error, 'err')
+      // the panel marks it again as it is read again (resyncAll)
+      quiet('a notification could not be marked read', r.error)
       resyncAll()
     })
   }
@@ -122,7 +123,8 @@ export function arrived(n: Note): void {
   n.seenAt = new Date().toISOString()
   // not marked seen, another page (or this one, opened again) would show the banner a second time: said
   call('POST /api/notifications/seen', { body: { ids: [n.id] } }).then((r) => {
-    if (!r.ok) flash('Could not mark the notification shown: ' + r.error, 'err')
+    // its banner may show once more; nothing the person sees is wrong
+    if (!r.ok) quiet('a notification could not be marked shown', r.error)
   })
   let banner: Notification
   try {

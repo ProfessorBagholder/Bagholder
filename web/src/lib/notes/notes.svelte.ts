@@ -5,7 +5,7 @@
 // with its source, or an external url). Drives the timestamp word and the click
 // target, exactly as the old page's noteWhenWord/noteOpen read n.extra.
 import { call } from '../api'
-import { flash } from '../ui.svelte'
+import { tell } from '../ui.svelte'
 import { resyncAll } from '../live.svelte'
 import { watchDoc, type Holder } from '../live.svelte'
 import { arrived } from './channel.svelte'
@@ -72,7 +72,7 @@ export async function markAllRead(): Promise<void> {
   doc.data.unread = 0
   const r = await call('POST /api/notifications/read', { body: { ids: null } })
   if (!r.ok) {
-    flash('Could not mark the notifications read: ' + r.error, 'err')
+    tell('Could not mark the notifications read: ' + r.error, 'err')
     resyncAll()
   }
 }
@@ -84,7 +84,7 @@ export async function clearNotes(): Promise<void> {
   }
   const r = await call('POST /api/notifications/clear')
   if (!r.ok) {
-    flash('Could not clear the notifications: ' + r.error, 'err')
+    tell('Could not clear the notifications: ' + r.error, 'err')
     resyncAll()
   }
 }

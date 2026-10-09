@@ -5,7 +5,7 @@ import type { Trade, ShortsPayload } from '../model'
 import { listingTicker } from './chart'
 import type { Answer } from '../api'
 import { held, read } from '../reads.svelte'
-import { flash } from '../ui.svelte'
+import { tell } from '../ui.svelte'
 import type { ShortsAnswer } from '../generated/markets'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -58,7 +58,7 @@ export async function ensureShorts(t: Trade): Promise<void> {
   shownFrom.set(key, d)
   // a failure is said, and the reading shown stands
   if (!d.ok) {
-    flash('Could not read short interest for ' + sym + ': ' + d.error, 'err')
+    tell('Could not read short interest for ' + sym + ': ' + d.error, 'err')
     if (!shortsStore[key]) shortsStore[key] = { at: Date.now(), ok: false } as unknown as ShortsRec
     return
   }
@@ -75,7 +75,7 @@ export async function ensureShorts(t: Trade): Promise<void> {
   if ('covered' in d && d.covered && !(d.shorts?.series || []).length) {
     const more = await read('GET /api/shorts', { query: { ...q, trend: true } }, { key: 'trend ' + key })
     const rec = shortsStore[key]
-    if (!more.ok) flash('Could not read the short-interest trend for ' + sym + ': ' + more.error, 'err')
+    if (!more.ok) tell('Could not read the short-interest trend for ' + sym + ': ' + more.error, 'err')
     else if ('covered' in more && more.covered && rec?.shorts && JSON.stringify(rec.shorts.series) !== JSON.stringify(more.shorts?.series || [])) rec.shorts.series = more.shorts?.series || []
   }
 }
