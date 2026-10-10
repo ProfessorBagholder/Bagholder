@@ -137,14 +137,39 @@ If folding changes any figure or any broker check on a populated book, the migra
 
 ## Anti-stub self-check
 
-_To be initialled at build._
+Initialled at build (Claude): no definition nobody references; no field written and never read (`Stated.cash_read`'s moment, read nowhere, is removed); no branch only the switch knows. The suite was run, the migration was run on a copy of the owner's book and compared with it account by account, and the capacity run was made at the owner's size and four times it.
 
 ## Verification
 
-_To be filled at build._
+### Built differently from the approach above, and why
+
+- **Moments are nanoseconds and the read's place, not microseconds.** Instants are kept as nanoseconds (`first_ns`, `last_ns`, `at_ns`), the precision the book writes them at, so no two instants it holds apart become one. Two statements at one instant are told apart by their reads' places in `broker_reads` (`first_seq`, `last_seq`), never by the row that holds them: the property test showed a split period's later half, written as a new row, overtaking statements made at the same instant before it.
+- **Buying power and value now are ordered by instant too.** Today's rows read the newest of these two by the row written last; cash by instant. One rule now holds for all three: by the read's instant, then the order the reads were written in. They differ only when the machine's clock is set back.
+- **`Book::stated_latest(account)`** reads the newest of each kind without the day history (`Book::stated` adds the days); the pull's check for cash moved since the activity read uses it.
+- **A quote's change rechecks only the accounts that hold the instrument** (the book's positions in it, or the broker's statement of it), as a statement's change rechecks only its account: the quote change recomputed every account's check, the same class as brief 22's change 4, and the capacity run showed its allocations growing with the book.
+- **The capacity build writes a year of balances at the owner's rates of change.** With statements kept as periods, a made-up broker whose balances never move folds to one period per account and stops resembling the owner's book; and storing every unchanged read for a year at four times the owner's size took over half an hour. The build now keeps every read (as the app does) and stores a statement where an account's cash, value or buying power changed, at the rates counted on a copy of the owner's book (`BALANCES_READS`, `CASH_CHANGES`, `VALUE_CHANGES`, `POWER_CHANGES` in `capacity.rs`); the last read states every account as the broker does. The owner-size build takes 17 s.
+- **Units statements are indexed, not folded** (brief 22, 7): the owner's copy holds 161 over 12.6 days, one per account per full pull, each with the broker's value of every holding, which moves with prices.
+
+### Commands and numbers
+
+- `RUSTFLAGS="-D warnings" cargo test --workspace` (in `rust/`): every test binary passed. `cargo clippy --workspace --lib --bins`: clean.
+- New tests, each shown failing without its change where it holds one: `book/tests/statements.rs` `statements_kept_as_periods_answer_what_a_row_per_read_answered_for_any_order_of_instants` (60 seeds, checked after every statement; it found the tie ordering above), `a_cash_stated_again_unchanged_extends_its_period_and_is_stated_at_its_last_moment`, `a_statement_whose_only_change_is_a_hold_becoming_unknown_is_a_period_of_its_own`; `book/tests/schema.rs` `migration_26_keeps_what_every_account_s_statements_answer` (40 generated version-25 books); `server/src/capacity.rs` `test_a_pull_reaches_the_figures_in_one_write_and_every_read_leaves_them_as_the_book_states`, `test_a_difference_the_broker_states_again_after_the_read_is_confirmed_through_a_folded_period` (fails with the period's first moment: `pending: true`); `server/src/tests_boundary.rs` `only_a_start_reads_the_market_and_every_account_whole`.
+- **The owner's book** (a copy of `~/.bagholder-rust`, opened by the release build): migration 26 and the first figures in 0.64 s. Cash statements 10,656 → 87 periods; value now 3,994 → 824; buying power 664 → 535; units statements 161, unchanged. Compared by SQL before and after, for every account: the newest cash and its moment, the cash and holds at the last full read of the activity, the newest buying power and value now: identical.
+- **`bagholder capacity run`** on an M-series Mac (the CI job's arm64 table is in the pull request), the owner's size and four times it:
+
+  | Operation | Here at ×4 (ms) | Pi (ms) | Budget (ms) | VM steps ×1 → ×4 | Allocations ×1 → ×4 | Before this plan, here at ×4 (ms) |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | startup | 1,103 | 2,316 | 5,000 | 2.0M → 8.3M | 0.85M → 3.3M | 25,135 |
+  | add-trade | 333 | 698 | 100 | 0.94M → 3.9M | 0.81M → 3.2M | 25,448 |
+  | import | 639 | 1,341 | 1,000 | 1.3M → 5.5M | 0.84M → 3.3M | 23,345 |
+  | brokers | 2.4 | 5.1 | 2,586 | 1,259 → 1,321 | 2,862 → 1,084 | 20,874 |
+  | price-changed | 1.0 | 2.0 | 95 | 366 → 366 | 87 → 86 | 19,513 |
+  | feed-step | 48 | 101 | 95 | 1,606 → 1,606 | 148K → 712K | 49 |
+
+  `startup`, `brokers` and `price-changed` are off `OVER_BUDGET`. `add-trade` (#420) and `import` (#419) stay listed: each rebuilds the ledger whole, the next plan. `feed-step` (#426) stays listed.
 
 ## Handoff
 
-_To be filled at build._
+- Issues #417 and #418 are closed by this change. `OVER_BUDGET` holds `import` (#419), `add-trade` (#420) and `feed-step` (#426), each the next plan in brief 15's Stage 3.
 
 **Nothing left running.**

@@ -102,48 +102,57 @@ pub fn old_store_source() -> SourceName {
 pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>, String> {
     let mut out = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
-        let s = book.stated(a.id).map_err(err)?;
-        if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() && s.buying_power.is_none() && s.net_value_now.is_none() {
-            continue;
+        if let Some(b) = broker_account(a.id, &book.stated(a.id).map_err(err)?)? {
+            out.insert(a.id, b);
         }
-        let mut b = bagholder_engine::input::BrokerAccount::default();
-        for (day, (value, deposits)) in &s.days {
-            if value.currency != Currency::CAD || deposits.currency != Currency::CAD {
-                return Err(format!("account {} states its value on {day} in {}, not CAD", a.id, value.currency));
-            }
-            b.net_value.insert(*day, value.amount);
-            b.net_deposits.insert(*day, deposits.amount);
-        }
-        // the account's value now, as the broker states it with the accounts
-        // (its daily values are a day behind, and are the equity curve's)
-        b.net_value_now = match s.net_value_now {
-            Some((_, v)) if v.currency == Currency::CAD => Some(v.amount),
-            Some((_, v)) => return Err(format!("account {} states what it is worth in {}, not CAD", a.id, v.currency)),
-            None => None,
-        };
-        if let Some((at, cash)) = s.cash {
-            b.as_of = Some(at);
-            b.cash = cash;
-        }
-        // a statement of units kept before the broker's worth of each was
-        // (migration 021) is not compared: the next read states both
-        if let Some((day, units)) = s.units.filter(|(_, u)| u.is_empty() || !s.unit_values.is_empty()) {
-            b.held_as_of = Some(day);
-            b.held = units;
-            b.held_value = s.unit_values;
-        }
-        b.activity_read_at = s.activity_read_at;
-        b.cash_read = s.cash_read.map(|(_, c)| c);
-        b.cash_read_holds = s.cash_read_holds;
-        b.buying_power = match s.buying_power {
-            None => None,
-            Some((_, Ok(m))) if m.currency == Currency::CAD => Some(Ok(m.amount)),
-            Some((_, Ok(m))) => return Err(format!("account {} states what it can borrow in {}, not CAD", a.id, m.currency)),
-            Some((_, Err(why))) => Some(Err(why)),
-        };
-        out.insert(a.id, b);
     }
     Ok(out)
+}
+
+/// What the broker states about one account, as the engine reads it, from what
+/// the book holds of it (`Book::stated`, or `Book::stated_latest` without its days).
+/// An account the broker has stated nothing about has none.
+pub fn broker_account(account: bagholder_core::AccountId, s: &bagholder_book::statements::Stated) -> Result<Option<bagholder_engine::input::BrokerAccount>, String> {
+    let a = account;
+    if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() && s.buying_power.is_none() && s.net_value_now.is_none() {
+        return Ok(None);
+    }
+    let mut b = bagholder_engine::input::BrokerAccount::default();
+    for (day, (value, deposits)) in &s.days {
+        if value.currency != Currency::CAD || deposits.currency != Currency::CAD {
+            return Err(format!("account {a} states its value on {day} in {}, not CAD", value.currency));
+        }
+        b.net_value.insert(*day, value.amount);
+        b.net_deposits.insert(*day, deposits.amount);
+    }
+    // the account's value now, as the broker states it with the accounts
+    // (its daily values are a day behind, and are the equity curve's)
+    b.net_value_now = match s.net_value_now {
+        Some((_, v)) if v.currency == Currency::CAD => Some(v.amount),
+        Some((_, v)) => return Err(format!("account {a} states what it is worth in {}, not CAD", v.currency)),
+        None => None,
+    };
+    if let Some((at, cash)) = &s.cash {
+        b.as_of = Some(*at);
+        b.cash = cash.clone();
+    }
+    // a statement of units kept before the broker's worth of each was
+    // (migration 021) is not compared: the next read states both
+    if let Some((day, units)) = s.units.as_ref().filter(|(_, u)| u.is_empty() || !s.unit_values.is_empty()) {
+        b.held_as_of = Some(*day);
+        b.held = units.clone();
+        b.held_value = s.unit_values.clone();
+    }
+    b.activity_read_at = s.activity_read_at;
+    b.cash_read = s.cash_read.clone();
+    b.cash_read_holds = s.cash_read_holds.clone();
+    b.buying_power = match &s.buying_power {
+        None => None,
+        Some((_, Ok(m))) if m.currency == Currency::CAD => Some(Ok(m.amount)),
+        Some((_, Ok(m))) => return Err(format!("account {a} states what it can borrow in {}, not CAD", m.currency)),
+        Some((_, Err(why))) => Some(Err(why.clone())),
+    };
+    Ok(Some(b))
 }
 
 #[cfg(test)]

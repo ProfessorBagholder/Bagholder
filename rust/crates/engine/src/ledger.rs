@@ -352,6 +352,10 @@ pub struct Matched {
     /// it is about: units that arrived with no cost on the record, and corporate
     /// events nothing says the values of.
     pub waiting: BTreeMap<TransactionId, Waiting>,
+    /// Each account's cash in each currency: every transaction's cash added up,
+    /// kept so that one account's check with its broker reads its own totals and
+    /// nothing else (`equity::broker_checks`); a sum that does not fit is that failure.
+    pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
 }
 
 /// A fact only the person can give, and what it is about.
@@ -2237,6 +2241,14 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         m.record_units(t.trade_date);
     }
     m.expire_before(inputs.clock.today);
+    for t in &ledger.transactions {
+        if let Some(c) = t.cash {
+            let e = m.out.cash.entry(t.account).or_default().entry(c.currency).or_insert(Ok(Dec::ZERO));
+            if let Ok(total) = e {
+                *e = total.checked_add(c.amount).map_err(Gaps::from);
+            }
+        }
+    }
     m.out
 }
 

@@ -46,12 +46,8 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
     let mut m = Market::default();
     let instruments: BTreeMap<InstrumentId, (InstrumentKind, Currency)> = book.instruments().map_err(err)?.into_iter().map(|i| (i.id, (i.kind, i.currency))).collect();
     for q in cache.quotes().map_err(err)? {
-        let source = match instruments.get(&q.instrument).map(|i| i.0) {
-            Some(InstrumentKind::Crypto) => QuoteSource::Crypto,
-            Some(InstrumentKind::OptionContract) => QuoteSource::OptionChain,
-            _ => QuoteSource::Listing,
-        };
-        m.quotes.insert(q.instrument, Quote { price: q.price, change: q.change, change_pct: q.change_pct, at: Some(q.quoted_at), source });
+        let kind = instruments.get(&q.instrument).map(|i| i.0);
+        m.quotes.insert(q.instrument, quote(kind, q));
     }
     m.closes = cache.closes().map_err(err)?;
     m.ex_dividends = cache.ex_dividends().map_err(err)?;
@@ -59,6 +55,30 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
         m.benchmarks.insert(b.key().to_string(), BenchmarkSeries { currency: b.tracker().1, closes: s.closes, dividends: s.dividends, splits: s.splits });
     }
     Ok(m)
+}
+
+/// A quote as the engine reads it: its source as the instrument's kind says.
+fn quote(kind: Option<InstrumentKind>, q: bagholder_sources::cache::StoredQuote) -> Quote {
+    let source = match kind {
+        Some(InstrumentKind::Crypto) => QuoteSource::Crypto,
+        Some(InstrumentKind::OptionContract) => QuoteSource::OptionChain,
+        _ => QuoteSource::Listing,
+    };
+    Quote { price: q.price, change: q.change, change_pct: q.change_pct, at: Some(q.quoted_at), source }
+}
+
+/// One instrument's quote, ex-dividend date and closes, read by its key from the
+/// cache: what a change to its price moves, and nothing of any other instrument.
+pub fn prices_of(cache: &MarketCache, id: InstrumentId, kind: Option<InstrumentKind>) -> Result<(Option<Quote>, Option<Date>, BTreeMap<Date, bagholder_core::Money>), String> {
+    // the last source's, as the whole read keeps the last of each instrument's
+    let quote = cache.quotes_of(id).map_err(err)?.pop().map(|q| quote(kind, q));
+    Ok((quote, cache.ex_dividend_of(id).map_err(err)?, cache.closes_of(id).map_err(err)?))
+}
+
+/// One benchmark's tracker, read by its key from the cache.
+pub fn benchmark_of(cache: &MarketCache, key: &str) -> Result<Option<BenchmarkSeries>, String> {
+    let Some(b) = bagholder_sources::contract::Benchmark::parse(key) else { return Ok(None) };
+    Ok(cache.benchmark_series_of(b).map_err(err)?.map(|s| BenchmarkSeries { currency: b.tracker().1, closes: s.closes, dividends: s.dividends, splits: s.splits }))
 }
 
 /// An instrument as the sources ask for it: its kind and currency, its symbol and

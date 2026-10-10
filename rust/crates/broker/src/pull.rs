@@ -48,6 +48,9 @@ pub struct Report {
     pub statements: crate::statements::Done,
     /// Each part that failed, and why.
     pub failures: Vec<(String, Failure)>,
+    /// The book's accounts this pull read the broker's statements of (cash,
+    /// holdings, days, value, activity): what the figures read again with its rows.
+    pub stated_for: std::collections::BTreeSet<AccountId>,
 }
 
 impl Report {
@@ -125,6 +128,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         };
         ids.insert(a.key.clone(), id);
     }
+    report.stated_for = ids.values().copied().collect();
     for a in &stated {
         if let (Some(to), Some(from)) = (a.linked_to.as_ref().and_then(|k| ids.get(k)), ids.get(&a.key)) {
             book.link_accounts(*from, *to, &read)?;
@@ -674,8 +678,8 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
     accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
     let mut cash_moved = Vec::new();
     for a in &accounts {
-        let stated = book.stated(*a)?;
-        if let (Some((_, now_cash)), Some((_, at_read))) = (&stated.cash, &stated.cash_read) {
+        let stated = book.stated_latest(*a)?;
+        if let (Some((_, now_cash)), Some(at_read)) = (&stated.cash, &stated.cash_read) {
             // a currency stated at nothing is the same as one not stated
             let held = |m: &BTreeMap<bagholder_core::Currency, bagholder_core::Dec>| m.iter().filter(|(_, v)| !v.is_zero()).map(|(c, v)| (*c, *v)).collect::<BTreeMap<_, _>>();
             if held(now_cash) != held(at_read) {

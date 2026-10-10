@@ -145,3 +145,107 @@ fn a_book_holding_a_bracket_with_its_orders_migrates_past_the_brackets_rebuild()
     let broken: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(broken, 0);
 }
+
+/// splitmix64: the same seed, the same book.
+struct Rng(u64);
+impl Rng {
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) % n
+    }
+}
+
+/// Migration 26 folds a book's statements into periods and the book answers what
+/// it answered before (`docs/plans/stage-3-the-brokers-statements.md`): a book at
+/// version 25 holding generated statements for several accounts (instants out of
+/// order and tied, their text with fractions of every length, holds whose amount is
+/// known or not), migrated, states for every account the newest cash and when, the
+/// cash and holds at its last full read, its buying power and its value now exactly
+/// as a model of the rows it held gives them: each the newest by its read's instant,
+/// then the order the reads were written in.
+#[test]
+fn migration_26_keeps_what_every_account_s_statements_answer() {
+    use bagholder_core::{AccountId, Currency, Dec};
+    use std::collections::BTreeMap;
+    for seed in 0..40u64 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.db");
+        let partial: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..25] }));
+        let (conn, _) = migrate::open(partial, &path, "test", t0()).unwrap();
+        conn.execute("INSERT INTO broker_connections (id, broker, label, created_at) VALUES ('c', 'wealthsimple', 'kept', 'x')", []).unwrap();
+        let accounts: Vec<AccountId> = (0..3).map(|n| AccountId::parse(&format!("00000000-0000-7000-8000-00000000000{n}")).unwrap()).collect();
+        for a in &accounts {
+            conn.execute("INSERT INTO accounts (id, connection_id, unrecognised_type, status, created_at) VALUES (?1, 'c', 'x', 'open', 'x')", [a.to_string()]).unwrap();
+        }
+        conn.execute("INSERT INTO source_records (id, connection_id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('00000000-0000-7000-8000-0000000000aa', 'c', 'wealthsimple', 'k', 'live', 1, 'x', 'x')", []).unwrap();
+        let mut rng = Rng(seed);
+        let base: jiff::Timestamp = "2026-10-01T10:00:00Z".parse().unwrap();
+        // (account, instant, the order written, cash, hold amount, power, value)
+        type Row = (usize, jiff::Timestamp, usize, i64, Option<&'static str>, i64, i64);
+        let mut rows: Vec<Row> = Vec::new();
+        let fractions = [0i64, 500_000_000, 450_401_000, 1, 999_999_999];
+        let mut uid = 0u32;
+        let mut id = || {
+            uid += 1;
+            format!("00000000-0000-7000-8000-{uid:012x}")
+        };
+        for k in 0..(10 + rng.below(30) as usize) {
+            let acc = rng.below(3) as usize;
+            let at = base.checked_add(jiff::SignedDuration::new(rng.below(6) as i64, fractions[rng.below(5) as usize] as i32)).unwrap();
+            let (cash, hold, power, value) = (rng.below(2) as i64, [None, Some("5"), Some("NULL")][rng.below(3) as usize], rng.below(2) as i64, rng.below(2) as i64);
+            let a = accounts[acc].to_string();
+            for part in ["cash", "buying-power", "net-value"] {
+                let read = id();
+                conn.execute("INSERT INTO broker_reads (id, connection_id, part, at) VALUES (?1, 'c', ?2, ?3)", rusqlite::params![read, part, at.to_string()]).unwrap();
+                match part {
+                    "cash" => {
+                        let s = id();
+                        conn.execute("INSERT INTO statements (id, account_id, kind, stated_at, read_id) VALUES (?1, ?2, 'cash', ?3, ?4)", rusqlite::params![s, a, at.to_string(), read]).unwrap();
+                        conn.execute("INSERT INTO statement_cash (statement_id, currency, amount) VALUES (?1, 'CAD', ?2)", rusqlite::params![s, cash.to_string()]).unwrap();
+                        if let Some(h) = hold {
+                            let amount = (h != "NULL").then_some(h);
+                            conn.execute("INSERT INTO statement_holds (statement_id, record_id, kind, currency, amount) VALUES (?1, '00000000-0000-7000-8000-0000000000aa', 'buy', 'CAD', ?2)", rusqlite::params![s, amount]).unwrap();
+                        }
+                    }
+                    "buying-power" => {
+                        conn.execute("INSERT INTO buying_power (account_id, stated_at, amount, currency, read_id) VALUES (?1, ?2, ?3, 'CAD', ?4)", rusqlite::params![a, at.to_string(), power.to_string(), read]).unwrap();
+                    }
+                    _ => {
+                        conn.execute("INSERT OR REPLACE INTO account_values (account_id, stated_at, amount, currency, read_id) VALUES (?1, ?2, ?3, 'CAD', ?4)", rusqlite::params![a, at.to_string(), value.to_string(), read]).unwrap();
+                    }
+                }
+            }
+            rows.push((acc, at, k, cash, hold, power, value));
+        }
+        // a full read of each account's activity at an instant among them
+        let mut read_at: BTreeMap<usize, jiff::Timestamp> = BTreeMap::new();
+        for (n, a) in accounts.iter().enumerate() {
+            let at = base.checked_add(jiff::SignedDuration::new(rng.below(7) as i64, fractions[rng.below(5) as usize] as i32)).unwrap();
+            conn.execute("INSERT INTO activity_reads (account_id, read_at, complete) VALUES (?1, ?2, 1)", rusqlite::params![a.to_string(), at.to_string()]).unwrap();
+            read_at.insert(n, at);
+        }
+        drop(conn);
+        let (book, done) = Book::open(&path, "test", t0()).unwrap();
+        assert_eq!(done.to, 26);
+        for (n, a) in accounts.iter().enumerate() {
+            let mut mine: Vec<&Row> = rows.iter().filter(|r| r.0 == n).collect();
+            // the model: by instant, then the order written; a value now replaced at one instant
+            mine.sort_by_key(|r| (r.1, r.2));
+            let s = book.stated_latest(*a).unwrap();
+            let cad = |v: i64| BTreeMap::from([(Currency::CAD, Dec::from_int(v))]);
+            let newest = mine.last();
+            assert_eq!(s.cash, newest.map(|r| (r.1, cad(r.3))), "seed {seed}, account {n}: newest cash");
+            assert_eq!(s.buying_power.map(|(at, p)| (at, p.unwrap().amount)), newest.map(|r| (r.1, Dec::from_int(r.5))), "seed {seed}, account {n}: buying power");
+            assert_eq!(s.net_value_now.map(|(at, v)| (at, v.amount)), newest.map(|r| (r.1, Dec::from_int(r.6))), "seed {seed}, account {n}: value now");
+            let at_read = mine.iter().rev().find(|r| r.1 <= read_at[&n]);
+            assert_eq!(s.activity_read_at, Some(read_at[&n]));
+            assert_eq!(s.cash_read, at_read.map(|r| cad(r.3)), "seed {seed}, account {n}: the cash at its full read");
+            let holds: Vec<Option<Dec>> = s.cash_read_holds.iter().map(|h| h.amount).collect();
+            let want: Vec<Option<Dec>> = at_read.and_then(|r| r.4).map(|h| (h != "NULL").then(|| Dec::from_int(5))).into_iter().collect();
+            assert_eq!(holds, want, "seed {seed}, account {n}: the holds at its full read");
+        }
+    }
+}

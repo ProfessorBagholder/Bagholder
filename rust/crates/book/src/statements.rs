@@ -5,12 +5,16 @@
 //! broker stated them: a later statement is kept beside an earlier one, never
 //! over it, and the newest is the one read.
 //!
-//! The newest is the one written last. Statements are appended as they are
-//! stated, one read at a time, so the order they were written in is the order
-//! they were stated in: two stated at one instant are told apart by it (a read
-//! made after the other, holding what that one did not), never by an id drawn
-//! at random, nor by an instant's text, whose fraction varies in length and so
-//! does not sort as time.
+//! A statement of cash, buying power or what an account is worth now is kept
+//! as a period (`docs/plans/stage-3-the-brokers-statements.md`, migration 026):
+//! one row per value, with the first and last moment the broker stated it, so a
+//! read that states again what the last one did extends that row instead of
+//! adding one, and the reads in between stay in `broker_reads`. Periods follow
+//! the order of their instants, then the order written: two stated at one
+//! instant are told apart by which was written last (a read made after the
+//! other), never by an id drawn at random. Every instant is kept as nanoseconds,
+//! which sort as time, beside its text, which is never read: a fraction of
+//! varying length does not sort.
 
 use std::collections::BTreeMap;
 
@@ -43,7 +47,7 @@ pub struct Stated {
     /// The newest statement of cash made at or before the last full read of the
     /// activity: every fill it reflects is on the record, so the book's cash is
     /// checked against it.
-    pub cash_read: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
+    pub cash_read: Option<BTreeMap<Currency, Dec>>,
     /// What the broker held against the account when it stated `cash_read`.
     pub cash_read_holds: Vec<bagholder_core::hold::Hold>,
     /// The newest statement of what the account is worth now, and when.
@@ -75,18 +79,74 @@ pub struct UnitsLine {
     pub value: Option<Money>,
 }
 
+/// A table of statements kept as periods, and which of its rows are periods.
+#[derive(Clone, Copy)]
+struct Periods {
+    table: &'static str,
+    only: &'static str,
+}
+const CASH: Periods = Periods { table: "statements", only: "kind = 'cash'" };
+const POWER: Periods = Periods { table: "buying_power", only: "1 = 1" };
+const VALUE: Periods = Periods { table: "account_values", only: "1 = 1" };
+
+/// A kept period: its row, its first and last moment, and the read that last stated it.
+struct Period {
+    rowid: i64,
+    first: Moment,
+    last: Moment,
+    last_read: String,
+}
+
+/// When a statement was made: its read's instant, then the order the reads were
+/// written in, which tells two reads at one instant apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Moment {
+    ns: i64,
+    seq: i64,
+}
+
+/// What a statement of cash states: its cash in each currency and the holds it
+/// carries, a missing amount equal only to a missing one.
+#[derive(Clone, Debug, PartialEq)]
+struct CashStated {
+    cash: BTreeMap<Currency, Dec>,
+    holds: Vec<HoldStated>,
+}
+
+/// One hold as a statement of cash keeps it, as written.
+#[derive(Clone, Debug, PartialEq)]
+struct HoldStated {
+    record: String,
+    kind: String,
+    currency: Option<String>,
+    instrument: Option<String>,
+    amount: Option<String>,
+    quantity: Option<String>,
+    premium: Option<String>,
+}
+
+/// An instant as kept for sorting: nanoseconds since the epoch, which hold every
+/// instant to the year 2262.
+fn ns(t: jiff::Timestamp) -> i64 {
+    t.as_nanosecond() as i64
+}
+
+fn from_ns(table: &'static str, column: &'static str, v: i64) -> Result<jiff::Timestamp> {
+    jiff::Timestamp::from_nanosecond(i128::from(v)).map_err(|e| text::corrupt(table, column, &v.to_string(), e))
+}
+
 impl Book {
     /// Note a read of `part` (`accounts`, `activity:<account>`, …).
     pub fn broker_read(&self, connection: ConnectionId, part: &str, at: jiff::Timestamp) -> Result<ReadId> {
         let id = new_uuid(at).to_string();
-        self.conn().execute("INSERT INTO broker_reads (id, connection_id, part, at) VALUES (?1, ?2, ?3, ?4)", params![id, connection.to_string(), part, at_text(at)])?;
+        self.conn().execute("INSERT INTO broker_reads (id, connection_id, part, at, at_ns) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, connection.to_string(), part, at_text(at), ns(at)])?;
         Ok(ReadId(id))
     }
 
     /// When `part` of a connection was last read, if ever.
     pub fn last_read(&self, connection: ConnectionId, part: &str) -> Result<Option<jiff::Timestamp>> {
-        let at: Option<String> = self.conn().query_row("SELECT MAX(at) FROM broker_reads WHERE connection_id = ?1 AND part = ?2", params![connection.to_string(), part], |r| r.get(0))?;
-        at.map(|t| text::instant("broker_reads", "at", &t)).transpose()
+        let at: Option<i64> = self.conn().query_row("SELECT MAX(at_ns) FROM broker_reads WHERE connection_id = ?1 AND part = ?2", params![connection.to_string(), part], |r| r.get(0))?;
+        at.map(|t| from_ns("broker_reads", "at_ns", t)).transpose()
     }
 
     /// Keep an account's statement for the month starting `month`, as the
@@ -142,14 +202,12 @@ impl Book {
     pub fn units_reads(&self, account: AccountId, instrument: InstrumentId, since: jiff::Timestamp) -> Result<Vec<(jiff::Timestamp, Option<Dec>)>> {
         let head = self.canonical(instrument)?;
         let mut st = self.conn().prepare(&format!(
-            "SELECT r.at, s.id, u.quantity FROM statements s JOIN broker_reads r ON r.id = s.read_id
+            "SELECT r.at_ns, s.id, u.quantity FROM statements s JOIN broker_reads r ON r.id = s.read_id
              LEFT JOIN statement_units u ON u.statement_id = s.id AND u.instrument_id IN {}
-             WHERE s.account_id = ?1 AND s.kind = 'units' AND r.at > ?3 ORDER BY s.rowid DESC",
+             WHERE s.account_id = ?1 AND s.kind = 'units' AND r.at_ns > ?3 ORDER BY s.rowid DESC",
             crate::identity::group_sql("?2")
         ))?;
-        let rows = st.query_map(params![account.to_string(), head.to_string(), at_text(since)], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
-        })?;
+        let rows = st.query_map(params![account.to_string(), head.to_string(), ns(since)], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?;
         let mut out: Vec<(String, jiff::Timestamp, Option<Dec>)> = Vec::new();
         for row in rows {
             let (at, statement, q) = row?;
@@ -160,7 +218,7 @@ impl Book {
                         *held = Some(held.unwrap_or(Dec::ZERO).checked_add(q).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?);
                     }
                 }
-                _ => out.push((statement, text::instant("broker_reads", "at", &at)?, q)),
+                _ => out.push((statement, from_ns("broker_reads", "at_ns", at)?, q)),
             }
         }
         Ok(out.into_iter().map(|(_, at, q)| (at, q)).collect())
@@ -227,66 +285,228 @@ impl Book {
     /// Store a statement of cash: each currency's amount, stated at `at`.
     pub fn store_cash(&self, account: AccountId, stated_at: jiff::Timestamp, cash: &BTreeMap<Currency, Dec>, read: &ReadId) -> Result<()> {
         self.atomically(|| {
-            let id = new_uuid(stated_at).to_string();
-            self.conn().execute("INSERT INTO statements (id, account_id, kind, stated_at, read_id) VALUES (?1, ?2, 'cash', ?3, ?4)", params![id, account.to_string(), at_text(stated_at), read.0])?;
-            for (c, a) in cash {
-                self.conn().execute("INSERT INTO statement_cash (statement_id, currency, amount) VALUES (?1, ?2, ?3)", params![id, c.to_string(), a.to_text()])?;
-            }
-            // what its live records hold against the account as the cash is stated
-            self.conn().execute(
-                "INSERT INTO statement_holds (statement_id, record_id, kind, currency, instrument_id, amount, quantity, premium)
-                 SELECT ?1, h.record_id, h.kind, h.currency, h.instrument_id, h.amount, h.quantity, h.premium
-                 FROM record_holds h JOIN source_records r ON r.id = h.record_id AND r.state = 'live' WHERE h.account_id = ?2",
-                params![id, account.to_string()],
-            )?;
-            // a working order with a fill against it already holds only its rest, which
-            // its row does not state: a fill the app booked from its own order, or
-            // another live record of the same order that moved anything (brief 18)
-            let mut st = self.conn().prepare(
-                "SELECT DISTINCT s.record_id, o.filled FROM statement_holds s
-                 JOIN record_orders ro ON ro.record_id = s.record_id
-                 LEFT JOIN orders o ON o.id = ro.order_id OR o.broker_id = ro.order_id
-                 WHERE s.statement_id = ?1 AND s.amount IS NOT NULL AND (o.id IS NOT NULL OR EXISTS (
-                     SELECT 1 FROM record_orders other JOIN source_records r ON r.id = other.record_id AND r.state = 'live'
-                     JOIN transactions t ON t.record_id = other.record_id
-                     WHERE other.order_id = ro.order_id AND other.record_id <> s.record_id))",
-            )?;
-            let rows: Vec<(String, Option<String>)> = st.query_map(params![id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            for (record, filled) in rows {
-                let filled_some = match filled {
+            let value = CashStated { cash: cash.clone(), holds: self.holds_standing(account)? };
+            self.store_period(CASH, account, stated_at, read, &value, &|rowid| self.cash_stated(rowid), &|first, last, read, last_read, v| {
+                let id = new_uuid(from_ns("statements", "first_ns", first.ns)?).to_string();
+                self.conn().execute(
+                    "INSERT INTO statements (id, account_id, kind, stated_at, read_id, first_ns, first_seq, last_ns, last_seq, last_read_id) VALUES (?1, ?2, 'cash', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![id, account.to_string(), at_text(from_ns("statements", "first_ns", first.ns)?), read, first.ns, first.seq, last.ns, last.seq, last_read],
+                )?;
+                for (c, a) in &v.cash {
+                    self.conn().execute("INSERT INTO statement_cash (statement_id, currency, amount) VALUES (?1, ?2, ?3)", params![id, c.to_string(), a.to_text()])?;
+                }
+                for h in &v.holds {
+                    self.conn().execute(
+                        "INSERT INTO statement_holds (statement_id, record_id, kind, currency, instrument_id, amount, quantity, premium) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        params![id, h.record, h.kind, h.currency, h.instrument, h.amount, h.quantity, h.premium],
+                    )?;
+                }
+                Ok(())
+            })
+        })
+    }
+
+    /// What the account's live records hold against it now, as a statement of its
+    /// cash keeps them: a working order with a fill against it already holds only
+    /// its rest, which its row does not state, so its amount is unknown (brief 18):
+    /// a fill the app booked from its own order, or another live record of the same
+    /// order that moved anything.
+    fn holds_standing(&self, account: AccountId) -> Result<Vec<HoldStated>> {
+        let mut st = self.conn().prepare_cached(
+            "SELECT h.record_id, h.kind, h.currency, h.instrument_id, h.amount, h.quantity, h.premium
+             FROM record_holds h JOIN source_records r ON r.id = h.record_id AND r.state = 'live' WHERE h.account_id = ?1 ORDER BY h.record_id",
+        )?;
+        let mut holds: Vec<HoldStated> = st
+            .query_map(params![account.to_string()], |r| Ok(HoldStated { record: r.get(0)?, kind: r.get(1)?, currency: r.get(2)?, instrument: r.get(3)?, amount: r.get(4)?, quantity: r.get(5)?, premium: r.get(6)? }))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut filled = self.conn().prepare_cached(
+            "SELECT DISTINCT o.filled FROM record_orders ro
+             LEFT JOIN orders o ON o.id = ro.order_id OR o.broker_id = ro.order_id
+             WHERE ro.record_id = ?1 AND (o.id IS NOT NULL OR EXISTS (
+                 SELECT 1 FROM record_orders other JOIN source_records r ON r.id = other.record_id AND r.state = 'live'
+                 JOIN transactions t ON t.record_id = other.record_id
+                 WHERE other.order_id = ro.order_id AND other.record_id <> ro.record_id))",
+        )?;
+        for h in holds.iter_mut().filter(|h| h.amount.is_some()) {
+            let rows: Vec<Option<String>> = filled.query_map(params![h.record], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let mut filled_some = false;
+            for f in rows {
+                filled_some |= match f {
                     Some(f) => text::dec("orders", "filled", &f)?.is_positive(),
                     // no order of the app's: another record of the order moved something
                     None => true,
                 };
-                if filled_some {
-                    self.conn().execute("UPDATE statement_holds SET amount = NULL WHERE statement_id = ?1 AND record_id = ?2", params![id, record])?;
-                }
             }
+            if filled_some {
+                h.amount = None;
+            }
+        }
+        Ok(holds)
+    }
+
+    /// The cash and holds a kept statement of cash states.
+    fn cash_stated(&self, rowid: i64) -> Result<CashStated> {
+        let id: String = self.conn().query_row("SELECT id FROM statements WHERE rowid = ?1", params![rowid], |r| r.get(0))?;
+        Ok(CashStated { cash: self.statement_cash(&id)?, holds: self.statement_hold_rows(&id)? })
+    }
+
+    fn statement_cash(&self, id: &str) -> Result<BTreeMap<Currency, Dec>> {
+        let mut m = BTreeMap::new();
+        let mut st = self.conn().prepare_cached("SELECT currency, amount FROM statement_cash WHERE statement_id = ?1")?;
+        for r in st.query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (c, v) = r?;
+            m.insert(text::currency("statement_cash", "currency", &c)?, text::dec("statement_cash", "amount", &v)?);
+        }
+        Ok(m)
+    }
+
+    fn statement_hold_rows(&self, id: &str) -> Result<Vec<HoldStated>> {
+        let mut st = self.conn().prepare_cached("SELECT record_id, kind, currency, instrument_id, amount, quantity, premium FROM statement_holds WHERE statement_id = ?1 ORDER BY record_id")?;
+        let rows = st.query_map(params![id], |r| Ok(HoldStated { record: r.get(0)?, kind: r.get(1)?, currency: r.get(2)?, instrument: r.get(3)?, amount: r.get(4)?, quantity: r.get(5)?, premium: r.get(6)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Keep `value`, stated of `account` at `at` by `read`, in the periods of `p`.
+    /// Statements are ordered by the moment of their read: its instant, then the
+    /// order the reads were written in (a read made after another at one instant
+    /// is the later). A period is a run of equal statements in that order, from
+    /// its first moment to its last. Stated after the newest period's last
+    /// moment, a statement extends that period where it states the same, else it
+    /// is a period of its own. Stated earlier (the machine's clock set back), it
+    /// extends the period it falls beside where it states the same; a period it
+    /// falls inside with another value is split at it, the moments either side
+    /// read from that connection's reads of the same part. No moment is ever
+    /// moved backwards, and what is stated is never written over.
+    #[allow(clippy::type_complexity)]
+    fn store_period<V: PartialEq>(
+        &self,
+        p: Periods,
+        account: AccountId,
+        at: jiff::Timestamp,
+        read: &ReadId,
+        value: &V,
+        load: &dyn Fn(i64) -> Result<V>,
+        insert: &dyn Fn(Moment, Moment, &str, &str, &V) -> Result<()>,
+    ) -> Result<()> {
+        let a = account.to_string();
+        let (connection, part, seq): (String, String, i64) = self.conn().query_row("SELECT connection_id, part, rowid FROM broker_reads WHERE id = ?1", params![read.0], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let m = Moment { ns: ns(at), seq };
+        let period = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<Option<Period>> {
+            Ok(self
+                .conn()
+                .query_row(sql, args, |r| Ok(Period { rowid: r.get(0)?, first: Moment { ns: r.get(1)?, seq: r.get(2)? }, last: Moment { ns: r.get(3)?, seq: r.get(4)? }, last_read: r.get(5)? }))
+                .optional()?)
+        };
+        let cols = "rowid, first_ns, first_seq, last_ns, last_seq, last_read_id";
+        let (table, only) = (p.table, p.only);
+        let set_last = |q: &Period, last: Moment, last_read: &str| -> Result<()> {
+            self.conn().execute(&format!("UPDATE {table} SET last_ns = ?1, last_seq = ?2, last_read_id = ?3 WHERE rowid = ?4"), params![last.ns, last.seq, last_read, q.rowid])?;
             Ok(())
-        })
+        };
+        let newest = period(&format!("SELECT {cols} FROM {table} WHERE account_id = ?1 AND {only} ORDER BY first_ns DESC, first_seq DESC LIMIT 1"), &[&a])?;
+        let Some(n) = newest else { return insert(m, m, &read.0, &read.0, value) };
+        if m >= n.last {
+            return if load(n.rowid)? == *value { set_last(&n, m, &read.0) } else { insert(m, m, &read.0, &read.0, value) };
+        }
+        // stated before the newest period's last moment: placed by its moment
+        let before = period(
+            &format!("SELECT {cols} FROM {table} WHERE account_id = ?1 AND {only} AND (first_ns < ?2 OR (first_ns = ?2 AND first_seq <= ?3)) ORDER BY first_ns DESC, first_seq DESC LIMIT 1"),
+            &[&a, &m.ns, &m.seq],
+        )?;
+        if let Some(b) = before.as_ref().filter(|b| m <= b.last) {
+            let held = load(b.rowid)?;
+            if held == *value {
+                return Ok(());
+            }
+            // split: the period ends at its last read before this one and starts
+            // again at its first read after it
+            let read_at = |sql: &str, lo: Moment, hi: Moment| -> Result<Option<(String, Moment)>> {
+                Ok(self
+                    .conn()
+                    .query_row(sql, params![connection, part, lo.ns, lo.seq, hi.ns, hi.seq], |r| Ok((r.get(0)?, Moment { ns: r.get(1)?, seq: r.get(2)? })))
+                    .optional()?)
+            };
+            let upto = read_at(
+                "SELECT id, at_ns, rowid FROM broker_reads WHERE connection_id = ?1 AND part = ?2
+                 AND (at_ns > ?3 OR (at_ns = ?3 AND rowid >= ?4)) AND (at_ns < ?5 OR (at_ns = ?5 AND rowid < ?6))
+                 ORDER BY at_ns DESC, rowid DESC LIMIT 1",
+                b.first,
+                m,
+            )?;
+            let from = read_at(
+                "SELECT id, at_ns, rowid FROM broker_reads WHERE connection_id = ?1 AND part = ?2
+                 AND (at_ns > ?3 OR (at_ns = ?3 AND rowid > ?4)) AND (at_ns < ?5 OR (at_ns = ?5 AND rowid <= ?6))
+                 ORDER BY at_ns, rowid LIMIT 1",
+                m,
+                b.last,
+            )?;
+            let (upto_id, upto_at) = upto.unwrap_or_else(|| (b.last_read.clone(), b.first));
+            set_last(b, upto_at, &upto_id)?;
+            insert(m, m, &read.0, &read.0, value)?;
+            if let Some((from_id, from_at)) = from {
+                insert(from_at, b.last, &from_id, &b.last_read, &held)?;
+            }
+            return Ok(());
+        }
+        // between two periods, or before the first
+        if let Some(b) = &before {
+            if load(b.rowid)? == *value {
+                return set_last(b, m, &read.0);
+            }
+        }
+        let after = match &before {
+            Some(b) => period(
+                &format!("SELECT {cols} FROM {table} WHERE account_id = ?1 AND {only} AND (first_ns > ?2 OR (first_ns = ?2 AND first_seq > ?3)) ORDER BY first_ns, first_seq LIMIT 1"),
+                &[&a, &b.first.ns, &b.first.seq],
+            )?,
+            None => period(&format!("SELECT {cols} FROM {table} WHERE account_id = ?1 AND {only} ORDER BY first_ns, first_seq LIMIT 1"), &[&a])?,
+        };
+        if let Some(q) = after {
+            if load(q.rowid)? == *value {
+                self.conn().execute(
+                    &format!("UPDATE {table} SET first_ns = ?1, first_seq = ?2, stated_at = ?3, read_id = ?4 WHERE rowid = ?5"),
+                    params![m.ns, m.seq, at_text(at), read.0, q.rowid],
+                )?;
+                return Ok(());
+            }
+        }
+        insert(m, m, &read.0, &read.0, value)
     }
 
     /// Store what the account can borrow as the broker states it now: an amount,
     /// or its reason it cannot say.
     pub fn store_buying_power(&self, account: AccountId, stated_at: jiff::Timestamp, stated: &std::result::Result<Money, String>, read: &ReadId) -> Result<()> {
-        let (amount, currency, why) = match stated {
+        let value: (Option<String>, Option<String>, Option<String>) = match stated {
             Ok(m) => (Some(m.amount.to_text()), Some(m.currency.to_string()), None),
-            Err(w) => (None, None, Some(w.as_str())),
+            Err(w) => (None, None, Some(w.clone())),
         };
-        self.conn().execute(
-            "INSERT INTO buying_power (account_id, stated_at, amount, currency, unavailable, read_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![account.to_string(), at_text(stated_at), amount, currency, why, read.0],
-        )?;
-        Ok(())
+        self.atomically(|| {
+            let load = |rowid: i64| -> Result<(Option<String>, Option<String>, Option<String>)> {
+                Ok(self.conn().query_row("SELECT amount, currency, unavailable FROM buying_power WHERE rowid = ?1", params![rowid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)
+            };
+            self.store_period(POWER, account, stated_at, read, &value, &load, &|first, last, read, last_read, v| {
+                self.conn().execute(
+                    "INSERT INTO buying_power (account_id, stated_at, amount, currency, unavailable, read_id, first_ns, first_seq, last_ns, last_seq, last_read_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    params![account.to_string(), at_text(from_ns("buying_power", "first_ns", first.ns)?), v.0, v.1, v.2, read, first.ns, first.seq, last.ns, last.seq, last_read],
+                )?;
+                Ok(())
+            })
+        })
     }
 
     /// Store what the broker states an account is worth now.
     pub fn store_net_value(&self, account: AccountId, at: jiff::Timestamp, value: Money, read: &ReadId) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO account_values (account_id, stated_at, amount, currency, read_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![account.to_string(), text::at(at), value.amount.to_text(), value.currency.to_string(), read.0],
-        )?;
-        Ok(())
+        let value = (value.amount.to_text(), value.currency.to_string());
+        self.atomically(|| {
+            let load = |rowid: i64| -> Result<(String, String)> { Ok(self.conn().query_row("SELECT amount, currency FROM account_values WHERE rowid = ?1", params![rowid], |r| Ok((r.get(0)?, r.get(1)?)))?) };
+            self.store_period(VALUE, account, at, read, &value, &load, &|first, last, read, last_read, v| {
+                self.conn().execute(
+                    "INSERT INTO account_values (account_id, stated_at, amount, currency, read_id, first_ns, first_seq, last_ns, last_seq, last_read_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![account.to_string(), at_text(from_ns("account_values", "first_ns", first.ns)?), v.0, v.1, read, first.ns, first.seq, last.ns, last.seq, last_read],
+                )?;
+                Ok(())
+            })
+        })
     }
 
     /// Store a statement of units as of a day.
@@ -307,14 +527,14 @@ impl Book {
     /// Note a read of an account's activity: `complete` when every page of it
     /// was read without a failure.
     pub fn note_activity_read(&self, account: AccountId, read_at: jiff::Timestamp, complete: bool) -> Result<()> {
-        self.conn().execute("INSERT OR REPLACE INTO activity_reads (account_id, read_at, complete) VALUES (?1, ?2, ?3)", params![account.to_string(), at_text(read_at), complete as i64])?;
+        self.conn().execute("INSERT OR REPLACE INTO activity_reads (account_id, read_at, complete, at_ns) VALUES (?1, ?2, ?3, ?4)", params![account.to_string(), at_text(read_at), complete as i64, ns(read_at)])?;
         Ok(())
     }
 
     /// When the account's activity was last read in full.
     pub fn activity_read_at(&self, account: AccountId) -> Result<Option<jiff::Timestamp>> {
-        let t: Option<String> = self.conn().query_row("SELECT MAX(read_at) FROM activity_reads WHERE account_id = ?1 AND complete = 1", params![account.to_string()], |r| r.get(0))?;
-        t.map(|s| text::instant("activity_reads", "read_at", &s)).transpose()
+        let t: Option<i64> = self.conn().query_row("SELECT MAX(at_ns) FROM activity_reads WHERE account_id = ?1 AND complete = 1", params![account.to_string()], |r| r.get(0))?;
+        t.map(|t| from_ns("activity_reads", "at_ns", t)).transpose()
     }
 
     /// That `out` and `into` are the two sides of one move of holdings.
@@ -363,56 +583,54 @@ impl Book {
         .collect()
     }
 
-    /// What the broker last stated about `account`.
+    /// What the broker last stated about `account`, with every day of its history.
     pub fn stated(&self, account: AccountId) -> Result<Stated> {
-        let a = account.to_string();
-        let mut out = Stated::default();
-        // each day's newest statement
-        let mut st = self.conn().prepare(
-            "SELECT d.day, d.net_value, d.net_deposits, d.currency FROM account_days d JOIN broker_reads r ON r.id = d.read_id WHERE d.account_id = ?1 ORDER BY d.day, d.rowid",
-        )?;
-        let rows = st.query_map(params![a], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+        Ok(Stated { days: self.stated_days(account)?, ..self.stated_latest(account)? })
+    }
+
+    /// Each day's value and net deposits of `account`, from the newest read of the day.
+    pub fn stated_days(&self, account: AccountId) -> Result<BTreeMap<jiff::civil::Date, (Money, Money)>> {
+        let mut out = BTreeMap::new();
+        let mut st = self.conn().prepare_cached("SELECT day, net_value, net_deposits, currency FROM account_days WHERE account_id = ?1 ORDER BY day, rowid")?;
+        let rows = st.query_map(params![account.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
         for r in rows {
             let (d, v, n, c) = r?;
             let t = "account_days";
             let c = text::currency(t, "currency", &c)?;
-            out.days.insert(text::date(t, "day", &d)?, (Money::new(text::dec(t, "net_value", &v)?, c), Money::new(text::dec(t, "net_deposits", &n)?, c)));
+            out.insert(text::date(t, "day", &d)?, (Money::new(text::dec(t, "net_value", &v)?, c), Money::new(text::dec(t, "net_deposits", &n)?, c)));
         }
-        out.activity_read_at = self.activity_read_at(account)?;
-        let cash_of = |id: &str| -> Result<BTreeMap<Currency, Dec>> {
-            let mut m = BTreeMap::new();
-            let mut st = self.conn().prepare_cached("SELECT currency, amount FROM statement_cash WHERE statement_id = ?1")?;
-            for r in st.query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-                let (c, v) = r?;
-                m.insert(text::currency("statement_cash", "currency", &c)?, text::dec("statement_cash", "amount", &v)?);
-            }
-            Ok(m)
-        };
-        // newest first, by the instant rather than its text (whose fraction's
-        // length varies): the newest, and the newest the last full read covers
-        // two stated at one instant: the one written last (the module's note)
-        let mut st = self.conn().prepare("SELECT id, stated_at, rowid FROM statements WHERE account_id = ?1 AND kind = 'cash'")?;
-        let mut stated: Vec<(jiff::Timestamp, i64, String)> = vec![];
-        for r in st.query_map(params![a], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))? {
-            let (id, at, written) = r?;
-            stated.push((text::instant("statements", "stated_at", &at)?, written, id));
-        }
-        stated.sort_unstable_by(|x, y| y.cmp(x));
-        if let Some((at, _, id)) = stated.first() {
-            out.cash = Some((*at, cash_of(id)?));
+        Ok(out)
+    }
+
+    /// What the broker last stated about `account`, its day history aside: each
+    /// part the newest of its kind, found through its index, with the moment it
+    /// was last stated.
+    pub fn stated_latest(&self, account: AccountId) -> Result<Stated> {
+        let a = account.to_string();
+        let mut out = Stated { activity_read_at: self.activity_read_at(account)?, ..Stated::default() };
+        let newest_cash: Option<(String, i64)> = self
+            .conn()
+            .query_row("SELECT id, last_ns FROM statements WHERE account_id = ?1 AND kind = 'cash' ORDER BY first_ns DESC, first_seq DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        if let Some((id, last)) = newest_cash {
+            out.cash = Some((from_ns("statements", "last_ns", last)?, self.statement_cash(&id)?));
         }
         if let Some(read) = out.activity_read_at {
-            if let Some((at, _, id)) = stated.iter().find(|(at, _, _)| *at <= read) {
-                out.cash_read = Some((*at, cash_of(id)?));
-                out.cash_read_holds = self.statement_holds(id)?;
+            let at_read: Option<String> = self
+                .conn()
+                .query_row("SELECT id FROM statements WHERE account_id = ?1 AND kind = 'cash' AND first_ns <= ?2 ORDER BY first_ns DESC, first_seq DESC LIMIT 1", params![a, ns(read)], |r| r.get(0))
+                .optional()?;
+            if let Some(id) = at_read {
+                out.cash_read = Some(self.statement_cash(&id)?);
+                out.cash_read_holds = self.statement_holds(&id)?;
             }
         }
-        let value: Option<(String, String, String)> = self
+        let value: Option<(i64, String, String)> = self
             .conn()
-            .query_row("SELECT stated_at, amount, currency FROM account_values WHERE account_id = ?1 ORDER BY rowid DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT last_ns, amount, currency FROM account_values WHERE account_id = ?1 ORDER BY first_ns DESC, first_seq DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
         if let Some((at, amount, currency)) = value {
-            out.net_value_now = Some((text::instant("account_values", "stated_at", &at)?, Money::new(text::dec("account_values", "amount", &amount)?, text::parsed("account_values", "currency", &currency, Currency::parse)?)));
+            out.net_value_now = Some((from_ns("account_values", "last_ns", at)?, Money::new(text::dec("account_values", "amount", &amount)?, text::parsed("account_values", "currency", &currency, Currency::parse)?)));
         }
         let units: Option<(String, String)> = self
             .conn()
@@ -458,10 +676,10 @@ impl Book {
             out.unit_books = books.into_iter().filter_map(|(i, v)| v.map(|v| (i, v))).collect();
             out.units = Some((text::date("statements", "as_of_day", &d)?, m));
         }
-        let bp: Option<(String, Option<String>, Option<String>, Option<String>)> = self
+        let bp: Option<(i64, Option<String>, Option<String>, Option<String>)> = self
             .conn()
             .query_row(
-                "SELECT b.stated_at, b.amount, b.currency, b.unavailable FROM buying_power b JOIN broker_reads r ON r.id = b.read_id WHERE b.account_id = ?1 ORDER BY b.rowid DESC LIMIT 1",
+                "SELECT last_ns, amount, currency, unavailable FROM buying_power WHERE account_id = ?1 ORDER BY first_ns DESC, first_seq DESC LIMIT 1",
                 params![a],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
@@ -473,7 +691,7 @@ impl Book {
                 (None, None, Some(w)) => Err(w),
                 _ => return Err(crate::BookError::Corrupt { table: t, column: "unavailable", value: a.clone(), why: "states both an amount and a reason, or neither".into() }),
             };
-            out.buying_power = Some((text::instant(t, "stated_at", &at)?, stated));
+            out.buying_power = Some((from_ns(t, "last_ns", at)?, stated));
         }
         Ok(out)
     }

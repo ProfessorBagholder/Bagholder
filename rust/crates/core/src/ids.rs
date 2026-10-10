@@ -27,6 +27,9 @@ macro_rules! id {
         pub struct $name(uuid::Uuid);
 
         impl $name {
+            /// The least id: the lower bound of a range over keys that lead with another.
+            pub const MIN: Self = $name(uuid::Uuid::nil());
+
             pub fn from_uuid(u: uuid::Uuid) -> Self {
                 $name(u)
             }

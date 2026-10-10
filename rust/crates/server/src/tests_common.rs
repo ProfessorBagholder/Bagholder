@@ -119,4 +119,6 @@ pub fn order_accounts_in(a: &Arc<App>) {
     let accounts = book.broker_read(conn, "accounts", now).unwrap();
     book.store_margin_backing(conn, &[(tfsa, margin)], &accounts).unwrap();
     f.record_changed(now).unwrap();
+    // what the margin account can borrow, as a balances read brings it to the figures
+    f.broker_changed(margin).unwrap();
 }
