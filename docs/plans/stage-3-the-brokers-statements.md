@@ -94,6 +94,24 @@ What stays the same:
 - `account_days`;
 - the order of statements written at one instant.
 
+## Brief 22's required changes, applied
+
+The reviewer's verdict (brief 22, Go with changes) is applied throughout the build; each item below replaces what the approach above says where they differ.
+
+1. **The engine's moment for a statement is its period's last moment.** `Stated.cash`, and so `BrokerAccount::as_of`, is the newest period's `last_us`, as the newest row's instant is today. Held by a unit test of the brief's sequence (100 at t1, a full read at t2, 100 again at t3, the book at 90) through `stated` and `broker_checks`, and the generated books contain folded runs that straddle an activity read.
+2. **Periods are runs in (instant, write) order, never in write order alone.** A period's `first_us` is its least instant and `last_us` its greatest. A statement whose instant is not after the newest period's last moment is placed by its instant: it extends the period it falls in or beside where it states the same, else it is a row of its own; a period it falls inside with another value is split at it, the moments either side read from that connection's cash reads (`broker_reads`). Nothing moves a moment backwards. Two different statements at one instant are both kept, the one written last the newer, which is what today's rows give (net value's `INSERT OR REPLACE` gives the same answer). Held by a property test: random non-monotone sequences with ties, the period store's `stated` equal at every read instant to a reference model of today's rows (sorted by instant, then write order).
+3. **Equal means the same cash in every currency and the same holds after `store_cash`'s nulling**, compared field by field with a missing amount equal only to a missing amount. The folding test includes a run whose only change is a hold's amount becoming unknown.
+4. **A balances read recomputes one account's check, in work that does not grow with the book.** `Change::Broker` recomputes the check of its account only, from a per-account cash total the engine keeps when the ledger changes, and the account's units through a range of `matched.units`. The `brokers` probe times `broker_changed(account)`, read and apply; acceptance is the growth rule, then the budget.
+5. **A pull's rows and its statements reach the engine in one write.** The pull reports the accounts it stated anything for; `record_changed(now, touched)` reads those accounts' statements and applies them with the ledger under one lock and one version. `broker_changed(account)` stays for the balances read alone. Held by a test that a pull writing rows and statements moves `Figures::version` by one, listed under the 2026-10-09 decision.
+6. **The writers are held by an oracle, not a list.** After each of `pull`, `pull_activity` and `balances` in the server's tests, the engine's `inputs.market.brokers` equals `engine_inputs::brokers(&book)`.
+7. **Units statements:** `first_us` and `last_us` are nullable with the same check `stated_at` has (cash only). A units statement is read newest through an index on `(account_id, kind, as_of_day)`. It is not folded: its lines carry the broker's value of each holding, which moves with the price every day, so two in a row are rarely equal. The PR states the count on the owner's copy.
+8. **Every instant the check hinges on is read as an integer.** `broker_reads` and `activity_reads` gain `at_us`; `last_read` and `activity_read_at` read `MAX(at_us)` through indexes; the text columns are written from the same instant and never read again, held equal on the migrated books by the migration test.
+9. **A balances read does not read the account's day history.** `broker_changed(account)` reads cash, buying power, net value now and the activity read; the days are read only when a pull touched the account (5), and the engine keeps the ones it has otherwise.
+10. **The migration rebuilds the tables** through new tables and a rename (the runner turns foreign keys off for it and checks them after), commits `schema/v26.sql`, deletes the folded rows' `statement_cash` and `statement_holds` with them, and the PR states what it took on the owner's copy.
+11. **The boundary test names the whole readers' only callers:** `figures::build`, `read_sources::engine`, `compare.rs` and the capacity `startup` probe; any other caller of `market`, `market_from_cache` or `engine_inputs::brokers` fails it.
+
+`Stated.cash_read` keeps only the cash and the holds: its moment is read nowhere (`engine_inputs.rs` drops it), so the field's moment is removed.
+
 ## Acceptance criteria
 
 - [ ] `RUSTFLAGS="-D warnings" cargo test --workspace` green; `cargo clippy --workspace --lib --bins` clean.
