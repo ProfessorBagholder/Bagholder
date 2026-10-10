@@ -49,7 +49,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "fs", "io-util"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["catch-panic", "limit", "set-header", "timeout"] }
+tower-http = { version = "0.7", features = ["catch-panic", "limit", "set-header", "timeout"] }
 # streams for response bodies (the event stream, the sign-in frames)
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
