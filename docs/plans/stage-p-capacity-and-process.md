@@ -132,14 +132,64 @@ What stays the same: the fixed demo book and every browser test on it; every scr
 
 ## Anti-stub self-check
 
-_To be initialled at build._
+Initialled at build (Claude): no definition nobody references; no field written and never read; no branch only the switch knows. The suite was run, the capacity run was made on this machine at the owner's size and four times it, and the made-up book was compared table by table with a copy of the owner's book.
 
 ## Verification
 
-_To be filled at build: the commands run and the numbers they showed._
+### What was built differently from the approach above, and why
+
+- **`bagholder capacity`, a subcommand, not a separate `capacity` binary.** What it measures is the server's own code (`figures`, `events`, `entries`, `csv_import`), which only the server binary holds; `demo-facts` and `pull-broker` are subcommands for the same reason. The release archive therefore carries it, at the cost of its code in the binary; nothing runs unless it is asked for.
+- **`capacity build <folder> [--times N] [--seed S]` and `capacity run <work folder>`** in place of the per-count flags and `capacity measure`: the sizes are the owner's (`OWNER`, counted on a copy of the owner's book) times N, so no size is chosen by hand.
+- **The book also holds the older activity from Wealthsimple's activity export, imported through the import.** A copy of the owner's book holds 6,156 rows of that export beside 7,994 feed records, and every import is linked against them (#419); a book without them would understate an import. The export is written from the same made-up replies, in the export's own words, as the owner's imported rows state them.
+- **Bytes read are counted from Linux's `/proc/self/io` (`rchar`), not `SQLITE_DBSTATUS_CACHE_MISS`.** SQLite reads its pages through `read()`, so the bytes the process reads are its page reads past its own cache, on every connection without reaching into each; the runner is Linux, and elsewhere the column says "not counted here".
+- **Startup is timed from the exec to the figures built**, not to the first message on `/api/events`: the stream's first message is sent from the figures once built, and a probe that started an HTTP server and a browser stream would time the loopback as well.
+- **An operation listed over budget is measured once, not seven times.** Its counts are the same every run and one run over budget keeps it over; only a run within budget is taken to the median of seven, to say it comes off the list. This is the "Right to refuse" case, decided by the list rather than by a time limit.
+- **Each probe runs on a fresh copy of the built folder.** Every probe writes (a quote, a trade, an import, what a start settles); without a copy the cached books would drift between runs.
+- **The normal suite's check is unit tests in `capacity.rs`**, not a `capacity_small` integration test: the probes are the server's own functions, which an integration test of the binary cannot call.
+- **SPEC ids are `<section>-<n>`**, not made from the rule's subject: an id must not change when the wording does, and a subject derived from words would. Every id ever given is listed in `docs/spec-ids.md` (standing or retired), so the test catches an id dropped without being retired as well as one given twice.
+- **The `capacity` job is its own workflow (`capacity.yml`), run when `rust/` or the workflow changes**, not inside `tests.yml`: what it builds and measures is the Rust code only, so a change to the page or the docs has nothing for it to measure. The three markdown files a test reads (`SPEC.md`, `docs/spec-ids.md`, `docs/architecture.md`) now run `tests.yml` (a test holds the list).
+- **The two books are built on every run, not kept in the Actions cache.** On the first CI run the measurement finished in 17 minutes, then saving the books (1.2 GB) to the cache had not finished two hours later; building them takes about nine minutes of the job. The build stays deterministic (tested), so a cache can be added back if the books ever take longer to build than to restore.
+- **Every operation is over budget today**, so the planted-regression run cannot be shown on an operation off the list. The verdict's logic is held by `test_an_operation_over_budget_fails_unless_listed_and_a_listed_one_within_fails_too` (a linear count planted on `price-changed`), and the first run here, with `OVER_BUDGET` empty, failed on every operation (below).
+
+### Found while building
+
+- **An import row named a share by its symbol, and the match took every instrument seen under that symbol.** Wealthsimple names each option contract by its underlying's symbol, so once a contract was held, the share's rows matched several instruments and the import made a new instrument and a second copy of each trade and dividend; a contract written by its terms was never matched to the contract the feed made. Fixed in this PR for both paths that look an instrument up by symbol (`entries::held_by_symbol`, now with the row's kind inside the match, and `entries::contract_by_terms`); `test_the_activity_export_links_to_the_feed_it_repeats` fails without the fix and passes with it. The owner's book is not affected: its exports came in through the earlier import.
+- **An asset movement is read as holdings by the feed and as cash by the import**, so the two never link (a copy of the owner's book holds one such row). Added to #405.
+
+### Commands and numbers
+
+- `RUSTFLAGS="-D warnings" cargo test --workspace` (in `rust/`): every test binary passed. `cargo clippy --workspace --lib --bins`: clean. `npm run check`: 0 errors. `npm test`: 28 files, 141 tests passed.
+- `SPEC.md`: `spec_ids.py same` (the converter's check, run once here and not kept) printed "same text: only ids and line breaks differ"; 964 ids, each listed in `docs/spec-ids.md`.
+- The made-up owner-size book against a copy of the owner's book (`capacity build`, 28 s on an M-series Mac):
+
+  | Count | Owner's book | Made-up |
+  | --- | --- | --- |
+  | Accounts | 29 (21 with activity) | 29 (29 with activity) |
+  | Instruments | 210 | 203 |
+  | Transactions | 7,137 | 7,807 |
+  | Feed records | 7,994 | 7,674 |
+  | Activity-export records | 6,156 | 5,909 |
+  | Trades | 646 | 627 |
+  | Balances rows over a year | about 325,000 (890 a day) | 328,193 |
+  | Record problems | | 0 |
+
+  Every account has activity in the made-up book, so it holds more account-days (31,813 against 24,245): the larger of the two, which is the side a budget should err on.
+- `bagholder capacity run` on this machine (an M-series Mac, so the "Runner" column is this Mac, not the arm64 runner; the CI job's table is in the pull request), 11 minutes including both builds:
+
+  | Operation | Here at ×4 (ms) | Pi (ms) | Budget (ms) | VM steps ×1 → ×4 | Allocations ×1 → ×4 |
+  | --- | --- | --- | --- | --- | --- |
+  | startup | 25,135 | 52,784 | 5,000 | 67,557,866 → 955,460,070 | 1,510,838 → 5,943,452 |
+  | add-trade | 25,448 | 53,441 | 100 | 69,301,613 → 962,400,105 | 1,691,780 → 6,729,708 |
+  | import | 23,345 | 49,024 | 1,000 | 69,707,069 → 964,008,512 | 1,718,557 → 6,797,813 |
+  | brokers | 20,874 | 43,835 | 2,586 | 66,393,553 → 950,626,357 | 866,177 → 3,466,072 |
+  | price-changed | 19,513 | 40,977 | 95 | 66,417,442 → 950,675,707 | 879,537 → 3,489,107 |
+  | feed-step | 49 | 104 | 95 | 1,562 → 1,562 | 148,316 → 712,199 |
+
+  The work grows 14 times when the book grows four times: `brokers()` reads every balances row of every account, and every other operation but the stream step runs through it. The first run, with `OVER_BUDGET` empty, failed naming all six operations; with them listed against their issues it passes.
 
 ## Handoff
 
-_To be filled at build._
+- `OVER_BUDGET` lists every operation: startup and `brokers` (#417), `price-changed` (#418), `import` (#419), `add-trade` (#420), `feed-step` (#426). Stage 3 of brief 15 takes them off one by one; the job fails when one is within budget and still listed.
+- Part F: 104 issues, #383 to #486, one per root cause, each with its findings, severity, standard and the test that will hold the fix.
 
 **Nothing left running.**

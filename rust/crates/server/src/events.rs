@@ -173,9 +173,9 @@ impl Bus {
             if ready() {
                 return true;
             }
-            let Some(slice) = app.wall.slice(until) else { return false };
             let g = m.lock().unwrap_or_else(|e| e.into_inner());
             let before = app.wall.now();
+            let Some(slice) = app.wall.slice(until, before) else { return false };
             drop(c.wait_timeout_while(g, slice, |n| *n == seen && !app.stopping()));
             app.wall.waited(before, slice, app.wall.now());
         }

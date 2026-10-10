@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod anonymise;
 pub mod assemble;
 pub mod client;
+pub mod generated;
 pub mod mapping;
 pub mod read;
 pub mod record;

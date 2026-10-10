@@ -147,10 +147,12 @@ impl Wall {
         Duration::from_millis(self.check_ms.load(Ordering::SeqCst))
     }
 
-    /// What is left of a wait until `until`, and how long to sleep in the kernel for
-    /// before looking at the clock again; none once it has come.
-    pub fn slice(&self, until: std::time::SystemTime) -> Option<Duration> {
-        let left = until.duration_since(self.now()).ok().filter(|l| !l.is_zero())?;
+    /// What is left at `now` of a wait until `until`, and how long to sleep in the
+    /// kernel for before looking at the clock again; none once it has come. `now` is
+    /// the reading the wait then stamps as its start (`waited`), one reading for
+    /// both, so a sleep that begins at any moment after it falls inside the wait.
+    pub fn slice(&self, until: std::time::SystemTime, now: std::time::SystemTime) -> Option<Duration> {
+        let left = until.duration_since(now).ok().filter(|l| !l.is_zero())?;
         Some(left.min(self.check()))
     }
 
@@ -360,8 +362,8 @@ impl App {
             if self.stopping() {
                 return true;
             }
-            let Some(slice) = self.wall.slice(until) else { return false };
             let before = self.wall.now();
+            let Some(slice) = self.wall.slice(until, before) else { return false };
             g = c.wait_timeout_while(g, slice, |_| !self.stopping()).unwrap_or_else(|e| e.into_inner()).0;
             self.wall.waited(before, slice, self.wall.now());
         }

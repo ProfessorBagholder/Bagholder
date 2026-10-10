@@ -1,0 +1,48 @@
+# The server held to its cost budget (docs/architecture.md §16). Its own workflow so it runs only
+# when the Rust code it builds and measures changed, or this file.
+name: Capacity
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/capacity.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/capacity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capacity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The server held to its cost budget (docs/architecture.md §16) at the owner's size and four
+  # times it, on the arm64 machine the budget is stated against: `bagholder capacity run` builds
+  # both books, measures every operation (seven times, once for one listed over budget), prints the table and fails when an operation
+  # off OVER_BUDGET misses its budget or the growth rule, or one on it now meets both. The two books
+  # are built on each run (about nine minutes): saved to the Actions cache, their 1.2 GB had not
+  # finished uploading after two hours. It runs only when what it builds or measures changed.
+  capacity:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: rust
+          shared-key: capacity
+      - name: The server, as released
+        run: cargo build --release --bin bagholder
+        working-directory: rust
+      - name: The cost budget
+        run: |
+          set -o pipefail
+          target/release/bagholder capacity run "$RUNNER_TEMP/capacity" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+        working-directory: rust
+

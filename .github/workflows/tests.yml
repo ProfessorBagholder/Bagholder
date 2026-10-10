@@ -1,18 +1,27 @@
-# Every suite, on every pull request and every push to master that touches anything but markdown.
-# Nothing ran on a pull request before this: a branch was only ever as tested as whoever remembered
-# to run it. The server and the page are one product -- the page is built into the server -- so a
-# pull request is green only when both are. No test or step reads a .md file, so a change to
-# documentation alone runs nothing.
+# Every suite, on every pull request and every push to master that touches anything but markdown,
+# or the markdown a test reads. Nothing ran on a pull request before this: a branch was only ever as
+# tested as whoever remembered to run it. The server and the page are one product -- the page is
+# built into the server -- so a pull request is green only when both are. The tests read three
+# markdown files (SPEC.md for its rule ids, docs/spec-ids.md, and docs/architecture.md for the cost
+# budget), so a change to one of them runs everything; any other documentation runs nothing.
 name: Tests
 
 on:
   pull_request:
-    paths-ignore:
-      - '**.md'
+    paths:
+      - '**'
+      - '!**.md'
+      - 'SPEC.md'
+      - 'docs/spec-ids.md'
+      - 'docs/architecture.md'
   push:
     branches: [master]
-    paths-ignore:
-      - '**.md'
+    paths:
+      - '**'
+      - '!**.md'
+      - 'SPEC.md'
+      - 'docs/spec-ids.md'
+      - 'docs/architecture.md'
   workflow_dispatch:
 
 permissions:
@@ -26,11 +35,11 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
       # a warning fails the build: the workspace is kept warning-free
@@ -54,11 +63,11 @@ jobs:
   rust-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
       - name: The Rust suite
@@ -80,9 +89,9 @@ jobs:
   rust-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
       - name: The model's suite
@@ -97,8 +106,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -113,33 +122,103 @@ jobs:
       - name: The bundle builds
         run: npm run build
 
-  # The image the release publishes, built on every pull request and not pushed:
-  # docker.yml builds it only on a tag, so a Dockerfile that no longer builds would
-  # otherwise first fail at a release.
-  image:
+  # The image the release publishes, built on every pull request and not pushed, then
+  # started on the made-up book (offline, dry orders) and driven in a real browser for
+  # one order through the page's own path (e2e/dryorder.spec.ts): docker.yml builds it
+  # only on a tag, so an image that no longer builds, starts or serves would otherwise
+  # first fail at a release.
+  container:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: rust
+          shared-key: browser
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: The browser the test drives
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: The made-up book
+        working-directory: rust
+        run: |
+          cargo build --bin bagholder --bin demo-book
+          mkdir -p "$RUNNER_TEMP/book"
+          target/debug/demo-book --home "$RUNNER_TEMP/book" --bars
+          target/debug/bagholder demo-facts "$RUNNER_TEMP/book"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: The image builds
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: rust/Dockerfile
-          push: false
+          load: true
+          tags: bagholder:ci
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
+      # the port the same inside and out, as docker-compose.yml publishes it
+      - name: The image starts on the book
+        run: |
+          docker run -d --name bagholder -p 127.0.0.1:8792:8792 -e BAGHOLDER_PORT=8792 \
+            -e BAGHOLDER_DRY_ORDERS=1 -e BAGHOLDER_OFFLINE=1 -e BAGHOLDER_NOTIFY=browser \
+            -v "$RUNNER_TEMP/book:/data" bagholder:ci
+          # until it answers, or the container has stopped
+          until curl -sf -o /dev/null http://127.0.0.1:8792/api/status; do
+            [ "$(docker inspect -f '{{.State.Running}}' bagholder)" = true ] || { docker logs bagholder; exit 1; }
+            sleep 1
+          done
+      - name: One dry order through the page
+        env:
+          E2E_URL: http://127.0.0.1:8792
+        run: npx playwright test
+        working-directory: web
+      - name: The container's log
+        if: failure()
+        run: docker logs bagholder
+
+  # Known vulnerabilities in what the build depends on: an advisory fails the job
+  # (cargo audit's own exit status); an unmaintained or yanked crate is printed and
+  # does not, as the project cannot always act on one. npm audit fails at any severity.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
+        working-directory: rust
+      - name: npm audit
+        run: npm audit
+        working-directory: web
+      # an action by a tag can change under the same name; by its commit it cannot
+      # (GitHub, "Security hardening for GitHub Actions")
+      - name: Every action pinned by its commit
+        run: |
+          if grep -nE '^\s*(-\s*)?uses:' .github/workflows/*.yml | grep -vE 'uses: \./|@[0-9a-f]{40}( |$)'; then
+            echo "pin each action above to a full commit SHA"; exit 1
+          fi
 
   # The page driven in a real browser against the real server, on a made-up book
   # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE.
   browser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
           shared-key: browser
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm

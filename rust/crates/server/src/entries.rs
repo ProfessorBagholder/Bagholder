@@ -99,17 +99,43 @@ pub fn contract_of(symbol: &str) -> Option<(String, bagholder_core::jiff::civil:
     Some((under.to_uppercase(), expiry, strike, right))
 }
 
-/// The instrument the book holds by `symbol` in `currency`, if exactly one.
-pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency) -> Option<InstrumentId> {
+/// The instrument the book holds by `symbol` in `currency`, of a kind `of_kind`
+/// takes, if exactly one. The kind is part of the match, never a filter after
+/// it: a broker names an option contract by its underlying's symbol, so a
+/// symbol alone is shared by a share and every contract on it.
+pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency, of_kind: impl Fn(InstrumentKind) -> bool) -> Option<InstrumentId> {
     let mut found = e
         .inputs()
         .ledger
         .instruments
         .iter()
-        .filter(|(_, i)| i.instrument.currency == currency && i.current_name().is_some_and(|n| n.symbol.eq_ignore_ascii_case(symbol)))
+        .filter(|(_, i)| i.instrument.currency == currency && of_kind(i.instrument.kind) && i.current_name().is_some_and(|n| n.symbol.eq_ignore_ascii_case(symbol)))
         .map(|(id, _)| *id);
     let first = found.next()?;
     found.next().is_none().then_some(first)
+}
+
+/// What a contract written by its terms (`contract_of`) names: the contract the
+/// book holds on that underlying with those terms, if exactly one, else a new
+/// one on the underlying the book holds by its symbol (or one named by it).
+/// `None` when `symbol` is not a contract's. A contract is found by its terms,
+/// never its name: a broker names a contract by its underlying's symbol.
+pub(crate) fn contract_by_terms(e: &Engine, symbol: &str, currency: Currency) -> Option<Traded> {
+    let (under, expiry, strike, right) = contract_of(symbol)?;
+    let held_under = held_by_symbol(e, &under, currency, |k| k != InstrumentKind::OptionContract);
+    let mut held = held_under.into_iter().flat_map(|u| {
+        e.inputs().ledger.instruments.iter().filter(move |(_, i)| {
+            i.instrument.currency == currency && i.terms.as_ref().is_some_and(|t| t.underlying == u && t.expiry == expiry && t.strike == strike && t.right == right)
+        })
+    });
+    Some(match (held.next(), held.next()) {
+        (Some((id, _)), None) => Traded::Held(*id),
+        _ => Traded::Named {
+            symbol: symbol.to_string(),
+            currency,
+            contract: Some(Contract { underlying: held_under.map(Underlying::Held).unwrap_or(Underlying::Named(under)), expiry, strike, right }),
+        },
+    })
 }
 
 /// The account a trade entered without one goes to: made the first time.
@@ -152,20 +178,10 @@ pub fn enter(f: &Figures, req: &EntryRequest, now: bagholder_core::jiff::Timesta
                     let traded = match instrument.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                         Some(id) => Traded::Held(instrument_id(id)?),
                         None if symbol.is_empty() => return Err(bad("a symbol is required")),
-                        None => match held_by_symbol(e, &symbol, currency) {
+                        // a contract is written by its terms (`contract_of`); any other symbol names no contract
+                        None => match held_by_symbol(e, &symbol, currency, |k| (k == InstrumentKind::OptionContract) == contract_of(&symbol).is_some()) {
                             Some(id) => Traded::Held(id),
-                            None => {
-                                let contract = contract_of(&symbol).map(|(under, expiry, strike, right)| Contract {
-                                    underlying: match held_by_symbol(e, &under, currency).filter(|u| i.ledger.instruments[u].instrument.kind != InstrumentKind::OptionContract) {
-                                        Some(u) => Underlying::Held(u),
-                                        None => Underlying::Named(under),
-                                    },
-                                    expiry,
-                                    strike,
-                                    right,
-                                });
-                                Traded::Named { symbol: symbol.clone(), currency, contract }
-                            }
+                            None => contract_by_terms(e, &symbol, currency).unwrap_or(Traded::Named { symbol: symbol.clone(), currency, contract: None }),
                         },
                     };
                     if let Traded::Held(id) = &traded {

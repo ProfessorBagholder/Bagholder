@@ -4,6 +4,7 @@
 
 pub mod migrate;
 pub mod pool;
+pub mod work;
 
 /// The one way a connection to the database file is made, so every connection
 /// agrees on how it is kept. Write-ahead logging: a reader never waits on a
@@ -42,6 +43,7 @@ pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn
         }
     }
     conn.pragma_update(None, "synchronous", "FULL")?;
+    work::watch(&conn);
     // every connection is made here, so every commit in the process is heard: no
     // writer has to remember to say it wrote
     if let Some(heard) = hook {
