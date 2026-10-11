@@ -5,19 +5,26 @@
 //! opened; the app itself never calls it, so no connection of a running app
 //! carries the counter.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static COUNTING: AtomicBool = AtomicBool::new(false);
-static STEPS: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// The steps taken on this thread: a statement's steps are counted on the
+    /// thread that runs it, so a measurement sees its own work and none of another
+    /// thread's running beside it (the test suite runs tests in parallel).
+    static STEPS: Cell<u64> = const { Cell::new(0) };
+}
 
 /// Count from here on: each connection opened after this counts its steps.
 pub fn start_counting() {
     COUNTING.store(true, Ordering::SeqCst);
 }
 
-/// The steps counted so far, on every counted connection.
+/// The steps counted so far on this thread, on every counted connection.
 pub fn steps() -> u64 {
-    STEPS.load(Ordering::SeqCst)
+    STEPS.with(Cell::get)
 }
 
 /// A connection just opened, counted where counting is on.
@@ -27,7 +34,7 @@ pub(crate) fn watch(conn: &rusqlite::Connection) {
         conn.progress_handler(
             1,
             Some(|| {
-                STEPS.fetch_add(1, Ordering::Relaxed);
+                STEPS.with(|s| s.set(s.get() + 1));
                 false
             }),
         );

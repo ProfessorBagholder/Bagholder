@@ -18,7 +18,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bagholder_book::Book;
@@ -137,7 +137,26 @@ pub const OVER_BUDGET: &[(&str, &str)] = &[
 // ---- work counted ----
 
 static COUNT_ALLOCS: AtomicBool = AtomicBool::new(false);
-static ALLOCS: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// The allocations made on this thread: a measurement sees its own work and
+    /// none of another thread's running beside it.
+    static ALLOCS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One allocation counted on this thread, where counting is on. A thread being
+/// torn down has no count to add to, and its allocation is not counted.
+fn count_alloc() {
+    if COUNT_ALLOCS.load(Ordering::Relaxed) {
+        // a thread being torn down keeps no count: its allocation goes uncounted
+        if ALLOCS.try_with(|a| a.set(a.get() + 1)).is_err() {}
+    }
+}
+
+fn allocs() -> u64 {
+    // read on a live thread, where the count always stands
+    ALLOCS.with(std::cell::Cell::get)
+}
 
 /// The process's allocator, counting allocations only once a capacity probe
 /// has turned counting on; otherwise the system's, with one flag read.
@@ -147,16 +166,12 @@ pub struct Counting;
 // arguments; the count is a relaxed atomic add, which allocates nothing.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNT_ALLOCS.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_alloc();
         // SAFETY: as the caller's contract for `alloc`
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNT_ALLOCS.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_alloc();
         // SAFETY: as the caller's contract for `alloc_zeroed`
         unsafe { System.alloc_zeroed(layout) }
     }
@@ -165,9 +180,7 @@ unsafe impl GlobalAlloc for Counting {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNT_ALLOCS.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_alloc();
         // SAFETY: as the caller's contract for `realloc`
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -200,14 +213,14 @@ struct Mark {
 }
 
 fn mark() -> Mark {
-    Mark { at: std::time::Instant::now(), steps: bagholder_sqlite::work::steps(), allocs: ALLOCS.load(Ordering::SeqCst), read: read_bytes() }
+    Mark { at: std::time::Instant::now(), steps: bagholder_sqlite::work::steps(), allocs: allocs(), read: read_bytes() }
 }
 
 fn since(m: &Mark, divisor: u64) -> Measured {
     Measured {
         wall_ns: m.at.elapsed().as_nanos() as u64,
         steps: bagholder_sqlite::work::steps() - m.steps,
-        allocs: ALLOCS.load(Ordering::SeqCst) - m.allocs,
+        allocs: allocs() - m.allocs,
         read: match (m.read, read_bytes()) {
             (Some(a), Some(b)) => Some(b - a),
             _ => None,
