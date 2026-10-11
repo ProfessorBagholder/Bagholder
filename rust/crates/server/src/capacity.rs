@@ -494,17 +494,25 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
     let f = figures(&app)?;
     let held: Vec<(bagholder_core::InstrumentId, String, Currency)> = f
         .read(|e| {
-            // the shares held, each by the name it trades under now
+            // the shares held, each by the name it trades under now: the one with
+            // the longest history of closes first, then by name, so the change
+            // measured is of the same size at every size of book, whichever ids a
+            // build drew (an id is made from the moment it is made)
             let ledger = &e.inputs().ledger;
-            e.figures()
+            let mut held = e
+                .figures()
                 .positions
                 .iter()
                 .filter_map(|p| {
                     let info = ledger.instruments.get(&p.instrument)?;
                     (info.instrument.kind == bagholder_core::instrument::InstrumentKind::Security).then_some(())?;
-                    Some((p.instrument, info.names.last()?.symbol.clone(), info.instrument.currency))
+                    let closes = e.inputs().market.closes.get(&p.instrument).map_or(0, |c| c.len());
+                    Some((closes, info.names.last()?.symbol.clone(), p.instrument, info.instrument.currency))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            held.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            held.dedup_by(|a, b| a.2 == b.2);
+            held.into_iter().map(|(_, symbol, id, currency)| (id, symbol, currency)).collect::<Vec<_>>()
         })
         .ok_or("the figures were not built")?;
     let priced = held.len().max(1) as u64;
@@ -515,7 +523,9 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
             let book = f.book()?;
-            let account = f.read(|e| e.figures().positions.first().map(|p| p.account)).flatten().ok_or("nothing is held")?;
+            // the account holding the instrument the other probes change, chosen the same way at every size
+            let (instrument, _, _) = held.first().cloned().ok_or("nothing is held")?;
+            let account = f.read(|e| e.figures().positions.iter().filter(|p| p.instrument == instrument).map(|p| p.account).min()).flatten().ok_or("nothing is held")?;
             let connection = book.connections().map_err(err)?.first().map(|c| c.id).ok_or("no connection")?;
             let at = Timestamp::now();
             let cash = std::collections::BTreeMap::from([(Currency::CAD, Dec::new(1_234_567, 2).map_err(err)?)]);
