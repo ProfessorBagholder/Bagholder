@@ -32,3 +32,4 @@ Read from any checkout without switching branches:
 | 21 | [Verdict on the Stage P plan (capacity test and the process stage): Go with changes](21-stage-p-verdict.md) | Current |
 | 22 | [Verdict on the Stage 3 statements plan (#503): Go with changes](22-stage-3-statements-verdict.md) | Current |
 | 23 | [Debts held outside Wealthsimple, read from its net worth feature: findings and proposal](23-external-debt-from-wealthsimple.md) | Current; queries and sources in [23/](23/) |
+| 24 | [The 85 open issues re-checked against master d6824aa7: 83 stand, #412 closes, #442 narrows](24-issues-rechecked.md) | Current; evidence in [24/](24/) |
