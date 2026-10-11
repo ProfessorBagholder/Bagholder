@@ -523,9 +523,21 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
             let book = f.book()?;
-            // the account holding the instrument the other probes change, chosen the same way at every size
-            let (instrument, _, _) = held.first().cloned().ok_or("nothing is held")?;
-            let account = f.read(|e| e.figures().positions.iter().filter(|p| p.instrument == instrument).map(|p| p.account).min()).flatten().ok_or("nothing is held")?;
+            // an account of the middle size among those holding anything, by the
+            // number of its holdings: a choice that means the same at every size of
+            // book, whichever ids a build drew
+            let account = f
+                .read(|e| {
+                    let mut count: std::collections::BTreeMap<bagholder_core::AccountId, usize> = Default::default();
+                    for p in e.figures().positions {
+                        *count.entry(p.account).or_default() += 1;
+                    }
+                    let mut by_size: Vec<(usize, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, a)).collect();
+                    by_size.sort();
+                    by_size.get(by_size.len() / 2).map(|(_, a)| *a)
+                })
+                .flatten()
+                .ok_or("nothing is held")?;
             let connection = book.connections().map_err(err)?.first().map(|c| c.id).ok_or("no connection")?;
             let at = Timestamp::now();
             let cash = std::collections::BTreeMap::from([(Currency::CAD, Dec::new(1_234_567, 2).map_err(err)?)]);

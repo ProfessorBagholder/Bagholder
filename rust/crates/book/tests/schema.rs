@@ -229,7 +229,7 @@ fn migration_26_keeps_what_every_account_s_statements_answer() {
         }
         drop(conn);
         let (book, done) = Book::open(&path, "test", t0()).unwrap();
-        assert_eq!(done.to, 26);
+        assert_eq!(done.to, MIGRATIONS.len() as u32);
         for (n, a) in accounts.iter().enumerate() {
             let mut mine: Vec<&Row> = rows.iter().filter(|r| r.0 == n).collect();
             // the model: by instant, then the order written; a value now replaced at one instant
