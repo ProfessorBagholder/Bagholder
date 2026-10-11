@@ -18,7 +18,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bagholder_book::Book;
@@ -137,7 +137,26 @@ pub const OVER_BUDGET: &[(&str, &str)] = &[
 // ---- work counted ----
 
 static COUNT_ALLOCS: AtomicBool = AtomicBool::new(false);
-static ALLOCS: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// The allocations made on this thread: a measurement sees its own work and
+    /// none of another thread's running beside it.
+    static ALLOCS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One allocation counted on this thread, where counting is on. A thread being
+/// torn down has no count to add to, and its allocation is not counted.
+fn count_alloc() {
+    if COUNT_ALLOCS.load(Ordering::Relaxed) {
+        // a thread being torn down keeps no count: its allocation goes uncounted
+        if ALLOCS.try_with(|a| a.set(a.get() + 1)).is_err() {}
+    }
+}
+
+fn allocs() -> u64 {
+    // read on a live thread, where the count always stands
+    ALLOCS.with(std::cell::Cell::get)
+}
 
 /// The process's allocator, counting allocations only once a capacity probe
 /// has turned counting on; otherwise the system's, with one flag read.
@@ -147,16 +166,12 @@ pub struct Counting;
 // arguments; the count is a relaxed atomic add, which allocates nothing.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNT_ALLOCS.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_alloc();
         // SAFETY: as the caller's contract for `alloc`
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNT_ALLOCS.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_alloc();
         // SAFETY: as the caller's contract for `alloc_zeroed`
         unsafe { System.alloc_zeroed(layout) }
     }
@@ -165,9 +180,7 @@ unsafe impl GlobalAlloc for Counting {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNT_ALLOCS.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_alloc();
         // SAFETY: as the caller's contract for `realloc`
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -200,14 +213,14 @@ struct Mark {
 }
 
 fn mark() -> Mark {
-    Mark { at: std::time::Instant::now(), steps: bagholder_sqlite::work::steps(), allocs: ALLOCS.load(Ordering::SeqCst), read: read_bytes() }
+    Mark { at: std::time::Instant::now(), steps: bagholder_sqlite::work::steps(), allocs: allocs(), read: read_bytes() }
 }
 
 fn since(m: &Mark, divisor: u64) -> Measured {
     Measured {
         wall_ns: m.at.elapsed().as_nanos() as u64,
         steps: bagholder_sqlite::work::steps() - m.steps,
-        allocs: ALLOCS.load(Ordering::SeqCst) - m.allocs,
+        allocs: allocs() - m.allocs,
         read: match (m.read, read_bytes()) {
             (Some(a), Some(b)) => Some(b - a),
             _ => None,
@@ -494,17 +507,25 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
     let f = figures(&app)?;
     let held: Vec<(bagholder_core::InstrumentId, String, Currency)> = f
         .read(|e| {
-            // the shares held, each by the name it trades under now
+            // the shares held, each by the name it trades under now: the one with
+            // the longest history of closes first, then by name, so the change
+            // measured is of the same size at every size of book, whichever ids a
+            // build drew (an id is made from the moment it is made)
             let ledger = &e.inputs().ledger;
-            e.figures()
+            let mut held = e
+                .figures()
                 .positions
                 .iter()
                 .filter_map(|p| {
                     let info = ledger.instruments.get(&p.instrument)?;
                     (info.instrument.kind == bagholder_core::instrument::InstrumentKind::Security).then_some(())?;
-                    Some((p.instrument, info.names.last()?.symbol.clone(), info.instrument.currency))
+                    let closes = e.inputs().market.closes.get(&p.instrument).map_or(0, |c| c.len());
+                    Some((closes, info.names.last()?.symbol.clone(), p.instrument, info.instrument.currency))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            held.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            held.dedup_by(|a, b| a.2 == b.2);
+            held.into_iter().map(|(_, symbol, id, currency)| (id, symbol, currency)).collect::<Vec<_>>()
         })
         .ok_or("the figures were not built")?;
     let priced = held.len().max(1) as u64;
@@ -515,7 +536,21 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
             let book = f.book()?;
-            let account = f.read(|e| e.figures().positions.first().map(|p| p.account)).flatten().ok_or("nothing is held")?;
+            // an account of the middle size among those holding anything, by the
+            // number of its holdings: a choice that means the same at every size of
+            // book, whichever ids a build drew
+            let account = f
+                .read(|e| {
+                    let mut count: std::collections::BTreeMap<bagholder_core::AccountId, usize> = Default::default();
+                    for p in e.figures().positions {
+                        *count.entry(p.account).or_default() += 1;
+                    }
+                    let mut by_size: Vec<(usize, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, a)).collect();
+                    by_size.sort();
+                    by_size.get(by_size.len() / 2).map(|(_, a)| *a)
+                })
+                .flatten()
+                .ok_or("nothing is held")?;
             let connection = book.connections().map_err(err)?.first().map(|c| c.id).ok_or("no connection")?;
             let at = Timestamp::now();
             let cash = std::collections::BTreeMap::from([(Currency::CAD, Dec::new(1_234_567, 2).map_err(err)?)]);

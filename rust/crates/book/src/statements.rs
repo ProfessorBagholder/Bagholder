@@ -637,9 +637,8 @@ impl Book {
             .query_row("SELECT id, as_of_day FROM statements WHERE account_id = ?1 AND kind = 'units' ORDER BY as_of_day DESC, rowid DESC LIMIT 1", params![a], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
         if let Some((id, d)) = units {
-            // each line under the instrument the book reads it as: the units of
-            // instruments read as one added up
-            let joined = self.joined()?;
+            // each line under the instrument the book reads it as, found by its key:
+            // the units of instruments read as one added up
             let mut m: BTreeMap<InstrumentId, Dec> = BTreeMap::new();
             // each instrument's value, none once a line of it states none or another currency
             let mut values: BTreeMap<InstrumentId, Option<Money>> = BTreeMap::new();
@@ -650,7 +649,7 @@ impl Book {
                 let (i, q, v, vc, b, bc) = r?;
                 let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
                 let q = text::dec("statement_units", "quantity", &q)?;
-                let head = joined.get(&i).copied().unwrap_or(i);
+                let head = self.canonical(i)?;
                 let e = m.entry(head).or_insert(Dec::ZERO);
                 *e = e.checked_add(q).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?;
                 let value = match (v, vc) {
