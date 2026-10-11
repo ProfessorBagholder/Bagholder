@@ -1,0 +1,42 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk FetchIdentityHousehold: 573-f6b80df04f354a78.js, read 2026-10-11).
+query FetchIdentityHousehold($identityId: ID!) {
+  identity(id: $identityId) {
+    id
+    household {
+      ...Household
+    }
+  }
+}
+
+fragment Household on Household {
+  id
+  name
+  createdAt
+  members {
+    ...HouseholdMember
+  }
+  mySettings {
+    ...HouseholdMemberSettings
+  }
+  isFinancialInfoShared
+}
+
+fragment HouseholdMember on HouseholdMember {
+  id
+  firstName
+  preferredFirstName
+  lastName
+  email
+  isPrimary
+  settings {
+    ...HouseholdMemberSettings
+  }
+}
+
+fragment HouseholdMemberSettings on HouseholdMemberSettings {
+  identityId
+  shareFinancialInfo
+  netWorthOnboardingCompletedAt
+  avatarColor
+  preferredInitials
+}

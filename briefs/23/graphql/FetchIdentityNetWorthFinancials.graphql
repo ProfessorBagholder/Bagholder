@@ -1,0 +1,34 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk FetchIdentityNetWorthFinancials: 471-807fa81c0550a1bc.js, read 2026-10-11).
+query FetchIdentityNetWorthFinancials($identityId: ID!, $accountIds: [ID!]!, $externalFinancialEntityIds: [ID!]!, $currency: Currency!, $startDate: Date!, $endDate: Date, $first: Int, $accountScope: AccountScope!) {
+  identity(id: $identityId) {
+    id
+    netWorth {
+      financials(accountScope: $accountScope, filter: {accounts: $accountIds, externalFinancialEntities: $externalFinancialEntityIds}) {
+        current(currency: $currency) {
+          id
+          balance {
+            amount
+            currency
+          }
+        }
+        historicalDaily(currency: $currency, startDate: $startDate, endDate: $endDate, first: $first) {
+          edges {
+            node {
+              date
+              balance {
+                amount
+                currency
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+        }
+      }
+    }
+  }
+}

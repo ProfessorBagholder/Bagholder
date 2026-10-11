@@ -1,0 +1,67 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk ExternalFinancialEntityUpdate: 471-807fa81c0550a1bc.js, read 2026-10-11).
+mutation ExternalFinancialEntityUpdate($input: UpdateExternalFinancialEntityInput!) {
+  updateExternalFinancialEntity(input: $input) {
+    __typename
+    ... on ExternalFinancialEntityUpdated {
+      externalFinancialEntity {
+        ... on ExternalFinancialEntity {
+          ...ExternalFinancialEntityFields
+        }
+      }
+    }
+    ... on MoneyManagementNotFoundError {
+      message
+      canonicalId
+      externalFinancialEntityId
+    }
+    ... on MoneyManagementValidationError {
+      reasons {
+        field
+        value
+      }
+    }
+    ... on MoneyManagementUnexpectedError {
+      reasons {
+        message
+      }
+    }
+  }
+}
+
+fragment ExternalFinancialEntityFields on ExternalFinancialEntity {
+  accountNumberLast4
+  accountNumberHash
+  aggregatorLink {
+    id
+    aggregator
+    error {
+      type
+    }
+  }
+  aggregatorLinkId
+  balance: currentBalance {
+    amount
+    currency
+  }
+  balanceAsOf: currentBalanceAsOf
+  updatedAt
+  currency
+  ownershipType
+  displayName: name
+  entityType
+  id: canonicalId
+  identityId
+  institutionName
+  institutionLogo
+  visibility {
+    household
+  }
+  __typename
+  ... on MortgageExternalFinancialEntity {
+    interestRate
+    monthlyPayment {
+      amount
+    }
+    remainingAmortizationMonths
+  }
+}

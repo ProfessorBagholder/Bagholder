@@ -1,0 +1,98 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk AggregatorLinkRefresh: 62-445e43b6c054f681.js, read 2026-10-11).
+mutation AggregatorLinkRefresh($input: RefreshAggregatorLinkInput!, $accountTypes: [AggregatorAccountTypeEnum!], $withAuthStatus: Boolean = false) {
+  refreshAggregatorLink(input: $input) {
+    ... on AggregatorLinkRefreshed {
+      aggregatorLink {
+        ...AggregatorLink
+      }
+    }
+    ... on AggregatorClientsUnexpectedError {
+      reasons {
+        message
+      }
+    }
+  }
+}
+
+fragment AggregatorAccount on AggregatorAccount {
+  id
+  name
+  unifiedType
+  balance {
+    amount
+  }
+  accountNumberLast4
+  accountNumberHash
+  currency
+  createdAt
+  canonicalId
+  nickname
+  isCorporate
+  authorizations @include(if: $withAuthStatus) {
+    status
+    authorizationType
+  }
+  bankLinkingEligibility {
+    eligible
+  }
+}
+
+fragment AggregatorConnectionMetadata on AggregatorConnectionMetadata {
+  ... on FlinksConnectionMetadata {
+    ...FlinksMetadata
+  }
+  ... on WstConnectionMetadata {
+    ...WstMetadata
+  }
+}
+
+fragment AggregatorLink on AggregatorLink {
+  id
+  aggregator
+  error {
+    code
+    type
+  }
+  flow
+  institution {
+    id
+    bankLinkProviderId
+    logoUrl
+    name
+  }
+  institutionInvestmentsProviderId
+  parentInstitutionId
+  status
+  accounts(accountTypes: $accountTypes) {
+    ...AggregatorAccount
+  }
+  aggregatorConnectionMetadata {
+    ...AggregatorConnectionMetadata
+  }
+  refreshedAt
+  createdAt
+}
+
+fragment FlinksMetadata on FlinksConnectionMetadata {
+  requestId
+  latestSessionId
+  latestSessionStartedAt
+}
+
+fragment WstMetadata on WstConnectionMetadata {
+  latestSessionId
+  latestSessionStartedAt
+  providerReferenceId
+  syncError {
+    name
+    message
+    options {
+      messages
+      items {
+        type
+        value
+        label
+      }
+    }
+  }
+}

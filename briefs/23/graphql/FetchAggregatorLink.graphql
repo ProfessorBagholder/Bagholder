@@ -1,0 +1,89 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk FetchAggregatorLink: 348-b581df1b5f39d6ea.js, read 2026-10-11).
+query FetchAggregatorLink($id: ID!, $accountTypes: [AggregatorAccountTypeEnum!], $withAuthStatus: Boolean = false) {
+  aggregatorLink(id: $id) {
+    ...AggregatorLink
+  }
+}
+
+fragment AggregatorAccount on AggregatorAccount {
+  id
+  name
+  unifiedType
+  balance {
+    amount
+  }
+  accountNumberLast4
+  accountNumberHash
+  currency
+  createdAt
+  canonicalId
+  nickname
+  isCorporate
+  authorizations @include(if: $withAuthStatus) {
+    status
+    authorizationType
+  }
+  bankLinkingEligibility {
+    eligible
+  }
+}
+
+fragment AggregatorConnectionMetadata on AggregatorConnectionMetadata {
+  ... on FlinksConnectionMetadata {
+    ...FlinksMetadata
+  }
+  ... on WstConnectionMetadata {
+    ...WstMetadata
+  }
+}
+
+fragment AggregatorLink on AggregatorLink {
+  id
+  aggregator
+  error {
+    code
+    type
+  }
+  flow
+  institution {
+    id
+    bankLinkProviderId
+    logoUrl
+    name
+  }
+  institutionInvestmentsProviderId
+  parentInstitutionId
+  status
+  accounts(accountTypes: $accountTypes) {
+    ...AggregatorAccount
+  }
+  aggregatorConnectionMetadata {
+    ...AggregatorConnectionMetadata
+  }
+  refreshedAt
+  createdAt
+}
+
+fragment FlinksMetadata on FlinksConnectionMetadata {
+  requestId
+  latestSessionId
+  latestSessionStartedAt
+}
+
+fragment WstMetadata on WstConnectionMetadata {
+  latestSessionId
+  latestSessionStartedAt
+  providerReferenceId
+  syncError {
+    name
+    message
+    options {
+      messages
+      items {
+        type
+        value
+        label
+      }
+    }
+  }
+}

@@ -1,0 +1,132 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk FetchIdentityNetWorthAccounts: 573-f6b80df04f354a78.js, read 2026-10-11).
+query FetchIdentityNetWorthAccounts($identityId: ID!, $pageSize: Int = 100, $cursor: String, $filter: AccountsFilter = {archived: false, closed: false}) {
+  identity(id: $identityId) {
+    id
+    household {
+      id
+      members {
+        id
+      }
+    }
+    netWorth {
+      corporations {
+        ...CorporationNetWorthFields
+      }
+      accounts(filter: $filter, first: $pageSize, after: $cursor) {
+        edges {
+          node {
+            ...InternalAccountFields
+          }
+        }
+        pageInfo {
+          endCursor
+          hasNextPage
+        }
+      }
+      externalFinancialEntities {
+        ... on ExternalFinancialEntity {
+          ...ExternalFinancialEntityFields
+        }
+      }
+    }
+  }
+}
+
+fragment CorporationNetWorthFields on NetWorthCorporation {
+  id
+  soleOwner
+}
+
+fragment ExternalFinancialEntityFields on ExternalFinancialEntity {
+  accountNumberLast4
+  accountNumberHash
+  aggregatorLink {
+    id
+    aggregator
+    error {
+      type
+    }
+  }
+  aggregatorLinkId
+  balance: currentBalance {
+    amount
+    currency
+  }
+  balanceAsOf: currentBalanceAsOf
+  updatedAt
+  currency
+  ownershipType
+  displayName: name
+  entityType
+  id: canonicalId
+  identityId
+  institutionName
+  institutionLogo
+  visibility {
+    household
+  }
+  __typename
+  ... on MortgageExternalFinancialEntity {
+    interestRate
+    monthlyPayment {
+      amount
+    }
+    remainingAmortizationMonths
+  }
+}
+
+fragment InternalAccountFields on Account {
+  accountOwnerConfiguration
+  archivedAt
+  closedAt
+  currency
+  id
+  nickname
+  unifiedAccountType
+  linkedAccount {
+    id
+  }
+  custodianAccounts {
+    id
+    status
+  }
+  accountEntityRelationships {
+    entityCanonicalId
+    entityType
+  }
+  accountFeatures {
+    enabled
+    functional
+    name
+    firstEnabledOn
+  }
+  accountOwners {
+    accountId
+    accountNickname
+    identityId
+    name
+    ownershipType
+    accountOpeningAgreementsSigned
+  }
+  accountVisibility {
+    household
+    canUpdateHousehold
+    isConfirmed
+  }
+  financials {
+    currentCombined {
+      id
+      netLiquidationValueV2 {
+        amount
+        cents
+        currency
+      }
+      creditCard {
+        current {
+          cents
+          currency
+        }
+      }
+    }
+  }
+}

@@ -31,3 +31,4 @@ Read from any checkout without switching branches:
 | 20 | [Verdict on the figures plan (#355): Go with changes](20-figures-category-verdict.md) | Current; item 3 corrected 2026-10-08, sources in [20/](20/) |
 | 21 | [Verdict on the Stage P plan (capacity test and the process stage): Go with changes](21-stage-p-verdict.md) | Current |
 | 22 | [Verdict on the Stage 3 statements plan (#503): Go with changes](22-stage-3-statements-verdict.md) | Current |
+| 23 | [Debts held outside Wealthsimple, read from its net worth feature: findings and proposal](23-external-debt-from-wealthsimple.md) | Current; queries and sources in [23/](23/) |

@@ -1,0 +1,24 @@
+# Wealthsimple's own document, rebuilt from its web app's parsed form (release 0.3.688170, chunk FetchIdentityNetWorthFinancialsWithBreakdowns: 235-86ca709a64e1b2df.js, read 2026-10-11).
+query FetchIdentityNetWorthFinancialsWithBreakdowns($identityId: ID!, $currency: Currency!, $breakdownGroups: [IdentityNetWorthBreakdownGroupInput!]!, $accountScope: AccountScope!) {
+  identity(id: $identityId) {
+    id
+    netWorth {
+      financials(accountScope: $accountScope) {
+        current(currency: $currency) {
+          id
+          breakdown(groups: $breakdownGroups) {
+            ...NetWorthBreakdownItem
+          }
+        }
+      }
+    }
+  }
+}
+
+fragment NetWorthBreakdownItem on IdentityNetWorthBreakdownItem {
+  balance {
+    amount
+    currency
+  }
+  key
+}
