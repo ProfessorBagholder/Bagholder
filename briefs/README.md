@@ -33,3 +33,4 @@ Read from any checkout without switching branches:
 | 22 | [Verdict on the Stage 3 statements plan (#503): Go with changes](22-stage-3-statements-verdict.md) | Current |
 | 23 | [Debts held outside Wealthsimple, read from its net worth feature: findings and proposal](23-external-debt-from-wealthsimple.md) | Current; queries and sources in [23/](23/) |
 | 24 | [The 85 open issues re-checked against master d6824aa7: 83 stand, #412 closes, #442 narrows](24-issues-rechecked.md) | Current; evidence in [24/](24/) |
+| 25 | [The Stage 3 statements build as built (#503): accepted, one fix](25-stage-3-statements-as-built.md) | Current; verdicts in [25/](25/) |
