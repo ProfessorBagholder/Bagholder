@@ -106,19 +106,19 @@ pub struct BrokerCheck {
     pub pending: bool,
 }
 
-pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
+/// Each account's check against what its broker states, or `only` that one's:
+/// its work is its own account's cash totals, holds and holdings, read by key, so
+/// one account's check does not grow with the rest of the book.
+pub fn broker_checks(inputs: &Inputs, matched: &Matched, only: Option<AccountId>) -> Vec<BrokerCheck> {
     let today = inputs.clock.today;
     let mut out = Vec::new();
-    for (account, b) in &inputs.market.brokers {
-        let mut own_cash: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
-        for t in inputs.ledger.transactions.iter().filter(|t| t.account == *account) {
-            if let Some(c) = t.cash {
-                let e = own_cash.entry(c.currency).or_insert(Ok(Dec::ZERO));
-                if let Ok(total) = e {
-                    *e = total.checked_add(c.amount).map_err(Gaps::from);
-                }
-            }
-        }
+    let brokers: Vec<(&AccountId, &crate::input::BrokerAccount)> = match only {
+        Some(a) => inputs.market.brokers.get_key_value(&a).into_iter().collect(),
+        None => inputs.market.brokers.iter().collect(),
+    };
+    for (account, b) in brokers {
+        let no_cash = BTreeMap::new();
+        let own_cash: &BTreeMap<Currency, Fig<Dec>> = matched.cash.get(account).unwrap_or(&no_cash);
         let pending = match (b.as_of, b.activity_read_at) {
             (Some(stated), Some(read)) => stated > read,
             (Some(_), None) => true,
@@ -161,7 +161,7 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
         if b.held_as_of.is_some() || !b.held.is_empty() {
             let units_pending = b.held_as_of.is_none() && pending;
             let as_of = b.held_as_of.unwrap_or(today);
-            let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
+            let instruments: BTreeSet<InstrumentId> = matched.units.range((*account, InstrumentId::MIN)..).take_while(|((a, _), _)| a == account).map(|((_, i), _)| *i).chain(b.held.keys().copied()).collect();
             for i in instruments {
                 let (o, br) = (matched.units_on(*account, i, as_of), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
                 // a coin's difference worth less than the broker's smallest order

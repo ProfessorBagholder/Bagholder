@@ -188,3 +188,73 @@ fn nothing_reads_the_earlier_store_but_the_carry() {
     assert_eq!(earlier_store("fn f() { get_meta(&c, \"synced_at\", \"\") }"), vec!["synced_at"]);
     assert!(earlier_store("// bagholder.db once\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { app.open() } }").is_empty());
 }
+
+/// The whole readers: every quote, close and broker statement of the book at once.
+const WHOLE_READERS: [&str; 3] = ["market", "market_from_cache", "brokers"];
+
+/// The only places that may read the market and every account's statements whole
+/// (`docs/plans/stage-3-the-brokers-statements.md`, brief 22, 11): the engine built
+/// at a start (`figures::build`, whose `market` reads the cache and the statements),
+/// the sources' own build (`read_sources::engine`) and the comparison with the
+/// earlier app (`compare.rs`). A change handler reads only what its change named;
+/// a call anywhere else fails here.
+const WHOLE_READS: [(&str, &str); 6] = [
+    ("compare.rs", "market_from_cache"),
+    ("compare.rs", "brokers"),
+    ("figures.rs", "market_from_cache"),
+    ("figures.rs", "brokers"),
+    ("figures.rs", "market"),
+    ("read_sources.rs", "market_from_cache"),
+];
+
+/// Each whole reader a file's code calls, outside its tests and comments, once per call.
+fn whole_reads(text: &str) -> Vec<&'static str> {
+    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let call = regex::Regex::new(r"(^|[^A-Za-z0-9_.])(market|market_from_cache|brokers)\(").unwrap();
+    let mut out = Vec::new();
+    for l in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+        for c in call.captures_iter(l) {
+            let name = c.get(2).unwrap();
+            if l[..name.start()].trim_end().ends_with("fn") {
+                continue;
+            }
+            out.push(*WHOLE_READERS.iter().find(|r| **r == name.as_str()).unwrap());
+        }
+    }
+    out
+}
+
+#[test]
+fn only_a_start_reads_the_market_and_every_account_whole() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found: Vec<(String, &str)> = Vec::new();
+    let mut dirs = vec![src.clone()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().map(Result::unwrap) {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+                continue;
+            }
+            let rel = p.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+            if !rel.ends_with(".rs") || rel.starts_with("tests_") {
+                continue;
+            }
+            for r in whole_reads(&std::fs::read_to_string(&p).unwrap()) {
+                found.push((rel.clone(), r));
+            }
+        }
+    }
+    found.sort();
+    let mut want: Vec<(String, &str)> = WHOLE_READS.iter().map(|(f, r)| (f.to_string(), *r)).collect();
+    want.sort();
+    assert_eq!(found, want, "a whole read of the market or every account's statements was added or removed: a change reads only what it changed");
+}
+
+#[test]
+fn the_whole_read_check_finds_a_call_and_not_a_definition_a_method_a_comment_or_a_test() {
+    assert_eq!(whole_reads("let m = market(book, cache)?;"), vec!["market"]);
+    assert_eq!(whole_reads("m.brokers = engine_inputs::brokers(&book)?;"), vec!["brokers"]);
+    assert!(whole_reads("pub fn market(book: &Book) {}\nlet x = adapter.brokers(1);").is_empty());
+    assert!(whole_reads("// market(book, cache)\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { market(b, c); } }").is_empty());
+}

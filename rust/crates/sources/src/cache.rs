@@ -240,9 +240,24 @@ impl MarketCache {
     }
 
     pub fn quotes(&self) -> Result<Vec<StoredQuote>> {
+        self.quotes_where(None)
+    }
+
+    /// One instrument's quotes, one per source, in the order of their sources:
+    /// read by its key, never the whole table.
+    pub fn quotes_of(&self, id: InstrumentId) -> Result<Vec<StoredQuote>> {
+        self.quotes_where(Some(id))
+    }
+
+    fn quotes_where(&self, only: Option<InstrumentId>) -> Result<Vec<StoredQuote>> {
         const T: &str = "quotes";
-        let mut stmt = self.conn.prepare("SELECT instrument_id, source, price, currency, change, change_pct, quoted_at, allowance_secs, received_at FROM quotes ORDER BY instrument_id, source")?;
-        let rows = stmt.query_map([], |r| {
+        let columns = "instrument_id, source, price, currency, change, change_pct, quoted_at, allowance_secs, received_at";
+        let (mut stmt, key) = match only {
+            Some(id) => (self.conn.prepare_cached(&format!("SELECT {columns} FROM quotes WHERE instrument_id = ?1 ORDER BY source"))?, Some(id.to_string())),
+            None => (self.conn.prepare_cached(&format!("SELECT {columns} FROM quotes ORDER BY instrument_id, source"))?, None),
+        };
+        let args: Vec<&dyn rusqlite::ToSql> = key.iter().map(|k| k as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(args.as_slice(), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, String>(6)?, r.get::<_, i64>(7)?, r.get::<_, String>(8)?))
         })?;
         let mut out = Vec::new();
@@ -274,6 +289,12 @@ impl MarketCache {
             None => self.conn.execute("DELETE FROM quoted_ex_dividends WHERE instrument_id = ?1", params![id.to_string()])?,
         };
         Ok(())
+    }
+
+    /// The ex-dividend date one instrument's quote states, read by its key.
+    pub fn ex_dividend_of(&self, id: InstrumentId) -> Result<Option<Date>> {
+        let d: Option<String> = self.conn.query_row("SELECT ex_date FROM quoted_ex_dividends WHERE instrument_id = ?1", params![id.to_string()], |r| r.get(0)).optional()?;
+        d.map(|d| day("quoted_ex_dividends", "ex_date", &d)).transpose()
     }
 
     /// The ex-dividend date each instrument's quote states.
@@ -329,6 +350,19 @@ impl MarketCache {
         for row in rows {
             let (i, d, c, cur) = row?;
             out.entry(instrument(T, "instrument_id", &i)?).or_default().insert(day(T, "day", &d)?, Money::new(dec(T, "close", &c)?, currency(T, "currency", &cur)?));
+        }
+        Ok(out)
+    }
+
+    /// One instrument's standing close on every day, read by its key.
+    pub fn closes_of(&self, id: InstrumentId) -> Result<BTreeMap<Date, Money>> {
+        const T: &str = "daily_closes";
+        let mut stmt = self.conn.prepare_cached("SELECT day, close, currency FROM daily_closes WHERE instrument_id = ?1 AND first = 1")?;
+        let rows = stmt.query_map(params![id.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (d, c, cur) = row?;
+            out.insert(day(T, "day", &d)?, Money::new(dec(T, "close", &c)?, currency(T, "currency", &cur)?));
         }
         Ok(out)
     }
@@ -426,20 +460,34 @@ impl MarketCache {
 
     /// Every tracker's standing closes and events.
     pub fn benchmark_series(&self) -> Result<BTreeMap<Benchmark, TrackerSeries>> {
+        self.benchmark_series_where(None)
+    }
+
+    /// One tracker's standing closes and events, read by its key.
+    pub fn benchmark_series_of(&self, b: Benchmark) -> Result<Option<TrackerSeries>> {
+        Ok(self.benchmark_series_where(Some(b))?.remove(&b))
+    }
+
+    fn benchmark_series_where(&self, only: Option<Benchmark>) -> Result<BTreeMap<Benchmark, TrackerSeries>> {
         let mut out: BTreeMap<Benchmark, TrackerSeries> = BTreeMap::new();
         let bench = |t: &'static str, s: &str| Benchmark::parse(s).ok_or_else(|| corrupt(t, "benchmark", s, "not a benchmark"));
+        let (filter, key) = match only {
+            Some(b) => (" AND benchmark = ?1", vec![b.key().to_string()]),
+            None => ("", vec![]),
+        };
+        let args: Vec<&dyn rusqlite::ToSql> = key.iter().map(|k| k as &dyn rusqlite::ToSql).collect();
         {
             const T: &str = "benchmark_closes";
-            let mut stmt = self.conn.prepare("SELECT benchmark, day, close FROM benchmark_closes WHERE first = 1")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+            let mut stmt = self.conn.prepare(&format!("SELECT benchmark, day, close FROM benchmark_closes WHERE first = 1{filter}"))?;
+            let rows = stmt.query_map(args.as_slice(), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
             for row in rows {
                 let (b, d, c) = row?;
                 out.entry(bench(T, &b)?).or_default().closes.insert(day(T, "day", &d)?, dec(T, "close", &c)?);
             }
         }
         const T: &str = "benchmark_events";
-        let mut stmt = self.conn.prepare("SELECT benchmark, day, kind, amount, denominator FROM benchmark_events WHERE first = 1")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?)))?;
+        let mut stmt = self.conn.prepare(&format!("SELECT benchmark, day, kind, amount, denominator FROM benchmark_events WHERE first = 1{filter}"))?;
+        let rows = stmt.query_map(args.as_slice(), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?)))?;
         for row in rows {
             let (b, d, kind, amount, den) = row?;
             let series = out.entry(bench(T, &b)?).or_default();

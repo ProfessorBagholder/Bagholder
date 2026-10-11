@@ -405,14 +405,26 @@ impl Figures {
         Ok(self.apply(Change::Journal(journal)))
     }
 
-    /// The record changed (a pull stored, revised or removed records; an entry, an
-    /// import): the ledger and the adjustments applied, each round trip given its
-    /// trade, and what the broker stated beside the rows.
+    /// The record changed (an entry, an import, a fill giving way): the ledger
+    /// and the adjustments applied, each round trip given its trade. What the
+    /// broker states beside the rows is not read: nothing here wrote it.
     pub fn record_changed(&self, now: Timestamp) -> Result<Moved, String> {
+        self.pulled(now, &BTreeSet::new())
+    }
+
+    /// A pull stored, revised or removed records and read the broker's statements
+    /// of `stated_for`: the ledger, the adjustments and those accounts' statements
+    /// applied in one write, under one lock and one version, so no page is ever
+    /// sent the rows without the statements that go with them (a cash difference
+    /// that shows for a moment and goes: `docs/decisions.md`, 2026-10-09).
+    pub fn pulled(&self, now: Timestamp, stated_for: &BTreeSet<bagholder_core::AccountId>) -> Result<Moved, String> {
         let book = self.book()?;
         let ledger = engine_inputs::ledger(&book)?;
         let adjustments = engine_inputs::facts(&book)?.adjustments;
-        let brokers = engine_inputs::brokers(&book)?;
+        let mut brokers = std::collections::BTreeMap::new();
+        for a in stated_for {
+            brokers.insert(*a, engine_inputs::broker_account(*a, &book.stated(*a).map_err(|e| e.to_string())?)?);
+        }
         let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
         let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
         let mut moved = Moved::default();
@@ -436,9 +448,7 @@ impl Figures {
             merge(&mut moved, e.apply(Change::Adjustments(adjustments)));
         }
         merge(&mut moved, settle_trades(&book, e, now)?);
-        let accounts: BTreeSet<bagholder_core::AccountId> = brokers.keys().chain(e.inputs().market.brokers.keys()).copied().collect();
-        for a in accounts {
-            let now_stated = brokers.get(&a).cloned();
+        for (a, now_stated) in brokers {
             if e.inputs().market.brokers.get(&a) != now_stated.as_ref() {
                 merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
             }
@@ -450,11 +460,24 @@ impl Figures {
         Ok(self.moved(moved))
     }
 
-    /// What the broker states of an account now (its cash, what it can borrow)
-    /// changed.
+    /// What the broker states of an account now (its cash, what it can borrow,
+    /// what it is worth) changed: that account's statements read through their
+    /// indexes, its day history left as the figures hold it (a balances read never
+    /// states a day), and that account's figures alone moved.
     pub fn broker_changed(&self, account: bagholder_core::AccountId) -> Result<Moved, String> {
-        let stated = engine_inputs::brokers(&self.book()?)?.remove(&account);
-        Ok(self.apply_if(|i| i.market.brokers.get(&account) != stated.as_ref(), || Change::Broker(account, stated.clone())))
+        let now = self.book()?.stated_latest(account).map_err(|e| e.to_string())?;
+        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
+        let held = e.inputs().market.brokers.get(&account);
+        let mut stated = engine_inputs::broker_account(account, &now)?;
+        if let Some(h) = held.filter(|h| !h.net_value.is_empty() || !h.net_deposits.is_empty()) {
+            let b = stated.get_or_insert_with(Default::default);
+            b.net_value = h.net_value.clone();
+            b.net_deposits = h.net_deposits.clone();
+        }
+        let m = if held != stated.as_ref() { e.apply(Change::Broker(account, stated)) } else { Moved::default() };
+        drop(guard);
+        Ok(self.moved(m))
     }
 
     /// The Bank's rates or its calendar changed.
@@ -475,9 +498,10 @@ impl Figures {
     /// An instrument's quote (with the ex-dividend date it states) or daily
     /// closes changed.
     pub fn price_changed(&self, instrument: InstrumentId) -> Result<Moved, String> {
-        let m = market(&self.book()?, &self.cache()?)?;
-        let (quote, closes) = (m.quotes.get(&instrument).cloned(), m.closes.get(&instrument).cloned().unwrap_or_default());
-        let ex_dividend = m.ex_dividends.get(&instrument).copied();
+        // that instrument's prices, read by its key: nothing of any other instrument
+        // and nothing of the book (its kind is the engine's own)
+        let kind = self.read(|e| e.inputs().ledger.instruments.get(&instrument).map(|i| i.instrument.kind)).flatten();
+        let (quote, ex_dividend, closes) = crate::read_sources::prices_of(&self.cache()?, instrument, kind)?;
         let mut moved = self.apply_if(|i| i.market.quotes.get(&instrument) != quote.as_ref(), || Change::Quote(instrument, quote.clone()));
         merge(&mut moved, self.apply_if(|i| i.market.ex_dividends.get(&instrument).copied() != ex_dividend, || Change::ExDividend(instrument, ex_dividend)));
         merge(&mut moved, self.apply_if(|i| i.market.closes.get(&instrument).cloned().unwrap_or_default() != closes, || Change::Closes(instrument, closes.clone())));
@@ -486,8 +510,7 @@ impl Figures {
 
     /// A benchmark's tracker changed.
     pub fn benchmark_changed(&self, key: &str) -> Result<Moved, String> {
-        let m = market(&self.book()?, &self.cache()?)?;
-        let series = m.benchmarks.get(key).cloned();
+        let series = crate::read_sources::benchmark_of(&self.cache()?, key)?;
         Ok(self.apply_if(|i| i.market.benchmarks.get(key) != series.as_ref(), || Change::Benchmark(key.to_string(), series.clone())))
     }
 }

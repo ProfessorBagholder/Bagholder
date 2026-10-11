@@ -284,7 +284,7 @@ impl Engine {
         self.cash = build_cashflow(i, &self.matched);
         self.payers = payer_rates(i, &self.cash, &self.matched);
         self.equity = build_equity(i, None);
-        self.checks = broker_checks(i, &self.matched);
+        self.checks = broker_checks(i, &self.matched, None);
     }
 
     fn rematch(&mut self) {
@@ -500,10 +500,13 @@ impl Engine {
                 };
                 quote_moved(i, was.as_ref(), q.as_ref(), &mut moved);
                 self.reprice(i, &mut moved);
-                // a coin's price decides whether a difference from the broker is dust
-                let before_checks = self.checks.clone();
-                self.checks = broker_checks(&self.inputs, &self.matched);
-                diff(&mut moved, before_checks.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().map(|c| (Entity::BrokerCheck(c.account), c)));
+                // a coin's price decides whether a difference from the broker is dust:
+                // the checks of the accounts the book or the broker says hold it
+                let holding: BTreeSet<AccountId> =
+                    self.positions.iter().filter(|p| p.instrument == i).map(|p| p.account).chain(self.inputs.market.brokers.iter().filter(|(_, b)| b.held.contains_key(&i)).map(|(a, _)| *a)).collect();
+                for a in holding {
+                    self.recheck(a, &mut moved);
+                }
             }
             Change::Closes(i, c) => {
                 if self.is_underlying(i) {
@@ -535,7 +538,6 @@ impl Engine {
             Change::Broker(a, b) => {
                 let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
                 let before_equity: Option<AccountEquity> = self.equity.get(&a).cloned();
-                let before_check: Vec<BrokerCheck> = self.checks.iter().filter(|c| c.account == a).cloned().collect();
                 let before_stated: Option<BrokerAccount> = self.inputs.market.brokers.get(&a).cloned();
                 match b {
                     Some(b) => self.inputs.market.brokers.insert(a, b),
@@ -546,10 +548,10 @@ impl Engine {
                 }
                 self.equity.remove(&a);
                 self.equity.extend(build_equity(&self.inputs, Some(&BTreeSet::from([a]))));
-                self.checks = broker_checks(&self.inputs, &self.matched);
+                // only this account's check moves: the others' inputs are as they were
+                self.recheck(a, &mut moved);
                 diff(&mut moved, before_positions.iter().map(|p| (position_entity(p), p)), self.positions.iter().filter(|p| p.account == a).map(|p| (position_entity(p), p)));
                 diff(&mut moved, before_equity.iter().map(|e| (Entity::Equity(a), e)), self.equity.get(&a).map(|e| (Entity::Equity(a), e)));
-                diff(&mut moved, before_check.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().filter(|c| c.account == a).map(|c| (Entity::BrokerCheck(c.account), c)));
                 let now_stated = self.inputs.market.brokers.get(&a);
                 diff(&mut moved, before_stated.as_ref().map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)), now_stated.map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)));
             }
@@ -558,6 +560,23 @@ impl Engine {
     }
 
     /// A price moved: that instrument's positions.
+    /// One account's check with its broker computed again, kept in its place
+    /// among the others (by account), and what moved said.
+    fn recheck(&mut self, account: AccountId, moved: &mut Moved) {
+        let at = self.checks.binary_search_by_key(&account, |c| c.account);
+        let before = at.ok().map(|n| self.checks[n].clone());
+        let now = broker_checks(&self.inputs, &self.matched, Some(account)).pop();
+        match (at, now.clone()) {
+            (Ok(n), Some(c)) => self.checks[n] = c,
+            (Ok(n), None) => {
+                self.checks.remove(n);
+            }
+            (Err(n), Some(c)) => self.checks.insert(n, c),
+            (Err(_), None) => {}
+        }
+        diff(moved, before.iter().map(|c| (Entity::BrokerCheck(c.account), c)), now.iter().map(|c| (Entity::BrokerCheck(c.account), c)));
+    }
+
     fn reprice(&mut self, instrument: InstrumentId, moved: &mut Moved) {
         let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.instrument == instrument).cloned().collect();
         let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument), None);

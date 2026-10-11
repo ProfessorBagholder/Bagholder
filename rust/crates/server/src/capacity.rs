@@ -58,11 +58,30 @@ pub const RUNS: usize = 7;
 /// accounts, 210 instruments of which 53 option contracts (each option round
 /// trip here makes its own), 646 trades, three years of activity.
 pub const OWNER: Size = Size { accounts: 29, instruments: 157, trades: 646, months: 36, seed: 1 };
-/// The rows the balances reads add to the book a day at the owner's size:
-/// 9,761 over the 11 days counted on the same copy.
-pub const STATEMENT_ROWS_A_DAY: u64 = 890;
+/// How the owner's balances move, counted on a copy of the owner's book on
+/// 2026-10-10 over the 12.6 days from 2026-09-27 to 2026-10-09: 664 balances
+/// reads, each stating the cash of 16 accounts; 87 periods of cash, 816 of value
+/// now (16 accounts) and 533 of buying power (one margin account). A balances read
+/// a day, and each kind's changes a day per account (per margin account for
+/// buying power), as (count, over days × accounts).
+pub const BALANCES_READS: (u64, f64) = (664, 12.6);
+pub const CASH_CHANGES: (u64, f64) = (87, 12.6 * 16.0);
+pub const VALUE_CHANGES: (u64, f64) = (816, 12.6 * 16.0);
+pub const POWER_CHANGES: (u64, f64) = (533, 12.6);
 /// A year of balances reads: the size the book reaches in a year of use.
 pub const BALANCES_DAYS: u32 = 365;
+/// splitmix64: the same seed, the same balances.
+struct Rng(u64);
+impl Rng {
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) % n.max(1)
+    }
+}
+
 /// The day the made-up activity ends on (fixed, so the same seed makes the same book).
 pub const MADE_UP_TODAY: &str = "2026-10-08";
 
@@ -107,11 +126,9 @@ impl Op {
 /// this list misses, and when one on it meets its budget and the growth rule,
 /// so the list only shrinks (`docs/architecture.md` §16).
 pub const OVER_BUDGET: &[(&str, &str)] = &[
-    // the balances history read whole by every figures pass (`engine_inputs::brokers`)
-    ("startup", "#417"),
-    ("brokers", "#417"),
-    ("price-changed", "#418"),
+    // an import's linking reads every row any file ever imported
     ("import", "#419"),
+    // an added trade rebuilds the ledger whole
     ("add-trade", "#420"),
     // the whole view built and serialised to learn whether it changed
     ("feed-step", "#426"),
@@ -232,22 +249,22 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
         return Err(format!("the pull failed: {:?}", report.failures));
     }
     // a year of balances reads at the owner's rate. One real pass, through the
-    // pull, says what a pass writes; the rest write the same through the book's
-    // own store calls, as the pull writes them (`pull::balances`), one
-    // transaction a pass, without the pull's reads: what grows is what is measured,
-    // and the build must not wait on it
-    let rows = |b: &Book| -> Result<u64, String> { b.conn_for_tests().query_row("SELECT count(*) FROM statements", [], |r| r.get::<_, i64>(0)).map(|n| n as u64).map_err(err) };
+    // pull, writes what a pass writes; the rest through the book's own store
+    // calls, as the pull writes them (`pull::balances`): every read kept, and a
+    // statement stored where an account's cash, value or buying power changed, at
+    // the rates the owner's book shows (a statement stating again what the last
+    // did only extends its period, which the last pass does for every account).
+    // The last pass states each account as the broker does, so the newest cash is
+    // the book's own and the check reads no difference the activity did not make.
     let start = at.checked_sub(SignedDuration::from_hours(24 * i64::from(balances_days))).map_err(err)?;
-    let before = rows(&book)?;
     let read = pull::balances(&book, &mut adapter, connection, start).map_err(err)?;
     if !read.failures.is_empty() {
         return Err(format!("the balances read failed: {:?}", read.failures));
     }
-    let per_pass = (rows(&book)? - before).max(1);
-    let accounts_ratio = size.accounts as f64 / OWNER.accounts as f64;
-    let passes_a_day = ((STATEMENT_ROWS_A_DAY as f64 * accounts_ratio / per_pass as f64).round() as u64).max(1);
-    let every = SignedDuration::from_secs((86_400 / passes_a_day) as i64);
-    // what each account states, read once: the made-up broker's balances do not move
+    let a_day = (BALANCES_READS.0 as f64 / BALANCES_READS.1).round().max(1.0) as u64;
+    let every = SignedDuration::from_secs((86_400 / a_day) as i64);
+    let chance = |(n, over): (u64, f64)| ((n as f64 / over / a_day as f64) * 1_000_000.0).round() as u64;
+    let (cash_chance, value_chance, power_chance) = (chance(CASH_CHANGES), chance(VALUE_CHANGES), chance(POWER_CHANGES));
     use bagholder_broker::BrokerAdapter as _;
     let stated = adapter.accounts().map_err(|f| f.to_string())?;
     let mut by_account = Vec::new();
@@ -257,35 +274,61 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
         by_account.push((id, a.key.clone(), a.net_value, margin));
     }
     let keys: Vec<String> = by_account.iter().map(|(_, k, _, _)| k.clone()).collect();
-    let cash = adapter.cash(&keys).map_err(|f| f.to_string())?;
+    let true_cash = adapter.cash(&keys).map_err(|f| f.to_string())?;
     let margins: Vec<String> = by_account.iter().filter(|(_, _, _, m)| *m).map(|(_, k, _, _)| k.clone()).collect();
-    let power = if margins.is_empty() { Default::default() } else { adapter.buying_power(&margins).map_err(|f| f.to_string())? };
+    let true_power = if margins.is_empty() { Default::default() } else { adapter.buying_power(&margins).map_err(|f| f.to_string())? };
+    let mut rng = Rng(size.seed ^ 0xBA1A_0CE5);
+    let cent = Dec::new(1, 2).map_err(err)?;
+    let moved = |rng: &mut Rng, d: Dec| -> Result<Dec, String> { d.checked_add(cent.mul_to_fit(Dec::from_int(1 + rng.below(5_000) as i64)).map_err(err)?).map_err(err) };
+    let passes = u64::from(balances_days) * a_day;
     let mut when = start;
-    for _ in 1..(u64::from(balances_days) * passes_a_day) {
+    for k in 1..passes {
         when = when.checked_add(every).map_err(err)?;
+        let last = k + 1 == passes;
+        // each change drawn before the pass is written
+        let mut draws = Vec::new();
+        for (_, key, value, margin) in &by_account {
+            let cash = match true_cash.get(key) {
+                Some(c) if last => Some(c.clone()),
+                Some(c) if rng.below(1_000_000) < cash_chance => {
+                    let mut c = c.clone();
+                    if let Some((_, v)) = c.iter_mut().next() {
+                        *v = moved(&mut rng, *v)?;
+                    }
+                    Some(c)
+                }
+                _ => None,
+            };
+            let value = match value {
+                Some(v) if last => Some(*v),
+                Some(v) if rng.below(1_000_000) < value_chance => Some(Money::new(moved(&mut rng, v.amount)?, v.currency)),
+                _ => None,
+            };
+            let power = match true_power.get(key) {
+                Some(Ok(p)) if *margin && last => Some(*p),
+                Some(Ok(p)) if *margin && rng.below(1_000_000) < power_chance => Some(moved(&mut rng, *p)?),
+                _ => None,
+            };
+            draws.push((cash, value, power));
+        }
         book.atomically(|| {
-            let read = book.broker_read(connection, "net-value", when)?;
-            for (id, _, value, _) in &by_account {
+            let (rv, rc, rp) = (book.broker_read(connection, "net-value", when)?, book.broker_read(connection, "cash", when)?, book.broker_read(connection, "buying-power", when)?);
+            for ((id, _, _, _), (cash, value, power)) in by_account.iter().zip(&draws) {
                 if let Some(v) = value {
-                    book.store_net_value(*id, when, *v, &read)?;
+                    book.store_net_value(*id, when, *v, &rv)?;
                 }
-            }
-            let read = book.broker_read(connection, "cash", when)?;
-            for (id, key, _, _) in &by_account {
-                if let Some(c) = cash.get(key) {
-                    book.store_cash(*id, when, c, &read)?;
+                if let Some(c) = cash {
+                    book.store_cash(*id, when, c, &rc)?;
                 }
-            }
-            let read = book.broker_read(connection, "buying-power", when)?;
-            for (id, key, _, _) in by_account.iter().filter(|(_, _, _, m)| *m) {
-                if let Some(Ok(p)) = power.get(key) {
-                    book.store_buying_power(*id, when, &Ok(Money::new(*p, Currency::CAD)), &read)?;
+                if let Some(p) = power {
+                    book.store_buying_power(*id, when, &Ok(Money::new(*p, Currency::CAD)), &rp)?;
                 }
             }
             Ok(())
         })
         .map_err(err)?;
     }
+    let rows = |b: &Book| -> Result<u64, String> { b.conn_for_tests().query_row("SELECT count(*) FROM statements", [], |r| r.get::<_, i64>(0)).map(|n| n as u64).map_err(err) };
     facts(home, &book, at)?;
     let first_account = by_account.first().map(|(id, _, _, _)| *id).ok_or("the made-up broker has no account")?;
     drop(book);
@@ -298,7 +341,7 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
     let open = || Ok(Box::new(std::io::Cursor::new(export.clone().into_bytes())) as Box<dyn std::io::BufRead>);
     crate::csv_import::import_from(&f, "activities.csv", &open, Some(first_account), at, &mut |_| crate::csv_import::Go::On).map_err(|e| format!("the activity export was not imported: {e:?}"))?;
     f.record_changed(at)?;
-    Ok(format!("{} rows, {} balances passes ({} a day), {} statement rows\n", report.rows_read, u64::from(balances_days) * passes_a_day, passes_a_day, rows(&f.book()?)?))
+    Ok(format!("{} rows, {} balances reads ({} a day), {} statement rows\n", report.rows_read, passes, a_day, rows(&f.book()?)?))
 }
 
 /// The share of the feed's records the owner's book also holds from
@@ -469,9 +512,17 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
     match op {
         Op::Startup => unreachable!("measured above"),
         Op::Brokers => {
+            // what a balances read costs an account whose cash moved: the statement
+            // kept, and that account's figures brought to it
             let book = f.book()?;
+            let account = f.read(|e| e.figures().positions.first().map(|p| p.account)).flatten().ok_or("nothing is held")?;
+            let connection = book.connections().map_err(err)?.first().map(|c| c.id).ok_or("no connection")?;
+            let at = Timestamp::now();
+            let cash = std::collections::BTreeMap::from([(Currency::CAD, Dec::new(1_234_567, 2).map_err(err)?)]);
             let m = mark();
-            crate::engine_inputs::brokers(&book)?;
+            let read = book.broker_read(connection, "cash", at).map_err(err)?;
+            book.store_cash(account, at, &cash, &read).map_err(err)?;
+            f.broker_changed(account)?;
             Ok(since(&m, accounts))
         }
         Op::PriceChanged => {
@@ -781,6 +832,78 @@ mod tests {
             .collect();
         assert!(unlinked.iter().all(|t| t == "ASSET_MOVEMENT"), "{unlinked:?}");
         assert_eq!(n("SELECT count(*) FROM instruments i WHERE NOT EXISTS (SELECT 1 FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id WHERE s.instrument_id = i.id AND r.source = 'wealthsimple')"), 0, "the import named an instrument the feed did not");
+    }
+
+    /// A pull reaches the figures in one write: its rows and the statements read
+    /// with them under one version, so no page is ever sent a state between them
+    /// (`docs/decisions.md`, 2026-10-09). And after a pull, a pull of the activity
+    /// alone and a balances read, applied as the server applies each, the engine
+    /// holds exactly what the whole read of the book's statements gives (brief 22, 5 and 6).
+    #[test]
+    fn test_a_pull_reaches_the_figures_in_one_write_and_every_read_leaves_them_as_the_book_states() {
+        let _g = crate::tests_common::guard();
+        let home = tempfile::tempdir().unwrap();
+        let today = made_up_today();
+        let at: Timestamp = format!("{today}T20:00:00Z").parse().unwrap();
+        let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, at).unwrap();
+        let ws = Broker::named("wealthsimple");
+        let connection = book.add_connection(&ws, "Wealthsimple", at).unwrap();
+        drop(book);
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        f.state_zone("America/Toronto", at).unwrap();
+        let book = f.book().unwrap();
+        let oracle = |what: &str| {
+            let whole = crate::engine_inputs::brokers(&f.book().unwrap()).unwrap();
+            let held = f.read(|e| e.inputs().market.brokers.clone()).unwrap();
+            assert_eq!(held, whole, "after {what}: the engine holds what the book states");
+        };
+        let mut adapter = Wealthsimple::new(Generated::new(SMALL, today));
+        let before = f.version();
+        let report = pull::pull(&book, &mut adapter, connection, today, at, &mut |_| {}).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert!(!f.pulled(at, &report.stated_for).unwrap().is_empty());
+        assert_eq!(f.version(), before + 1, "the rows and their statements in one write");
+        oracle("a pull");
+        let later = at.checked_add(SignedDuration::from_hours(1)).unwrap();
+        let report = pull::pull_activity(&book, &mut adapter, connection, today, later, &mut |_| {}).unwrap();
+        f.pulled(later, &report.stated_for).unwrap();
+        oracle("a pull of the activity");
+        let read = pull::balances(&book, &mut adapter, connection, later.checked_add(SignedDuration::from_mins(5)).unwrap()).unwrap();
+        for a in &read.accounts {
+            f.broker_changed(*a).unwrap();
+        }
+        oracle("a balances read");
+    }
+
+    /// The broker check's moment for a cash stated again unchanged is its last
+    /// (brief 22, 1): the broker states the book's cash plus ten at t1, the activity
+    /// is read in full at t2, the broker states the same again at t3. The cash
+    /// stated after the read confirms the difference: it is said, not pending.
+    #[test]
+    fn test_a_difference_the_broker_states_again_after_the_read_is_confirmed_through_a_folded_period() {
+        let _g = crate::tests_common::guard();
+        let home = tempfile::tempdir().unwrap();
+        build(home.path(), SMALL, 1).unwrap();
+        let f = crate::figures::Figures::open(home.path(), Timestamp::now()).unwrap();
+        let book = f.book().unwrap();
+        let (account, own) = f
+            .read(|e| e.figures().matched.cash.iter().find_map(|(a, c)| c.get(&Currency::CAD).and_then(|v| v.as_ref().ok()).map(|v| (*a, *v))))
+            .flatten()
+            .unwrap();
+        let connection = book.connections().unwrap()[0].id;
+        let stated = std::collections::BTreeMap::from([(Currency::CAD, own.checked_add(Dec::from_int(10)).unwrap())]);
+        let (t1, t2, t3): (Timestamp, Timestamp, Timestamp) = ("2026-10-09T10:00:00Z".parse().unwrap(), "2026-10-09T10:05:00Z".parse().unwrap(), "2026-10-09T10:10:00Z".parse().unwrap());
+        let r1 = book.broker_read(connection, "cash", t1).unwrap();
+        book.store_cash(account, t1, &stated, &r1).unwrap();
+        book.note_activity_read(account, t2, true).unwrap();
+        let r3 = book.broker_read(connection, "cash", t3).unwrap();
+        book.store_cash(account, t3, &stated, &r3).unwrap();
+        f.broker_changed(account).unwrap();
+        let cad = f
+            .read(|e| e.figures().checks.iter().find(|c| c.account == account).and_then(|c| c.differences.iter().find(|d| matches!(d, bagholder_engine::equity::Difference::Cash { currency: Currency::CAD, .. })).cloned()))
+            .flatten()
+            .expect("the difference of ten");
+        assert!(!cad.pending(), "stated again after the read: confirmed, {cad:?}");
     }
 
     /// Every operation is measured on a small book and four times it, in this

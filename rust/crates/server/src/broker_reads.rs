@@ -405,7 +405,8 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     };
     // what was stored is applied whatever else failed
     set_step(app, "Saving…");
-    let applied = f.record_changed(now);
+    // the rows and the statements read with them, applied in one write
+    let applied = f.pulled(now, &report.stated_for);
     end_steps(app);
     applied?;
     // each month whose statement the book does not reconcile with, said in the header

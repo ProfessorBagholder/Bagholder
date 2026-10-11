@@ -74,10 +74,9 @@ fn the_cash_a_full_read_covers_is_the_newest_stated_at_or_before_it() {
     f.book.note_activity_read(a, at("2026-09-23T10:00:00.450401Z"), true).unwrap();
     let s = f.book.stated(a).unwrap();
     assert_eq!(s.cash.unwrap().1[&Currency::CAD], d("7"));
-    let (when, cash) = s.cash_read.unwrap();
-    assert_eq!((when, cash[&Currency::CAD]), (at("2026-09-23T10:00:00.450401Z"), d("4")));
+    assert_eq!(s.cash_read.unwrap()[&Currency::CAD], d("4"));
     f.book.note_activity_read(a, at("2026-09-23T11:00:00Z"), true).unwrap();
-    assert_eq!(f.book.stated(a).unwrap().cash_read.unwrap().1[&Currency::CAD], d("5"));
+    assert_eq!(f.book.stated(a).unwrap().cash_read.unwrap()[&Currency::CAD], d("5"));
 }
 
 #[test]
@@ -256,4 +255,141 @@ fn the_newest_statement_is_the_latest_stated_whatever_its_text_sorts_as() {
     f.book.store_cash(a, earlier, &BTreeMap::from([(Currency::CAD, d("1"))]), &r).unwrap();
     f.book.store_cash(a, later, &BTreeMap::from([(Currency::CAD, d("2"))]), &r).unwrap();
     assert_eq!(f.book.stated(a).unwrap().cash.map(|(_, c)| c[&Currency::CAD]), Some(d("2")));
+}
+
+/// splitmix64: the same seed, the same sequence.
+struct Rng(u64);
+impl Rng {
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) % n
+    }
+}
+
+/// A statement kept as a period (migration 026) answers what a row per read
+/// answered: for any sequence of statements, their instants out of order and
+/// tied, the newest (by instant, then the one written last) and the newest at or
+/// before each full read of the activity are the same as a model of the rows
+/// gives them, and so are buying power and the value now.
+#[test]
+fn statements_kept_as_periods_answer_what_a_row_per_read_answered_for_any_order_of_instants() {
+    for seed in 0..60u64 {
+        let f = Fixture::new();
+        let a = f.account(&["tfsa-1"]);
+        let mut rng = Rng(seed);
+        let base = t0();
+        let n = 3 + rng.below(25) as usize;
+        // (instant offset in seconds, the order written, a value): instants in a
+        // narrow range so ties and steps back are common, values from three
+        let mut rows: Vec<(i64, usize, u64)> = Vec::new();
+        for k in 0..n {
+            let offset = rng.below(12) as i64;
+            let value = rng.below(3);
+            let when = base.checked_add(jiff::SignedDuration::from_secs(offset)).unwrap();
+            let read = f.book.broker_read(f.connection, "cash", when).unwrap();
+            let cash = BTreeMap::from([(Currency::CAD, Dec::from_int(value as i64))]);
+            f.book.store_cash(a, when, &cash, &read).unwrap();
+            let power = if value == 2 { Err("not stated".to_string()) } else { Ok(cad(&value.to_string())) };
+            let bp_read = f.book.broker_read(f.connection, "buying-power", when).unwrap();
+            f.book.store_buying_power(a, when, &power, &bp_read).unwrap();
+            let nv_read = f.book.broker_read(f.connection, "net-value", when).unwrap();
+            f.book.store_net_value(a, when, cad(&(value * 10).to_string()), &nv_read).unwrap();
+            rows.push((offset, k, value));
+            // after each statement: the newest at or before every instant, as the rows give it
+            let mut sorted = rows.clone();
+            sorted.sort();
+            for r in -1..13i64 {
+                let want = sorted.iter().rev().find(|(t, _, _)| *t <= r).map(|(_, _, v)| *v as i64);
+                let got: Option<i64> = f
+                    .book
+                    .conn_for_tests()
+                    .query_row(
+                        "SELECT CAST(c.amount AS INTEGER) FROM statements s JOIN statement_cash c ON c.statement_id = s.id WHERE s.kind = 'cash' AND s.first_ns <= ?1 ORDER BY s.first_ns DESC, s.first_seq DESC LIMIT 1",
+                        rusqlite::params![base.as_nanosecond() as i64 + r * 1_000_000_000],
+                        |x| x.get(0),
+                    )
+                    .ok();
+                if got != want {
+                    let periods: Vec<(i64, i64, String)> = f
+                        .book
+                        .conn_for_tests()
+                        .prepare("SELECT (s.first_ns - ?1) / 1000000000, (s.last_ns - ?1) / 1000000000, c.amount FROM statements s JOIN statement_cash c ON c.statement_id = s.id WHERE s.kind = 'cash' ORDER BY s.first_ns, s.first_seq")
+                        .unwrap()
+                        .query_map(rusqlite::params![base.as_nanosecond() as i64], |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)))
+                        .unwrap()
+                        .map(Result::unwrap)
+                        .collect();
+                    panic!("seed {seed}, after statement {k} ({offset}s, {value}): at +{r}s the periods give {got:?}, the rows {want:?}\nstatements: {rows:?}\nperiods (first, last, cash): {periods:?}");
+                }
+            }
+        }
+        let mut sorted = rows.clone();
+        sorted.sort();
+        let (t_newest, _, v_newest) = *sorted.last().unwrap();
+        let s = f.book.stated_latest(a).unwrap();
+        let instant = |o: i64| base.checked_add(jiff::SignedDuration::from_secs(o)).unwrap();
+        assert_eq!(s.cash, Some((instant(t_newest), BTreeMap::from([(Currency::CAD, Dec::from_int(v_newest as i64))]))), "seed {seed}: newest cash, {rows:?}");
+        let power = if v_newest == 2 { Err("not stated".to_string()) } else { Ok(cad(&v_newest.to_string())) };
+        assert_eq!(s.buying_power, Some((instant(t_newest), power)), "seed {seed}: buying power, {rows:?}");
+        assert_eq!(s.net_value_now, Some((instant(t_newest), cad(&(v_newest * 10).to_string()))), "seed {seed}: value now, {rows:?}");
+        // each full read, in order of its instant: the newest statement at or before it
+        for r in -1..13i64 {
+            f.book.note_activity_read(a, instant(r), true).unwrap();
+            let want = sorted.iter().rev().find(|(t, _, _)| *t <= r).map(|(_, _, v)| BTreeMap::from([(Currency::CAD, Dec::from_int(*v as i64))]));
+            assert_eq!(f.book.stated_latest(a).unwrap().cash_read, want, "seed {seed}: the cash at a read at +{r}s, {rows:?}");
+        }
+    }
+}
+
+/// A read stating again what the last one did keeps one row whose last moment
+/// moves on; the engine's moment for it is that last moment (brief 22, 1): 100 at
+/// t1, the activity read in full at t2, 100 again at t3: the cash is stated at t3,
+/// after the read, and covers it.
+#[test]
+fn a_cash_stated_again_unchanged_extends_its_period_and_is_stated_at_its_last_moment() {
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let (t1, t2, t3) = (at("2026-10-01T10:00:00Z"), at("2026-10-01T10:05:00Z"), at("2026-10-01T10:10:00Z"));
+    let hundred = BTreeMap::from([(Currency::CAD, d("100"))]);
+    for t in [t1, t3] {
+        let r = f.book.broker_read(f.connection, "cash", t).unwrap();
+        f.book.store_cash(a, t, &hundred, &r).unwrap();
+    }
+    f.book.note_activity_read(a, t2, true).unwrap();
+    let rows: i64 = f.book.conn_for_tests().query_row("SELECT count(*) FROM statements WHERE kind = 'cash'", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1, "one row for one value");
+    let s = f.book.stated_latest(a).unwrap();
+    assert_eq!(s.cash, Some((t3, hundred.clone())), "stated at its last moment, after the read");
+    assert_eq!(s.cash_read, Some(hundred), "and the cash the read covers");
+}
+
+/// Two statements are the same only when their holds are too, a missing amount
+/// equal only to a missing one: a hold whose amount becomes unknown starts a
+/// period of its own, and the same holds again extend it (brief 22, 3).
+#[test]
+fn a_statement_whose_only_change_is_a_hold_becoming_unknown_is_a_period_of_its_own() {
+    let f = Fixture::new();
+    let a = f.account(&["tfsa-1"]);
+    let rec = f.store(&Spelled::v(1), "pending-buy", &legs(vec![buy("tfsa-1", share("CA0000000001", "XYZ"), "3", "0", "2026-10-01T15:00:00Z")]));
+    let c = f.book.conn_for_tests();
+    c.execute("INSERT INTO record_holds (record_id, account_id, kind, currency, amount) VALUES (?1, ?2, 'buy', 'CAD', '30')", rusqlite::params![rec.record.to_string(), a.to_string()]).unwrap();
+    let cash = BTreeMap::from([(Currency::CAD, d("100"))]);
+    let store = |t: &str| {
+        let r = f.book.broker_read(f.connection, "cash", at(t)).unwrap();
+        f.book.store_cash(a, at(t), &cash, &r).unwrap();
+    };
+    let periods = || -> i64 { f.book.conn_for_tests().query_row("SELECT count(*) FROM statements WHERE kind = 'cash'", [], |r| r.get(0)).unwrap() };
+    store("2026-10-01T10:00:00Z");
+    store("2026-10-01T10:05:00Z");
+    assert_eq!(periods(), 1, "the same cash and the same hold");
+    c.execute("UPDATE record_holds SET amount = NULL WHERE record_id = ?1", rusqlite::params![rec.record.to_string()]).unwrap();
+    store("2026-10-01T10:10:00Z");
+    assert_eq!(periods(), 2, "the hold's amount became unknown");
+    store("2026-10-01T10:15:00Z");
+    assert_eq!(periods(), 2, "an unknown amount is the same as an unknown amount");
+    f.book.note_activity_read(a, at("2026-10-01T10:07:00Z"), true).unwrap();
+    assert_eq!(f.book.stated_latest(a).unwrap().cash_read_holds[0].amount, Some(d("30")), "the holds as they stood when the read's cash was stated");
 }
