@@ -594,6 +594,29 @@ mod tests {
         assert!(held.is_empty(), "{held:?}");
     }
 
+    /// A balances read states no day (brief 22, 9; brief 25): what the broker states
+    /// of an account now is applied without one statement on the day history, which
+    /// a start and a pull read.
+    #[test]
+    fn a_balances_read_runs_no_statement_on_the_day_history() {
+        bagholder_sqlite::work::start_counting();
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        let account = f.read(|e| e.figures().positions[0].account).unwrap();
+        let read = book.broker_read(book.connections().unwrap()[0].id, "cash", now).unwrap();
+        book.store_cash(account, now, &[(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("42.00").unwrap())].into_iter().collect(), &read).unwrap();
+        let (moved, days) = bagholder_sqlite::work::statements_naming("account_days", || f.broker_changed(account).unwrap());
+        assert!(!moved.is_empty(), "the cash moved its account");
+        assert_eq!(days, 0, "a balances read ran statements on the day history");
+        // the counter sees the read it refuses: the whole read with days names the table
+        let (_, whole) = bagholder_sqlite::work::statements_naming("account_days", || engine_inputs::brokers(&book).unwrap());
+        assert!(whole > 0);
+    }
+
     #[test]
     fn no_figure_is_built_before_a_page_states_a_zone() {
         let home = tempfile::tempdir().unwrap();
@@ -755,7 +778,7 @@ mod tests {
             }
         }
         let this = std::fs::read_to_string(crates.join("server/src/figures.rs")).unwrap();
-        let this = &this[..this.find("#[cfg(test)]").unwrap()];
+        let this = crate::tests_source::production(&this);
         let found: Vec<String> = files
             .iter()
             .filter(|p| {

@@ -45,48 +45,15 @@ const IO_CALLS: [&str; 8] = [".get()", ".open()", "connect(", "std::fs::", "fs::
 
 /// Places the two scanned forms stand, by file, with why each may: the scan
 /// fails when a file has more or fewer than listed.
-const LISTED: [(&str, usize, &str); 1] = [
+const LISTED: [(&str, usize, &str); 2] = [
+    ("server/src/http/mod.rs", 1, "`tokio::select!`'s arm (`_ = async { .. } => Ok(())`), not an assignment: the drain's deadline after a stop"),
     ("server/src/main.rs", 2, "`tokio::select!`'s arms (`_ = ctrl_c() => {}`), not an assignment: the signal that stops the app"),
 ];
 
-/// `text` with its comments and string literals blanked, lengths kept, cut at
-/// its tests.
+/// `text`'s production code with its comments and string literals blanked,
+/// lengths and lines kept.
 fn code(text: &str) -> String {
-    let text = text.split("#[cfg(test)]").next().unwrap_or("");
-    let b = text.as_bytes();
-    let mut out = b.to_vec();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i..].starts_with(b"//") {
-            while i < b.len() && b[i] != b'\n' {
-                out[i] = b' ';
-                i += 1;
-            }
-        } else if b[i] == b'"' {
-            i += 1;
-            while i < b.len() && b[i] != b'"' {
-                let n = if b[i] == b'\\' { 2 } else { 1 };
-                for k in i..(i + n).min(b.len()) {
-                    if b[k] != b'\n' {
-                        out[k] = b' ';
-                    }
-                }
-                i += n;
-            }
-            i += 1;
-        } else if b[i] == b'\'' && i + 2 < b.len() && (b[i + 2] == b'\'' || b[i + 1] == b'\\') {
-            // a char literal: `'{'` must not count as a brace
-            let from = if b[i + 1] == b'\\' { i + 3 } else { i + 1 };
-            let end = b[from..].iter().position(|&c| c == b'\'').map_or(b.len(), |p| from + p);
-            for k in i + 1..end {
-                out[k] = b' ';
-            }
-            i = end + 1;
-        } else {
-            i += 1;
-        }
-    }
-    String::from_utf8(out).expect("blanking keeps the text UTF-8")
+    crate::tests_source::blanked(&crate::tests_source::production(text))
 }
 
 /// The index just past the bracket that closes the one opening at `open`.

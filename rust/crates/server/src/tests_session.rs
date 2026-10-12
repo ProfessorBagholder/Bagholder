@@ -99,8 +99,8 @@ fn connected_has_one_writer() {
                 continue;
             }
             let text = std::fs::read_to_string(&p).unwrap();
-            // a file's own test module is a test's set-up, not a writer
-            let code = text.split("#[cfg(test)]\nmod ").next().unwrap();
+            // a file's own test items are a test's set-up, not a writer
+            let code = crate::tests_source::production(&text);
             for (i, line) in code.lines().enumerate() {
                 if line.contains(".connected =") {
                     writers.push(format!("{name}:{}", i + 1));

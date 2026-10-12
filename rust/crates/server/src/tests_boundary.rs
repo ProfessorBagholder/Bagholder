@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use crate::tests_source::production;
+
 /// The earlier crates, by the names code uses them under.
 const EARLIER: [&str; 4] = ["bagholder_model", "bagholder_store", "bagholder_ws", "bagholder_market"];
 
@@ -18,7 +20,7 @@ const FIGURE_PATH: [&str; 15] = [
 
 /// Each earlier crate a file's code names, outside its tests.
 fn violations(text: &str) -> Vec<&'static str> {
-    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let code = &production(&text);
     EARLIER.iter().copied().filter(|c| code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(c))).collect()
 }
 
@@ -47,7 +49,7 @@ fn the_check_finds_an_earlier_crate_named_in_code_and_not_in_a_comment_or_a_test
 /// What reaches Wealthsimple's order mutations in a file's code, outside its tests: the
 /// operations named, or the client's one-shot `mutate` called.
 fn mutations(text: &str) -> Vec<String> {
-    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let code = &production(&text);
     let mut out = Vec::new();
     for l in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
         for op in ["SoOrdersOrderCreate", "SoOrdersOrderCancel", "SoOrdersOrderModify", ".mutate("] {
@@ -94,7 +96,7 @@ fn no_order_mutation_reaches_wealthsimple_but_through_the_gate() {
 /// A list the order code acts on is never cut at a count: `LIMIT` only in the page's own
 /// paging of the book's orders and brackets.
 fn limits(text: &str) -> usize {
-    text.split("#[cfg(test)]").next().unwrap_or("").lines().filter(|l| !l.trim_start().starts_with("//") && l.contains(" LIMIT ")).count()
+    production(text).lines().filter(|l| !l.trim_start().starts_with("//") && l.contains(" LIMIT ")).count()
 }
 
 #[test]
@@ -111,7 +113,7 @@ fn no_list_the_order_code_acts_on_is_cut_at_a_count() {
 #[test]
 fn the_order_path_reads_nothing_leniently_and_nothing_from_the_earlier_store() {
     for (f, text) in server_sources().into_iter().filter(|(f, _)| f.starts_with("orders/") || f == "http/orders.rs") {
-        let code = text.split("#[cfg(test)]").next().unwrap_or("");
+        let code = &production(&text);
         for word in ["lenient", "page_num", "bagholder_store"] {
             assert!(!code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(word)), "{f} uses {word}");
         }
@@ -120,7 +122,7 @@ fn the_order_path_reads_nothing_leniently_and_nothing_from_the_earlier_store() {
 
 /// What reads or writes the earlier store's quotes, in a file's code outside its tests.
 fn earlier_quotes(text: &str) -> Vec<&'static str> {
-    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let code = &production(&text);
     const NAMES: [&str; 11] = [
         "upsert_quote", "refresh_quotes", "refresh_distributions", "refresh_all", "refresh_periodic", "quote_loop",
         "quote_symbols_needing_refresh", "peek_quote", "store::market::quotes", "fetch_yahoo_quote", "fetch_cboe_ca_quote",
@@ -146,7 +148,7 @@ fn nothing_reads_or_writes_the_earlier_store_s_quotes() {
 /// keys that stayed in it (the rest moved to the book and the market cache,
 /// `docs/plans/stage-6-cutover.md`, 6a), and the functions that read those.
 fn earlier_store(text: &str) -> Vec<&'static str> {
-    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let code = &production(&text);
     const NAMES: [&str; 22] = [
         "OLD_FILE", "bagholder.db", "bagholder_store::pool", "bagholder_store::connect", "bagholder_store::open_db", "bagholder_store::schema",
         "bagholder_store::relabel", "gens::install", "bagholder_store::activities", "bagholder_store::rows", "bagholder_store::csvimport",
@@ -163,7 +165,8 @@ fn earlier_store(text: &str) -> Vec<&'static str> {
 /// (`compare.rs`, `compare-figures`; `demo_facts.rs`, the demo's). The figure
 /// path names its file only to import it into a new book. The market readers
 /// convert and count days from the book's rates and the market cache's tracker
-/// closes, not the earlier store's tables.
+/// closes, not the earlier store's tables. An update that is rolled back names
+/// its file to put it back as the update found it (`update.rs`).
 #[test]
 fn nothing_reads_the_earlier_store_but_the_carry() {
     const CARRY: [&str; 5] = ["carry.rs", "legacy_import.rs", "legacy_orders.rs", "compare.rs", "demo_facts.rs"];
@@ -172,13 +175,16 @@ fn nothing_reads_the_earlier_store_but_the_carry() {
         match f.as_str() {
             f if CARRY.contains(&f) => {}
             "figures.rs" => assert_eq!(found, vec!["OLD_FILE", "bagholder.db"], "the figure path names the earlier store only to import it"),
+            // an update rolled back puts the stores back as it found them, the earlier
+            // one among them: the carry brings it to its own schema at a start
+            "update.rs" => assert_eq!(found, vec!["OLD_FILE"], "the update names the earlier store only to put it back"),
             _ => assert_eq!(found, Vec::<&str>::new(), "{f} reaches the earlier store"),
         }
     }
     let market = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../market/src");
     for f in ["history.rs", "shorts.rs"] {
         let text = std::fs::read_to_string(market.join(f)).unwrap();
-        let code = text.split("#[cfg(test)]").next().unwrap_or("");
+        let code = &production(&text);
         for dropped in ["read_fx", "tables::fx_rates", "benchmark_days", "benchmark_prices"] {
             // the earlier quote readers keep their own rates, in `quotes.rs`
             assert!(!code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(dropped)), "market/{f} reads {dropped}");
@@ -209,7 +215,7 @@ const WHOLE_READS: [(&str, &str); 6] = [
 
 /// Each whole reader a file's code calls, outside its tests and comments, once per call.
 fn whole_reads(text: &str) -> Vec<&'static str> {
-    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let code = &production(&text);
     let call = regex::Regex::new(r"(^|[^A-Za-z0-9_.])(market|market_from_cache|brokers)\(").unwrap();
     let mut out = Vec::new();
     for l in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
@@ -257,4 +263,7 @@ fn the_whole_read_check_finds_a_call_and_not_a_definition_a_method_a_comment_or_
     assert_eq!(whole_reads("m.brokers = engine_inputs::brokers(&book)?;"), vec!["brokers"]);
     assert!(whole_reads("pub fn market(book: &Book) {}\nlet x = adapter.brokers(1);").is_empty());
     assert!(whole_reads("// market(book, cache)\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { market(b, c); } }").is_empty());
+    // a test-only field or import near the top does not hide the code after it (brief 25)
+    let planted = "#[cfg(test)]\nuse crate::fake;\nstruct S {\n    #[cfg(test)]\n    seen: u8,\n}\nfn sweep() { let m = crate::figures::market(&book, &cache)?; }\n#[cfg(test)]\nmod t {}";
+    assert_eq!(whole_reads(planted), vec!["market"]);
 }

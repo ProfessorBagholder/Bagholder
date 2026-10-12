@@ -220,6 +220,17 @@ fn migration_26_keeps_what_every_account_s_statements_answer() {
             }
             rows.push((acc, at, k, cash, hold, power, value));
         }
+        // statements of units as of a day, days out of order and tied: (account, day, the order written, quantity)
+        conn.execute("INSERT INTO instruments(id, kind, currency, created_at) VALUES ('00000000-0000-7000-8000-0000000000bb', 'security', 'CAD', 'x')", []).unwrap();
+        let mut units: Vec<(usize, jiff::civil::Date, usize, i64)> = Vec::new();
+        for k in 0..rng.below(8) as usize {
+            let (acc, day, quantity) = (rng.below(3) as usize, jiff::civil::date(2026, 9, 28 + rng.below(3) as i8), 1 + rng.below(9) as i64);
+            let (read, s) = (id(), id());
+            conn.execute("INSERT INTO broker_reads (id, connection_id, part, at) VALUES (?1, 'c', 'units', ?2)", rusqlite::params![read, base.to_string()]).unwrap();
+            conn.execute("INSERT INTO statements (id, account_id, kind, as_of_day, read_id) VALUES (?1, ?2, 'units', ?3, ?4)", rusqlite::params![s, accounts[acc].to_string(), day.to_string(), read]).unwrap();
+            conn.execute("INSERT INTO statement_units (statement_id, instrument_id, quantity) VALUES (?1, '00000000-0000-7000-8000-0000000000bb', ?2)", rusqlite::params![s, quantity.to_string()]).unwrap();
+            units.push((acc, day, k, quantity));
+        }
         // a full read of each account's activity at an instant among them
         let mut read_at: BTreeMap<usize, jiff::Timestamp> = BTreeMap::new();
         for (n, a) in accounts.iter().enumerate() {
@@ -246,6 +257,10 @@ fn migration_26_keeps_what_every_account_s_statements_answer() {
             let holds: Vec<Option<Dec>> = s.cash_read_holds.iter().map(|h| h.amount).collect();
             let want: Vec<Option<Dec>> = at_read.and_then(|r| r.4).map(|h| (h != "NULL").then(|| Dec::from_int(5))).into_iter().collect();
             assert_eq!(holds, want, "seed {seed}, account {n}: the holds at its full read");
+            // the units: the newest by the day they are as of, then the order written
+            let held = bagholder_core::InstrumentId::parse("00000000-0000-7000-8000-0000000000bb").unwrap();
+            let newest_units = units.iter().filter(|u| u.0 == n).max_by_key(|u| (u.1, u.2)).map(|u| (u.1, BTreeMap::from([(held, Dec::from_int(u.3))])));
+            assert_eq!(s.units, newest_units, "seed {seed}, account {n}: the units");
         }
     }
 }
