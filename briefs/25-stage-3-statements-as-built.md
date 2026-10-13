@@ -33,3 +33,7 @@ Accepted. Eight items are done as written, two are done another way that is as g
 ## For the owner
 
 Nothing to decide. The build is sound; the fix is to a test, not to what the app does. One process point: this build was merged before its as-built review, which is the step that found the gap above. Not a disaster here, but the order matters when it is the app that is wrong.
+
+## Addendum, 2026-10-13: the fix is in #505
+
+PR #505 (`brief-25-scans`, not merged when read) carries the required fix and both items worth closing. Read: every source scan in the server now goes through `tests_source::production`, which blanks each `#[cfg(test)]` item wherever it stands with lines kept, and the boundary checker's own test plants a whole read after a test-only import and field and finds it; scanned whole, two more sites surfaced and are listed with reasons. `migration_26_keeps_what_every_account_s_statements_answer` now writes units statements, days out of order and tied. `figures.rs` `a_balances_read_runs_no_statement_on_the_day_history` counts statements naming `account_days` through `bagholder_sqlite::work::statements_naming`, a trace-hook counter with its own test. Accepted; brief 25 is closed when #505 merges.
