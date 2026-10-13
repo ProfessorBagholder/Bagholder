@@ -352,3 +352,26 @@ fn a_merged_book_whose_event_row_came_later_is_parted_by_the_repair() {
     // a statement the merge added up under both ids is not read against one
     assert_eq!(repaired.stated, None);
 }
+
+/// A part re-points rows on both ids the book read as one: the change log names
+/// every record with a transaction on either, every trade anchored on either and
+/// both instruments (`docs/plans/stage-3-the-record-by-change.md`, A; brief 26, 1),
+/// so a reader applying the log by key reads them as a fresh read does.
+#[test]
+fn a_join_and_a_part_log_every_record_trade_and_instrument_they_re_point() {
+    let (f, a) = book_of(&["buy", "sell"]);
+    let trade = add_the_rest(&f, a);
+    let joined = instrument_of(&f, "buy");
+    let before = f.book.changes_upto().unwrap();
+    f.store(&Spelled::v(1), "event", &row("event"));
+    let changes = f.book.changes_since(before).unwrap();
+    let (buy, sell) = (instrument_of(&f, "buy"), instrument_of(&f, "sell"));
+    assert_ne!(buy, sell, "parted");
+    for r in ["buy", "sell", "event"] {
+        assert!(changes.records.contains(&record(&f, r)), "{r} not logged: {changes:?}");
+    }
+    assert!(changes.trades.contains(&trade), "the trade anchored on the joined id not logged");
+    for i in [buy, sell, joined] {
+        assert!(changes.instruments.contains(&i), "{i} not logged");
+    }
+}

@@ -52,6 +52,9 @@ pub enum Holds {
     Settings,
     /// The file's own version.
     Schema,
+    /// The record's change log (migration 028): emptied by every clear, since the
+    /// figures are built again whole after one.
+    Changes,
 }
 
 /// Every table of the book and what it holds. A table missing here fails a test.
@@ -115,6 +118,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("issuers", Holds::Named),
     ("settings", Holds::Settings),
     ("schema_migrations", Holds::Schema),
+    ("ledger_changes", Holds::Changes),
 ];
 
 /// The sources whose records are the person's own; every other source's are a broker's.
@@ -207,6 +211,8 @@ impl Book {
             self.clear_unnamed()?;
             // what the records left state of their ids
             self.settle_successions()?;
+            // the figures are built again whole after a clear: nothing logged is left to apply
+            c.execute("DELETE FROM ledger_changes", [])?;
             Ok(())
         })
     }

@@ -411,6 +411,9 @@ mod tests {
         for (t, n) in counts(&f.book().unwrap().conn_for_tests()) {
             match t.as_str() {
                 "schema_migrations" => {}
+                // the clear empties it; what the figures' build after it wrote (the
+                // default tiles, the trades given again) is logged afresh
+                "ledger_changes" => {}
                 "settings" => assert_eq!(f.book().unwrap().setting("zone").unwrap().as_deref(), Some("America/Toronto"), "the zone stays"),
                 // the tile row is the default six again, and nothing else names an instrument
                 "tiles" => assert_eq!(n as usize, crate::following::DEFAULT_TILES.len(), "the default tiles after Clear all"),
