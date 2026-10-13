@@ -10,7 +10,8 @@
 //!   times it under the work folder, measures each operation in a process of
 //!   its own, prints the table, and fails when the budget or the growth rule is
 //!   broken (or when an operation listed over budget is now within it).
-//! - `capacity probe <operation> <folder>` is one measured run, printed as one
+//! - `capacity probe <operation> <folder> [--depth]` is one measured run (on a
+//!   book of the depth pair with `--depth`), printed as one
 //!   line; `run` starts it.
 //!
 //! A subcommand of the server, as `demo-facts` and `pull-broker` are: what it
@@ -114,6 +115,14 @@ impl Pair {
             Pair::Depth => &[Op::AddTrade, Op::Import],
         }
     }
+    /// What a probe is told of the pair it measures.
+    fn flag(self) -> &'static [&'static str] {
+        match self {
+            Pair::Breadth => &[],
+            Pair::Depth => &["--depth"],
+        }
+    }
+
     /// The pair's two books, under the work folder.
     fn folders(self, work: &Path) -> (PathBuf, PathBuf) {
         match self {
@@ -544,7 +553,11 @@ fn figures(app: &crate::app::App) -> Result<&crate::figures::Figures, String> {
 /// What a page showing every tab watches, as `web/src/lib/live.svelte.ts` says it.
 const PAGE: [&str; 9] = ["status", "book", "notifications", "dashboard", "trades", "positions", "exposure", "markets", "cashflow"];
 
-pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
+/// One measured run of `op` on the book in `home`. An added trade and an
+/// import change the deepest listing on the depth pair's books (what grows
+/// there), and the same listing a price change takes on the breadth pair's (a
+/// choice that means the same at every size of book).
+pub fn probe(op: Op, pair: Pair, home: &Path) -> Result<Measured, String> {
     // every connection from here on is counted, and every allocation
     bagholder_sqlite::work::start_counting();
     COUNT_ALLOCS.store(true, Ordering::SeqCst);
@@ -633,7 +646,7 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             Ok(since(&m, priced))
         }
         Op::AddTrade => {
-            let (_, symbol, currency) = deepest(f, &held)?;
+            let (_, symbol, currency) = target(f, pair, &held)?;
             // the page holds the broker's names: what a change does to them is in the window
             f.names()?;
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
@@ -643,7 +656,7 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
         }
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
-            let (_, symbol, currency) = deepest(f, &held)?;
+            let (_, symbol, currency) = target(f, pair, &held)?;
             f.names()?;
             for n in 0..20 {
                 text.push_str(&format!("{},Buy,{symbol},1,{}.00,-{}.00,{currency}\n", made_up_today(), 10 + n, 10 + n));
@@ -653,6 +666,14 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             crate::csv_import::import_from(f, "capacity.csv", &open, None, Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
             Ok(since(&m, 1))
         }
+    }
+}
+
+/// The listing an added trade or an import changes on `pair`'s books.
+fn target(f: &crate::figures::Figures, pair: Pair, held: &[(bagholder_core::InstrumentId, String, Currency)]) -> Result<(bagholder_core::InstrumentId, String, Currency), String> {
+    match pair {
+        Pair::Depth => deepest(f, held),
+        Pair::Breadth => held.first().cloned().ok_or_else(|| "nothing is held".to_string()),
     }
 }
 
@@ -703,7 +724,7 @@ fn median(mut v: Vec<u64>) -> u64 {
     v[v.len() / 2]
 }
 
-fn measure(exe: &Path, op: Op, home: &Path, times: usize) -> Result<Measured, String> {
+fn measure(exe: &Path, op: Op, pair: Pair, home: &Path, times: usize) -> Result<Measured, String> {
     let mut runs = Vec::new();
     for _ in 0..times {
         // every probe writes (a quote, a trade, an import, what a start settles),
@@ -711,7 +732,7 @@ fn measure(exe: &Path, op: Op, home: &Path, times: usize) -> Result<Measured, St
         let copy = home.with_extension("probe");
         copy_folder(home, &copy)?;
         let exec = std::time::Instant::now();
-        let out = std::process::Command::new(exe).args(["capacity", "probe", op.name()]).arg(&copy).env("BAGHOLDER_OFFLINE", "1").env("BAGHOLDER_DRY_ORDERS", "1").output().map_err(err)?;
+        let out = std::process::Command::new(exe).args(["capacity", "probe", op.name()]).arg(&copy).args(pair.flag()).env("BAGHOLDER_OFFLINE", "1").env("BAGHOLDER_DRY_ORDERS", "1").output().map_err(err)?;
         std::fs::remove_dir_all(&copy).map_err(err)?;
         if !out.status.success() {
             return Err(format!("{} on {}: {}", op.name(), home.display(), String::from_utf8_lossy(&out.stderr)));
@@ -745,6 +766,10 @@ fn copy_folder(from: &Path, to: &Path) -> Result<(), String> {
             copy_folder(&entry.path(), &target)?;
         } else {
             std::fs::copy(entry.path(), &target).map_err(err)?;
+            // on disk before the probe starts: a copy still waiting to be written
+            // back is written by the first sync the probe makes, and that is the
+            // copy's cost, not the operation's
+            std::fs::File::open(&target).and_then(|f| f.sync_all()).map_err(err)?;
         }
     }
     Ok(())
@@ -815,11 +840,11 @@ pub fn run(work: &Path) -> Result<String, String> {
             // same every run, and one run over its budget keeps it over; only a run
             // within it is taken to the median of seven, to say it is off the list
             let listed = listed(op, pair);
-            let mut a = measure(&exe, op, &one, if listed { 1 } else { RUNS })?;
-            let mut b = measure(&exe, op, &four, if listed { 1 } else { RUNS })?;
+            let mut a = measure(&exe, op, pair, &one, if listed { 1 } else { RUNS })?;
+            let mut b = measure(&exe, op, pair, &four, if listed { 1 } else { RUNS })?;
             if listed && judge(op, pair, &a, &b).over.is_empty() {
-                a = measure(&exe, op, &one, RUNS)?;
-                b = measure(&exe, op, &four, RUNS)?;
+                a = measure(&exe, op, pair, &one, RUNS)?;
+                b = measure(&exe, op, pair, &four, RUNS)?;
             }
             let (budget, from) = budget_ms(op, b.divisor);
             let read = match (a.read, b.read) {
@@ -855,7 +880,7 @@ fn write_out(text: &str) -> Result<(), String> {
 }
 
 pub fn cli(args: &[String]) -> i32 {
-    let usage = "usage: bagholder capacity build <folder> [--times N] [--seed S] | run <work folder> | probe <operation> <folder>";
+    let usage = "usage: bagholder capacity build <folder> [--times N] [--seed S] | run <work folder> | probe <operation> <folder> [--depth]";
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u64>().ok());
     let result = match args.first().map(String::as_str) {
         Some("build") => match args.get(1) {
@@ -867,7 +892,7 @@ pub fn cli(args: &[String]) -> i32 {
             None => Err(usage.into()),
         },
         Some("probe") => match (args.get(1).and_then(|o| Op::parse(o)), args.get(2)) {
-            (Some(op), Some(dir)) => probe(op, Path::new(dir)).map(|m| {
+            (Some(op), Some(dir)) => probe(op, if args.iter().any(|a| a == "--depth") { Pair::Depth } else { Pair::Breadth }, Path::new(dir)).map(|m| {
                 format!("{}\n", serde_json::json!({"wall_ns": m.wall_ns, "steps": m.steps, "allocs": m.allocs, "read": m.read, "divisor": m.divisor}))
             }),
             _ => Err(usage.into()),
@@ -1045,7 +1070,7 @@ mod tests {
             build(one.path(), small, 2).unwrap();
             build(four.path(), large, 2).unwrap();
             for &op in pair.ops().iter().filter(|o| o.per_change()) {
-                let (a, b) = (probe(op, one.path()).unwrap(), probe(op, four.path()).unwrap());
+                let (a, b) = (probe(op, pair, one.path()).unwrap(), probe(op, pair, four.path()).unwrap());
                 assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
                 let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew")).collect();
