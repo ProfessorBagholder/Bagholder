@@ -1,5 +1,6 @@
 -- user_version 28
 CREATE INDEX account_refs_account ON account_refs (account_id);
+CREATE INDEX account_refs_value ON account_refs (value);
 CREATE INDEX account_values_account ON account_values (account_id, first_ns, first_seq);
 CREATE INDEX activity_reads_complete ON activity_reads (account_id, complete, at_ns);
 CREATE INDEX adjustments_applies ON adjustments (applies_record, applies_leg);

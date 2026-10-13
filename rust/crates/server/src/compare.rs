@@ -279,7 +279,8 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     let mut engine = Engine::build(Inputs { ledger, facts, market, clock });
     // the book as read above, everything its change log holds taken as applied
     let applied = std::sync::atomic::AtomicI64::new(book.changes_upto().map_err(err)?);
-    crate::figures::settle_trades(&book, &mut engine, &applied, at)?;
+    let movements = Default::default();
+    crate::figures::settle_trades(&book, &mut engine, &crate::figures::Held { applied: &applied, movements: &movements }, at)?;
 
     // rows are joined by Wealthsimple's own id for them: the old store gives
     // its rows new ids of its own when it syncs again, so its ids name nothing

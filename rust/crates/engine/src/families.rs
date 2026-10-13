@@ -121,6 +121,12 @@ impl Families {
         }
     }
 
+    /// Whether any contract is written on `i`: a close of it can decide a
+    /// contract's expiry.
+    pub fn is_underlying(&self, i: InstrumentId) -> bool {
+        self.contracts.contains_key(&i)
+    }
+
     /// The family a node is in (a node in none is a family of its own).
     pub fn of(&self, n: Node) -> Node {
         self.family_of.get(&n).copied().unwrap_or(n)

@@ -368,10 +368,16 @@ impl Engine {
 
     /// The families of `seeds` worked out again and matched again: what a change
     /// to the record reaches, and nothing else.
-    fn rematch_families(&mut self, seeds: BTreeSet<Node>) -> (crate::families::Regrouped, BTreeSet<AccountId>) {
+    fn rematch_families(&mut self, seeds: BTreeSet<Node>) -> (crate::families::Regrouped, BTreeSet<AccountId>, bool) {
         let g = self.families.regroup(&self.inputs.ledger, &self.inputs.facts.adjustments, seeds);
         let (fresh, by_family) = match_families(&self.inputs, &self.families, g.families.iter().copied());
+        // what waits on the person in the region, before and after
+        let in_region = |m: &Matched, l: &crate::input::Ledger| -> Vec<(bagholder_core::TransactionId, crate::ledger::Waiting)> {
+            m.waiting.iter().filter(|(tx, w)| g.region.contains(&Node::Instrument(w.instrument)) || l.transactions.get(tx).is_none_or(|t| g.region.contains(&node_of(t)))).map(|(t, w)| (t.clone(), w.clone())).collect()
+        };
+        let waiting_was = in_region(&self.matched, &self.inputs.ledger);
         self.matched.replace(&self.inputs.ledger, &g.region, fresh);
+        let waiting_moved = waiting_was != in_region(&self.matched, &self.inputs.ledger);
         let mut touched: BTreeSet<AccountId> = BTreeSet::new();
         for (a, s) in self.shares.iter_mut() {
             let before = s.len();
@@ -397,7 +403,7 @@ impl Engine {
                 }
             }
         }
-        (g, touched)
+        (g, touched, waiting_moved)
     }
 
     /// The holdings at the close of `day`, a day before today.
@@ -495,11 +501,6 @@ impl Engine {
         crate::scope::cashflow_in_scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, portfolio)
     }
 
-    /// Whether a close of this instrument can decide a contract's expiry.
-    fn is_underlying(&self, instrument: InstrumentId) -> bool {
-        self.inputs.ledger.instruments.values().any(|i| i.terms.as_ref().is_some_and(|t| t.underlying == instrument))
-    }
-
     /// Apply one change, recomputing only what it touches, and say what moved:
     /// only the figures recomputed are compared.
     pub fn apply(&mut self, change: Change) -> Moved {
@@ -580,10 +581,10 @@ impl Engine {
                 reach.accounts.extend(come.iter().map(|t| t.account));
                 reach.accounts.extend(accounts.iter().copied());
                 self.families.reindex(&self.inputs.ledger, &was, gone.iter(), come.iter(), &adjusted_was, &self.inputs.facts.adjustments);
-                let waiting_was = self.matched.waiting.clone();
+                let mut waiting_moved = false;
                 if matching {
-                    // the books of the region before, so what they held is rechecked too
-                    let (g, cash_moved) = self.rematch_families(seeds);
+                    let (g, cash_moved, waited) = self.rematch_families(seeds);
+                    waiting_moved = waited;
                     reach.accounts.extend(cash_moved);
                     for n in &g.region {
                         if let Node::Instrument(i) = n {
@@ -607,7 +608,7 @@ impl Engine {
                 if book_was.instruments.iter().any(|(i, was)| self.inputs.ledger.instruments.get(i) != was.as_ref()) {
                     book.insert("instruments");
                 }
-                if waiting_was != self.matched.waiting {
+                if waiting_moved {
                     book.insert("waiting");
                 }
                 if book_was.activity != self.inputs.ledger.transactions.len() {
@@ -674,15 +675,20 @@ impl Engine {
                 }
             }
             Change::Closes(i, c) => {
-                if self.is_underlying(i) {
+                if self.families.is_underlying(i) {
                     // a close can decide whether a contract expired worthless:
                     // the underlying's family, its contracts with it
-                    let before = self.snapshot(Parts::ALL);
                     self.inputs.market.closes.insert(i, c);
-                    self.rematch_families(BTreeSet::from([Node::Instrument(i)]));
-                    self.identity = identify(&self.inputs.ledger, &self.matched);
-                    self.derive();
-                    self.compare(&before, &mut moved);
+                    let (g, cash_moved, waited) = self.rematch_families(BTreeSet::from([Node::Instrument(i)]));
+                    let mut reach = Reach { accounts: cash_moved, ..Reach::default() };
+                    reach.instruments = g.region.iter().filter_map(|n| if let Node::Instrument(i) = n { Some(*i) } else { None }).collect();
+                    for x in &reach.instruments {
+                        reach.accounts.extend(self.matched.held_by.get(x).into_iter().flatten().copied());
+                    }
+                    self.rederive(&reach, &mut moved);
+                    if waited {
+                        moved.0.entry(Entity::Book).or_default().insert("waiting");
+                    }
                 } else {
                     self.inputs.market.closes.insert(i, c);
                     self.reprice(i, &mut moved);

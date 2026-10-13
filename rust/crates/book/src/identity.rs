@@ -112,6 +112,20 @@ impl Book {
         }
     }
 
+    /// The account a broker's id names, whatever broker states it: the one made
+    /// last where two do.
+    pub fn account_by_ref_value(&self, value: &str) -> Result<Option<AccountId>> {
+        let found: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT r.account_id FROM account_refs r JOIN accounts a ON a.id = r.account_id WHERE r.value = ? ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+                params![value],
+                |row| row.get(0),
+            )
+            .optional()?;
+        found.map(|s| text::parsed("account_refs", "account_id", &s, AccountId::parse)).transpose()
+    }
+
     pub fn account_by_ref(&self, r: &AccountRef) -> Result<Option<AccountId>> {
         let found: Option<String> = self
             .conn()

@@ -2323,8 +2323,25 @@ impl Matched {
         self.unapplied.retain(|x| !tx_in(&x.0));
         self.roles.retain(|x, _| !tx_in(x));
         self.waiting.retain(|x, _| !tx_in(x));
-        self.absorb(fresh);
-        self.in_match_order(ledger);
+        // the lists kept in the match's order: each new row put in its place
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, held_by } = fresh;
+        let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
+        fn put<T>(list: &mut Vec<T>, rows: Vec<T>, key: impl Fn(&T) -> Option<(Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId)>) {
+            for row in rows {
+                let k = key(&row);
+                // after every row at the same place: a transaction's rows in the order found
+                let i = list.partition_point(|x| key(x) <= k);
+                list.insert(i, row);
+            }
+        }
+        put(&mut self.beyond, beyond, |x| at(&x.transaction));
+        put(&mut self.dust, dust, |x| at(&x.transaction));
+        put(&mut self.arrived, arrived, |x| at(&x.transaction));
+        put(&mut self.stock_dividends, stock_dividends, |x| at(&x.transaction));
+        put(&mut self.disagreements, disagreements, |x| at(x));
+        put(&mut self.unit_disagreements, unit_disagreements, |x| at(&x.transaction));
+        put(&mut self.unapplied, unapplied, |x| at(&x.0));
+        self.absorb(Matched { trips, books, last_price, units, roles, waiting, trips_of, held_by, ..Matched::default() });
     }
 
     /// The indexes worked out from what the match holds.

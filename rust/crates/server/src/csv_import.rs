@@ -169,21 +169,15 @@ pub fn import_from(
     };
     let book = f.book().map_err(Refused::Failed)?;
     let fail = |e: bagholder_book::BookError| Refused::Failed(e.to_string());
-    let accounts = book.accounts().map_err(fail)?;
-    if !accounts.iter().any(|a| a.id == account) {
+    let Some(chosen) = book.account_held(account).map_err(fail)? else {
         return Err(Refused::Entry(format!("no account {account} in the book")));
-    }
-    // every id a broker states for an account, to place a row that names one
-    let mut by_ref: BTreeMap<String, AccountId> = BTreeMap::new();
-    for a in &accounts {
-        for r in book.account_refs(a.id).map_err(fail)? {
-            by_ref.insert(r.value, a.id);
-        }
-    }
+    };
+    // the account a row names by a broker's id for it, each id looked up once
+    let by_ref: std::cell::RefCell<BTreeMap<String, Option<AccountId>>> = Default::default();
     let mut report = ImportReport {
         file: file.to_string(),
         layout: read.layout.as_str().to_string(),
-        account: accounts.iter().find(|a| a.id == account).and_then(|a| a.nickname.clone()).unwrap_or_else(|| account.to_string()),
+        account: chosen.nickname.clone().unwrap_or_else(|| account.to_string()),
         rows: 0,
         added: 0,
         unchanged: 0,
@@ -210,10 +204,21 @@ pub fn import_from(
                 let stated = csv::state(layout, &row.cells);
                 let (placed, unplaced) = match stated.as_ref().ok().and_then(|s| s.account.as_deref()) {
                     None => (account, None),
-                    Some(named) => match by_ref.get(named) {
-                        Some(a) => (*a, None),
-                        None => (account, Some(format!("the row names account {named:?}, which is none of the book's"))),
-                    },
+                    Some(named) => {
+                        let held = by_ref.borrow().get(named).copied();
+                        let found = match held {
+                            Some(a) => a,
+                            None => {
+                                let a = book.account_by_ref_value(named).map_err(|e| Refused::Failed(e.to_string()))?;
+                                by_ref.borrow_mut().insert(named.to_string(), a);
+                                a
+                            }
+                        };
+                        match found {
+                            Some(a) => (a, None),
+                            None => (account, Some(format!("the row names account {named:?}, which is none of the book's"))),
+                        }
+                    }
                 };
                 let instrument = match &stated {
                     Ok(s) => match (&s.instrument, s.currency) {
@@ -312,6 +317,104 @@ pub struct Linking {
     pub ambiguous: BTreeMap<RecordId, usize>,
 }
 
+/// A fill: bought or sold, on an instrument, units stated.
+fn is_fill(t: &Transaction) -> bool {
+    matches!(t.kind, Kind::Buy | Kind::Sell) && t.instrument.is_some() && t.quantity.is_some_and(|q| !q.is_zero())
+}
+
+/// Every other movement on an instrument (a dividend, a distribution, an
+/// interest payment on a holding, units in or out).
+fn is_movement(t: &Transaction) -> bool {
+    t.instrument.is_some() && !is_fill(t) && t.kind != Kind::Unclassified && (t.cash.is_some_and(|c| !c.amount.is_zero()) || t.quantity.is_some_and(|q| !q.is_zero()))
+}
+
+/// Cash moved with no instrument: a deposit, a withdrawal, a transfer, a tax.
+fn is_moved(t: &Transaction) -> bool {
+    t.instrument.is_none() && t.cash.is_some_and(|c| !c.amount.is_zero())
+}
+
+/// What a file's row and the broker's row for the same movement share: the key
+/// each of the three matches looks under (`docs/plans/stage-3-the-record-by-change.md`,
+/// D). A fill by its account, trade day, instrument, side and units (its price is
+/// compared row to row); another movement on an instrument by its account, kind,
+/// instrument, units and cash (its days compared row to row: its trade day or
+/// settle day); cash moved by its account and amount (its days likewise).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Movement {
+    Fill(AccountId, bagholder_core::jiff::civil::Date, bagholder_core::InstrumentId, Kind, bagholder_core::Dec),
+    OnInstrument(AccountId, Kind, bagholder_core::InstrumentId, Option<bagholder_core::Dec>, Option<(bagholder_core::Dec, Currency)>),
+    Cash(AccountId, bagholder_core::Dec, Currency),
+}
+
+/// The key a row is found under, if it is a movement a file's row can be.
+pub fn movement_of(t: &Transaction) -> Option<Movement> {
+    if is_fill(t) {
+        return Some(Movement::Fill(t.account, t.trade_date, t.instrument?, t.kind, t.quantity?));
+    }
+    if is_movement(t) {
+        return Some(Movement::OnInstrument(t.account, t.kind, t.instrument?, t.quantity, t.cash.map(|c| (c.amount, c.currency))));
+    }
+    if is_moved(t) {
+        let c = t.cash?;
+        return Some(Movement::Cash(t.account, c.amount, c.currency));
+    }
+    None
+}
+
+/// The ledger's rows by the movement each is, kept in step with the ledger
+/// (`figures::catch_up`), and the movements a change touched since linking last
+/// looked: an ambiguity resolves when a competitor is taken, revised or removed,
+/// so every key a stored, revised, removed or superseded row was under, before
+/// and after, is looked at again.
+#[derive(Clone, Debug, Default)]
+pub struct Movements {
+    by: BTreeMap<Movement, BTreeSet<bagholder_core::TransactionId>>,
+    pending: BTreeSet<Movement>,
+}
+
+impl Movements {
+    /// Every row of `ledger`, nothing pending.
+    pub fn build(ledger: &bagholder_engine::input::Ledger) -> Movements {
+        let mut m = Movements::default();
+        for t in &ledger.transactions {
+            if let Some(k) = movement_of(t) {
+                m.by.entry(k).or_default().insert(t.id.clone());
+            }
+        }
+        m
+    }
+
+    /// Rows gone and come: the index brought to them, and their keys pending.
+    pub fn changed<'a>(&mut self, gone: impl IntoIterator<Item = &'a Transaction>, come: impl IntoIterator<Item = &'a Transaction>) {
+        for t in gone {
+            if let Some(k) = movement_of(t) {
+                if let Some(s) = self.by.get_mut(&k) {
+                    s.remove(&t.id);
+                    if s.is_empty() {
+                        self.by.remove(&k);
+                    }
+                }
+                self.pending.insert(k);
+            }
+        }
+        for t in come {
+            if let Some(k) = movement_of(t) {
+                self.by.entry(k.clone()).or_default().insert(t.id.clone());
+                self.pending.insert(k);
+            }
+        }
+    }
+
+    /// The movements touched since this was last asked.
+    pub fn take_pending(&mut self) -> BTreeSet<Movement> {
+        std::mem::take(&mut self.pending)
+    }
+
+    fn rows(&self, k: &Movement) -> impl Iterator<Item = &bagholder_core::TransactionId> {
+        self.by.get(k).into_iter().flatten()
+    }
+}
+
 /// Link each live row of a file to the broker's row for the same movement,
 /// where there is exactly one: for a fill, the same account, day, instrument,
 /// side and quantity, and the price the file states (to the places it states
@@ -319,26 +422,58 @@ pub struct Linking {
 /// the same day. The broker's activity feed comes first, then a row booked from
 /// its statement (`docs/plans/statement-gaps.md`): a row of the feed takes the
 /// file row's place where one fits, else a statement row. A broker row that has
-/// taken a file row's place takes no other's.
+/// taken a file row's place takes no other's. Only the movements a change touched
+/// since the last pass are looked at (`Movements`), each whole.
 pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking, String> {
-    let book = f.book()?;
-    let csv_rows: BTreeSet<RecordId> = book.live_records(&csv::source()).map_err(|e| e.to_string())?.into_iter().collect();
-    if csv_rows.is_empty() {
+    let keys = f.links_pending();
+    #[cfg(test)]
+    if keys.is_empty() {
+        // nothing touched: the whole pass would link nothing either
+        assert_eq!(whole_plan(f).linked, vec![], "a link was missed: nothing pending, and the whole pass links");
+    }
+    if keys.is_empty() {
         return Ok(Linking::default());
     }
-    let mut not_broker: BTreeSet<RecordId> = book.live_records(&SourceName::person()).map_err(|e| e.to_string())?.into_iter().collect();
-    not_broker.extend(csv_rows.iter().copied());
-    let taken: BTreeSet<RecordId> = book.superseding(&csv::source()).map_err(|e| e.to_string())?.into_iter().collect();
-    let found = f.read(|e| candidates(e, &csv_rows, &not_broker, &taken)).ok_or("the figures are not built yet")?;
+    let book = f.book()?;
+    let file = csv::source();
+    // a broker record that has taken a file row's place already
+    let taken = |r: RecordId| book.supersedes_from(r, &file).map_err(|e| e.to_string());
+    let found = f.read(|e| f.with_movements(|m| candidates(e, m, &keys, &taken))).ok_or("the figures are not built yet")??;
+    let out = plan(found, BTreeSet::new());
+    #[cfg(test)]
+    {
+        // held to today's whole pass: the same links, and the same ambiguities
+        // under the movements looked at
+        let whole = whole_plan(f);
+        let mut linked = out.linked.clone();
+        let mut want = whole.linked.clone();
+        linked.sort();
+        want.sort();
+        assert_eq!(linked, want, "the keyed pass links otherwise than the whole one");
+        let key_of = |r: &RecordId| f.read(|e| e.inputs().ledger.transactions.of_record(*r).find_map(movement_of)).flatten();
+        let ambiguous: BTreeMap<RecordId, usize> = whole.ambiguous.into_iter().filter(|(r, _)| key_of(r).is_some_and(|k| keys.contains(&k))).collect();
+        assert_eq!(out.ambiguous, ambiguous, "the keyed pass finds other ambiguities than the whole one");
+    }
+    for (row, one) in &out.linked {
+        book.supersede(&[*row], &[*one], "the broker's own row for the same fill", now).map_err(|e| e.to_string())?;
+    }
+    if !out.linked.is_empty() {
+        f.record_changed(now)?;
+    }
+    Ok(out)
+}
+
+/// What a pass does with its candidates: each file row, in order, gives way to
+/// the one free broker record of the first tier that has any, a broker record
+/// taking one file row only; a row with more than one is ambiguous.
+fn plan(found: Candidates, mut used: BTreeSet<RecordId>) -> Linking {
     let mut out = Linking::default();
-    let mut used = taken;
     for (row, tiers) in found {
         // the first tier with a free candidate: the feed's, then the statement's
         let free: Vec<RecordId> = tiers.into_iter().map(|t| t.into_iter().filter(|b| !used.contains(b)).collect::<Vec<_>>()).find(|t| !t.is_empty()).unwrap_or_default();
         match free.as_slice() {
             [] => {}
             [one] => {
-                book.supersede(&[row], &[*one], "the broker's own row for the same fill", now).map_err(|e| e.to_string())?;
                 used.insert(*one);
                 out.linked.push((row, *one));
             }
@@ -347,15 +482,97 @@ pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking
             }
         }
     }
-    if !out.linked.is_empty() {
-        f.record_changed(now)?;
-    }
-    Ok(out)
+    out
 }
 
+/// Under each movement `keys` names: each live file row, in the order the
+/// whole pass took them (fills, then other movements, then cash moved, each in
+/// the ledger's order), and the broker records holding the same movement, the
+/// feed's before the statement's.
+type Candidates = Vec<(RecordId, Vec<Vec<RecordId>>)>;
+
+fn candidates(e: &Engine, m: &Movements, keys: &BTreeSet<Movement>, taken: &dyn Fn(RecordId) -> Result<bool, String>) -> Result<Candidates, String> {
+    let ledger = &e.inputs().ledger;
+    let file = csv::source();
+    let person = SourceName::person();
+    let statement = bagholder_wealthsimple::statement::source();
+    let price = |t: &Transaction| bagholder_engine::ledger::fill_price(t, t.instrument.and_then(|i| ledger.instruments.get(&i))).ok();
+    let mut out: Vec<((u8, Option<&bagholder_engine::input::Place>), RecordId, Vec<Vec<RecordId>>)> = Vec::new();
+    let mut taken_seen: BTreeMap<RecordId, bool> = BTreeMap::new();
+    for k in keys {
+        let rows: Vec<&Transaction> = m.rows(k).filter_map(|id| ledger.transactions.get(id)).collect();
+        let mut broker: Vec<&Transaction> = Vec::new();
+        for b in rows.iter().filter(|b| b.mapping.source != file && b.mapping.source != person) {
+            let t = match taken_seen.get(&b.id.record) {
+                Some(t) => *t,
+                None => {
+                    let t = taken(b.id.record)?;
+                    taken_seen.insert(b.id.record, t);
+                    t
+                }
+            };
+            if !t {
+                broker.push(b);
+            }
+        }
+        let tier = |ok: &dyn Fn(&&Transaction) -> bool, from_statement: bool| -> Vec<RecordId> {
+            let mut r: Vec<RecordId> = broker.iter().filter(|b| ok(b) && (b.mapping.source == statement) == from_statement).map(|b| b.id.record).collect();
+            r.sort();
+            r.dedup();
+            r
+        };
+        for c in rows.iter().filter(|c| c.mapping.source == file) {
+            let place = ledger.transactions.place_of(&c.id);
+            match k {
+                Movement::Fill(..) => {
+                    // the price as the file states it, or as its cash over its units where it states none
+                    let Some(p) = c.price.map(|p| p.amount).or_else(|| price(c)) else { continue };
+                    let mut records: Vec<RecordId> = broker.iter().filter(|b| price(b).is_some_and(|bp| bp.round(p.places(), Rounding::HalfEven) == p)).map(|b| b.id.record).collect();
+                    records.sort();
+                    records.dedup();
+                    if !records.is_empty() {
+                        out.push(((0, place), c.id.record, vec![records]));
+                    }
+                }
+                Movement::OnInstrument(..) => {
+                    let same = |b: &&Transaction| b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date || b.settle_date == Some(c.trade_date);
+                    let tiers = vec![tier(&same, false), tier(&same, true)];
+                    if tiers.iter().any(|t| !t.is_empty()) {
+                        out.push(((1, place), c.id.record, tiers));
+                    }
+                }
+                Movement::Cash(..) => {
+                    let same = |b: &&Transaction| b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date;
+                    let tiers = vec![tier(&same, false), tier(&same, true)];
+                    if tiers.iter().any(|t| !t.is_empty()) {
+                        out.push(((2, place), c.id.record, tiers));
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out.into_iter().map(|(_, r, t)| (r, t)).collect())
+}
+
+/// Today's linking over the whole ledger, kept as the reference the keyed pass
+/// is held to in every test build (`link`; brief 26, 7): what it would link and
+/// what it finds ambiguous, written nowhere.
+#[cfg(test)]
+fn whole_plan(f: &Figures) -> Linking {
+    let book = f.book().unwrap();
+    let csv_rows: BTreeSet<RecordId> = book.live_records(&csv::source()).unwrap().into_iter().collect();
+    let mut not_broker: BTreeSet<RecordId> = book.live_records(&SourceName::person()).unwrap().into_iter().collect();
+    not_broker.extend(csv_rows.iter().copied());
+    let taken: BTreeSet<RecordId> = book.superseding(&csv::source()).unwrap().into_iter().collect();
+    let found = f.read(|e| whole_candidates(e, &csv_rows, &not_broker, &taken)).unwrap();
+    plan(found, taken)
+}
+
+#[cfg(test)]
 /// Each file row that is a fill or moved cash, and the broker records holding
 /// the same movement, the feed's before the statement's.
-fn candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<RecordId>, taken: &BTreeSet<RecordId>) -> Vec<(RecordId, Vec<Vec<RecordId>>)> {
+fn whole_candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<RecordId>, taken: &BTreeSet<RecordId>) -> Vec<(RecordId, Vec<Vec<RecordId>>)> {
     let ledger = &e.inputs().ledger;
     let fill = |t: &Transaction| matches!(t.kind, Kind::Buy | Kind::Sell) && t.instrument.is_some() && t.quantity.is_some_and(|q| !q.is_zero());
     let price = |t: &Transaction| bagholder_engine::ledger::fill_price(t, t.instrument.and_then(|i| ledger.instruments.get(&i))).ok();
@@ -423,6 +640,7 @@ fn candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<R
     }
     out
 }
+
 
 // ---------------------------------------------------------------------------
 // the watched folder
@@ -784,6 +1002,112 @@ mod tests {
         statement_row(&f, day, other, 2);
         let r = import(&f, "b.csv", &cash_file(day, other), Some(account), now()).unwrap();
         assert_eq!((r.linked, r.ambiguous.len()), (0, 1), "{r:?}");
+    }
+
+    /// Linking by the movements a change touched links and finds ambiguous what
+    /// today's whole pass does (`link` asserts it on every call in a test build),
+    /// over random files, broker rows, statement rows and removals of cash moved
+    /// on two days in two amounts: an ambiguity a later file or a removal
+    /// resolves, two identical broker rows, a file row arriving before its
+    /// broker row and after (brief 26, 5 and 7).
+    #[test]
+    fn linking_by_what_changed_does_what_the_whole_pass_does_whatever_arrives_in_whatever_order() {
+        for seed in 1..=10u64 {
+            let (_h, f) = figures();
+            let account = f.book().unwrap().account_by_ref(&bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+            let mut r = seed;
+            let mut next = |n: u64| {
+                r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (r >> 33) % n
+            };
+            // few movements, so rows collide: duplicates, ambiguities, competitors
+            let days = ["2025-11-04", "2025-11-04", "2025-11-05"];
+            let amounts = ["12.34", "56.78"];
+            let mut broker: Vec<RecordId> = Vec::new();
+            for step in 0..30 {
+                let day = days[next(3) as usize];
+                let cash = bagholder_core::Money::new(Dec::parse(amounts[next(2) as usize]).unwrap(), bagholder_core::Currency::CAD);
+                match next(4) {
+                    0 => {
+                        // the broker's row, as an earlier database's import states it
+                        let book = f.book().unwrap();
+                        let conn = book.connections().unwrap()[0].id;
+                        let key = format!("deposit-{seed}-{step}");
+                        let row = OldActivity {
+                            id: key.clone(),
+                            transaction_date: Some(day.into()),
+                            account_id: Some("anon-tfsa-1".into()),
+                            activity_type: Some("Deposit".into()),
+                            currency: Some("CAD".into()),
+                            net_cash_amount: Some(cash.amount.to_text()),
+                            source: Some("csv".into()),
+                            ..OldActivity::default()
+                        };
+                        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
+                        broker.push(book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: &key, payload: &payload, refs: vec![] }, now()).unwrap().record);
+                        f.record_changed(now()).unwrap();
+                        link(&f, now()).unwrap();
+                    }
+                    1 => {
+                        statement_row(&f, day.parse().unwrap(), cash, step);
+                        link(&f, now()).unwrap();
+                    }
+                    2 => {
+                        import(&f, &format!("file-{step}.csv"), &cash_file(day.parse().unwrap(), cash), Some(account), now()).unwrap();
+                    }
+                    _ => {
+                        if broker.is_empty() {
+                            continue;
+                        }
+                        let gone = broker.remove(next(broker.len() as u64) as usize);
+                        f.book().unwrap().mark_removed(gone, now()).unwrap();
+                        f.record_changed(now()).unwrap();
+                        link(&f, now()).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    /// The broker's deposit row `key` of `cash` on `day`, as an earlier
+    /// database's import states it.
+    fn broker_deposit(f: &Figures, key: &str, day: &str, cash: &str) -> RecordId {
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap()[0].id;
+        let row = OldActivity {
+            id: key.into(),
+            transaction_date: Some(day.into()),
+            account_id: Some("anon-tfsa-1".into()),
+            activity_type: Some("Deposit".into()),
+            currency: Some("CAD".into()),
+            net_cash_amount: Some(cash.into()),
+            source: Some("csv".into()),
+            ..OldActivity::default()
+        };
+        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
+        let r = book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: key, payload: &payload, refs: vec![] }, now()).unwrap().record;
+        f.record_changed(now()).unwrap();
+        r
+    }
+
+    /// A file's row with two broker rows it could be links nothing; once one of
+    /// them is removed, the next pass links it to the other, though the removal
+    /// stored nothing (brief 26, 5b).
+    #[test]
+    fn an_ambiguity_a_removal_resolves_is_linked_by_the_next_pass() {
+        let (_h, f) = figures();
+        let account = f.book().unwrap().account_by_ref(&bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+        let day = "2025-11-06";
+        let one = broker_deposit(&f, "dup-1", day, "77.77");
+        let two = broker_deposit(&f, "dup-2", day, "77.77");
+        link(&f, now()).unwrap();
+        let cash = bagholder_core::Money::new(Dec::parse("77.77").unwrap(), bagholder_core::Currency::CAD);
+        let r = import(&f, "f.csv", &cash_file(day.parse().unwrap(), cash), Some(account), now()).unwrap();
+        assert_eq!((r.linked, r.ambiguous_rows), (0, 1), "{r:?}");
+        f.book().unwrap().mark_removed(two, now()).unwrap();
+        f.record_changed(now()).unwrap();
+        let l = link(&f, now()).unwrap();
+        assert_eq!(l.linked.iter().map(|(_, b)| *b).collect::<Vec<_>>(), vec![one], "{l:?}");
     }
 
     #[test]
