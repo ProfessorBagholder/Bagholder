@@ -356,6 +356,11 @@ pub struct Matched {
     /// kept so that one account's check with its broker reads its own totals and
     /// nothing else (`equity::broker_checks`); a sum that does not fit is that failure.
     pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
+    /// Each instrument's round trips (by the instrument each is keyed on): what a
+    /// family's figures are rebuilt from without a pass over every round trip.
+    pub trips_of: BTreeMap<InstrumentId, BTreeSet<TripKey>>,
+    /// The accounts holding a book or a count of units of each instrument.
+    pub held_by: BTreeMap<InstrumentId, BTreeSet<AccountId>>,
 }
 
 /// A fact only the person can give, and what it is about.
@@ -2290,6 +2295,7 @@ pub fn match_over(inputs: &Inputs, txs: Vec<&Transaction>) -> Matched {
     }
     let mut out = m.out;
     out.in_match_order(ledger);
+    out.index();
     out
 }
 
@@ -2303,6 +2309,8 @@ impl Matched {
         let ins = |i: &InstrumentId| region.contains(&Node::Instrument(*i));
         let tx_in = |id: &TransactionId| ledger.transactions.get(id).is_none_or(|t| region.contains(&node_of(t)));
         self.trips.retain(|k, _| !ins(&k.instrument));
+        self.trips_of.retain(|i, _| !ins(i));
+        self.held_by.retain(|i, _| !ins(i));
         self.books.retain(|(_, i), _| !ins(i));
         self.units.retain(|(_, i), _| !ins(i));
         self.last_price.retain(|i, _| !ins(i));
@@ -2319,10 +2327,42 @@ impl Matched {
         self.in_match_order(ledger);
     }
 
+    /// The indexes worked out from what the match holds.
+    fn index(&mut self) {
+        self.trips_of.clear();
+        self.held_by.clear();
+        for k in self.trips.keys() {
+            self.trips_of.entry(k.instrument).or_default().insert(k.clone());
+        }
+        for (a, i) in self.books.keys().chain(self.units.keys()) {
+            self.held_by.entry(*i).or_default().insert(*a);
+        }
+    }
+
+    /// The lots still open of a round trip, wherever they are held, each with the
+    /// instrument of its book.
+    /// In the books' order (account, then instrument), each book's lots in order.
+    pub fn lots_of(&self, trip: &Trip) -> Vec<(InstrumentId, &Lot)> {
+        let held: BTreeSet<(AccountId, InstrumentId)> = trip.instruments.iter().flat_map(|i| self.held_by.get(i).into_iter().flatten().map(move |a| (*a, *i))).collect();
+        let mut out = Vec::new();
+        for (a, i) in held {
+            if let Some(b) = self.books.get(&(a, i)) {
+                out.extend(b.lots.iter().filter(|l| l.trip == trip.key).map(|l| (i, l)));
+            }
+        }
+        out
+    }
+
     /// Everything `fresh` holds put in beside what this holds, the cash totals
     /// aside (the caller's); the lists left for `in_match_order`.
     pub fn absorb(&mut self, fresh: Matched) {
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _ } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, held_by } = fresh;
+        for (i, k) in trips_of {
+            self.trips_of.entry(i).or_default().extend(k);
+        }
+        for (i, a) in held_by {
+            self.held_by.entry(i).or_default().extend(a);
+        }
         self.trips.extend(trips);
         self.books.extend(books);
         self.beyond.extend(beyond);

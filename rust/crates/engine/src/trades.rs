@@ -3,7 +3,7 @@
 //! figures in the instrument's own currency and its P&L in CAD, each sale
 //! realized on its own day and each leg converted on its own day.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::jiff::civil::Date;
@@ -291,51 +291,69 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
     })
 }
 
+/// A saved group's figure, over the round trips it holds; none where they hold
+/// nothing to show.
+pub fn group_fig(inputs: &Inputs, matched: &Matched, group: GroupId, trips: &[TripKey]) -> Option<TradeFig> {
+    let slices: Vec<Slice> = trips.iter().filter_map(|k| matched.trips.get(k)).flat_map(|t| t.slices.iter().cloned()).collect();
+    let lots: Vec<(InstrumentId, &Lot)> = trips.iter().filter_map(|k| matched.trips.get(k)).flat_map(|t| matched.lots_of(t)).collect();
+    let entry = inputs.ledger.journal.get(&JournalSubject::Group(group)).cloned().unwrap_or_default();
+    collapse(inputs, matched, TradeKey::Group(group), None, trips.to_vec(), slices, lots, entry, true)
+}
+
+/// A round trip's figure, where it is a trade of the person's that no group
+/// holds; none where it is not.
+pub fn trip_fig(inputs: &Inputs, matched: &Matched, identity: &Identity, key: &TripKey) -> Option<TradeFig> {
+    let trip = matched.trips.get(key)?;
+    // a trip held in a managed account is the broker's, not a trade
+    if crate::identity::managed(&inputs.ledger, trip.account) {
+        return None;
+    }
+    let trade = identity.trade_of.get(key).copied();
+    let entry = trade.and_then(|t| inputs.ledger.journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
+    collapse(inputs, matched, TradeKey::Trip(key.clone()), trade, vec![key.clone()], trip.slices.clone(), matched.lots_of(trip), entry, false)
+}
+
+/// The order trades are shown in: newest activity first.
+pub fn shown_order(a: &TradeFig, b: &TradeFig) -> std::cmp::Ordering {
+    (b.last_on, b.closed_at, &b.key).cmp(&(a.last_on, a.closed_at, &a.key))
+}
+
 /// Every trade: the saved groups first, then each remaining round trip, open or
-/// closed, newest activity first.
+/// closed, newest activity first. A group takes the round trips of its members
+/// that no earlier group took, where it has something to show.
 pub fn build_trades(inputs: &Inputs, matched: &Matched, identity: &Identity) -> Vec<TradeFig> {
-    let journal = &inputs.ledger.journal;
-    let mut open: BTreeMap<&TripKey, Vec<(InstrumentId, &Lot)>> = BTreeMap::new();
-    for ((_, instrument), book) in &matched.books {
-        for l in &book.lots {
-            open.entry(&l.trip).or_default().push((*instrument, l));
+    let (mut out, held) = groups_shown(inputs, matched, identity);
+    for key in matched.trips.keys() {
+        if held.contains(key) {
+            continue;
+        }
+        if let Some(t) = trip_fig(inputs, matched, identity, key) {
+            out.push(t);
         }
     }
-    let lots_of = |trips: &[TripKey]| -> Vec<(InstrumentId, &Lot)> { trips.iter().flat_map(|k| open.get(k).cloned().unwrap_or_default()).collect() };
-    let trip_of_trade: BTreeMap<TradeId, &TripKey> = identity.trade_of.iter().map(|(k, t)| (*t, k)).collect();
+    out.sort_by(shown_order);
+    out
+}
+
+/// Each group's figure where it has something to show, in the book's order, and
+/// the round trips those groups hold.
+pub fn groups_shown(inputs: &Inputs, matched: &Matched, identity: &Identity) -> (Vec<TradeFig>, BTreeSet<TripKey>) {
     let mut used: BTreeSet<TripKey> = BTreeSet::new();
     let mut out = Vec::new();
     for g in &inputs.ledger.groups {
-        let mut trips: Vec<TripKey> = Vec::new();
-        for m in &g.members {
-            if let Some(k) = trip_of_trade.get(m) {
-                if !trips.contains(k) && !used.contains(*k) {
-                    trips.push((*k).clone());
-                }
+        let trips: Vec<TripKey> = g.members.iter().filter_map(|m| identity.trip_of.get(m)).filter(|k| !used.contains(*k)).fold(Vec::new(), |mut v, k| {
+            if !v.contains(k) {
+                v.push(k.clone());
             }
-        }
+            v
+        });
         if trips.is_empty() {
             continue;
         }
-        let slices: Vec<Slice> = trips.iter().filter_map(|k| matched.trips.get(k)).flat_map(|t| t.slices.iter().cloned()).collect();
-        let entry = journal.get(&JournalSubject::Group(g.id)).cloned().unwrap_or_default();
-        if let Some(t) = collapse(inputs, matched, TradeKey::Group(g.id), None, trips.clone(), slices, lots_of(&trips), entry, true) {
+        if let Some(t) = group_fig(inputs, matched, g.id, &trips) {
             used.extend(trips);
             out.push(t);
         }
     }
-    for (key, trip) in &matched.trips {
-        // a trip held in a managed account is the broker's, not a trade
-        if used.contains(key) || crate::identity::managed(&inputs.ledger, trip.account) {
-            continue;
-        }
-        let trade = identity.trade_of.get(key).copied();
-        let entry = trade.and_then(|t| journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
-        let keys = vec![key.clone()];
-        if let Some(t) = collapse(inputs, matched, TradeKey::Trip(key.clone()), trade, keys.clone(), trip.slices.clone(), lots_of(&keys), entry, false) {
-            out.push(t);
-        }
-    }
-    out.sort_by(|a, b| (b.last_on, b.closed_at, &b.key).cmp(&(a.last_on, a.closed_at, &a.key)));
-    out
+    (out, used)
 }

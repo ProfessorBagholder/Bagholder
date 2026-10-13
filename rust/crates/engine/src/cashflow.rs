@@ -50,53 +50,62 @@ pub struct CashRow {
 }
 
 pub fn build_cashflow(inputs: &Inputs, matched: &Matched) -> Vec<CashRow> {
-    let rates = &inputs.facts.rates;
-    let clock = &inputs.clock;
-    let mut rows = Vec::new();
-    for t in &inputs.ledger.transactions {
-        let kind = match t.kind {
-            Kind::Dividend => Payment::Dividend,
-            Kind::Interest => Payment::Interest,
-            Kind::WithholdingTax => Payment::WithholdingTax,
-            Kind::InterestCharge => Payment::InterestCharge,
-            _ => continue,
-        };
-        // a dividend of no cash is the broker's notice of one to come, not a payment
-        let Some(cash) = t.cash.filter(|c| !c.amount.is_zero()) else { continue };
-        // the units the source states it was paid on (a payment moves no units)
-        let qty = t.paid_on.filter(|q| q.is_positive());
-        let per: Option<Fig<Money>> = qty.map(|q| Ok(Money::new(cash.amount.abs().div_rounded(q, crate::trades::PRICE_PLACES, Rounding::HalfEven)?, cash.currency)));
-        rows.push(CashRow {
-            id: t.id.clone(),
-            day: t.trade_date,
-            at: t.occurred_at,
-            kind,
-            account: t.account,
-            instrument: t.instrument,
-            qty,
-            per,
-            amount: cash,
-            amount_cad: to_cad(rates, clock, cash, t.trade_date),
-            in_units: None,
-        });
-    }
-    for s in &matched.stock_dividends {
-        rows.push(CashRow {
-            id: s.transaction.clone(),
-            day: s.day,
-            at: None,
-            kind: Payment::Dividend,
-            account: s.account,
-            instrument: Some(s.instrument),
-            qty: None,
-            per: None,
-            amount: s.value,
-            amount_cad: to_cad(rates, clock, s.value, s.day),
-            in_units: Some(s.units),
-        });
-    }
-    rows.sort_by(|a, b| (b.day, b.at, &b.id).cmp(&(a.day, a.at, &a.id)));
+    let mut rows: Vec<CashRow> = inputs.ledger.transactions.iter().filter_map(|t| cash_row(inputs, t)).collect();
+    rows.extend(matched.stock_dividends.iter().map(|s| stock_dividend_row(inputs, s)));
+    rows.sort_by(shown_order);
     rows
+}
+
+/// The order cashflow rows are shown in: newest first.
+pub fn shown_order(a: &CashRow, b: &CashRow) -> std::cmp::Ordering {
+    (b.day, b.at, &b.id).cmp(&(a.day, a.at, &a.id))
+}
+
+/// A transaction's cashflow row: a dividend, interest, withholding tax or an
+/// interest charge that moved cash; none for anything else.
+pub fn cash_row(inputs: &Inputs, t: &bagholder_core::transaction::Transaction) -> Option<CashRow> {
+    let kind = match t.kind {
+        Kind::Dividend => Payment::Dividend,
+        Kind::Interest => Payment::Interest,
+        Kind::WithholdingTax => Payment::WithholdingTax,
+        Kind::InterestCharge => Payment::InterestCharge,
+        _ => return None,
+    };
+    // a dividend of no cash is the broker's notice of one to come, not a payment
+    let cash = t.cash.filter(|c| !c.amount.is_zero())?;
+    // the units the source states it was paid on (a payment moves no units)
+    let qty = t.paid_on.filter(|q| q.is_positive());
+    let per: Option<Fig<Money>> = qty.map(|q| Ok(Money::new(cash.amount.abs().div_rounded(q, crate::trades::PRICE_PLACES, Rounding::HalfEven)?, cash.currency)));
+    Some(CashRow {
+        id: t.id.clone(),
+        day: t.trade_date,
+        at: t.occurred_at,
+        kind,
+        account: t.account,
+        instrument: t.instrument,
+        qty,
+        per,
+        amount: cash,
+        amount_cad: to_cad(&inputs.facts.rates, &inputs.clock, cash, t.trade_date),
+        in_units: None,
+    })
+}
+
+/// A stock dividend's row: paid in units, at the adjustment's value.
+pub fn stock_dividend_row(inputs: &Inputs, s: &crate::ledger::StockDividend) -> CashRow {
+    CashRow {
+        id: s.transaction.clone(),
+        day: s.day,
+        at: None,
+        kind: Payment::Dividend,
+        account: s.account,
+        instrument: Some(s.instrument),
+        qty: None,
+        per: None,
+        amount: s.value,
+        amount_cad: to_cad(&inputs.facts.rates, &inputs.clock, s.value, s.day),
+        in_units: Some(s.units),
+    }
 }
 
 /// Where a payer's rate came from.
@@ -203,7 +212,6 @@ fn found_form(d: &crate::input::Declared, next_ex: Option<Date>, paid: &[&CashRo
 
 /// Every instrument that has paid a dividend or has a declared record: its rate.
 pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTreeMap<InstrumentId, PayerRate> {
-    let today = inputs.clock.today;
     let mut paid: BTreeMap<InstrumentId, Vec<&CashRow>> = BTreeMap::new();
     for r in rows.iter().filter(|r| r.kind == Payment::Dividend && r.in_units.is_none()) {
         if let Some(i) = r.instrument {
@@ -214,9 +222,17 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTre
     instruments.extend(inputs.facts.declared.keys().copied());
     instruments.sort();
     instruments.dedup();
-    let mut out = BTreeMap::new();
-    for i in instruments {
-        let payments = paid.get(&i).cloned().unwrap_or_default();
+    instruments.into_iter().filter_map(|i| payer_rate(inputs, i, paid.get(&i).cloned().unwrap_or_default(), matched).map(|r| (i, r))).collect()
+}
+
+/// An instrument's rate, from the cash dividends it paid (`payments`, newest
+/// first) and its payer's record; none where it has neither.
+pub fn payer_rate(inputs: &Inputs, i: InstrumentId, payments: Vec<&CashRow>, matched: &Matched) -> Option<PayerRate> {
+    let today = inputs.clock.today;
+    if payments.is_empty() && !inputs.facts.declared.contains_key(&i) {
+        return None;
+    }
+    {
         let read = inputs.facts.declared.get(&i);
         // every row of the payer's record counts; what the figures are is income
         // paid, so a row reinvested whole pays nothing and is passed over
@@ -227,7 +243,7 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTre
         // over once it shows it paid in units, and holds the rate until then.
         let mut gone: Vec<&&crate::input::Declared> = cash.iter().filter(|d| d.ex_date <= today).collect();
         gone.sort_by_key(|d| std::cmp::Reverse(d.ex_date));
-        let accounts: Vec<AccountId> = matched.units.keys().filter(|(_, x)| *x == i).map(|(a, _)| *a).collect();
+        let accounts: Vec<AccountId> = matched.held_by.get(&i).into_iter().flatten().filter(|a| matched.units.contains_key(&(**a, i))).copied().collect();
         let held_on = |day: Date| accounts.iter().any(|a| day.yesterday().ok().is_some_and(|before| matched.units_on(*a, i, before).is_ok_and(|q| q.is_positive())));
         let mut latest: Result<Option<&crate::input::Declared>, Gap> = Ok(None);
         for (n, d) in gone.iter().enumerate() {
@@ -281,7 +297,6 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTre
             Some(d) => (Some(d.ex_date), d.pay_date),
             None => (inputs.market.ex_dividends.get(&i).copied(), payments.iter().map(|r| r.day).max()),
         };
-        out.insert(i, PayerRate { instrument: i, per, source, per_year, frequency_source, next_ex, next_pay });
+        Some(PayerRate { instrument: i, per, source, per_year, frequency_source, next_ex, next_pay })
     }
-    out
 }

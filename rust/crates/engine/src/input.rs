@@ -325,16 +325,27 @@ impl LedgerDelta {
 /// which of two trades keeps a round trip turns on it).
 pub type Rank = (String, i64);
 
-/// What a ranked store holds is found by.
+/// What a ranked store holds is found by: its key, and the instrument it is
+/// about, where it is about one.
 pub trait Keyed {
     type Key: Ord + Clone;
     fn key(&self) -> Self::Key;
+    fn instrument(&self) -> Option<InstrumentId> {
+        None
+    }
 }
 
 impl Keyed for Trade {
     type Key = bagholder_core::TradeId;
     fn key(&self) -> bagholder_core::TradeId {
         self.id
+    }
+    /// The instrument it is anchored on.
+    fn instrument(&self) -> Option<InstrumentId> {
+        match &self.anchor {
+            bagholder_core::journal::Anchor::Opening(o) => Some(o.instrument),
+            bagholder_core::journal::Anchor::Orphaned(_) => None,
+        }
     }
 }
 
@@ -350,11 +361,13 @@ impl Keyed for Group {
 pub struct Ranked<V: Keyed> {
     rows: BTreeMap<Rank, V>,
     rank_of: BTreeMap<V::Key, Rank>,
+    /// Each instrument's rows, by rank.
+    on: BTreeMap<InstrumentId, BTreeSet<Rank>>,
 }
 
 impl<V: Keyed> Default for Ranked<V> {
     fn default() -> Self {
-        Ranked { rows: BTreeMap::new(), rank_of: BTreeMap::new() }
+        Ranked { rows: BTreeMap::new(), rank_of: BTreeMap::new(), on: BTreeMap::new() }
     }
 }
 
@@ -375,16 +388,38 @@ impl<V: Keyed> Ranked<V> {
         self.rank_of.get(key).and_then(|r| self.rows.get(r))
     }
 
+    /// Where a row stands in the book's order.
+    pub fn rank(&self, key: &V::Key) -> Option<&Rank> {
+        self.rank_of.get(key)
+    }
+
+    /// The rows about an instrument, in the book's order.
+    pub fn on(&self, instrument: InstrumentId) -> impl Iterator<Item = &V> {
+        self.on.get(&instrument).into_iter().flatten().filter_map(|r| self.rows.get(r))
+    }
+
     /// `v` put at `rank`, in place of what its key held.
     pub fn put(&mut self, rank: Rank, v: V) {
-        if let Some(was) = self.rank_of.insert(v.key(), rank.clone()) {
-            self.rows.remove(&was);
+        self.remove(&v.key());
+        self.rank_of.insert(v.key(), rank.clone());
+        if let Some(i) = v.instrument() {
+            self.on.entry(i).or_default().insert(rank.clone());
         }
         self.rows.insert(rank, v);
     }
 
     pub fn remove(&mut self, key: &V::Key) -> Option<V> {
-        self.rank_of.remove(key).and_then(|r| self.rows.remove(&r))
+        let rank = self.rank_of.remove(key)?;
+        let v = self.rows.remove(&rank)?;
+        if let Some(i) = v.instrument() {
+            if let Some(s) = self.on.get_mut(&i) {
+                s.remove(&rank);
+                if s.is_empty() {
+                    self.on.remove(&i);
+                }
+            }
+        }
+        Some(v)
     }
 }
 
