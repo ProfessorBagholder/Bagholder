@@ -34,8 +34,9 @@ pub struct Size {
     pub months: u32,
     pub seed: u64,
     /// Round trips more on one listing in one investment account, each a purchase
-    /// and a sale of all of it: one instrument's history this deep, beside the
-    /// rest of the book (the capacity test's depth pair).
+    /// and a sale of all of it, the last still open: one instrument's history
+    /// this deep (twice as many rows, less one), beside the rest of the book
+    /// (the capacity test's depth pair).
     pub deep: usize,
 }
 
@@ -441,7 +442,10 @@ impl Generated {
                 let opened = 1 + (k as i64 * (days - 3)) / size.deep as i64;
                 let closed = (1 + ((k as i64 + 1) * (days - 3)) / size.deep as i64 - 1).max(opened);
                 out.entry(day(opened)).or_default().push(Plan::Buy { account, listing, units: r.range(1, 200) });
-                out.entry(day(closed)).or_default().push(Plan::Sell { account, listing, all: true });
+                // the last stays open: the listing is held today
+                if k + 1 < size.deep {
+                    out.entry(day(closed)).or_default().push(Plan::Sell { account, listing, all: true });
+                }
             }
         }
         // money in and out, between accounts, interest, and the card

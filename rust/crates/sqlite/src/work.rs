@@ -28,6 +28,22 @@ pub fn start_counting() {
     COUNTING.store(true, Ordering::SeqCst);
 }
 
+thread_local! {
+    /// A capacity probe's measured window is open on this thread.
+    static MEASURING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Open or close a probe's measured window on this thread.
+pub fn set_measuring(on: bool) {
+    MEASURING.with(|m| m.set(on));
+}
+
+/// Whether a probe's measured window is open on this thread: a test build's
+/// checks that read the whole book stay out of what is measured.
+pub fn measuring() -> bool {
+    MEASURING.with(Cell::get)
+}
+
 /// The steps counted so far on this thread, on every counted connection.
 pub fn steps() -> u64 {
     STEPS.with(Cell::get)

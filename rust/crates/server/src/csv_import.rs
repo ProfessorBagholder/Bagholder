@@ -455,7 +455,7 @@ pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking
 fn link_keys(f: &Figures, now: bagholder_core::jiff::Timestamp, keys: &BTreeSet<Movement>) -> Result<Linking, String> {
     let keys = keys.clone();
     #[cfg(test)]
-    if keys.is_empty() {
+    if keys.is_empty() && !bagholder_sqlite::work::measuring() {
         // nothing touched: the whole pass would link nothing either
         assert_eq!(whole_plan(f).linked, vec![], "a link was missed: nothing pending, and the whole pass links");
     }
@@ -468,8 +468,9 @@ fn link_keys(f: &Figures, now: bagholder_core::jiff::Timestamp, keys: &BTreeSet<
     let taken = |r: RecordId| book.supersedes_from(r, &file).map_err(|e| e.to_string());
     let found = f.read(|e| f.with_movements(|m| candidates(e, m, &keys, &taken))).ok_or("the figures are not built yet")??;
     let out = plan(found, BTreeSet::new());
+    // (never inside a capacity probe's window, which would count it)
     #[cfg(test)]
-    {
+    if !bagholder_sqlite::work::measuring() {
         // held to today's whole pass: the same links, and the same ambiguities
         // under the movements looked at
         let whole = whole_plan(f);
@@ -587,7 +588,7 @@ fn candidates(e: &Engine, m: &Movements, keys: &BTreeSet<Movement>, taken: &dyn 
 /// is held to in every test build (`link`; brief 26, 7): what it would link and
 /// what it finds ambiguous, written nowhere.
 #[cfg(test)]
-fn whole_plan(f: &Figures) -> Linking {
+pub(crate) fn whole_plan(f: &Figures) -> Linking {
     let book = f.book().unwrap();
     let csv_rows: BTreeSet<RecordId> = book.live_records(&csv::source()).unwrap().into_iter().collect();
     let mut not_broker: BTreeSet<RecordId> = book.live_records(&SourceName::person()).unwrap().into_iter().collect();

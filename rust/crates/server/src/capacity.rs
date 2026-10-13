@@ -10,8 +10,8 @@
 //!   times it under the work folder, measures each operation in a process of
 //!   its own, prints the table, and fails when the budget or the growth rule is
 //!   broken (or when an operation listed over budget is now within it).
-//! - `capacity probe <operation> <folder> [--depth]` is one measured run (on a
-//!   book of the depth pair with `--depth`), printed as one
+//! - `capacity probe <operation> <folder> [--depth <rows>]` is one measured run
+//!   (on a book of the depth pair, its deep listing built with `<rows>`), printed as one
 //!   line; `run` starts it.
 //!
 //! A subcommand of the server, as `demo-facts` and `pull-broker` are: what it
@@ -116,10 +116,19 @@ impl Pair {
         }
     }
     /// What a probe is told of the pair it measures.
-    fn flag(self) -> &'static [&'static str] {
+    fn flag(self, min_rows: u64) -> Vec<String> {
         match self {
-            Pair::Breadth => &[],
-            Pair::Depth => &["--depth"],
+            Pair::Breadth => vec![],
+            Pair::Depth => vec!["--depth".into(), min_rows.to_string()],
+        }
+    }
+
+    /// The rows the deep listing of a book `times` the owner's was built with.
+    fn min_rows(self, times: usize) -> u64 {
+        match self {
+            Pair::Breadth => 0,
+            // two rows a round trip, the last still open
+            Pair::Depth => (self.size(times).deep * 2).saturating_sub(1) as u64,
         }
     }
 
@@ -176,6 +185,10 @@ impl Op {
         self != Op::Startup
     }
 }
+
+/// A test's planted whole pass inside the import probe's window.
+#[cfg(test)]
+static PLANT_WHOLE_READ: AtomicBool = AtomicBool::new(false);
 
 /// What is over budget today, each with its issue: the run fails when one off
 /// this list misses, and when one on it meets its budget and the growth rule,
@@ -263,6 +276,8 @@ pub struct Measured {
     /// What the budget divides by at this size: accounts for `brokers`, priced
     /// holdings for a price change and a stream step.
     pub divisor: u64,
+    /// The rows of the listing an added trade or an import changed.
+    pub rows: Option<u64>,
 }
 
 struct Mark {
@@ -273,10 +288,12 @@ struct Mark {
 }
 
 fn mark() -> Mark {
+    bagholder_sqlite::work::set_measuring(true);
     Mark { at: std::time::Instant::now(), steps: bagholder_sqlite::work::steps(), allocs: allocs(), read: read_bytes() }
 }
 
 fn since(m: &Mark, divisor: u64) -> Measured {
+    bagholder_sqlite::work::set_measuring(false);
     Measured {
         wall_ns: m.at.elapsed().as_nanos() as u64,
         steps: bagholder_sqlite::work::steps() - m.steps,
@@ -286,6 +303,7 @@ fn since(m: &Mark, divisor: u64) -> Measured {
             _ => None,
         },
         divisor,
+        rows: None,
     }
 }
 
@@ -557,7 +575,7 @@ const PAGE: [&str; 9] = ["status", "book", "notifications", "dashboard", "trades
 /// import change the deepest listing on the depth pair's books (what grows
 /// there), and the same listing a price change takes on the breadth pair's (a
 /// choice that means the same at every size of book).
-pub fn probe(op: Op, pair: Pair, home: &Path) -> Result<Measured, String> {
+pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured, String> {
     // every connection from here on is counted, and every allocation
     bagholder_sqlite::work::start_counting();
     COUNT_ALLOCS.store(true, Ordering::SeqCst);
@@ -646,17 +664,17 @@ pub fn probe(op: Op, pair: Pair, home: &Path) -> Result<Measured, String> {
             Ok(since(&m, priced))
         }
         Op::AddTrade => {
-            let (_, symbol, currency) = target(f, pair, &held)?;
+            let ((_, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             // the page holds the broker's names: what a change does to them is in the window
             f.names()?;
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
-            Ok(since(&m, 1))
+            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
         }
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
-            let (_, symbol, currency) = target(f, pair, &held)?;
+            let ((_, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             f.names()?;
             for n in 0..20 {
                 text.push_str(&format!("{},Buy,{symbol},1,{}.00,-{}.00,{currency}\n", made_up_today(), 10 + n, 10 + n));
@@ -664,35 +682,32 @@ pub fn probe(op: Op, pair: Pair, home: &Path) -> Result<Measured, String> {
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
             let m = mark();
             crate::csv_import::import_from(f, "capacity.csv", &open, None, Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
-            Ok(since(&m, 1))
+            // a test's planted whole pass, which the growth rule must catch
+            #[cfg(test)]
+            if PLANT_WHOLE_READ.load(Ordering::SeqCst) {
+                crate::csv_import::whole_plan(f);
+            }
+            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
         }
     }
 }
 
-/// The listing an added trade or an import changes on `pair`'s books.
-fn target(f: &crate::figures::Figures, pair: Pair, held: &[(bagholder_core::InstrumentId, String, Currency)]) -> Result<(bagholder_core::InstrumentId, String, Currency), String> {
-    match pair {
-        Pair::Depth => deepest(f, held),
-        Pair::Breadth => held.first().cloned().ok_or_else(|| "nothing is held".to_string()),
+/// The listing an added trade or an import changes on `pair`'s books, and its
+/// rows: on the depth pair's, the deepest held, refused below the planted depth
+/// `min_rows`; on the breadth pair's, the held listing of median depth, as deep
+/// at every size of book (rows per listing stay as they are).
+fn target(f: &crate::figures::Figures, pair: Pair, min_rows: u64, held: &[(bagholder_core::InstrumentId, String, Currency)]) -> Result<((bagholder_core::InstrumentId, String, Currency), u64), String> {
+    let rows = f.read(|e| held.iter().map(|h| e.inputs().ledger.transactions.of_instrument(h.0).count() as u64).collect::<Vec<_>>()).ok_or("the figures were not built")?;
+    let mut by_depth: Vec<(u64, &(bagholder_core::InstrumentId, String, Currency))> = rows.into_iter().zip(held.iter()).collect();
+    by_depth.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1 .1.cmp(&b.1 .1)));
+    let (n, h) = match pair {
+        Pair::Depth => *by_depth.last().ok_or("nothing is held")?,
+        Pair::Breadth => *by_depth.get(by_depth.len() / 2).ok_or("nothing is held")?,
+    };
+    if n < min_rows {
+        return Err(format!("the deepest listing held has {n} rows, below the {min_rows} the book was built with"));
     }
-}
-
-/// The held listing with the most rows in the record (the first by symbol of
-/// those as deep): what an added trade or an import on the deepest instrument
-/// costs, at every size of book (brief 26, 12).
-fn deepest(f: &crate::figures::Figures, held: &[(bagholder_core::InstrumentId, String, Currency)]) -> Result<(bagholder_core::InstrumentId, String, Currency), String> {
-    let rows = f
-        .read(|e| {
-            let mut n: std::collections::BTreeMap<bagholder_core::InstrumentId, usize> = Default::default();
-            for t in &e.inputs().ledger.transactions {
-                if let Some(i) = t.instrument {
-                    *n.entry(i).or_default() += 1;
-                }
-            }
-            n
-        })
-        .ok_or("the figures were not built")?;
-    held.iter().max_by(|a, b| rows.get(&a.0).cmp(&rows.get(&b.0)).then_with(|| b.1.cmp(&a.1))).cloned().ok_or_else(|| "nothing is held".to_string())
+    Ok((h.clone(), n))
 }
 
 /// A new quote for one listing, a cent above its last.
@@ -724,7 +739,7 @@ fn median(mut v: Vec<u64>) -> u64 {
     v[v.len() / 2]
 }
 
-fn measure(exe: &Path, op: Op, pair: Pair, home: &Path, times: usize) -> Result<Measured, String> {
+fn measure(exe: &Path, op: Op, pair: Pair, min_rows: u64, home: &Path, times: usize) -> Result<Measured, String> {
     let mut runs = Vec::new();
     for _ in 0..times {
         // every probe writes (a quote, a trade, an import, what a start settles),
@@ -732,7 +747,7 @@ fn measure(exe: &Path, op: Op, pair: Pair, home: &Path, times: usize) -> Result<
         let copy = home.with_extension("probe");
         copy_folder(home, &copy)?;
         let exec = std::time::Instant::now();
-        let out = std::process::Command::new(exe).args(["capacity", "probe", op.name()]).arg(&copy).args(pair.flag()).env("BAGHOLDER_OFFLINE", "1").env("BAGHOLDER_DRY_ORDERS", "1").output().map_err(err)?;
+        let out = std::process::Command::new(exe).args(["capacity", "probe", op.name()]).arg(&copy).args(pair.flag(min_rows)).env("BAGHOLDER_OFFLINE", "1").env("BAGHOLDER_DRY_ORDERS", "1").output().map_err(err)?;
         std::fs::remove_dir_all(&copy).map_err(err)?;
         if !out.status.success() {
             return Err(format!("{} on {}: {}", op.name(), home.display(), String::from_utf8_lossy(&out.stderr)));
@@ -742,7 +757,7 @@ fn measure(exe: &Path, op: Op, pair: Pair, home: &Path, times: usize) -> Result<
         let n = |k: &str| v[k].as_u64();
         // startup is timed from the exec, as a person starting the app waits on it
         let wall_ns = if op == Op::Startup { exec.elapsed().as_nanos() as u64 } else { n("wall_ns").unwrap_or(0) };
-        runs.push(Measured { wall_ns, steps: n("steps").unwrap_or(0), allocs: n("allocs").unwrap_or(0), read: n("read"), divisor: n("divisor").unwrap_or(1) });
+        runs.push(Measured { wall_ns, steps: n("steps").unwrap_or(0), allocs: n("allocs").unwrap_or(0), read: n("read"), divisor: n("divisor").unwrap_or(1), rows: n("rows") });
     }
     Ok(Measured {
         wall_ns: median(runs.iter().map(|r| r.wall_ns).collect()),
@@ -750,6 +765,7 @@ fn measure(exe: &Path, op: Op, pair: Pair, home: &Path, times: usize) -> Result<
         allocs: median(runs.iter().map(|r| r.allocs).collect()),
         read: runs.iter().map(|r| r.read).collect::<Option<Vec<_>>>().map(median),
         divisor: runs[0].divisor,
+        rows: runs[0].rows,
     })
 }
 
@@ -830,7 +846,7 @@ pub fn run(work: &Path) -> Result<String, String> {
         }
     }
     // each row printed as it is measured, so a long run shows where it is
-    let header = "| Operation | Grows by | Runner (ms) | Pi (ms) | Budget (ms) | From | VM steps ×1 → ×4 | Allocations ×1 → ×4 | Bytes read ×1 → ×4 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
+    let header = "| Operation | Grows by | Rows ×1 → ×4 | Runner (ms) | Pi (ms) | Budget (ms) | From | VM steps ×1 → ×4 | Allocations ×1 → ×4 | Bytes read ×1 → ×4 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
     write_out(header)?;
     let mut verdicts = Vec::new();
     for pair in [Pair::Breadth, Pair::Depth] {
@@ -839,30 +855,32 @@ pub fn run(work: &Path) -> Result<String, String> {
             // an operation listed over budget is measured once: its counts are the
             // same every run, and one run over its budget keeps it over; only a run
             // within it is taken to the median of seven, to say it is off the list
-            let listed = listed(op, pair);
-            let mut a = measure(&exe, op, pair, &one, if listed { 1 } else { RUNS })?;
-            let mut b = measure(&exe, op, pair, &four, if listed { 1 } else { RUNS })?;
-            if listed && judge(op, pair, &a, &b).over.is_empty() {
-                a = measure(&exe, op, pair, &one, RUNS)?;
-                b = measure(&exe, op, pair, &four, RUNS)?;
-            }
+            // every operation the median of seven runs, listed or not (§16)
+            let a = measure(&exe, op, pair, pair.min_rows(1), &one, RUNS)?;
+            let b = measure(&exe, op, pair, pair.min_rows(4), &four, RUNS)?;
+            let verdict = judge(op, pair, &a, &b);
+            let rows = match (a.rows, b.rows) {
+                (Some(x), Some(y)) => format!("{x} → {y}"),
+                _ => "".into(),
+            };
+            let pi = b.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
+            let over = if verdict.over.iter().any(|o| o.contains("on a Pi")) { " (over)" } else { "" };
             let (budget, from) = budget_ms(op, b.divisor);
             let read = match (a.read, b.read) {
                 (Some(x), Some(y)) => format!("{x} → {y}"),
                 _ => "not counted here".into(),
             };
             write_out(&format!(
-                "| {} | {} | {:.1} | {:.1} | {budget:.1} | {from} | {} → {} | {} → {} | {read} |\n",
+                "| {} | {} | {rows} | {:.1} | {pi:.1}{over} | {budget:.1} | {from} | {} → {} | {} → {} | {read} |\n",
                 op.name(),
                 pair.name(),
                 b.wall_ns as f64 / 1e6,
-                b.wall_ns as f64 / 1e6 * PI_SLOWDOWN,
                 a.steps,
                 b.steps,
                 a.allocs,
                 b.allocs
             ))?;
-            verdicts.push(judge(op, pair, &a, &b));
+            verdicts.push(verdict);
         }
     }
     let wrong = listed_disagree(&verdicts);
@@ -880,7 +898,7 @@ fn write_out(text: &str) -> Result<(), String> {
 }
 
 pub fn cli(args: &[String]) -> i32 {
-    let usage = "usage: bagholder capacity build <folder> [--times N] [--seed S] | run <work folder> | probe <operation> <folder> [--depth]";
+    let usage = "usage: bagholder capacity build <folder> [--times N] [--seed S] | run <work folder> | probe <operation> <folder> [--depth <rows>]";
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u64>().ok());
     let result = match args.first().map(String::as_str) {
         Some("build") => match args.get(1) {
@@ -892,9 +910,13 @@ pub fn cli(args: &[String]) -> i32 {
             None => Err(usage.into()),
         },
         Some("probe") => match (args.get(1).and_then(|o| Op::parse(o)), args.get(2)) {
-            (Some(op), Some(dir)) => probe(op, if args.iter().any(|a| a == "--depth") { Pair::Depth } else { Pair::Breadth }, Path::new(dir)).map(|m| {
-                format!("{}\n", serde_json::json!({"wall_ns": m.wall_ns, "steps": m.steps, "allocs": m.allocs, "read": m.read, "divisor": m.divisor}))
-            }),
+            (Some(op), Some(dir)) => {
+                let (pair, min_rows) = match args.iter().position(|a| a == "--depth") {
+                    Some(i) => (Pair::Depth, args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0)),
+                    None => (Pair::Breadth, 0),
+                };
+                probe(op, pair, min_rows, Path::new(dir)).map(|m| format!("{}\n", serde_json::json!({"wall_ns": m.wall_ns, "steps": m.steps, "allocs": m.allocs, "read": m.read, "divisor": m.divisor, "rows": m.rows})))
+            }
             _ => Err(usage.into()),
         },
         _ => Err(usage.into()),
@@ -1062,15 +1084,15 @@ mod tests {
     fn test_every_operation_is_measured_and_the_growth_rule_judged() {
         let _g = crate::tests_common::guard();
         let sizes = [
-            (Pair::Breadth, SMALL, Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }),
-            (Pair::Depth, Size { deep: 20, ..SMALL }, Size { deep: 80, ..SMALL }),
+            (Pair::Breadth, SMALL, Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }, (0, 0)),
+            (Pair::Depth, Size { deep: 20, ..SMALL }, Size { deep: 80, ..SMALL }, (39, 159)),
         ];
-        for (pair, small, large) in sizes {
+        for (pair, small, large, min) in sizes {
             let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
             build(one.path(), small, 2).unwrap();
             build(four.path(), large, 2).unwrap();
             for &op in pair.ops().iter().filter(|o| o.per_change()) {
-                let (a, b) = (probe(op, pair, one.path()).unwrap(), probe(op, pair, four.path()).unwrap());
+                let (a, b) = (probe(op, pair, min.0, one.path()).unwrap(), probe(op, pair, min.1, four.path()).unwrap());
                 assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
                 let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew")).collect();
@@ -1079,12 +1101,42 @@ mod tests {
         }
     }
 
+    /// The growth rule catches a whole pass in the import's window (brief 27, 9):
+    /// today's whole-ledger linking, planted where the test build's check used to
+    /// run, fails it; that check now stays out of the window, so without the plant
+    /// the import passes. (A single small whole read adds too little beside the
+    /// operation's own work for a ratio to show at the suite's small sizes.)
+    #[test]
+    fn a_whole_pass_planted_in_the_import_fails_the_growth_rule() {
+        let _g = crate::tests_common::guard();
+        let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        build(one.path(), SMALL, 2).unwrap();
+        build(four.path(), Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }, 2).unwrap();
+        let measured = |plant: bool| {
+            PLANT_WHOLE_READ.store(plant, Ordering::SeqCst);
+            let copy = |d: &Path| {
+                let c = tempfile::tempdir().unwrap();
+                copy_folder(d, c.path()).unwrap();
+                c
+            };
+            let (a, b) = (copy(one.path()), copy(four.path()));
+            let (x, y) = (probe(Op::Import, Pair::Breadth, 0, a.path()).unwrap(), probe(Op::Import, Pair::Breadth, 0, b.path()).unwrap());
+            PLANT_WHOLE_READ.store(false, Ordering::SeqCst);
+            (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew")), x.read.is_some())
+        };
+        assert!(!measured(false).0, "the import grows with the book without the plant");
+        // the pages a whole pass reads show where the system counts them (Linux, the
+        // capacity job's runner); its steps alone are too few at these sizes
+        let (seen, counted) = measured(true);
+        assert!(seen || !counted, "today's whole linking pass in the window went unseen");
+    }
+
     /// The verdict: a listed operation within its budget fails the run as an
     /// unlisted one over it does.
     #[test]
     fn test_an_operation_over_budget_fails_unless_listed_and_a_listed_one_within_fails_too() {
-        let small = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 10 };
-        let linear = Measured { wall_ns: 1_000, steps: 400, allocs: 100, read: Some(1_000), divisor: 40 };
+        let small = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 10, rows: None };
+        let linear = Measured { wall_ns: 1_000, steps: 400, allocs: 100, read: Some(1_000), divisor: 40, rows: None };
         let v = judge(Op::PriceChanged, Pair::Breadth, &small, &linear);
         assert!(v.over.iter().any(|o| o.contains("steps grew 4.00 times")), "{v:?}");
         assert!(judge(Op::PriceChanged, Pair::Breadth, &small, &small).over.is_empty());
