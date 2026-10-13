@@ -1097,7 +1097,10 @@ mod tests {
                 let (a, b) = (probe(op, pair, min.0, one.path()).unwrap(), probe(op, pair, min.1, four.path()).unwrap());
                 assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
-                let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew")).collect();
+                // steps and allocations: what the process reads from storage at
+                // these small sizes is what this run's page cache holds, judged by
+                // the capacity job at the owner's size instead
+                let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew") && !o.contains("bytes read")).collect();
                 assert!(growth.is_empty() || listed(op, pair), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
             }
         }
@@ -1123,7 +1126,7 @@ mod tests {
             let (a, b) = (copy(one.path()), copy(four.path()));
             let (x, y) = (probe(Op::Import, Pair::Breadth, 0, a.path()).unwrap(), probe(Op::Import, Pair::Breadth, 0, b.path()).unwrap());
             PLANT_WHOLE_READ.store(false, Ordering::SeqCst);
-            (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew")), ())
+            (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew") && !o.contains("bytes read")), ())
         };
         assert!(!measured(false).0, "the import grows with the book without the plant");
         assert!(measured(true).0, "today's whole linking pass in the window went unseen");
