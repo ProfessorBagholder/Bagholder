@@ -376,3 +376,17 @@ CREATE TRIGGER transactions_succession_delete AFTER DELETE ON transactions WHEN 
     UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
 END;
 
+-- a record superseded or superseding another: what links a file's row reads of it moved
+CREATE TRIGGER link_records_changed_insert AFTER INSERT ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER link_records_changed_update AFTER UPDATE ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER link_records_changed_delete AFTER DELETE ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+END;
+

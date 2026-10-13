@@ -77,6 +77,12 @@ impl Book {
                 other => return Err(crate::BookError::Refused(format!("ledger_changes holds a kind {other:?} no reader knows"))),
             }
         }
+        // a row kept under an instrument a succession joins into another is read
+        // under that one (its names, refs and terms through the join): both move
+        let members: Vec<InstrumentId> = out.instruments.iter().copied().collect();
+        for i in members {
+            out.instruments.insert(self.canonical(i)?);
+        }
         // the counter, not the last row: a sequence handed out to a row since
         // pruned is still past
         out.upto = out.upto.max(self.changes_upto()?);

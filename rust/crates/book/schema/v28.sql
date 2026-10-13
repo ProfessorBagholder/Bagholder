@@ -747,6 +747,16 @@ CREATE TRIGGER journal_tags_changed_update AFTER UPDATE ON journal_tags BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT trade_id AS k FROM journal WHERE id = NEW.journal_id) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT group_id AS k FROM journal WHERE id = NEW.journal_id) WHERE k IS NOT NULL;
 END;
+CREATE TRIGGER link_records_changed_delete AFTER DELETE ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER link_records_changed_insert AFTER INSERT ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER link_records_changed_update AFTER UPDATE ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
 CREATE TRIGGER listings_named_changed_delete AFTER DELETE ON listings_named BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
 END;

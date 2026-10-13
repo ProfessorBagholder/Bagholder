@@ -391,9 +391,11 @@ impl Engine {
             m.waiting.iter().filter(|(tx, w)| g.region.contains(&Node::Instrument(w.instrument)) || l.transactions.get(tx).is_none_or(|t| g.region.contains(&node_of(t)))).map(|(t, w)| (t.clone(), w.clone())).collect()
         };
         let waiting_was = in_region(&self.matched, &self.inputs.ledger);
+        // every account holding an instrument of the region before the change: one
+        // that holds none of it after is rechecked too
+        let mut touched: BTreeSet<AccountId> = g.region.iter().filter_map(|n| if let Node::Instrument(i) = n { Some(i) } else { None }).flat_map(|i| self.matched.held_by.get(i).into_iter().flatten().copied()).collect();
         self.matched.replace(&self.inputs.ledger, &g.region, fresh);
         let waiting_moved = waiting_was != in_region(&self.matched, &self.inputs.ledger);
-        let mut touched: BTreeSet<AccountId> = BTreeSet::new();
         for (a, s) in self.shares.iter_mut() {
             let before = s.len();
             s.retain(|f, _| !g.gone.contains(f));

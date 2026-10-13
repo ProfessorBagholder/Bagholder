@@ -276,6 +276,8 @@ pub fn import_from(
         }
     }
     f.record_changed(now).map_err(Refused::Failed)?;
+    // every row the file holds is looked at, kept now or before
+    f.links_pend_records(&lines.keys().copied().collect());
     let linking = link(f, now).map_err(Refused::Failed)?;
     for (from, _) in &linking.linked {
         if lines.contains_key(from) {
@@ -410,6 +412,22 @@ impl Movements {
         std::mem::take(&mut self.pending)
     }
 
+    /// `keys` pending again (a pass that failed looks at them next time).
+    pub fn pend(&mut self, keys: impl IntoIterator<Item = Movement>) {
+        self.pending.extend(keys);
+    }
+
+    /// Every movement holding a live file's row pending: after a start or a
+    /// rebuild the first pass looks at every one, as the whole pass did.
+    pub fn pend_every_file_row(&mut self, ledger: &bagholder_engine::input::Ledger) {
+        let file = csv::source();
+        for t in ledger.transactions.iter().filter(|t| t.mapping.source == file) {
+            if let Some(k) = movement_of(t) {
+                self.pending.insert(k);
+            }
+        }
+    }
+
     fn rows(&self, k: &Movement) -> impl Iterator<Item = &bagholder_core::TransactionId> {
         self.by.get(k).into_iter().flatten()
     }
@@ -426,6 +444,16 @@ impl Movements {
 /// since the last pass are looked at (`Movements`), each whole.
 pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking, String> {
     let keys = f.links_pending();
+    let out = link_keys(f, now, &keys);
+    if out.is_err() {
+        // looked at again by the next pass
+        f.links_pend(keys);
+    }
+    out
+}
+
+fn link_keys(f: &Figures, now: bagholder_core::jiff::Timestamp, keys: &BTreeSet<Movement>) -> Result<Linking, String> {
+    let keys = keys.clone();
     #[cfg(test)]
     if keys.is_empty() {
         // nothing touched: the whole pass would link nothing either

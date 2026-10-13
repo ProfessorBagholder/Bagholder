@@ -78,6 +78,15 @@ fn in_snapshot<T>(book: &Book, f: impl FnOnce() -> Result<T, String>) -> Result<
 pub(crate) struct Held<'a> {
     pub applied: &'a std::sync::atomic::AtomicI64,
     pub movements: &'a std::sync::Mutex<crate::csv_import::Movements>,
+    /// The instruments and accounts every catch-up through this read: whose
+    /// broker names the page holds are read again (brief 27, 5).
+    pub named: std::cell::RefCell<Named>,
+}
+
+impl<'a> Held<'a> {
+    pub(crate) fn new(applied: &'a std::sync::atomic::AtomicI64, movements: &'a std::sync::Mutex<crate::csv_import::Movements>) -> Held<'a> {
+        Held { applied, movements, named: Default::default() }
+    }
 }
 
 /// What the record's change log names past `applied`, read in one snapshot and
@@ -86,11 +95,6 @@ pub(crate) struct Held<'a> {
 /// lock held: the snapshot is taken after the lock, so it holds everything an
 /// earlier holder applied, and the sequence only rises.
 fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, String> {
-    Ok(catch_up_named(book, engine, held)?.0)
-}
-
-/// As `catch_up`, with the instruments and accounts the change log named.
-fn catch_up_named(book: &Book, engine: &mut Engine, held: &Held) -> Result<(Moved, Named), String> {
     let applied = held.applied;
     let after = applied.load(std::sync::atomic::Ordering::SeqCst);
     let (changes, delta) = in_snapshot(book, || {
@@ -108,17 +112,29 @@ fn catch_up_named(book: &Book, engine: &mut Engine, held: &Held) -> Result<(Move
     }
     applied.store(changes.upto, std::sync::atomic::Ordering::SeqCst);
     // what is applied is dropped from the log as it is applied: the log holds only
-    // what the engine has not read yet
+    // what the engine has not read yet. The sequence applied already keeps it from
+    // being read twice, so a drop that fails waits for the next one (brief 27, 7)
     if !changes.is_empty() {
-        book.forget_changes(changes.upto).map_err(err)?;
+        forget(book, changes.upto);
     }
-    Ok((moved, Named { instruments: changes.instruments, accounts: changes.accounts }))
+    let mut named = held.named.borrow_mut();
+    named.instruments.extend(changes.instruments);
+    named.accounts.extend(changes.accounts);
+    Ok(moved)
+}
+
+/// The log dropped up to `upto`, its failure said and not raised: the engine has
+/// applied it, and a later drop takes it.
+fn forget(book: &Book, upto: i64) {
+    if let Err(e) = book.forget_changes(upto) {
+        crate::app::log(&format!("bagholder: the record's change log could not be trimmed (it is trimmed at the next change): {e}"));
+    }
 }
 
 /// The instruments and accounts a change named: whose names the page holds are
 /// read again.
 #[derive(Default)]
-struct Named {
+pub(crate) struct Named {
     instruments: BTreeSet<bagholder_core::InstrumentId>,
     accounts: BTreeSet<bagholder_core::AccountId>,
 }
@@ -179,17 +195,29 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
 /// dropped from it); every round trip given its trade, and the notes carried
 /// from the earlier app put back on the round trips an earlier build orphaned
 /// them from (`legacy_import::reattach_carried_notes`, once per book).
-fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp, held: &Held) -> Result<Engine, String> {
+fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp) -> Result<Built, String> {
     let (mut e, upto) = in_snapshot(book, || Ok((build(book, cache, clock(zone, now)?)?, book.changes_upto().map_err(err)?)))?;
-    held.applied.store(upto, std::sync::atomic::Ordering::SeqCst);
-    *held.movements.lock().unwrap_or_else(|e| e.into_inner()) = crate::csv_import::Movements::build(&e.inputs().ledger);
-    book.forget_changes(upto).map_err(err)?;
-    settle_trades(book, &mut e, held, now)?;
+    // a sequence and an index of the build's own: nothing the server holds moves
+    // until the engine is in place (brief 27, 6)
+    let applied = std::sync::atomic::AtomicI64::new(upto);
+    let movements = std::sync::Mutex::new(crate::csv_import::Movements::build(&e.inputs().ledger));
+    let held = Held::new(&applied, &movements);
+    settle_trades(book, &mut e, &held, now)?;
     if crate::legacy_import::reattach_carried_notes(home, book, &e, now)? {
-        catch_up(book, &mut e, held)?;
-        settle_trades(book, &mut e, held, now)?;
+        catch_up(book, &mut e, &held)?;
+        settle_trades(book, &mut e, &held, now)?;
     }
-    Ok(e)
+    let applied = applied.load(std::sync::atomic::Ordering::SeqCst);
+    let movements = movements.into_inner().unwrap_or_else(|e| e.into_inner());
+    Ok(Built { engine: e, applied, movements })
+}
+
+/// An engine built whole, with the sequence of the change log it holds and its
+/// rows by movement: put in place by `Figures::install`.
+struct Built {
+    engine: Engine,
+    applied: i64,
+    movements: crate::csv_import::Movements,
 }
 
 /// Why a journal was not written.
@@ -249,8 +277,9 @@ impl Figures {
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
         if let Some(z) = book.zone().map_err(err)? {
-            let e = built(home, &book, &cache, &z.zone, at, &f.held())?;
-            *f.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
+            let b = built(home, &book, &cache, &z.zone, at)?;
+            let mut engine = f.engine.write().unwrap_or_else(|e| e.into_inner());
+            f.install(&mut engine, &book, b);
         }
         Ok(f)
     }
@@ -262,9 +291,16 @@ impl Figures {
         let book = self.book()?;
         let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
-        *engine = Some(built(&self.home, &book, &self.cache()?, &z.zone, now, &self.held())?);
+        match self.cache().and_then(|c| built(&self.home, &book, &c, &z.zone, now)) {
+            Ok(b) => self.install(&mut engine, &book, b),
+            Err(e) => {
+                // what the engine held is no longer the record: the next zone a
+                // page states builds it whole
+                *engine = None;
+                return Err(e);
+            }
+        }
         drop(engine);
-        *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
         self.logged(None);
         self.wake();
         Ok(())
@@ -326,13 +362,37 @@ impl Figures {
         Ok(bagholder_sources::health::failures(&newest, started, in_a_row))
     }
 
-    fn held(&self) -> Held<'_> {
-        Held { applied: &self.applied, movements: &self.movements }
+    /// A built engine put in place, under the engine's lock: then, and only
+    /// then, the sequence it holds, its rows by movement (every movement holding a
+    /// file's row pending, so the first link after it looks at them all), the log
+    /// dropped up to it, and the broker names read again.
+    fn install(&self, engine: &mut Option<Engine>, book: &Book, b: Built) {
+        let Built { engine: e, applied, mut movements } = b;
+        movements.pend_every_file_row(&e.inputs().ledger);
+        *engine = Some(e);
+        self.applied.store(applied, std::sync::atomic::Ordering::SeqCst);
+        *self.movements.lock().unwrap_or_else(|e| e.into_inner()) = movements;
+        forget(book, applied);
+        *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// The movements a change touched since linking last looked, taken.
     pub fn links_pending(&self) -> std::collections::BTreeSet<crate::csv_import::Movement> {
         self.movements.lock().unwrap_or_else(|e| e.into_inner()).take_pending()
+    }
+
+    /// `keys` pending again.
+    pub fn links_pend(&self, keys: std::collections::BTreeSet<crate::csv_import::Movement>) {
+        self.movements.lock().unwrap_or_else(|e| e.into_inner()).pend(keys);
+    }
+
+    /// The movements of `records`' rows pending: a file read again whose rows were
+    /// all kept before still has each looked at (brief 27, 4b).
+    pub fn links_pend_records(&self, records: &std::collections::BTreeSet<bagholder_core::RecordId>) {
+        let keys: Vec<crate::csv_import::Movement> = self
+            .read(|e| records.iter().flat_map(|r| e.inputs().ledger.transactions.of_record(*r).filter_map(crate::csv_import::movement_of).collect::<Vec<_>>()).collect())
+            .unwrap_or_default();
+        self.links_pend(keys.into_iter().collect());
     }
 
     /// Read the ledger's rows by movement.
@@ -442,7 +502,8 @@ impl Figures {
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
         match engine.as_mut() {
             None => {
-                *engine = Some(built(&self.home, &book, &self.cache()?, &zone, now, &self.held())?);
+                let b = built(&self.home, &book, &self.cache()?, &zone, now)?;
+                self.install(&mut engine, &book, b);
                 drop(engine);
                 self.logged(None);
                 Ok(Moved::default())
@@ -503,9 +564,10 @@ impl Figures {
         // the record by what changed in it, then each round trip given its trade:
         // a pull that supersedes a record moves the trades on it to the broker's
         // rows in the same write, read back with it
-        let held = Held { applied: &self.applied, movements: &self.movements };
-        let (mut moved, named) = catch_up_named(&book, e, &held)?;
+        let held = Held::new(&self.applied, &self.movements);
+        let mut moved = catch_up(&book, e, &held)?;
         merge(&mut moved, settle_trades(&book, e, &held, now)?);
+        let named = held.named.take();
         let mut brokers = std::collections::BTreeMap::new();
         for a in stated_for {
             brokers.insert(*a, engine_inputs::broker_account(*a, &book.stated(*a).map_err(|e| e.to_string())?)?);
@@ -687,6 +749,37 @@ mod tests {
         // the counter sees the read it refuses: the whole read with days names the table
         let (_, whole) = bagholder_sqlite::work::statements_naming("account_days", || engine_inputs::brokers(&book).unwrap());
         assert!(whole > 0);
+    }
+
+    /// A write kept under an instrument a succession joins into another reaches
+    /// the engine under the one it is read as (brief 27, 1): its name, a broker's
+    /// id for it and a record under it removed, each applied as a whole read
+    /// gives it.
+    #[test]
+    fn a_write_under_a_joined_id_reaches_the_instrument_it_is_read_as() {
+        let home = tempfile::tempdir().unwrap();
+        let size = bagholder_wealthsimple::generated::Size { accounts: 6, instruments: 16, trades: 60, months: 4, seed: 3, deep: 0 };
+        crate::capacity::build(home.path(), size, 2).unwrap();
+        let now = Timestamp::now();
+        let f = Figures::open(home.path(), now).unwrap();
+        f.names().unwrap();
+        let book = f.book().unwrap();
+        let (member, head): (String, String) = book.conn_for_tests().query_row("SELECT instrument_id, into_id FROM instrument_joins LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).expect("the made-up broker states a succession");
+        same_as_fresh(&f, now);
+        // its name, as a record under the member states it
+        book.conn_for_tests().execute("UPDATE instrument_sightings SET name = 'Renamed Under The Member', day = '2099-01-01' WHERE rowid = (SELECT s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live' WHERE s.instrument_id = ?1 LIMIT 1)", [&member]).unwrap();
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+        assert!(f.read(|e| e.inputs().ledger.instruments[&head.parse().unwrap()].names.last().and_then(|n| n.name.clone())).unwrap().as_deref() == Some("Renamed Under The Member"), "the head kept its old name");
+        // a broker's id for it, under the member
+        book.conn_for_tests().execute("INSERT INTO instrument_refs (scheme, value, instrument_id) VALUES ('broker-security:wealthsimple', 'sec-s-another-id', ?1)", [&member]).unwrap();
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+        // a record under the member removed
+        let record: String = book.conn_for_tests().query_row("SELECT t.record_id FROM transactions t JOIN source_records r ON r.id = t.record_id WHERE t.instrument_id = ?1 AND r.state = 'live' LIMIT 1", [&member], |r| r.get(0)).unwrap();
+        book.mark_removed(record.parse().unwrap(), now).unwrap();
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
     }
 
     #[test]

@@ -50,19 +50,21 @@ fn the_sequence_never_goes_back_after_the_log_is_pruned() {
     assert!(changes.records.contains(&stored.record), "a write after the prune was numbered at or below what was applied");
 }
 
-/// A clear empties the log (the figures are built again whole after one), and the
-/// sequence goes on past it.
+/// A clear is logged like any write (the build after it drops what it built
+/// from), and the sequence goes on past it (brief 27, 6).
 #[test]
-fn a_clear_empties_the_log_and_the_sequence_goes_on() {
+fn a_clear_is_logged_and_the_sequence_goes_on() {
     let f = Fixture::new();
     f.account(&["a1"]);
-    f.store(&Spelled::v(1), "b1", &legs(vec![buy("a1", share("CA0000000001", "AAA"), "10", "-100", "2026-01-02T15:00:00Z")]));
+    let stored = f.store(&Spelled::v(1), "b1", &legs(vec![buy("a1", share("CA0000000001", "AAA"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let before = f.book.changes_upto().unwrap();
     f.book.clear(&bagholder_book::clear::Clearing::all()).unwrap();
-    assert!(f.book.changes_since(0).unwrap().is_empty());
+    let changes = f.book.changes_since(before).unwrap();
+    assert!(changes.records.contains(&stored.record), "the cleared record is not logged: {changes:?}");
+    let after = changes.upto;
     // the clear took the connection nothing named any more: a new one, and an account on it
     let connection = f.book.add_connection(&bagholder_core::Broker::named("wealthsimple"), "Wealthsimple", t0()).unwrap();
     let t = bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Cash, registration: bagholder_core::account::Registration::Tfsa, managed: false, joint: false };
     f.book.add_account(connection, &[bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "a2")], &t, bagholder_core::account::AccountStatus::Open, None, t0()).unwrap();
-    assert!(!f.book.changes_since(before).unwrap().accounts.is_empty(), "a write after the clear numbered at or below what came before it");
+    assert!(!f.book.changes_since(after).unwrap().accounts.is_empty(), "a write after the clear numbered at or below it");
 }
