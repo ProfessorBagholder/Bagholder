@@ -13,7 +13,9 @@ use crate::cashflow::{build_cashflow, payer_rates, CashRow, PayerRate};
 use crate::equity::{broker_checks, build_equity, AccountEquity, BrokerCheck};
 use crate::identity::{identify, Identity};
 use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, LedgerDelta, Quote, Rates, Sourced};
-use crate::ledger::{match_lots, Direction, Matched};
+use crate::families::{node_of, Families, Node};
+use crate::gap::Fig;
+use crate::ledger::{match_lots, match_over, Direction, Matched};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
 use crate::trades::{build_trades, TradeFig, TradeKey};
@@ -250,6 +252,52 @@ pub struct Engine {
     /// Each benchmark's total return in CAD, as a level per session.
     benchmarks: BTreeMap<String, crate::stat::benchmark::Levels>,
     past: PastCache,
+    /// The match split into families (`crate::families`): what a change to the
+    /// record is matched again in.
+    families: Families,
+    /// Each account's cash, by the family whose rows moved it: a family's match
+    /// gives its share, and an account's total is its shares added up.
+    shares: BTreeMap<AccountId, BTreeMap<Node, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>,
+}
+
+/// Each account's cash a family's match gives, by family.
+type ByFamily = BTreeMap<Node, BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>;
+
+/// The match of each family named, put together in the match's order, and each
+/// one's share of the accounts' cash.
+fn match_families(inputs: &Inputs, families: &Families, names: impl IntoIterator<Item = Node>) -> (Matched, ByFamily) {
+    let mut all = Matched::default();
+    let mut shares = ByFamily::new();
+    for f in names {
+        let txs = families.transactions(&inputs.ledger, f);
+        if txs.is_empty() {
+            continue;
+        }
+        let mut m = match_over(inputs, txs);
+        shares.insert(f, std::mem::take(&mut m.cash));
+        all.absorb(m);
+    }
+    all.in_match_order(&inputs.ledger);
+    (all, shares)
+}
+
+/// An account's cash in each currency: its families' shares added up, in the
+/// families' order; a sum that does not fit, or a share that did not, is that
+/// failure.
+fn total(shares: &BTreeMap<Node, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>) -> BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>> {
+    let mut out: BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>> = BTreeMap::new();
+    for share in shares.values() {
+        for (c, v) in share {
+            let e = out.entry(*c).or_insert(Ok(bagholder_core::Dec::ZERO));
+            if let Ok(t) = e {
+                *e = match v {
+                    Ok(v) => t.checked_add(*v).map_err(crate::gap::Gaps::from),
+                    Err(g) => Err(g.clone()),
+                };
+            }
+        }
+    }
+    out
 }
 
 /// The figures, read.
@@ -266,9 +314,24 @@ pub struct Figures<'a> {
 
 impl Engine {
     pub fn build(inputs: Inputs) -> Engine {
-        let matched = match_lots(&inputs);
-        let identity = identify(&inputs.ledger, &matched);
-        let mut e = Engine { inputs, matched, identity, trades: vec![], positions: vec![], cash: vec![], payers: BTreeMap::new(), equity: BTreeMap::new(), checks: vec![], benchmarks: BTreeMap::new(), past: PastCache::default() };
+        let families = Families::build(&inputs.ledger, &inputs.facts.adjustments);
+        let mut e = Engine {
+            inputs,
+            matched: Matched::default(),
+            identity: Identity::default(),
+            trades: vec![],
+            positions: vec![],
+            cash: vec![],
+            payers: BTreeMap::new(),
+            equity: BTreeMap::new(),
+            checks: vec![],
+            benchmarks: BTreeMap::new(),
+            past: PastCache::default(),
+            families,
+            shares: BTreeMap::new(),
+        };
+        e.match_all();
+        e.identity = identify(&e.inputs.ledger, &e.matched);
         e.benchmarks = build_benchmarks(&e.inputs.market.benchmarks, &e.inputs.facts.rates, &e.inputs.clock);
         e.derive();
         e
@@ -285,10 +348,57 @@ impl Engine {
         self.checks = broker_checks(i, &self.matched, None);
     }
 
+    /// Every family matched again (the day turned: any contract's expiry).
+    fn match_all(&mut self) {
+        let names: Vec<Node> = self.families.all().map(|(n, _)| *n).collect();
+        let (matched, by_family) = match_families(&self.inputs, &self.families, names);
+        self.matched = matched;
+        self.shares.clear();
+        for (f, accounts) in by_family {
+            for (a, cash) in accounts {
+                self.shares.entry(a).or_default().insert(f, cash);
+            }
+        }
+        self.matched.cash = self.shares.iter().map(|(a, s)| (*a, total(s))).collect();
+    }
+
     fn rematch(&mut self) {
-        self.matched = match_lots(&self.inputs);
+        self.match_all();
         self.identity = identify(&self.inputs.ledger, &self.matched);
         self.derive();
+    }
+
+    /// The families of `seeds` worked out again and matched again: what a change
+    /// to the record reaches, and nothing else.
+    fn rematch_families(&mut self, seeds: BTreeSet<Node>) {
+        let g = self.families.regroup(&self.inputs.ledger, &self.inputs.facts.adjustments, seeds);
+        let (fresh, by_family) = match_families(&self.inputs, &self.families, g.families.iter().copied());
+        self.matched.replace(&self.inputs.ledger, &g.region, fresh);
+        let mut touched: BTreeSet<AccountId> = BTreeSet::new();
+        for (a, s) in self.shares.iter_mut() {
+            let before = s.len();
+            s.retain(|f, _| !g.gone.contains(f));
+            if s.len() != before {
+                touched.insert(*a);
+            }
+        }
+        for (f, accounts) in by_family {
+            for (a, cash) in accounts {
+                self.shares.entry(a).or_default().insert(f, cash);
+                touched.insert(a);
+            }
+        }
+        for a in touched {
+            match self.shares.get(&a).filter(|s| !s.is_empty()) {
+                Some(s) => {
+                    self.matched.cash.insert(a, total(s));
+                }
+                None => {
+                    self.shares.remove(&a);
+                    self.matched.cash.remove(&a);
+                }
+            }
+        }
     }
 
     /// The holdings at the close of `day`, a day before today.
@@ -419,16 +529,46 @@ impl Engine {
         match change {
             Change::Ledger(delta) => {
                 let before = self.snapshot(Parts::ALL);
+                let matching = !delta.records.is_empty() || !delta.instruments.is_empty() || !delta.accounts.is_empty();
+                let mut seeds: BTreeSet<Node> = BTreeSet::new();
+                let records: Vec<bagholder_core::RecordId> = delta.records.keys().copied().collect();
+                let instruments: Vec<InstrumentId> = delta.instruments.keys().copied().collect();
+                let accounts: Vec<AccountId> = delta.accounts.keys().copied().collect();
+                let gone: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
+                let was: BTreeMap<InstrumentId, Option<InstrumentId>> =
+                    instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
+                self.seed(&mut seeds, &records, &was, &accounts);
                 self.inputs.ledger.apply(delta);
-                self.rematch();
+                let now: BTreeMap<InstrumentId, Option<InstrumentId>> =
+                    instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
+                self.seed(&mut seeds, &records, &now, &accounts);
+                let come: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
+                self.families.reindex(&self.inputs.ledger, &was, gone.iter(), come.iter(), &BTreeMap::new(), &self.inputs.facts.adjustments);
+                if matching {
+                    self.rematch_families(seeds);
+                }
+                self.identity = identify(&self.inputs.ledger, &self.matched);
+                self.derive();
                 self.compare(&before, &mut moved);
             }
             Change::Adjustments(a) => {
                 let before = self.snapshot(Parts::ALL);
+                let mut seeds: BTreeSet<Node> = BTreeSet::new();
+                let mut was: BTreeMap<bagholder_core::TransactionId, Option<crate::input::Adjustment>> = BTreeMap::new();
                 for (tx, list) in a {
+                    if let Some(t) = self.inputs.ledger.transactions.get(&tx) {
+                        seeds.insert(node_of(t));
+                    }
+                    let old = self.inputs.facts.adjustments.get(&tx).cloned();
+                    seeds.extend(old.iter().flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
+                    seeds.extend(list.iter().flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
+                    was.insert(tx.clone(), old);
                     self.inputs.facts.adjustments.replace(tx, list);
                 }
-                self.rematch();
+                self.families.reindex(&self.inputs.ledger, &BTreeMap::new(), std::iter::empty(), std::iter::empty(), &was, &self.inputs.facts.adjustments);
+                self.rematch_families(seeds);
+                self.identity = identify(&self.inputs.ledger, &self.matched);
+                self.derive();
                 self.compare(&before, &mut moved);
             }
             Change::Clock(c) => {
@@ -489,10 +629,13 @@ impl Engine {
             }
             Change::Closes(i, c) => {
                 if self.is_underlying(i) {
-                    // a close can decide whether a contract expired worthless
+                    // a close can decide whether a contract expired worthless:
+                    // the underlying's family, its contracts with it
                     let before = self.snapshot(Parts::ALL);
                     self.inputs.market.closes.insert(i, c);
-                    self.rematch();
+                    self.rematch_families(BTreeSet::from([Node::Instrument(i)]));
+                    self.identity = identify(&self.inputs.ledger, &self.matched);
+                    self.derive();
                     self.compare(&before, &mut moved);
                 } else {
                     self.inputs.market.closes.insert(i, c);
@@ -536,6 +679,33 @@ impl Engine {
             }
         }
         moved
+    }
+
+    /// The nodes a change to `records`, the instruments `under` names (each with
+    /// its underlying) and `accounts` reaches in the ledger as it stands: their
+    /// rows', their links' other sides', their own.
+    fn seed(&self, seeds: &mut BTreeSet<Node>, records: &[bagholder_core::RecordId], under: &BTreeMap<InstrumentId, Option<InstrumentId>>, accounts: &[AccountId]) {
+        let l = &self.inputs.ledger;
+        for r in records {
+            for t in l.transactions.of_record(*r) {
+                seeds.insert(node_of(t));
+                for other in [l.transfer_links.received_by(&t.id), l.transfer_links.sent_by(&t.id)].into_iter().flatten() {
+                    if let Some(o) = l.transactions.get(other) {
+                        seeds.insert(node_of(o));
+                    }
+                }
+            }
+        }
+        for (i, u) in under {
+            seeds.insert(Node::Instrument(*i));
+            if let Some(u) = u {
+                seeds.insert(Node::Instrument(*u));
+            }
+        }
+        for a in accounts {
+            seeds.insert(Node::Cash(*a));
+            seeds.extend(l.transactions.instruments_in(*a).map(Node::Instrument));
+        }
     }
 
     /// A price moved: that instrument's positions.
@@ -616,6 +786,36 @@ impl Engine {
             let now = self.book_fig();
             diff(m, [(Entity::Book, b)], [(Entity::Book, &now)]);
         }
+    }
+
+    /// Where this engine and another disagree, beyond the figures `differences`
+    /// compares: the match whole (every lot, round trip and what waits) and the
+    /// trades' identity. None when they agree.
+    pub fn match_disagrees(&self, other: &Engine) -> Option<String> {
+        if self.matched != other.matched {
+            let m = (&self.matched, &other.matched);
+            let parts = [
+                ("trips", m.0.trips != m.1.trips),
+                ("books", m.0.books != m.1.books),
+                ("beyond", m.0.beyond != m.1.beyond),
+                ("dust", m.0.dust != m.1.dust),
+                ("arrived", m.0.arrived != m.1.arrived),
+                ("last_price", m.0.last_price != m.1.last_price),
+                ("stock_dividends", m.0.stock_dividends != m.1.stock_dividends),
+                ("disagreements", m.0.disagreements != m.1.disagreements),
+                ("unit_disagreements", m.0.unit_disagreements != m.1.unit_disagreements),
+                ("unapplied", m.0.unapplied != m.1.unapplied),
+                ("units", m.0.units != m.1.units),
+                ("roles", m.0.roles != m.1.roles),
+                ("waiting", m.0.waiting != m.1.waiting),
+                ("cash", m.0.cash != m.1.cash),
+            ];
+            return Some(format!("the match differs in {:?}", parts.iter().filter(|(_, d)| *d).map(|(n, _)| *n).collect::<Vec<_>>()));
+        }
+        if self.identity != other.identity {
+            return Some(format!("the trades' identity differs: {:?} against {:?}", self.identity, other.identity));
+        }
+        None
     }
 
     /// What differs between this engine's figures and another's, field for

@@ -8,6 +8,7 @@ pub mod fx;
 pub mod gap;
 pub mod input;
 pub mod ledger;
+pub mod families;
 pub mod dust;
 pub mod identity;
 pub mod positions;

@@ -222,6 +222,9 @@ fn every_change_equals_a_fresh_build_and_says_what_moved() {
         if !off.is_empty() {
             failures.push(format!("{k}: the incremental figures differ from a fresh build in {:?}", off.0));
         }
+        if let Some(why) = incremental.match_disagrees(&fresh) {
+            failures.push(format!("{k}: {why}"));
+        }
         // what moved is exactly what differs between before and after
         let expected = fresh.differences(&base);
         if moved != expected {

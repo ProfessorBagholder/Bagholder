@@ -77,6 +77,12 @@ fn place(t: &Transaction) -> Place {
 pub struct Transactions {
     rows: BTreeMap<Place, Transaction>,
     by_id: BTreeMap<TransactionId, Place>,
+    /// Each instrument's transactions, in any account.
+    by_instrument: BTreeMap<InstrumentId, BTreeSet<TransactionId>>,
+    /// Each account's transactions that name no instrument.
+    cash_by_account: BTreeMap<AccountId, BTreeSet<TransactionId>>,
+    /// Each account's instruments, by how many of its transactions name each.
+    held_in: BTreeMap<AccountId, BTreeMap<InstrumentId, usize>>,
 }
 
 impl Transactions {
@@ -97,18 +103,36 @@ impl Transactions {
         self.by_id.get(id).and_then(|p| self.rows.get(p))
     }
 
+    /// Where a transaction stands in the ledger's order.
+    pub fn place_of(&self, id: &TransactionId) -> Option<&Place> {
+        self.by_id.get(id)
+    }
+
     /// A record's transactions, by leg.
     pub fn of_record(&self, record: RecordId) -> impl Iterator<Item = &Transaction> {
         self.by_id.range(TransactionId::new(record, bagholder_core::Leg::first())..).take_while(move |(id, _)| id.record == record).filter_map(|(_, p)| self.rows.get(p))
+    }
+
+    /// Every transaction of an instrument, in any account, by id.
+    pub fn of_instrument(&self, instrument: InstrumentId) -> impl Iterator<Item = &Transaction> {
+        self.by_instrument.get(&instrument).into_iter().flatten().filter_map(|id| self.get(id))
+    }
+
+    /// Every transaction of an account that names no instrument, by id.
+    pub fn cash_of(&self, account: AccountId) -> impl Iterator<Item = &Transaction> {
+        self.cash_by_account.get(&account).into_iter().flatten().filter_map(|id| self.get(id))
+    }
+
+    /// The instruments an account's transactions name.
+    pub fn instruments_in(&self, account: AccountId) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.held_in.get(&account).into_iter().flat_map(|m| m.keys().copied())
     }
 
     /// A record's transactions replaced by `now` (none: the record is gone).
     pub fn put_record(&mut self, record: RecordId, now: Vec<Transaction>) {
         let gone: Vec<TransactionId> = self.of_record(record).map(|t| t.id.clone()).collect();
         for id in gone {
-            if let Some(p) = self.by_id.remove(&id) {
-                self.rows.remove(&p);
-            }
+            self.remove(&id);
         }
         for t in now {
             debug_assert_eq!(t.id.record, record, "a transaction of another record");
@@ -116,9 +140,51 @@ impl Transactions {
         }
     }
 
+    fn remove(&mut self, id: &TransactionId) {
+        let Some(p) = self.by_id.remove(id) else { return };
+        let Some(t) = self.rows.remove(&p) else { return };
+        match t.instrument {
+            Some(i) => {
+                if let Some(s) = self.by_instrument.get_mut(&i) {
+                    s.remove(id);
+                    if s.is_empty() {
+                        self.by_instrument.remove(&i);
+                    }
+                }
+                if let Some(m) = self.held_in.get_mut(&t.account) {
+                    if let Some(n) = m.get_mut(&i) {
+                        *n -= 1;
+                        if *n == 0 {
+                            m.remove(&i);
+                        }
+                    }
+                    if m.is_empty() {
+                        self.held_in.remove(&t.account);
+                    }
+                }
+            }
+            None => {
+                if let Some(s) = self.cash_by_account.get_mut(&t.account) {
+                    s.remove(id);
+                    if s.is_empty() {
+                        self.cash_by_account.remove(&t.account);
+                    }
+                }
+            }
+        }
+    }
+
     fn insert(&mut self, t: Transaction) {
-        if let Some(was) = self.by_id.insert(t.id.clone(), place(&t)) {
-            self.rows.remove(&was);
+        self.remove(&t.id);
+        self.by_id.insert(t.id.clone(), place(&t));
+        match t.instrument {
+            Some(i) => {
+                self.by_instrument.entry(i).or_default().insert(t.id.clone());
+                *self.held_in.entry(t.account).or_default().entry(i).or_default() += 1;
+            }
+            None => {
+                self.cash_by_account.entry(t.account).or_default().insert(t.id.clone());
+            }
         }
         self.rows.insert(place(&t), t);
     }

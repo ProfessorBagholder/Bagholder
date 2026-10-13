@@ -831,6 +831,11 @@ fn run(path: &Path) -> Vec<String> {
             c.words("price and cash disagree", v, got);
         }
         invariants(&mut c, &b, &f);
+        // the match put together family by family is the match of the whole ledger
+        let whole = bagholder_engine::ledger::match_lots(e.inputs());
+        if f.matched != &whole {
+            c.fail("invariant: the families' match differs from the whole ledger's".to_string());
+        }
         results_agree(&mut c, &b, &e);
         // the same book listed in another order gives the same figures
         let mut reversed = e.inputs().clone();
