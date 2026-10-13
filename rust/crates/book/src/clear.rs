@@ -119,6 +119,8 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("settings", Holds::Settings),
     ("schema_migrations", Holds::Schema),
     ("ledger_changes", Holds::Changes),
+    // one row: what settling the successions read last; kept, as the version is
+    ("successions_due", Holds::Schema),
 ];
 
 /// The sources whose records are the person's own; every other source's are a broker's.

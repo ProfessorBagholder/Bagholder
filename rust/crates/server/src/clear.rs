@@ -411,6 +411,8 @@ mod tests {
         for (t, n) in counts(&f.book().unwrap().conn_for_tests()) {
             match t.as_str() {
                 "schema_migrations" => {}
+                // one row, kept as the version is: what settling the successions read last
+                "successions_due" => assert_eq!(n, 1),
                 // the clear empties it; what the figures' build after it wrote (the
                 // default tiles, the trades given again) is logged afresh
                 "ledger_changes" => {}

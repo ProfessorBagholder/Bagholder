@@ -514,6 +514,11 @@ CREATE TABLE "statements" (
     CHECK ((kind = 'cash') = (last_read_id IS NOT NULL)),
     CHECK (first_ns < last_ns OR (first_ns = last_ns AND first_seq <= last_seq))
 ) STRICT;
+CREATE TABLE successions_due (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    changed INTEGER NOT NULL,
+    settled INTEGER NOT NULL
+) STRICT;
 CREATE TABLE tiles (
     instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
     position INTEGER NOT NULL UNIQUE
@@ -666,6 +671,15 @@ CREATE TRIGGER instrument_refs_changed_update AFTER UPDATE ON instrument_refs BE
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
 END;
+CREATE TRIGGER instrument_refs_succession_delete AFTER DELETE ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instrument_refs_succession_insert AFTER INSERT ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instrument_refs_succession_update AFTER UPDATE ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
 CREATE TRIGGER instrument_sightings_changed_delete AFTER DELETE ON instrument_sightings BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
 END;
@@ -695,6 +709,15 @@ END;
 CREATE TRIGGER instruments_described_changed_update AFTER UPDATE ON instruments_described BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_succession_delete AFTER DELETE ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instruments_succession_insert AFTER INSERT ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instruments_succession_update AFTER UPDATE ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
 END;
 CREATE TRIGGER journal_changed_delete AFTER DELETE ON journal BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT OLD.trade_id AS k) WHERE k IS NOT NULL;
@@ -754,6 +777,15 @@ CREATE TRIGGER record_problems_changed_update AFTER UPDATE ON record_problems BE
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
 END;
+CREATE TRIGGER security_standings_succession_delete AFTER DELETE ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER security_standings_succession_insert AFTER INSERT ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER security_standings_succession_update AFTER UPDATE ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
 CREATE TRIGGER source_records_changed_delete AFTER DELETE ON source_records BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT DISTINCT instrument_id AS k FROM instrument_sightings WHERE record_id = OLD.id) WHERE k IS NOT NULL;
@@ -807,6 +839,15 @@ END;
 CREATE TRIGGER transactions_changed_update AFTER UPDATE ON transactions BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transactions_succession_delete AFTER DELETE ON transactions WHEN OLD.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER transactions_succession_insert AFTER INSERT ON transactions WHEN NEW.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER transactions_succession_update AFTER UPDATE ON transactions WHEN OLD.kind = 'corporate-event' OR NEW.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
 END;
 CREATE TRIGGER transfer_links_changed_delete AFTER DELETE ON transfer_links BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.out_record AS k UNION SELECT OLD.in_record) WHERE k IS NOT NULL;

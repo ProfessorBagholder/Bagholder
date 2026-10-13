@@ -669,7 +669,8 @@ impl Book {
         };
         self.conn().execute(
             "INSERT INTO security_standings(scheme, value, standing, kind, currency, symbol, venue_mic) VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(scheme, value, standing) DO UPDATE SET kind = excluded.kind, currency = excluded.currency, symbol = excluded.symbol, venue_mic = excluded.venue_mic",
+             ON CONFLICT(scheme, value, standing) DO UPDATE SET kind = excluded.kind, currency = excluded.currency, symbol = excluded.symbol, venue_mic = excluded.venue_mic
+             WHERE kind IS NOT excluded.kind OR currency IS NOT excluded.currency OR symbol IS NOT excluded.symbol OR venue_mic IS NOT excluded.venue_mic",
             params![s.of.scheme.to_text(), s.of.value, s.standing.as_str(), draft.kind.as_str(), draft.currency.as_str(), symbol, venue_mic],
         )?;
         Ok(())
@@ -694,6 +695,20 @@ impl Book {
     /// joined. Run after every write that can change what it reads.
     pub fn settle_successions(&self) -> Result<Successions> {
         self.atomically(|| {
+            // nothing it reads changed since it last settled: nothing to do
+            // (`successions_due`, kept by triggers on what it reads)
+            let (changed, settled): (i64, i64) = self.conn().query_row("SELECT changed, settled FROM successions_due WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            if changed == settled {
+                return Ok(Successions::default());
+            }
+            let out = self.settle_successions_again()?;
+            self.conn().execute("UPDATE successions_due SET settled = ?1 WHERE id = 1", [changed])?;
+            Ok(out)
+        })
+    }
+
+    fn settle_successions_again(&self) -> Result<Successions> {
+        {
             let retired: Vec<(String, String, String, String, String, String)> = {
                 let mut stmt = self.conn().prepare_cached(
                     "SELECT scheme, value, kind, currency, symbol, venue_mic FROM security_standings
@@ -784,7 +799,7 @@ impl Book {
                 )?;
             }
             Ok(Successions { joined, parted })
-        })
+        }
     }
 
     /// Whether a corporate event row gives up units of the instrument: its

@@ -318,3 +318,61 @@ CREATE TRIGGER account_refs_changed_delete AFTER DELETE ON account_refs BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
 END;
 
+-- What settling the successions reads (`Book::settle_successions`) changed since it
+-- last settled: a counter the triggers on what it reads move, and the counter it
+-- last settled at. A write that changes none of it (a trade, a note, an import's
+-- rows) settles nothing.
+CREATE TABLE successions_due (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    changed INTEGER NOT NULL,
+    settled INTEGER NOT NULL
+) STRICT;
+INSERT INTO successions_due (id, changed, settled) VALUES (1, 1, 0);
+CREATE TRIGGER security_standings_succession_insert AFTER INSERT ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER security_standings_succession_update AFTER UPDATE ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER security_standings_succession_delete AFTER DELETE ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER instrument_refs_succession_insert AFTER INSERT ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER instrument_refs_succession_update AFTER UPDATE ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER instrument_refs_succession_delete AFTER DELETE ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER instruments_succession_insert AFTER INSERT ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER instruments_succession_update AFTER UPDATE ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER instruments_succession_delete AFTER DELETE ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER transactions_succession_insert AFTER INSERT ON transactions WHEN NEW.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER transactions_succession_update AFTER UPDATE ON transactions WHEN OLD.kind = 'corporate-event' OR NEW.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER transactions_succession_delete AFTER DELETE ON transactions WHEN OLD.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+
