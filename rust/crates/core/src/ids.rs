@@ -141,6 +141,12 @@ impl Leg {
         Leg::parse(s).unwrap_or_else(|_| panic!("malformed leg name {s:?}"))
     }
 
+    /// Below every leg a record can hold (the empty name, which `parse` refuses):
+    /// where a range over a record's legs starts.
+    pub fn first() -> Leg {
+        Leg(String::new())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

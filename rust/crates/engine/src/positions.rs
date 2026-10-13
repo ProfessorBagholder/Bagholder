@@ -140,10 +140,12 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
     let mut out = Vec::new();
-    for ((account, instrument), book) in &matched.books {
-        if only.is_some_and(|o| o != *instrument) {
-            continue;
-        }
+    // one instrument's books found by the accounts holding it, not by a pass over every book
+    let books: Vec<(&(bagholder_core::AccountId, InstrumentId), &crate::ledger::Book)> = match only {
+        Some(i) => matched.held_by.get(&i).into_iter().flatten().filter_map(|a| matched.books.get_key_value(&(*a, i))).collect(),
+        None => matched.books.iter().collect(),
+    };
+    for ((account, instrument), book) in books {
         for direction in [Direction::Long, Direction::Short] {
             let lots: Vec<Lot> = book.lots.iter().filter(|l| l.direction == direction).cloned().collect();
             let Some(first) = lots.first() else { continue };

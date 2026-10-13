@@ -33,6 +33,11 @@ pub struct Size {
     /// How far back the activity starts.
     pub months: u32,
     pub seed: u64,
+    /// Round trips more on one listing in one investment account, each a purchase
+    /// and a sale of all of it, the last still open: one instrument's history
+    /// this deep (twice as many rows, less one), beside the rest of the book
+    /// (the capacity test's depth pair).
+    pub deep: usize,
 }
 
 const ACTIVITY: &str = include_str!("../tests/replies/wealthsimple/edited-activity-one-per-kind.json");
@@ -130,6 +135,10 @@ struct Listing {
     price: i64,
     /// A contract's underlying and terms.
     contract: Option<(String, jiff::civil::Date, i64)>,
+    /// What Wealthsimple states of a share's id: `TRADING`, or `CORPORATE_ACTION`
+    /// for one retired by a corporate action, the listing trading on under a
+    /// successor id of the same symbol and venue.
+    status: &'static str,
 }
 
 impl Listing {
@@ -339,7 +348,17 @@ impl Generated {
             let symbol = name(i);
             let id = if coin { format!("sec-z-{}-{}", symbol.to_lowercase(), r.hex()) } else { format!("sec-s-{}", r.hex()) };
             let price = if coin { r.range(5, 60_000) * 100 } else { r.range(200, 40_000) };
-            listings.push(Listing { id, symbol, sort: if coin { Sort::Coin } else { Sort::Share }, cur, price, contract: None });
+            listings.push(Listing { id, symbol, sort: if coin { Sort::Coin } else { Sort::Share }, cur, price, contract: None, status: "TRADING" });
+        }
+        // about one share in sixteen retired by a corporate action and trading on
+        // under a successor id (the owner's book: 11 of 173 ids stated), so a book
+        // carries successions as a real one does
+        let retired: Vec<usize> = (0..listings.len()).filter(|i| listings[*i].sort == Sort::Share && i % 16 == 3).collect();
+        for i in retired {
+            let mut next = listings[i].clone();
+            next.id = format!("sec-s-{}", r.hex());
+            listings[i].status = "CORPORATE_ACTION";
+            listings.push(next);
         }
         let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0 };
         let plans = g.plan(&mut r, size, start);
@@ -377,7 +396,7 @@ impl Generated {
                     let expiry = day(opened + r.range(7, 90));
                     let u = self.listings[under].clone();
                     let strike = (u.price / 100 + r.range(-3, 3)).max(1) * 100;
-                    self.listings.push(Listing { id: format!("sec-o-{}", r.hex()), symbol: u.symbol.clone(), sort: Sort::Contract, cur: Cur::Usd, price: r.range(5, 900), contract: Some((u.id.clone(), expiry, strike)) });
+                    self.listings.push(Listing { id: format!("sec-o-{}", r.hex()), symbol: u.symbol.clone(), sort: Sort::Contract, cur: Cur::Usd, price: r.range(5, 900), contract: Some((u.id.clone(), expiry, strike)), status: "TRADING" });
                     let contract = self.listings.len() - 1;
                     out.entry(day(opened)).or_default().push(Plan::Buy { account, listing: contract, units: r.range(1, 5) });
                     let exp = (expiry - day(0)).get_days() as i64;
@@ -414,6 +433,19 @@ impl Generated {
                 let p = if l.sort == Sort::Coin { Plan::Staking { account, listing } } else { Plan::Dividend { account, listing } };
                 out.entry(day(d)).or_default().push(p);
                 d += if l.sort == Sort::Coin { 7 } else { 91 };
+            }
+        }
+        // one listing's history made deep: round trips one after another, each
+        // closed before the next opens
+        if let (Some(&account), Some(&listing)) = (invest.first(), shares.first()) {
+            for k in 0..size.deep {
+                let opened = 1 + (k as i64 * (days - 3)) / size.deep as i64;
+                let closed = (1 + ((k as i64 + 1) * (days - 3)) / size.deep as i64 - 1).max(opened);
+                out.entry(day(opened)).or_default().push(Plan::Buy { account, listing, units: r.range(1, 200) });
+                // the last stays open: the listing is held today
+                if k + 1 < size.deep {
+                    out.entry(day(closed)).or_default().push(Plan::Sell { account, listing, all: true });
+                }
             }
         }
         // money in and out, between accounts, interest, and the card
@@ -795,6 +827,7 @@ impl Generated {
             let (exchange, mic) = if l.cur == Cur::Cad { ("TSX", "XTSE") } else { ("NASDAQ", "XNAS") };
             fields.push((&["stock", "primaryExchange"], text(exchange)));
             fields.push((&["stock", "primaryMic"], text(mic)));
+            fields.push((&["status"], text(l.status)));
         }
         if let Some((under, expiry, strike)) = &l.contract {
             fields.push((&["optionDetails", "expiryDate"], text(expiry.to_string())));

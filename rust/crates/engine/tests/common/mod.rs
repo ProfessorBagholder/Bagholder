@@ -190,14 +190,14 @@ pub fn build(case: &Value) -> Built {
         tx.insert(label, id);
         transactions.push(transaction);
     }
-    let transfer_links = arr(case, "transfer_links").iter().map(|l| (tx[s(l, "out").unwrap()].clone(), tx[s(l, "in").unwrap()].clone())).collect();
+    let transfer_links: BTreeMap<_, _> = arr(case, "transfer_links").iter().map(|l| (tx[s(l, "out").unwrap()].clone(), tx[s(l, "in").unwrap()].clone())).collect();
     let mut trades = Vec::new();
     for t in arr(case, "trades") {
         let opened_by = &tx[s(&t, "opened_by").unwrap()];
         let instrument = ids.instrument(s(&t, "instrument").unwrap());
         trades.push(Trade { id: ids.trade(s(&t, "id").unwrap()), anchor: Anchor::Opening(Opening { transaction: opened_by.clone(), instrument }), legacy_key: None });
     }
-    let groups = arr(case, "groups").iter().map(|g| Group { id: ids.group(s(g, "id").unwrap()), locked: true, members: arr(g, "members").iter().map(|m| ids.trade(m.as_str().unwrap())).collect() }).collect();
+    let groups = arr(case, "groups").iter().enumerate().map(|(n, g)| (rank(n), Group { id: ids.group(s(g, "id").unwrap()), locked: true, members: arr(g, "members").iter().map(|m| ids.trade(m.as_str().unwrap())).collect() })).collect();
     let mut journal = BTreeMap::new();
     for j in arr(case, "journal") {
         let subject = match (s(&j, "trade"), s(&j, "group")) {
@@ -208,7 +208,8 @@ pub fn build(case: &Value) -> Built {
         let entry = JournalEntry { thesis: s(&j, "thesis").unwrap_or("").into(), grade: s(&j, "grade").map(|g| Grade::parse(g).unwrap()), tags: arr(&j, "tags").iter().map(|t| t.as_str().unwrap().to_string()).collect() };
         journal.insert(subject, entry);
     }
-    let ledger = Ledger { accounts, instruments, transactions, records, transfer_links, trades, groups, journal };
+    let trades = trades.into_iter().enumerate().map(|(n, t)| (rank(n), t)).collect();
+    let ledger = Ledger { accounts, instruments, transactions: transactions.into_iter().collect(), records, transfer_links: transfer_links.into_iter().collect(), trades, groups, journal };
 
     let mut rates = Rates::default();
     for (c, days) in obj(case, "rates") {
@@ -365,16 +366,22 @@ pub fn build(case: &Value) -> Built {
     Built { inputs: Inputs { ledger, facts, market, clock }, tx, ids }
 }
 
+/// The `n`th row in the book's order of what the person keeps.
+pub fn rank(n: usize) -> bagholder_engine::input::Rank {
+    (format!("{n:08}"), n as i64)
+}
+
 /// The engine on a case, with a trade for every round trip that needs one (as
 /// the book would open them, one after another).
 pub fn engine(b: &mut Built) -> Engine {
     let mut e = Engine::build(b.inputs.clone());
-    let mut trades = b.inputs.ledger.trades.clone();
+    let mut delta = bagholder_engine::input::LedgerDelta::default();
+    let made = b.inputs.ledger.trades.len();
     for (n, key) in e.identity().needs_trade.clone().into_iter().enumerate() {
         let id = b.ids.trade(&format!("auto-{n}-{}", key.opening));
-        trades.push(Trade { id, anchor: Anchor::Opening(Opening { transaction: key.opening, instrument: key.instrument }), legacy_key: None });
+        delta.trades.insert(id, Some((rank(made + n), Trade { id, anchor: Anchor::Opening(Opening { transaction: key.opening, instrument: key.instrument }), legacy_key: None })));
     }
-    e.apply(Change::Trades(trades));
+    e.apply(Change::Ledger(delta));
     e
 }
 

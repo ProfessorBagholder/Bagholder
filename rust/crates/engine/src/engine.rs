@@ -6,15 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use bagholder_core::jiff::civil::Date;
-use bagholder_core::journal::{Group, JournalEntry, JournalSubject, Trade};
 use bagholder_core::{AccountId, InstrumentId, Money, TransactionId};
 
 use crate::stat::benchmark::{build_benchmarks, total_return_cad};
 use crate::cashflow::{build_cashflow, payer_rates, CashRow, PayerRate};
 use crate::equity::{broker_checks, build_equity, AccountEquity, BrokerCheck};
 use crate::identity::{identify, Identity};
-use crate::input::{Adjustments, BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, Quote, Rates, Sourced};
-use crate::ledger::{match_lots, Direction, Matched};
+use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, LedgerDelta, Quote, Rates, Sourced};
+use crate::families::{node_of, Families, Node};
+use crate::gap::Fig;
+use crate::ledger::{match_lots, match_over, Direction, Matched, TripKey};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
 use crate::trades::{build_trades, TradeFig, TradeKey};
@@ -23,14 +24,11 @@ use crate::trades::{build_trades, TradeFig, TradeKey};
 /// exactly one variant.
 #[derive(Clone, Debug)]
 pub enum Change {
-    /// The record: accounts, instruments with their names and terms, the live
-    /// transactions, their records' problems, the transfer links.
-    Ledger(Ledger),
-    /// The trades the book assigned or orphaned.
-    Trades(Vec<Trade>),
-    Groups(Vec<Group>),
-    Journal(BTreeMap<JournalSubject, JournalEntry>),
-    Adjustments(Adjustments),
+    /// The record, by what changed: accounts, instruments with their names and
+    /// terms, records with their transactions and problems, the transfer links,
+    /// the adjustments the person or a source states, the trades the book
+    /// assigned or orphaned, groups and the journal.
+    Ledger(LedgerDelta),
     Rates(Rates),
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),
@@ -252,6 +250,61 @@ pub struct Engine {
     /// Each benchmark's total return in CAD, as a level per session.
     benchmarks: BTreeMap<String, crate::stat::benchmark::Levels>,
     past: PastCache,
+    /// The match split into families (`crate::families`): what a change to the
+    /// record is matched again in.
+    families: Families,
+    /// Each account's cash, by the family whose rows moved it: a family's match
+    /// gives its share, and an account's total is its shares added up.
+    shares: BTreeMap<AccountId, BTreeMap<Node, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>,
+    /// Each instrument by what it is called now (its symbol in ASCII capitals)
+    /// and its currency: what a trade typed in by symbol is found by.
+    symbols: BTreeMap<(String, bagholder_core::Currency), BTreeSet<InstrumentId>>,
+}
+
+/// What an instrument is found by when named: its current symbol in ASCII
+/// capitals, and its currency.
+fn symbol_key(i: &crate::input::InstrumentInfo) -> Option<(String, bagholder_core::Currency)> {
+    i.current_name().map(|n| (n.symbol.to_ascii_uppercase(), i.instrument.currency))
+}
+
+/// Each account's cash a family's match gives, by family.
+type ByFamily = BTreeMap<Node, BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>;
+
+/// The match of each family named, put together in the match's order, and each
+/// one's share of the accounts' cash.
+fn match_families(inputs: &Inputs, families: &Families, names: impl IntoIterator<Item = Node>) -> (Matched, ByFamily) {
+    let mut all = Matched::default();
+    let mut shares = ByFamily::new();
+    for f in names {
+        let txs = families.transactions(&inputs.ledger, f);
+        if txs.is_empty() {
+            continue;
+        }
+        let mut m = match_over(inputs, txs);
+        shares.insert(f, std::mem::take(&mut m.cash));
+        all.absorb(m);
+    }
+    all.in_match_order(&inputs.ledger);
+    (all, shares)
+}
+
+/// An account's cash in each currency: its families' shares added up, in the
+/// families' order; a sum that does not fit, or a share that did not, is that
+/// failure.
+fn total(shares: &BTreeMap<Node, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>) -> BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>> {
+    let mut out: BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>> = BTreeMap::new();
+    for share in shares.values() {
+        for (c, v) in share {
+            let e = out.entry(*c).or_insert(Ok(bagholder_core::Dec::ZERO));
+            if let Ok(t) = e {
+                *e = match v {
+                    Ok(v) => t.checked_add(*v).map_err(crate::gap::Gaps::from),
+                    Err(g) => Err(g.clone()),
+                };
+            }
+        }
+    }
+    out
 }
 
 /// The figures, read.
@@ -268,9 +321,30 @@ pub struct Figures<'a> {
 
 impl Engine {
     pub fn build(inputs: Inputs) -> Engine {
-        let matched = match_lots(&inputs);
-        let identity = identify(&inputs.ledger, &matched);
-        let mut e = Engine { inputs, matched, identity, trades: vec![], positions: vec![], cash: vec![], payers: BTreeMap::new(), equity: BTreeMap::new(), checks: vec![], benchmarks: BTreeMap::new(), past: PastCache::default() };
+        let families = Families::build(&inputs.ledger, &inputs.facts.adjustments);
+        let mut e = Engine {
+            inputs,
+            matched: Matched::default(),
+            identity: Identity::default(),
+            trades: vec![],
+            positions: vec![],
+            cash: vec![],
+            payers: BTreeMap::new(),
+            equity: BTreeMap::new(),
+            checks: vec![],
+            benchmarks: BTreeMap::new(),
+            past: PastCache::default(),
+            families,
+            shares: BTreeMap::new(),
+            symbols: BTreeMap::new(),
+        };
+        for (id, info) in &e.inputs.ledger.instruments {
+            if let Some(k) = symbol_key(info) {
+                e.symbols.entry(k).or_default().insert(*id);
+            }
+        }
+        e.match_all();
+        e.identity = identify(&e.inputs.ledger, &e.matched);
         e.benchmarks = build_benchmarks(&e.inputs.market.benchmarks, &e.inputs.facts.rates, &e.inputs.clock);
         e.derive();
         e
@@ -287,10 +361,66 @@ impl Engine {
         self.checks = broker_checks(i, &self.matched, None);
     }
 
+    /// Every family matched again (the day turned: any contract's expiry).
+    fn match_all(&mut self) {
+        let names: Vec<Node> = self.families.all().map(|(n, _)| *n).collect();
+        let (matched, by_family) = match_families(&self.inputs, &self.families, names);
+        self.matched = matched;
+        self.shares.clear();
+        for (f, accounts) in by_family {
+            for (a, cash) in accounts {
+                self.shares.entry(a).or_default().insert(f, cash);
+            }
+        }
+        self.matched.cash = self.shares.iter().map(|(a, s)| (*a, total(s))).collect();
+    }
+
     fn rematch(&mut self) {
-        self.matched = match_lots(&self.inputs);
+        self.match_all();
         self.identity = identify(&self.inputs.ledger, &self.matched);
         self.derive();
+    }
+
+    /// The families of `seeds` worked out again and matched again: what a change
+    /// to the record reaches, and nothing else.
+    fn rematch_families(&mut self, seeds: BTreeSet<Node>) -> (crate::families::Regrouped, BTreeSet<AccountId>, bool) {
+        let g = self.families.regroup(&self.inputs.ledger, &self.inputs.facts.adjustments, seeds);
+        let (fresh, by_family) = match_families(&self.inputs, &self.families, g.families.iter().copied());
+        // what waits on the person in the region, before and after
+        let in_region = |m: &Matched, l: &crate::input::Ledger| -> Vec<(bagholder_core::TransactionId, crate::ledger::Waiting)> {
+            m.waiting.iter().filter(|(tx, w)| g.region.contains(&Node::Instrument(w.instrument)) || l.transactions.get(tx).is_none_or(|t| g.region.contains(&node_of(t)))).map(|(t, w)| (t.clone(), w.clone())).collect()
+        };
+        let waiting_was = in_region(&self.matched, &self.inputs.ledger);
+        // every account holding an instrument of the region before the change: one
+        // that holds none of it after is rechecked too
+        let mut touched: BTreeSet<AccountId> = g.region.iter().filter_map(|n| if let Node::Instrument(i) = n { Some(i) } else { None }).flat_map(|i| self.matched.held_by.get(i).into_iter().flatten().copied()).collect();
+        self.matched.replace(&self.inputs.ledger, &g.region, fresh);
+        let waiting_moved = waiting_was != in_region(&self.matched, &self.inputs.ledger);
+        for (a, s) in self.shares.iter_mut() {
+            let before = s.len();
+            s.retain(|f, _| !g.gone.contains(f));
+            if s.len() != before {
+                touched.insert(*a);
+            }
+        }
+        for (f, accounts) in by_family {
+            for (a, cash) in accounts {
+                self.shares.entry(a).or_default().insert(f, cash);
+                touched.insert(a);
+            }
+        }
+        for a in &touched {
+            match self.shares.get(a).filter(|s| !s.is_empty()) {
+                Some(s) => {
+                    self.matched.cash.insert(*a, total(s));
+                }
+                None => {
+                    self.shares.remove(a);
+                    self.matched.cash.remove(a);
+                }
+            }
+        }
+        (g, touched, waiting_moved)
     }
 
     /// The holdings at the close of `day`, a day before today.
@@ -301,12 +431,12 @@ impl Engine {
         }
         cache.retain(|_, w| w.strong_count() > 0);
         let i = &self.inputs;
-        let kept: Vec<_> = i.ledger.transactions.iter().filter(|t| t.trade_date <= day).cloned().collect();
+        let kept: crate::input::Transactions = i.ledger.transactions.iter().filter(|t| t.trade_date <= day).cloned().collect();
         let ids: BTreeSet<&TransactionId> = kept.iter().map(|t| &t.id).collect();
         let ledger = Ledger {
             accounts: i.ledger.accounts.clone(),
             instruments: i.ledger.instruments.clone(),
-            transfer_links: i.ledger.transfer_links.iter().filter(|(o, n)| ids.contains(o) && ids.contains(n)).cloned().collect(),
+            transfer_links: i.ledger.transfer_links.iter().filter(|(o, n)| ids.contains(o) && ids.contains(n)).map(|(o, n)| (o.clone(), n.clone())).collect(),
             records: i.ledger.records.clone(),
             trades: i.ledger.trades.clone(),
             groups: i.ledger.groups.clone(),
@@ -336,6 +466,17 @@ impl Engine {
 
     pub fn inputs(&self) -> &Inputs {
         &self.inputs
+    }
+
+    /// The instruments called `symbol` now (any case of its ASCII letters) in
+    /// `currency`.
+    pub fn named(&self, symbol: &str, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.symbols.get(&(symbol.to_ascii_uppercase(), currency)).into_iter().flatten().copied()
+    }
+
+    /// The contracts written on `underlying`.
+    pub fn contracts_on(&self, underlying: InstrumentId) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.families.contracts_on(underlying)
     }
 
     pub fn identity(&self) -> &Identity {
@@ -388,11 +529,6 @@ impl Engine {
         crate::scope::cashflow_in_scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, portfolio)
     }
 
-    /// Whether a close of this instrument can decide a contract's expiry.
-    fn is_underlying(&self, instrument: InstrumentId) -> bool {
-        self.inputs.ledger.instruments.values().any(|i| i.terms.as_ref().is_some_and(|t| t.underlying == instrument))
-    }
-
     /// Apply one change, recomputing only what it touches, and say what moved:
     /// only the figures recomputed are compared.
     pub fn apply(&mut self, change: Change) -> Moved {
@@ -401,7 +537,7 @@ impl Engine {
         // the trades and notes move every day's; rates and closes the days from
         // the first they changed on
         let stale: Option<Date> = match &change {
-            Change::Ledger(_) | Change::Adjustments(_) | Change::Trades(_) | Change::Journal(_) => Some(Date::MIN),
+            Change::Ledger(_) => Some(Date::MIN),
             Change::Rates(r) => {
                 let was = &self.inputs.facts.rates;
                 if r.covered != was.covered || r.series != was.series || r.holidays != was.holidays {
@@ -419,17 +555,111 @@ impl Engine {
             moved.0.entry(Entity::Past).or_default().insert("*");
         }
         match change {
-            Change::Ledger(l) => {
-                let before = self.snapshot(Parts::ALL);
-                self.inputs.ledger = Ledger { trades: std::mem::take(&mut self.inputs.ledger.trades), groups: std::mem::take(&mut self.inputs.ledger.groups), journal: std::mem::take(&mut self.inputs.ledger.journal), ..l };
-                self.rematch();
-                self.compare(&before, &mut moved);
-            }
-            Change::Adjustments(a) => {
-                let before = self.snapshot(Parts::ALL);
-                self.inputs.facts.adjustments = a;
-                self.rematch();
-                self.compare(&before, &mut moved);
+            Change::Ledger(mut delta) => {
+                let matching = delta.matches();
+                let mut seeds: BTreeSet<Node> = BTreeSet::new();
+                let records: Vec<bagholder_core::RecordId> = delta.records.keys().copied().collect();
+                let instruments: Vec<InstrumentId> = delta.instruments.keys().copied().collect();
+                let accounts: Vec<AccountId> = delta.accounts.keys().copied().collect();
+                let gone: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
+                let was: BTreeMap<InstrumentId, Option<InstrumentId>> =
+                    instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
+                self.seed(&mut seeds, &records, &was, &accounts);
+                // what the person keeps on the trades: the instruments they are anchored on, before and after
+                let mut reach = Reach::default();
+                for t in delta.trades.keys() {
+                    reach.instruments.extend(self.inputs.ledger.trades.get(t).and_then(crate::input::Keyed::instrument));
+                }
+                for (t, now) in &delta.trades {
+                    reach.instruments.extend(now.as_ref().and_then(|(_, t)| crate::input::Keyed::instrument(t)));
+                    reach.trades.insert(*t);
+                }
+                for subject in delta.journal.keys() {
+                    match subject {
+                        bagholder_core::journal::JournalSubject::Trade(t) => {
+                            reach.trades.insert(*t);
+                            reach.instruments.extend(self.identity.trip_of.get(t).map(|k| k.instrument));
+                        }
+                        bagholder_core::journal::JournalSubject::Group(_) => {}
+                    }
+                }
+                // the adjustments: the rows they apply to, and every instrument their legs name before and after
+                let adjustments = std::mem::take(&mut delta.adjustments);
+                let mut adjusted_was: BTreeMap<bagholder_core::TransactionId, Option<crate::input::Adjustment>> = BTreeMap::new();
+                for (tx, list) in &adjustments {
+                    let old = self.inputs.facts.adjustments.get(tx).cloned();
+                    seeds.extend(old.iter().chain(list.iter()).flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
+                    adjusted_was.insert(tx.clone(), old);
+                }
+                for i in &instruments {
+                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
+                        if let Some(s) = self.symbols.get_mut(&k) {
+                            s.remove(i);
+                            if s.is_empty() {
+                                self.symbols.remove(&k);
+                            }
+                        }
+                    }
+                }
+                let book_was = BookParts { accounts: accounts.iter().map(|a| (*a, self.inputs.ledger.accounts.get(a).cloned())).collect(), instruments: instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).cloned())).collect(), activity: self.inputs.ledger.transactions.len() };
+                reach.transactions.extend(gone.iter().map(|t| t.id.clone()));
+                reach.accounts.extend(gone.iter().map(|t| t.account));
+                self.inputs.ledger.apply(delta);
+                for (tx, list) in adjustments {
+                    if let Some(t) = self.inputs.ledger.transactions.get(&tx) {
+                        seeds.insert(node_of(t));
+                    }
+                    self.inputs.facts.adjustments.replace(tx, list);
+                }
+                let now: BTreeMap<InstrumentId, Option<InstrumentId>> =
+                    instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
+                self.seed(&mut seeds, &records, &now, &accounts);
+                for i in &instruments {
+                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
+                        self.symbols.entry(k).or_default().insert(*i);
+                    }
+                }
+                let come: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
+                reach.transactions.extend(come.iter().map(|t| t.id.clone()));
+                reach.accounts.extend(come.iter().map(|t| t.account));
+                reach.accounts.extend(accounts.iter().copied());
+                self.families.reindex(&self.inputs.ledger, &was, gone.iter(), come.iter(), &adjusted_was, &self.inputs.facts.adjustments);
+                let mut waiting_moved = false;
+                if matching {
+                    let (g, cash_moved, waited) = self.rematch_families(seeds);
+                    waiting_moved = waited;
+                    reach.accounts.extend(cash_moved);
+                    for n in &g.region {
+                        if let Node::Instrument(i) = n {
+                            reach.instruments.insert(*i);
+                        }
+                    }
+                    reach.matched = true;
+                }
+                // every instrument of a family reached: a round trip keyed on one holds lots of the others
+                let fam: BTreeSet<InstrumentId> = reach.instruments.iter().flat_map(|i| self.families.members(self.families.of(Node::Instrument(*i)))).filter_map(|n| if let Node::Instrument(i) = n { Some(i) } else { None }).collect();
+                reach.instruments.extend(fam);
+                for i in &reach.instruments {
+                    reach.accounts.extend(self.matched.held_by.get(i).into_iter().flatten().copied());
+                }
+                self.rederive(&reach, &mut moved);
+                // the record as a whole
+                let mut book = BTreeSet::new();
+                if book_was.accounts.iter().any(|(a, was)| self.inputs.ledger.accounts.get(a) != was.as_ref()) {
+                    book.insert("accounts");
+                }
+                if book_was.instruments.iter().any(|(i, was)| self.inputs.ledger.instruments.get(i) != was.as_ref()) {
+                    book.insert("instruments");
+                }
+                if waiting_moved {
+                    book.insert("waiting");
+                }
+                if book_was.activity != self.inputs.ledger.transactions.len() {
+                    book.insert("activity");
+                }
+                if !book.is_empty() {
+                    moved.0.entry(Entity::Book).or_default().extend(book);
+                }
             }
             Change::Clock(c) => {
                 let before = self.snapshot(Parts::ALL);
@@ -443,27 +673,6 @@ impl Engine {
                 self.inputs.facts.rates = r;
                 self.derive();
                 self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
-                self.compare(&before, &mut moved);
-            }
-            Change::Trades(t) => {
-                let before = self.snapshot(Parts { trades: true, positions: true, ..Parts::NONE });
-                self.inputs.ledger.trades = t;
-                self.identity = identify(&self.inputs.ledger, &self.matched);
-                self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None, None);
-                self.compare(&before, &mut moved);
-            }
-            Change::Groups(g) => {
-                let before = self.snapshot(Parts { trades: true, ..Parts::NONE });
-                self.inputs.ledger.groups = g;
-                self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.compare(&before, &mut moved);
-            }
-            Change::Journal(j) => {
-                let before = self.snapshot(Parts { trades: true, positions: true, ..Parts::NONE });
-                self.inputs.ledger.journal = j;
-                self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None, None);
                 self.compare(&before, &mut moved);
             }
             Change::Declared(i, d) => {
@@ -509,12 +718,20 @@ impl Engine {
                 }
             }
             Change::Closes(i, c) => {
-                if self.is_underlying(i) {
-                    // a close can decide whether a contract expired worthless
-                    let before = self.snapshot(Parts::ALL);
+                if self.families.is_underlying(i) {
+                    // a close can decide whether a contract expired worthless:
+                    // the underlying's family, its contracts with it
                     self.inputs.market.closes.insert(i, c);
-                    self.rematch();
-                    self.compare(&before, &mut moved);
+                    let (g, cash_moved, waited) = self.rematch_families(BTreeSet::from([Node::Instrument(i)]));
+                    let mut reach = Reach { accounts: cash_moved, ..Reach::default() };
+                    reach.instruments = g.region.iter().filter_map(|n| if let Node::Instrument(i) = n { Some(*i) } else { None }).collect();
+                    for x in &reach.instruments {
+                        reach.accounts.extend(self.matched.held_by.get(x).into_iter().flatten().copied());
+                    }
+                    self.rederive(&reach, &mut moved);
+                    if waited {
+                        moved.0.entry(Entity::Book).or_default().insert("waiting");
+                    }
                 } else {
                     self.inputs.market.closes.insert(i, c);
                     self.reprice(i, &mut moved);
@@ -557,6 +774,126 @@ impl Engine {
             }
         }
         moved
+    }
+
+    /// The nodes a change to `records`, the instruments `under` names (each with
+    /// its underlying) and `accounts` reaches in the ledger as it stands: their
+    /// rows', their links' other sides', their own.
+    fn seed(&self, seeds: &mut BTreeSet<Node>, records: &[bagholder_core::RecordId], under: &BTreeMap<InstrumentId, Option<InstrumentId>>, accounts: &[AccountId]) {
+        let l = &self.inputs.ledger;
+        for r in records {
+            for t in l.transactions.of_record(*r) {
+                seeds.insert(node_of(t));
+                for other in [l.transfer_links.received_by(&t.id), l.transfer_links.sent_by(&t.id)].into_iter().flatten() {
+                    if let Some(o) = l.transactions.get(other) {
+                        seeds.insert(node_of(o));
+                    }
+                }
+            }
+        }
+        for (i, u) in under {
+            seeds.insert(Node::Instrument(*i));
+            if let Some(u) = u {
+                seeds.insert(Node::Instrument(*u));
+            }
+        }
+        for a in accounts {
+            seeds.insert(Node::Cash(*a));
+            seeds.extend(l.transactions.instruments_in(*a).map(Node::Instrument));
+        }
+    }
+
+    /// The figures a change to the record reached, worked out again in place, and
+    /// what moved said (`docs/plans/stage-3-the-record-by-change.md`, B): the
+    /// trade identity, round trips and positions of `reach.instruments`, the
+    /// saved groups (their claims are settled over every group, in the book's
+    /// order), the cashflow rows of `reach.transactions` and of the stock
+    /// dividends of those instruments, the payers' rates of what those rows and
+    /// instruments are, and the checks of `reach.accounts`.
+    fn rederive(&mut self, reach: &Reach, moved: &mut Moved) {
+        let instruments = &reach.instruments;
+        let fresh = crate::identity::identify_in(&self.inputs.ledger, &self.matched, instruments);
+        self.identity.replace(&self.inputs.ledger, instruments, fresh);
+        // the groups, every one: which round trips each holds turns on the earlier ones
+        let held_was: BTreeSet<TripKey> = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
+        let (groups, held) = crate::trades::groups_shown(&self.inputs, &self.matched, &self.identity);
+        let mut trips: BTreeSet<TripKey> = instruments.iter().flat_map(|i| self.matched.trips_of.get(i).into_iter().flatten().cloned()).collect();
+        trips.extend(held_was.symmetric_difference(&held).cloned());
+        let rebuilt = |k: &TradeKey| match k {
+            TradeKey::Group(_) => true,
+            TradeKey::Trip(t) => instruments.contains(&t.instrument) || trips.contains(t),
+        };
+        let mut was: Vec<TradeFig> = Vec::new();
+        self.trades.retain(|t| {
+            if rebuilt(&t.key) {
+                was.push(t.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let mut now: Vec<TradeFig> = groups;
+        for k in &trips {
+            if held.contains(k) {
+                continue;
+            }
+            now.extend(crate::trades::trip_fig(&self.inputs, &self.matched, &self.identity, k));
+        }
+        // each after every row it ties with: as a fresh build's stable sort leaves them
+        for t in &now {
+            let at = self.trades.partition_point(|x| crate::trades::shown_order(x, t) != std::cmp::Ordering::Greater);
+            self.trades.insert(at, t.clone());
+        }
+        diff(moved, was.iter().map(|t| (trade_entity(t), t)), now.iter().map(|t| (trade_entity(t), t)));
+        // positions
+        let mut was: Vec<PositionFig> = Vec::new();
+        self.positions.retain(|p| {
+            if instruments.contains(&p.instrument) {
+                was.push(p.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let now: Vec<PositionFig> = instruments.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i), None)).collect();
+        let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
+        for p in &now {
+            let at = self.positions.partition_point(|x| order(x) <= order(p));
+            self.positions.insert(at, p.clone());
+        }
+        diff(moved, was.iter().map(|p| (position_entity(p), p)), now.iter().map(|p| (position_entity(p), p)));
+        // cashflow rows
+        let mut was: Vec<CashRow> = Vec::new();
+        self.cash.retain(|r| {
+            let gone = reach.transactions.contains(&r.id) || (r.in_units.is_some() && r.instrument.is_some_and(|i| instruments.contains(&i)));
+            if gone {
+                was.push(r.clone());
+            }
+            !gone
+        });
+        let mut now: Vec<CashRow> = reach.transactions.iter().filter_map(|id| self.inputs.ledger.transactions.get(id)).filter_map(|t| crate::cashflow::cash_row(&self.inputs, t)).collect();
+        now.extend(self.matched.stock_dividends.iter().filter(|s| instruments.contains(&s.instrument)).map(|s| crate::cashflow::stock_dividend_row(&self.inputs, s)));
+        for r in &now {
+            let at = self.cash.partition_point(|x| crate::cashflow::shown_order(x, r) != std::cmp::Ordering::Greater);
+            self.cash.insert(at, r.clone());
+        }
+        let payers: BTreeSet<InstrumentId> = was.iter().chain(now.iter()).filter_map(|r| r.instrument).chain(instruments.iter().copied()).collect();
+        diff(moved, was.iter().map(|r| (Entity::CashRow(r.id.clone()), r)), now.iter().map(|r| (Entity::CashRow(r.id.clone()), r)));
+        // the payers' rates
+        for i in payers {
+            let payments: Vec<&CashRow> = self.cash.iter().filter(|r| r.instrument == Some(i) && r.kind == crate::cashflow::Payment::Dividend && r.in_units.is_none()).collect();
+            let rate = crate::cashflow::payer_rate(&self.inputs, i, payments, &self.matched);
+            let before = self.payers.get(&i).cloned();
+            match rate.clone() {
+                Some(r) => self.payers.insert(i, r),
+                None => self.payers.remove(&i),
+            };
+            diff(moved, before.iter().map(|p| (Entity::Payer(i), p)), rate.iter().map(|p| (Entity::Payer(i), p)));
+        }
+        // the checks with the brokers
+        for a in &reach.accounts {
+            self.recheck(*a, moved);
+        }
     }
 
     /// A price moved: that instrument's positions.
@@ -639,6 +976,55 @@ impl Engine {
         }
     }
 
+    /// Where this engine and another disagree, beyond the figures `differences`
+    /// compares: the match whole (every lot, round trip and what waits) and the
+    /// trades' identity. None when they agree.
+    pub fn match_disagrees(&self, other: &Engine) -> Option<String> {
+        if self.matched != other.matched {
+            let m = (&self.matched, &other.matched);
+            let parts = [
+                ("trips", m.0.trips != m.1.trips),
+                ("books", m.0.books != m.1.books),
+                ("beyond", m.0.beyond != m.1.beyond),
+                ("dust", m.0.dust != m.1.dust),
+                ("arrived", m.0.arrived != m.1.arrived),
+                ("last_price", m.0.last_price != m.1.last_price),
+                ("stock_dividends", m.0.stock_dividends != m.1.stock_dividends),
+                ("disagreements", m.0.disagreements != m.1.disagreements),
+                ("unit_disagreements", m.0.unit_disagreements != m.1.unit_disagreements),
+                ("unapplied", m.0.unapplied != m.1.unapplied),
+                ("units", m.0.units != m.1.units),
+                ("roles", m.0.roles != m.1.roles),
+                ("waiting", m.0.waiting != m.1.waiting),
+                ("cash", m.0.cash != m.1.cash),
+            ];
+            return Some(format!("the match differs in {:?}", parts.iter().filter(|(_, d)| *d).map(|(n, _)| *n).collect::<Vec<_>>()));
+        }
+        if self.identity != other.identity {
+            return Some(format!("the trades' identity differs: {:?} against {:?}", self.identity, other.identity));
+        }
+        // what the page shows in order, in that order (brief 27, 11)
+        if self.trades != other.trades {
+            return Some("the trades differ in order or content".into());
+        }
+        if self.positions != other.positions {
+            return Some("the positions differ in order or content".into());
+        }
+        if self.cash != other.cash {
+            return Some("the cashflow rows differ in order or content".into());
+        }
+        if self.families != other.families {
+            return Some(format!("the families differ: {}", self.families.differences(&other.families)));
+        }
+        if self.symbols != other.symbols {
+            return Some("the instruments by symbol differ".into());
+        }
+        if self.shares != other.shares {
+            return Some("the cash shares by family differ".into());
+        }
+        None
+    }
+
     /// What differs between this engine's figures and another's, field for
     /// field: empty when an incremental `apply` agrees with a fresh build.
     pub fn differences(&self, other: &Engine) -> Moved {
@@ -671,6 +1057,23 @@ fn quote_moved(i: InstrumentId, was: Option<&Quote>, now: Option<&Quote>, moved:
     if !fields.is_empty() {
         moved.0.entry(Entity::Quote(i)).or_default().extend(fields);
     }
+}
+
+/// What a change to the record reached (`Engine::rederive`).
+#[derive(Default)]
+struct Reach {
+    instruments: BTreeSet<InstrumentId>,
+    transactions: BTreeSet<bagholder_core::TransactionId>,
+    accounts: BTreeSet<AccountId>,
+    trades: BTreeSet<bagholder_core::TradeId>,
+    matched: bool,
+}
+
+/// What the record as a whole was, for the parts a change names.
+struct BookParts {
+    accounts: BTreeMap<AccountId, Option<crate::input::AccountInfo>>,
+    instruments: BTreeMap<InstrumentId, Option<crate::input::InstrumentInfo>>,
+    activity: usize,
 }
 
 /// Which collections a change recomputes.

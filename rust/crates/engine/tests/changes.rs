@@ -12,7 +12,7 @@ use serde_json::Value;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::journal::{Group, JournalEntry, JournalSubject};
 use bagholder_core::{Currency, Dec, Money, SourceName};
-use bagholder_engine::input::{Adjustment, AdjustmentLeg, Adjustments, BrokerAccount, Declared, DeclaredRead, Inputs, Quote, QuoteSource, Sourced};
+use bagholder_engine::input::{Adjustment, AdjustmentLeg, Adjustments, BrokerAccount, Declared, DeclaredRead, Inputs, LedgerDelta, Quote, QuoteSource, Sourced};
 use bagholder_engine::{Change, Engine};
 use common::*;
 
@@ -20,11 +20,12 @@ use common::*;
 /// until the kind is named here and tried below.
 fn kind(c: &Change) -> &'static str {
     match c {
-        Change::Ledger(_) => "ledger",
-        Change::Trades(_) => "trades",
-        Change::Groups(_) => "groups",
-        Change::Journal(_) => "journal",
-        Change::Adjustments(_) => "adjustments",
+        // the record, and what the person keeps on it: one change, by what it names
+        Change::Ledger(d) if !d.records.is_empty() => "ledger",
+        Change::Ledger(d) if !d.trades.is_empty() => "trades",
+        Change::Ledger(d) if !d.groups.is_empty() => "groups",
+        Change::Ledger(d) if !d.adjustments.is_empty() => "adjustments",
+        Change::Ledger(_) => "journal",
         Change::Rates(_) => "rates",
         Change::Declared(..) => "declared",
         Change::Frequency(..) => "frequency",
@@ -44,17 +45,52 @@ const KINDS: [&str; 14] = ["ledger", "trades", "groups", "journal", "adjustments
 fn changed(inputs: &Inputs, c: &Change) -> Inputs {
     let mut i = inputs.clone();
     match c.clone() {
-        Change::Ledger(l) => {
-            let (trades, groups, journal) = (i.ledger.trades.clone(), i.ledger.groups.clone(), i.ledger.journal.clone());
-            i.ledger = l;
-            i.ledger.trades = trades;
-            i.ledger.groups = groups;
-            i.ledger.journal = journal;
+        Change::Ledger(d) => {
+            // each thing the delta names, as it reads now, in place of what was held
+            let l = &mut i.ledger;
+            let named: std::collections::BTreeSet<_> = d.records.keys().copied().collect();
+            let mut txs: Vec<_> = l.transactions.iter().filter(|t| !named.contains(&t.id.record)).cloned().collect();
+            for (r, now) in &d.records {
+                match now {
+                    Some((info, rows)) => {
+                        l.records.insert(*r, info.clone());
+                        txs.extend(rows.iter().cloned());
+                    }
+                    None => {
+                        l.records.remove(r);
+                    }
+                }
+            }
+            l.transactions = txs.into_iter().collect();
+            if !named.is_empty() {
+                let kept: Vec<_> = l.transfer_links.iter().filter(|(o, n)| !named.contains(&o.record) && !named.contains(&n.record)).map(|(o, n)| (o.clone(), n.clone())).collect();
+                l.transfer_links = kept.into_iter().chain(d.links.iter().cloned()).collect();
+            }
+            for (id, t) in &d.trades {
+                l.trades.remove(id);
+                if let Some((rank, t)) = t {
+                    l.trades.put(rank.clone(), t.clone());
+                }
+            }
+            for (id, g) in &d.groups {
+                l.groups.remove(id);
+                if let Some((rank, g)) = g {
+                    l.groups.put(rank.clone(), g.clone());
+                }
+            }
+            for (k, j) in &d.journal {
+                match j {
+                    Some(j) => l.journal.insert(*k, j.clone()),
+                    None => l.journal.remove(k),
+                };
+            }
+            if !d.adjustments.is_empty() {
+                // every adjustment the inputs held, the named transactions' put in place, chosen again whole
+                let mut all: Vec<Adjustment> = i.facts.adjustments.iter().filter(|(tx, _)| !d.adjustments.contains_key(*tx)).map(|(_, x)| x.clone()).collect();
+                all.extend(d.adjustments.values().flatten().cloned());
+                i.facts.adjustments = Adjustments::choose(all);
+            }
         }
-        Change::Trades(t) => i.ledger.trades = t,
-        Change::Groups(g) => i.ledger.groups = g,
-        Change::Journal(j) => i.ledger.journal = j,
-        Change::Adjustments(a) => i.facts.adjustments = a,
         Change::Rates(r) => i.facts.rates = r,
         Change::Declared(k, d) => {
             match d {
@@ -115,24 +151,22 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let u = b.ids.instrument("U");
     let f = b.ids.instrument("F");
     let a = b.ids.account("A");
-    let mut ledger = i.ledger.clone();
     // a sale of X arrives: the match moves
-    let mut sale = ledger.transactions.iter().find(|t| t.id == b.tx["t2"]).unwrap().clone();
+    let mut sale = i.ledger.transactions.iter().find(|t| t.id == b.tx["t2"]).unwrap().clone();
     sale.id = bagholder_core::TransactionId::new(b.ids.record("late-sale"), bagholder_core::Leg::named("trade"));
     sale.trade_date = day("2026-03-10");
     sale.occurred_at = Some("2026-03-10T15:00:00Z".parse().unwrap());
-    ledger.transactions.push(sale);
-    ledger.records.insert(b.ids.record("late-sale"), bagholder_engine::input::RecordInfo { source_key: "late-sale".into(), ..Default::default() });
+    let record = LedgerDelta { records: BTreeMap::from([(b.ids.record("late-sale"), Some((bagholder_engine::input::RecordInfo { source_key: "late-sale".into(), ..Default::default() }, vec![sale])))]), ..LedgerDelta::default() };
     let trade = e.figures().trades.iter().find_map(|t| t.trade).expect("a trade with an id");
     let second = e.figures().positions.iter().find_map(|p| p.trade).expect("a position with an id");
-    let groups = vec![Group { id: b.ids.group("G"), locked: true, members: vec![trade, second] }];
-    let journal = BTreeMap::from([(JournalSubject::Trade(trade), JournalEntry { thesis: "breakout".into(), grade: Some(bagholder_core::journal::Grade::A), tags: vec!["momentum".into()] })]);
+    let groups = LedgerDelta { groups: BTreeMap::from([(b.ids.group("G"), Some((rank(1000), Group { id: b.ids.group("G"), locked: true, members: vec![trade, second] })))]), ..LedgerDelta::default() };
+    let journal = LedgerDelta { journal: BTreeMap::from([(JournalSubject::Trade(trade), Some(JournalEntry { thesis: "breakout".into(), grade: Some(bagholder_core::journal::Grade::A), tags: vec!["momentum".into()] }))]), ..LedgerDelta::default() };
     // the trade on X's round trip is gone: the round trip asks for one again
     let x_trade = e.figures().trades.iter().find(|t| t.instrument == x).and_then(|t| t.trade).expect("X's trade");
-    let trades: Vec<_> = i.ledger.trades.iter().filter(|t| t.id != x_trade).cloned().collect();
+    let trades = LedgerDelta { trades: BTreeMap::from([(x_trade, None)]), ..LedgerDelta::default() };
     // the person states what the deposited coin cost
     let btc = b.ids.instrument("BTC");
-    let adjustments = Adjustments::choose([Adjustment { applies_to: b.tx["k1"].clone(), legs: vec![AdjustmentLeg { to: Some(btc), cost: Some(Money::new(d("25000"), Currency::CAD)), ..AdjustmentLeg::default() }], source: SourceName::named("person") }]);
+    let adjustments = BTreeMap::from([(b.tx["k1"].clone(), vec![Adjustment { applies_to: b.tx["k1"].clone(), legs: vec![AdjustmentLeg { to: Some(btc), cost: Some(Money::new(d("25000"), Currency::CAD)), ..AdjustmentLeg::default() }], source: SourceName::named("person") }])]);
     let mut rates = i.facts.rates.clone();
     rates.by_currency.get_mut(&Currency::USD).unwrap().insert(day("2026-04-20"), d("1.39"));
     let declared = DeclaredRead {
@@ -150,11 +184,11 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let mut benchmark = i.market.benchmarks.get("SP500").cloned().unwrap_or(bagholder_engine::input::BenchmarkSeries { currency: Currency::USD, closes: BTreeMap::new(), dividends: BTreeMap::new(), splits: BTreeMap::new() });
     benchmark.closes.insert(day("2026-04-20"), d("5210"));
     vec![
-        Change::Ledger(ledger),
-        Change::Trades(trades),
-        Change::Groups(groups),
-        Change::Journal(journal),
-        Change::Adjustments(adjustments),
+        Change::Ledger(record),
+        Change::Ledger(trades),
+        Change::Ledger(groups),
+        Change::Ledger(journal),
+        Change::Ledger(LedgerDelta { adjustments, ..LedgerDelta::default() }),
         Change::Rates(rates),
         Change::Declared(f, Some(declared)),
         Change::Frequency(f, Some(Sourced { value: 4, source: SourceName::named("tmx") })),
@@ -187,6 +221,9 @@ fn every_change_equals_a_fresh_build_and_says_what_moved() {
         let off = incremental.differences(&fresh);
         if !off.is_empty() {
             failures.push(format!("{k}: the incremental figures differ from a fresh build in {:?}", off.0));
+        }
+        if let Some(why) = incremental.match_disagrees(&fresh) {
+            failures.push(format!("{k}: {why}"));
         }
         // what moved is exactly what differs between before and after
         let expected = fresh.differences(&base);

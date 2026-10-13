@@ -62,6 +62,385 @@ pub struct RecordInfo {
     pub first_received_at: Option<Timestamp>,
 }
 
+/// Where a transaction stands in the ledger's order: its account, its trade day,
+/// the instant it happened (none first), its record and its leg.
+pub type Place = (AccountId, Date, Option<Timestamp>, RecordId, bagholder_core::Leg);
+
+fn place(t: &Transaction) -> Place {
+    (t.account, t.trade_date, t.occurred_at, t.id.record, t.id.leg.clone())
+}
+
+/// The live transactions, held by key: in the ledger's order (`Place`), found
+/// by id, and replaced a record at a time, so a change to one record touches
+/// that record and nothing else (`docs/plans/stage-3-the-record-by-change.md`, B).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Transactions {
+    rows: BTreeMap<Place, Transaction>,
+    by_id: BTreeMap<TransactionId, Place>,
+    /// Each instrument's transactions, in any account.
+    by_instrument: BTreeMap<InstrumentId, BTreeSet<TransactionId>>,
+    /// Each account's transactions that name no instrument.
+    cash_by_account: BTreeMap<AccountId, BTreeSet<TransactionId>>,
+    /// Each account's instruments, by how many of its transactions name each.
+    held_in: BTreeMap<AccountId, BTreeMap<InstrumentId, usize>>,
+}
+
+impl Transactions {
+    /// Every transaction, in the ledger's order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Transaction> + Clone {
+        self.rows.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn get(&self, id: &TransactionId) -> Option<&Transaction> {
+        self.by_id.get(id).and_then(|p| self.rows.get(p))
+    }
+
+    /// Where a transaction stands in the ledger's order.
+    pub fn place_of(&self, id: &TransactionId) -> Option<&Place> {
+        self.by_id.get(id)
+    }
+
+    /// A record's transactions, by leg.
+    pub fn of_record(&self, record: RecordId) -> impl Iterator<Item = &Transaction> {
+        self.by_id.range(TransactionId::new(record, bagholder_core::Leg::first())..).take_while(move |(id, _)| id.record == record).filter_map(|(_, p)| self.rows.get(p))
+    }
+
+    /// Every transaction of an instrument, in any account, by id.
+    pub fn of_instrument(&self, instrument: InstrumentId) -> impl Iterator<Item = &Transaction> {
+        self.by_instrument.get(&instrument).into_iter().flatten().filter_map(|id| self.get(id))
+    }
+
+    /// Every transaction of an account that names no instrument, by id.
+    pub fn cash_of(&self, account: AccountId) -> impl Iterator<Item = &Transaction> {
+        self.cash_by_account.get(&account).into_iter().flatten().filter_map(|id| self.get(id))
+    }
+
+    /// The instruments an account's transactions name.
+    pub fn instruments_in(&self, account: AccountId) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.held_in.get(&account).into_iter().flat_map(|m| m.keys().copied())
+    }
+
+    /// A record's transactions replaced by `now` (none: the record is gone).
+    pub fn put_record(&mut self, record: RecordId, now: Vec<Transaction>) {
+        let gone: Vec<TransactionId> = self.of_record(record).map(|t| t.id.clone()).collect();
+        for id in gone {
+            self.remove(&id);
+        }
+        for t in now {
+            debug_assert_eq!(t.id.record, record, "a transaction of another record");
+            self.insert(t);
+        }
+    }
+
+    fn remove(&mut self, id: &TransactionId) {
+        let Some(p) = self.by_id.remove(id) else { return };
+        let Some(t) = self.rows.remove(&p) else { return };
+        match t.instrument {
+            Some(i) => {
+                if let Some(s) = self.by_instrument.get_mut(&i) {
+                    s.remove(id);
+                    if s.is_empty() {
+                        self.by_instrument.remove(&i);
+                    }
+                }
+                if let Some(m) = self.held_in.get_mut(&t.account) {
+                    if let Some(n) = m.get_mut(&i) {
+                        *n -= 1;
+                        if *n == 0 {
+                            m.remove(&i);
+                        }
+                    }
+                    if m.is_empty() {
+                        self.held_in.remove(&t.account);
+                    }
+                }
+            }
+            None => {
+                if let Some(s) = self.cash_by_account.get_mut(&t.account) {
+                    s.remove(id);
+                    if s.is_empty() {
+                        self.cash_by_account.remove(&t.account);
+                    }
+                }
+            }
+        }
+    }
+
+    fn insert(&mut self, t: Transaction) {
+        self.remove(&t.id);
+        self.by_id.insert(t.id.clone(), place(&t));
+        match t.instrument {
+            Some(i) => {
+                self.by_instrument.entry(i).or_default().insert(t.id.clone());
+                *self.held_in.entry(t.account).or_default().entry(i).or_default() += 1;
+            }
+            None => {
+                self.cash_by_account.entry(t.account).or_default().insert(t.id.clone());
+            }
+        }
+        self.rows.insert(place(&t), t);
+    }
+}
+
+impl FromIterator<Transaction> for Transactions {
+    fn from_iter<I: IntoIterator<Item = Transaction>>(items: I) -> Transactions {
+        let mut out = Transactions::default();
+        for t in items {
+            out.insert(t);
+        }
+        out
+    }
+}
+
+impl<'a> IntoIterator for &'a Transactions {
+    type Item = &'a Transaction;
+    type IntoIter = std::collections::btree_map::Values<'a, Place, Transaction>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.values()
+    }
+}
+
+/// The transfers between the person's accounts the book links: each transfer
+/// out and the transfer in that received it, found from either side.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Links {
+    outs: BTreeMap<TransactionId, TransactionId>,
+    ins: BTreeMap<TransactionId, TransactionId>,
+}
+
+impl Links {
+    /// Each link, as (out, in), by its out side.
+    pub fn iter(&self) -> impl Iterator<Item = (&TransactionId, &TransactionId)> + Clone {
+        self.outs.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.outs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.outs.is_empty()
+    }
+
+    /// The transfer in that received `out`.
+    pub fn received_by(&self, out: &TransactionId) -> Option<&TransactionId> {
+        self.outs.get(out)
+    }
+
+    /// The transfer out that `received` received.
+    pub fn sent_by(&self, received: &TransactionId) -> Option<&TransactionId> {
+        self.ins.get(received)
+    }
+
+    pub fn insert(&mut self, out: TransactionId, received: TransactionId) {
+        if let Some(was) = self.outs.insert(out.clone(), received.clone()) {
+            self.ins.remove(&was);
+        }
+        // a transfer in is received from one transfer out
+        if let Some(was) = self.ins.insert(received, out.clone()) {
+            if was != out {
+                self.outs.remove(&was);
+            }
+        }
+    }
+
+    /// Every link either side of which is on `record`, taken out.
+    pub fn remove_record(&mut self, record: RecordId) {
+        let on = |m: &BTreeMap<TransactionId, TransactionId>| -> Vec<TransactionId> {
+            m.range(TransactionId::new(record, bagholder_core::Leg::first())..).take_while(|(id, _)| id.record == record).map(|(id, _)| id.clone()).collect()
+        };
+        for out in on(&self.outs) {
+            if let Some(r) = self.outs.remove(&out) {
+                self.ins.remove(&r);
+            }
+        }
+        for received in on(&self.ins) {
+            if let Some(o) = self.ins.remove(&received) {
+                self.outs.remove(&o);
+            }
+        }
+    }
+}
+
+impl FromIterator<(TransactionId, TransactionId)> for Links {
+    fn from_iter<I: IntoIterator<Item = (TransactionId, TransactionId)>>(items: I) -> Links {
+        let mut out = Links::default();
+        for (o, i) in items {
+            out.insert(o, i);
+        }
+        out
+    }
+}
+
+/// What changed in the ledger, by key (`docs/plans/stage-3-the-record-by-change.md`,
+/// B): each thing named, as it reads now, or none where it is gone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LedgerDelta {
+    pub accounts: BTreeMap<AccountId, Option<AccountInfo>>,
+    pub instruments: BTreeMap<InstrumentId, Option<InstrumentInfo>>,
+    /// Each record named: what the ledger knows of it and its transactions, or
+    /// none where it is no longer live.
+    pub records: BTreeMap<RecordId, Option<(RecordInfo, Vec<Transaction>)>>,
+    /// Every link either side of which is on a record named, as the book links
+    /// them now: they replace every link on those records.
+    pub links: Vec<(TransactionId, TransactionId)>,
+    pub trades: BTreeMap<bagholder_core::TradeId, Option<(Rank, Trade)>>,
+    pub groups: BTreeMap<bagholder_core::GroupId, Option<(Rank, Group)>>,
+    pub journal: BTreeMap<JournalSubject, Option<JournalEntry>>,
+    /// Each transaction's adjustments: every one of a live record that applies to
+    /// it, in the book's order (none: nothing applies any more). They are the
+    /// person's records, read and applied with the rest.
+    pub adjustments: BTreeMap<TransactionId, Vec<Adjustment>>,
+}
+
+impl LedgerDelta {
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty()
+            && self.instruments.is_empty()
+            && self.records.is_empty()
+            && self.links.is_empty()
+            && self.trades.is_empty()
+            && self.groups.is_empty()
+            && self.journal.is_empty()
+            && self.adjustments.is_empty()
+    }
+
+    /// Whether the match can move: the records, the instruments, the accounts or
+    /// the adjustments changed (the trades, groups and journal do not match).
+    pub fn matches(&self) -> bool {
+        !self.records.is_empty() || !self.instruments.is_empty() || !self.accounts.is_empty() || !self.adjustments.is_empty()
+    }
+}
+
+/// Where a row stands in the book's own order of what the person keeps: when it
+/// was made, then the row's own number (trades and groups are read in it, and
+/// which of two trades keeps a round trip turns on it).
+pub type Rank = (String, i64);
+
+/// What a ranked store holds is found by: its key, and the instrument it is
+/// about, where it is about one.
+pub trait Keyed {
+    type Key: Ord + Clone;
+    fn key(&self) -> Self::Key;
+    fn instrument(&self) -> Option<InstrumentId> {
+        None
+    }
+}
+
+impl Keyed for Trade {
+    type Key = bagholder_core::TradeId;
+    fn key(&self) -> bagholder_core::TradeId {
+        self.id
+    }
+    /// The instrument it is anchored on.
+    fn instrument(&self) -> Option<InstrumentId> {
+        match &self.anchor {
+            bagholder_core::journal::Anchor::Opening(o) => Some(o.instrument),
+            bagholder_core::journal::Anchor::Orphaned(_) => None,
+        }
+    }
+}
+
+impl Keyed for Group {
+    type Key = bagholder_core::GroupId;
+    fn key(&self) -> bagholder_core::GroupId {
+        self.id
+    }
+}
+
+/// Rows in the book's order (`Rank`), found and replaced by key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ranked<V: Keyed> {
+    rows: BTreeMap<Rank, V>,
+    rank_of: BTreeMap<V::Key, Rank>,
+    /// Each instrument's rows, by rank.
+    on: BTreeMap<InstrumentId, BTreeSet<Rank>>,
+}
+
+impl<V: Keyed> Default for Ranked<V> {
+    fn default() -> Self {
+        Ranked { rows: BTreeMap::new(), rank_of: BTreeMap::new(), on: BTreeMap::new() }
+    }
+}
+
+impl<V: Keyed> Ranked<V> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &V> + Clone {
+        self.rows.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn get(&self, key: &V::Key) -> Option<&V> {
+        self.rank_of.get(key).and_then(|r| self.rows.get(r))
+    }
+
+    /// Where a row stands in the book's order.
+    pub fn rank(&self, key: &V::Key) -> Option<&Rank> {
+        self.rank_of.get(key)
+    }
+
+    /// The rows about an instrument, in the book's order.
+    pub fn on(&self, instrument: InstrumentId) -> impl Iterator<Item = &V> {
+        self.on.get(&instrument).into_iter().flatten().filter_map(|r| self.rows.get(r))
+    }
+
+    /// `v` put at `rank`, in place of what its key held.
+    pub fn put(&mut self, rank: Rank, v: V) {
+        self.remove(&v.key());
+        self.rank_of.insert(v.key(), rank.clone());
+        if let Some(i) = v.instrument() {
+            self.on.entry(i).or_default().insert(rank.clone());
+        }
+        self.rows.insert(rank, v);
+    }
+
+    pub fn remove(&mut self, key: &V::Key) -> Option<V> {
+        let rank = self.rank_of.remove(key)?;
+        let v = self.rows.remove(&rank)?;
+        if let Some(i) = v.instrument() {
+            if let Some(s) = self.on.get_mut(&i) {
+                s.remove(&rank);
+                if s.is_empty() {
+                    self.on.remove(&i);
+                }
+            }
+        }
+        Some(v)
+    }
+}
+
+impl<V: Keyed> FromIterator<(Rank, V)> for Ranked<V> {
+    fn from_iter<I: IntoIterator<Item = (Rank, V)>>(items: I) -> Ranked<V> {
+        let mut out = Ranked::default();
+        for (rank, v) in items {
+            out.put(rank, v);
+        }
+        out
+    }
+}
+
+impl<'a, V: Keyed> IntoIterator for &'a Ranked<V> {
+    type Item = &'a V;
+    type IntoIter = std::collections::btree_map::Values<'a, Rank, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.values()
+    }
+}
+
 /// The book's record: accounts, instruments, the live transactions, and what the
 /// person keeps on them.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -69,16 +448,75 @@ pub struct Ledger {
     pub accounts: BTreeMap<AccountId, AccountInfo>,
     pub instruments: BTreeMap<InstrumentId, InstrumentInfo>,
     /// Only live records' transactions.
-    pub transactions: Vec<Transaction>,
+    pub transactions: Transactions,
     /// Every live record a transaction belongs to.
     pub records: BTreeMap<RecordId, RecordInfo>,
     /// A transfer out of one of the person's accounts and the transfer into
     /// another that received it, as the book links them.
-    pub transfer_links: Vec<(TransactionId, TransactionId)>,
+    /// Each transfer out, and the transfer in that received it.
+    pub transfer_links: Links,
     /// Every trade the book has assigned, with its anchor.
-    pub trades: Vec<Trade>,
-    pub groups: Vec<Group>,
+    pub trades: Ranked<Trade>,
+    pub groups: Ranked<Group>,
     pub journal: BTreeMap<JournalSubject, JournalEntry>,
+}
+
+impl Ledger {
+    /// What `delta` names, as it reads now, in place of what was held; its
+    /// adjustments are the facts', applied beside it (`crate::engine`).
+    pub fn apply(&mut self, delta: LedgerDelta) {
+        let LedgerDelta { accounts, instruments, records, links, trades, groups, journal, adjustments: _ } = delta;
+        for (id, a) in accounts {
+            match a {
+                Some(a) => self.accounts.insert(id, a),
+                None => self.accounts.remove(&id),
+            };
+        }
+        for (id, i) in instruments {
+            match i {
+                Some(i) => self.instruments.insert(id, i),
+                None => self.instruments.remove(&id),
+            };
+        }
+        for (id, r) in records {
+            self.transfer_links.remove_record(id);
+            match r {
+                Some((info, txs)) => {
+                    self.records.insert(id, info);
+                    self.transactions.put_record(id, txs);
+                }
+                None => {
+                    self.records.remove(&id);
+                    self.transactions.put_record(id, vec![]);
+                }
+            }
+        }
+        for (o, i) in links {
+            self.transfer_links.insert(o, i);
+        }
+        for (id, t) in trades {
+            match t {
+                Some((rank, t)) => self.trades.put(rank, t),
+                None => {
+                    self.trades.remove(&id);
+                }
+            }
+        }
+        for (id, g) in groups {
+            match g {
+                Some((rank, g)) => self.groups.put(rank, g),
+                None => {
+                    self.groups.remove(&id);
+                }
+            }
+        }
+        for (subject, j) in journal {
+            match j {
+                Some(j) => self.journal.insert(subject, j),
+                None => self.journal.remove(&subject),
+            };
+        }
+    }
 }
 
 /// A fact with where it came from.
@@ -192,16 +630,27 @@ impl Adjustments {
         }
         let mut out = Adjustments::default();
         for (tx, list) in by_tx {
-            let person = SourceName::person();
-            let sourced: Vec<&Adjustment> = list.iter().filter(|a| a.source != person).collect();
-            let standing: Vec<&Adjustment> = if sourced.is_empty() { list.iter().collect() } else { sourced };
-            if standing.iter().all(|a| a.legs == standing[0].legs) {
-                out.chosen.insert(tx, standing[0].clone());
-            } else {
-                out.conflicts.insert(tx);
-            }
+            out.replace(tx, list);
         }
         out
+    }
+
+    /// What applies to `tx` chosen again from `list`, every adjustment of a live
+    /// record that applies to it, in the book's order (none: nothing applies).
+    pub fn replace(&mut self, tx: TransactionId, list: Vec<Adjustment>) {
+        self.chosen.remove(&tx);
+        self.conflicts.remove(&tx);
+        if list.is_empty() {
+            return;
+        }
+        let person = SourceName::person();
+        let sourced: Vec<&Adjustment> = list.iter().filter(|a| a.source != person).collect();
+        let standing: Vec<&Adjustment> = if sourced.is_empty() { list.iter().collect() } else { sourced };
+        if standing.iter().all(|a| a.legs == standing[0].legs) {
+            self.chosen.insert(tx, standing[0].clone());
+        } else {
+            self.conflicts.insert(tx);
+        }
     }
 
     pub fn get(&self, transaction: &TransactionId) -> Option<&Adjustment> {

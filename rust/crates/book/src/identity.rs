@@ -112,12 +112,31 @@ impl Book {
         }
     }
 
+    /// The account a broker's id names, whatever broker states it: the one made
+    /// last where two do.
+    pub fn account_by_ref_value(&self, value: &str) -> Result<Option<AccountId>> {
+        let found: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT r.account_id FROM account_refs r JOIN accounts a ON a.id = r.account_id WHERE r.value = ? ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+                params![value],
+                |row| row.get(0),
+            )
+            .optional()?;
+        found.map(|s| text::parsed("account_refs", "account_id", &s, AccountId::parse)).transpose()
+    }
+
     pub fn account_by_ref(&self, r: &AccountRef) -> Result<Option<AccountId>> {
         let found: Option<String> = self
             .conn()
             .query_row("SELECT account_id FROM account_refs WHERE scheme = ? AND value = ?", params![r.scheme_text(), r.value], |row| row.get(0))
             .optional()?;
         found.map(|s| text::parsed("account_refs", "account_id", &s, AccountId::parse)).transpose()
+    }
+
+    /// An account, where the book holds it.
+    pub fn account_held(&self, id: AccountId) -> Result<Option<Account>> {
+        Ok(self.accounts_where("WHERE id = ?", params![id.to_string()])?.pop())
     }
 
     pub fn account(&self, id: AccountId) -> Result<Account> {
@@ -231,6 +250,15 @@ impl Book {
             currency: text::currency("instruments", "currency", &currency)?,
             issuer: text::opt_parsed("instruments", "issuer_id", issuer, IssuerId::parse)?,
         })
+    }
+
+    /// An instrument as the ledger reads it: none where it is gone or joined into
+    /// another by a succession (that one is read in its place).
+    pub fn instrument_as_read(&self, id: InstrumentId) -> Result<Option<Instrument>> {
+        let listed: bool = self
+            .conn()
+            .query_row("SELECT EXISTS (SELECT 1 FROM instruments WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM instrument_joins WHERE instrument_id = ?1)", [id.to_string()], |r| r.get(0))?;
+        listed.then(|| self.instrument(id)).transpose()
     }
 
     /// Every instrument as the book reads them: one joined into another by a
@@ -375,6 +403,33 @@ impl Book {
     /// records' sightings under one symbol and venue is one name, from its first
     /// day to its last. A ticker that changes and changes back is three names.
     /// The sightings of every instrument read as one with it count.
+    /// What the instrument is called now: the symbol of `names`' last, read
+    /// through an index from the newest sighting of each instrument read as it,
+    /// not by working out every name it had.
+    pub fn current_symbol(&self, id: InstrumentId) -> Result<Option<String>> {
+        let head = self.canonical(id)?;
+        let mut members = self.conn().prepare_cached(&format!("SELECT * FROM {}", group_sql("?1")))?;
+        let ids: Vec<String> = members.query_map([head.to_string()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut newest: Option<(String, String, i64)> = None;
+        let mut st = self.conn().prepare_cached(
+            "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+             WHERE s.instrument_id = ?1 ORDER BY s.day DESC, s.symbol DESC, s.rowid DESC LIMIT 1",
+        )?;
+        for i in ids {
+            let row: Option<(String, String, i64)> = st.query_row([i], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+            if let Some(row) = row {
+                if newest.as_ref().is_none_or(|n| (&row.0, &row.1, row.2) > (&n.0, &n.1, n.2)) {
+                    newest = Some(row);
+                }
+            }
+        }
+        if let Some((_, symbol, _)) = newest {
+            return Ok(Some(symbol));
+        }
+        // no record names it: the fallbacks `names` reads
+        Ok(self.names(id)?.last().map(|n| n.symbol.clone()))
+    }
+
     pub fn names(&self, id: InstrumentId) -> Result<Vec<Name>> {
         let head = self.canonical(id)?;
         let mut stmt = self.conn().prepare_cached(&format!(
@@ -614,7 +669,8 @@ impl Book {
         };
         self.conn().execute(
             "INSERT INTO security_standings(scheme, value, standing, kind, currency, symbol, venue_mic) VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(scheme, value, standing) DO UPDATE SET kind = excluded.kind, currency = excluded.currency, symbol = excluded.symbol, venue_mic = excluded.venue_mic",
+             ON CONFLICT(scheme, value, standing) DO UPDATE SET kind = excluded.kind, currency = excluded.currency, symbol = excluded.symbol, venue_mic = excluded.venue_mic
+             WHERE kind IS NOT excluded.kind OR currency IS NOT excluded.currency OR symbol IS NOT excluded.symbol OR venue_mic IS NOT excluded.venue_mic",
             params![s.of.scheme.to_text(), s.of.value, s.standing.as_str(), draft.kind.as_str(), draft.currency.as_str(), symbol, venue_mic],
         )?;
         Ok(())
@@ -639,6 +695,20 @@ impl Book {
     /// joined. Run after every write that can change what it reads.
     pub fn settle_successions(&self) -> Result<Successions> {
         self.atomically(|| {
+            // nothing it reads changed since it last settled: nothing to do
+            // (`successions_due`, kept by triggers on what it reads)
+            let (changed, settled): (i64, i64) = self.conn().query_row("SELECT changed, settled FROM successions_due WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            if changed == settled {
+                return Ok(Successions::default());
+            }
+            let out = self.settle_successions_again()?;
+            self.conn().execute("UPDATE successions_due SET settled = ?1 WHERE id = 1", [changed])?;
+            Ok(out)
+        })
+    }
+
+    fn settle_successions_again(&self) -> Result<Successions> {
+        {
             let retired: Vec<(String, String, String, String, String, String)> = {
                 let mut stmt = self.conn().prepare_cached(
                     "SELECT scheme, value, kind, currency, symbol, venue_mic FROM security_standings
@@ -658,14 +728,18 @@ impl Book {
             }
             for (scheme, value, kind, currency, symbol, venue_mic) in retired {
                 let successors: Vec<String> = {
+                    // found through the listing's index (standing, symbol, venue),
+                    // never a pass over every id the source states; ordered here,
+                    // since ordering in the query would take the key's order instead
                     let mut stmt = self.conn().prepare_cached(
                         "SELECT s.value FROM security_standings s
                          WHERE s.scheme = ? AND s.standing = 'live' AND s.kind = ? AND s.currency = ? AND s.symbol = ? AND s.venue_mic = ? AND s.value <> ?
-                           AND NOT EXISTS (SELECT 1 FROM security_standings r WHERE r.scheme = s.scheme AND r.value = s.value AND r.standing = 'retired-by-event')
-                         ORDER BY s.value",
+                           AND NOT EXISTS (SELECT 1 FROM security_standings r WHERE r.scheme = s.scheme AND r.value = s.value AND r.standing = 'retired-by-event')",
                     )?;
                     let rows = stmt.query_map(params![scheme, kind, currency, symbol, venue_mic, value], |r| r.get(0))?;
-                    rows.collect::<rusqlite::Result<_>>()?
+                    let mut found: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+                    found.sort();
+                    found
                 };
                 let [successor] = successors.as_slice() else { continue };
                 let scheme = text::parsed("security_standings", "scheme", &scheme, RefScheme::parse)?;
@@ -725,7 +799,7 @@ impl Book {
                 )?;
             }
             Ok(Successions { joined, parted })
-        })
+        }
     }
 
     /// Whether a corporate event row gives up units of the instrument: its

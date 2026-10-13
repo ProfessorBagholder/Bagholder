@@ -9,7 +9,7 @@ use bagholder_core::Broker;
 use bagholder_wealthsimple::adapter::Wealthsimple;
 use bagholder_wealthsimple::generated::{Generated, Size};
 
-const SIZE: Size = Size { accounts: 14, instruments: 24, trades: 80, months: 8, seed: 7 };
+const SIZE: Size = Size { accounts: 14, instruments: 24, trades: 80, months: 8, seed: 7, deep: 0 };
 
 fn today() -> jiff::civil::Date {
     "2026-10-08".parse().unwrap()

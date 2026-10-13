@@ -12,7 +12,7 @@ use bagholder_core::transaction::Kind;
 use bagholder_core::{GroupId, InstrumentId, Leg, RecordId, TradeId, TransactionId};
 
 use crate::text::{self, at as at_text};
-use crate::{new_uuid, Book, BookError, Result};
+use crate::{new_uuid, Book, BookError, Rank, Result};
 
 /// What `Book::reattach` did.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -274,25 +274,36 @@ impl Book {
     }
 
     pub fn trade(&self, id: TradeId) -> Result<Trade> {
-        self.trades_where("WHERE id = ?", [id.to_string()])?.pop().ok_or_else(|| BookError::Refused(format!("no trade {id}")))
+        self.trades_where("WHERE id = ?", [id.to_string()])?.pop().map(|(_, t)| t).ok_or_else(|| BookError::Refused(format!("no trade {id}")))
     }
 
     pub fn trades(&self) -> Result<Vec<Trade>> {
+        Ok(self.trades_where("", [])?.into_iter().map(|(_, t)| t).collect())
+    }
+
+    /// Every trade with its place in the book's order (when it was made, then its
+    /// row): which of two trades keeps a round trip turns on it.
+    pub fn trades_ranked(&self) -> Result<Vec<(Rank, Trade)>> {
         self.trades_where("", [])
     }
 
+    /// One trade with its place in the book's order; none where it is gone.
+    pub fn trade_ranked(&self, id: TradeId) -> Result<Option<(Rank, Trade)>> {
+        Ok(self.trades_where("WHERE trades.id = ?", [id.to_string()])?.pop())
+    }
+
     /// Trades, each anchored on the instrument the book reads its anchor as.
-    fn trades_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Trade>> {
+    fn trades_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<(Rank, Trade)>> {
         let sql = format!(
-            "SELECT id, anchor_record, anchor_leg, COALESCE(j.into_id, anchor_instrument), orphaned_reason, legacy_key
+            "SELECT id, anchor_record, anchor_leg, COALESCE(j.into_id, anchor_instrument), orphaned_reason, legacy_key, trades.created_at, trades.rowid
              FROM trades LEFT JOIN instrument_joins j ON j.instrument_id = trades.anchor_instrument {filter} ORDER BY trades.created_at, trades.rowid"
         );
         let mut stmt = self.conn().prepare_cached(&sql)?;
-        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
-        let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })?;
+        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String, i64);
+        let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)) })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, record, leg, instrument, orphaned, legacy_key) = row?;
+            let (id, record, leg, instrument, orphaned, legacy_key, made, rowid) = row?;
             let anchor = match (record, leg, instrument, orphaned) {
                 (Some(r), Some(l), Some(i), None) => Anchor::Opening(Opening {
                     transaction: TransactionId::new(text::parsed("trades", "anchor_record", &r, RecordId::parse)?, text::parsed("trades", "anchor_leg", &l, Leg::parse)?),
@@ -301,7 +312,7 @@ impl Book {
                 (None, None, None, Some(why)) => Anchor::Orphaned(why),
                 (r, l, i, o) => return Err(text::corrupt("trades", "anchor_record", &format!("{r:?} {l:?} {i:?} {o:?}"), "neither anchored on an instrument nor orphaned")),
             };
-            out.push(Trade { id: text::parsed("trades", "id", &id, TradeId::parse)?, anchor, legacy_key });
+            out.push(((made, rowid), Trade { id: text::parsed("trades", "id", &id, TradeId::parse)?, anchor, legacy_key }));
         }
         Ok(out)
     }
@@ -429,17 +440,31 @@ impl Book {
     }
 
     pub fn groups(&self) -> Result<Vec<Group>> {
-        let mut stmt = self.conn().prepare_cached("SELECT id, locked FROM trade_groups ORDER BY created_at, rowid")?;
-        let rows: Vec<(String, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(self.groups_where("", [])?.into_iter().map(|(_, g)| g).collect())
+    }
+
+    /// Every group with its place in the book's order.
+    pub fn groups_ranked(&self) -> Result<Vec<(Rank, Group)>> {
+        self.groups_where("", [])
+    }
+
+    /// One group with its place in the book's order; none where it is gone.
+    pub fn group_ranked(&self, id: GroupId) -> Result<Option<(Rank, Group)>> {
+        Ok(self.groups_where("WHERE id = ?", [id.to_string()])?.pop())
+    }
+
+    fn groups_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<(Rank, Group)>> {
+        let mut stmt = self.conn().prepare_cached(&format!("SELECT id, locked, created_at, rowid FROM trade_groups {filter} ORDER BY created_at, rowid"))?;
+        let rows: Vec<(String, i64, String, i64)> = stmt.query_map(args, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
         let mut out = Vec::new();
-        for (id, locked) in rows {
+        for (id, locked, made, rowid) in rows {
             let gid = text::parsed("trade_groups", "id", &id, GroupId::parse)?;
             let mut m = self.conn().prepare_cached("SELECT trade_id FROM trade_group_members WHERE group_id = ? ORDER BY position")?;
             let members = m
                 .query_map([&id], |r| r.get::<_, String>(0))?
                 .map(|s| text::parsed("trade_group_members", "trade_id", &s?, TradeId::parse))
                 .collect::<Result<_>>()?;
-            out.push(Group { id: gid, locked: locked == 1, members });
+            out.push(((made, rowid), Group { id: gid, locked: locked == 1, members }));
         }
         Ok(out)
     }

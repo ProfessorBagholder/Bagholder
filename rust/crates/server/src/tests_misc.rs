@@ -846,7 +846,7 @@ fn test_the_capacity_budget_is_the_one_the_architecture_states() {
     }
     assert_eq!(GROWTH_LIMIT, 2.0, "§16: the work at four times the owner's size is under twice the work at it");
     assert!(arch.contains("is under twice the work at the owner's size"));
-    for (op, issue) in OVER_BUDGET {
+    for (op, _, issue) in OVER_BUDGET {
         assert!(Op::ALL.iter().any(|o| o.name() == *op), "OVER_BUDGET names no operation: {op}");
         assert!(regex::Regex::new(r"^#\d+$").unwrap().is_match(issue), "{op}'s entry names its issue as #N: {issue}");
     }

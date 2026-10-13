@@ -547,8 +547,17 @@ impl Book {
     }
 
     pub fn transfer_links(&self) -> Result<Vec<(TransactionId, TransactionId)>> {
-        let mut st = self.conn().prepare("SELECT out_record, out_leg, in_record, in_leg FROM transfer_links ORDER BY out_record, out_leg")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+        self.transfer_links_where("", [])
+    }
+
+    /// Every link either side of which is on `record`.
+    pub fn transfer_links_of(&self, record: RecordId) -> Result<Vec<(TransactionId, TransactionId)>> {
+        self.transfer_links_where("WHERE out_record = ?1 OR in_record = ?1", [record.to_string()])
+    }
+
+    fn transfer_links_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<(TransactionId, TransactionId)>> {
+        let mut st = self.conn().prepare_cached(&format!("SELECT out_record, out_leg, in_record, in_leg FROM transfer_links {filter} ORDER BY out_record, out_leg"))?;
+        let rows = st.query_map(args, |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
         rows.map(|r| {
             let (a, b, c, d) = r?;
             let t = "transfer_links";

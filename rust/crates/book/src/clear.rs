@@ -52,6 +52,9 @@ pub enum Holds {
     Settings,
     /// The file's own version.
     Schema,
+    /// The record's change log (migration 028): what a clear deletes is logged
+    /// like any write, and the build after it drops what it built from.
+    Changes,
 }
 
 /// Every table of the book and what it holds. A table missing here fails a test.
@@ -115,6 +118,9 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("issuers", Holds::Named),
     ("settings", Holds::Settings),
     ("schema_migrations", Holds::Schema),
+    ("ledger_changes", Holds::Changes),
+    // one row: what settling the successions read last; kept, as the version is
+    ("successions_due", Holds::Schema),
 ];
 
 /// The sources whose records are the person's own; every other source's are a broker's.

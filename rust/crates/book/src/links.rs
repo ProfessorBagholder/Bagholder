@@ -135,6 +135,17 @@ impl Book {
         Ok(out)
     }
 
+    /// Whether `record` has superseded a record of `source`: it has taken the
+    /// place of one already, and takes no other's.
+    pub fn supersedes_from(&self, record: RecordId, source: &bagholder_core::SourceName) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM link_records t JOIN link_records f ON f.link_id = t.link_id AND f.side = 'from'
+                JOIN source_records r ON r.id = f.record_id WHERE t.record_id = ?1 AND t.side = 'to' AND r.source = ?2)",
+            params![record.to_string(), source.as_str()],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Whether `record` has superseded others.
     pub fn has_superseded(&self, record: RecordId) -> Result<bool> {
         let n: i64 = self.conn().query_row(

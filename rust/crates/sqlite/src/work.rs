@@ -1,8 +1,8 @@
 //! The database work the process does, counted for the capacity test
 //! (`docs/architecture.md` §16, the growth rule): every virtual-machine step
 //! SQLite takes on every connection the app opens, which is the same on every
-//! machine; and, for a test that holds a path off a table, the statements run
-//! that name it. Off unless `start_counting` is called before the connections are
+//! machine; and, for a test that holds a path off a table or lists what a read
+//! touches, the statements run that name a table and the tables read. Off unless `start_counting` is called before the connections are
 //! opened; the app itself never calls it, so no connection of a running app
 //! carries the counter.
 
@@ -19,11 +19,29 @@ thread_local! {
     /// The table a test asked about and the statements run on this thread that
     /// named it since.
     static NAMING: RefCell<Option<(&'static str, u64)>> = const { RefCell::new(None) };
+    /// The tables statements prepared on this thread read, while a test asks.
+    static READING: RefCell<Option<std::collections::BTreeSet<String>>> = const { RefCell::new(None) };
 }
 
 /// Count from here on: each connection opened after this counts its steps.
 pub fn start_counting() {
     COUNTING.store(true, Ordering::SeqCst);
+}
+
+thread_local! {
+    /// A capacity probe's measured window is open on this thread.
+    static MEASURING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Open or close a probe's measured window on this thread.
+pub fn set_measuring(on: bool) {
+    MEASURING.with(|m| m.set(on));
+}
+
+/// Whether a probe's measured window is open on this thread: a test build's
+/// checks that read the whole book stay out of what is measured.
+pub fn measuring() -> bool {
+    MEASURING.with(Cell::get)
 }
 
 /// The steps counted so far on this thread, on every counted connection.
@@ -38,6 +56,18 @@ pub fn statements_naming<T>(table: &'static str, f: impl FnOnce() -> T) -> (T, u
     let out = f();
     let (_, count) = NAMING.with(|n| n.borrow_mut().take()).expect("set above");
     (out, count)
+}
+
+/// What `f` returns, and every table the statements it prepared on this thread
+/// read, on counted connections, as SQLite's authorizer names them while it
+/// prepares each one. A statement already prepared and cached is not prepared
+/// again, so a caller that must see every table reads through connections
+/// opened inside `f`.
+pub fn tables_read<T>(f: impl FnOnce() -> T) -> (T, std::collections::BTreeSet<String>) {
+    READING.with(|r| *r.borrow_mut() = Some(Default::default()));
+    let out = f();
+    let tables = READING.with(|r| r.borrow_mut().take()).expect("set above");
+    (out, tables)
 }
 
 /// A statement starting, as SQLite's trace hook gives it.
@@ -56,6 +86,16 @@ fn traced(sql: &str) {
 pub(crate) fn watch(conn: &mut rusqlite::Connection) {
     if COUNTING.load(Ordering::Relaxed) {
         conn.trace(Some(traced));
+        conn.authorizer(Some(|ctx: rusqlite::hooks::AuthContext<'_>| {
+            if let rusqlite::hooks::AuthAction::Read { table_name, .. } = ctx.action {
+                READING.with(|r| {
+                    if let Some(tables) = r.borrow_mut().as_mut() {
+                        tables.insert(table_name.to_string());
+                    }
+                });
+            }
+            rusqlite::hooks::Authorization::Allow
+        }));
         // the handler is called once per virtual-machine instruction, and never interrupts
         conn.progress_handler(
             1,
@@ -70,6 +110,7 @@ pub(crate) fn watch(conn: &mut rusqlite::Connection) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::OptionalExtension;
 
     #[test]
     fn a_counted_connection_counts_its_steps_and_more_rows_take_more() {
@@ -111,5 +152,18 @@ mod tests {
             }
         });
         assert_eq!(again, 3);
+    }
+
+    #[test]
+    fn the_tables_a_statement_reads_are_listed_through_its_joins_and_no_others() {
+        start_counting();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.db");
+        crate::open_db(&path).unwrap().execute_batch("CREATE TABLE a (x INTEGER); CREATE TABLE b (x INTEGER); CREATE TABLE c (x INTEGER)").unwrap();
+        let ((), tables) = tables_read(|| {
+            let c = crate::open_db(&path).unwrap();
+            let _: Option<i64> = c.query_row("SELECT a.x FROM a LEFT JOIN b ON b.x = a.x", [], |r| r.get(0)).optional().unwrap();
+        });
+        assert_eq!(tables.into_iter().collect::<Vec<_>>(), ["a", "b"]);
     }
 }

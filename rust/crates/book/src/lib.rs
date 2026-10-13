@@ -7,6 +7,7 @@
 //! The book never reads the clock: every write is given the time it happened.
 
 pub mod canon;
+pub mod changes;
 pub mod clear;
 pub mod facts;
 pub mod identity;
@@ -128,7 +129,26 @@ impl Book {
         tx.commit()?;
         Ok(out)
     }
+
+    /// Run `reads` as one read transaction: every read in it sees the book as it
+    /// stood at its first read, whatever another connection commits meanwhile
+    /// (WAL's snapshot). Nested calls join the transaction already open. For a
+    /// reader that must see what the change log names and the rows it names at one
+    /// moment (`changes`).
+    pub fn snapshot<T>(&self, reads: impl FnOnce() -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return reads();
+        }
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Deferred)?;
+        let out = reads()?;
+        tx.commit()?;
+        Ok(out)
+    }
 }
+
+/// Where a trade or a group stands in the book's own order: when it was made,
+/// then its row's number.
+pub type Rank = (String, i64);
 
 /// A new id for something stored at `at`: a UUID v7 from that time and random bits.
 pub(crate) fn new_uuid(at: jiff::Timestamp) -> uuid::Uuid {

@@ -277,7 +277,7 @@ impl Book {
         let (refs, kind, currency, symbol, contract) = match traded {
             Traded::Held(i) => {
                 let held = self.instrument(*i)?;
-                let symbol = self.names(*i)?.last().map(|n| n.symbol.clone()).ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?;
+                let symbol = self.current_symbol(*i)?.ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?;
                 let strong = self.strong_ref(*i).or_else(|_| {
                     // one a connection names by its symbol: the same reference again
                     self.instrument_refs(*i)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {i} has no reference")))
@@ -302,7 +302,7 @@ impl Book {
                                 if held.currency != *currency {
                                     return Err(BookError::Refused(format!("a contract in {currency} on an instrument priced in {}", held.currency)));
                                 }
-                                let name = self.names(*u)?.last().map(|n| n.symbol.clone()).ok_or_else(|| BookError::Refused(format!("instrument {u} has no name")))?;
+                                let name = self.current_symbol(*u)?.ok_or_else(|| BookError::Refused(format!("instrument {u} has no name")))?;
                                 let strong = self.strong_ref(*u).or_else(|_| self.instrument_refs(*u)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {u} has no reference"))))?;
                                 (vec![strong], held.kind, name)
                             }

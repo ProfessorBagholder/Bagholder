@@ -356,6 +356,11 @@ pub struct Matched {
     /// kept so that one account's check with its broker reads its own totals and
     /// nothing else (`equity::broker_checks`); a sum that does not fit is that failure.
     pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
+    /// Each instrument's round trips (by the instrument each is keyed on): what a
+    /// family's figures are rebuilt from without a pass over every round trip.
+    pub trips_of: BTreeMap<InstrumentId, BTreeSet<TripKey>>,
+    /// The accounts holding a book or a count of units of each instrument.
+    pub held_by: BTreeMap<InstrumentId, BTreeSet<AccountId>>,
 }
 
 /// A fact only the person can give, and what it is about.
@@ -1653,14 +1658,14 @@ impl<'a> Matcher<'a> {
     /// states none, or states it only in another currency (no rate the broker
     /// used is stated): the units keep their own.
     fn cost_on_arrival(&self, to: &TransactionId, instrument: InstrumentId) -> Option<Fig<Money>> {
-        let recv = self.inputs.ledger.transactions.iter().find(|x| &x.id == to)?;
+        let recv = self.inputs.ledger.transactions.get(to)?;
         recv.value.filter(|v| v.currency == self.currency(instrument)).map(Ok)
     }
 
     /// A transfer out's linked receiving side: its id, account and instrument.
     fn link_of(&self, t: &Transaction, instrument: InstrumentId) -> Option<(TransactionId, AccountId, InstrumentId)> {
         let to = self.links_out.get(&t.id)?;
-        let recv = self.inputs.ledger.transactions.iter().find(|x| &x.id == to)?;
+        let recv = self.inputs.ledger.transactions.get(to)?;
         Some((to.clone(), recv.account, recv.instrument.unwrap_or(instrument)))
     }
 
@@ -2133,14 +2138,52 @@ fn scale_side(lots: Vec<Lot>, direction: Direction, held: Dec, total: Dec) -> Re
 
 /// The match over every live transaction.
 pub fn match_lots(inputs: &Inputs) -> Matched {
+    match_over(inputs, inputs.ledger.transactions.iter().collect())
+}
+
+/// A transaction's place in the match: the order it is applied in, then its id.
+/// A record is ranked and ordered by all its legs, whichever of them are matched.
+pub fn place_in_match(ledger: &crate::input::Ledger, t: &Transaction) -> (Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId) {
+    let legs: Vec<&Transaction> = ledger.transactions.of_record(t.id.record).collect();
+    let key = ledger.records.get(&t.id.record).map(|r| r.source_key.clone()).unwrap_or_default();
+    let (a, b, c, d, e, f, g) = order_key(t, record_rank(&legs), &key);
+    (a, b, c, d, e, f, g, t.id.clone())
+}
+
+/// The match of `txs` alone: a set of transactions no other transaction's
+/// matching reaches (a family, `crate::families`), or every transaction. Each
+/// record is ranked, ordered and applied by all its legs, as the whole match
+/// applies it (`docs/plans/stage-3-the-record-by-change.md`, B): a record whose
+/// legs share a day is applied where its first leg falls, whichever family that
+/// leg is in, each of `txs`'s legs as the whole match would. The lists of what
+/// the record waits on are in the match's order (`place_in_match`), so the
+/// matches of several families put together are the whole match.
+pub fn match_over(inputs: &Inputs, txs: Vec<&Transaction>) -> Matched {
     let ledger = &inputs.ledger;
+    let mine: BTreeSet<&TransactionId> = txs.iter().map(|t| &t.id).collect();
+    // every leg of every record of `txs`, each record whole
     let mut by_record: BTreeMap<_, Vec<&Transaction>> = BTreeMap::new();
-    for t in &ledger.transactions {
-        by_record.entry(t.id.record).or_default().push(t);
+    for t in &txs {
+        by_record.entry(t.id.record).or_insert_with(|| ledger.transactions.of_record(t.id.record).collect());
     }
     let key_of = |t: &Transaction| ledger.records.get(&t.id.record).map(|r| r.source_key.clone()).unwrap_or_default();
-    let mut txs: Vec<&Transaction> = ledger.transactions.iter().collect();
-    txs.sort_by_cached_key(|t| order_key(t, record_rank(&by_record[&t.id.record]), &key_of(t)));
+    let place = |t: &Transaction| order_key(t, record_rank(&by_record[&t.id.record]), &key_of(t));
+    // a record whose legs share a day is applied at its first leg: where that leg
+    // is not one of `txs`, it is walked past to apply the others there
+    let one_day = |legs: &[&Transaction]| legs.len() > 1 && legs.iter().all(|l| l.trade_date == legs[0].trade_date);
+    let mut walk: Vec<&Transaction> = txs.clone();
+    for legs in by_record.values() {
+        if one_day(legs) {
+            if let Some(first) = legs.iter().min_by_key(|l| (place(l), l.id.clone())) {
+                if !mine.contains(&first.id) {
+                    walk.push(first);
+                }
+            }
+        }
+    }
+    // in the ledger's order first, so equal places keep it
+    walk.sort_by(|a, b| ledger.transactions.place_of(&a.id).cmp(&ledger.transactions.place_of(&b.id)));
+    walk.sort_by_cached_key(|t| place(t));
 
     let mut m = Matcher {
         inputs,
@@ -2150,20 +2193,19 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         instrument_taint: BTreeMap::new(),
         account_taint: BTreeMap::new(),
         consumed: BTreeSet::new(),
-        links_out: ledger.transfer_links.iter().cloned().collect(),
-        links_in: ledger.transfer_links.iter().map(|(_, i)| i.clone()).collect(),
+        links_out: txs.iter().filter_map(|t| ledger.transfer_links.received_by(&t.id).map(|i| (t.id.clone(), i.clone()))).collect(),
+        links_in: txs.iter().filter(|t| ledger.transfer_links.sent_by(&t.id).is_some()).map(|t| t.id.clone()).collect(),
         event_groups: BTreeMap::new(),
         dirty: BTreeSet::new(),
         lieu_fraction: BTreeMap::new(),
-        ended_on_record: ledger
-            .transactions
+        ended_on_record: txs
             .iter()
             .filter(|t| matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise))
             .filter_map(|t| t.instrument.map(|i| (t.account, i)))
             .collect(),
         places: {
             let mut p: BTreeMap<(InstrumentId, bagholder_core::SourceName), u32> = BTreeMap::new();
-            for t in &ledger.transactions {
+            for t in &txs {
                 if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
                     if ledger.instruments.get(&i).is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto) {
                         let e = p.entry((i, t.mapping.source.clone())).or_insert(0);
@@ -2177,14 +2219,17 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
     };
     // each adjustment's event: its own row and the event rows of that account and
     // day on the instruments its legs name
-    for (applies_to, adj) in inputs.facts.adjustments.iter() {
-        let Some(anchor) = ledger.transactions.iter().find(|t| &t.id == applies_to) else { continue };
+    let mut anchors: Vec<&Transaction> = txs.iter().filter(|t| inputs.facts.adjustments.get(&t.id).is_some()).copied().collect();
+    // by the transaction each applies to: of two events naming one row, the first keeps it
+    anchors.sort_by(|a, b| a.id.cmp(&b.id));
+    for anchor in anchors {
+        let Some(adj) = inputs.facts.adjustments.get(&anchor.id) else { continue };
         if anchor.kind != Kind::CorporateEvent {
             continue;
         }
         let named: BTreeSet<InstrumentId> = adj.legs.iter().flat_map(|l| [l.from, l.to]).flatten().collect();
         m.event_groups.insert(anchor.id.clone(), anchor.id.clone());
-        for t in &ledger.transactions {
+        for t in &txs {
             if t.kind == Kind::CorporateEvent && t.account == anchor.account && t.trade_date == anchor.trade_date && t.instrument.is_some_and(|i| named.contains(&i)) {
                 m.event_groups.entry(t.id.clone()).or_insert_with(|| anchor.id.clone());
             }
@@ -2195,11 +2240,11 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
     // roll that states no effects closes the old contract before it opens the
     // new one, whichever way its legs sort
     let mut in_order: BTreeMap<_, Vec<&Transaction>> = BTreeMap::new();
-    for t in &txs {
+    for t in walk.iter().filter(|t| mine.contains(&t.id)) {
         in_order.entry(t.id.record).or_default().push(t);
     }
     let mut done: BTreeSet<&TransactionId> = BTreeSet::new();
-    for (at, t) in txs.iter().enumerate() {
+    for (at, t) in walk.iter().enumerate() {
         if done.contains(&t.id) {
             continue;
         }
@@ -2207,11 +2252,11 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         // stated open of the same contract, which would meet that position; an
         // open goes first only where the close needs it (a short opened and
         // covered at one instant)
-        if t.effect == Some(Effect::Open) {
-            let closes: Vec<&Transaction> = txs[at + 1..]
+        if t.effect == Some(Effect::Open) && mine.contains(&t.id) {
+            let closes: Vec<&Transaction> = walk[at + 1..]
                 .iter()
                 .take_while(|c| instant(c) == instant(t))
-                .filter(|c| !done.contains(&c.id) && c.effect == Some(Effect::Close) && c.account == t.account && c.instrument == t.instrument && by_record.get(&c.id.record).is_some_and(|l| l.len() == 1))
+                .filter(|c| mine.contains(&c.id) && !done.contains(&c.id) && c.effect == Some(Effect::Close) && c.account == t.account && c.instrument == t.instrument && by_record.get(&c.id.record).is_some_and(|l| l.len() == 1))
                 .copied()
                 .collect();
             for c in closes {
@@ -2223,14 +2268,13 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
             }
         }
         let legs = by_record.get(&t.id.record).map(|v| v.as_slice()).unwrap_or(&[]);
-        let one_day = legs.len() > 1 && legs.iter().all(|l| l.trade_date == t.trade_date);
-        if !one_day {
+        if !one_day(legs) {
             m.expire_before(t.trade_date);
             m.apply(t, legs);
             m.record_units(t.trade_date);
             continue;
         }
-        let mut left = in_order[&t.id.record].clone();
+        let mut left = in_order.get(&t.id.record).cloned().unwrap_or_default();
         m.expire_before(t.trade_date);
         while !left.is_empty() {
             let i = left.iter().position(|l| m.meets_opposite(l)).unwrap_or(0);
@@ -2241,7 +2285,7 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         m.record_units(t.trade_date);
     }
     m.expire_before(inputs.clock.today);
-    for t in &ledger.transactions {
+    for t in &txs {
         if let Some(c) = t.cash {
             let e = m.out.cash.entry(t.account).or_default().entry(c.currency).or_insert(Ok(Dec::ZERO));
             if let Ok(total) = e {
@@ -2249,7 +2293,121 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
             }
         }
     }
-    m.out
+    let mut out = m.out;
+    out.in_match_order(ledger);
+    out.index();
+    out
+}
+
+impl Matched {
+    /// What the match of the nodes `region` holds taken out, and `fresh`, their
+    /// match again, put in: every figure of the match keyed by an instrument of
+    /// the region, or by a transaction of it or one no longer in the ledger.
+    /// The cash totals are the caller's (`crate::engine`), by family.
+    pub fn replace(&mut self, ledger: &crate::input::Ledger, region: &BTreeSet<crate::families::Node>, fresh: Matched) {
+        use crate::families::{node_of, Node};
+        let ins = |i: &InstrumentId| region.contains(&Node::Instrument(*i));
+        let tx_in = |id: &TransactionId| ledger.transactions.get(id).is_none_or(|t| region.contains(&node_of(t)));
+        self.trips.retain(|k, _| !ins(&k.instrument));
+        self.trips_of.retain(|i, _| !ins(i));
+        self.held_by.retain(|i, _| !ins(i));
+        self.books.retain(|(_, i), _| !ins(i));
+        self.units.retain(|(_, i), _| !ins(i));
+        self.last_price.retain(|i, _| !ins(i));
+        self.beyond.retain(|x| !ins(&x.instrument));
+        self.dust.retain(|x| !ins(&x.instrument));
+        self.arrived.retain(|x| !ins(&x.instrument));
+        self.stock_dividends.retain(|x| !ins(&x.instrument));
+        self.unit_disagreements.retain(|x| !ins(&x.instrument));
+        self.disagreements.retain(|x| !tx_in(x));
+        self.unapplied.retain(|x| !tx_in(&x.0));
+        self.roles.retain(|x, _| !tx_in(x));
+        self.waiting.retain(|x, _| !tx_in(x));
+        // the lists kept in the match's order: each new row put in its place
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, held_by } = fresh;
+        let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
+        fn put<T>(list: &mut Vec<T>, rows: Vec<T>, key: impl Fn(&T) -> Option<(Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId)>) {
+            for row in rows {
+                let k = key(&row);
+                // after every row at the same place: a transaction's rows in the order found
+                let i = list.partition_point(|x| key(x) <= k);
+                list.insert(i, row);
+            }
+        }
+        put(&mut self.beyond, beyond, |x| at(&x.transaction));
+        put(&mut self.dust, dust, |x| at(&x.transaction));
+        put(&mut self.arrived, arrived, |x| at(&x.transaction));
+        put(&mut self.stock_dividends, stock_dividends, |x| at(&x.transaction));
+        put(&mut self.disagreements, disagreements, |x| at(x));
+        put(&mut self.unit_disagreements, unit_disagreements, |x| at(&x.transaction));
+        put(&mut self.unapplied, unapplied, |x| at(&x.0));
+        self.absorb(Matched { trips, books, last_price, units, roles, waiting, trips_of, held_by, ..Matched::default() });
+    }
+
+    /// The indexes worked out from what the match holds.
+    fn index(&mut self) {
+        self.trips_of.clear();
+        self.held_by.clear();
+        for k in self.trips.keys() {
+            self.trips_of.entry(k.instrument).or_default().insert(k.clone());
+        }
+        for (a, i) in self.books.keys().chain(self.units.keys()) {
+            self.held_by.entry(*i).or_default().insert(*a);
+        }
+    }
+
+    /// The lots still open of a round trip, wherever they are held, each with the
+    /// instrument of its book.
+    /// In the books' order (account, then instrument), each book's lots in order.
+    pub fn lots_of(&self, trip: &Trip) -> Vec<(InstrumentId, &Lot)> {
+        let held: BTreeSet<(AccountId, InstrumentId)> = trip.instruments.iter().flat_map(|i| self.held_by.get(i).into_iter().flatten().map(move |a| (*a, *i))).collect();
+        let mut out = Vec::new();
+        for (a, i) in held {
+            if let Some(b) = self.books.get(&(a, i)) {
+                out.extend(b.lots.iter().filter(|l| l.trip == trip.key).map(|l| (i, l)));
+            }
+        }
+        out
+    }
+
+    /// Everything `fresh` holds put in beside what this holds, the cash totals
+    /// aside (the caller's); the lists left for `in_match_order`.
+    pub fn absorb(&mut self, fresh: Matched) {
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, held_by } = fresh;
+        for (i, k) in trips_of {
+            self.trips_of.entry(i).or_default().extend(k);
+        }
+        for (i, a) in held_by {
+            self.held_by.entry(i).or_default().extend(a);
+        }
+        self.trips.extend(trips);
+        self.books.extend(books);
+        self.beyond.extend(beyond);
+        self.dust.extend(dust);
+        self.arrived.extend(arrived);
+        self.last_price.extend(last_price);
+        self.stock_dividends.extend(stock_dividends);
+        self.disagreements.extend(disagreements);
+        self.unit_disagreements.extend(unit_disagreements);
+        self.unapplied.extend(unapplied);
+        self.units.extend(units);
+        self.roles.extend(roles);
+        self.waiting.extend(waiting);
+    }
+
+    /// The lists of what the record waits on in the match's order: by each
+    /// transaction's place (`place_in_match`), a transaction's rows in the order
+    /// its matching found them.
+    pub fn in_match_order(&mut self, ledger: &crate::input::Ledger) {
+        let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
+        self.beyond.sort_by_cached_key(|x| at(&x.transaction));
+        self.dust.sort_by_cached_key(|x| at(&x.transaction));
+        self.arrived.sort_by_cached_key(|x| at(&x.transaction));
+        self.stock_dividends.sort_by_cached_key(|x| at(&x.transaction));
+        self.disagreements.sort_by_cached_key(|x| at(x));
+        self.unit_disagreements.sort_by_cached_key(|x| at(&x.transaction));
+        self.unapplied.sort_by_cached_key(|x| at(&x.0));
+    }
 }
 
 impl Direction {

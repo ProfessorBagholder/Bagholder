@@ -52,15 +52,18 @@ fn a_past_days_holdings_move_only_with_what_they_are_worked_out_from() {
     let again = e.past(day);
     assert_eq!(again.positions.iter().find(|p| p.instrument == x).unwrap().mark.as_ref().unwrap().price, Dec::from_int(14));
 
-    // the record moves every past day
-    let ledger = e.inputs().ledger.clone();
-    let moved = e.apply(Change::Ledger(ledger));
+    // the record moves every past day: a record stated again
+    let restated = |e: &bagholder_engine::Engine| {
+        let l = &e.inputs().ledger;
+        let r = l.transactions.iter().next().unwrap().id.record;
+        bagholder_engine::input::LedgerDelta { records: BTreeMap::from([(r, Some((l.records[&r].clone(), l.transactions.of_record(r).cloned().collect())))]), ..Default::default() }
+    };
+    let moved = e.apply(Change::Ledger(restated(&e)));
     assert!(moved.0.contains_key(&Entity::Past), "a change to the record did not move it");
     check(&e, "after the record");
 
     // nothing held: nothing to say moved
     drop(again);
     drop(held);
-    let ledger = e.inputs().ledger.clone();
-    assert!(!e.apply(Change::Ledger(ledger)).0.contains_key(&Entity::Past), "a day no screen holds was said to move");
+    assert!(!e.apply(Change::Ledger(restated(&e))).0.contains_key(&Entity::Past), "a day no screen holds was said to move");
 }
