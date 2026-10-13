@@ -36,3 +36,4 @@ Read from any checkout without switching branches:
 | 25 | [The Stage 3 statements build as built (#503): accepted, one fix](25-stage-3-statements-as-built.md) | Current; verdicts in [25/](25/) |
 | 26 | [Verdict on the Stage 3 record-by-change plan (#506): Go with changes](26-record-by-change-verdict.md) | Current; findings in [26/](26/) |
 | 27 | [The record-by-change build as built (#507): sound, merge after the fixes](27-record-by-change-as-built.md) | Current; findings in [27/](27/) |
+| 28 | [Verdict on the deep-history plan (#511), and brief 27's fixes as merged: Go with changes](28-deep-history-verdict.md) | Current |
