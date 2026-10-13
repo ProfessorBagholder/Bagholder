@@ -1076,7 +1076,9 @@ mod tests {
         assert!(!cad.pending(), "stated again after the read: confirmed, {cad:?}");
     }
 
-    /// Every operation is measured on a small book and four times it, by breadth
+    /// Every operation is measured on a small book and sixteen times it (at these
+    /// sizes an operation's own work is large beside a whole read, so the larger
+    /// step is what lets the growth rule, under twice, see one), by breadth
     /// and by depth, in this process, and none off `OVER_BUDGET` breaks the growth
     /// rule there; the budget itself, and whether a listed one now meets it, is the
     /// CI job's, at the owner's size, on the runner it is stated for.
@@ -1084,7 +1086,7 @@ mod tests {
     fn test_every_operation_is_measured_and_the_growth_rule_judged() {
         let _g = crate::tests_common::guard();
         let sizes = [
-            (Pair::Breadth, SMALL, Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }, (0, 0)),
+            (Pair::Breadth, SMALL, Size { accounts: SMALL.accounts * 16, instruments: SMALL.instruments * 16, trades: SMALL.trades * 16, ..SMALL }, (0, 0)),
             (Pair::Depth, Size { deep: 20, ..SMALL }, Size { deep: 80, ..SMALL }, (39, 159)),
         ];
         for (pair, small, large, min) in sizes {
@@ -1104,14 +1106,13 @@ mod tests {
     /// The growth rule catches a whole pass in the import's window (brief 27, 9):
     /// today's whole-ledger linking, planted where the test build's check used to
     /// run, fails it; that check now stays out of the window, so without the plant
-    /// the import passes. (A single small whole read adds too little beside the
-    /// operation's own work for a ratio to show at the suite's small sizes.)
+    /// the import passes. The books are a small one and sixteen times it.
     #[test]
     fn a_whole_pass_planted_in_the_import_fails_the_growth_rule() {
         let _g = crate::tests_common::guard();
         let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         build(one.path(), SMALL, 2).unwrap();
-        build(four.path(), Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }, 2).unwrap();
+        build(four.path(), Size { accounts: SMALL.accounts * 16, instruments: SMALL.instruments * 16, trades: SMALL.trades * 16, ..SMALL }, 2).unwrap();
         let measured = |plant: bool| {
             PLANT_WHOLE_READ.store(plant, Ordering::SeqCst);
             let copy = |d: &Path| {
@@ -1122,13 +1123,10 @@ mod tests {
             let (a, b) = (copy(one.path()), copy(four.path()));
             let (x, y) = (probe(Op::Import, Pair::Breadth, 0, a.path()).unwrap(), probe(Op::Import, Pair::Breadth, 0, b.path()).unwrap());
             PLANT_WHOLE_READ.store(false, Ordering::SeqCst);
-            (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew")), x.read.is_some())
+            (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew")), ())
         };
         assert!(!measured(false).0, "the import grows with the book without the plant");
-        // the pages a whole pass reads show where the system counts them (Linux, the
-        // capacity job's runner); its steps alone are too few at these sizes
-        let (seen, counted) = measured(true);
-        assert!(seen || !counted, "today's whole linking pass in the window went unseen");
+        assert!(measured(true).0, "today's whole linking pass in the window went unseen");
     }
 
     /// The verdict: a listed operation within its budget fails the run as an
