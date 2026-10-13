@@ -33,6 +33,10 @@ pub struct Size {
     /// How far back the activity starts.
     pub months: u32,
     pub seed: u64,
+    /// Round trips more on one listing in one investment account, each a purchase
+    /// and a sale of all of it: one instrument's history this deep, beside the
+    /// rest of the book (the capacity test's depth pair).
+    pub deep: usize,
 }
 
 const ACTIVITY: &str = include_str!("../tests/replies/wealthsimple/edited-activity-one-per-kind.json");
@@ -414,6 +418,16 @@ impl Generated {
                 let p = if l.sort == Sort::Coin { Plan::Staking { account, listing } } else { Plan::Dividend { account, listing } };
                 out.entry(day(d)).or_default().push(p);
                 d += if l.sort == Sort::Coin { 7 } else { 91 };
+            }
+        }
+        // one listing's history made deep: round trips one after another, each
+        // closed before the next opens
+        if let (Some(&account), Some(&listing)) = (invest.first(), shares.first()) {
+            for k in 0..size.deep {
+                let opened = 1 + (k as i64 * (days - 3)) / size.deep as i64;
+                let closed = (1 + ((k as i64 + 1) * (days - 3)) / size.deep as i64 - 1).max(opened);
+                out.entry(day(opened)).or_default().push(Plan::Buy { account, listing, units: r.range(1, 200) });
+                out.entry(day(closed)).or_default().push(Plan::Sell { account, listing, all: true });
             }
         }
         // money in and out, between accounts, interest, and the card

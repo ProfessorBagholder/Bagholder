@@ -57,7 +57,7 @@ pub const RUNS: usize = 7;
 /// The owner's size, counted on a copy of the owner's book on 2026-10-08: 29
 /// accounts, 210 instruments of which 53 option contracts (each option round
 /// trip here makes its own), 646 trades, three years of activity.
-pub const OWNER: Size = Size { accounts: 29, instruments: 157, trades: 646, months: 36, seed: 1 };
+pub const OWNER: Size = Size { accounts: 29, instruments: 157, trades: 646, months: 36, seed: 1, deep: 0 };
 /// How the owner's balances move, counted on a copy of the owner's book on
 /// 2026-10-10 over the 12.6 days from 2026-09-27 to 2026-10-09: 664 balances
 /// reads, each stating the cash of 16 accounts; 87 periods of cash, 816 of value
@@ -68,6 +68,10 @@ pub const BALANCES_READS: (u64, f64) = (664, 12.6);
 pub const CASH_CHANGES: (u64, f64) = (87, 12.6 * 16.0);
 pub const VALUE_CHANGES: (u64, f64) = (816, 12.6 * 16.0);
 pub const POWER_CHANGES: (u64, f64) = (533, 12.6);
+/// The most rows one instrument holds on the owner's book: 349 of 7,151 live
+/// transactions, counted on a copy of the owner's book on 2026-10-12. The depth
+/// pair carries one listing this deep, and four times it (brief 26, 12).
+pub const DEEPEST_ROWS: usize = 349;
 /// A year of balances reads: the size the book reaches in a year of use.
 pub const BALANCES_DAYS: u32 = 365;
 /// splitmix64: the same seed, the same balances.
@@ -84,6 +88,48 @@ impl Rng {
 
 /// The day the made-up activity ends on (fixed, so the same seed makes the same book).
 pub const MADE_UP_TODAY: &str = "2026-10-08";
+
+/// The two ways a book grows four times, each a pair of books the growth rule
+/// is judged on: every count four times (more accounts, instruments and trades,
+/// each instrument as deep as before), or one instrument's history four times as
+/// deep, the rest as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pair {
+    Breadth,
+    Depth,
+}
+
+impl Pair {
+    pub fn name(self) -> &'static str {
+        match self {
+            Pair::Breadth => "breadth",
+            Pair::Depth => "depth",
+        }
+    }
+    /// The operations measured on this pair: depth is what a change to one
+    /// instrument's history costs.
+    fn ops(self) -> &'static [Op] {
+        match self {
+            Pair::Breadth => &Op::ALL,
+            Pair::Depth => &[Op::AddTrade, Op::Import],
+        }
+    }
+    /// The pair's two books, under the work folder.
+    fn folders(self, work: &Path) -> (PathBuf, PathBuf) {
+        match self {
+            Pair::Breadth => (work.join("owner"), work.join("owner-x4")),
+            Pair::Depth => (work.join("owner-deep"), work.join("owner-deep-x4")),
+        }
+    }
+    /// The size of its book `times` the owner's.
+    fn size(self, times: usize) -> Size {
+        match self {
+            Pair::Breadth => sized(times, OWNER.seed),
+            // two rows a round trip
+            Pair::Depth => Size { deep: DEEPEST_ROWS * times / 2, ..OWNER },
+        }
+    }
+}
 
 /// Each operation measured, whether a person waits on it, and whether the
 /// growth rule holds it.
@@ -125,14 +171,21 @@ impl Op {
 /// What is over budget today, each with its issue: the run fails when one off
 /// this list misses, and when one on it meets its budget and the growth rule,
 /// so the list only shrinks (`docs/architecture.md` §16).
-pub const OVER_BUDGET: &[(&str, &str)] = &[
+pub const OVER_BUDGET: &[(&str, Pair, &str)] = &[
     // an import's linking reads every row any file ever imported
-    ("import", "#419"),
+    ("import", Pair::Breadth, "#419"),
+    ("import", Pair::Depth, "#419"),
     // an added trade rebuilds the ledger whole
-    ("add-trade", "#420"),
+    ("add-trade", Pair::Breadth, "#420"),
+    ("add-trade", Pair::Depth, "#420"),
     // the whole view built and serialised to learn whether it changed
-    ("feed-step", "#426"),
+    ("feed-step", Pair::Breadth, "#426"),
 ];
+
+/// Whether `op` on `pair` is listed over budget.
+fn listed(op: Op, pair: Pair) -> bool {
+    OVER_BUDGET.iter().any(|(name, p, _)| *name == op.name() && *p == pair)
+}
 
 // ---- work counted ----
 
@@ -582,7 +635,7 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             Ok(since(&m, priced))
         }
         Op::AddTrade => {
-            let (_, symbol, currency) = held.first().cloned().ok_or("nothing is held")?;
+            let (_, symbol, currency) = deepest(f, &held)?;
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
@@ -590,7 +643,8 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
         }
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
-            for (n, (_, symbol, currency)) in held.iter().cycle().take(20).enumerate() {
+            let (_, symbol, currency) = deepest(f, &held)?;
+            for n in 0..20 {
                 text.push_str(&format!("{},Buy,{symbol},1,{}.00,-{}.00,{currency}\n", made_up_today(), 10 + n, 10 + n));
             }
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
@@ -599,6 +653,24 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
             Ok(since(&m, 1))
         }
     }
+}
+
+/// The held listing with the most rows in the record (the first by symbol of
+/// those as deep): what an added trade or an import on the deepest instrument
+/// costs, at every size of book (brief 26, 12).
+fn deepest(f: &crate::figures::Figures, held: &[(bagholder_core::InstrumentId, String, Currency)]) -> Result<(bagholder_core::InstrumentId, String, Currency), String> {
+    let rows = f
+        .read(|e| {
+            let mut n: std::collections::BTreeMap<bagholder_core::InstrumentId, usize> = Default::default();
+            for t in &e.inputs().ledger.transactions {
+                if let Some(i) = t.instrument {
+                    *n.entry(i).or_default() += 1;
+                }
+            }
+            n
+        })
+        .ok_or("the figures were not built")?;
+    held.iter().max_by(|a, b| rows.get(&a.0).cmp(&rows.get(&b.0)).then_with(|| b.1.cmp(&a.1))).cloned().ok_or_else(|| "nothing is held".to_string())
 }
 
 /// A new quote for one listing, a cent above its last.
@@ -681,11 +753,12 @@ fn copy_folder(from: &Path, to: &Path) -> Result<(), String> {
 #[derive(Debug, PartialEq)]
 pub struct Verdict {
     pub op: Op,
+    pub pair: Pair,
     pub over: Vec<String>,
 }
 
 /// What breaks the budget or the growth rule, from the two sizes' measurements.
-pub fn judge(op: Op, one: &Measured, four: &Measured) -> Verdict {
+pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
     let mut over = Vec::new();
     let pi_ms = four.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
     let (budget, _) = budget_ms(op, four.divisor);
@@ -703,7 +776,7 @@ pub fn judge(op: Op, one: &Measured, four: &Measured) -> Verdict {
             }
         }
     }
-    Verdict { op, over }
+    Verdict { op, pair, over }
 }
 
 /// The run fails on an operation off the list that is over, and on one on the
@@ -711,10 +784,9 @@ pub fn judge(op: Op, one: &Measured, four: &Measured) -> Verdict {
 pub fn listed_disagree(verdicts: &[Verdict]) -> Vec<String> {
     let mut out = Vec::new();
     for v in verdicts {
-        let listed = OVER_BUDGET.iter().any(|(name, _)| *name == v.op.name());
-        match (listed, v.over.is_empty()) {
-            (false, false) => out.push(format!("{} is over budget: {}", v.op.name(), v.over.join("; "))),
-            (true, true) => out.push(format!("{} is within its budget now: take it off OVER_BUDGET and close its issue", v.op.name())),
+        match (listed(v.op, v.pair), v.over.is_empty()) {
+            (false, false) => out.push(format!("{} ({}) is over budget: {}", v.op.name(), v.pair.name(), v.over.join("; "))),
+            (true, true) => out.push(format!("{} ({}) is within its budget now: take it off OVER_BUDGET and close its issue", v.op.name(), v.pair.name())),
             _ => {}
         }
     }
@@ -723,34 +795,49 @@ pub fn listed_disagree(verdicts: &[Verdict]) -> Vec<String> {
 
 pub fn run(work: &Path) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(err)?;
-    let (one, four) = (work.join("owner"), work.join("owner-x4"));
-    for (dir, times) in [(&one, 1), (&four, 4)] {
-        if !dir.join(bagholder_book::BOOK_FILE).exists() {
-            build(dir, sized(times, OWNER.seed), BALANCES_DAYS)?;
+    for pair in [Pair::Breadth, Pair::Depth] {
+        let (one, four) = pair.folders(work);
+        for (dir, times) in [(&one, 1), (&four, 4)] {
+            if !dir.join(bagholder_book::BOOK_FILE).exists() {
+                build(dir, pair.size(times), BALANCES_DAYS)?;
+            }
         }
     }
     // each row printed as it is measured, so a long run shows where it is
-    let header = "| Operation | Runner (ms) | Pi (ms) | Budget (ms) | From | VM steps ×1 → ×4 | Allocations ×1 → ×4 | Bytes read ×1 → ×4 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n";
+    let header = "| Operation | Grows by | Runner (ms) | Pi (ms) | Budget (ms) | From | VM steps ×1 → ×4 | Allocations ×1 → ×4 | Bytes read ×1 → ×4 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
     write_out(header)?;
     let mut verdicts = Vec::new();
-    for op in Op::ALL {
-        // an operation listed over budget is measured once: its counts are the
-        // same every run, and one run over its budget keeps it over; only a run
-        // within it is taken to the median of seven, to say it is off the list
-        let listed = OVER_BUDGET.iter().any(|(name, _)| *name == op.name());
-        let mut a = measure(&exe, op, &one, if listed { 1 } else { RUNS })?;
-        let mut b = measure(&exe, op, &four, if listed { 1 } else { RUNS })?;
-        if listed && judge(op, &a, &b).over.is_empty() {
-            a = measure(&exe, op, &one, RUNS)?;
-            b = measure(&exe, op, &four, RUNS)?;
+    for pair in [Pair::Breadth, Pair::Depth] {
+        let (one, four) = pair.folders(work);
+        for &op in pair.ops() {
+            // an operation listed over budget is measured once: its counts are the
+            // same every run, and one run over its budget keeps it over; only a run
+            // within it is taken to the median of seven, to say it is off the list
+            let listed = listed(op, pair);
+            let mut a = measure(&exe, op, &one, if listed { 1 } else { RUNS })?;
+            let mut b = measure(&exe, op, &four, if listed { 1 } else { RUNS })?;
+            if listed && judge(op, pair, &a, &b).over.is_empty() {
+                a = measure(&exe, op, &one, RUNS)?;
+                b = measure(&exe, op, &four, RUNS)?;
+            }
+            let (budget, from) = budget_ms(op, b.divisor);
+            let read = match (a.read, b.read) {
+                (Some(x), Some(y)) => format!("{x} → {y}"),
+                _ => "not counted here".into(),
+            };
+            write_out(&format!(
+                "| {} | {} | {:.1} | {:.1} | {budget:.1} | {from} | {} → {} | {} → {} | {read} |\n",
+                op.name(),
+                pair.name(),
+                b.wall_ns as f64 / 1e6,
+                b.wall_ns as f64 / 1e6 * PI_SLOWDOWN,
+                a.steps,
+                b.steps,
+                a.allocs,
+                b.allocs
+            ))?;
+            verdicts.push(judge(op, pair, &a, &b));
         }
-        let (budget, from) = budget_ms(op, b.divisor);
-        let read = match (a.read, b.read) {
-            (Some(x), Some(y)) => format!("{x} → {y}"),
-            _ => "not counted here".into(),
-        };
-        write_out(&format!("| {} | {:.1} | {:.1} | {budget:.1} | {from} | {} → {} | {} → {} | {read} |\n", op.name(), b.wall_ns as f64 / 1e6, b.wall_ns as f64 / 1e6 * PI_SLOWDOWN, a.steps, b.steps, a.allocs, b.allocs))?;
-        verdicts.push(judge(op, &a, &b));
     }
     let wrong = listed_disagree(&verdicts);
     if wrong.is_empty() {
@@ -802,7 +889,7 @@ pub fn cli(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    const SMALL: Size = Size { accounts: 12, instruments: 16, trades: 40, months: 4, seed: 3 };
+    const SMALL: Size = Size { accounts: 12, instruments: 16, trades: 40, months: 4, seed: 3, deep: 0 };
 
     fn counts(home: &Path) -> Vec<(String, i64)> {
         let c = rusqlite::Connection::open(home.join(bagholder_book::BOOK_FILE)).unwrap();
@@ -941,23 +1028,28 @@ mod tests {
         assert!(!cad.pending(), "stated again after the read: confirmed, {cad:?}");
     }
 
-    /// Every operation is measured on a small book and four times it, in this
-    /// process, and none off `OVER_BUDGET` breaks the growth rule there; the
-    /// budget itself, and whether a listed one now meets it, is the CI job's, at
-    /// the owner's size, on the runner it is stated for.
+    /// Every operation is measured on a small book and four times it, by breadth
+    /// and by depth, in this process, and none off `OVER_BUDGET` breaks the growth
+    /// rule there; the budget itself, and whether a listed one now meets it, is the
+    /// CI job's, at the owner's size, on the runner it is stated for.
     #[test]
     fn test_every_operation_is_measured_and_the_growth_rule_judged() {
         let _g = crate::tests_common::guard();
-        let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        build(one.path(), SMALL, 2).unwrap();
-        build(four.path(), Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }, 2).unwrap();
-        let listed = |op: Op| OVER_BUDGET.iter().any(|(name, _)| *name == op.name());
-        for op in Op::ALL.into_iter().filter(|o| o.per_change()) {
-            let (a, b) = (probe(op, one.path()).unwrap(), probe(op, four.path()).unwrap());
-            assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
-            let v = judge(op, &a, &b);
-            let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew")).collect();
-            assert!(growth.is_empty() || listed(op), "{op:?}: {growth:?} ({a:?} then {b:?})");
+        let sizes = [
+            (Pair::Breadth, SMALL, Size { accounts: SMALL.accounts * 4, instruments: SMALL.instruments * 4, trades: SMALL.trades * 4, ..SMALL }),
+            (Pair::Depth, Size { deep: 20, ..SMALL }, Size { deep: 80, ..SMALL }),
+        ];
+        for (pair, small, large) in sizes {
+            let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+            build(one.path(), small, 2).unwrap();
+            build(four.path(), large, 2).unwrap();
+            for &op in pair.ops().iter().filter(|o| o.per_change()) {
+                let (a, b) = (probe(op, one.path()).unwrap(), probe(op, four.path()).unwrap());
+                assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
+                let v = judge(op, pair, &a, &b);
+                let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew")).collect();
+                assert!(growth.is_empty() || listed(op, pair), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
+            }
         }
     }
 
@@ -967,14 +1059,14 @@ mod tests {
     fn test_an_operation_over_budget_fails_unless_listed_and_a_listed_one_within_fails_too() {
         let small = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 10 };
         let linear = Measured { wall_ns: 1_000, steps: 400, allocs: 100, read: Some(1_000), divisor: 40 };
-        let v = judge(Op::PriceChanged, &small, &linear);
+        let v = judge(Op::PriceChanged, Pair::Breadth, &small, &linear);
         assert!(v.over.iter().any(|o| o.contains("steps grew 4.00 times")), "{v:?}");
-        assert!(judge(Op::PriceChanged, &small, &small).over.is_empty());
+        assert!(judge(Op::PriceChanged, Pair::Breadth, &small, &small).over.is_empty());
         let slow = Measured { wall_ns: 10_000_000_000, ..small };
-        assert!(judge(Op::Startup, &small, &slow).over.iter().any(|o| o.contains("over 5000 ms")));
+        assert!(judge(Op::Startup, Pair::Breadth, &small, &slow).over.iter().any(|o| o.contains("over 5000 ms")));
         // a background operation's wall time is reported, never judged
-        assert!(judge(Op::Brokers, &small, &Measured { wall_ns: 10_000_000_000, ..small }).over.is_empty());
-        let off_list = listed_disagree(&[Verdict { op: Op::PriceChanged, over: vec!["x".into()] }]);
-        assert_eq!(off_list.len(), usize::from(!OVER_BUDGET.iter().any(|(n, _)| *n == "price-changed")));
+        assert!(judge(Op::Brokers, Pair::Breadth, &small, &Measured { wall_ns: 10_000_000_000, ..small }).over.is_empty());
+        let off_list = listed_disagree(&[Verdict { op: Op::PriceChanged, pair: Pair::Breadth, over: vec!["x".into()] }]);
+        assert_eq!(off_list.len(), usize::from(!listed(Op::PriceChanged, Pair::Breadth)));
     }
 }
