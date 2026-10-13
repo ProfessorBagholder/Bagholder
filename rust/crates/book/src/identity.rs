@@ -403,6 +403,33 @@ impl Book {
     /// records' sightings under one symbol and venue is one name, from its first
     /// day to its last. A ticker that changes and changes back is three names.
     /// The sightings of every instrument read as one with it count.
+    /// What the instrument is called now: the symbol of `names`' last, read
+    /// through an index from the newest sighting of each instrument read as it,
+    /// not by working out every name it had.
+    pub fn current_symbol(&self, id: InstrumentId) -> Result<Option<String>> {
+        let head = self.canonical(id)?;
+        let mut members = self.conn().prepare_cached(&format!("SELECT * FROM {}", group_sql("?1")))?;
+        let ids: Vec<String> = members.query_map([head.to_string()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut newest: Option<(String, String, i64)> = None;
+        let mut st = self.conn().prepare_cached(
+            "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+             WHERE s.instrument_id = ?1 ORDER BY s.day DESC, s.symbol DESC, s.rowid DESC LIMIT 1",
+        )?;
+        for i in ids {
+            let row: Option<(String, String, i64)> = st.query_row([i], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+            if let Some(row) = row {
+                if newest.as_ref().is_none_or(|n| (&row.0, &row.1, row.2) > (&n.0, &n.1, n.2)) {
+                    newest = Some(row);
+                }
+            }
+        }
+        if let Some((_, symbol, _)) = newest {
+            return Ok(Some(symbol));
+        }
+        // no record names it: the fallbacks `names` reads
+        Ok(self.names(id)?.last().map(|n| n.symbol.clone()))
+    }
+
     pub fn names(&self, id: InstrumentId) -> Result<Vec<Name>> {
         let head = self.canonical(id)?;
         let mut stmt = self.conn().prepare_cached(&format!(

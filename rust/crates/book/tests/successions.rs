@@ -375,3 +375,45 @@ fn a_join_and_a_part_log_every_record_trade_and_instrument_they_re_point() {
         assert!(changes.instruments.contains(&i), "{i} not logged");
     }
 }
+
+/// What an instrument is called now, read by index, is the last of its names,
+/// whichever ids are read as one and whatever order the rows arrived in.
+#[test]
+fn the_current_symbol_is_the_last_name_s() {
+    for keys in [&["buy", "sell"][..], &["buy", "event", "sell"], &["sell", "buy"], &["event", "sell", "buy"]] {
+        let (f, _) = book_of(keys);
+        for i in f.book.instruments().unwrap() {
+            assert_eq!(f.book.current_symbol(i.id).unwrap(), f.book.names(i.id).unwrap().last().map(|n| n.symbol.clone()), "{keys:?}");
+        }
+    }
+}
+
+/// The same over generated sightings: one listing seen under three symbols on
+/// days in any order, some of its rows removed, the current symbol read by
+/// index is always the last of the names worked out from every sighting.
+#[test]
+fn the_current_symbol_is_the_last_name_s_over_generated_sightings() {
+    let mut r = 7u64;
+    let mut next = |n: u64| {
+        r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (r >> 33) % n
+    };
+    for book in 0..20 {
+        let f = Fixture::new();
+        f.account(&["a1"]);
+        let mut stored = Vec::new();
+        for k in 0..(5 + next(15)) {
+            let symbol = ["AAA", "BBB", "CCC"][next(3) as usize];
+            let day = 1 + next(9);
+            let row = legs(vec![buy("a1", share("CA0000000009", symbol), "1", "-10", &format!("2026-01-0{day}T15:00:00Z"))]);
+            stored.push(f.store(&Spelled::v(1), &format!("r{book}-{k}"), &row).record);
+            if next(4) == 0 {
+                let gone = stored.remove(next(stored.len() as u64) as usize);
+                f.book.mark_removed(gone, t0()).unwrap();
+            }
+            for i in f.book.instruments().unwrap() {
+                assert_eq!(f.book.current_symbol(i.id).unwrap(), f.book.names(i.id).unwrap().last().map(|n| n.symbol.clone()), "book {book}, after {k}");
+            }
+        }
+    }
+}

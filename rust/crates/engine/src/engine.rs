@@ -256,6 +256,15 @@ pub struct Engine {
     /// Each account's cash, by the family whose rows moved it: a family's match
     /// gives its share, and an account's total is its shares added up.
     shares: BTreeMap<AccountId, BTreeMap<Node, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>,
+    /// Each instrument by what it is called now (its symbol in ASCII capitals)
+    /// and its currency: what a trade typed in by symbol is found by.
+    symbols: BTreeMap<(String, bagholder_core::Currency), BTreeSet<InstrumentId>>,
+}
+
+/// What an instrument is found by when named: its current symbol in ASCII
+/// capitals, and its currency.
+fn symbol_key(i: &crate::input::InstrumentInfo) -> Option<(String, bagholder_core::Currency)> {
+    i.current_name().map(|n| (n.symbol.to_ascii_uppercase(), i.instrument.currency))
 }
 
 /// Each account's cash a family's match gives, by family.
@@ -327,7 +336,13 @@ impl Engine {
             past: PastCache::default(),
             families,
             shares: BTreeMap::new(),
+            symbols: BTreeMap::new(),
         };
+        for (id, info) in &e.inputs.ledger.instruments {
+            if let Some(k) = symbol_key(info) {
+                e.symbols.entry(k).or_default().insert(*id);
+            }
+        }
         e.match_all();
         e.identity = identify(&e.inputs.ledger, &e.matched);
         e.benchmarks = build_benchmarks(&e.inputs.market.benchmarks, &e.inputs.facts.rates, &e.inputs.clock);
@@ -451,6 +466,17 @@ impl Engine {
         &self.inputs
     }
 
+    /// The instruments called `symbol` now (any case of its ASCII letters) in
+    /// `currency`.
+    pub fn named(&self, symbol: &str, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.symbols.get(&(symbol.to_ascii_uppercase(), currency)).into_iter().flatten().copied()
+    }
+
+    /// The contracts written on `underlying`.
+    pub fn contracts_on(&self, underlying: InstrumentId) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.families.contracts_on(underlying)
+    }
+
     pub fn identity(&self) -> &Identity {
         &self.identity
     }
@@ -563,6 +589,16 @@ impl Engine {
                     seeds.extend(old.iter().chain(list.iter()).flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
                     adjusted_was.insert(tx.clone(), old);
                 }
+                for i in &instruments {
+                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
+                        if let Some(s) = self.symbols.get_mut(&k) {
+                            s.remove(i);
+                            if s.is_empty() {
+                                self.symbols.remove(&k);
+                            }
+                        }
+                    }
+                }
                 let book_was = BookParts { accounts: accounts.iter().map(|a| (*a, self.inputs.ledger.accounts.get(a).cloned())).collect(), instruments: instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).cloned())).collect(), activity: self.inputs.ledger.transactions.len() };
                 reach.transactions.extend(gone.iter().map(|t| t.id.clone()));
                 reach.accounts.extend(gone.iter().map(|t| t.account));
@@ -576,6 +612,11 @@ impl Engine {
                 let now: BTreeMap<InstrumentId, Option<InstrumentId>> =
                     instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
                 self.seed(&mut seeds, &records, &now, &accounts);
+                for i in &instruments {
+                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
+                        self.symbols.entry(k).or_default().insert(*i);
+                    }
+                }
                 let come: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
                 reach.transactions.extend(come.iter().map(|t| t.id.clone()));
                 reach.accounts.extend(come.iter().map(|t| t.account));
@@ -958,6 +999,15 @@ impl Engine {
         }
         if self.identity != other.identity {
             return Some(format!("the trades' identity differs: {:?} against {:?}", self.identity, other.identity));
+        }
+        if self.families != other.families {
+            return Some(format!("the families differ: {}", self.families.differences(&other.families)));
+        }
+        if self.symbols != other.symbols {
+            return Some("the instruments by symbol differ".into());
+        }
+        if self.shares != other.shares {
+            return Some("the cash shares by family differ".into());
         }
         None
     }

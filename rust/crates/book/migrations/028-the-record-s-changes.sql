@@ -16,6 +16,8 @@ CREATE INDEX trades_anchor_instrument ON trades (anchor_instrument) WHERE anchor
 -- a record's links read by key from either side; an account by a broker's id for it
 CREATE INDEX transfer_links_in ON transfer_links (in_record);
 CREATE INDEX account_refs_value ON account_refs (value);
+-- an instrument's newest sighting, by day and symbol: what it is called now
+CREATE INDEX instrument_sightings_newest ON instrument_sightings (instrument_id, day, symbol);
 
 
 CREATE TRIGGER accounts_changed_insert AFTER INSERT ON accounts BEGIN

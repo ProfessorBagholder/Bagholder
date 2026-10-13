@@ -104,13 +104,8 @@ pub fn contract_of(symbol: &str) -> Option<(String, bagholder_core::jiff::civil:
 /// it: a broker names an option contract by its underlying's symbol, so a
 /// symbol alone is shared by a share and every contract on it.
 pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency, of_kind: impl Fn(InstrumentKind) -> bool) -> Option<InstrumentId> {
-    let mut found = e
-        .inputs()
-        .ledger
-        .instruments
-        .iter()
-        .filter(|(_, i)| i.instrument.currency == currency && of_kind(i.instrument.kind) && i.current_name().is_some_and(|n| n.symbol.eq_ignore_ascii_case(symbol)))
-        .map(|(id, _)| *id);
+    let instruments = &e.inputs().ledger.instruments;
+    let mut found = e.named(symbol, currency).filter(|id| instruments.get(id).is_some_and(|i| of_kind(i.instrument.kind)));
     let first = found.next()?;
     found.next().is_none().then_some(first)
 }
@@ -123,13 +118,14 @@ pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency, of_ki
 pub(crate) fn contract_by_terms(e: &Engine, symbol: &str, currency: Currency) -> Option<Traded> {
     let (under, expiry, strike, right) = contract_of(symbol)?;
     let held_under = held_by_symbol(e, &under, currency, |k| k != InstrumentKind::OptionContract);
+    let instruments = &e.inputs().ledger.instruments;
     let mut held = held_under.into_iter().flat_map(|u| {
-        e.inputs().ledger.instruments.iter().filter(move |(_, i)| {
-            i.instrument.currency == currency && i.terms.as_ref().is_some_and(|t| t.underlying == u && t.expiry == expiry && t.strike == strike && t.right == right)
+        e.contracts_on(u).filter(move |id| {
+            instruments.get(id).is_some_and(|i| i.instrument.currency == currency && i.terms.as_ref().is_some_and(|t| t.underlying == u && t.expiry == expiry && t.strike == strike && t.right == right))
         })
     });
     Some(match (held.next(), held.next()) {
-        (Some((id, _)), None) => Traded::Held(*id),
+        (Some(id), None) => Traded::Held(id),
         _ => Traded::Named {
             symbol: symbol.to_string(),
             currency,
@@ -168,7 +164,7 @@ pub fn enter(f: &Figures, req: &EntryRequest, now: bagholder_core::jiff::Timesta
     let entry = f
         .read(|e| -> Result<Prepared, Refused> {
             let i = e.inputs();
-            let transaction = |id: &TransactionId| i.ledger.transactions.iter().find(|t| &t.id == id).ok_or_else(|| bad(format!("no transaction {id} in the book")));
+            let transaction = |id: &TransactionId| i.ledger.transactions.get(id).ok_or_else(|| bad(format!("no transaction {id} in the book")));
             let waits = |id: &TransactionId, what: bagholder_engine::ledger::Wanted| e.figures().matched.waiting.get(id).is_some_and(|w| w.what == what);
             let currency_of = |id: InstrumentId| i.ledger.instruments.get(&id).map(|x| x.instrument.currency).ok_or_else(|| bad(format!("no instrument {id} in the book")));
             Ok(Prepared::Ready(match req {

@@ -14,6 +14,7 @@ CREATE INDEX instrument_joins_into ON instrument_joins (into_id);
 CREATE INDEX instrument_refs_instrument ON instrument_refs (instrument_id);
 CREATE INDEX instrument_routes_value ON instrument_routes (scheme, value);
 CREATE INDEX instrument_sightings_instrument ON instrument_sightings (instrument_id, day);
+CREATE INDEX instrument_sightings_newest ON instrument_sightings (instrument_id, day, symbol);
 CREATE INDEX link_records_record ON link_records (record_id);
 CREATE INDEX option_terms_underlying ON option_terms (underlying_id);
 CREATE INDEX orders_by_bracket ON orders(bracket_id, role) WHERE bracket_id IS NOT NULL;

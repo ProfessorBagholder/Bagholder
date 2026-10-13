@@ -121,6 +121,36 @@ impl Families {
         }
     }
 
+    /// Where two sets of families differ, said for a test.
+    pub fn differences(&self, other: &Families) -> String {
+        let mut out = Vec::new();
+        for (n, f) in &self.family_of {
+            if other.family_of.get(n) != Some(f) {
+                out.push(format!("{n:?} in {f:?} here, {:?} there", other.family_of.get(n)));
+            }
+        }
+        for (n, f) in &other.family_of {
+            if !self.family_of.contains_key(n) {
+                out.push(format!("{n:?} in none here, {f:?} there"));
+            }
+        }
+        if self.contracts != other.contracts {
+            out.push("contracts".into());
+        }
+        if self.named_by != other.named_by {
+            out.push(format!("named_by {:?} against {:?}", self.named_by, other.named_by));
+        }
+        if self.whole != other.whole {
+            out.push(format!("whole {:?} against {:?}", self.whole, other.whole));
+        }
+        out.join("; ")
+    }
+
+    /// The contracts written on `i`.
+    pub fn contracts_on(&self, i: InstrumentId) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.contracts.get(&i).into_iter().flatten().copied()
+    }
+
     /// Whether any contract is written on `i`: a close of it can decide a
     /// contract's expiry.
     pub fn is_underlying(&self, i: InstrumentId) -> bool {
@@ -205,7 +235,14 @@ impl Families {
         // reaches outside it
         let mut seen: BTreeSet<Node> = BTreeSet::new();
         let mut parts: Vec<BTreeSet<Node>> = Vec::new();
-        let mut pending: Vec<Node> = region.iter().copied().collect();
+        // a node with nothing left (an account's cash with no row, an instrument
+        // the ledger no longer holds and nothing names) is a family only where a
+        // coupling reaches it, as in a fresh build
+        let exists = |n: &Node| match n {
+            Node::Instrument(i) => ledger.instruments.contains_key(i) || ledger.transactions.of_instrument(*i).next().is_some(),
+            Node::Cash(a) => ledger.transactions.cash_of(*a).next().is_some(),
+        };
+        let mut pending: Vec<Node> = region.iter().copied().filter(exists).collect();
         while let Some(start) = pending.pop() {
             if seen.contains(&start) {
                 continue;
