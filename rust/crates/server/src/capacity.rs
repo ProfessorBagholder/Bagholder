@@ -172,11 +172,10 @@ impl Op {
 /// this list misses, and when one on it meets its budget and the growth rule,
 /// so the list only shrinks (`docs/architecture.md` §16).
 pub const OVER_BUDGET: &[(&str, Pair, &str)] = &[
-    // an import's linking reads every row any file ever imported
-    ("import", Pair::Breadth, "#419"),
-    // an added trade rebuilds the ledger whole
-    ("add-trade", Pair::Breadth, "#420"),
+    // a change on one instrument matches again its family's whole history, and
+    // reads every name the instrument had from every sighting
     ("add-trade", Pair::Depth, "#420"),
+    ("import", Pair::Depth, "#419"),
     // the whole view built and serialised to learn whether it changed
     ("feed-step", Pair::Breadth, "#426"),
 ];

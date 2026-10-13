@@ -713,14 +713,18 @@ impl Book {
             }
             for (scheme, value, kind, currency, symbol, venue_mic) in retired {
                 let successors: Vec<String> = {
+                    // found through the listing's index (standing, symbol, venue),
+                    // never a pass over every id the source states; ordered here,
+                    // since ordering in the query would take the key's order instead
                     let mut stmt = self.conn().prepare_cached(
                         "SELECT s.value FROM security_standings s
                          WHERE s.scheme = ? AND s.standing = 'live' AND s.kind = ? AND s.currency = ? AND s.symbol = ? AND s.venue_mic = ? AND s.value <> ?
-                           AND NOT EXISTS (SELECT 1 FROM security_standings r WHERE r.scheme = s.scheme AND r.value = s.value AND r.standing = 'retired-by-event')
-                         ORDER BY s.value",
+                           AND NOT EXISTS (SELECT 1 FROM security_standings r WHERE r.scheme = s.scheme AND r.value = s.value AND r.standing = 'retired-by-event')",
                     )?;
                     let rows = stmt.query_map(params![scheme, kind, currency, symbol, venue_mic, value], |r| r.get(0))?;
-                    rows.collect::<rusqlite::Result<_>>()?
+                    let mut found: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+                    found.sort();
+                    found
                 };
                 let [successor] = successors.as_slice() else { continue };
                 let scheme = text::parsed("security_standings", "scheme", &scheme, RefScheme::parse)?;
