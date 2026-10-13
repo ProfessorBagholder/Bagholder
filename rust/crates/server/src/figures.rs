@@ -107,6 +107,11 @@ fn catch_up_named(book: &Book, engine: &mut Engine, held: &Held) -> Result<(Move
         held.movements.lock().unwrap_or_else(|e| e.into_inner()).changed(&gone, &rows(engine));
     }
     applied.store(changes.upto, std::sync::atomic::Ordering::SeqCst);
+    // what is applied is dropped from the log as it is applied: the log holds only
+    // what the engine has not read yet
+    if !changes.is_empty() {
+        book.forget_changes(changes.upto).map_err(err)?;
+    }
     Ok((moved, Named { instruments: changes.instruments, accounts: changes.accounts }))
 }
 

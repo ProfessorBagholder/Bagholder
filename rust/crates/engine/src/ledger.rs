@@ -2182,7 +2182,7 @@ pub fn match_over(inputs: &Inputs, txs: Vec<&Transaction>) -> Matched {
         }
     }
     // in the ledger's order first, so equal places keep it
-    walk.sort_by_cached_key(|t| (ledger.transactions.place_of(&t.id), t.id.clone()));
+    walk.sort_by(|a, b| ledger.transactions.place_of(&a.id).cmp(&ledger.transactions.place_of(&b.id)));
     walk.sort_by_cached_key(|t| place(t));
 
     let mut m = Matcher {

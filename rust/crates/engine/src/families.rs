@@ -104,7 +104,7 @@ impl Families {
                 Node::Cash(a) => out.extend(ledger.transactions.cash_of(a)),
             }
         }
-        out.sort_by_cached_key(|t| ledger.transactions.place_of(&t.id).cloned());
+        out.sort_by(|a, b| ledger.transactions.place_of(&a.id).cmp(&ledger.transactions.place_of(&b.id)));
         out
     }
 
