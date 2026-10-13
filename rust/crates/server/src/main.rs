@@ -503,6 +503,8 @@ mod tests_boundary;
 #[cfg(test)]
 mod tests_lints;
 #[cfg(test)]
+mod tests_source;
+#[cfg(test)]
 mod tests_universes;
 #[cfg(test)]
 mod tests_failures;

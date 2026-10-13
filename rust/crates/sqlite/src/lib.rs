@@ -25,7 +25,7 @@ pub fn open_db(path: &std::path::Path) -> rusqlite::Result<rusqlite::Connection>
 /// signal (wake a waiter) and return -- it must not touch the database. What
 /// changed is read afterwards, from the generation counters.
 pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) -> rusqlite::Result<rusqlite::Connection> {
-    let conn = rusqlite::Connection::open(path)?;
+    let mut conn = rusqlite::Connection::open(path)?;
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
     // Asking the mode takes no lock; changing it needs the file to itself for a
     // moment. So it is changed only when it is not already WAL -- once in a file's
@@ -43,7 +43,7 @@ pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn
         }
     }
     conn.pragma_update(None, "synchronous", "FULL")?;
-    work::watch(&conn);
+    work::watch(&mut conn);
     // every connection is made here, so every commit in the process is heard: no
     // writer has to remember to say it wrote
     if let Some(heard) = hook {

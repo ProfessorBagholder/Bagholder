@@ -8,8 +8,10 @@ rust-version.workspace = true
 # SQLite itself, built from source so a copy of the app carries its own and
 # does not depend on what the machine happens to have.
 # "hooks": SQLite tells the process when a transaction commits (open_db_hooked), so a
-# change reaches the page because it happened, not because something polled for it
-rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+# change reaches the page because it happened, not because something polled for it.
+# "trace": SQLite names each statement as it runs, so a test can hold a path to the
+# tables it reads (work::statements_naming); bindings only, no other crate
+rusqlite = { version = "0.32", features = ["bundled", "hooks", "trace"] }
 # the instant a migration ran and a snapshot was taken, given by the caller (this
 # crate never reads the clock) and written in one format
 jiff = "0.2.37"

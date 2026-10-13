@@ -119,7 +119,7 @@ The reviewer's verdict (brief 22, Go with changes) is applied throughout the bui
 - [ ] **Folding:** a run of N equal balance reads stores one row, whose period spans the first to the last read; a read that differs adds one. The test uses generated sequences, including equal values with different holds, and two statements at one instant.
 - [ ] **The broker check (decision 2026-10-09):** the existing tests for a cash difference stated after the activity read pass unchanged.
 - [ ] **No change handler reads the whole market or every account:** `price_changed`, `benchmark_changed`, `broker_changed` and `record_changed` held by a boundary test.
-- [ ] **The `Capacity` workflow:** `brokers` and `price-changed` meet their budgets and the growth rule, and are removed from `OVER_BUDGET`. `startup` meets its 5 s budget on the Pi scale or stays listed with the issue naming what remains. `add-trade` and `import` stay listed under #419/#420 with their remaining cost shown. The job's table is pasted in the PR.
+- [ ] **The `Capacity` workflow:** `brokers` and `price-changed` meet the growth rule, then their budgets, and are removed from `OVER_BUDGET`. `startup` meets its 5 s budget on the Pi scale or stays listed with the issue naming what remains. `add-trade` and `import` stay listed under #419/#420 with their remaining cost shown. The job's table is pasted in the PR.
 - [ ] **The owner's book:** a copy migrates; its folded row count is stated in the PR, and `stated` agrees for every account before and after.
 
 ## Surfaces to check beyond the diff
