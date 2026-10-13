@@ -120,6 +120,11 @@ impl Book {
         found.map(|s| text::parsed("account_refs", "account_id", &s, AccountId::parse)).transpose()
     }
 
+    /// An account, where the book holds it.
+    pub fn account_held(&self, id: AccountId) -> Result<Option<Account>> {
+        Ok(self.accounts_where("WHERE id = ?", params![id.to_string()])?.pop())
+    }
+
     pub fn account(&self, id: AccountId) -> Result<Account> {
         self.accounts_where("WHERE id = ?", params![id.to_string()])?
             .pop()
@@ -231,6 +236,15 @@ impl Book {
             currency: text::currency("instruments", "currency", &currency)?,
             issuer: text::opt_parsed("instruments", "issuer_id", issuer, IssuerId::parse)?,
         })
+    }
+
+    /// An instrument as the ledger reads it: none where it is gone or joined into
+    /// another by a succession (that one is read in its place).
+    pub fn instrument_as_read(&self, id: InstrumentId) -> Result<Option<Instrument>> {
+        let listed: bool = self
+            .conn()
+            .query_row("SELECT EXISTS (SELECT 1 FROM instruments WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM instrument_joins WHERE instrument_id = ?1)", [id.to_string()], |r| r.get(0))?;
+        listed.then(|| self.instrument(id)).transpose()
     }
 
     /// Every instrument as the book reads them: one joined into another by a

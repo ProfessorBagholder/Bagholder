@@ -13,6 +13,8 @@ CREATE TABLE ledger_changes (
 ) STRICT;
 CREATE INDEX option_terms_underlying ON option_terms (underlying_id);
 CREATE INDEX trades_anchor_instrument ON trades (anchor_instrument) WHERE anchor_instrument IS NOT NULL;
+-- a record's links read by key from either side
+CREATE INDEX transfer_links_in ON transfer_links (in_record);
 
 
 CREATE TRIGGER accounts_changed_insert AFTER INSERT ON accounts BEGIN

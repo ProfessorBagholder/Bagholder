@@ -61,17 +61,52 @@ pub fn build(book: &Book, cache: &MarketCache, clock: Clock) -> Result<Engine, S
     Ok(Engine::build(Inputs { ledger: engine_inputs::ledger(book)?, facts: engine_inputs::facts(book)?, market: market(book, cache)?, clock }))
 }
 
+/// `f` run in one read transaction of the book (`Book::snapshot`): every read
+/// in it sees the book at one moment.
+fn in_snapshot<T>(book: &Book, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let mut out = None;
+    book.snapshot(|| {
+        out = Some(f());
+        Ok(())
+    })
+    .map_err(err)?;
+    out.expect("the snapshot ran its reads")
+}
+
+/// What the record's change log names past `applied`, read in one snapshot and
+/// applied to the engine, and the sequence the engine has applied moved past it
+/// (`docs/plans/stage-3-the-record-by-change.md`, A). Called with the engine's
+/// lock held: the snapshot is taken after the lock, so it holds everything an
+/// earlier holder applied, and the sequence only rises.
+fn catch_up(book: &Book, engine: &mut Engine, applied: &std::sync::atomic::AtomicI64) -> Result<Moved, String> {
+    let after = applied.load(std::sync::atomic::Ordering::SeqCst);
+    let (changes, delta, adjustments) = in_snapshot(book, || {
+        let changes = book.changes_since(after).map_err(err)?;
+        let (delta, adjustments) = engine_inputs::delta(book, &changes)?;
+        Ok((changes, delta, adjustments))
+    })?;
+    let mut moved = Moved::default();
+    if !delta.is_empty() {
+        merge(&mut moved, engine.apply(Change::Ledger(delta)));
+    }
+    if !adjustments.is_empty() {
+        merge(&mut moved, engine.apply(Change::Adjustments(adjustments)));
+    }
+    applied.store(changes.upto, std::sync::atomic::Ordering::SeqCst);
+    Ok(moved)
+}
+
 /// Every round trip given its trade in the book: one opened for each that has
 /// none, a trade whose anchor a correction made a fill of another opening's round
 /// trip moved to it, a trade a correction joined into another's orphaned, and one
-/// whose opening no longer opens anything orphaned, its notes kept; then the
-/// trades applied. What moved.
+/// whose opening no longer opens anything orphaned, its notes kept; then what was
+/// written read back through the change log (`catch_up`). What moved.
 ///
 /// Each move and orphaning is done only on the anchor the engine saw (the book
 /// may have moved it since, as a pull does), so what a stale reading named is
 /// never written over the book's own; the trades then read back are settled again
 /// until a pass writes nothing.
-pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, at: Timestamp) -> Result<Moved, String> {
+pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, applied: &std::sync::atomic::AtomicI64, at: Timestamp) -> Result<Moved, String> {
     use bagholder_core::journal::{Anchor, Opening};
     let mut moved = Moved::default();
     loop {
@@ -79,56 +114,50 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, at: Timestamp) -> 
         if identity.needs_trade.is_empty() && identity.moved.is_empty() && identity.joined.is_empty() && identity.unclaimed.is_empty() {
             return Ok(moved);
         }
-        let seen: std::collections::BTreeMap<bagholder_core::TradeId, Opening> = engine
-            .inputs()
-            .ledger
-            .trades
-            .iter()
-            .filter_map(|t| match &t.anchor {
-                Anchor::Opening(o) => Some((t.id, o.clone())),
-                Anchor::Orphaned(_) => None,
-            })
-            .collect();
-        let before = book.trades().map_err(err)?;
+        let seen = |t: &bagholder_core::TradeId| match engine.inputs().ledger.trades.get(t).map(|t| &t.anchor) {
+            Some(Anchor::Opening(o)) => Some(o.clone()),
+            _ => None,
+        };
+        let before = book.changes_upto().map_err(err)?;
         for (trade, key) in &identity.moved {
-            if let Some(s) = seen.get(trade) {
-                book.move_trade(*trade, s, &Opening { transaction: key.opening.clone(), instrument: key.instrument }).map_err(err)?;
+            if let Some(s) = seen(trade) {
+                book.move_trade(*trade, &s, &Opening { transaction: key.opening.clone(), instrument: key.instrument }).map_err(err)?;
             }
         }
         for key in &identity.needs_trade {
             book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at).map_err(err)?;
         }
         for (joined, keeps) in &identity.joined {
-            if let Some(s) = seen.get(joined) {
-                book.orphan_joined(*joined, *keeps, s).map_err(err)?;
+            if let Some(s) = seen(joined) {
+                book.orphan_joined(*joined, *keeps, &s).map_err(err)?;
             }
         }
         for trade in &identity.unclaimed {
-            if let Some(s) = seen.get(trade) {
-                book.orphan_unclaimed(*trade, s).map_err(err)?;
+            if let Some(s) = seen(trade) {
+                book.orphan_unclaimed(*trade, &s).map_err(err)?;
             }
         }
-        let after = book.trades().map_err(err)?;
-        let wrote = after != before;
-        if after != engine.inputs().ledger.trades {
-            merge(&mut moved, engine.apply(Change::Trades(after)));
-        }
-        if !wrote {
+        // nothing written: what the engine named was already moved by another
+        if book.changes_upto().map_err(err)? == before {
             return Ok(moved);
         }
+        merge(&mut moved, catch_up(book, engine, applied)?);
     }
 }
 
-/// The engine built whole from the book and the cache in `zone` at `now`, every
-/// round trip given its trade, and the notes carried from the earlier app put
-/// back on the round trips an earlier build orphaned them from
-/// (`legacy_import::reattach_carried_notes`, once per book).
-fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp) -> Result<Engine, String> {
-    let mut e = build(book, cache, clock(zone, now)?)?;
-    settle_trades(book, &mut e, now)?;
+/// The engine built whole from the book and the cache in `zone` at `now`, in one
+/// snapshot, with everything the change log holds then taken as applied (and
+/// dropped from it); every round trip given its trade, and the notes carried
+/// from the earlier app put back on the round trips an earlier build orphaned
+/// them from (`legacy_import::reattach_carried_notes`, once per book).
+fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp, applied: &std::sync::atomic::AtomicI64) -> Result<Engine, String> {
+    let (mut e, upto) = in_snapshot(book, || Ok((build(book, cache, clock(zone, now)?)?, book.changes_upto().map_err(err)?)))?;
+    applied.store(upto, std::sync::atomic::Ordering::SeqCst);
+    book.forget_changes(upto).map_err(err)?;
+    settle_trades(book, &mut e, applied, now)?;
     if crate::legacy_import::reattach_carried_notes(home, book, &e, now)? {
-        e.apply(Change::Trades(book.trades().map_err(err)?));
-        settle_trades(book, &mut e, now)?;
+        catch_up(book, &mut e, applied)?;
+        settle_trades(book, &mut e, applied, now)?;
     }
     Ok(e)
 }
@@ -165,6 +194,9 @@ pub struct Figures {
     book_heard: std::sync::OnceLock<std::sync::Arc<dyn Fn() + Send + Sync>>,
     /// The connection the header's source failures are read on, opened once.
     failures_conn: std::sync::Mutex<Option<MarketCache>>,
+    /// The last sequence of the record's change log the engine holds: written only
+    /// with the engine's lock held (`catch_up`).
+    applied: std::sync::atomic::AtomicI64,
 }
 
 impl Figures {
@@ -179,12 +211,12 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None) };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
         if let Some(z) = book.zone().map_err(err)? {
-            let e = built(home, &book, &cache, &z.zone, at)?;
+            let e = built(home, &book, &cache, &z.zone, at, &f.applied)?;
             *f.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
         }
         Ok(f)
@@ -196,8 +228,9 @@ impl Figures {
     pub fn rebuild(&self, now: Timestamp) -> Result<(), String> {
         let book = self.book()?;
         let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
-        let e = built(&self.home, &book, &self.cache()?, &z.zone, now)?;
-        *self.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
+        let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        *engine = Some(built(&self.home, &book, &self.cache()?, &z.zone, now, &self.applied)?);
+        drop(engine);
         *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
         self.logged(None);
         self.wake();
@@ -362,7 +395,7 @@ impl Figures {
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
         match engine.as_mut() {
             None => {
-                *engine = Some(built(&self.home, &book, &self.cache()?, &zone, now)?);
+                *engine = Some(built(&self.home, &book, &self.cache()?, &zone, now, &self.applied)?);
                 drop(engine);
                 self.logged(None);
                 Ok(Moved::default())
@@ -401,8 +434,7 @@ impl Figures {
             .ok_or_else(|| JournalRefused::Unknown(id.to_string()))?;
         let book = self.book().map_err(JournalRefused::Failed)?;
         book.set_journal(subject, entry, now).map_err(|e| JournalRefused::Failed(e.to_string()))?;
-        let journal = book.journal_entries().map_err(|e| JournalRefused::Failed(e.to_string()))?.into_iter().collect();
-        Ok(self.apply(Change::Journal(journal)))
+        self.record_changed(now).map_err(JournalRefused::Failed)
     }
 
     /// The record changed (an entry, an import, a fill giving way): the ledger
@@ -419,35 +451,17 @@ impl Figures {
     /// that shows for a moment and goes: `docs/decisions.md`, 2026-10-09).
     pub fn pulled(&self, now: Timestamp, stated_for: &BTreeSet<bagholder_core::AccountId>) -> Result<Moved, String> {
         let book = self.book()?;
-        let ledger = engine_inputs::ledger(&book)?;
-        let adjustments = engine_inputs::facts(&book)?.adjustments;
+        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
+        // the record by what changed in it, then each round trip given its trade:
+        // a pull that supersedes a record moves the trades on it to the broker's
+        // rows in the same write, read back with it
+        let mut moved = catch_up(&book, e, &self.applied)?;
+        merge(&mut moved, settle_trades(&book, e, &self.applied, now)?);
         let mut brokers = std::collections::BTreeMap::new();
         for a in stated_for {
             brokers.insert(*a, engine_inputs::broker_account(*a, &book.stated(*a).map_err(|e| e.to_string())?)?);
         }
-        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
-        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
-        let mut moved = Moved::default();
-        // the record and the trades anchored on it are one state: a pull that
-        // supersedes a record moves the trades on it to the broker's rows in the
-        // same write, so the trades, groups and journal read with the record are
-        // applied with it, never matched against the anchors held from before
-        if e.inputs().ledger.trades != ledger.trades {
-            merge(&mut moved, e.apply(Change::Trades(ledger.trades.clone())));
-        }
-        if e.inputs().ledger.groups != ledger.groups {
-            merge(&mut moved, e.apply(Change::Groups(ledger.groups.clone())));
-        }
-        if e.inputs().ledger.journal != ledger.journal {
-            merge(&mut moved, e.apply(Change::Journal(ledger.journal.clone())));
-        }
-        if e.inputs().ledger != ledger {
-            merge(&mut moved, e.apply(Change::Ledger(ledger)));
-        }
-        if e.inputs().facts.adjustments != adjustments {
-            merge(&mut moved, e.apply(Change::Adjustments(adjustments)));
-        }
-        merge(&mut moved, settle_trades(&book, e, now)?);
         for (a, now_stated) in brokers {
             if e.inputs().market.brokers.get(&a) != now_stated.as_ref() {
                 merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
@@ -592,6 +606,10 @@ mod tests {
         let fresh = build(&book, &f.cache().unwrap(), clock(&zone, now).unwrap()).unwrap();
         let held = f.read(|e| e.differences(&fresh)).expect("built");
         assert!(held.is_empty(), "{held:?}");
+        // what the change log brought in is the record as a whole read gives it
+        let (ledger, adjustments) = f.read(|e| (e.inputs().ledger.clone(), e.inputs().facts.adjustments.clone())).unwrap();
+        assert!(ledger == engine_inputs::ledger(&book).unwrap(), "the ledger applied by key is not the ledger read whole");
+        assert!(adjustments == engine_inputs::facts(&book).unwrap().adjustments, "the adjustments applied by key are not those read whole");
     }
 
     /// A balances read states no day (brief 22, 9; brief 25): what the broker states

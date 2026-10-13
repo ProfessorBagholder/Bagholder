@@ -174,7 +174,6 @@ impl Op {
 pub const OVER_BUDGET: &[(&str, Pair, &str)] = &[
     // an import's linking reads every row any file ever imported
     ("import", Pair::Breadth, "#419"),
-    ("import", Pair::Depth, "#419"),
     // an added trade rebuilds the ledger whole
     ("add-trade", Pair::Breadth, "#420"),
     ("add-trade", Pair::Depth, "#420"),

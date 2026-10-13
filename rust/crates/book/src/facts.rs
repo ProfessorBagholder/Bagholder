@@ -537,14 +537,23 @@ impl Book {
 
     /// Every adjustment of a live record, its instruments as the book reads them.
     pub fn adjustments(&self) -> Result<Vec<Adjustment>> {
+        self.adjustments_where("", [])
+    }
+
+    /// The adjustments of live records that apply to `to`, in the book's order.
+    pub fn adjustments_of(&self, to: &TransactionId) -> Result<Vec<Adjustment>> {
+        self.adjustments_where("AND a.applies_record = ? AND a.applies_leg = ?", [to.record.to_string(), to.leg.to_string()])
+    }
+
+    fn adjustments_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Adjustment>> {
         let joined = self.joined()?;
         let read = |i: InstrumentId| joined.get(&i).copied().unwrap_or(i);
-        let mut stmt = self.conn().prepare_cached(
+        let mut stmt = self.conn().prepare_cached(&format!(
             "SELECT a.record_id, a.leg, a.applies_record, a.applies_leg, s.source FROM adjustments a JOIN source_records s ON s.id = a.record_id
-             WHERE s.state = 'live' ORDER BY s.first_received_at, a.record_id, a.leg",
-        )?;
+             WHERE s.state = 'live' {filter} ORDER BY s.first_received_at, a.record_id, a.leg"
+        ))?;
         let heads = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?)))?
+            .query_map(args, |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut out = Vec::new();
         for (record, leg, applies_record, applies_leg, source) in heads {

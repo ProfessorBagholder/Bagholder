@@ -6,14 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use bagholder_core::jiff::civil::Date;
-use bagholder_core::journal::{Group, JournalEntry, JournalSubject, Trade};
 use bagholder_core::{AccountId, InstrumentId, Money, TransactionId};
 
 use crate::stat::benchmark::{build_benchmarks, total_return_cad};
 use crate::cashflow::{build_cashflow, payer_rates, CashRow, PayerRate};
 use crate::equity::{broker_checks, build_equity, AccountEquity, BrokerCheck};
 use crate::identity::{identify, Identity};
-use crate::input::{Adjustments, BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, Quote, Rates, Sourced};
+use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, LedgerDelta, Quote, Rates, Sourced};
 use crate::ledger::{match_lots, Direction, Matched};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
@@ -23,14 +22,13 @@ use crate::trades::{build_trades, TradeFig, TradeKey};
 /// exactly one variant.
 #[derive(Clone, Debug)]
 pub enum Change {
-    /// The record: accounts, instruments with their names and terms, the live
-    /// transactions, their records' problems, the transfer links.
-    Ledger(Ledger),
-    /// The trades the book assigned or orphaned.
-    Trades(Vec<Trade>),
-    Groups(Vec<Group>),
-    Journal(BTreeMap<JournalSubject, JournalEntry>),
-    Adjustments(Adjustments),
+    /// The record, by what changed: accounts, instruments with their names and
+    /// terms, records with their transactions and problems, the transfer links,
+    /// the trades the book assigned or orphaned, groups and the journal.
+    Ledger(LedgerDelta),
+    /// Each transaction's adjustments, every one of a live record that applies
+    /// to it, in the book's order (none: nothing applies any more).
+    Adjustments(BTreeMap<bagholder_core::TransactionId, Vec<crate::input::Adjustment>>),
     Rates(Rates),
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),
@@ -401,7 +399,7 @@ impl Engine {
         // the trades and notes move every day's; rates and closes the days from
         // the first they changed on
         let stale: Option<Date> = match &change {
-            Change::Ledger(_) | Change::Adjustments(_) | Change::Trades(_) | Change::Journal(_) => Some(Date::MIN),
+            Change::Ledger(_) | Change::Adjustments(_) => Some(Date::MIN),
             Change::Rates(r) => {
                 let was = &self.inputs.facts.rates;
                 if r.covered != was.covered || r.series != was.series || r.holidays != was.holidays {
@@ -419,15 +417,17 @@ impl Engine {
             moved.0.entry(Entity::Past).or_default().insert("*");
         }
         match change {
-            Change::Ledger(l) => {
+            Change::Ledger(delta) => {
                 let before = self.snapshot(Parts::ALL);
-                self.inputs.ledger = Ledger { trades: std::mem::take(&mut self.inputs.ledger.trades), groups: std::mem::take(&mut self.inputs.ledger.groups), journal: std::mem::take(&mut self.inputs.ledger.journal), ..l };
+                self.inputs.ledger.apply(delta);
                 self.rematch();
                 self.compare(&before, &mut moved);
             }
             Change::Adjustments(a) => {
                 let before = self.snapshot(Parts::ALL);
-                self.inputs.facts.adjustments = a;
+                for (tx, list) in a {
+                    self.inputs.facts.adjustments.replace(tx, list);
+                }
                 self.rematch();
                 self.compare(&before, &mut moved);
             }
@@ -443,27 +443,6 @@ impl Engine {
                 self.inputs.facts.rates = r;
                 self.derive();
                 self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
-                self.compare(&before, &mut moved);
-            }
-            Change::Trades(t) => {
-                let before = self.snapshot(Parts { trades: true, positions: true, ..Parts::NONE });
-                self.inputs.ledger.trades = t;
-                self.identity = identify(&self.inputs.ledger, &self.matched);
-                self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None, None);
-                self.compare(&before, &mut moved);
-            }
-            Change::Groups(g) => {
-                let before = self.snapshot(Parts { trades: true, ..Parts::NONE });
-                self.inputs.ledger.groups = g;
-                self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.compare(&before, &mut moved);
-            }
-            Change::Journal(j) => {
-                let before = self.snapshot(Parts { trades: true, positions: true, ..Parts::NONE });
-                self.inputs.ledger.journal = j;
-                self.trades = build_trades(&self.inputs, &self.matched, &self.identity);
-                self.positions = build_positions(&self.inputs, &self.matched, &self.identity, None, None);
                 self.compare(&before, &mut moved);
             }
             Change::Declared(i, d) => {

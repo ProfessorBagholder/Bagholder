@@ -688,6 +688,21 @@ impl Book {
         Ok(out)
     }
 
+    /// A record's source key, connection and first arrival, where it is live;
+    /// none where it is not (superseded, removed or gone).
+    pub fn live_record_fact(&self, id: RecordId) -> Result<Option<(String, Option<bagholder_core::ConnectionId>, jiff::Timestamp)>> {
+        let row: Option<(String, Option<String>, String)> = self
+            .conn()
+            .query_row("SELECT source_key, connection_id, first_received_at FROM source_records WHERE id = ? AND state = 'live'", [id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        row.map(|(key, connection, at)| {
+            let connection = text::opt_parsed("source_records", "connection_id", connection, bagholder_core::ConnectionId::parse)?;
+            let at = text::parsed("source_records", "first_received_at", &at, |t: &str| t.parse::<jiff::Timestamp>())?;
+            Ok((key, connection, at))
+        })
+        .transpose()
+    }
+
     pub fn live_record_keys(&self) -> Result<BTreeMap<RecordId, String>> {
         let mut stmt = self.conn().prepare_cached("SELECT id, source_key FROM source_records WHERE state = 'live'")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;

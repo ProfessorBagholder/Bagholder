@@ -146,6 +146,10 @@ impl Book {
     }
 }
 
+/// Where a trade or a group stands in the book's own order: when it was made,
+/// then its row's number.
+pub type Rank = (String, i64);
+
 /// A new id for something stored at `at`: a UUID v7 from that time and random bits.
 pub(crate) fn new_uuid(at: jiff::Timestamp) -> uuid::Uuid {
     let secs = at.as_second().max(0) as u64;

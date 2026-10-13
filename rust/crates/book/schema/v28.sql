@@ -34,6 +34,7 @@ CREATE INDEX trades_anchor_instrument ON trades (anchor_instrument) WHERE anchor
 CREATE UNIQUE INDEX trades_legacy_key ON trades (legacy_key) WHERE legacy_key IS NOT NULL;
 CREATE INDEX transactions_account ON transactions (account_id, trade_date);
 CREATE INDEX transactions_instrument ON transactions (instrument_id);
+CREATE INDEX transfer_links_in ON transfer_links (in_record);
 CREATE TABLE account_days (
     account_id TEXT NOT NULL REFERENCES accounts(id),
     day TEXT NOT NULL,

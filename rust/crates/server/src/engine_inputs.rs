@@ -8,7 +8,10 @@ use std::collections::BTreeMap;
 use bagholder_book::Book;
 use bagholder_core::names::SourceName;
 use bagholder_core::Currency;
-use bagholder_engine::input::{Adjustments, Read, AccountInfo, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Series, Sourced};
+use bagholder_book::changes::Changes;
+use bagholder_core::journal::JournalSubject;
+use bagholder_core::TransactionId;
+use bagholder_engine::input::{AccountInfo, Adjustment, Adjustments, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, LedgerDelta, Rates, Read, RecordInfo, Series, Sourced};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -20,21 +23,36 @@ fn coin_minimum(broker: &bagholder_core::Broker) -> Option<bagholder_core::Money
     (*broker == bagholder_wealthsimple::mapping::broker()).then(bagholder_wealthsimple::mapping::coin_minimum)
 }
 
+/// The broker's connections, by id: what an account is held at.
+type Brokers = BTreeMap<bagholder_core::ConnectionId, (bagholder_core::Broker, String)>;
+
+fn brokers_of(book: &Book) -> Result<Brokers, String> {
+    Ok(book.connections().map_err(err)?.into_iter().map(|c| (c.id, (c.broker, c.label))).collect())
+}
+
+fn account_info(brokers: &Brokers, a: bagholder_core::account::Account) -> Result<AccountInfo, String> {
+    let (broker, broker_label) = brokers.get(&a.connection).cloned().ok_or_else(|| format!("account {} has no connection", a.id))?;
+    let coin_minimum = coin_minimum(&broker);
+    Ok(AccountInfo { account: a, broker, broker_label, coin_minimum })
+}
+
+fn instrument_info(book: &Book, i: bagholder_core::instrument::Instrument) -> Result<InstrumentInfo, String> {
+    let names = book.names(i.id).map_err(err)?;
+    let terms = book.option_terms(i.id).map_err(err)?;
+    Ok(InstrumentInfo { instrument: i, names, terms })
+}
+
 /// The ledger: accounts, instruments with their names and terms, the live
 /// transactions and their records, the trades, groups and journal.
 pub fn ledger(book: &Book) -> Result<Ledger, String> {
-    let brokers: BTreeMap<_, _> = book.connections().map_err(err)?.into_iter().map(|c| (c.id, (c.broker, c.label))).collect();
+    let brokers = brokers_of(book)?;
     let mut accounts = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
-        let (broker, broker_label) = brokers.get(&a.connection).cloned().ok_or_else(|| format!("account {} has no connection", a.id))?;
-        let coin_minimum = coin_minimum(&broker);
-        accounts.insert(a.id, AccountInfo { account: a, broker, broker_label, coin_minimum });
+        accounts.insert(a.id, account_info(&brokers, a)?);
     }
     let mut instruments = BTreeMap::new();
     for i in book.instruments().map_err(err)? {
-        let names = book.names(i.id).map_err(err)?;
-        let terms = book.option_terms(i.id).map_err(err)?;
-        instruments.insert(i.id, InstrumentInfo { instrument: i, names, terms });
+        instruments.insert(i.id, instrument_info(book, i)?);
     }
     let mut records: BTreeMap<_, RecordInfo> = book
         .live_record_facts()
@@ -54,10 +72,58 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
         records,
         // the two sides of each move of holdings, as the broker's rows state them
         transfer_links: book.transfer_links().map_err(err)?.into_iter().collect(),
-        trades: book.trades().map_err(err)?,
-        groups: book.groups().map_err(err)?,
+        trades: book.trades_ranked().map_err(err)?.into_iter().collect(),
+        groups: book.groups_ranked().map_err(err)?.into_iter().collect(),
         journal: book.journal_entries().map_err(err)?.into_iter().collect(),
     })
+}
+
+/// What the record's change log names, read by key as the whole read
+/// (`ledger`, `facts().adjustments`) reads it (`docs/plans/stage-3-the-record-by-change.md`,
+/// A): each thing named, as it reads now, or none where it is gone. Read in the
+/// same snapshot as the log (`Book::snapshot`).
+pub fn delta(book: &Book, changes: &Changes) -> Result<(LedgerDelta, BTreeMap<TransactionId, Vec<Adjustment>>), String> {
+    let mut d = LedgerDelta::default();
+    if !changes.accounts.is_empty() {
+        let brokers = brokers_of(book)?;
+        for id in &changes.accounts {
+            let a = book.account_held(*id).map_err(err)?.map(|a| account_info(&brokers, a)).transpose()?;
+            d.accounts.insert(*id, a);
+        }
+    }
+    for id in &changes.instruments {
+        let i = book.instrument_as_read(*id).map_err(err)?.map(|i| instrument_info(book, i)).transpose()?;
+        d.instruments.insert(*id, i);
+    }
+    let mut links = std::collections::BTreeSet::new();
+    for id in &changes.records {
+        let now = match book.live_record_fact(*id).map_err(err)? {
+            Some((source_key, connection, at)) => {
+                let problems = book.problems_of(*id).map_err(err)?;
+                let info = RecordInfo { source_key, problems, connection, first_received_at: Some(at) };
+                Some((info, book.transactions_of(*id).map_err(err)?))
+            }
+            None => None,
+        };
+        d.records.insert(*id, now);
+        links.extend(book.transfer_links_of(*id).map_err(err)?);
+    }
+    d.links = links.into_iter().collect();
+    for id in &changes.trades {
+        d.trades.insert(*id, book.trade_ranked(*id).map_err(err)?);
+        let subject = JournalSubject::Trade(*id);
+        d.journal.insert(subject, book.journal(subject).map_err(err)?);
+    }
+    for id in &changes.groups {
+        d.groups.insert(*id, book.group_ranked(*id).map_err(err)?);
+        let subject = JournalSubject::Group(*id);
+        d.journal.insert(subject, book.journal(subject).map_err(err)?);
+    }
+    let mut adjustments = BTreeMap::new();
+    for tx in &changes.adjustments {
+        adjustments.insert(tx.clone(), book.adjustments_of(tx).map_err(err)?);
+    }
+    Ok((d, adjustments))
 }
 
 /// Per currency, each series of the Bank's rates the book holds.
