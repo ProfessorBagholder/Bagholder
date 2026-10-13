@@ -50,10 +50,10 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
     Ok(Ledger {
         accounts,
         instruments,
-        transactions: book.transactions().map_err(err)?,
+        transactions: book.transactions().map_err(err)?.into_iter().collect(),
         records,
         // the two sides of each move of holdings, as the broker's rows state them
-        transfer_links: book.transfer_links().map_err(err)?,
+        transfer_links: book.transfer_links().map_err(err)?.into_iter().collect(),
         trades: book.trades().map_err(err)?,
         groups: book.groups().map_err(err)?,
         journal: book.journal_entries().map_err(err)?.into_iter().collect(),

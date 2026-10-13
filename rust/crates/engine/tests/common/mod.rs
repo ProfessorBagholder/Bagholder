@@ -190,7 +190,7 @@ pub fn build(case: &Value) -> Built {
         tx.insert(label, id);
         transactions.push(transaction);
     }
-    let transfer_links = arr(case, "transfer_links").iter().map(|l| (tx[s(l, "out").unwrap()].clone(), tx[s(l, "in").unwrap()].clone())).collect();
+    let transfer_links: BTreeMap<_, _> = arr(case, "transfer_links").iter().map(|l| (tx[s(l, "out").unwrap()].clone(), tx[s(l, "in").unwrap()].clone())).collect();
     let mut trades = Vec::new();
     for t in arr(case, "trades") {
         let opened_by = &tx[s(&t, "opened_by").unwrap()];
@@ -208,7 +208,7 @@ pub fn build(case: &Value) -> Built {
         let entry = JournalEntry { thesis: s(&j, "thesis").unwrap_or("").into(), grade: s(&j, "grade").map(|g| Grade::parse(g).unwrap()), tags: arr(&j, "tags").iter().map(|t| t.as_str().unwrap().to_string()).collect() };
         journal.insert(subject, entry);
     }
-    let ledger = Ledger { accounts, instruments, transactions, records, transfer_links, trades, groups, journal };
+    let ledger = Ledger { accounts, instruments, transactions: transactions.into_iter().collect(), records, transfer_links, trades, groups, journal };
 
     let mut rates = Rates::default();
     for (c, days) in obj(case, "rates") {

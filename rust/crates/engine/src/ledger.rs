@@ -1653,14 +1653,14 @@ impl<'a> Matcher<'a> {
     /// states none, or states it only in another currency (no rate the broker
     /// used is stated): the units keep their own.
     fn cost_on_arrival(&self, to: &TransactionId, instrument: InstrumentId) -> Option<Fig<Money>> {
-        let recv = self.inputs.ledger.transactions.iter().find(|x| &x.id == to)?;
+        let recv = self.inputs.ledger.transactions.get(to)?;
         recv.value.filter(|v| v.currency == self.currency(instrument)).map(Ok)
     }
 
     /// A transfer out's linked receiving side: its id, account and instrument.
     fn link_of(&self, t: &Transaction, instrument: InstrumentId) -> Option<(TransactionId, AccountId, InstrumentId)> {
         let to = self.links_out.get(&t.id)?;
-        let recv = self.inputs.ledger.transactions.iter().find(|x| &x.id == to)?;
+        let recv = self.inputs.ledger.transactions.get(to)?;
         Some((to.clone(), recv.account, recv.instrument.unwrap_or(instrument)))
     }
 
@@ -2150,8 +2150,8 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         instrument_taint: BTreeMap::new(),
         account_taint: BTreeMap::new(),
         consumed: BTreeSet::new(),
-        links_out: ledger.transfer_links.iter().cloned().collect(),
-        links_in: ledger.transfer_links.iter().map(|(_, i)| i.clone()).collect(),
+        links_out: ledger.transfer_links.clone(),
+        links_in: ledger.transfer_links.values().cloned().collect(),
         event_groups: BTreeMap::new(),
         dirty: BTreeSet::new(),
         lieu_fraction: BTreeMap::new(),
@@ -2178,7 +2178,7 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
     // each adjustment's event: its own row and the event rows of that account and
     // day on the instruments its legs name
     for (applies_to, adj) in inputs.facts.adjustments.iter() {
-        let Some(anchor) = ledger.transactions.iter().find(|t| &t.id == applies_to) else { continue };
+        let Some(anchor) = ledger.transactions.get(applies_to) else { continue };
         if anchor.kind != Kind::CorporateEvent {
             continue;
         }

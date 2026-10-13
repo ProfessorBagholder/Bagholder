@@ -62,6 +62,86 @@ pub struct RecordInfo {
     pub first_received_at: Option<Timestamp>,
 }
 
+/// Where a transaction stands in the ledger's order: its account, its trade day,
+/// the instant it happened (none first), its record and its leg.
+pub type Place = (AccountId, Date, Option<Timestamp>, RecordId, bagholder_core::Leg);
+
+fn place(t: &Transaction) -> Place {
+    (t.account, t.trade_date, t.occurred_at, t.id.record, t.id.leg.clone())
+}
+
+/// The live transactions, held by key: in the ledger's order (`Place`), found
+/// by id, and replaced a record at a time, so a change to one record touches
+/// that record and nothing else (`docs/plans/stage-3-the-record-by-change.md`, B).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Transactions {
+    rows: BTreeMap<Place, Transaction>,
+    by_id: BTreeMap<TransactionId, Place>,
+}
+
+impl Transactions {
+    /// Every transaction, in the ledger's order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Transaction> + Clone {
+        self.rows.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn get(&self, id: &TransactionId) -> Option<&Transaction> {
+        self.by_id.get(id).and_then(|p| self.rows.get(p))
+    }
+
+    /// A record's transactions, by leg.
+    pub fn of_record(&self, record: RecordId) -> impl Iterator<Item = &Transaction> {
+        self.by_id.range(TransactionId::new(record, bagholder_core::Leg::first())..).take_while(move |(id, _)| id.record == record).filter_map(|(_, p)| self.rows.get(p))
+    }
+
+    /// A record's transactions replaced by `now` (none: the record is gone).
+    pub fn put_record(&mut self, record: RecordId, now: Vec<Transaction>) {
+        let gone: Vec<TransactionId> = self.of_record(record).map(|t| t.id.clone()).collect();
+        for id in gone {
+            if let Some(p) = self.by_id.remove(&id) {
+                self.rows.remove(&p);
+            }
+        }
+        for t in now {
+            debug_assert_eq!(t.id.record, record, "a transaction of another record");
+            self.insert(t);
+        }
+    }
+
+    fn insert(&mut self, t: Transaction) {
+        if let Some(was) = self.by_id.insert(t.id.clone(), place(&t)) {
+            self.rows.remove(&was);
+        }
+        self.rows.insert(place(&t), t);
+    }
+}
+
+impl FromIterator<Transaction> for Transactions {
+    fn from_iter<I: IntoIterator<Item = Transaction>>(items: I) -> Transactions {
+        let mut out = Transactions::default();
+        for t in items {
+            out.insert(t);
+        }
+        out
+    }
+}
+
+impl<'a> IntoIterator for &'a Transactions {
+    type Item = &'a Transaction;
+    type IntoIter = std::collections::btree_map::Values<'a, Place, Transaction>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.values()
+    }
+}
+
 /// The book's record: accounts, instruments, the live transactions, and what the
 /// person keeps on them.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -69,12 +149,13 @@ pub struct Ledger {
     pub accounts: BTreeMap<AccountId, AccountInfo>,
     pub instruments: BTreeMap<InstrumentId, InstrumentInfo>,
     /// Only live records' transactions.
-    pub transactions: Vec<Transaction>,
+    pub transactions: Transactions,
     /// Every live record a transaction belongs to.
     pub records: BTreeMap<RecordId, RecordInfo>,
     /// A transfer out of one of the person's accounts and the transfer into
     /// another that received it, as the book links them.
-    pub transfer_links: Vec<(TransactionId, TransactionId)>,
+    /// Each transfer out, and the transfer in that received it.
+    pub transfer_links: BTreeMap<TransactionId, TransactionId>,
     /// Every trade the book has assigned, with its anchor.
     pub trades: Vec<Trade>,
     pub groups: Vec<Group>,

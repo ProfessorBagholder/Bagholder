@@ -834,7 +834,7 @@ fn run(path: &Path) -> Vec<String> {
         results_agree(&mut c, &b, &e);
         // the same book listed in another order gives the same figures
         let mut reversed = e.inputs().clone();
-        reversed.ledger.transactions.reverse();
+        reversed.ledger.transactions = e.inputs().ledger.transactions.iter().rev().cloned().collect();
         let moved = e.differences(&Engine::build(reversed));
         if !moved.is_empty() {
             c.fail(format!("invariant: the book in reverse order moves {moved:?}"));

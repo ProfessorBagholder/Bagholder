@@ -301,12 +301,12 @@ impl Engine {
         }
         cache.retain(|_, w| w.strong_count() > 0);
         let i = &self.inputs;
-        let kept: Vec<_> = i.ledger.transactions.iter().filter(|t| t.trade_date <= day).cloned().collect();
+        let kept: crate::input::Transactions = i.ledger.transactions.iter().filter(|t| t.trade_date <= day).cloned().collect();
         let ids: BTreeSet<&TransactionId> = kept.iter().map(|t| &t.id).collect();
         let ledger = Ledger {
             accounts: i.ledger.accounts.clone(),
             instruments: i.ledger.instruments.clone(),
-            transfer_links: i.ledger.transfer_links.iter().filter(|(o, n)| ids.contains(o) && ids.contains(n)).cloned().collect(),
+            transfer_links: i.ledger.transfer_links.iter().filter(|(o, n)| ids.contains(o) && ids.contains(n)).map(|(o, n)| (o.clone(), n.clone())).collect(),
             records: i.ledger.records.clone(),
             trades: i.ledger.trades.clone(),
             groups: i.ledger.groups.clone(),

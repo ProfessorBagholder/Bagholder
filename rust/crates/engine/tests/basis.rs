@@ -272,14 +272,15 @@ fn average_cost_and_the_lots_account_for_the_same_money_after_every_transaction(
     for seed in 1..=400u64 {
         let case = generate(seed);
         let full = build(&case);
-        let n = full.inputs.ledger.transactions.len();
+        let all: Vec<bagholder_core::transaction::Transaction> = full.inputs.ledger.transactions.iter().cloned().collect();
+        let n = all.len();
         let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by_key(|k| (full.inputs.ledger.transactions[*k].trade_date, full.inputs.ledger.transactions[*k].occurred_at));
+        order.sort_by_key(|k| (all[*k].trade_date, all[*k].occurred_at));
         let mut before: Option<Matched> = None;
         for upto in 1..=n {
             let mut inputs = full.inputs.clone();
-            let keep: std::collections::BTreeSet<_> = order[..upto].iter().map(|k| full.inputs.ledger.transactions[*k].id.clone()).collect();
-            inputs.ledger.transactions.retain(|t| keep.contains(&t.id));
+            let keep: std::collections::BTreeSet<_> = order[..upto].iter().map(|k| all[*k].id.clone()).collect();
+            inputs.ledger.transactions = all.iter().filter(|t| keep.contains(&t.id)).cloned().collect();
             // a move between the accounts is one step: never cut between its sides
             if inputs.ledger.transfer_links.iter().any(|(o, i)| keep.contains(o) != keep.contains(i)) {
                 continue;
@@ -297,7 +298,7 @@ fn average_cost_and_the_lots_account_for_the_same_money_after_every_transaction(
                 }
             }
             // a sale leaves the average cost of what is still held where it was
-            let last = &full.inputs.ledger.transactions[order[upto - 1]];
+            let last = &all[order[upto - 1]];
             if let (Some(prev), bagholder_core::transaction::Kind::Sell, None) = (&before, last.kind, last.effect) {
                 let per = |m: &Matched| {
                     let b = m.books.get(&(last.account, last.instrument.unwrap()))?;
