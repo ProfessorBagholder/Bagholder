@@ -80,17 +80,14 @@ fn in_snapshot<T>(book: &Book, f: impl FnOnce() -> Result<T, String>) -> Result<
 /// earlier holder applied, and the sequence only rises.
 fn catch_up(book: &Book, engine: &mut Engine, applied: &std::sync::atomic::AtomicI64) -> Result<Moved, String> {
     let after = applied.load(std::sync::atomic::Ordering::SeqCst);
-    let (changes, delta, adjustments) = in_snapshot(book, || {
+    let (changes, delta) = in_snapshot(book, || {
         let changes = book.changes_since(after).map_err(err)?;
-        let (delta, adjustments) = engine_inputs::delta(book, &changes)?;
-        Ok((changes, delta, adjustments))
+        let delta = engine_inputs::delta(book, &changes)?;
+        Ok((changes, delta))
     })?;
     let mut moved = Moved::default();
     if !delta.is_empty() {
         merge(&mut moved, engine.apply(Change::Ledger(delta)));
-    }
-    if !adjustments.is_empty() {
-        merge(&mut moved, engine.apply(Change::Adjustments(adjustments)));
     }
     applied.store(changes.upto, std::sync::atomic::Ordering::SeqCst);
     Ok(moved)

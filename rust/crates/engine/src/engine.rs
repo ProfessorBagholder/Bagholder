@@ -26,11 +26,9 @@ use crate::trades::{build_trades, TradeFig, TradeKey};
 pub enum Change {
     /// The record, by what changed: accounts, instruments with their names and
     /// terms, records with their transactions and problems, the transfer links,
-    /// the trades the book assigned or orphaned, groups and the journal.
+    /// the adjustments the person or a source states, the trades the book
+    /// assigned or orphaned, groups and the journal.
     Ledger(LedgerDelta),
-    /// Each transaction's adjustments, every one of a live record that applies
-    /// to it, in the book's order (none: nothing applies any more).
-    Adjustments(BTreeMap<bagholder_core::TransactionId, Vec<crate::input::Adjustment>>),
     Rates(Rates),
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),
@@ -509,7 +507,7 @@ impl Engine {
         // the trades and notes move every day's; rates and closes the days from
         // the first they changed on
         let stale: Option<Date> = match &change {
-            Change::Ledger(_) | Change::Adjustments(_) => Some(Date::MIN),
+            Change::Ledger(_) => Some(Date::MIN),
             Change::Rates(r) => {
                 let was = &self.inputs.facts.rates;
                 if r.covered != was.covered || r.series != was.series || r.holidays != was.holidays {
@@ -527,9 +525,9 @@ impl Engine {
             moved.0.entry(Entity::Past).or_default().insert("*");
         }
         match change {
-            Change::Ledger(delta) => {
+            Change::Ledger(mut delta) => {
                 let before = self.snapshot(Parts::ALL);
-                let matching = !delta.records.is_empty() || !delta.instruments.is_empty() || !delta.accounts.is_empty();
+                let matching = delta.matches();
                 let mut seeds: BTreeSet<Node> = BTreeSet::new();
                 let records: Vec<bagholder_core::RecordId> = delta.records.keys().copied().collect();
                 let instruments: Vec<InstrumentId> = delta.instruments.keys().copied().collect();
@@ -538,35 +536,29 @@ impl Engine {
                 let was: BTreeMap<InstrumentId, Option<InstrumentId>> =
                     instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
                 self.seed(&mut seeds, &records, &was, &accounts);
+                // the adjustments: the rows they apply to, and every instrument their legs name before and after
+                let adjustments = std::mem::take(&mut delta.adjustments);
+                let mut adjusted_was: BTreeMap<bagholder_core::TransactionId, Option<crate::input::Adjustment>> = BTreeMap::new();
+                for (tx, list) in &adjustments {
+                    let old = self.inputs.facts.adjustments.get(tx).cloned();
+                    seeds.extend(old.iter().chain(list.iter()).flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
+                    adjusted_was.insert(tx.clone(), old);
+                }
                 self.inputs.ledger.apply(delta);
+                for (tx, list) in adjustments {
+                    if let Some(t) = self.inputs.ledger.transactions.get(&tx) {
+                        seeds.insert(node_of(t));
+                    }
+                    self.inputs.facts.adjustments.replace(tx, list);
+                }
                 let now: BTreeMap<InstrumentId, Option<InstrumentId>> =
                     instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
                 self.seed(&mut seeds, &records, &now, &accounts);
                 let come: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
-                self.families.reindex(&self.inputs.ledger, &was, gone.iter(), come.iter(), &BTreeMap::new(), &self.inputs.facts.adjustments);
+                self.families.reindex(&self.inputs.ledger, &was, gone.iter(), come.iter(), &adjusted_was, &self.inputs.facts.adjustments);
                 if matching {
                     self.rematch_families(seeds);
                 }
-                self.identity = identify(&self.inputs.ledger, &self.matched);
-                self.derive();
-                self.compare(&before, &mut moved);
-            }
-            Change::Adjustments(a) => {
-                let before = self.snapshot(Parts::ALL);
-                let mut seeds: BTreeSet<Node> = BTreeSet::new();
-                let mut was: BTreeMap<bagholder_core::TransactionId, Option<crate::input::Adjustment>> = BTreeMap::new();
-                for (tx, list) in a {
-                    if let Some(t) = self.inputs.ledger.transactions.get(&tx) {
-                        seeds.insert(node_of(t));
-                    }
-                    let old = self.inputs.facts.adjustments.get(&tx).cloned();
-                    seeds.extend(old.iter().flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
-                    seeds.extend(list.iter().flat_map(|x| x.legs.iter().flat_map(|l| [l.from, l.to])).flatten().map(Node::Instrument));
-                    was.insert(tx.clone(), old);
-                    self.inputs.facts.adjustments.replace(tx, list);
-                }
-                self.families.reindex(&self.inputs.ledger, &BTreeMap::new(), std::iter::empty(), std::iter::empty(), &was, &self.inputs.facts.adjustments);
-                self.rematch_families(seeds);
                 self.identity = identify(&self.inputs.ledger, &self.matched);
                 self.derive();
                 self.compare(&before, &mut moved);

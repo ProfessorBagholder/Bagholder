@@ -295,11 +295,28 @@ pub struct LedgerDelta {
     pub trades: BTreeMap<bagholder_core::TradeId, Option<(Rank, Trade)>>,
     pub groups: BTreeMap<bagholder_core::GroupId, Option<(Rank, Group)>>,
     pub journal: BTreeMap<JournalSubject, Option<JournalEntry>>,
+    /// Each transaction's adjustments: every one of a live record that applies to
+    /// it, in the book's order (none: nothing applies any more). They are the
+    /// person's records, read and applied with the rest.
+    pub adjustments: BTreeMap<TransactionId, Vec<Adjustment>>,
 }
 
 impl LedgerDelta {
     pub fn is_empty(&self) -> bool {
-        self.accounts.is_empty() && self.instruments.is_empty() && self.records.is_empty() && self.links.is_empty() && self.trades.is_empty() && self.groups.is_empty() && self.journal.is_empty()
+        self.accounts.is_empty()
+            && self.instruments.is_empty()
+            && self.records.is_empty()
+            && self.links.is_empty()
+            && self.trades.is_empty()
+            && self.groups.is_empty()
+            && self.journal.is_empty()
+            && self.adjustments.is_empty()
+    }
+
+    /// Whether the match can move: the records, the instruments, the accounts or
+    /// the adjustments changed (the trades, groups and journal do not match).
+    pub fn matches(&self) -> bool {
+        !self.records.is_empty() || !self.instruments.is_empty() || !self.accounts.is_empty() || !self.adjustments.is_empty()
     }
 }
 
@@ -410,9 +427,10 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    /// What `delta` names, as it reads now, in place of what was held.
+    /// What `delta` names, as it reads now, in place of what was held; its
+    /// adjustments are the facts', applied beside it (`crate::engine`).
     pub fn apply(&mut self, delta: LedgerDelta) {
-        let LedgerDelta { accounts, instruments, records, links, trades, groups, journal } = delta;
+        let LedgerDelta { accounts, instruments, records, links, trades, groups, journal, adjustments: _ } = delta;
         for (id, a) in accounts {
             match a {
                 Some(a) => self.accounts.insert(id, a),

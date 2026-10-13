@@ -10,8 +10,7 @@ use bagholder_core::names::SourceName;
 use bagholder_core::Currency;
 use bagholder_book::changes::Changes;
 use bagholder_core::journal::JournalSubject;
-use bagholder_core::TransactionId;
-use bagholder_engine::input::{AccountInfo, Adjustment, Adjustments, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, LedgerDelta, Rates, Read, RecordInfo, Series, Sourced};
+use bagholder_engine::input::{AccountInfo, Adjustments, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, LedgerDelta, Rates, Read, RecordInfo, Series, Sourced};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -82,7 +81,7 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
 /// (`ledger`, `facts().adjustments`) reads it (`docs/plans/stage-3-the-record-by-change.md`,
 /// A): each thing named, as it reads now, or none where it is gone. Read in the
 /// same snapshot as the log (`Book::snapshot`).
-pub fn delta(book: &Book, changes: &Changes) -> Result<(LedgerDelta, BTreeMap<TransactionId, Vec<Adjustment>>), String> {
+pub fn delta(book: &Book, changes: &Changes) -> Result<LedgerDelta, String> {
     let mut d = LedgerDelta::default();
     if !changes.accounts.is_empty() {
         let brokers = brokers_of(book)?;
@@ -119,11 +118,10 @@ pub fn delta(book: &Book, changes: &Changes) -> Result<(LedgerDelta, BTreeMap<Tr
         let subject = JournalSubject::Group(*id);
         d.journal.insert(subject, book.journal(subject).map_err(err)?);
     }
-    let mut adjustments = BTreeMap::new();
     for tx in &changes.adjustments {
-        adjustments.insert(tx.clone(), book.adjustments_of(tx).map_err(err)?);
+        d.adjustments.insert(tx.clone(), book.adjustments_of(tx).map_err(err)?);
     }
-    Ok((d, adjustments))
+    Ok(d)
 }
 
 /// Per currency, each series of the Bank's rates the book holds.

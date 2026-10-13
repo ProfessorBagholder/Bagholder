@@ -24,8 +24,8 @@ fn kind(c: &Change) -> &'static str {
         Change::Ledger(d) if !d.records.is_empty() => "ledger",
         Change::Ledger(d) if !d.trades.is_empty() => "trades",
         Change::Ledger(d) if !d.groups.is_empty() => "groups",
+        Change::Ledger(d) if !d.adjustments.is_empty() => "adjustments",
         Change::Ledger(_) => "journal",
-        Change::Adjustments(_) => "adjustments",
         Change::Rates(_) => "rates",
         Change::Declared(..) => "declared",
         Change::Frequency(..) => "frequency",
@@ -84,12 +84,12 @@ fn changed(inputs: &Inputs, c: &Change) -> Inputs {
                     None => l.journal.remove(k),
                 };
             }
-        }
-        Change::Adjustments(a) => {
-            // every adjustment the inputs held, the named transactions' put in place, chosen again whole
-            let mut all: Vec<Adjustment> = i.facts.adjustments.iter().filter(|(tx, _)| !a.contains_key(*tx)).map(|(_, x)| x.clone()).collect();
-            all.extend(a.values().flatten().cloned());
-            i.facts.adjustments = Adjustments::choose(all);
+            if !d.adjustments.is_empty() {
+                // every adjustment the inputs held, the named transactions' put in place, chosen again whole
+                let mut all: Vec<Adjustment> = i.facts.adjustments.iter().filter(|(tx, _)| !d.adjustments.contains_key(*tx)).map(|(_, x)| x.clone()).collect();
+                all.extend(d.adjustments.values().flatten().cloned());
+                i.facts.adjustments = Adjustments::choose(all);
+            }
         }
         Change::Rates(r) => i.facts.rates = r,
         Change::Declared(k, d) => {
@@ -188,7 +188,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
         Change::Ledger(trades),
         Change::Ledger(groups),
         Change::Ledger(journal),
-        Change::Adjustments(adjustments),
+        Change::Ledger(LedgerDelta { adjustments, ..LedgerDelta::default() }),
         Change::Rates(rates),
         Change::Declared(f, Some(declared)),
         Change::Frequency(f, Some(Sourced { value: 4, source: SourceName::named("tmx") })),
