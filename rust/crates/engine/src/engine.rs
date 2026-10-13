@@ -839,8 +839,9 @@ impl Engine {
             }
             now.extend(crate::trades::trip_fig(&self.inputs, &self.matched, &self.identity, k));
         }
+        // each after every row it ties with: as a fresh build's stable sort leaves them
         for t in &now {
-            let at = self.trades.binary_search_by(|x| crate::trades::shown_order(x, t)).unwrap_or_else(|e| e);
+            let at = self.trades.partition_point(|x| crate::trades::shown_order(x, t) != std::cmp::Ordering::Greater);
             self.trades.insert(at, t.clone());
         }
         diff(moved, was.iter().map(|t| (trade_entity(t), t)), now.iter().map(|t| (trade_entity(t), t)));
@@ -857,7 +858,7 @@ impl Engine {
         let now: Vec<PositionFig> = instruments.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i), None)).collect();
         let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
         for p in &now {
-            let at = self.positions.binary_search_by(|x| order(x).cmp(&order(p))).unwrap_or_else(|e| e);
+            let at = self.positions.partition_point(|x| order(x) <= order(p));
             self.positions.insert(at, p.clone());
         }
         diff(moved, was.iter().map(|p| (position_entity(p), p)), now.iter().map(|p| (position_entity(p), p)));
@@ -873,7 +874,7 @@ impl Engine {
         let mut now: Vec<CashRow> = reach.transactions.iter().filter_map(|id| self.inputs.ledger.transactions.get(id)).filter_map(|t| crate::cashflow::cash_row(&self.inputs, t)).collect();
         now.extend(self.matched.stock_dividends.iter().filter(|s| instruments.contains(&s.instrument)).map(|s| crate::cashflow::stock_dividend_row(&self.inputs, s)));
         for r in &now {
-            let at = self.cash.binary_search_by(|x| crate::cashflow::shown_order(x, r)).unwrap_or_else(|e| e);
+            let at = self.cash.partition_point(|x| crate::cashflow::shown_order(x, r) != std::cmp::Ordering::Greater);
             self.cash.insert(at, r.clone());
         }
         let payers: BTreeSet<InstrumentId> = was.iter().chain(now.iter()).filter_map(|r| r.instrument).chain(instruments.iter().copied()).collect();
@@ -1001,6 +1002,16 @@ impl Engine {
         }
         if self.identity != other.identity {
             return Some(format!("the trades' identity differs: {:?} against {:?}", self.identity, other.identity));
+        }
+        // what the page shows in order, in that order (brief 27, 11)
+        if self.trades != other.trades {
+            return Some("the trades differ in order or content".into());
+        }
+        if self.positions != other.positions {
+            return Some("the positions differ in order or content".into());
+        }
+        if self.cash != other.cash {
+            return Some("the cashflow rows differ in order or content".into());
         }
         if self.families != other.families {
             return Some(format!("the families differ: {}", self.families.differences(&other.families)));
