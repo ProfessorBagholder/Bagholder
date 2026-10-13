@@ -35,7 +35,7 @@ The rule they break is the one #507 built (`docs/architecture.md` §13): only th
 Nothing on screen changes. `SPEC.md` does not change: every figure keeps its definition, and the engine after any change stays equal to a fresh build (held below).
 
 Out of scope, each with its reason:
-- A row placed **before** rows the family has already matched (a back-dated trade, a correction, a removal) still matches the family whole. Every later lot can change with it, so the work from that row onward is the change's own; starting from the family's first row instead of from that row is the part over. Doing that would need the family's state kept at past points, and the gate's probes add today's rows. It is filed as its own issue with this measurement, for the gate to schedule.
+- A row placed **before** rows the family has already matched (a back-dated trade, a correction, a removal) still matches the family whole. Every later lot can change with it, so the work from that row onward is the change's own; starting from the family's first row instead of from that row is the part over. Doing that would need the family's state kept at past points, and the gate's probes add today's rows. It is issue #512, for the gate to schedule.
 - The day turning (`Change::Clock`) still matches everything once a day, as #507 left it.
 - Issues #508, #509, #426, #421 and #422.
 
@@ -143,7 +143,7 @@ What every figure is; the order the match applies rows in; the whole-family matc
 - [ ] **The capacity run, breadth and depth:** add-trade and import meet the growth rule on both pairs (steps, allocations and bytes read under 2×), and their budgets on a Pi (100 ms; 1 s), with nothing listed for them in `OVER_BUDGET`. The runner's table is pasted in the PR.
 - [ ] **The in-suite growth test** compares an added trade on a small book's deepest listing with the same listing sixteen times as deep, and holds steps and allocations under 2×. Its planted whole fold of names (`Book::names` read through the fold inside the window) fails it.
 - [ ] **The owner's book:** a copy migrates (029); the figures digest is equal before and after; an added trade and a 20-row import on the copy are timed and counted, and pasted in the PR.
-- [ ] `docs/architecture.md` §13's sentence on the engine says a change to the record continues a family's match where it can, and keeps names as runs; the out-of-scope back-dated case is filed as its issue.
+- [ ] `docs/architecture.md` §13's sentence on the engine says a change to the record continues a family's match where it can, and keeps names as runs; the out-of-scope back-dated case stays under #512.
 
 ## Surfaces to check beyond the diff
 
