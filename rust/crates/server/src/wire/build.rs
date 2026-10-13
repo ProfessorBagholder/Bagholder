@@ -16,9 +16,10 @@ use bagholder_engine::Engine;
 use super::figures::*;
 use super::{Dec, Fig};
 
-/// What the page calls each instrument and account, read from the book once per
-/// record change (`Names::load`): the engine carries no broker ids.
-#[derive(Clone, Debug, Default)]
+/// What the page calls each instrument and account, read from the book once and
+/// then for what each change names (`Names::reload`): the engine carries no
+/// broker ids.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Names {
     /// The broker's id for each instrument, which an order names.
     pub security: BTreeMap<InstrumentId, String>,
@@ -28,21 +29,33 @@ pub struct Names {
 
 impl Names {
     pub fn load(book: &bagholder_book::Book, inputs: &Inputs) -> Result<Names, String> {
-        let mut security = BTreeMap::new();
-        for id in inputs.ledger.instruments.keys() {
-            let refs = book.instrument_refs(*id).map_err(|e| e.to_string())?;
+        let mut n = Names { security: BTreeMap::new(), account: BTreeMap::new() };
+        n.reload(book, inputs, inputs.ledger.instruments.keys().copied(), inputs.ledger.accounts.keys().copied())?;
+        Ok(n)
+    }
+
+    /// The names of `instruments` and `accounts` read again: what a change to
+    /// them moved, and nothing else (`Figures::pulled`).
+    pub fn reload(&mut self, book: &bagholder_book::Book, inputs: &Inputs, instruments: impl IntoIterator<Item = InstrumentId>, accounts: impl IntoIterator<Item = bagholder_core::AccountId>) -> Result<(), String> {
+        for id in instruments {
+            self.security.remove(&id);
+            if !inputs.ledger.instruments.contains_key(&id) {
+                continue;
+            }
+            let refs = book.instrument_refs(id).map_err(|e| e.to_string())?;
             if let Some(r) = refs.into_iter().find(|r| matches!(r.scheme, RefScheme::BrokerSecurity(_))) {
-                security.insert(*id, r.value);
+                self.security.insert(id, r.value);
             }
         }
-        let mut account = BTreeMap::new();
-        for (id, info) in &inputs.ledger.accounts {
-            let refs = book.account_refs(*id).map_err(|e| e.to_string())?;
+        for id in accounts {
+            self.account.remove(&id);
+            let Some(info) = inputs.ledger.accounts.get(&id) else { continue };
+            let refs = book.account_refs(id).map_err(|e| e.to_string())?;
             if let Some(r) = refs.into_iter().find(|r| r.broker == info.broker) {
-                account.insert(*id, r.value);
+                self.account.insert(id, r.value);
             }
         }
-        Ok(Names { security, account })
+        Ok(())
     }
 }
 

@@ -290,3 +290,31 @@ END;
 CREATE TRIGGER adjustment_legs_changed_delete AFTER DELETE ON adjustment_legs BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT applies_record || '/' || applies_leg AS k FROM adjustments WHERE record_id = OLD.record_id AND leg = OLD.leg) WHERE k IS NOT NULL;
 END;
+
+-- the broker's ids for an instrument or an account: what the page names them by to the broker
+CREATE TRIGGER instrument_refs_changed_insert AFTER INSERT ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER instrument_refs_changed_update AFTER UPDATE ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER instrument_refs_changed_delete AFTER DELETE ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER account_refs_changed_insert AFTER INSERT ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.account_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER account_refs_changed_update AFTER UPDATE ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.account_id AS k) WHERE k IS NOT NULL;
+END;
+
+CREATE TRIGGER account_refs_changed_delete AFTER DELETE ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
+END;
+

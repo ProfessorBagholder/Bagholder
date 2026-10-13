@@ -86,6 +86,11 @@ pub(crate) struct Held<'a> {
 /// lock held: the snapshot is taken after the lock, so it holds everything an
 /// earlier holder applied, and the sequence only rises.
 fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, String> {
+    Ok(catch_up_named(book, engine, held)?.0)
+}
+
+/// As `catch_up`, with the instruments and accounts the change log named.
+fn catch_up_named(book: &Book, engine: &mut Engine, held: &Held) -> Result<(Moved, Named), String> {
     let applied = held.applied;
     let after = applied.load(std::sync::atomic::Ordering::SeqCst);
     let (changes, delta) = in_snapshot(book, || {
@@ -102,7 +107,15 @@ fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, Stri
         held.movements.lock().unwrap_or_else(|e| e.into_inner()).changed(&gone, &rows(engine));
     }
     applied.store(changes.upto, std::sync::atomic::Ordering::SeqCst);
-    Ok(moved)
+    Ok((moved, Named { instruments: changes.instruments, accounts: changes.accounts }))
+}
+
+/// The instruments and accounts a change named: whose names the page holds are
+/// read again.
+#[derive(Default)]
+struct Named {
+    instruments: BTreeSet<bagholder_core::InstrumentId>,
+    accounts: BTreeSet<bagholder_core::AccountId>,
 }
 
 /// Every round trip given its trade in the book: one opened for each that has
@@ -486,7 +499,7 @@ impl Figures {
         // a pull that supersedes a record moves the trades on it to the broker's
         // rows in the same write, read back with it
         let held = Held { applied: &self.applied, movements: &self.movements };
-        let mut moved = catch_up(&book, e, &held)?;
+        let (mut moved, named) = catch_up_named(&book, e, &held)?;
         merge(&mut moved, settle_trades(&book, e, &held, now)?);
         let mut brokers = std::collections::BTreeMap::new();
         for a in stated_for {
@@ -497,9 +510,11 @@ impl Figures {
                 merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
             }
         }
+        // the broker's names of what the change named read again, where the page holds them
+        if let Some(n) = self.names.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            n.reload(&book, e.inputs(), named.instruments, named.accounts)?;
+        }
         drop(guard);
-        // the broker's names for what the record holds are read again
-        *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
         self.wake();
         Ok(self.moved(moved))
     }
@@ -640,6 +655,10 @@ mod tests {
         let (ledger, adjustments) = f.read(|e| (e.inputs().ledger.clone(), e.inputs().facts.adjustments.clone())).unwrap();
         assert!(ledger == engine_inputs::ledger(&book).unwrap(), "the ledger applied by key is not the ledger read whole");
         assert!(adjustments == engine_inputs::facts(&book).unwrap().adjustments, "the adjustments applied by key are not those read whole");
+        // the broker's names the page holds, kept by key, are those read whole
+        let held = f.names().unwrap();
+        let whole = f.read(|e| crate::wire::build::Names::load(&book, e.inputs())).unwrap().unwrap();
+        assert!(held == whole, "the names kept by key are not those read whole");
     }
 
     /// A balances read states no day (brief 22, 9; brief 25): what the broker states
@@ -686,6 +705,8 @@ mod tests {
         let now = at("2025-11-19T21:00:00Z");
         let f = Figures::open(home.path(), now).unwrap();
         f.state_zone("Asia/Kolkata", now).unwrap();
+        // the page holds the broker's names: each change keeps them by key
+        f.names().unwrap();
         // another zone: "today" moves with it
         f.state_zone("Pacific/Honolulu", now).unwrap();
         same_as_fresh(&f, now);
@@ -730,6 +751,12 @@ mod tests {
         assert!(!f.broker_changed(account).unwrap().is_empty());
         same_as_fresh(&f, now);
         assert!(f.broker_changed(account).unwrap().is_empty(), "the same statement again moves nothing");
+        // an account the broker names by an id of its own arrives
+        let t = bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Cash, registration: bagholder_core::account::Registration::Tfsa, managed: false, joint: false };
+        let named = bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "a-new-account");
+        book.add_account(connection, &[named], &t, bagholder_core::account::AccountStatus::Open, Some("New"), now).unwrap();
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
         // the next day
         let later = at("2025-11-20T21:00:00Z");
         assert!(!f.clock_moved(later).unwrap().is_empty());

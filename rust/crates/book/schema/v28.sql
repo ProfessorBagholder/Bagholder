@@ -584,6 +584,16 @@ CREATE TABLE watched (
     instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
     added_at TEXT NOT NULL
 ) STRICT;
+CREATE TRIGGER account_refs_changed_delete AFTER DELETE ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER account_refs_changed_insert AFTER INSERT ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.account_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER account_refs_changed_update AFTER UPDATE ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.account_id AS k) WHERE k IS NOT NULL;
+END;
 CREATE TRIGGER accounts_changed_delete AFTER DELETE ON accounts BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
 END;
@@ -645,6 +655,16 @@ CREATE TRIGGER instrument_joins_changed_update AFTER UPDATE ON instrument_joins 
     INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT DISTINCT record_id AS k FROM transactions WHERE instrument_id IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT id AS k FROM trades WHERE anchor_instrument IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
     INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT DISTINCT a.applies_record || '/' || a.applies_leg AS k FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg WHERE l.from_instrument IN (NEW.instrument_id, NEW.into_id) OR l.to_instrument IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_changed_delete AFTER DELETE ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_changed_insert AFTER INSERT ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_changed_update AFTER UPDATE ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
 END;
 CREATE TRIGGER instrument_sightings_changed_delete AFTER DELETE ON instrument_sightings BEGIN
     INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;

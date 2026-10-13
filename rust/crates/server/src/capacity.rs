@@ -635,6 +635,8 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
         }
         Op::AddTrade => {
             let (_, symbol, currency) = deepest(f, &held)?;
+            // the page holds the broker's names: what a change does to them is in the window
+            f.names()?;
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
@@ -643,6 +645,7 @@ pub fn probe(op: Op, home: &Path) -> Result<Measured, String> {
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
             let (_, symbol, currency) = deepest(f, &held)?;
+            f.names()?;
             for n in 0..20 {
                 text.push_str(&format!("{},Buy,{symbol},1,{}.00,-{}.00,{currency}\n", made_up_today(), 10 + n, 10 + n));
             }
