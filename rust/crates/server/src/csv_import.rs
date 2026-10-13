@@ -1304,6 +1304,27 @@ mod tests {
         assert_eq!((r.added, r.linked), (1, 0), "{r:?}");
         assert_eq!(r.ambiguous, vec![RowNote { line: 2, message: "the same fill as 2 of the broker's rows: not linked".into() }]);
         assert_eq!(csv_records(&f).len(), 1, "kept, and counted");
+        // the same file read again: its row is kept already, and still said (brief 27, 4b)
+        let again = import(&f, "mine.csv", &simple_row(&account), None, now()).unwrap();
+        assert_eq!((again.added, again.unchanged, again.ambiguous_rows), (0, 1, 1), "{again:?}");
+    }
+
+    /// After a start, the first pass looks at every file's row (brief 27, 4c): a
+    /// competitor removed while the app was not running resolves the ambiguity.
+    #[test]
+    fn after_a_start_the_first_pass_looks_at_every_file_row() {
+        let (h, f) = figures();
+        let account = broker_fill(&f).broker_account;
+        imported_fill(&f, "a", &account, "ZZQQ");
+        let second = imported_fill(&f, "b", &account, "ZZQQ");
+        let r = import(&f, "mine.csv", &simple_row(&account), None, now()).unwrap();
+        assert_eq!(r.ambiguous_rows, 1, "{r:?}");
+        // the competitor goes while nothing applies it
+        f.book().unwrap().mark_removed(second, now()).unwrap();
+        drop(f);
+        let f = Figures::open(h.path(), now()).unwrap();
+        let l = link(&f, now()).unwrap();
+        assert_eq!(l.linked.len(), 1, "{l:?}");
     }
 
     #[test]

@@ -68,3 +68,17 @@ fn a_clear_is_logged_and_the_sequence_goes_on() {
     f.book.add_account(connection, &[bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "a2")], &t, bagholder_core::account::AccountStatus::Open, None, t0()).unwrap();
     assert!(!f.book.changes_since(after).unwrap().accounts.is_empty(), "a write after the clear numbered at or below it");
 }
+
+/// A supersede logs both records: a broker record that takes a file row's place
+/// is read again with every leg it has (brief 27, 4a).
+#[test]
+fn a_supersede_logs_both_records() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let from = f.store(&Spelled::v(1), "f1", &legs(vec![buy("a1", share("CA0000000001", "AAA"), "10", "-100", "2026-01-02T15:00:00Z")])).record;
+    let to = f.store(&Spelled::v(1), "b1", &legs(vec![buy("a1", share("CA0000000001", "AAA"), "10", "-100", "2026-01-02T15:00:00Z")])).record;
+    let before = f.book.changes_upto().unwrap();
+    f.book.supersede(&[from], &[to], "the same fill", t0()).unwrap();
+    let changes = f.book.changes_since(before).unwrap();
+    assert!(changes.records.contains(&from) && changes.records.contains(&to), "{changes:?}");
+}

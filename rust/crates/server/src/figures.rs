@@ -99,6 +99,12 @@ fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, Stri
     let after = applied.load(std::sync::atomic::Ordering::SeqCst);
     let (changes, delta) = in_snapshot(book, || {
         let changes = book.changes_since(after).map_err(err)?;
+        #[cfg(test)]
+        BETWEEN_READS.with(|h| {
+            if let Some(f) = h.borrow_mut().take() {
+                f();
+            }
+        });
         let delta = engine_inputs::delta(book, &changes)?;
         Ok((changes, delta))
     })?;
@@ -121,6 +127,13 @@ fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, Stri
     named.instruments.extend(changes.instruments);
     named.accounts.extend(changes.accounts);
     Ok(moved)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A write another writer commits between the log's read and the keyed reads
+    /// of the next catch-up on this thread (`tests::two_writers_racing…`).
+    static BETWEEN_READS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The log dropped up to `upto`, its failure said and not raised: the engine has
@@ -779,6 +792,97 @@ mod tests {
         let record: String = book.conn_for_tests().query_row("SELECT t.record_id FROM transactions t JOIN source_records r ON r.id = t.record_id WHERE t.instrument_id = ?1 AND r.state = 'live' LIMIT 1", [&member], |r| r.get(0)).unwrap();
         book.mark_removed(record.parse().unwrap(), now).unwrap();
         f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+    }
+
+    /// Two writers racing (brief 26, 3; brief 27, 13): another connection
+    /// supersedes and removes rows between the log's read and the keyed reads.
+    /// The catch-up applies the book as it stood at its read, never a mix, and
+    /// the next one applies what the other writer did: then the engine is a
+    /// fresh build's, and no trade was orphaned that a fresh settle keeps.
+    #[test]
+    fn two_writers_racing_leave_the_engine_as_a_fresh_build_would_and_orphan_no_trade() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        let orphaned = |b: &Book| b.trades().unwrap().iter().filter(|t| t.orphaned_reason().is_some()).count();
+        let orphaned_before = orphaned(&book);
+        // a record the catch-up will read, and two the other writer changes under it
+        let live = book.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap();
+        let (read, gone, revised) = (live[0], live[1], live[2]);
+        book.mark_removed(read, now).unwrap();
+        // a problem on `revised` the catch-up reads, and one the other writer adds to it after
+        book.conn_for_tests().execute("INSERT INTO record_problems (record_id, code, detail) VALUES (?1, 'before', 'written before the read')", [revised.to_string()]).unwrap();
+        let home_path = home.path().to_path_buf();
+        BETWEEN_READS.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                // the other writer, on a connection of its own
+                let (other, _) = Book::open_in(&home_path, crate::app::APP_VERSION, now).unwrap();
+                other.mark_removed(gone, now).unwrap();
+                other.conn_for_tests().execute("INSERT INTO record_problems (record_id, code, detail) VALUES (?1, 'raced', 'written between the reads')", [revised.to_string()]).unwrap();
+            }))
+        });
+        // one catch-up alone: it saw `read` removed and nothing the other writer did
+        {
+            let mut guard = f.engine.write().unwrap();
+            let e = guard.as_mut().unwrap();
+            catch_up(&book, e, &Held::new(&f.applied, &f.movements)).unwrap();
+        }
+        let held = f.read(|e| e.inputs().ledger.clone()).unwrap();
+        assert!(!held.records.contains_key(&read), "the change read is not applied");
+        assert!(held.records.contains_key(&gone), "a write committed after the log's read was applied in part");
+        let codes: Vec<String> = held.records[&revised].problems.iter().map(|p| p.code.clone()).collect();
+        assert!(codes.contains(&"before".to_string()) && !codes.contains(&"raced".to_string()), "a write committed after the log's read was applied in part: {codes:?}");
+        // the next change applies what the other writer did
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+        // the same writes made one after another, no race: as many trades orphaned
+        let twin = tempfile::tempdir().unwrap();
+        pulled(twin.path());
+        let g = Figures::open(twin.path(), now).unwrap();
+        g.state_zone("America/Toronto", now).unwrap();
+        let tb = g.book().unwrap();
+        assert_eq!(orphaned(&tb), orphaned_before);
+        let twin_live = tb.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap();
+        for r in [twin_live[0], twin_live[1]] {
+            tb.mark_removed(r, now).unwrap();
+        }
+        g.record_changed(now).unwrap();
+        assert_eq!(orphaned(&f.book().unwrap()), orphaned(&tb), "the race orphaned otherwise than the same writes made in turn");
+    }
+
+    /// What every catch-up of one pull named is read again, not only the first's
+    /// (brief 27, 5): a broker id another writer commits between two catch-ups
+    /// reaches the names the page holds.
+    #[test]
+    fn a_broker_id_written_between_two_catch_ups_reaches_the_names() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        f.names().unwrap();
+        let book = f.book().unwrap();
+        let (instrument, record): (String, String) = book.conn_for_tests().query_row("SELECT instrument_id, record_id FROM transactions WHERE instrument_id IS NOT NULL LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let held = Held::new(&f.applied, &f.movements);
+        {
+            let mut guard = f.engine.write().unwrap();
+            let e = guard.as_mut().unwrap();
+            book.conn_for_tests().execute("INSERT INTO record_problems (record_id, code, detail) VALUES (?1, 'first', 'the first catch-up')", [&record]).unwrap();
+            catch_up(&book, e, &held).unwrap();
+            // the other writer: a broker id for the instrument, then the second catch-up
+            let (other, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            other.conn_for_tests().execute("DELETE FROM instrument_refs WHERE instrument_id = ?1 AND scheme LIKE 'broker-security:%'", [&instrument]).unwrap();
+            other.conn_for_tests().execute("INSERT INTO instrument_refs (scheme, value, instrument_id) VALUES ('broker-security:wealthsimple', 'sec-s-written-between', ?1)", [&instrument]).unwrap();
+            catch_up(&book, e, &held).unwrap();
+        }
+        assert!(held.named.borrow().instruments.contains(&instrument.parse().unwrap()), "the second catch-up's names were dropped");
+        // read again as a pull reads them: then they are a whole read's
+        let named = held.named.take();
+        f.read(|e| f.names.write().unwrap().as_mut().unwrap().reload(&book, e.inputs(), named.instruments, named.accounts).unwrap()).unwrap();
         same_as_fresh(&f, now);
     }
 
