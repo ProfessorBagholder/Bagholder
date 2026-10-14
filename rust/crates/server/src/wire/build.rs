@@ -453,7 +453,7 @@ pub fn book_doc(engine: &Engine, names: &Names) -> BookDoc {
     let figs = engine.figures();
     let accounts = accounts(inputs, names);
     // over every open account, never over only those whose value could be put in CAD
-    let nav_total = bagholder_engine::scope::net_value_now(inputs).map(|v| match v {
+    let nav_total = bagholder_engine::scope::current_net_value(inputs).map(|v| match v {
         Ok(m) => Fig::Stated(Dec(m.amount)),
         Err(g) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
     });

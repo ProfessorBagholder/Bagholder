@@ -735,7 +735,7 @@ pub fn scope(
 }
 
 /// Each account's value now as its broker states it, in CAD at the live rate.
-fn navs_now(inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -> Vec<Fig<Money>> {
+fn current_navs(inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -> Vec<Fig<Money>> {
     accounts.iter().filter_map(|a| inputs.market.brokers.get(&a.account.id)?.net_value_now).map(|n| live_to_cad(&inputs.facts.rates, &inputs.clock, n)).collect()
 }
 
@@ -743,8 +743,8 @@ fn navs_now(inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -> Vec<Fig
 /// position size is over (`SPEC.md` order-ticket-66), the same sum as the
 /// portfolio's net value with no filter, waiting on the first account it
 /// cannot put in CAD. None where no account states a value.
-pub fn net_value_now(inputs: &Inputs) -> Option<Fig<Money>> {
-    let navs = navs_now(inputs, &open_accounts_in_scope(&Filters::default(), inputs));
+pub fn current_net_value(inputs: &Inputs) -> Option<Fig<Money>> {
+    let navs = current_navs(inputs, &open_accounts_in_scope(&Filters::default(), inputs));
     (!navs.is_empty()).then(|| fig_sum(&navs))
 }
 
@@ -772,7 +772,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     // an account figure is never divided by a filtered sum: margin used is over
     // the market value of every holding in the accounts in scope
     let accounts_market = Partial::of(&positions.iter().filter(|p| f.accounts.is_empty() || f.accounts.contains(&p.account)).map(signed_market).collect::<Vec<_>>());
-    let navs = navs_now(inputs, &accounts);
+    let navs = current_navs(inputs, &accounts);
     let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut available = Vec::new();
