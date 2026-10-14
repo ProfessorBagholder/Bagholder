@@ -34,7 +34,7 @@ Confirmed with a throwaway engine test, on accounts A (9,000 CAD) and U (1,000 U
 - the net value goes from 10,400 to 10,500 CAD;
 - `apply` reports nothing moved.
 
-The NAV tile and the ticket's position size keep 10,400 until some other change reaches the page. Where the rate was missing, they keep waiting after it has arrived. The Cash tile's conversion of a foreign cash balance had the same gap before 2.5.7.
+The NAV tile and the ticket's position size keep 10,400 until some other change reaches the page. Where the rate was missing, they keep waiting after it has arrived.
 
 Required, in its own PR on master:
 - A rates change reports every account whose stated value, cash or buying power is in a currency whose rate moved, as `Entity::Broker`. The book and holdings views already re-read on that (`views.rs:231`, :235).
