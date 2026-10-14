@@ -289,12 +289,38 @@ impl Figures {
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
+        // a record the figures cannot be built from is said on the page and tried
+        // again at the next pass; it never stops the server, which a service
+        // manager would only start again into the same failure
         if let Some(z) = book.zone().map_err(err)? {
-            let b = built(home, &book, &cache, &z.zone, at)?;
-            let mut engine = f.engine.write().unwrap_or_else(|e| e.into_inner());
-            f.install(&mut engine, &book, b);
+            match built(home, &book, &cache, &z.zone, at) {
+                Ok(b) => {
+                    let mut engine = f.engine.write().unwrap_or_else(|e| e.into_inner());
+                    f.install(&mut engine, &book, b);
+                }
+                Err(e) => crate::app::log(&format!("bagholder: the figures could not be built: {e}")),
+            }
         }
         Ok(f)
+    }
+
+    /// The engine built where a zone is known and it is not built yet: what a
+    /// pass needs first. Its failure is the pass's, said on the page.
+    pub fn ensure_built(&self, now: Timestamp) -> Result<(), String> {
+        if self.engine.read().unwrap_or_else(|e| e.into_inner()).is_some() {
+            return Ok(());
+        }
+        let book = self.book()?;
+        let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
+        let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        if engine.is_none() {
+            let b = built(&self.home, &book, &self.cache()?, &z.zone, now)?;
+            self.install(&mut engine, &book, b);
+            drop(engine);
+            self.logged(None);
+            self.wake();
+        }
+        Ok(())
     }
 
     /// Build the engine again from what the book and the cache hold now: after
@@ -583,7 +609,7 @@ impl Figures {
         let named = held.named.take();
         let mut brokers = std::collections::BTreeMap::new();
         for a in stated_for {
-            brokers.insert(*a, engine_inputs::broker_account(*a, &book.stated(*a).map_err(|e| e.to_string())?)?);
+            brokers.insert(*a, engine_inputs::broker_account(&book.stated(*a).map_err(|e| e.to_string())?));
         }
         for (a, now_stated) in brokers {
             if e.inputs().market.brokers.get(&a) != now_stated.as_ref() {
@@ -608,7 +634,7 @@ impl Figures {
         let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
         let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
         let held = e.inputs().market.brokers.get(&account);
-        let mut stated = engine_inputs::broker_account(account, &now)?;
+        let mut stated = engine_inputs::broker_account(&now);
         if let Some(h) = held.filter(|h| !h.net_value.is_empty() || !h.net_deposits.is_empty()) {
             let b = stated.get_or_insert_with(Default::default);
             b.net_value = h.net_value.clone();
@@ -884,6 +910,50 @@ mod tests {
         let named = held.named.take();
         f.read(|e| f.names.write().unwrap().as_mut().unwrap().reload(&book, e.inputs(), named.instruments, named.accounts).unwrap()).unwrap();
         same_as_fresh(&f, now);
+    }
+
+    /// An account its broker states in US dollars (2.5.6 refused it, and every
+    /// start with it failed): the figures are built, and its value is in the
+    /// total at the live rate, as every other figure in another currency is.
+    #[test]
+    fn an_account_stated_in_us_dollars_is_built_and_counted_in_cad() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            book.state_zone("America/Toronto", now).unwrap();
+            let account = book.accounts().unwrap()[0].id;
+            let conn = book.connections().unwrap()[0].id;
+            let read = book.broker_read(conn, "accounts", now).unwrap();
+            book.store_net_value(account, now, bagholder_core::Money::new(bagholder_core::Dec::from_int(1000), bagholder_core::Currency::USD), &read).unwrap();
+        }
+        let f = Figures::open(home.path(), now).expect("a start with an account stated in US dollars");
+        assert!(f.read(|_| ()).is_some(), "the figures are built");
+        same_as_fresh(&f, now);
+    }
+
+    /// A record the figures cannot be built from never stops the server: the
+    /// start goes on with no figures, and the next pass says why.
+    #[test]
+    fn a_book_the_figures_cannot_be_built_from_starts_and_says_why() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            book.state_zone("America/Toronto", now).unwrap();
+            let account = book.accounts().unwrap()[0].id;
+            let conn = book.connections().unwrap()[0].id;
+            let read = book.broker_read(conn, "accounts", now).unwrap();
+            book.store_net_value(account, now, bagholder_core::Money::new(bagholder_core::Dec::from_int(1000), bagholder_core::Currency::CAD), &read).unwrap();
+            // a value no reader can read, written around the book
+            book.conn_for_tests().execute("UPDATE account_values SET amount = 'not a number'", []).unwrap();
+        }
+        let f = Figures::open(home.path(), now).expect("the server starts");
+        assert!(f.read(|_| ()).is_none(), "no figures from a record they cannot be built from");
+        let why = f.ensure_built(now).expect_err("the pass's failure");
+        assert!(why.contains("not a number"), "{why}");
     }
 
     #[test]

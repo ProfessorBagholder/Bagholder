@@ -99,6 +99,8 @@ pub fn settle(app: &App, passed: Result<Option<Timestamp>, String>) -> Option<Ti
 /// One pass: the clock, every due read, what each stored applied. The next
 /// instant a read can be due, if any.
 pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>, String> {
+    // figures a start could not build are built here, or the reason is the pass's
+    f.ensure_built(now)?;
     let book = f.book()?;
     let Some(zone) = book.zone().map_err(|e| e.to_string())?.map(|z| z.zone) else {
         // no page has stated a zone: no figure is built, nothing is read for one
