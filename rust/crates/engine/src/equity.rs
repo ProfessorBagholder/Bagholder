@@ -47,7 +47,8 @@ pub struct AccountEquity {
 /// day's rate: the value as stated, and the flow as the change in net deposits
 /// in the currency stated, converted on the day it moved. A day whose value or
 /// flow cannot be put in CAD (its rate not published yet) forms no point, and
-/// says so in the gaps.
+/// says so in the gaps; a day whose deposits are stated in another currency
+/// than the day before forms no flow, and says so.
 pub fn account_equity(account: AccountId, broker: &BrokerAccount, rates: &crate::input::Rates, clock: &crate::input::Clock) -> AccountEquity {
     let mut points = Vec::with_capacity(broker.net_value.len());
     let mut returns = Vec::new();
@@ -59,13 +60,17 @@ pub fn account_equity(account: AccountId, broker: &BrokerAccount, rates: &crate:
         let flow = before.and_then(|(b, _)| {
             let now = *broker.net_deposits.get(day)?;
             let then = *broker.net_deposits.get(&b)?;
-            if now.currency == then.currency {
-                let moved = now.amount.add_to_fit(then.amount.neg()).map_err(|e| gaps.merge(&Gaps::from(e))).ok()?;
-                cad(Money::new(moved, now.currency), *day, &mut gaps)
-            } else {
-                let (n, t) = (cad(now, *day, &mut gaps)?, cad(then, b, &mut gaps)?);
-                n.add_to_fit(t.neg()).map_err(|e| gaps.merge(&Gaps::from(e))).ok()
+            if now.currency != then.currency {
+                // a total restated in another currency is not a deposit: converting
+                // the two at their own days' rates would count the rate's move on
+                // the whole deposit base as money moved, and at one rate the
+                // restatement itself; the day forms no flow, as a day with no stated
+                // deposits forms none, and says why
+                gaps.merge(&Gaps::from(crate::gap::Gap::DepositsRestated { account, day: *day }));
+                return None;
             }
+            let moved = now.amount.add_to_fit(then.amount.neg()).map_err(|e| gaps.merge(&Gaps::from(e))).ok()?;
+            cad(Money::new(moved, now.currency), *day, &mut gaps)
         });
         if let (Some((_, v0)), Some(f)) = (before, flow) {
             if let Some(r) = crate::stat::day_return(v0, value, f) {

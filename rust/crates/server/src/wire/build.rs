@@ -452,13 +452,11 @@ pub fn book_doc(engine: &Engine, names: &Names) -> BookDoc {
     let inputs = engine.inputs();
     let figs = engine.figures();
     let accounts = accounts(inputs, names);
-    let nav_total = {
-        let navs: Vec<bagholder_core::Dec> = accounts.iter().filter_map(|a| a.nav.map(|d| d.0)).collect();
-        (!navs.is_empty()).then(|| match navs.into_iter().try_fold(bagholder_core::Dec::ZERO, |a, b| a.checked_add(b)) {
-            Ok(total) => Fig::Stated(Dec(total)),
-            Err(e) => Fig::Waits { gaps: vec![format!("arithmetic: {e}")] },
-        })
-    };
+    // over every open account, never over only those whose value could be put in CAD
+    let nav_total = bagholder_engine::scope::current_net_value(inputs).map(|v| match v {
+        Ok(m) => Fig::Stated(Dec(m.amount)),
+        Err(g) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
+    });
     BookDoc {
         today: inputs.clock.today.to_string(),
         activity_count: inputs.ledger.transactions.len(),
@@ -1157,5 +1155,35 @@ mod contracts {
         assert_eq!(contract_label("QNC", &terms("2026-11-20", "3", OptionRight::Call)), "QNC 20NOV26 3.00 CALL");
         assert_eq!(contract_label("BBAI", &terms("2028-01-21", "12.5", OptionRight::Put)), "BBAI 21JAN28 12.50 PUT");
         assert_eq!(contract_label("SPY", &terms("2026-06-05", "512.125", OptionRight::Call)), "SPY 05JUN26 512.125 CALL");
+    }
+
+    /// The ticket's position size is over the net liquidation value of every
+    /// open account (`SPEC.md` order-ticket-66): an account whose value cannot be
+    /// put in CAD makes the total wait on its rate, never leaves a smaller sum.
+    #[test]
+    fn the_net_asset_value_an_order_is_sized_over_waits_on_any_account_it_cannot_put_in_cad() {
+        let case = |rates: serde_json::Value| {
+            serde_json::json!({
+                "today": "2026-03-04",
+                "accounts": [{"id": "A", "kind": "margin"}, {"id": "U", "kind": "margin"}],
+                "instruments": [],
+                "rates": rates,
+                "covered": {"USD": [["2026-01-01", "2026-03-04"]]},
+                "brokers": {
+                    "A": {"net_value": {"2026-03-03": "5100"}, "now": "9000"},
+                    "U": {"currency": "USD", "net_value": {"2026-03-03": "200"}, "now": "1000"}
+                },
+                "transactions": []
+            })
+        };
+        let total = |c: &serde_json::Value| {
+            let mut b = super::case_common::build(c);
+            let e = super::case_common::engine(&mut b);
+            book_doc(&e, &Names::default()).nav_total
+        };
+        let with = total(&case(serde_json::json!({"USD": {"2026-03-04": "1.5000"}})));
+        assert_eq!(with, Some(Fig::Stated(Dec(bagholder_core::Dec::parse("10500").unwrap()))), "9000 CAD and 1000 USD at 1.50");
+        let without = total(&case(serde_json::json!({})));
+        assert!(matches!(&without, Some(Fig::Waits { gaps }) if !gaps.is_empty()), "no USD rate: the total waits on it, {without:?}");
     }
 }

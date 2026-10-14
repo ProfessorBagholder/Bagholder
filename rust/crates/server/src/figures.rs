@@ -562,6 +562,9 @@ impl Figures {
                 self.install(&mut engine, &book, b);
                 drop(engine);
                 self.logged(None);
+                // the scheduler's next pass reads for the figures, and clears a
+                // failure the header holds from a build that did not succeed
+                self.wake();
                 Ok(Moved::default())
             }
             Some(e) if changed => {
@@ -616,7 +619,13 @@ impl Figures {
     pub fn pulled(&self, now: Timestamp, stated_for: &BTreeSet<bagholder_core::AccountId>) -> Result<Moved, String> {
         let book = self.book()?;
         let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
-        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
+        let Some(e) = guard.as_mut() else {
+            // figures that could not be built may build from the record as it is
+            // now: the scheduler's next pass tries again
+            drop(guard);
+            self.wake();
+            return Ok(Moved::default());
+        };
         // the record by what changed in it, then each round trip given its trade:
         // a pull that supersedes a record moves the trades on it to the broker's
         // rows in the same write, read back with it

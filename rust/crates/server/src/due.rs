@@ -537,4 +537,43 @@ mod tests {
         assert_eq!(next_settle(Market::Canada, t("2026-09-24T19:00:00Z"), &bank), Some(t("2026-09-24T20:30:00Z")));
         assert_eq!(next_settle(Market::Crypto, t("2026-09-24T19:00:00Z"), &bank), Some(t("2026-09-25T00:00:00Z")));
     }
+
+    /// A book the figures could not be built from, then mended: the change that
+    /// mends it (a write to the record, or a page stating its zone) asks for a
+    /// pass, and that pass builds the figures and clears the header's failure.
+    #[test]
+    fn a_change_after_a_failed_build_retries_and_a_build_clears_the_header() {
+        crate::tests_common::home(); // offline: the pass's reads leave nothing on the machine
+        let now = t("2025-11-19T21:00:00Z");
+        for through_zone in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            crate::tests_common::pulled_book(home.path());
+            {
+                let (book, _) = bagholder_book::Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+                book.state_zone("America/Toronto", now).unwrap();
+                let account = book.accounts().unwrap()[0].id;
+                let conn = book.connections().unwrap()[0].id;
+                let read = book.broker_read(conn, "accounts", now).unwrap();
+                book.store_net_value(account, now, bagholder_core::Money::new(bagholder_core::Dec::from_int(1000), bagholder_core::Currency::CAD), &read).unwrap();
+                // a value no reader can read, written around the book
+                book.conn_for_tests().execute("UPDATE account_values SET amount = 'not a number'", []).unwrap();
+            }
+            let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+            app.set_figures(crate::figures::Figures::open(home.path(), now).unwrap());
+            let f = app.figures.get().unwrap();
+            assert_eq!(settle(&app, pass(&app, f, now)), None);
+            assert!(!app.state.lock().unwrap().figures_error.is_empty(), "the failure is in the header");
+            f.woken();
+            f.book().unwrap().conn_for_tests().execute("UPDATE account_values SET amount = '1000'", []).unwrap();
+            if through_zone {
+                f.state_zone("America/Toronto", now).unwrap();
+            } else {
+                f.record_changed(now).unwrap();
+            }
+            assert!(f.woken(), "the change asks the scheduler for a pass (through_zone {through_zone})");
+            settle(&app, pass(&app, f, now));
+            assert!(f.read(|_| ()).is_some(), "the figures are built");
+            assert!(app.state.lock().unwrap().figures_error.is_empty(), "the pass that built them cleared the header (through_zone {through_zone})");
+        }
+    }
 }
