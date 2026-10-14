@@ -333,6 +333,10 @@ pub trait Keyed {
     fn instrument(&self) -> Option<InstrumentId> {
         None
     }
+    /// The transaction it is anchored on, where it is anchored on one.
+    fn anchor(&self) -> Option<bagholder_core::TransactionId> {
+        None
+    }
 }
 
 impl Keyed for Trade {
@@ -344,6 +348,12 @@ impl Keyed for Trade {
     fn instrument(&self) -> Option<InstrumentId> {
         match &self.anchor {
             bagholder_core::journal::Anchor::Opening(o) => Some(o.instrument),
+            bagholder_core::journal::Anchor::Orphaned(_) => None,
+        }
+    }
+    fn anchor(&self) -> Option<bagholder_core::TransactionId> {
+        match &self.anchor {
+            bagholder_core::journal::Anchor::Opening(o) => Some(o.transaction.clone()),
             bagholder_core::journal::Anchor::Orphaned(_) => None,
         }
     }
@@ -363,11 +373,13 @@ pub struct Ranked<V: Keyed> {
     rank_of: BTreeMap<V::Key, Rank>,
     /// Each instrument's rows, by rank.
     on: BTreeMap<InstrumentId, BTreeSet<Rank>>,
+    /// Each transaction's rows anchored on it, by rank.
+    anchored: BTreeMap<bagholder_core::TransactionId, BTreeSet<Rank>>,
 }
 
 impl<V: Keyed> Default for Ranked<V> {
     fn default() -> Self {
-        Ranked { rows: BTreeMap::new(), rank_of: BTreeMap::new(), on: BTreeMap::new() }
+        Ranked { rows: BTreeMap::new(), rank_of: BTreeMap::new(), on: BTreeMap::new(), anchored: BTreeMap::new() }
     }
 }
 
@@ -398,12 +410,20 @@ impl<V: Keyed> Ranked<V> {
         self.on.get(&instrument).into_iter().flatten().filter_map(|r| self.rows.get(r))
     }
 
+    /// The rows anchored on a transaction, in the book's order.
+    pub fn anchored_on(&self, t: &bagholder_core::TransactionId) -> impl Iterator<Item = &V> {
+        self.anchored.get(t).into_iter().flatten().filter_map(|r| self.rows.get(r))
+    }
+
     /// `v` put at `rank`, in place of what its key held.
     pub fn put(&mut self, rank: Rank, v: V) {
         self.remove(&v.key());
         self.rank_of.insert(v.key(), rank.clone());
         if let Some(i) = v.instrument() {
             self.on.entry(i).or_default().insert(rank.clone());
+        }
+        if let Some(t) = v.anchor() {
+            self.anchored.entry(t).or_default().insert(rank.clone());
         }
         self.rows.insert(rank, v);
     }
@@ -416,6 +436,14 @@ impl<V: Keyed> Ranked<V> {
                 s.remove(&rank);
                 if s.is_empty() {
                     self.on.remove(&i);
+                }
+            }
+        }
+        if let Some(t) = v.anchor() {
+            if let Some(s) = self.anchored.get_mut(&t) {
+                s.remove(&rank);
+                if s.is_empty() {
+                    self.anchored.remove(&t);
                 }
             }
         }

@@ -351,7 +351,8 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
         for step in 0..(3 * records.len()) {
             let before_fresh = Engine::build(e.inputs().clone());
             let mut d = LedgerDelta::default();
-            match r.below(10) {
+            let act = r.below(10);
+            match act {
                 0..=2 => {
                     // a record arrives, again or anew
                     let id = records[r.below(records.len() as u64) as usize];
@@ -476,7 +477,9 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
                     d.adjustments.entry(t.id.clone()).or_insert_with(|| if k.present.contains_key(id) { k.adjustments.get(&t.id).cloned().unwrap_or_default() } else { vec![] });
                 }
             }
+            if std::env::var("BYDBG").is_ok() && seed == 2 && step >= 70 { eprintln!("step {step} act {act} records {:?} trades {:?} groups {:?} accounts {:?} instruments {:?}", d.records.iter().map(|(r, x)| (r, x.as_ref().map(|(_, t)| t.iter().map(|t| (t.id.clone(), t.kind, t.instrument)).collect::<Vec<_>>()))).collect::<Vec<_>>(), d.trades, d.groups.keys().collect::<Vec<_>>(), d.accounts.keys().collect::<Vec<_>>(), d.instruments.keys().collect::<Vec<_>>()); }
             let moved = e.apply(Change::Ledger(d));
+            if std::env::var("BYDBG").is_ok() && seed == 2 && step >= 70 { eprintln!("  paths {:?}", bagholder_engine::engine::take_paths()); }
             steps += 1;
             let fresh = Engine::build(now.clone());
             let off = e.differences(&fresh);

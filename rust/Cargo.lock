@@ -229,6 +229,7 @@ name = "bagholder-engine"
 version = "2.5.6"
 dependencies = [
  "bagholder-core",
+ "bagholder-engine",
  "serde",
  "serde_json",
 ]
