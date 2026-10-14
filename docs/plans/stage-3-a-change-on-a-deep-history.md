@@ -106,7 +106,7 @@ The match's output is not copied: the family's books, round trips and units are 
 1. The change only adds records. Nothing is revised or removed among the family's records, and nothing among their problems, links or adjustments changes.
 2. Every leg of each added record has an `order_key` strictly greater than the largest walked. Where a leg falls at that key's instant, it is not a single-leg stated Close on a holding in the kept set of stated-Open holdings. That set is all the look-ahead reads: it fires only from a stated Open row and takes only single-leg stated Close rows on the same holding (`ledger.rs:2255–2260`). Hand-entered trades state no effect (`person.rs:204–208`), so the probes' ordinary case continues.
 3. The change leaves the families as they were. This is decided from the added rows alone: each added row's instrument, account and the couplings it carries (an underlying, a transfer's link, an event's legs, `leg-unstated`) fall within one existing family, so no family is joined or split. The family reads none of its other rows to decide it (`Families::regroup` reads every row of the family today, `families.rs:194`; brief 28, 15).
-4. No added row is an expiry, an assignment or an exercise (`ended_on_record` decides earlier expiries), or a corporate event (`event_groups`, `lieu_fraction`). No added row is a transfer linked to a row already walked, or one that names an adjustment.
+4. No added row is an expiry, an assignment or an exercise (`ended_on_record` decides earlier expiries), or a corporate event (`event_groups`, `lieu_fraction`). No added row is a transfer linked to a row already walked. (A row that names an adjustment is not refused on that ground: the adjustment couples families only through its legs, which seed the families they name, and the whole match that takes in a continued family, below, matches it whole; the build showed no case where refusing it changes a figure, and a guard no test can trip is not kept.)
 5. No added coin row states its units to a finer place than the family's rows from the same source did (`places`, per instrument and source, rounds every earlier row).
 6. Nothing the match reads of an instrument or an account changed: the instrument's kind, currency and terms, and each account's smallest coin order (`coin_minimum`, which `dust.rs:32` reads), compared before and after for every account that held a row of the family before the change. A new account, such as the Manual account an added trade or an import creates (`entries.rs:138`, `csv_import.rs:168`), held none and does not stop it (brief 28, 5).
 7. The final `expire_before(today)` of the family's last match changed nothing, and the day has not turned since. Turning the day matches everything whole, as now.
@@ -202,6 +202,6 @@ Before the build: the breakdown in Scope, master `0bc73874`, this Mac, the depth
 
 ## Handoff
 
-Brief 28 (Go with changes) applied. Build order: A (the names; measured alone first, as brief 27 asked), then B behind the property test and the oracles, then C, then D and E.
+Built in the PR that carries this plan. A was measured alone first (Verification).
 
 **Nothing left running.**
