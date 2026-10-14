@@ -37,4 +37,4 @@ Read from any checkout without switching branches:
 | 26 | [Verdict on the Stage 3 record-by-change plan (#506): Go with changes](26-record-by-change-verdict.md) | Current; findings in [26/](26/) |
 | 27 | [The record-by-change build as built (#507): sound, merge after the fixes](27-record-by-change-as-built.md) | Current; findings in [27/](27/) |
 | 28 | [Verdict on the deep-history plan (#511), and brief 27's fixes as merged: Go with changes](28-deep-history-verdict.md) | Current |
-| 29 | [The 2.5.7 hotfix (#515): merge after four small fixes](29-usd-accounts-hotfix.md) | Current |
+| 29 | [The 2.5.7 hotfix (#515): merge now, four fixes right after](29-usd-accounts-hotfix.md) | Current; verdict corrected 2026-10-14 |

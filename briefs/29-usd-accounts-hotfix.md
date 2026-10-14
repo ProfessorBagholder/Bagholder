@@ -1,10 +1,12 @@
-# Brief 29: the 2.5.7 hotfix (#515, `usd-accounts-2.5.7` at `8a11daed`): merge after four small fixes
+# Brief 29: the 2.5.7 hotfix (#515, `usd-accounts-2.5.7` at `8a11daed`): merge now, four fixes right after
 
 **Reviewed:** the whole diff against master `e340e0d7` (2.5.6). Read: `server/src/{engine_inputs.rs, figures.rs (open, ensure_built, rebuild, state_zone, pulled, broker_changed), due.rs (run, settle, pass), docs.rs, events.rs (watch), http/stream.rs, status.rs, main.rs, wire/build.rs (accounts, book_doc), orders/ticket.rs}`, `engine/src/{equity.rs, fx.rs, scope.rs, input.rs}`, `engine/tests/stated_currency.rs`, `wealthsimple/src/{client.rs, read.rs}`, `wealthsimple/graphql/FetchAllAccounts.graphql`, `web/src/lib/{ticket/ticket.svelte.ts, Portfolio.svelte}`, and the `SPEC.md` changes. I merged `deep-history` (#514, `1a550d63`) into this head on a throwaway worktree to answer the rebase question. CI at the time of writing: web, audit, rust-windows and capacity green; rust, rust-macos, browser and container still running.
 
 ## Verdict
 
-Merge after four small fixes, all in this PR and none widening it. The cause is fixed in the right place. The broker's statements keep the currency they are stated in, every sum puts each account in CAD, and a figures build that fails no longer stops the server. PATCH is the right bump.
+Merge now, once CI is green. The owner's install is down: 2.5.6 exits at every start on this error. An outage is fixed first, and the rest follows. None of the four fixes below is needed to stop the crash, and none is worse than an app that does not start. They go in the next PR, straight after the release. The cause is fixed in the right place. The broker's statements keep the currency they are stated in, every sum puts each account in CAD, and a figures build that fails no longer stops the server. PATCH is the right bump.
+
+(Corrected 2026-10-14: this brief first held the merge for the four fixes. That was the wrong call while the install is down.)
 
 ## The three questions
 
@@ -12,13 +14,13 @@ Merge after four small fixes, all in this PR and none widening it. The cause is 
 
 2. **Trying again when something changes is the right retry; as built, no change triggers it.** A build that failed on the book fails the same way until the book changes, so retrying on a change is right, and a timer or backoff would only repeat the same failure. Building under the engine's write lock is what `rebuild` and `state_zone` already do. But in the one state `ensure_built` exists for, nothing that changes the book triggers a pass (fix 1).
 
-3. **No rebase.** Merge #515 first. Then merge master into `deep-history` with a merge commit; a pushed branch is never rebased. I ran that merge. One file conflicts, `server/src/figures.rs`, in two hunks:
+3. **No rebase.** Merge #515 first, and the follow-up PR before #514 too, or into it by the same merge. Then merge master into `deep-history` with a merge commit; a pushed branch is never rebased. I ran that merge. One file conflicts, `server/src/figures.rs`, in two hunks:
    - `pulled`: #514 wraps the broker reads in a closure, and #515 changed `broker_account`'s signature. Keep #514's closure with #515's call, `broker_account(&book.stated(*a)…)`, which takes no account and no `?`.
    - the tests: keep both sets.
 
    Everything else merges cleanly. The merged head must then build and pass both suites. Brief 30's verdict on #514 is for that head.
 
-## Required changes
+## The next PR, straight after the release
 
 1. **A change to the book must trigger the retry, and a build that succeeds must clear the header.** After a failed pass, `settle` returns no deadline (`due.rs:94`), so the scheduler parks until something wakes it. With no engine, `pulled` returns at `figures.rs:602`, before its wake at :624, so a sync that changes the book never retries. A page connecting does build the figures, through `state_zone`'s no-engine branch (`figures.rs:543–548`), but that branch does not wake the scheduler either. The header then keeps "The figures could not be brought up to date: …" while the figures are built, and no read runs, until a page opens a priced view (`docs.rs:193`) or the next pull lands. Required:
    - `pulled` wakes the scheduler when there is no engine, since the change is what can make the build succeed.
