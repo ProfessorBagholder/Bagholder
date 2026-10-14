@@ -19,3 +19,7 @@ serde_json = "1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# the book's test oracles (its names held to their fold), in tests only
+bagholder-book = { path = "../book", features = ["oracles"] }

@@ -65,6 +65,9 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("record_refs", Holds::Records),
     ("transactions", Holds::Records),
     ("instrument_sightings", Holds::Records),
+    // an instrument's names, kept from its sightings by triggers (migration 029):
+    // right for whatever a clear leaves of them
+    ("instrument_names", Holds::Records),
     ("adjustments", Holds::Records),
     ("adjustment_legs", Holds::Records),
     ("links", Holds::Records),
@@ -119,6 +122,9 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("settings", Holds::Settings),
     ("schema_migrations", Holds::Schema),
     ("ledger_changes", Holds::Changes),
+    // the sightings whose names are due to be settled: empty after every commit
+    // through the book (migration 029)
+    ("names_due", Holds::Changes),
     // one row: what settling the successions read last; kept, as the version is
     ("successions_due", Holds::Schema),
 ];

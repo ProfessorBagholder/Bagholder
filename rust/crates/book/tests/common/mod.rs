@@ -97,7 +97,7 @@ fn instrument(v: &Value) -> InstrumentDraft {
         name: v.get("symbol").map(|s| NameDraft {
             symbol: s.as_str().unwrap().to_string(),
             venue_mic: v.get("mic").and_then(Value::as_str).map(str::to_string),
-            venue_name: None,
+            venue_name: v.get("venue").and_then(Value::as_str).map(str::to_string),
             name: v.get("name").and_then(Value::as_str).map(str::to_string),
             seen: v["seen"].as_str().unwrap_or("2026-01-02").parse().unwrap(),
         }),

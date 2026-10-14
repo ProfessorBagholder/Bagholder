@@ -14,6 +14,7 @@ pub mod identity;
 pub mod import;
 pub mod links;
 pub mod mapping;
+pub mod names;
 pub mod notices;
 pub mod fills;
 pub mod orders;
@@ -32,6 +33,8 @@ use std::fmt;
 use std::path::Path;
 
 use rusqlite::Connection;
+#[cfg(feature = "oracles")]
+use bagholder_core::InstrumentId as InstrumentIdOf;
 
 pub use bagholder_sqlite::migrate::Migrated;
 
@@ -97,7 +100,14 @@ impl Book {
         let (conn, done) = bagholder_sqlite::migrate::open(&schema::SCHEMA, path, app_version, at)?;
         // every reference between the book's tables is held by SQLite itself
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        Ok((Book { conn, zones: zones::Zones::new() }, done))
+        // a REPLACE fires the delete triggers of the row it replaces: the change log
+        // and the names' due rows see the row that went (brief 28, 1)
+        conn.pragma_update(None, "recursive_triggers", "ON")?;
+        let book = Book { conn, zones: zones::Zones::new() };
+        // what a migration marked, or a write outside the book's own transactions
+        // left, settled once (`names`)
+        book.atomically(|| Ok(()))?;
+        Ok((book, done))
     }
 
     /// The book in the data folder `home`.
@@ -126,6 +136,17 @@ impl Book {
         }
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
         let out = work()?; // dropping `tx` on an error or a panic rolls back
+        // the names around every sighting the work changed, kept before it commits
+        let failed = self.settle_names()?;
+        #[cfg(feature = "oracles")]
+        {
+            let due: Vec<String> = self.conn.prepare("SELECT DISTINCT instrument_id FROM names_due")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            for d in due {
+                let id = InstrumentIdOf::parse(&d).ok().map(|i| self.canonical(i)).transpose()?;
+                assert!(id.is_some_and(|h| failed.contains(&h)), "a write through the book left the names of {d} unsettled");
+            }
+        }
+        let _ = failed;
         tx.commit()?;
         Ok(out)
     }

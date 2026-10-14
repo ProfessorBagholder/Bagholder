@@ -49,8 +49,11 @@ fn every_table_the_ledger_is_read_from_logs_its_changes() {
         let mut st = book.conn_for_tests().prepare("SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger'").unwrap();
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
     };
-    let tables: Vec<&String> = read.iter().filter(|t| !t.starts_with("sqlite_")).collect();
-    for want in ["trade_group_members", "journal_tags", "adjustment_legs", "listings_named", "instruments_described", "instrument_joins"] {
+    // `names_due` is the queue an instrument's kept names are settled from
+    // (migration 029): a read checks it to fall back to the fold, and nothing the
+    // engine reads changes with it, so it has no triggers of the log's own
+    let tables: Vec<&String> = read.iter().filter(|t| !t.starts_with("sqlite_") && *t != "names_due").collect();
+    for want in ["trade_group_members", "journal_tags", "adjustment_legs", "listings_named", "instruments_described", "instrument_joins", "instrument_names"] {
         assert!(read.contains(want), "the seeded book did not reach {want}: the seed misses a kind of row ({read:?})");
     }
     let mut missing = Vec::new();

@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::{params, OptionalExtension};
 
 use bagholder_core::account::{Account, AccountKind, AccountRef, AccountStatus, AccountType, Connection, Registration};
-use bagholder_core::instrument::{Instrument, InstrumentKind, Issuer, Name, OptionRight, OptionTerms, RefScheme, Reference};
+use bagholder_core::instrument::{Instrument, InstrumentKind, Issuer, OptionRight, OptionTerms, RefScheme, Reference};
 use bagholder_core::record::Problem;
 use bagholder_core::{AccountId, Broker, ConnectionId, InstrumentId, IssuerId, SourceName, TransactionId};
 
@@ -397,80 +397,6 @@ impl Book {
                 Ok(())
             }
         }
-    }
-
-    /// What the instrument was called, oldest first: each unbroken run of live
-    /// records' sightings under one symbol and venue is one name, from its first
-    /// day to its last. A ticker that changes and changes back is three names.
-    /// The sightings of every instrument read as one with it count.
-    /// What the instrument is called now: the symbol of `names`' last, read
-    /// through an index from the newest sighting of each instrument read as it,
-    /// not by working out every name it had.
-    pub fn current_symbol(&self, id: InstrumentId) -> Result<Option<String>> {
-        let head = self.canonical(id)?;
-        let mut members = self.conn().prepare_cached(&format!("SELECT * FROM {}", group_sql("?1")))?;
-        let ids: Vec<String> = members.query_map([head.to_string()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        let mut newest: Option<(String, String, i64)> = None;
-        let mut st = self.conn().prepare_cached(
-            "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
-             WHERE s.instrument_id = ?1 ORDER BY s.day DESC, s.symbol DESC, s.rowid DESC LIMIT 1",
-        )?;
-        for i in ids {
-            let row: Option<(String, String, i64)> = st.query_row([i], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
-            if let Some(row) = row {
-                if newest.as_ref().is_none_or(|n| (&row.0, &row.1, row.2) > (&n.0, &n.1, n.2)) {
-                    newest = Some(row);
-                }
-            }
-        }
-        if let Some((_, symbol, _)) = newest {
-            return Ok(Some(symbol));
-        }
-        // no record names it: the fallbacks `names` reads
-        Ok(self.names(id)?.last().map(|n| n.symbol.clone()))
-    }
-
-    pub fn names(&self, id: InstrumentId) -> Result<Vec<Name>> {
-        let head = self.canonical(id)?;
-        let mut stmt = self.conn().prepare_cached(&format!(
-            "SELECT s.symbol, s.venue_mic, s.venue_name, s.name, s.day, r.source FROM instrument_sightings s
-             JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
-             WHERE s.instrument_id IN {} ORDER BY s.day, s.symbol, s.rowid",
-            group_sql("?1")
-        ))?;
-        type Row = (String, Option<String>, Option<String>, Option<String>, String, String);
-        let rows = stmt.query_map([head.to_string()], |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })?;
-        let mut out: Vec<Name> = Vec::new();
-        for row in rows {
-            let (symbol, venue_mic, venue_name, name, day_text, source) = row?;
-            let seen = text::date("instrument_sightings", "day", &day_text)?;
-            let source = text::parsed("source_records", "source", &source, SourceName::parse)?;
-            match out.last_mut() {
-                Some(last) if last.symbol == symbol && last.venue_mic == venue_mic => {
-                    // the latest sighting's words stand for the run
-                    last.last_seen = seen;
-                    last.venue_name = venue_name.or(last.venue_name.take());
-                    last.name = name.or(last.name.take());
-                    last.source = source;
-                }
-                _ => out.push(Name { symbol, venue_mic, venue_name, name, first_seen: seen, last_seen: seen, source }),
-            }
-        }
-        if out.is_empty() && self.listing_named(id)?.is_none() {
-            // neither a record nor the person's pick names it: what a source's own
-            // description of it does, its own first
-            let sql = format!(
-                "SELECT symbol, venue_mic, venue_name, name, day, source FROM instruments_described WHERE instrument_id IN {} ORDER BY instrument_id = ?1 DESC, day DESC, instrument_id LIMIT 1",
-                group_sql("?1")
-            );
-            let found: Option<Row> = self.conn().query_row(&sql, [head.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).optional()?;
-            if let Some((symbol, venue_mic, venue_name, name, day_text, source)) = found {
-                let seen = text::date("instruments_described", "day", &day_text)?;
-                let source = text::parsed("instruments_described", "source", &source, SourceName::parse)?;
-                out.push(Name { symbol, venue_mic, venue_name, name, first_seen: seen, last_seen: seen, source });
-            }
-        }
-        Ok(out)
     }
 
     /// A contract's terms as the book reads them: its own, else those of an
@@ -936,7 +862,10 @@ impl Book {
     /// Note that a record's leg called the instrument this, on its day.
     fn record_sighting(&self, id: InstrumentId, n: &NameDraft, seen_by: &TransactionId) -> Result<()> {
         self.conn().execute(
-            "INSERT OR REPLACE INTO instrument_sightings(record_id, leg, instrument_id, symbol, venue_mic, venue_name, name, day) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            // an upsert, not a replace: a REPLACE fires no delete trigger (no connection
+            // sets `recursive_triggers`), and the names' triggers must see the old row
+            "INSERT INTO instrument_sightings(record_id, leg, instrument_id, symbol, venue_mic, venue_name, name, day) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(record_id, leg, instrument_id) DO UPDATE SET symbol = excluded.symbol, venue_mic = excluded.venue_mic, venue_name = excluded.venue_name, name = excluded.name, day = excluded.day",
             params![seen_by.record.to_string(), seen_by.leg.as_str(), id.to_string(), n.symbol, n.venue_mic, n.venue_name, n.name, day(n.seen)],
         )?;
         Ok(())
