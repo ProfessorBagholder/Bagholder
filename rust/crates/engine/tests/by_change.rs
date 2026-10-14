@@ -93,9 +93,11 @@ fn generate(seed: u64) -> Value {
                 tx.push(json!({"id": inn, "account": to, "day": date, "at": at(4), "kind": "transfer-in", "instrument": i, "qty": q.to_string()}));
                 links.push(json!({"out": out, "in": inn}));
             }
-            9 if r.below(2) == 0 => {
+            9 | 14 if r.below(4) != 0 => {
                 // a holding moved to another account whose row names no instrument:
-                // the units land under the instrument sent
+                // the units land under the instrument sent (common, so that the
+                // removal of its sending side, which leaves the receiving account
+                // holding none, is met in many books: brief 28, E)
                 let q = 1 + r.below(30);
                 let (out, inn) = (format!("{id}o"), format!("{id}i"));
                 tx.push(json!({"id": out, "account": "A", "day": date, "at": at(3), "kind": "transfer-out", "instrument": "X", "qty": format!("-{q}")}));
@@ -351,8 +353,7 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
         for step in 0..(3 * records.len()) {
             let before_fresh = Engine::build(e.inputs().clone());
             let mut d = LedgerDelta::default();
-            let act = r.below(10);
-            match act {
+            match r.below(10) {
                 0..=2 => {
                     // a record arrives, again or anew
                     let id = records[r.below(records.len() as u64) as usize];
@@ -388,7 +389,14 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
                     d.records.insert(id, Some((info, txs)));
                 }
                 4 => {
-                    let Some(id) = k.present.keys().nth(r.below(k.present.len().max(1) as u64) as usize).copied() else { continue };
+                    // a record gone: as often as not a transfer's sending side
+                    let outs: Vec<RecordId> = k.present.iter().filter(|(_, (_, t))| t.iter().any(|t| t.kind == bagholder_core::transaction::Kind::TransferOut)).map(|(id, _)| *id).collect();
+                    let id = if !outs.is_empty() && r.below(2) == 0 {
+                        outs[r.below(outs.len() as u64) as usize]
+                    } else {
+                        let Some(id) = k.present.keys().nth(r.below(k.present.len().max(1) as u64) as usize).copied() else { continue };
+                        id
+                    };
                     k.present.remove(&id);
                     d.records.insert(id, None);
                 }
@@ -477,9 +485,7 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
                     d.adjustments.entry(t.id.clone()).or_insert_with(|| if k.present.contains_key(id) { k.adjustments.get(&t.id).cloned().unwrap_or_default() } else { vec![] });
                 }
             }
-            if std::env::var("BYDBG").is_ok() && seed == 2 && step >= 70 { eprintln!("step {step} act {act} records {:?} trades {:?} groups {:?} accounts {:?} instruments {:?}", d.records.iter().map(|(r, x)| (r, x.as_ref().map(|(_, t)| t.iter().map(|t| (t.id.clone(), t.kind, t.instrument)).collect::<Vec<_>>()))).collect::<Vec<_>>(), d.trades, d.groups.keys().collect::<Vec<_>>(), d.accounts.keys().collect::<Vec<_>>(), d.instruments.keys().collect::<Vec<_>>()); }
             let moved = e.apply(Change::Ledger(d));
-            if std::env::var("BYDBG").is_ok() && seed == 2 && step >= 70 { eprintln!("  paths {:?}", bagholder_engine::engine::take_paths()); }
             steps += 1;
             let fresh = Engine::build(now.clone());
             let off = e.differences(&fresh);

@@ -1125,11 +1125,35 @@ impl Engine {
         let instruments = &reach.instruments;
         let fresh = crate::identity::identify_in(&self.inputs.ledger, &self.matched, instruments);
         self.identity.replace(&self.inputs.ledger, instruments, fresh);
-        // the round trips reached beyond the instruments reached whole
-        let narrow: BTreeSet<TripKey> = reach.trips.iter().filter(|k| !instruments.contains(&k.instrument)).cloned().collect();
+        // the round trips reached beyond the instruments reached whole, and the
+        // trades whose round trip can move: the ones named, those sharing their
+        // anchor, and every one on a round trip reached; closed over each other,
+        // so every round trip such a trade holds or could claim is worked out with it
+        let whole = |t: &bagholder_core::TradeId| self.inputs.ledger.trades.get(t).and_then(crate::input::Keyed::instrument).is_some_and(|i| instruments.contains(&i));
         let on_anchors = reach.anchors.iter().flat_map(|a| self.inputs.ledger.trades.anchored_on(a).map(|t| t.id));
-        let named: BTreeSet<bagholder_core::TradeId> =
-            reach.trades.iter().copied().chain(on_anchors).filter(|t| self.inputs.ledger.trades.get(t).and_then(crate::input::Keyed::instrument).is_none_or(|i| !instruments.contains(&i))).collect();
+        let mut named: BTreeSet<bagholder_core::TradeId> = reach.trades.iter().copied().chain(on_anchors).filter(|t| !whole(t)).collect();
+        let mut narrow: BTreeSet<TripKey> = reach.trips.iter().filter(|k| !instruments.contains(&k.instrument)).cloned().collect();
+        loop {
+            let mut more: BTreeSet<TripKey> = BTreeSet::new();
+            for t in &named {
+                more.extend(self.identity.trip_of.get(t).cloned());
+                if let Some(trade) = self.inputs.ledger.trades.get(t) {
+                    more.extend(self.trips_anchored(trade));
+                }
+            }
+            let mut trades: BTreeSet<bagholder_core::TradeId> = BTreeSet::new();
+            for k in narrow.iter().chain(more.iter()) {
+                for f in self.matched.trips.get(k).into_iter().flat_map(|t| t.fills.iter()) {
+                    trades.extend(self.inputs.ledger.trades.anchored_on(f).map(|t| t.id).filter(|t| !whole(t)));
+                }
+            }
+            let before = (narrow.len(), named.len());
+            narrow.extend(more.into_iter().filter(|k| !instruments.contains(&k.instrument)));
+            named.extend(trades);
+            if (narrow.len(), named.len()) == before {
+                break;
+            }
+        }
         // the trades whose round trip can move: the ones named, and every one on a
         // round trip reached
         let mut identified: BTreeSet<bagholder_core::TradeId> = reach.trades.clone();
