@@ -722,13 +722,15 @@ pub struct Quote {
 /// What a broker states about one account, the check against Bagholder's own.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BrokerAccount {
-    /// The account's net value per day, in CAD, as the broker states it.
-    pub net_value: BTreeMap<Date, Dec>,
-    /// The money put in less the money taken out to date, in CAD, per day, as
-    /// the broker states it beside its net value.
-    pub net_deposits: BTreeMap<Date, Dec>,
-    /// Its net value now, in CAD.
-    pub net_value_now: Option<Dec>,
+    /// The account's net value per day, as the broker states it, in the
+    /// currency it states it in (an account held in US dollars states its value
+    /// in US dollars).
+    pub net_value: BTreeMap<Date, Money>,
+    /// The money put in less the money taken out to date, per day, as the
+    /// broker states it beside its net value.
+    pub net_deposits: BTreeMap<Date, Money>,
+    /// Its net value now, as the broker states it.
+    pub net_value_now: Option<Money>,
     /// When the broker stated its balances and holdings now.
     pub as_of: Option<Timestamp>,
     /// When the account's activity was last read in full: every fill the
@@ -750,8 +752,8 @@ pub struct BrokerAccount {
     /// read in full (`docs/plans/stage-3b-wealthsimple.md`, question 4); today
     /// where none is stated.
     pub held_as_of: Option<Date>,
-    /// What it can borrow, in CAD, or why the broker cannot say.
-    pub buying_power: Option<Result<Dec, String>>,
+    /// What it can borrow, as the broker states it, or why it cannot say.
+    pub buying_power: Option<Result<Money, String>>,
 }
 
 /// The ETF that tracks a benchmark, as its source states it: each session's

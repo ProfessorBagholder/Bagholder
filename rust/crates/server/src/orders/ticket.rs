@@ -91,7 +91,9 @@ fn ticket_figures(app: &Arc<App>, margin_account: &str) -> Result<Option<f64>, S
             .and_then(|(a, _)| i.market.brokers.get(a))
             .and_then(|b| b.buying_power.as_ref())
             .and_then(|bp| bp.as_ref().ok())
-            .map(|d| d.to_f64());
+            // in CAD at the live rate, as the ticket's cost is (`SPEC.md` order-ticket-66)
+            .and_then(|m| bagholder_engine::fx::live_to_cad(&i.facts.rates, &i.clock, *m).ok())
+            .map(|m| m.amount.to_f64());
         available
     })
     .ok_or_else(|| "the figures are not built yet".to_string())

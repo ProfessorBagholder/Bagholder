@@ -522,6 +522,15 @@ fn money_sum(items: impl IntoIterator<Item = Money>) -> Fig<Money> {
     Ok(items.into_iter().try_fold(Money::zero(Currency::CAD), Money::add_to_fit)?)
 }
 
+/// Σ figures in CAD: the first failure among them, or of adding them.
+fn fig_sum(items: &[Fig<Money>]) -> Fig<Money> {
+    let mut total = Money::zero(Currency::CAD);
+    for m in items {
+        total = total.add_to_fit(m.clone()?)?;
+    }
+    Ok(total)
+}
+
 /// The mean of `n` amounts totalling `total`; none of none.
 fn avg_money(total: &Fig<Money>, n: usize) -> Fig<Option<Money>> {
     let total = total.clone()?;
@@ -757,8 +766,9 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let mut unread = Vec::new();
     for a in &accounts {
         let Some(b) = inputs.market.brokers.get(&a.account.id) else { continue };
+        // each account's value as its broker states it, in CAD at the live rate
         if let Some(n) = b.net_value_now {
-            navs.push(Money::new(n, Currency::CAD));
+            navs.push(live_to_cad(rates, clock, n));
         }
         for (c, v) in &b.cash {
             // money borrowed is a margin account's negative cash; another
@@ -774,7 +784,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         }
         if is_margin(a) {
             match &b.buying_power {
-                Some(Ok(p)) => available.push(Money::new(*p, Currency::CAD)),
+                Some(Ok(p)) => available.push(live_to_cad(rates, clock, *p)),
                 Some(Err(why)) => unavailable.push((a.account.id, why.clone())),
                 None => unread.push(a.account.id),
             }
@@ -796,7 +806,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     };
     let margin_used = to_cad_sum(&used);
     let cash = to_cad_sum(&cash_by);
-    let net_value = (!navs.is_empty()).then(|| money_sum(navs.iter().copied()));
+    let net_value = (!navs.is_empty()).then(|| fig_sum(&navs));
     let quoted: Vec<(usize, Money)> = idx.iter().filter_map(|i| positions[*i].day_change_cad.as_ref().ok().and_then(|d| d.map(|m| (*i, m)))).collect();
     let day_change = (!quoted.is_empty()).then(|| Partial { total: money_sum(quoted.iter().map(|(_, m)| *m)), left_out: idx.len() - quoted.len() });
     let day_change_pct: Fig<Option<Ratio>> = match &day_change {
@@ -838,7 +848,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         margin_used: Some(margin_used),
         available_margin: match (unread.first(), available.is_empty()) {
             (Some(a), _) => Some(Err(Gaps::of(Gap::BuyingPowerUnread(*a)))),
-            (None, false) => Some(money_sum(available.iter().copied())),
+            (None, false) => Some(fig_sum(&available)),
             (None, true) => None,
         },
         margin_unavailable: unavailable,
@@ -860,9 +870,10 @@ pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate:
     let mut p = portfolio(f, inputs, &past.positions);
     let accounts: Vec<AccountId> = inputs.ledger.accounts.keys().copied().filter(|a| f.accounts.is_empty() || f.accounts.contains(a)).collect();
     // each account's value that day: its last stated on or before it
-    let navs: Vec<Money> = accounts.iter().filter_map(|a| inputs.market.brokers.get(a)?.net_value.range(..=day).next_back().map(|(_, v)| Money::new(*v, Currency::CAD))).collect();
+    // each at the rate of the day it is that account's value for
+    let navs: Vec<Fig<Money>> = accounts.iter().filter_map(|a| inputs.market.brokers.get(a)?.net_value.range(..=day).next_back().map(|(d, v)| crate::fx::to_cad(&inputs.facts.rates, &inputs.clock, *v, *d))).collect();
     p.net_value_accounts = navs.len();
-    p.net_value = (!navs.is_empty()).then(|| money_sum(navs.iter().copied()));
+    p.net_value = (!navs.is_empty()).then(|| fig_sum(&navs));
     // the book's cash that day, each currency's positive balance at that day's rate
     let mut by: BTreeMap<(AccountId, Currency), Fig<Dec>> = BTreeMap::new();
     for t in inputs.ledger.transactions.iter().filter(|t| t.trade_date <= day && accounts.contains(&t.account)) {

@@ -403,7 +403,8 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
             // an account the ticket can place with: the one broker orders go to, self-directed, trading securities
             tradable: info.broker == bagholder_core::Broker::named("wealthsimple") && matches!(info.account.account_type, AccountType::Known { managed: false, kind: AccountKind::Cash | AccountKind::Margin, .. }),
             margin: matches!(info.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. }),
-            nav: inputs.market.brokers.get(id).and_then(|b| b.net_value_now).map(Dec),
+            // in CAD at the live rate, as every account's value is added
+            nav: inputs.market.brokers.get(id).and_then(|b| b.net_value_now).and_then(|v| bagholder_engine::fx::live_to_cad(&inputs.facts.rates, &inputs.clock, v).ok()).map(|m| Dec(m.amount)),
         })
         .collect()
 }

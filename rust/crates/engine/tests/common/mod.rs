@@ -319,11 +319,13 @@ pub fn build(case: &Value) -> Built {
     for (a, b) in obj(case, "brokers") {
         let id = ids.account(&a);
         let mut acct = BrokerAccount::default();
+        // the currency the broker states the account's value in: CAD unless the case says
+        let vc = ccy(s(&b, "currency").unwrap_or("CAD"));
         for (d, v) in obj(&b, "net_value") {
-            acct.net_value.insert(day(&d), dec(v.as_str().unwrap()));
+            acct.net_value.insert(day(&d), Money::new(dec(v.as_str().unwrap()), vc));
         }
         for (d, v) in obj(&b, "net_deposits") {
-            acct.net_deposits.insert(day(&d), dec(v.as_str().unwrap()));
+            acct.net_deposits.insert(day(&d), Money::new(dec(v.as_str().unwrap()), vc));
         }
         for (c, v) in obj(&b, "cash") {
             acct.cash.insert(ccy(&c), dec(v.as_str().unwrap()));
@@ -336,7 +338,7 @@ pub fn build(case: &Value) -> Built {
             let (amount, currency) = v.as_str().unwrap().split_once(' ').unwrap();
             acct.held_value.insert(ids.instrument(&i), Money::new(dec(amount), ccy(currency)));
         }
-        acct.net_value_now = s(&b, "now").map(dec);
+        acct.net_value_now = s(&b, "now").map(|v| Money::new(dec(v), vc));
         acct.as_of = s(&b, "as_of").map(at);
         acct.activity_read_at = s(&b, "activity_read_at").map(at);
         if let Some(c) = b.get("cash_read").and_then(Value::as_object) {
@@ -356,7 +358,7 @@ pub fn build(case: &Value) -> Built {
             });
         }
         acct.held_as_of = s(&b, "held_as_of").map(day);
-        acct.buying_power = s(&b, "buying_power").map(|v| Ok(dec(v)));
+        acct.buying_power = s(&b, "buying_power").map(|v| Ok(Money::new(dec(v), vc)));
         market.brokers.insert(id, acct);
     }
     let today = day(s(case, "today").unwrap());
