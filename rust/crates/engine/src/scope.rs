@@ -734,6 +734,20 @@ pub fn scope(
     }
 }
 
+/// Each account's value now as its broker states it, in CAD at the live rate.
+fn navs_now(inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -> Vec<Fig<Money>> {
+    accounts.iter().filter_map(|a| inputs.market.brokers.get(&a.account.id)?.net_value_now).map(|n| live_to_cad(&inputs.facts.rates, &inputs.clock, n)).collect()
+}
+
+/// The net liquidation value of every open account now, in CAD: what an order's
+/// position size is over (`SPEC.md` order-ticket-66), the same sum as the
+/// portfolio's net value with no filter, waiting on the first account it
+/// cannot put in CAD. None where no account states a value.
+pub fn net_value_now(inputs: &Inputs) -> Option<Fig<Money>> {
+    let navs = navs_now(inputs, &open_accounts_in_scope(&Filters::default(), inputs));
+    (!navs.is_empty()).then(|| fig_sum(&navs))
+}
+
 fn open_accounts_in_scope<'a>(f: &Filters, inputs: &'a Inputs) -> Vec<&'a crate::input::AccountInfo> {
     inputs.ledger.accounts.values().filter(|a| a.account.status == AccountStatus::Open).filter(|a| f.accounts.is_empty() || f.accounts.contains(&a.account.id)).collect()
 }
@@ -758,7 +772,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     // an account figure is never divided by a filtered sum: margin used is over
     // the market value of every holding in the accounts in scope
     let accounts_market = Partial::of(&positions.iter().filter(|p| f.accounts.is_empty() || f.accounts.contains(&p.account)).map(signed_market).collect::<Vec<_>>());
-    let mut navs = Vec::new();
+    let navs = navs_now(inputs, &accounts);
     let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut available = Vec::new();
@@ -766,10 +780,6 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let mut unread = Vec::new();
     for a in &accounts {
         let Some(b) = inputs.market.brokers.get(&a.account.id) else { continue };
-        // each account's value as its broker states it, in CAD at the live rate
-        if let Some(n) = b.net_value_now {
-            navs.push(live_to_cad(rates, clock, n));
-        }
         for (c, v) in &b.cash {
             // money borrowed is a margin account's negative cash; another
             // account's (a credit card's balance owed) is a debt, not margin

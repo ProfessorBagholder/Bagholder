@@ -58,3 +58,30 @@ fn an_account_in_a_currency_without_its_rate_waits_on_the_rate() {
     let pf = e.holdings(&Filters::default());
     assert!(matches!(&pf.net_value, Some(Err(g)) if g.iter().any(|x| matches!(x, bagholder_engine::gap::Gap::RateMissing { currency: Currency::USD, .. }))), "{:?}", pf.net_value);
 }
+
+/// A day whose net deposits are stated in another currency than the day before
+/// forms no flow: a total restated is not money moved, at either day's rate or
+/// at one. The day says why, and no return is formed over it; the days on
+/// either side, stated in one currency, keep theirs.
+#[test]
+fn deposits_restated_in_another_currency_form_no_flow() {
+    let mut c = case();
+    c["rates"] = json!({"USD": {"2026-03-02": "1.3000", "2026-03-03": "1.4000", "2026-03-04": "1.5000", "2026-03-05": "1.5000"}});
+    c["today"] = json!("2026-03-05");
+    c["covered"] = json!({"USD": [["2026-01-01", "2026-03-05"]]});
+    c["brokers"]["U"]["net_value"] = json!({"2026-03-02": "100", "2026-03-03": "200", "2026-03-04": "210", "2026-03-05": "220"});
+    c["brokers"]["U"]["net_deposits"] = json!({"2026-03-02": "100", "2026-03-03": "150", "2026-03-04": "150", "2026-03-05": "160"});
+    let mut b = build(&c);
+    let u = b.ids.account("U");
+    // the broker restates the deposits of 03-04 in CAD (150 USD at 1.50)
+    let broker = b.inputs.market.brokers.get_mut(&u).unwrap();
+    broker.net_deposits.insert("2026-03-04".parse().unwrap(), cad("225"));
+    let broker = broker.clone();
+    let eq = bagholder_engine::equity::account_equity(u, &broker, &b.inputs.facts.rates, &b.inputs.clock);
+    let flow = |d: &str| eq.points.iter().find(|p| p.day.to_string() == d).unwrap().flow;
+    assert_eq!(flow("2026-03-03"), Some(Dec::from_int(70)), "50 USD moved in at 1.40");
+    assert_eq!(flow("2026-03-04"), None, "restated: no flow");
+    assert_eq!(flow("2026-03-05"), None, "restated back: no flow");
+    assert!(eq.returns.iter().all(|(d, _, _)| d.to_string() == "2026-03-03"), "{:?}", eq.returns);
+    assert!(eq.gaps.iter().any(|g| matches!(g, bagholder_engine::gap::Gap::DepositsRestated { account, day } if *account == u && day.to_string() == "2026-03-04")), "{:?}", eq.gaps);
+}
