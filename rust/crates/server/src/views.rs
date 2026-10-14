@@ -1035,6 +1035,20 @@ mod tests {
         page.step();
         same_as_fresh(&app, &page, "a rate");
 
+        // an account its broker states in US dollars, then the day's rate read: the
+        // total in CAD moves though no holding, cash row or statement does
+        let usd = f.read(|e| e.figures().positions[0].account).unwrap();
+        let read = book.broker_read(book.connections().unwrap()[0].id, "accounts", now).unwrap();
+        book.store_net_value(usd, now, bagholder_core::Money::new(bagholder_core::Dec::from_int(1000), bagholder_core::Currency::USD), &read).unwrap();
+        f.broker_changed(usd).unwrap();
+        page.step();
+        same_as_fresh(&app, &page, "an account stated in US dollars");
+        book.store_rates(bagholder_core::Currency::USD, &[("2025-11-19".parse().unwrap(), bagholder_core::Dec::parse("1.4100").unwrap())], ("2025-11-19".parse().unwrap(), "2025-11-19".parse().unwrap()), &bagholder_core::SourceName::named("bank-of-canada"), now).unwrap();
+        f.rates_changed().unwrap();
+        let moved = page.step();
+        assert!(moved.contains(&"book".to_string()) && moved.contains(&"positions".to_string()), "the day's rate moved {moved:?}");
+        same_as_fresh(&app, &page, "the rate of an account stated in US dollars");
+
         // a journal written
         let trade = page.held["trades"]["trades"][0]["id"].as_str().unwrap().to_string();
         f.write_journal(&trade, &bagholder_core::journal::JournalEntry { thesis: "why".into(), grade: Some(bagholder_core::journal::Grade::A), tags: vec!["t".into()] }, now).unwrap();
