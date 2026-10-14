@@ -179,7 +179,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     // a close of the fund, which no contract is written on
     let mut closes = i.market.closes.get(&f).cloned().unwrap_or_default();
     closes.insert(day("2026-04-18"), Money::new(d("10.4"), Currency::CAD));
-    let broker = BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1100"))]), net_value_now: Some(d("3100")), as_of: Some("2026-04-20T16:00:00Z".parse().unwrap()), ..BrokerAccount::default() };
+    let broker = BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1100"))]), net_value_now: Some(bagholder_core::Money::new(d("3100"), Currency::CAD)), as_of: Some("2026-04-20T16:00:00Z".parse().unwrap()), ..BrokerAccount::default() };
     let clock = bagholder_engine::input::Clock { today: day("2026-04-21"), now: "2026-04-21T22:00:00Z".parse().unwrap(), ..i.clock.clone() };
     let mut benchmark = i.market.benchmarks.get("SP500").cloned().unwrap_or(bagholder_engine::input::BenchmarkSeries { currency: Currency::USD, closes: BTreeMap::new(), dividends: BTreeMap::new(), splits: BTreeMap::new() });
     benchmark.closes.insert(day("2026-04-20"), d("5210"));

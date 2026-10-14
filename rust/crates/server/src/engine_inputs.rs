@@ -166,7 +166,7 @@ pub fn old_store_source() -> SourceName {
 pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>, String> {
     let mut out = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
-        if let Some(b) = broker_account(a.id, &book.stated(a.id).map_err(err)?)? {
+        if let Some(b) = broker_account(&book.stated(a.id).map_err(err)?) {
             out.insert(a.id, b);
         }
     }
@@ -176,26 +176,21 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
 /// What the broker states about one account, as the engine reads it, from what
 /// the book holds of it (`Book::stated`, or `Book::stated_latest` without its days).
 /// An account the broker has stated nothing about has none.
-pub fn broker_account(account: bagholder_core::AccountId, s: &bagholder_book::statements::Stated) -> Result<Option<bagholder_engine::input::BrokerAccount>, String> {
-    let a = account;
+pub fn broker_account(s: &bagholder_book::statements::Stated) -> Option<bagholder_engine::input::BrokerAccount> {
     if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() && s.buying_power.is_none() && s.net_value_now.is_none() {
-        return Ok(None);
+        return None;
     }
     let mut b = bagholder_engine::input::BrokerAccount::default();
+    // in whatever currency the broker states them (an account held in US dollars
+    // states its value in US dollars): the figures put them in CAD at the rate
+    // of the day they are for
     for (day, (value, deposits)) in &s.days {
-        if value.currency != Currency::CAD || deposits.currency != Currency::CAD {
-            return Err(format!("account {a} states its value on {day} in {}, not CAD", value.currency));
-        }
-        b.net_value.insert(*day, value.amount);
-        b.net_deposits.insert(*day, deposits.amount);
+        b.net_value.insert(*day, *value);
+        b.net_deposits.insert(*day, *deposits);
     }
     // the account's value now, as the broker states it with the accounts
     // (its daily values are a day behind, and are the equity curve's)
-    b.net_value_now = match s.net_value_now {
-        Some((_, v)) if v.currency == Currency::CAD => Some(v.amount),
-        Some((_, v)) => return Err(format!("account {a} states what it is worth in {}, not CAD", v.currency)),
-        None => None,
-    };
+    b.net_value_now = s.net_value_now.map(|(_, v)| v);
     if let Some((at, cash)) = &s.cash {
         b.as_of = Some(*at);
         b.cash = cash.clone();
@@ -210,13 +205,8 @@ pub fn broker_account(account: bagholder_core::AccountId, s: &bagholder_book::st
     b.activity_read_at = s.activity_read_at;
     b.cash_read = s.cash_read.clone();
     b.cash_read_holds = s.cash_read_holds.clone();
-    b.buying_power = match &s.buying_power {
-        None => None,
-        Some((_, Ok(m))) if m.currency == Currency::CAD => Some(Ok(m.amount)),
-        Some((_, Ok(m))) => return Err(format!("account {a} states what it can borrow in {}, not CAD", m.currency)),
-        Some((_, Err(why))) => Some(Err(why.clone())),
-    };
-    Ok(Some(b))
+    b.buying_power = s.buying_power.as_ref().map(|(_, p)| p.clone());
+    Some(b)
 }
 
 #[cfg(test)]
