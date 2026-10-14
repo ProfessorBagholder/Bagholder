@@ -357,6 +357,12 @@ impl Book {
         }
         let members = self.group_of(head)?;
         let runs = self.runs_kept(head)?;
+        // every changed sighting placed after the last run: each one live extends
+        // that run where it is of the same symbol and venue, and starts the next
+        // otherwise, as the fold would go on from there; one not live changes nothing
+        if runs.last().is_none_or(|r| keys.iter().next().is_some_and(|k| *k > r.last)) {
+            return self.append_runs(head, &members, runs.last().cloned(), keys);
+        }
         // the runs each key reaches: the one holding it, and one either side
         let mut reached: Vec<(usize, usize)> = Vec::new();
         for k in keys {
@@ -390,6 +396,47 @@ impl Book {
             self.replace_runs(head, &members, kept, pieces)?;
         }
         Ok(())
+    }
+
+    /// The changed sightings `keys`, every one after `last`, folded on from it.
+    fn append_runs(&self, head: InstrumentId, members: &[String], last: Option<Run>, keys: &BTreeSet<Key>) -> Result<()> {
+        let mut st = self.conn().prepare_cached(
+            "SELECT s.instrument_id, s.day, s.symbol, s.venue_mic, s.venue_name, s.name, r.source FROM instrument_sightings s
+             JOIN source_records r ON r.id = s.record_id AND r.state = 'live' WHERE s.rowid = ?1",
+        )?;
+        type Row = (String, String, String, Option<String>, Option<String>, Option<String>, String);
+        let first_kept = last.as_ref().map(|r| r.first.clone());
+        let mut runs: Vec<Run> = last.into_iter().collect();
+        let had = runs.len();
+        for k in keys {
+            let row: Option<Row> = st.query_row([k.2], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))).optional()?;
+            let Some((inst, day, symbol, venue_mic, venue_name, name, source)) = row else { continue };
+            if !members.contains(&inst) || day != k.0 || symbol != k.1 {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(r) if r.symbol == symbol && r.venue_mic == venue_mic => {
+                    r.last = k.clone();
+                    r.venue_name = venue_name.or(r.venue_name.take());
+                    r.name = name.or(r.name.take());
+                    r.source = source;
+                }
+                _ => runs.push(Run { first: k.clone(), last: k.clone(), symbol, venue_mic, venue_name, name, source }),
+            }
+        }
+        if had == 1 {
+            // the last run kept, as it now reads
+            let r = &runs[0];
+            let first = first_kept.unwrap_or_default();
+            self.conn()
+                .prepare_cached(
+                    "UPDATE instrument_names SET last_day = ?5, last_symbol = ?6, last_sighting = ?7, venue_name = ?8, name = ?9, source = ?10
+                     WHERE instrument_id = ?1 AND first_day = ?2 AND first_symbol = ?3 AND first_sighting = ?4
+                     AND (last_day, last_symbol, last_sighting, venue_name, name, source) IS NOT (?5, ?6, ?7, ?8, ?9, ?10)",
+                )?
+                .execute(params![head.to_string(), first.0, first.1, first.2, r.last.0, r.last.1, r.last.2, r.venue_name, r.name, r.source])?;
+        }
+        self.keep_runs(head, &runs[had..])
     }
 
     /// The pieces, in order, of `kept` cut at `keys`, with the changed sightings

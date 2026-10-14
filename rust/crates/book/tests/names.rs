@@ -63,6 +63,7 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
         f.account(&["a1"]);
         f.account(&["a2"]);
         let m = Spelled::v(1);
+        let other = Spelled { source: "other-broker", version: 1 };
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let mut keys: Vec<String> = Vec::new();
         for n in 0..60 {
@@ -85,7 +86,9 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                         inst["venue"] = json!(rng.pick(&["TSX", "TSX-V"]));
                     }
                     let account = rng.pick(&["a1", "a2"]).to_string();
-                    f.store(&m, &key, &legs(vec![buy(&account, inst, "1", "-1", &format!("{day}T15:00:00Z"))]));
+                    // from either of two sources: a run's source is its last sighting's
+                    let source = if rng.below(3) == 0 { &other } else { &m };
+                    f.store(source, &key, &legs(vec![buy(&account, inst, "1", "-1", &format!("{day}T15:00:00Z"))]));
                     if !keys.contains(&key) {
                         keys.push(key);
                     }
