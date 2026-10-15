@@ -8,7 +8,7 @@ import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
-import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
+import type { Adjust, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
 import type { StatusAnswer } from './status'
 
@@ -34,6 +34,7 @@ export interface Routes {
   'POST /api/bracket/cancel': { body: Named; answer: OrderActionAnswer }
   'POST /api/orders/refresh': { answer: RefreshAndOrders }
   'GET /api/order/quote': { query: QuoteOf; answer: TicketQuote }
+  'POST /api/order/listing': { body: ListingOf; answer: OrderListingAnswer }
   'POST /api/order/preview': { body: PreviewRequest; answer: Preview }
   'POST /api/order': { body: Ticket; answer: PlaceTicketAnswer }
   'GET /api/symbols/search': { query: Search; answer: SymbolSearchAnswer }

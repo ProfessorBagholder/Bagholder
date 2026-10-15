@@ -5,14 +5,15 @@ import { watchDoc } from '../live.svelte'
 import { symText } from '../sym'
 import { orderPx, qty as qtyFmt } from '../fmt'
 import { view, previewRequest, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
-import type { Preview } from '../generated/orders'
+import type { ListingRef, OrderListing, Preview } from '../generated/orders'
 import { call } from '../api'
 import { ticketNumber } from '../dec'
 
 // The order ticket's live state. Opened from a ⌘K row's Buy/Sell (or the trade
-// detail); the quote is polled while open; submit posts to /api/order. A draft is
-// kept in localStorage so reopening the same symbol/side restores what was typed,
-// and it also surfaces as a card in the Orders panel until resumed or discarded.
+// detail) on a listing, by Wealthsimple's id for it, never by its ticker (brief 34,
+// section 1); the quote is polled while open; submit posts to /api/order. A draft is
+// kept in localStorage so reopening the same listing and side restores what was
+// typed, and it also surfaces as a card in the Orders panel until resumed or discarded.
 
 export const ticketStore = $state<{ t: Ticket | null; preview: Preview | null; previewError: string }>({ t: null, preview: null, previewError: '' })
 
@@ -21,7 +22,7 @@ export const ticketStore = $state<{ t: Ticket | null; preview: Preview | null; p
 // figures for what the draft holds, as the ticket last had them: the card's amount
 // and its legs' levels and amounts are those, never worked out in the page.
 export interface TicketDraft {
-  symbol: string; side: 'BUY' | 'SELL'; exchange: string; at: string
+  listing: OrderListing; side: 'BUY' | 'SELL'; at: string
   accountId: string; type: string; tif: string
   qty: number | null; limit: number | null; stop: number | null
   sl: Ticket['sl']; tp: Ticket['tp']; text: Record<string, string | null>
@@ -34,10 +35,10 @@ let draftOf: Ticket | null = null
 const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl', 'tp', 'text'] as const
 
 
-// what the book knows about the listing the broker names `securityId` (or, with none
-// given, the one symbol it holds by that text): its kind and the open position
-function tkLookup(symbol: string, securityId: string, holding = ''): { securityId: string; kind: string; position: Position | null } {
-  const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
+// what the book knows about the listing: its kind and the open position, by
+// Wealthsimple's id for it alone
+function tkLookup(listing: OrderListing, holding = ''): { kind: string; position: Position | null } {
+  const is = (x: { security: string }) => x.security === listing.securityId
   // held in more than one account: the margin account among them, else the first by name
   const accounts = book.data?.accounts ?? []
   const held = positions.data?.positions ?? []
@@ -45,8 +46,8 @@ function tkLookup(symbol: string, securityId: string, holding = ''): { securityI
     const a = accounts.find((x) => x.id === accountId)
     return [a?.margin ? 0 : 1, a?.name ?? ''] as const
   }
-  // opened from a holding's own page: that holding, whatever else holds the symbol
-  const own = holding ? held.find((p) => p.id === holding) ?? null : null
+  // opened from a holding's own page: that holding, whatever else holds the listing
+  const own = holding ? held.find((p) => p.id === holding && is(p)) ?? null : null
   const pos =
     own ??
     (held
@@ -55,9 +56,8 @@ function tkLookup(symbol: string, securityId: string, holding = ''): { securityI
         const [x, y] = [rank(a.accountId), rank(b.accountId)]
         return x[0] - y[0] || x[1].localeCompare(y[1])
       })[0] || null)
-  // one the book has traded, by the broker's id or its symbol
   const t = pos || (book.data?.options.instruments ?? []).find(is) || null
-  return { securityId: t ? t.security : securityId, kind: t ? t.kind : '', position: pos }
+  return { kind: t ? t.kind : '', position: pos }
 }
 
 // an account as an order names it: by the broker's own id for it
@@ -121,24 +121,23 @@ export function maxQty(): number | null {
   const t = ticketStore.t
   if (!t) return null
   if (t.side !== 'BUY') {
-    const held = heldIn(t.symbol, t.securityId, t.accountId)
+    const held = heldIn(t.listing.securityId, t.accountId)
     return held != null && held > 0 ? held : null
   }
   return ticketNumber(ticketStore.preview?.maxQuantity)
 }
 
 // the units of the listing the book holds in the broker account `accountId`
-function heldIn(symbol: string, securityId: string, accountId: string): number | null {
-  const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
-  const pos = (positions.data?.positions ?? []).find((p) => is(p) && brokerAccount(p.accountId) === accountId)
+function heldIn(securityId: string, accountId: string): number | null {
+  const pos = (positions.data?.positions ?? []).find((p) => p.security === securityId && brokerAccount(p.accountId) === accountId)
   return pos ? ticketNumber(pos.qty) : null
 }
 
 // What a side starts from (SPEC.md §4, Order ticket): a Sell goes where the shares
 // are and sells them all; a Buy is one share in the account used last, else the
 // holding's, else the margin account.
-function sideDefaults(symbol: string, securityId: string, side: 'BUY' | 'SELL', holding = ''): { accountId: string; qty: number | null } {
-  const info = tkLookup(symbol, securityId, holding)
+function sideDefaults(listing: OrderListing, side: 'BUY' | 'SELL', holding = ''): { accountId: string; qty: number | null } {
+  const info = tkLookup(listing, holding)
   const accounts = ticketAccounts()
   const held = info.position
   const heldAt = held ? brokerAccount(held.accountId) : ''
@@ -153,7 +152,7 @@ function sideDefaults(symbol: string, securityId: string, side: 'BUY' | 'SELL', 
 export function switchSide(side: 'BUY' | 'SELL') {
   const t = ticketStore.t
   if (!t || t.side === side) return
-  const d = sideDefaults(t.symbol, t.securityId, side, t.holding)
+  const d = sideDefaults(t.listing, side, t.holding)
   const accountChanged = d.accountId !== t.accountId
   t.side = side
   t.accountId = d.accountId
@@ -178,7 +177,7 @@ function tkRememberedAccount(accounts: TicketAccount[]): string {
   return ''
 }
 function saveDraft(t: Ticket) {
-  const d = { symbol: t.symbol, side: t.side, exchange: t.exchange, at: new Date().toISOString(), preview: ticketStore.preview } as Record<string, unknown>
+  const d = { listing: t.listing, side: t.side, at: new Date().toISOString(), preview: ticketStore.preview } as Record<string, unknown>
   for (const k of TK_DRAFT_KEYS) d[k] = (t as unknown as Record<string, unknown>)[k]
   draftStore.d = d as unknown as TicketDraft
   draftOf = t
@@ -192,30 +191,53 @@ export function dropDraft() {
   draftOf = null
   try { localStorage.removeItem('bh2.ticketDraft') } catch { /* the browser keeps nothing: there is no draft kept to drop */ }
 }
+// A draft names its listing by Wealthsimple's id; one saved before drafts did names
+// only a ticker, and is dropped: finding its listing would be a lookup by ticker.
 function loadDraftFromStorage() {
-  try { draftStore.d = JSON.parse(localStorage.getItem('bh2.ticketDraft') || 'null') } catch { draftStore.d = null }
+  let d: TicketDraft | null = null
+  try { d = JSON.parse(localStorage.getItem('bh2.ticketDraft') || 'null') } catch { d = null }
+  draftStore.d = d && d.listing && typeof d.listing.securityId === 'string' && d.listing.securityId ? d : null
+  if (d && !draftStore.d) dropDraft()
 }
 loadDraftFromStorage()
 
-// Signature preserved: openTicket(symbol, side, exchange='', securityId='') — the
-// command palette and the trade detail wire their Buy/Sell to exactly this.
-export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', securityId = '', holding = '') {
-  const info = tkLookup(symbol, securityId, holding)
-  const { accountId, qty } = sideDefaults(symbol, securityId || info.securityId, side === 'SELL' ? 'SELL' : 'BUY', holding)
+// The ticket on a listing: Wealthsimple's id for it, which every request the ticket
+// makes names. `holding` is the holding it was opened from, by its id.
+export function openTicket(listing: OrderListing, side: 'BUY' | 'SELL', holding = '') {
+  const { accountId, qty } = sideDefaults(listing, side === 'SELL' ? 'SELL' : 'BUY', holding)
   ui.menuOpen = false
   const t: Ticket = {
-    step: 'form', orderId: '', symbol, securityId: securityId || info.securityId, exchange,
+    step: 'form', orderId: '', listing,
     side: side === 'SELL' ? 'SELL' : 'BUY', accountId, holding: holding || undefined, type: 'LIMIT', tif: 'DAY',
     qty, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: null, unit: 'amt' },
     text: {}, data: null, error: '', busy: false, submitError: '',
   }
-  const d = draftStore.d // what was typed before the ticket closed
-  if (d && d.symbol === symbol && d.side === t.side) for (const k of TK_DRAFT_KEYS) if ((d as unknown as Record<string, unknown>)[k] != null) (t as unknown as Record<string, unknown>)[k] = (d as unknown as Record<string, unknown>)[k]
+  const d = draftStore.d // what was typed before the ticket closed, on this listing
+  if (d && d.listing.securityId === listing.securityId && d.side === t.side) for (const k of TK_DRAFT_KEYS) if ((d as unknown as Record<string, unknown>)[k] != null) (t as unknown as Record<string, unknown>)[k] = (d as unknown as Record<string, unknown>)[k]
   ticketStore.t = t
   ticketStore.preview = null
   fetchQuote()
+}
+
+// The ticket on an exact listing whose Wealthsimple id the page does not hold: the
+// book's instrument, or a symbol on the venue a directory named. The server finds the
+// id (never by the ticker alone); its refusal is said in the header and opens nothing.
+export async function ticketOn(of: ListingRef, side: 'BUY' | 'SELL', holding = '') {
+  const r = await call('POST /api/order/listing', { body: { of } })
+  if (!r.ok) {
+    tell(r.error, 'err')
+    return
+  }
+  openTicket(r.listing, side, holding)
+}
+
+// A holding's or a listing's own Buy and Sell: the listing it is, by Wealthsimple's id
+// where the book holds one, else by the book's instrument.
+export function ticketOnInstrument(x: { instrument: string; security: string; symbol: string; exchange: string; currency: string }, side: 'BUY' | 'SELL', holding = '') {
+  if (x.security) openTicket({ securityId: x.security, symbol: x.symbol, exchange: x.exchange, currency: x.currency }, side, holding)
+  else void ticketOn({ kind: 'instrument', id: x.instrument }, side, holding)
 }
 
 // the cross, Escape and the scrim keep the draft; Cancel and a sent order discard it
@@ -237,7 +259,7 @@ export function fetchQuote() {
   stopQuote?.()
   stopQuote = undefined
   if (!t) return
-  const qp = new URLSearchParams({ symbol: t.symbol, security: t.securityId || '', account: t.accountId || '', exchange: t.exchange || '' })
+  const qp = new URLSearchParams({ security: t.listing.securityId, account: t.accountId || '' })
   const holder = {
     get data() { return ticketStore.t === t ? t.data : null },
     set data(v: typeof t.data) { if (ticketStore.t === t) t.data = v },
@@ -266,7 +288,7 @@ export function fetchQuote() {
 function notice(v: ReturnType<typeof view>, status: string | undefined) {
   const t = ticketStore.t!
   const head = status === 'dry' ? 'Not sent (orders are off) · ' : status === 'unconfirmed' || status === 'sending' ? 'Sent, not confirmed · ' : 'Order placed · '
-  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : orderPx(v.entry) + ' ' + v.typeWord.toLowerCase()) +
+  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.listing.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : orderPx(v.entry) + ' ' + v.typeWord.toLowerCase()) +
     (v.slOn ? ', stop ' + orderPx(v.slPrice) : '') + (v.tpOn ? ', target ' + orderPx(v.tpPrice) : '')
 }
 
@@ -278,7 +300,7 @@ export async function submit() {
   // the exact decimal text of the server's own figures for the ticket
   const body = {
     id: t.orderId,
-    symbol: t.symbol, securityId: q.securityId || t.securityId || '', accountId: t.accountId, side: t.side, type: t.type, tif: t.tif,
+    listing: t.listing, accountId: t.accountId, side: t.side, type: t.type, tif: t.tif,
     quantity: v.qty,
     limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? v.limit : null,
     stopPrice: t.type === 'STOP' || t.type === 'STOP_LIMIT' ? v.stop : null,
@@ -304,7 +326,7 @@ export async function submit() {
 export function resumeDraft() {
   const d = draftStore.d
   if (!d) return
-  openTicket(d.symbol, d.side, d.exchange, '')
+  openTicket(d.listing, d.side)
 }
 export function discardDraft() { dropDraft() }
 

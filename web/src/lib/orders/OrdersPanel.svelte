@@ -68,7 +68,7 @@
 
           {#if showDraft && draftInfo}
             <div class="od-card draft">
-              <div class="od-row1"><span class="od-title"><span class="od-draft">Draft</span> {listing(draftInfo.d)}</span><span class="od-value num">{draftInfo.value}</span></div>
+              <div class="od-row1"><span class="od-title"><span class="od-draft">Draft</span> {listing(draftInfo.d.listing)}</span><span class="od-value num">{draftInfo.value}</span></div>
               <div class="od-row2"><span class="od-line">{draftInfo.line}</span></div>
               {#each draftInfo.legs as leg}
                 <div class="od-leg"><span class="od-leg-label {leg.tone}">{leg.label}</span><span class="od-leg-value num">{leg.value}</span><span class="od-leg-amt num {leg.tone}">{leg.amount}</span></div>

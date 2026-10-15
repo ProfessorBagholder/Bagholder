@@ -8,14 +8,13 @@ import { openWithStatus, ready, figures, waits, waiting, pctPlain, money, px } f
 // availability (SPEC: Sell only where a position is held) is the book's own truth.
 //
 // The ticket's live quote is a document, `quote:<params>`, whose key is built by
-// ticket.svelte.ts's fetchQuote() from the exact symbol/security/account/exchange the
-// ticket opened with (insertion order: symbol, security, account, exchange). openTicket()
+// ticket.svelte.ts's fetchQuote() from the listing's Wealthsimple id and the account
+// the ticket opened with (insertion order: security, account). openTicket()
 // resolves the account deterministically from the book before any quote answers: a Buy or
 // Sell on a held symbol goes to the account holding it; a Buy on a symbol with no position
 // falls back to the book's margin account, "Trading". Those rules, read from the figures
 // document, let the test compute the exact doc key up front.
-const quoteKey = (symbol: string, security: string, account: string, exchange: string) =>
-  'quote:' + new URLSearchParams({ symbol, security, account, exchange }).toString()
+const quoteKey = (security: string, account: string) => 'quote:' + new URLSearchParams({ security, account }).toString()
 
 // An order names an account by the broker's own id for it. The book's holding of a
 // symbol (the first, as the ticket takes it) gives the account a ticket on it opens on
@@ -142,7 +141,7 @@ test('a Market order hides Limit/Stop price and Time in force; other types show 
 
 test('the ticket offers the order types the server names, and nothing of its own', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('TD', 'sec-td', (await holding(request, 'TD')).account, 'TSX')]: { ok: true, orderTypes: ['MARKET', 'LIMIT'] },
+    [quoteKey('sec-td', (await holding(request, 'TD')).account)]: { ok: true, orderTypes: ['MARKET', 'LIMIT'] },
   })
   await ready(page)
   await page.keyboard.press('Control+k')
@@ -178,7 +177,7 @@ test('typing Shares sets Amount at the working price, and Amount sets whole Shar
 
 test('Max sets the whole shares the account\'s buying power covers, and is off when unknown', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: { ok: true, buyingPower: 1000 },
+    [quoteKey('sec-nvda', (await holding(request, 'NVDA')).account)]: { ok: true, buyingPower: 1000 },
   })
   await ready(page)
   await page.keyboard.press('Control+k')
@@ -208,7 +207,7 @@ test('Max is off (and the position\'s shares fill Sell) when buying power is unk
 
 test('a ticket closed without sending leaves a draft card showing the server\'s amount and legs, though no price was typed', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' } },
+    [quoteKey('sec-nvda', (await holding(request, 'NVDA')).account)]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' } },
     // the stream here is made up whole: the Orders panel reads its own document, with nothing pending
     orders: { ok: true, live: true, orders: [], brackets: [] },
   })
@@ -239,7 +238,7 @@ test('a ticket closed without sending leaves a draft card showing the server\'s 
 
 test('a stop loss and target round to the cent even off a quote with extra precision', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('AAPL', 'sec-aapl', (await holding(request, 'AAPL')).account, 'NASDAQ')]: { ok: true, quote: { last: 163.47, currency: 'USD', multiplier: 1 } },
+    [quoteKey('sec-aapl', (await holding(request, 'AAPL')).account)]: { ok: true, quote: { last: 163.47, currency: 'USD', multiplier: 1 } },
   })
   await ready(page)
   await page.keyboard.press('Control+k')
@@ -253,7 +252,7 @@ test('a stop loss and target round to the cent even off a quote with extra preci
 
 test('a trailing stop\'s loss is its distance exactly, and it reads "Starts at"', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1 } },
+    [quoteKey('sec-nvda', (await holding(request, 'NVDA')).account)]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1 } },
   })
   await ready(page)
   await page.keyboard.press('Control+k')
@@ -281,7 +280,7 @@ test('removing and re-adding Stop loss and Take profit', async ({ page, request 
 
 test('a quote that cannot be had says why, and the figures are dashes', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('UBER', 'sec-uber', await marginAccount(request), 'NYSE')]: { ok: false, error: 'Wealthsimple has no quote for UBER.' },
+    [quoteKey('sec-uber', await marginAccount(request))]: { ok: false, error: 'Wealthsimple has no quote for UBER.' },
   })
   await ready(page)
   await page.keyboard.press('Control+k')
@@ -293,7 +292,7 @@ test('a quote that cannot be had says why, and the figures are dashes', async ({
 
 test('the review step shows the order, the risk, and Available margin after on a margin account', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('NVDA', 'sec-nvda', (await holding(request, 'NVDA')).account, 'NASDAQ')]: {
+    [quoteKey('sec-nvda', (await holding(request, 'NVDA')).account)]: {
       ok: true,
       quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' },
       marginRate: 0.4, marginAvailable: 5000,
@@ -346,7 +345,7 @@ test('Back returns to the form with every value kept', async ({ page, request })
 test('submitting sends Wealthsimple\'s own request shape and flashes the order placed', async ({ page, request }) => {
   const nvdaAccount = (await holding(request, 'NVDA')).account
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('NVDA', 'sec-nvda', nvdaAccount, 'NASDAQ')]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' } },
+    [quoteKey('sec-nvda', nvdaAccount)]: { ok: true, quote: { last: 165.4, currency: 'USD', multiplier: 1, securityId: 'sec-nvda' } },
   })
   await ready(page)
   let sent: unknown = null
@@ -362,7 +361,8 @@ test('submitting sends Wealthsimple\'s own request shape and flashes the order p
   await expect.poll(() => sent).toEqual({
     // the order's id, made when the review opened
     id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
-    symbol: 'NVDA', securityId: 'sec-nvda', accountId: nvdaAccount, side: 'BUY', type: 'LIMIT', tif: 'DAY',
+    // the listing, by Wealthsimple's id; its symbol and exchange are words to show
+    listing: { securityId: 'sec-nvda', symbol: 'NVDA', exchange: 'NASDAQ', currency: 'USD' }, accountId: nvdaAccount, side: 'BUY', type: 'LIMIT', tif: 'DAY',
     // the exact decimal text of the server's preview, never a float
     quantity: '25', limitPrice: '165.4', stopPrice: null, currency: 'USD',
     stopLoss: { kind: 'stop', price: '157.13', trail: '5', trailUnit: 'pct' },
@@ -448,7 +448,7 @@ test('a price Wealthsimple would not take is said on the review, and Submit is o
 
 test('a read the ticket could not make is said on it', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('AAPL', 'sec-aapl', (await holding(request, 'AAPL')).account, 'NASDAQ')]: { ok: true, quote: { last: 163.47, currency: 'USD', multiplier: 1 }, unread: ['The margin rate could not be read: the connection dropped'] },
+    [quoteKey('sec-aapl', (await holding(request, 'AAPL')).account)]: { ok: true, quote: { last: 163.47, currency: 'USD', multiplier: 1 }, unread: ['The margin rate could not be read: the connection dropped'] },
   })
   await ready(page)
   await page.keyboard.press('Control+k')

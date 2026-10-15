@@ -17,6 +17,7 @@ pub fn routes() -> Routed {
         post "/api/bracket/cancel" => bracket_cancel;
         post "/api/orders/refresh" => refresh;
         get "/api/order/quote" => quote;
+        post "/api/order/listing" => listing;
         post "/api/order/preview" => preview;
         post "/api/order" => place;
     }
@@ -45,20 +46,29 @@ async fn refresh(State(state): State<AppState>) -> Api<RefreshAndOrders> {
     .await
 }
 
+/// The listing a quote is for, by Wealthsimple's id (required), and the account.
 #[derive(Deserialize, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
 pub struct QuoteOf {
-    #[serde(default, deserialize_with = "text")]
-    symbol: String,
-    #[serde(default, deserialize_with = "text")]
+    #[serde(deserialize_with = "text")]
     security: String,
     #[serde(default, deserialize_with = "text")]
     account: String,
-    #[serde(default, deserialize_with = "text")]
-    exchange: String,
 }
 
 async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api<orders::TicketQuote> {
-    answer(move || orders::ticket_quote(&state.app, &q.symbol, &q.security, &q.account, &q.exchange)).await
+    answer(move || orders::ticket_quote(&state.app, &q.security, &q.account)).await
+}
+
+/// `POST /api/order/listing`: the listing a ticket opens on, from the exact listing
+/// it was opened from (`orders::resolve_listing`).
+async fn listing(State(state): State<AppState>, Body(r): Body<orders::ListingOf>) -> Api<orders::OrderListingAnswer> {
+    answer(move || match r.of {
+        Some(r) => orders::resolve_listing(&state.app, &r, jiff::Timestamp::now()),
+        // an empty body names no listing
+        None => orders::OrderListingAnswer::Refused { ok: false, error: "No listing named.".into() },
+    })
+    .await
 }
 
 /// `POST /api/order/preview`: the ticket's figures, worked out exactly from what it

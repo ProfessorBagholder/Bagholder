@@ -6,7 +6,7 @@
 
 import { money, signedMoney, px } from '../fmt'
 import { dec, sign, type Dec } from '../dec'
-import type { Preview, PreviewRequest } from '../generated/orders'
+import type { OrderListing, Preview, PreviewRequest } from '../generated/orders'
 
 export interface Quote {
   symbol?: string
@@ -28,7 +28,8 @@ export interface Ticket {
   step: 'form' | 'review'
   /** The order's id, made when the review opens: a second Submit of one review is the same order. */
   orderId: string
-  symbol: string; securityId: string; exchange: string
+  /** The listing the ticket is on: Wealthsimple's id for it, which every request names. */
+  listing: OrderListing
   side: 'BUY' | 'SELL'; accountId: string
   /** The holding the ticket was opened from, by its id: its account and quantity are the defaults. */
   holding?: string
@@ -57,7 +58,7 @@ export function previewRequest(t: Ticket, ctx: ValsCtx): PreviewRequest {
   const q = d.quote || {}
   const acct = ctx.accounts.find((a) => a.id === t.accountId) || null
   return {
-    side: t.side, type: t.type,
+    securityId: t.listing.securityId, side: t.side, type: t.type,
     quantity: txt(t.qty), amount: t.text.amt ?? null, limit: txt(t.limit), stop: txt(t.stop),
     sl: { on: t.sl.on, kind: t.sl.kind, priceUnit: t.sl.priceUnit, price: txt(t.sl.price), pct: txt(t.sl.pct), trail: txt(t.sl.trail), unit: t.sl.unit },
     tp: { on: t.tp.on, unit: t.tp.unit, price: txt(t.tp.price), pct: txt(t.tp.pct) },

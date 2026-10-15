@@ -20,6 +20,9 @@ use crate::wire::Fig;
 #[derive(Clone, Debug, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct PreviewRequest {
+    /// The listing the ticket is on, by Wealthsimple's id: required, as on every
+    /// order request (brief 34, section 1).
+    pub security_id: String,
     /// `BUY` or `SELL`.
     pub side: String,
     /// `MARKET`, `LIMIT`, `STOP` or `STOP_LIMIT`.
@@ -191,6 +194,9 @@ pub type ToCad = Option<Result<Dec, Vec<String>>>;
 /// figures (the Bank of Canada's, for today).
 pub fn preview_for(app: &std::sync::Arc<crate::app::App>, r: &PreviewRequest) -> Result<Preview, crate::http::ApiError> {
     use crate::http::ApiError;
+    if r.security_id.trim().is_empty() {
+        return Err(ApiError::BadRequest("No listing named: open the ticket on a listing.".into()));
+    }
     let named = r.quote.currency.trim();
     let to_cad: ToCad = if named.is_empty() {
         None
@@ -406,6 +412,7 @@ mod tests {
     /// A Buy limit of 10 at 100, a 5% stop and a 10% target, quoted 99/101 last 100 in USD.
     fn ticket() -> PreviewRequest {
         PreviewRequest {
+            security_id: "sec-s-us".into(),
             side: "BUY".into(),
             kind: "LIMIT".into(),
             quantity: t("10"),

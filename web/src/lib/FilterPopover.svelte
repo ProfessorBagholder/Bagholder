@@ -7,7 +7,7 @@
   } from './filters.svelte'
   import { setFilters, refilter } from './state.svelte'
   import { use, filtered } from './subs.svelte'
-  import { openTicket } from './ticket/ticket.svelte'
+  import { ticketOn, ticketOnInstrument } from './ticket/ticket.svelte'
   import { goSub } from './router.svelte'
   import { symText, bareSymbol } from './sym'
   import { ICONS } from './icons'
@@ -42,10 +42,10 @@
   use('positions', positions, filtered)
 
   // ---- the book's knowledge of an instrument, for the row's Buy/Sell ----
-  function tkLookup(instrument: string): { securityId: string; kind: string; hasPosition: boolean } {
+  function tkLookup(instrument: string): { kind: string; hasPosition: boolean } {
     const pos = (positions.data?.positions ?? []).find((p) => p.instrument === instrument) ?? null
     const known = options.instruments.find((i) => i.id === instrument)
-    return { securityId: pos?.security || known?.security || '', kind: known?.kind ?? '', hasPosition: !!pos }
+    return { kind: known?.kind ?? '', hasPosition: !!pos }
   }
 
   // ---- external symbol search ----
@@ -214,8 +214,15 @@
     if (held) goSub('portfolio', held.id)
     else goSub('markets', rememberListing({ symbol, exchange, kind }))
   }
-  function trade(symbol: string, side: 'BUY' | 'SELL', exchange: string, securityId: string) {
-    openTicket(symbol, side, exchange, securityId)
+  // A row of the book trades its own instrument; a row a directory gave trades the
+  // symbol on the venue it names. Never a ticker alone.
+  function tradeBook(instrument: string, side: 'BUY' | 'SELL') {
+    const known = options.instruments.find((i) => i.id === instrument)
+    if (known) ticketOnInstrument({ instrument, security: known.security, symbol: known.symbol, exchange: known.exchange, currency: known.currency }, side)
+    onclose()
+  }
+  function tradeVenue(symbol: string, venue: string) {
+    void ticketOn({ kind: 'venue', symbol, venue }, 'BUY')
     onclose()
   }
 
@@ -459,7 +466,7 @@
 <!-- The three-slot symbol row (ledger symbolRowHtml + symbolRowButtons): funnel, Buy, Sell.
      onOpen (the row itself) opens the listing; onToggle (a contract) toggles its filter. -->
 {#snippet symbolRow(sym: string, name: string, exchange: string, id: string, full: string, cls: string, onOpen: (() => void) | undefined, onToggle: (() => void) | undefined, book: boolean)}
-  {@const info = book ? tkLookup(id) : { securityId: '', kind: '', hasPosition: false }}
+  {@const info = book ? tkLookup(id) : { kind: '', hasPosition: false }}
   {@const share = info.kind === 'Shares'}
   {@const filtered = filters.lists.symbol.indexOf(id) >= 0}
   <div class="pop-row{cls}" role="button" tabindex="-1" onclick={() => (onToggle ? onToggle() : onOpen?.())} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle ? onToggle() : onOpen?.() } }}>
@@ -469,8 +476,8 @@
     <span style="flex:none;width:70px;display:inline-flex;justify-content:flex-end">
       <span class="tk-rowbtns">
         <button class="tk-rowbtn funnel{filtered ? ' on' : ''}" aria-label={(filtered ? 'Stop filtering by ' : 'Filter by ') + symText(full)} aria-pressed={filtered} onclick={(e) => { e.stopPropagation(); toggleList('symbol', id) }}>{@render iconSvg(ICONS.funnel)}</button>
-        {#if share}<button class="tk-rowbtn buy" aria-label="Buy {symText(full)}" onclick={(e) => { e.stopPropagation(); trade(full, 'BUY', exchange, info.securityId) }}>{@render iconSvg(ICONS.plus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.plus)}</span>{/if}
-        {#if share && info.hasPosition}<button class="tk-rowbtn sell" aria-label="Sell {symText(full)}" onclick={(e) => { e.stopPropagation(); trade(full, 'SELL', exchange, info.securityId) }}>{@render iconSvg(ICONS.minus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>{/if}
+        {#if share}<button class="tk-rowbtn buy" aria-label="Buy {symText(full)}" onclick={(e) => { e.stopPropagation(); tradeBook(id, 'BUY') }}>{@render iconSvg(ICONS.plus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.plus)}</span>{/if}
+        {#if share && info.hasPosition}<button class="tk-rowbtn sell" aria-label="Sell {symText(full)}" onclick={(e) => { e.stopPropagation(); tradeBook(id, 'SELL') }}>{@render iconSvg(ICONS.minus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>{/if}
       </span>
     </span>
   </div>
@@ -488,10 +495,10 @@
     <span style="flex:none;width:70px;display:inline-flex;justify-content:flex-end">
       <span class="tk-rowbtns">
         <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.funnel)}</span>
-        {#if r.kind}
+        {#if r.kind || !r.exchange}
           <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.plus)}</span>
         {:else}
-          <button class="tk-rowbtn buy" aria-label="Buy {symText(r.sym)}" onclick={(e) => { e.stopPropagation(); trade(r.sym, 'BUY', r.exchange, '') }}>{@render iconSvg(ICONS.plus)}</button>
+          <button class="tk-rowbtn buy" aria-label="Buy {symText(r.sym)}" onclick={(e) => { e.stopPropagation(); tradeVenue(r.sym, r.exchange) }}>{@render iconSvg(ICONS.plus)}</button>
         {/if}
         <span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>
       </span>

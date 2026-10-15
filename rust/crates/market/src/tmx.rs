@@ -38,20 +38,26 @@ pub const RESOLVE_RETRY_DAYS: i64 = 1;
 
 /// The venue a TMX quote names, in the app's own
 /// words.
-const EXCHANGE_NAMES: [(&str, &str); 8] = [
-    ("VENTURE", "TSX-V"),
-    ("TORONTO", "TSX"),
-    ("CANADIAN SECURITIES", "CSE"),
-    ("CBOE", "Cboe Canada"),
-    ("NEO", "Cboe Canada"),
-    ("NASDAQ", "NASDAQ"),
-    ("NYSE", "NYSE"),
-    ("NEW YORK", "NYSE"),
+/// A mark in TMX's name for an exchange, the venue's words, and the market identifier
+/// code those words are read as: first match wins, so a venue whose name holds
+/// another's (NYSE American, NYSE Arca) comes before it.
+pub const EXCHANGE_NAMES: [(&str, &str, &str); 11] = [
+    ("VENTURE", "TSX-V", "XTSX"),
+    ("TORONTO", "TSX", "XTSE"),
+    ("CANADIAN SECURITIES", "CSE", "XCNQ"),
+    ("CBOE", "Cboe Canada", "NEOE"),
+    ("NEO", "Cboe Canada", "NEOE"),
+    ("NASDAQ", "NASDAQ", "XNAS"),
+    ("NYSE AMERICAN", "NYSE American", "XASE"),
+    ("AMEX", "NYSE American", "XASE"),
+    ("NYSE ARCA", "NYSE Arca", "ARCX"),
+    ("NYSE", "NYSE", "XNYS"),
+    ("NEW YORK", "NYSE", "XNYS"),
 ];
 
 pub fn tmx_venue(name: &str) -> String {
     let up = name.to_uppercase();
-    for (mark, venue) in EXCHANGE_NAMES {
+    for (mark, venue, _) in EXCHANGE_NAMES {
         if up.contains(mark) {
             return venue.to_string();
         }

@@ -94,7 +94,7 @@
         <div class="tk-quote" id="tkQuote">
           <div style="display:flex;justify-content:space-between;gap:12px">
             <div style="min-width:0">
-              <div style="font-size:20px;line-height:1.2;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{symText(v.q.symbol || t.symbol)}</div>
+              <div style="font-size:20px;line-height:1.2;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{symText(v.q.symbol || t.listing.symbol)}</div>
               <div style="font-size:12px;color:var(--ink55);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{(v.q.name || '') + (v.q.exchange ? ' · ' + v.q.exchange : '')}</div>
             </div>
             <div style="text-align:right;flex:none">
@@ -198,7 +198,7 @@
     {:else}
       <div class="tk-body">
         <div style="padding-bottom:14px;box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.10)">
-          <div style="font-size:20px;line-height:1.2;font-weight:500"><span style="color:{v.buy ? 'var(--pos)' : 'var(--neg)'}">{v.buy ? 'Buy' : 'Sell'}</span> {qtyFmt(v.qty)} {symText(v.q.symbol || t.symbol)}</div>
+          <div style="font-size:20px;line-height:1.2;font-weight:500"><span style="color:{v.buy ? 'var(--pos)' : 'var(--neg)'}">{v.buy ? 'Buy' : 'Sell'}</span> {qtyFmt(v.qty)} {symText(v.q.symbol || t.listing.symbol)}</div>
           <div style="font-size:12px;color:var(--ink55);margin-top:2px">{line}</div>
         </div>
         {#if v.buy}

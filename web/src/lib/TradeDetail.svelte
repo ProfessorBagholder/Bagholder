@@ -14,7 +14,7 @@
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { saveJournal, server, detail } from './state.svelte'
   import { use, filtered } from './subs.svelte'
-  import { openTicket } from './ticket/ticket.svelte'
+  import { ticketOn, ticketOnInstrument } from './ticket/ticket.svelte'
   import { untrack } from 'svelte'
   import { recall, remember } from './reads.svelte'
   import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, keptHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
@@ -146,8 +146,12 @@
     if (asOf) return null
     if (String(trade.kind || 'Shares') !== 'Shares') return null
     if (trade.listing) {
+      // a listing outside the book is the symbol on the venue its page names; a page
+      // that names no venue has no exact listing to order on, and offers no Buy
+      const venue = trade.exchange || ''
+      if (!venue) return [{ side: 'BUY', on: false }, { side: 'SELL', on: false }]
       return [
-        { side: 'BUY', on: true, open: () => openTicket(trade.symbol, 'BUY', trade.exchange || '') },
+        { side: 'BUY', on: true, open: () => void ticketOn({ kind: 'venue', symbol: trade.symbol, venue }, 'BUY') },
         { side: 'SELL', on: false },
       ]
     }
@@ -156,8 +160,8 @@
     const pos = trade.position ? (positions.data?.positions || []).find((p) => p.id === trade.position) ?? null : null
     const holding = pos?.id ?? ''
     return [
-      { side: 'BUY', on: true, open: () => openTicket(trade.symbol, 'BUY', trade.exchange || '', trade.security, holding) },
-      { side: 'SELL', on: !!pos, open: () => openTicket(trade.symbol, 'SELL', trade.exchange || '', trade.security, holding) },
+      { side: 'BUY', on: true, open: () => ticketOnInstrument(trade, 'BUY', holding) },
+      { side: 'SELL', on: !!pos, open: () => ticketOnInstrument(trade, 'SELL', holding) },
     ]
   })
 

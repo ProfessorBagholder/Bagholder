@@ -11,11 +11,19 @@ use bagholder_model::wire::SymbolMatch;
 
 pub const NASDAQ_SEARCH_URL: &str = "https://api.nasdaq.com/api/autocomplete/slookup/10?search={}";
 pub const TSX_SEARCH_URL: &str = "https://www.tsx.com/json/company-directory/search/{}/{}";
-/// Nasdaq's exchange code, as the book names the exchange.
-const NASDAQ_EXCHANGES: [(&str, &str); 8] = [
-    ("NYSE", "NYSE"), ("AMEX", "NYSE"), ("PSE", "NYSE"), ("NASDAQ-GS", "NASDAQ"), ("NASDAQ-GM", "NASDAQ"),
-    ("NASDAQ-CM", "NASDAQ"), ("NASDAQ", "NASDAQ"), ("BAT", "BATS"),
+/// Nasdaq's exchange code, the venue's words as a search row shows them, and the
+/// venue's market identifier code those words are read as (`bagholder_sources::venue`):
+/// each venue its own, so an order on a row finds its listing on that venue and no
+/// other (brief 35, 2). AMEX is NYSE American; PSE, the old Pacific exchange, is NYSE
+/// Arca.
+pub const NASDAQ_EXCHANGES: [(&str, &str, &str); 8] = [
+    ("NYSE", "NYSE", "XNYS"), ("AMEX", "NYSE American", "XASE"), ("PSE", "NYSE Arca", "ARCX"), ("NASDAQ-GS", "NASDAQ", "XNAS"), ("NASDAQ-GM", "NASDAQ", "XNAS"),
+    ("NASDAQ-CM", "NASDAQ", "XNAS"), ("NASDAQ", "NASDAQ", "XNAS"), ("BAT", "BATS", "BATS"),
 ];
+
+/// TMX's company directories, each venue's words as a search row shows them, and
+/// the venue's market identifier code.
+pub const TSX_DIRECTORIES: [(&str, &str, &str); 2] = [("tsx", "TSX", "XTSE"), ("tsxv", "TSX-V", "XTSX")];
 const NASDAQ_ASSETS: [&str; 2] = ["STOCKS", "ETF"];
 /// Warrants, units and rights listed beside a share.
 const NASDAQ_DERIVATIVE_SUFFIXES: [&str; 5] = ["WS", "W", "U", "RT", "R"];
@@ -39,7 +47,7 @@ pub fn parse_nasdaq_search(data: &Value) -> Vec<SymbolMatch> {
         if !q.is_object() || !NASDAQ_ASSETS.contains(&s(q.get("asset")).to_uppercase().as_str()) {
             continue;
         }
-        let ex = NASDAQ_EXCHANGES.iter().find(|(k, _)| *k == s(q.get("exchange")).to_uppercase()).map(|(_, v)| *v);
+        let ex = NASDAQ_EXCHANGES.iter().find(|(k, _, _)| *k == s(q.get("exchange")).to_uppercase()).map(|(_, v, _)| *v);
         let sym = s(q.get("symbol")).to_uppercase();
         let tail = sym.rsplit('.').next().unwrap_or("").to_string();
         let ex = match ex { Some(e) if !sym.is_empty() && !NASDAQ_DERIVATIVE_SUFFIXES.contains(&tail.as_str()) => e, _ => continue };
@@ -134,8 +142,7 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
                         .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()))
                         .map(|d| match name.as_str() {
                             "nasdaq" => parse_nasdaq_search(&d),
-                            "tsx" => parse_tsx_search(&d, "TSX"),
-                            _ => parse_tsx_search(&d, "TSX-V"),
+                            dir => parse_tsx_search(&d, TSX_DIRECTORIES.iter().find(|(n, _, _)| *n == dir).map_or("", |(_, w, _)| *w)),
                         });
                     (name, got)
                 })
@@ -205,6 +212,17 @@ mod tests {
         ]});
         let out = parse_nasdaq_search(&data);
         assert_eq!(out, vec![m("AAPL", "Apple Inc.", "NASDAQ", "USD"), m("SPY", "SPDR S&P 500 ETF Trust", "NASDAQ", "USD")]);
+    }
+
+    #[test]
+    fn every_venue_a_directory_names_is_read_as_its_own_code() {
+        for (code, words, mic) in NASDAQ_EXCHANGES.iter().chain(TSX_DIRECTORIES.iter()) {
+            assert_eq!(bagholder_sources::venue::mic_of(words), Some(*mic), "{code}: {words}");
+        }
+        for (mark, words, mic) in crate::tmx::EXCHANGE_NAMES {
+            assert_eq!(bagholder_sources::venue::mic_of(words), Some(mic), "{mark}: {words}");
+            assert_eq!(bagholder_sources::venue::mic_of(&crate::tmx::tmx_venue(&format!("The {mark} exchange"))), Some(mic), "TMX's {mark}");
+        }
     }
 
     #[test]

@@ -123,7 +123,7 @@ export type Adjust = { id: string, leg: string, price: PageDec, trail: PageDec, 
 
 export type RefreshAndOrders = { read: RefreshOrdersAnswer, orders: OrdersDoc, };
 
-export type QuoteOf = { symbol: string, security: string, account: string, exchange: string, };
+export type QuoteOf = { security: string, account: string, };
 
 export type OrderAccount = { id: string, name: string, margin: boolean, 
 /**
@@ -160,7 +160,12 @@ export type Ticket = {
  * The order's id, made by the page when it opened the review: the same order
  * submitted twice is one order (brief 15 §2; brief 19, change 8).
  */
-id: string, symbol: string, securityId: string, accountId: string, 
+id: string, 
+/**
+ * The listing the order is on, by Wealthsimple's id for it: the ticket opened
+ * on it, and nothing here looks one up by its symbol.
+ */
+listing: OrderListing, accountId: string, 
 /**
  * `BUY` or `SELL`.
  */
@@ -179,6 +184,14 @@ export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string,
  * Where the order stands after the answer: `dry`, `unconfirmed`, `pending`, …
  */
 status?: string, bracketId?: string, };
+
+export type OrderListing = { securityId: string, symbol: string, exchange: string, currency: string, };
+
+export type ListingRef = { "kind": "instrument", id: string, } | { "kind": "venue", symbol: string, venue: string, };
+
+export type ListingOf = { of: ListingRef | null, };
+
+export type OrderListingAnswer = { ok: true, listing: OrderListing, } | { ok: false, error: string, };
 
 export type StopInput = { on: boolean, 
 /**
@@ -207,6 +220,11 @@ export type QuoteInput = { last: string | null, ask: string | null, bid: string 
 multiplier: string | null, currency: string, };
 
 export type PreviewRequest = { 
+/**
+ * The listing the ticket is on, by Wealthsimple's id: required, as on every
+ * order request (brief 34, section 1).
+ */
+securityId: string, 
 /**
  * `BUY` or `SELL`.
  */

@@ -158,7 +158,7 @@ describe('the draft card', () => {
     stopLossValue: '3928.25', takeProfitValue: '4548.5', ...over,
   }) as unknown as Preview
   const draft = (over: Partial<TicketDraft> = {}): TicketDraft => ({
-    symbol: 'X', side: 'BUY', exchange: 'EX', at: '2026-09-19T16:00:00Z', accountId: 'a', type: 'LIMIT', tif: 'DAY',
+    listing: { securityId: 'sec-x', symbol: 'X', exchange: 'EX', currency: 'USD' }, side: 'BUY', at: '2026-09-19T16:00:00Z', accountId: 'a', type: 'LIMIT', tif: 'DAY',
     qty: 1, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: null, unit: 'amt' }, text: {}, preview: preview(), ...over,

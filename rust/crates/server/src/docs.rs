@@ -42,7 +42,7 @@ fn quote_shown(app: Arc<App>, key: String) {
         app.clone().single_flight(&key.clone(), (), || {
             let q = &key["quote:".len()..];
             while app.events.watched(&key) && !app.stopping() {
-                let v = crate::orders::ticket_quote(&app, &one(q, "symbol"), &one(q, "security"), &one(q, "account"), &one(q, "exchange"));
+                let v = crate::orders::ticket_quote(&app, &one(q, "security"), &one(q, "account"));
                 app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), v);
                 app.events.signal();
                 if app.wait(QUOTE_EVERY) {
