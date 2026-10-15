@@ -64,6 +64,17 @@ const LISTINGS: [(&str, &str, &str, &str, &str); 23] = [
     ("DOGE", "Dogecoin", "", "", "CAD"),
 ];
 
+/// Listings whose ticker another listing above already has, each by a key of its own
+/// (`SYMBOL@VENUE`): a listing is its own security, with its own Wealthsimple id,
+/// never found by its ticker (brief 36, 7).
+/// key, symbol, name, exchange, mic, currency
+const MORE_LISTINGS: [(&str, &str, &str, &str, &str, &str); 1] = [("TD@NYSE", "TD", "Toronto-Dominion Bank", "NYSE", "XNYS", "USD")];
+
+/// The ticker a listing's key names.
+fn symbol_of(key: &str) -> &str {
+    key.split('@').next().unwrap_or(key)
+}
+
 /// Net liquidation value per account at the snapshot: positions plus cash, less margin.
 const NAV_BY_ACCOUNT: [(&str, f64); 4] = [("TFSA", 90714.35), ("RRSP", 97220.10), ("Trading", 18157.40), ("Crypto", 27787.60)];
 
@@ -151,8 +162,10 @@ impl Mt {
     }
 }
 
-fn sec_id(symbol: &str) -> String {
-    format!("sec-{}", symbol.to_lowercase().replace(' ', "-").replace('.', "_"))
+/// A listing's Wealthsimple id, by its key: the ticker, or `SYMBOL@VENUE` for a
+/// second listing of one ticker.
+fn sec_id(key: &str) -> String {
+    format!("sec-{}", key.to_lowercase().replace(' ', "-").replace('.', "_").replace('@', "-"))
 }
 
 fn account(nick: &str) -> (&'static str, &'static str, &'static str, &'static str) {
@@ -168,7 +181,8 @@ struct Book {
 }
 
 impl Book {
-    fn row(&mut self, kind: &str, acct: &str, day: &str, symbol: &str, qty: N, px: N, cash: N, currency: &str) -> String {
+    fn row(&mut self, kind: &str, acct: &str, day: &str, key: &str, qty: N, px: N, cash: N, currency: &str) -> String {
+        let symbol = symbol_of(key);
         self.n += 1;
         let id = format!("demo-{:04}", self.n);
         let (_, aid, _, _) = account(acct);
@@ -207,7 +221,7 @@ impl Book {
             symbol: symbol.to_string(),
             name: symbol.split(' ').next().unwrap_or("").to_string(),
             currency: currency.to_string(),
-            security_id: if symbol.is_empty() { None } else { Some(sec_id(symbol)) },
+            security_id: if symbol.is_empty() { None } else { Some(sec_id(key)) },
             quantity: qty.f(),
             unit_price: px.f(),
             net_cash_amount: cash.round2().f(),
@@ -271,6 +285,8 @@ fn build() -> Book {
     b.buy("RRSP", "2024-01-10", "VFV", 250, 118.50, c); b.buy("RRSP", "2025-01-08", "VFV", 120, 145.20, c);
     let aapl = b.buy("RRSP", "2024-02-05", "AAPL", 40, 186.50, u); b.sell("RRSP", "2024-12-10", "AAPL", 40, 246.80, u);
     b.buy("RRSP", "2024-06-03", "MSFT", 20, 410.20, u);
+    // TD on the NYSE, beside the TFSA's TD on the TSX: one ticker, two listings
+    b.buy("RRSP", "2025-03-12", "TD@NYSE", 40, 58.10, u);
     b.buy("RRSP", "2024-08-07", "NVDA", 100, 98.90, u); b.sell("RRSP", "2025-01-27", "NVDA", 60, 118.40, u);
     let intc = b.buy("RRSP", "2024-04-29", "INTC", 200, 31.20, u); b.sell("RRSP", "2024-11-05", "INTC", 200, 22.90, u);
     b.note(&aapl, "B", &["core", "trim"], "Services margin story intact; trimmed the whole lot at a stretched multiple to fund the index core.");
@@ -385,6 +401,9 @@ fn listings(b: &Book) -> Vec<Security> {
     let mut out: Vec<Security> = LISTINGS.iter().map(|(sym, name, ex, mic, cur)| {
         Security { id: sec_id(sym), symbol: sym.to_string(), name: name.to_string(), primary_exchange: ex.to_string(), primary_mic: mic.to_string(), currency: cur.to_string(), ..Security::default() }
     }).collect();
+    out.extend(MORE_LISTINGS.iter().map(|(key, sym, name, ex, mic, cur)| {
+        Security { id: sec_id(key), symbol: sym.to_string(), name: name.to_string(), primary_exchange: ex.to_string(), primary_mic: mic.to_string(), currency: cur.to_string(), ..Security::default() }
+    }));
     for (osym, under) in &b.option_ids {
         out.push(Security { id: sec_id(osym), symbol: osym.clone(), name: osym.clone(), primary_exchange: "OPRA".into(), primary_mic: "OPRA".into(), currency: "USD".into(), underlying_id: sec_id(under) });
     }
@@ -471,7 +490,10 @@ fn write_bars(dir: &Path, b: &Book) -> rusqlite::Result<()> {
     for (sym, ..) in LISTINGS.iter() {
         let mut anchors: Vec<(i64, f64)> = b.acts.iter()
             // a coin's buys and sells are traded too, though Wealthsimple files them under "other"
-            .filter(|a| (a.category == "trade" || matches!(a.raw_type.as_str(), "CRYPTO_BUY" | "CRYPTO_SELL")) && a.symbol == *sym)
+            // the listing's own fills, by its id: a second listing of the ticker has its own
+            // (its bars are not written: the market store keeps one history per ticker
+            // until brief 34's section 2 keys it by listing)
+            .filter(|a| (a.category == "trade" || matches!(a.raw_type.as_str(), "CRYPTO_BUY" | "CRYPTO_SELL")) && a.security_id.as_deref() == Some(sec_id(sym).as_str()))
             .filter_map(|a| {
                 let (y, m, d) = parse_iso(&a.transaction_date)?;
                 Some((to_days(y, m, d), a.unit_price))

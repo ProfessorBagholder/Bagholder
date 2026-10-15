@@ -15,6 +15,7 @@
   import { saveJournal, server, detail } from './state.svelte'
   import { use, filtered } from './subs.svelte'
   import { ticketOn, ticketOnInstrument } from './ticket/ticket.svelte'
+  import { listingVenue } from './listing.svelte'
   import { untrack } from 'svelte'
   import { recall, remember } from './reads.svelte'
   import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, keptHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
@@ -146,9 +147,10 @@
     if (asOf) return null
     if (String(trade.kind || 'Shares') !== 'Shares') return null
     if (trade.listing) {
-      // a listing outside the book is the symbol on the venue its page names; a page
-      // that names no venue has no exact listing to order on, and offers no Buy
-      const venue = trade.exchange || ''
+      // a listing outside the book is the symbol on the venue its own address names,
+      // never one filled in by what was found by the ticker; a page whose address
+      // names no venue has no exact listing to order on, and offers no Buy
+      const venue = listingVenue(trade.id)
       if (!venue) return [{ side: 'BUY', on: false }, { side: 'SELL', on: false }]
       return [
         { side: 'BUY', on: true, open: () => void ticketOn({ kind: 'venue', symbol: trade.symbol, venue }, 'BUY') },

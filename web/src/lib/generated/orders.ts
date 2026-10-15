@@ -123,7 +123,7 @@ export type Adjust = { id: string, leg: string, price: PageDec, trail: PageDec, 
 
 export type RefreshAndOrders = { read: RefreshOrdersAnswer, orders: OrdersDoc, };
 
-export type QuoteOf = { security: string, account: string, };
+export type QuoteOf = { security: SecurityId, account: string, };
 
 export type OrderAccount = { id: string, name: string, margin: boolean, 
 /**
@@ -185,11 +185,13 @@ export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string,
  */
 status?: string, bracketId?: string, };
 
-export type OrderListing = { securityId: string, symbol: string, exchange: string, currency: string, };
+export type SecurityId = string;
+
+export type OrderListing = { securityId: SecurityId, symbol: string, exchange: string, currency: string, };
 
 export type ListingRef = { "kind": "instrument", id: string, } | { "kind": "venue", symbol: string, venue: string, };
 
-export type ListingOf = { of: ListingRef | null, };
+export type ListingOf = { of: ListingRef, };
 
 export type OrderListingAnswer = { ok: true, listing: OrderListing, } | { ok: false, error: string, };
 
@@ -222,9 +224,9 @@ multiplier: string | null, currency: string, };
 export type PreviewRequest = { 
 /**
  * The listing the ticket is on, by Wealthsimple's id: required, as on every
- * order request (brief 34, section 1).
+ * order request (brief 34, section 1); its currency is the listing's own.
  */
-securityId: string, 
+securityId: SecurityId, 
 /**
  * `BUY` or `SELL`.
  */

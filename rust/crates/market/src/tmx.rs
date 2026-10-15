@@ -272,12 +272,14 @@ pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Re
         return Ok(None);
     }
     let name = if q.name.is_empty() { bare.clone() } else { q.name };
+    // the venue's own currency where TMX states none, by the app's one venue table
     let currency = if !q.currency.is_empty() {
         q.currency
-    } else if venue == "NYSE" || venue == "NASDAQ" {
-        "USD".into()
     } else {
-        "CAD".into()
+        match bagholder_sources::venue::mic_of(&venue).and_then(bagholder_sources::venue::currency_of) {
+            Some(c) => c.as_str().to_string(),
+            None => return Ok(None),
+        }
     };
     Ok(Some(bagholder_model::wire::SymbolMatch { symbol: bare, name, exchange: venue.to_string(), currency, ..Default::default() }))
 }

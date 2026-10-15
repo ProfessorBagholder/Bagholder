@@ -72,8 +72,9 @@
   function extRows(q: string): SymRow[] {
     const Q = q.trim().toUpperCase()
     if (!Q || extResults.q !== Q) return []
-    const held = new Set(options.instruments.map((i) => bareSymbol(i.symbol) + '|' + i.exchange.toUpperCase()))
-    return extResults.rows.filter((r) => !held.has(bareSymbol((r.symbol ?? r.sym) as string) + '|' + String(r.exchange ?? '').toUpperCase()))
+    // the server leaves out the listings the book holds (SPEC.md filters-24), by the
+    // venue rule its venue table holds
+    return extResults.rows
   }
 
   interface SymRow { book?: boolean; sym?: string; symbol?: string; name?: string; exchange?: string; currency?: string; kind?: string; rank?: number; sub?: string }

@@ -19,13 +19,13 @@ const quoteKey = (security: string, account: string) => 'quote:' + new URLSearch
 // An order names an account by the broker's own id for it. The book's holding of a
 // symbol (the first, as the ticket takes it) gives the account a ticket on it opens on
 // and the quantity a Sell starts from.
-async function holding(request: import('@playwright/test').APIRequestContext, symbol: string): Promise<{ account: string; qty: string }> {
+async function holding(request: import('@playwright/test').APIRequestContext, symbol: string, exchange = ''): Promise<{ account: string; qty: string }> {
   const m = await figures(request)
   // held in more than one account: the margin account among them, else the first by name (SPEC §4 Order ticket)
   const accounts = m.accounts as { id: string; name: string; margin: boolean; brokerAccount: string | null }[]
   const of = (id: string) => accounts.find((a) => a.id === id)!
-  const p = (m.positions as { symbol: string; accountId: string; qty: string }[])
-    .filter((x) => x.symbol === symbol)
+  const p = (m.positions as { symbol: string; exchange: string; accountId: string; qty: string }[])
+    .filter((x) => x.symbol === symbol && (!exchange || x.exchange === exchange))
     .sort((a, b) => Number(of(b.accountId).margin) - Number(of(a.accountId).margin) || of(a.accountId).name.localeCompare(of(b.accountId).name))[0]
   const account = of(p.accountId).brokerAccount!
   return { account, qty: p.qty }
@@ -107,11 +107,11 @@ test('switching Buy and Sell recomputes the defaults: a Sell sells the held shar
   await ready(page)
   await page.keyboard.press('Control+k')
   await page.getByRole('textbox', { name: 'Search' }).fill('TD')
-  await page.getByRole('button', { name: 'Buy TD', exact: true }).click()
+  await page.locator('.pop-row').filter({ hasText: 'TSX' }).getByRole('button', { name: 'Buy TD', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'New order' })).toBeVisible()
   await expect(page.locator('#tk-qty')).toHaveValue('1')
   await page.locator('.tk-segopt.sell').click()
-  const td = await holding(request, 'TD')
+  const td = await holding(request, 'TD', 'TSX')
   await expect(page.locator('#tk-qty')).toHaveValue(td.qty) // every share held, not the Buy's one
   await expect(page.locator('#tk-account')).toHaveValue(td.account) // where the shares are
   await page.locator('.tk-segopt.buy').click()
@@ -141,12 +141,12 @@ test('a Market order hides Limit/Stop price and Time in force; other types show 
 
 test('the ticket offers the order types the server names, and nothing of its own', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', () => {}, {
-    [quoteKey('sec-td', (await holding(request, 'TD')).account)]: { ok: true, orderTypes: ['MARKET', 'LIMIT'] },
+    [quoteKey('sec-td', (await holding(request, 'TD', 'TSX')).account)]: { ok: true, orderTypes: ['MARKET', 'LIMIT'] },
   })
   await ready(page)
   await page.keyboard.press('Control+k')
   await page.getByRole('textbox', { name: 'Search' }).fill('TD')
-  await page.getByRole('button', { name: 'Sell TD', exact: true }).click()
+  await page.locator('.pop-row').filter({ hasText: 'TSX' }).getByRole('button', { name: 'Sell TD', exact: true }).click()
   await expect(page.locator('#tk-type option')).toHaveCount(2)
   await expect(page.locator('#tk-type option[value="STOP"]')).toHaveCount(0)
 })
@@ -156,7 +156,7 @@ test('a Sell shows no Stop loss or Take profit section', async ({ page, request 
   await ready(page)
   await page.keyboard.press('Control+k')
   await page.getByRole('textbox', { name: 'Search' }).fill('TD')
-  await page.getByRole('button', { name: 'Sell TD', exact: true }).click()
+  await page.locator('.pop-row').filter({ hasText: 'TSX' }).getByRole('button', { name: 'Sell TD', exact: true }).click()
   await expect(page.getByText('Stop loss')).toHaveCount(0)
   await expect(page.getByText('Take profit')).toHaveCount(0)
 })

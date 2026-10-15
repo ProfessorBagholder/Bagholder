@@ -19,7 +19,7 @@ Nothing open.
 Nothing on screen changes, except that a ticket now always opens on the listing it was opened from.
 
 **Out of scope, on purpose:**
-- The market readers and the page's other ticker keys (charts, history, filings, news, breakdowns, watchlist): brief 34, sections 2 and 3, next.
+- The market readers and the page's other ticker keys (charts, history, filings, news, breakdowns, watchlist): brief 34, sections 2 and 3, next. That plan also covers the made-up book's own market data (brief 36, 7). `demo_book.rs` writes one price history per ticker, so a second listing of a ticker (`TD@NYSE`) gets none. `demo_facts.rs` quotes from it by ticker, so such a listing is quoted from its own last fill instead.
 - Orders already placed, brackets, and the read-back. They already name the listing by Wealthsimple's id (`OrderRequest::broker_security`, `gate.rs:281`); nothing in them is keyed by ticker.
 
 ## The old app here

@@ -46,8 +46,9 @@ function tkLookup(listing: OrderListing, holding = ''): { kind: string; position
     const a = accounts.find((x) => x.id === accountId)
     return [a?.margin ? 0 : 1, a?.name ?? ''] as const
   }
-  // opened from a holding's own page: that holding, whatever else holds the listing
-  const own = holding ? held.find((p) => p.id === holding && is(p)) ?? null : null
+  // opened from a holding's own page: that holding, by its id alone (its broker id
+  // may not have reached the page yet), whatever else holds the listing
+  const own = holding ? held.find((p) => p.id === holding) ?? null : null
   const pos =
     own ??
     (held
@@ -204,6 +205,7 @@ loadDraftFromStorage()
 // The ticket on a listing: Wealthsimple's id for it, which every request the ticket
 // makes names. `holding` is the holding it was opened from, by its id.
 export function openTicket(listing: OrderListing, side: 'BUY' | 'SELL', holding = '') {
+  ticketsSeen++
   const { accountId, qty } = sideDefaults(listing, side === 'SELL' ? 'SELL' : 'BUY', holding)
   ui.menuOpen = false
   const t: Ticket = {
@@ -224,8 +226,14 @@ export function openTicket(listing: OrderListing, side: 'BUY' | 'SELL', holding 
 // The ticket on an exact listing whose Wealthsimple id the page does not hold: the
 // book's instrument, or a symbol on the venue a directory named. The server finds the
 // id (never by the ticker alone); its refusal is said in the header and opens nothing.
+// Each ticket opened or closed counts here: an answer to a ticketOn asked before
+// the last of them is not acted on, so a late answer never replaces a ticket
+// opened since (brief 36, 6).
+let ticketsSeen = 0
 export async function ticketOn(of: ListingRef, side: 'BUY' | 'SELL', holding = '') {
+  const asked = ticketsSeen
   const r = await call('POST /api/order/listing', { body: { of } })
+  if (asked !== ticketsSeen) return
   if (!r.ok) {
     tell(r.error, 'err')
     return
@@ -242,6 +250,7 @@ export function ticketOnInstrument(x: { instrument: string; security: string; sy
 
 // the cross, Escape and the scrim keep the draft; Cancel and a sent order discard it
 export function closeTicket(discard = false) {
+  ticketsSeen++
   const t = ticketStore.t
   if (t) { if (discard) dropDraft(); else saveDraft(t) }
   ticketStore.t = null

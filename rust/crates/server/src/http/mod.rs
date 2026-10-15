@@ -42,7 +42,7 @@ use tower_http::timeout::TimeoutLayer;
 
 use crate::app::App;
 pub use error::ApiError;
-pub use extract::{Body, Params};
+pub use extract::{Body, Params, Required};
 
 /// What a route can reach. One field today: the app, which the modules behind
 /// the routes still reach as a global. Routes take it from here so that the
@@ -143,6 +143,16 @@ where
 {
     fn names() -> (Option<String>, Option<String>, String) {
         (Some(ts_name::<Q>()), None, ts_name::<<Fut::Output as Answered>::Answer>())
+    }
+}
+impl<F, Fut, B: ts_rs::TS> Signature<(State<AppState>, Required<B>)> for F
+where
+    F: Fn(State<AppState>, Required<B>) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    fn names() -> (Option<String>, Option<String>, String) {
+        (None, Some(ts_name::<B>()), ts_name::<<Fut::Output as Answered>::Answer>())
     }
 }
 impl<F, Fut, B: ts_rs::TS> Signature<(State<AppState>, Body<B>)> for F

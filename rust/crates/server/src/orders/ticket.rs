@@ -102,13 +102,45 @@ fn ticket_figures(app: &Arc<App>, margin_account: &str) -> Result<Option<f64>, S
 /// The listing an order is on (brief 34, section 1): Wealthsimple's id for it,
 /// which every order request names, and what the ticket shows of it. The symbol
 /// and the exchange are words to show, never the key.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OrderListing {
-    pub security_id: String,
+    pub security_id: SecurityId,
     pub symbol: String,
     pub exchange: String,
     pub currency: String,
+}
+
+/// Wealthsimple's id for a listing: never empty, read so at the boundary, so a
+/// request that names no listing cannot be read at all (brief 36, 5).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, TS)]
+#[ts(type = "string")]
+pub struct SecurityId(String);
+
+impl SecurityId {
+    pub fn parse(s: &str) -> Result<SecurityId, String> {
+        let s = s.trim();
+        if s.is_empty() {
+            Err("no listing named".into())
+        } else {
+            Ok(SecurityId(s.to_string()))
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for SecurityId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<SecurityId, D::Error> {
+        SecurityId::parse(&String::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::fmt::Display for SecurityId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// An exact listing a ticket opens from, before Wealthsimple's id for it is known
@@ -122,10 +154,10 @@ pub enum ListingRef {
 }
 
 /// `POST /api/order/listing`'s body: the exact listing a ticket opens from.
-#[derive(Clone, Debug, Default, Deserialize, TS)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ListingOf {
-    pub of: Option<ListingRef>,
+    pub of: ListingRef,
 }
 
 /// `POST /api/order/listing`: the listing to open a ticket on, or why there is none,
@@ -145,8 +177,39 @@ pub enum OrderListingAnswer {
     },
 }
 
-fn listing_of(s: &bagholder_model::securities::Security) -> OrderListing {
-    OrderListing { security_id: s.id.clone(), symbol: s.symbol.clone(), exchange: s.primary_exchange.clone(), currency: s.currency.clone() }
+fn listing_of(s: &bagholder_model::securities::Security) -> Result<OrderListing, String> {
+    Ok(OrderListing { security_id: SecurityId::parse(&s.id)?, symbol: s.symbol.clone(), exchange: s.primary_exchange.clone(), currency: s.currency.clone() })
+}
+
+/// The listing Wealthsimple's id names, as the book or this run's search holds it,
+/// else as Wealthsimple's own summary states it (kept by its id for the run):
+/// the symbol, the venue and the currency an order is recorded with are
+/// Wealthsimple's, never what a page sent (brief 36, 4). An id Wealthsimple does
+/// not know is refused.
+pub fn listing_by_id(app: &Arc<App>, security_id: &SecurityId) -> Result<bagholder_model::securities::Security, String> {
+    if let Some(sec) = known_listing(app, security_id.as_str())? {
+        return Ok(sec);
+    }
+    let sess = ticket_session(app)?;
+    let q = fetch_quotes(app, &sess, &[security_id.to_string()])
+        .map_err(|e| format!("Wealthsimple could not be asked for the listing: {}", err_text(&e)))?
+        .remove(security_id.as_str())
+        .ok_or_else(|| format!("Wealthsimple does not know the listing {security_id}."))?;
+    Ok(remember_summary(app, &q))
+}
+
+/// A listing as Wealthsimple's summary states it, kept by its id for the run.
+fn remember_summary(app: &Arc<App>, q: &TicketQuoteDetail) -> bagholder_model::securities::Security {
+    let sec = bagholder_model::securities::Security {
+        id: q.security_id.clone(),
+        symbol: q.symbol.clone(),
+        name: q.name.clone(),
+        primary_exchange: q.exchange.clone(),
+        currency: q.currency.to_uppercase(),
+        ..Default::default()
+    };
+    app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).insert(sec.id.clone(), sec.clone());
+    sec
 }
 
 /// The listing Wealthsimple's id names, as the book records it, else as Wealthsimple's
@@ -192,9 +255,11 @@ pub fn resolve_listing(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> 
 }
 
 fn listing_for(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> Result<OrderListing, String> {
-    use bagholder_core::instrument::{RefScheme, Reference};
+    use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
+    use bagholder_sources::venue::{known_mic, listing_venue, mic_of};
     let f = app.figures.get().ok_or("The book is not open.")?;
-    let (instrument, symbol, venue) = match r {
+    // the instrument it is, where the book's; the symbol, the venue's code and its words
+    let (instrument, symbol, mic, words) = match r {
         ListingRef::Instrument { id } => {
             let id: bagholder_core::InstrumentId = id.trim().parse().map_err(|_| "No such listing in the book.".to_string())?;
             let names = f.names()?;
@@ -202,28 +267,28 @@ fn listing_for(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> Result<O
                 .read(|e| {
                     let info = e.inputs().ledger.instruments.get(&id)?;
                     let n = info.current_name()?;
-                    let mic = bagholder_sources::venue::known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref()).map(str::to_string);
+                    let mic = known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref()).map(str::to_string);
                     let exchange = n.venue_name.clone().or_else(|| n.venue_mic.clone()).unwrap_or_default();
-                    let currency = info.instrument.currency.as_str().to_string();
-                    Some((n.symbol.clone(), mic, exchange, currency))
+                    Some((n.symbol.clone(), mic, exchange, info.instrument.currency, info.instrument.kind))
                 })
                 .ok_or("The figures are not built yet.")?
                 .ok_or("No such listing in the book.")?;
-            let (symbol, mic, exchange, currency) = found;
+            let (symbol, mic, exchange, currency, kind) = found;
             if let Some(sid) = names.security.get(&id) {
-                return Ok(OrderListing { security_id: sid.clone(), symbol, exchange, currency });
+                return Ok(OrderListing { security_id: SecurityId::parse(sid)?, symbol, exchange, currency: currency.as_str().to_string() });
             }
             let mic = mic.ok_or_else(|| format!("The book names no venue for {symbol}: Wealthsimple cannot be asked for it."))?;
-            (Some(id), symbol, mic)
+            (Some((id, currency, kind)), symbol, mic, exchange)
         }
         ListingRef::Venue { symbol, venue } => {
-            let mic = bagholder_sources::venue::mic_of(venue).ok_or_else(|| format!("{venue} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
-            (None, symbol.trim().to_string(), mic.to_string())
+            let mic = mic_of(venue).ok_or_else(|| format!("{venue} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
+            (None, symbol.trim().to_string(), mic.to_string(), venue.trim().to_string())
         }
     };
     if symbol.is_empty() {
         return Err("No symbol named.".into());
     }
+    let venue = listing_venue(&mic).ok_or_else(|| format!("{words} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
     let key = (bare_symbol(&symbol), venue.clone());
     let cached = app.orders.found_at.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
     let sec = match cached.and_then(|id| app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned()) {
@@ -231,19 +296,26 @@ fn listing_for(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> Result<O
         None => {
             let sess = ticket_session(app)?;
             let data: wire::SecuritySearchAnswer = gql_as(app, &sess, "FetchSecuritySearchResult", json!({"query": key.0})).map_err(|e| format!("Wealthsimple's search failed: {}", err_text(&e)))?;
-            let sec = parse_listing_search(&data, &symbol, &venue)?;
+            let sec = parse_listing_search(&data, &symbol, &mic, &words)?;
             app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).insert(sec.id.clone(), sec.clone());
             app.orders.found_at.lock().unwrap_or_else(|e| e.into_inner()).insert(key, sec.id.clone());
             sec
         }
     };
-    if let Some(id) = instrument {
-        // learned and remembered against the instrument: the next order reads it from the book
+    if let Some((id, currency, kind)) = instrument {
+        // learned and remembered against the instrument, so the next order reads it
+        // from the book: only a share or fund in the instrument's own currency, and
+        // only an id no other instrument already holds (that one names the listing
+        // already; the ticket opens on it, and nothing is recorded)
+        let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), &sec.id);
         let book = f.book()?;
-        book.add_instrument_ref(id, &Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), &sec.id)).map_err(|e| e.to_string())?;
-        f.record_changed(now)?;
+        let held_by_another = book.instrument_by_ref(&r).map_err(|e| e.to_string())?.is_some_and(|other| other != id);
+        if kind == InstrumentKind::Security && sec.currency == currency.as_str() && !held_by_another {
+            book.add_instrument_ref(id, &r).map_err(|e| e.to_string())?;
+            f.record_changed(now)?;
+        }
     }
-    Ok(listing_of(&sec))
+    listing_of(&sec)
 }
 
 /// A ticket's own quote, as `GET /api/order/quote` and the ticket's live
@@ -451,7 +523,7 @@ pub fn ws_execution(kind: OrderKind) -> &'static str {
     }
 }
 
-pub(super) const LOOKUP_TYPES: [&str; 2] = ["EQUITY", "EXCHANGE_TRADED_FUND"];
+pub const LOOKUP_TYPES: [&str; 2] = ["EQUITY", "EXCHANGE_TRADED_FUND"];
 pub(super) const CANADIAN_SUFFIXES: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
 
 pub(crate) fn bare_symbol(sym: &str) -> String {
@@ -464,21 +536,24 @@ pub(crate) fn bare_symbol(sym: &str) -> String {
     sym
 }
 
-/// The one equity or ETF a search found for this symbol on the venue `mic`: the
-/// symbols compared bare (a Canadian suffix on either side ignored), the venues by
-/// their market identifier codes through the app's one venue table, so the
-/// directory's words and Wealthsimple's never meet as raw text (brief 35, 2). None,
-/// or more than one, is said, never chosen between.
-pub fn parse_listing_search(data: &wire::SecuritySearchAnswer, symbol: &str, mic: &str) -> Result<bagholder_model::securities::Security, String> {
-    use bagholder_sources::venue::mic_of;
+/// The one equity or ETF a search found for this symbol on the venue `mic` (named
+/// `words` where it is said): the symbols compared bare (a Canadian suffix on either
+/// side ignored), the venues through the app's one venue table, so the directory's
+/// words and Wealthsimple's never meet as raw text (brief 35, 2): by their codes in
+/// Canada, by the market in the US, where Wealthsimple states the NYSE group as one
+/// (`venue::listing_venue`; brief 36, 1). None, or more than one, is said, never
+/// chosen between.
+pub fn parse_listing_search(data: &wire::SecuritySearchAnswer, symbol: &str, mic: &str, words: &str) -> Result<bagholder_model::securities::Security, String> {
+    use bagholder_sources::venue::{listing_venue, mic_of};
     let want_sym = bare_symbol(symbol);
+    let want = listing_venue(mic);
     let results = data.security_search.as_ref().map(|s| s.results.as_slice()).unwrap_or_default();
     let found: Vec<bagholder_model::securities::Security> = results
         .iter()
         .filter(|r| {
             let stock = r.stock.clone().unwrap_or_default();
-            let venue = mic_of(&stock.primary_mic).or_else(|| mic_of(&stock.primary_exchange));
-            !r.id.is_empty() && bare_symbol(&stock.symbol) == want_sym && venue == Some(mic) && LOOKUP_TYPES.contains(&r.security_type.to_uppercase().as_str())
+            let venue = mic_of(&stock.primary_mic).or_else(|| mic_of(&stock.primary_exchange)).and_then(listing_venue);
+            !r.id.is_empty() && bare_symbol(&stock.symbol) == want_sym && want.is_some() && venue == want && LOOKUP_TYPES.contains(&r.security_type.to_uppercase().as_str())
         })
         .map(|r| {
             let stock = r.stock.clone().unwrap_or_default();
@@ -495,10 +570,11 @@ pub fn parse_listing_search(data: &wire::SecuritySearchAnswer, symbol: &str, mic
         .collect();
     let mut ids: Vec<&str> = found.iter().map(|s| s.id.as_str()).collect();
     ids.dedup();
+    let on = if words.trim().is_empty() { mic } else { words.trim() };
     match ids.len() {
         1 => Ok(found.into_iter().next().expect("one found")),
-        0 => Err(format!("Wealthsimple lists no {want_sym} on {mic}.")),
-        _ => Err(format!("Wealthsimple lists more than one {want_sym} on {mic}: the listing cannot be told apart.")),
+        0 => Err(format!("Wealthsimple lists no {want_sym} on {on}.")),
+        _ => Err(format!("Wealthsimple lists more than one {want_sym} on {on}: the listing cannot be told apart.")),
     }
 }
 
@@ -549,17 +625,15 @@ impl TicketQuote {
     }
 }
 
-pub fn ticket_quote(app: &Arc<App>, security_id: &str, account_id: &str) -> TicketQuote {
-    let sid = security_id.trim().to_string();
-    if sid.is_empty() {
-        return TicketQuote::err("No listing named.");
-    }
+pub fn ticket_quote(app: &Arc<App>, security_id: &SecurityId, account_id: &str) -> TicketQuote {
+    let sid = security_id.to_string();
     // the book's or the search's record of it, where either holds it; Wealthsimple's
     // own summary, asked by the id, states the rest
-    let sec = match known_listing(app, &sid) {
-        Ok(s) => s.unwrap_or_else(|| bagholder_model::securities::Security { id: sid.clone(), ..Default::default() }),
+    let known = match known_listing(app, &sid) {
+        Ok(s) => s,
         Err(e) => return TicketQuote::err(format!("The book could not be read: {e}")),
     };
+    let sec = known.clone().unwrap_or_else(|| bagholder_model::securities::Security { id: sid.clone(), ..Default::default() });
     let sess = match ticket_session(app) {
         Ok(s) => s,
         Err(e) => return TicketQuote::err(e),
@@ -587,6 +661,10 @@ pub fn ticket_quote(app: &Arc<App>, security_id: &str, account_id: &str) -> Tick
     }
     if quote.currency.is_empty() {
         quote.currency = sec.currency.to_uppercase();
+    }
+    if known.is_none() {
+        // the listing as Wealthsimple states it, for the preview and the order
+        remember_summary(app, &quote);
     }
     let mut unread = Vec::new();
     let mut md = MarketData::default();
@@ -685,28 +763,39 @@ pub struct TicketTarget {
 
 /// `POST /api/order`: the order ticket, as the page sends it. `ticket_order` checks
 /// every field and says what is wrong with the first that is.
-#[derive(Debug, Clone, Default, Deserialize, TS)]
-#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Ticket {
     /// The order's id, made by the page when it opened the review: the same order
     /// submitted twice is one order (brief 15 §2; brief 19, change 8).
+    #[serde(default)]
     pub id: String,
     /// The listing the order is on, by Wealthsimple's id for it: the ticket opened
     /// on it, and nothing here looks one up by its symbol.
     pub listing: OrderListing,
+    #[serde(default)]
     pub account_id: String,
     /// `BUY` or `SELL`.
+    #[serde(default)]
     pub side: String,
     /// `MARKET`, `LIMIT`, `STOP` or `STOP_LIMIT`.
     #[serde(rename = "type")]
+    #[serde(default)]
     pub kind: String,
     /// `DAY` or `UNTIL_CANCEL`; a day order when absent.
+    #[serde(default)]
     pub tif: Option<String>,
+    #[serde(default)]
     pub quantity: PageDec,
+    #[serde(default)]
     pub limit_price: PageDec,
+    #[serde(default)]
     pub stop_price: PageDec,
+    #[serde(default)]
     pub currency: Option<String>,
+    #[serde(default)]
     pub stop_loss: Option<TicketStop>,
+    #[serde(default)]
     pub take_profit: Option<TicketTarget>,
 }
 
@@ -754,18 +843,9 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
         None
     };
     let acct = order_accounts(app)?.into_iter().find(|a| a.id == t.account_id).ok_or("Choose an account.")?;
-    if t.listing.security_id.trim().is_empty() {
-        return Err("No listing named: open the ticket on a listing.".into());
-    }
-    // the book's record of the listing by its id, else the listing as the ticket was
-    // opened on it, which named it by that id
-    let sec = known_listing(app, &t.listing.security_id)?.unwrap_or_else(|| bagholder_model::securities::Security {
-        id: t.listing.security_id.trim().to_string(),
-        symbol: t.listing.symbol.clone(),
-        primary_exchange: t.listing.exchange.clone(),
-        currency: t.listing.currency.clone(),
-        ..Default::default()
-    });
+    // the listing as the book or Wealthsimple states it, by its id: the symbol and the
+    // currency the order is recorded with are never the page's (brief 36, 4)
+    let sec = listing_by_id(app, &t.listing.security_id)?;
     // exits are an entry's: a sale has none
     let (mut stop, mut target) = (None, None);
     if side == Side::Buy {

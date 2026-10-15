@@ -3,6 +3,9 @@ import type { OrderListing } from '../generated/orders'
 
 // the ticket's quote is a live document; no server answers here
 vi.mock(import('../live.svelte'), async (original) => ({ ...(await original()), watchDoc: () => () => {} }))
+// the server's answers, each held until the test lets it go
+const answers: ((v: unknown) => void)[] = []
+vi.mock(import('../api'), async (original) => ({ ...(await original()), call: (() => new Promise((ok) => answers.push(ok))) as never }))
 
 // Two listings that share a ticker, each its own by Wealthsimple's id (brief 34, section 1).
 const tsx: OrderListing = { securityId: 'sec-s-tsx', symbol: 'RY', exchange: 'TSX', currency: 'CAD' }
@@ -44,5 +47,28 @@ describe('the ticket draft belongs to its listing', () => {
     const tk = await import('./ticket.svelte')
     expect(tk.draftStore.d).toBeNull()
     expect(localStorage.getItem('bh2.ticketDraft')).toBeNull()
+  })
+
+  it('a listing answered after another ticket opened never replaces it', async () => {
+    const tk = await import('./ticket.svelte')
+    const asked = tk.ticketOn({ kind: 'venue', symbol: 'RY', venue: 'NYSE' }, 'BUY')
+    tk.openTicket(tsx, 'BUY')
+    tk.ticketStore.t!.qty = 5
+    answers.shift()!({ ok: true, listing: nyse })
+    await asked
+    expect(tk.ticketStore.t!.listing).toEqual(tsx)
+    expect(tk.ticketStore.t!.qty).toBe(5)
+  })
+
+  it('a Sell from a holding page sells that holding where it is, matched by its id alone', async () => {
+    const subs = await import('../subs.svelte')
+    subs.book.data = { accounts: [{ id: 'acct-1', brokerAccount: 'A1', name: 'TFSA', margin: false, tradable: true, status: 'open' }, { id: 'acct-2', brokerAccount: 'A2', name: 'Trading', margin: true, tradable: true, status: 'open' }], options: { instruments: [] } } as never
+    // the holding's broker id has not reached the page yet
+    subs.positions.data = { positions: [{ id: 'h-tsx', security: '', symbol: 'RY', accountId: 'acct-1', qty: '150' }] } as never
+    const tk = await import('./ticket.svelte')
+    tk.openTicket(tsx, 'SELL', 'h-tsx')
+    expect([tk.ticketStore.t!.accountId, tk.ticketStore.t!.qty]).toEqual(['A1', 150])
+    subs.book.data = null
+    subs.positions.data = null
   })
 })

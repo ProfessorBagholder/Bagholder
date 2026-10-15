@@ -568,8 +568,19 @@
         "underlyingId": null
       }
     },
-    "the wrong exchange": {
-      "Err": "Wealthsimple lists no BBAI on XNAS."
+    "another market": {
+      "Err": "Wealthsimple lists no BBAI on XTSE."
+    },
+    "another exchange of the US market": {
+      "Ok": {
+        "id": "sec-s-bbai",
+        "symbol": "BBAI",
+        "name": "BigBear.ai Holdings Inc",
+        "primaryExchange": "nyse",
+        "primaryMic": "XNYS",
+        "currency": "USD",
+        "underlyingId": null
+      }
     },
     "a listing without a stock": {
       "Err": "Wealthsimple lists no  on ."

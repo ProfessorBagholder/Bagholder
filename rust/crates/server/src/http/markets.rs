@@ -79,11 +79,38 @@ pub enum SymbolSearchAnswer {
 
 async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
     let pool = state.app.cache_pool()?;
+    let app = state.app.clone();
     answer(move || match bagholder_market::search::symbol_search(&pool, &s.q) {
-        Ok(matches) => SymbolSearchAnswer::Ok { ok: true, matches },
+        Ok(matches) => SymbolSearchAnswer::Ok { ok: true, matches: not_held(&app, matches) },
         Err(error) => SymbolSearchAnswer::Err { ok: false, error, matches: vec![] },
     })
     .await
+}
+
+/// The listings found, less any the book already holds (`SPEC.md` filters-24): the
+/// same symbol without a Canadian suffix, on the same venue as the app's venue table
+/// compares two sources' venues (`venue::listing_venue`: the code in Canada, the
+/// market in the US), so a listing the broker names on one NYSE venue and the
+/// directory on another is one listing, never a second row.
+fn not_held(app: &std::sync::Arc<crate::app::App>, matches: Vec<bagholder_model::wire::SymbolMatch>) -> Vec<bagholder_model::wire::SymbolMatch> {
+    use bagholder_sources::venue::{known_mic, listing_venue, mic_of};
+    let bare = |s: &str| crate::orders::bare_symbol(s);
+    let Some(held) = app.figures.get().and_then(|f| {
+        f.read(|e| {
+            e.inputs()
+                .ledger
+                .instruments
+                .values()
+                .filter_map(|i| {
+                    let n = i.current_name()?;
+                    Some((bare(&n.symbol), known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref()).and_then(listing_venue)?))
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+    }) else {
+        return matches;
+    };
+    matches.into_iter().filter(|m| !mic_of(&m.exchange).and_then(listing_venue).is_some_and(|v| held.contains(&(bare(&m.symbol), v)))).collect()
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
@@ -301,4 +328,38 @@ pub struct TilesSet {
 async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api<following::TilesAnswer> {
     let tiles: Vec<(String, String)> = body.tiles.into_iter().map(|t| (t.symbol, t.exchange)).collect();
     answer(move || following::set_tiles(&state.app, &tiles)).await
+}
+
+#[cfg(test)]
+mod listings_held {
+    use bagholder_model::wire::SymbolMatch;
+
+    /// A listing the book holds is not a second row of the search, whichever of the US
+    /// market's exchanges the directory names it on; the same symbol on another market
+    /// is its own listing, and stays (`SPEC.md` filters-24; brief 36, 1).
+    #[test]
+    fn a_listing_the_book_holds_is_left_out_on_any_exchange_of_its_market() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let f = app.figures.get().unwrap();
+        let held: Vec<(String, String)> = f
+            .read(|e| {
+                e.inputs()
+                    .ledger
+                    .instruments
+                    .values()
+                    .filter_map(|i| {
+                        let n = i.current_name()?;
+                        let mic = bagholder_sources::venue::known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref())?;
+                        Some((crate::orders::bare_symbol(&n.symbol), mic.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap();
+        let (us, _) = held.iter().find(|(_, m)| bagholder_sources::venue::listing_venue(m).as_deref() == Some("US")).expect("a US listing held").clone();
+        let row = |symbol: &str, exchange: &str| SymbolMatch { symbol: symbol.into(), exchange: exchange.into(), currency: "USD".into(), ..SymbolMatch::default() };
+        let kept = super::not_held(&app, vec![row(&us, "NYSE Arca"), row(&us, "NYSE American"), row(&us, "NASDAQ"), row(&us, "TSX"), row("ZZZZQ", "NYSE")]);
+        let kept: Vec<(String, String)> = kept.into_iter().map(|m| (m.symbol, m.exchange)).collect();
+        assert_eq!(kept, vec![(us.clone(), "TSX".to_string()), ("ZZZZQ".to_string(), "NYSE".to_string())]);
+    }
 }
