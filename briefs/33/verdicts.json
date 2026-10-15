@@ -1,0 +1,850 @@
+[
+ {
+  "number": 383,
+  "title": "The page's write token is the same on every install, and any local process passes the peer check",
+  "class": "ruled-out",
+  "evidence": "Owner decision 2026-10-15: #383 (local write token / local processes) is not applicable to the owner's use. Code fact still present (http/mod.rs:316 any non-empty X-Bagholder; :324-333 peer_ok for loopback; recheck-383-399.json).",
+  "condition_or_scenario": "Needs another program on the machine (or a page via a local proxy) sending writes; excluded by the 2026-10-15 decision.",
+  "user_impact": "none"
+ },
+ {
+  "number": 384,
+  "title": "The watched folder is accepted unchecked and imported in the same request that sets it",
+  "class": "hypothetical",
+  "evidence": "csv_import.rs:763 checks only is_dir; http/model.rs:476-483 sets then scans. But scan_folder (csv_import.rs:802-848) reads only top-level *.csv files and import_from -> csv::read_rows (broker/src/csv.rs:259-270) refuses any file whose headers fit no Wealthsimple layout, so a wrong folder imports nothing but broker-layout CSVs. No evidence of a wrong folder ever being set.",
+  "condition_or_scenario": "Needs the person to point the watch at a wrong folder that holds broker-layout CSVs, or a hostile request setting the folder (the latter is the #383 local-process case).",
+  "user_impact": "none in ordinary use; at worst broker-layout CSVs in a mistakenly chosen folder are imported at once"
+ },
+ {
+  "number": 385,
+  "title": "No Content-Security-Policy or framing headers, and filing documents are served at the app's own origin",
+  "class": "hypothetical",
+  "evidence": "http/markets.rs:183 serves the upstream content type with no CSP/sandbox (still true). Documents are SEC EDGAR filings (HTML; EDGAR does not accept active content in submissions) and SEDAR+ PDFs. No fixture, doc or log shows a filing carrying script.",
+  "condition_or_scenario": "Needs a filing document that carries script (a hostile or malformed filing) or a hostile page framing the app.",
+  "user_impact": "none"
+ },
+ {
+  "number": 386,
+  "title": "The HTTP client re-sends every header, Authorization included, to whatever host a redirect names",
+  "class": "hypothetical",
+  "evidence": "net/src/client.rs:751-785 follows Location to any host with the caller's headers (still true). The only redirect recorded in the repo is Cboe's chains to cdn-api.cboe.com (docs/plans/stage-3a-brief-06.md:72), a request carrying no Authorization. Nothing shows Wealthsimple's API or token endpoint ever answering a 3xx.",
+  "condition_or_scenario": "Needs Wealthsimple (a Bearer-carrying host) to answer a cross-origin redirect; never observed.",
+  "user_impact": "none"
+ },
+ {
+  "number": 387,
+  "title": "The container runs as root, the sign-in browser runs without its sandbox, Xvfb runs all the time, and the base images are unpinned",
+  "class": "hypothetical",
+  "evidence": "rust/Dockerfile:59-61 (root, by design), :8/:26/:33 tags; login.rs:1199 --no-sandbox under BAGHOLDER_LOGIN_VIEW; docker-entrypoint.sh:5 Xvfb for container life; compose has no user/init/cap_drop. The sign-in browser only loads my.wealthsimple.com (login.rs:23); compose binds 127.0.0.1 only. No measured cost of the idle Xvfb; unpinned bases affect build reproducibility, not the running app.",
+  "condition_or_scenario": "Root/no-sandbox matter only if the sign-in page or the app is compromised (attacker); nothing observed.",
+  "user_impact": "none"
+ },
+ {
+  "number": 388,
+  "title": "The sign-in browser's profile is never deleted, and its DevTools endpoint is a TCP port",
+  "class": "reachable",
+  "evidence": "login.rs:1164 profile = home/chrome, created and reused, passed as --user-data-dir (:1187); clear.rs:174-176 on Kind::Login calls only session::delete_session (session.rs:268-269, the session file); no code removes home/chrome. Owner decision 2026-09-25 (docs/decisions.md:76): after Clear all nothing is left, the Wealthsimple login included. DevTools on 127.0.0.1 TCP (login.rs:1190-1191) is the hypothetical part (needs a hostile local process, the #383 case).",
+  "condition_or_scenario": "Ordinary: Settings > Clear data > Clear all (Kind::Login) -> clear.rs:174-176 -> session.rs:268 removes session.json only -> home/chrome keeps Wealthsimple's cookies (_oauth2_access_v2, wssdi; login.rs:21-22) on disk -> next Connect Wealthsimple launches Chrome on the same profile (login.rs:1164-1187).",
+  "user_impact": "After Clear all, Wealthsimple's sign-in cookies stay on disk in the app's folder, and the next Connect may sign straight in without asking."
+ },
+ {
+  "number": 389,
+  "title": "The headless sign-in says one sentence for every failure, gives up after a fixed three minutes and is driven on timers",
+  "class": "seen",
+  "evidence": "Commit 6cb9ed37 (2026-09-17): in the container a stale Chromium profile lock made Chromium exit at launch and 'the page shows a white pane and then the closed-window message', i.e. a launch failure told as the window being closed. That cause was fixed, but the conflation remains: login.rs:646-656 sets the same 'The Chrome window closed before a session showed up' for a dead process, a window closed, and no page within 10 s; Chrome's stderr is discarded (login.rs:1210). The three-minute wait is SPEC behaviour (SPEC.md pages-37) and has its own message (login.rs:670). NO_BROWSER is not reached in the container (Dockerfile installs chromium, BAGHOLDER_CHROME=/usr/bin/chromium).",
+  "condition_or_scenario": "Any Chromium launch or crash failure during Connect Wealthsimple (seen once, stale lock, in the container) is reported as the person having closed the window.",
+  "user_impact": "A sign-in that fails because Chromium could not start or crashed tells the person they closed the window, with no cause to act on."
+ },
+ {
+  "number": 390,
+  "title": "Order-path failures are only written to the log",
+  "class": "hypothetical",
+  "evidence": "readback.rs:380-385 and refresh_orders (readback.rs:411-466) log and count; brackets.rs:281-283 log InFlight/Dry/NotNow. But the bracket check's own read-backs already reach the header (brackets.rs:330-347 `said` -> troubles); refresh_orders runs again every 30 s while anything is open (orders_loop, readback.rs:480-501), so a transient failure is retried; the held steps are benign states: another exit in flight (gate.rs:104), orders off by BAGHOLDER_DRY_ORDERS (gate.rs:115), an order already ended (gate.rs:140, :203).",
+  "condition_or_scenario": "Needs a read-back of an open order to fail repeatedly while the session stays good; no evidence of that.",
+  "user_impact": "An order's card could keep a stale state with nothing in the header while Wealthsimple refuses to read it back."
+ },
+ {
+  "number": 391,
+  "title": "A price edited from the Orders panel is rounded to the tick without a review",
+  "class": "reachable",
+  "evidence": "edit.rs:71 and :186 `.map(tick)`, bracket legs :159/:164 `tick(p)`; preview.rs:145-147 rounds HalfUp to 2 places from $1, 4 below. The page does not restrict decimals: web/src/lib/orders/orders.svelte.ts:221-230 typedDec accepts any positive decimal and :240-244 sends it, then shows the typed price in the notice. The owner has typed an off-tick price before: preview.rs:149-151 cites Wealthsimple's refusal 'Limit price has too many decimal places' on the owner's record, 2026-09-10.",
+  "condition_or_scenario": "Ordinary: Orders panel > Edit on a resting limit order > type 12.345 > Save -> POST /api/order/modify -> edit.rs:71 rounds to 12.35 -> gate::modify sends 12.35.",
+  "user_impact": "An edited order goes to Wealthsimple at a rounded price (e.g. 12.35 for 12.345) while the notice repeats the price typed."
+ },
+ {
+  "number": 392,
+  "title": "A failed quote read is taken as the market being closed by the bracket",
+  "class": "hypothetical",
+  "evidence": "brackets.rs:352 unwrap_or_default (open=false) and :440; core/src/bracket.rs:717-727 roll_due returns `!open` only inside the last 7 days of a 90-day GTC exit (ROLL_SECONDS :188, GTC_DAYS brackets.rs:35). Outside a session the roll happens at the first check anyway, so the exposure is the rest of the one session in which an exit enters its 7-day window; the result is the in-session roll SPEC order-ticket-46 already allows in the last two days, with the level watched meanwhile. No evidence of it occurring.",
+  "condition_or_scenario": "Needs a bracket exit resting 83+ days AND a Wealthsimple quote read failing during the session in which it enters the roll window.",
+  "user_impact": "A resting stop is cancelled and placed again during market hours up to five days earlier than SPEC says."
+ },
+ {
+  "number": 393,
+  "title": "Orders placed in Wealthsimple's own app are forgotten when the app restarts",
+  "class": "reachable",
+  "evidence": "orders/mod.rs:89-92 `elsewhere: Mutex<Vec<Elsewhere>>`, 'never in the book', initialised empty (:123); readback.rs:341-386 keeps ended ones only in memory; :380 drops Found::None silently. After a restart only still-pending orders return via the pending feed (read_feed). SPEC orders-4/-9/-11: the panel lists orders from anywhere, with Filled and Cancelled tabs.",
+  "condition_or_scenario": "Ordinary: place an order in Wealthsimple's app -> it shows Pending, then Filled/Cancelled in the Orders panel -> restart Bagholder (e.g. after an update) -> the ended order is gone from the panel.",
+  "user_impact": "Orders placed in Wealthsimple's own app that have filled or been cancelled disappear from the Orders panel after a restart (their fills still show as trades)."
+ },
+ {
+  "number": 394,
+  "title": "A stop or update cuts an order step in progress, and the supervisor neither forwards signals nor restarts a crash",
+  "class": "hypothetical",
+  "evidence": "update.rs:733-739 stop 500 ms after install; app/main.rs join nothing; supervise_child forwards no signal (still true). But an order is written before it is sent (gate.rs:111-112 write_order) and a row left sending by an earlier run is read back by its external id at the next read (commit 852c43ab), so a cut step is recovered. A terminal's Ctrl-C reaches the whole foreground process group. No crash or cut step recorded.",
+  "condition_or_scenario": "Needs an update or stop to land inside an in-flight order request (sub-second window), or the server to crash.",
+  "user_impact": "At worst an order's outcome is recorded at the next read after restart instead of at once."
+ },
+ {
+  "number": 395,
+  "title": "Brokers are named in the server instead of described by the adapter, and orders still go through the old Wealthsimple client",
+  "class": "not-a-user-bug",
+  "evidence": "Adapter boundaries, two clients, limiter placement (gate.rs:47/:226, broker_reads.rs:95/:128, session.rs:9/:118-163, ws/src/session.rs:455) are structure. Behavioural sub-parts are hypothetical: ws/src/wire.rs:514-516 f64 prices (2/4-decimal prices round-trip exactly through serde's shortest form); gate.rs:363/:374/:385 Accepted when Wealthsimple's answer carries no errors (needs a wrong-shape answer, never recorded); wealthsimple/src/client.rs:149 a 403 after a refresh read as lapsed (no evidence Wealthsimple answers 403 for anything but auth).",
+  "condition_or_scenario": "Structure; the sub-parts need Wealthsimple answers never observed.",
+  "user_impact": "none"
+ },
+ {
+  "number": 396,
+  "title": "Orders, brackets and statements are keyed by the broker's strings, not the book's ids",
+  "class": "not-a-user-bug",
+  "evidence": "book/src/orders.rs:22-39 OrderRequest keeps broker_account and broker_security, which are Wealthsimple's unique account and security ids; where an order meets the book it maps them to AccountId/InstrumentId (brackets.rs:140-141 account_by_ref / instrument_by_ref). The same symbol in two accounts is told apart by broker_account. Statement tables already carry account_id/instrument_id (recheck-383-399.json).",
+  "condition_or_scenario": "Keying style; no lookup by symbol on the order path.",
+  "user_impact": "none"
+ },
+ {
+  "number": 397,
+  "title": "The cutover is unfinished: the earlier market readers are keyed by symbol and the old store is still opened every start",
+  "class": "reachable",
+  "evidence": "price_history/history_fetches/price_bars keyed by symbol only (sources/migrations/004-the-earlier-readers.sql:110-146); market/src/history.rs:508-575 key every daily read by venues::tmx_symbol(rec.symbol), which strips .TO/.V (model/src/venues.rs:16-25); store/src/market.rs:264 INSERT OR IGNORE. The owner's book holds both QNC.TO (TSX-V, CAD: wealthsimple/tests/replies/wealthsimple-pull/positions@anon-tfsa-1@2025-11-18.json) and QNC (NYSE, USD: wealthsimple/tests/replies/wealthsimple-pending/pending-orders.json) plus QNC options charted on the underlying (history.rs:662-668). The old-store reopen (carry.rs) is structure.",
+  "condition_or_scenario": "Ordinary: open the daily chart of QNC.TO -> fill_daily stores TSX-V closes under 'QNC' and marks it fetched (history.rs:526-542) -> open NYSE QNC (or a QNC option's chart) -> daily_due sees 'QNC' covered and fresh (history.rs:508-524) -> stored_daily returns the TSX-V closes (history.rs:567-575); INSERT OR IGNORE keeps them on later reads.",
+  "user_impact": "The daily price chart of one of the two QNC listings (or a QNC option's underlying) shows the other listing's closes, in the other currency."
+ },
+ {
+  "number": 398,
+  "title": "The server crate is one 38,000-line crate whose boundaries are held by text scans",
+  "class": "not-a-user-bug",
+  "evidence": "Crate size and text-scan boundary tests (main.rs, feeds.rs, tests_boundary.rs) are code organisation and test quality.",
+  "condition_or_scenario": "Structure.",
+  "user_impact": "none"
+ },
+ {
+  "number": 399,
+  "title": "The journal is deleted and written again on every edit, with no history",
+  "class": "not-a-user-bug",
+  "evidence": "book/src/trades.rs:344-372 set_journal deletes and re-inserts inside self.atomically (all or nothing), so no edit is lost; an edit replaces the entry and clearing removes it, as asked. Keeping revisions is a new feature (owner, 2026-10-04: journal features are a separate feature lift, docs/decisions.md:23).",
+  "condition_or_scenario": "Storage design / missing revision history; no failure.",
+  "user_impact": "none (an earlier wording of a note cannot be recovered)"
+ },
+ {
+  "number": 400,
+  "title": "CAD is wired in as the only home currency: a non-CAD account fails the whole build, and an unknown instrument defaults to CAD and one share",
+  "class": "wrong",
+  "evidence": "The headline fact is fixed at f89634de: engine_inputs.rs:177-200 broker_account returns Option with no Err and carries values 'in whatever currency the broker states them'; brokers() (:167-175) has no `?` on a currency. It was seen before the fix: commit 8a11daed 'Version 2.5.6 refused an account whose broker states its value in US dollars, and the refusal stopped the server at every start, so a service manager restarted it without end' (version 2.5.7). Remaining defaults (ledger.rs:752, positions.rs:153-154, trades.rs:187-188, ledger.rs:1885 cost_share) apply only when an instrument is missing from the ledger's own instruments map or a leg states no cost_share (the mappers always state one: wealthsimple/src/mapping.rs:730, book/src/person.rs:235); no evidence either occurs.",
+  "condition_or_scenario": "Headline no longer true; residual defaults need an instrument absent from the ledger, unobserved.",
+  "user_impact": "none at f89634de (before 2.5.7 the server would not start with a USD account)"
+ },
+ {
+  "number": 401,
+  "title": "A split or consolidation cannot be entered by hand",
+  "class": "hypothetical",
+  "evidence": "book/src/person.rs:20-31 still has no Split entry. Splits and consolidations come from Wealthsimple's CORPORATE_ACTION rows and entitlements (wealthsimple/src/mapping.rs:285, :717; docs/plans/stage-3b-wealthsimple.md:61, :137); the owner's earlier gaps (CH, QIMC->QESS, MSTY 1:5 in old imported rows, docs/plans/stage-2-engine.md:184) are now stated by the pull (commit 6a0e6318: 'a consolidation... states its own succession, as MSTY's does') or joined as successions. No current case of a split Wealthsimple failed to state.",
+  "condition_or_scenario": "Needs Wealthsimple to omit or delay a split/consolidation row and its entitlements.",
+  "user_impact": "A holding whose split Wealthsimple never stated would wait with no way to enter the ratio."
+ },
+ {
+  "number": 402,
+  "title": "Figures can be applied from a stale read, and trade settlement writes the book under the engine's lock",
+  "class": "wrong",
+  "evidence": "At f89634de Figures::pulled (record_changed's path) takes the engine write lock first (figures.rs:604) and only then reads the change log and every named row in one snapshot (catch_up, figures.rs:96-110: 'Called with the engine's lock held: the snapshot is taken after the lock'), and reads the broker statements under the lock (:619-621); commit 597336ba. Remaining: broker_changed reads stated_latest before the lock (figures.rs:642-643; a race of two balance reads of one account, unobserved); settle_trades writes the book under the lock (:617), by design, no user-visible failure.",
+  "condition_or_scenario": "Headline no longer true; the broker_changed residue needs two concurrent balance reads of one account.",
+  "user_impact": "none"
+ },
+ {
+  "number": 403,
+  "title": "A holding's journal is the oldest lot's round trip",
+  "class": "reachable",
+  "evidence": "engine/src/positions.rs:151 first = oldest lot, :228 key = first.trip, :236 journal of that trip only; engine/src/ledger.rs:863-878 trip_for keeps a deposited lot in deposit_trip and bought lots in trip (SPEC trade-24: a transfer in is a round trip of its own). The owner's history has coins deposited and transfers in from other institutions (docs/plans/stage-3b-wealthsimple.md:65, :241; fixture CRYPTO_TRANSFER TRANSFER_IN). Designed this way in docs/plans/stage-2-engine.md:86.",
+  "condition_or_scenario": "Ordinary: a coin (or shares) transferred into an account (ledger.rs:1584-1586, Flag::Deposited) and more of it bought there while held -> two open round trips in one holding -> the holding shows and edits the oldest lot's journal; once those units are sold the holding's journal switches to the other round trip's.",
+  "user_impact": "The note on a holding belongs to one of its round trips only, and changes to a different (often empty) note once the oldest units are sold."
+ },
+ {
+  "number": 404,
+  "title": "The broker's stated cost is read and stored but never compared with the book's",
+  "class": "hypothetical",
+  "evidence": "wealthsimple/src/read.rs:143 reads bookValue; broker/src/pull.rs:377 stores it; engine_inputs.rs:191-200 passes units and unit values only; no engine disagreement on cost (still true). Wealthsimple's book value legitimately differs from the book's cost (crypto deposits at market value, ATON placeholders, retroactive return of capital: docs/plans/stage-3b-wealthsimple.md:65).",
+  "condition_or_scenario": "Matters only if the book's own cost is wrong (a separate defect, none evidenced here).",
+  "user_impact": "none unless the book's cost is wrong, which would then go unflagged"
+ },
+ {
+  "number": 405,
+  "title": "The mapping drops fields and signs it does not read, and the feed, the import and the statements each keep their own code table",
+  "class": "hypothetical",
+  "evidence": "wealthsimple/src/mapping.rs:237-263 reads 11 fields; :384-386 abs() for Paid/Received; feed :196/:204-205 vs book/src/import/mapping.rs:167/:172 disagree (still true). But the fixtures show DIY_BUY rows with amountSign 'positive' (167 of them), so the sign does not state direction on paid rows; Fee and Cashback carry the same cash and no figure reads either kind (engine/src/cashflow.rs:66-72); PREDICTIONS_RESOLUTION amounts are non-negative in the fixtures. No recorded row where an unread field or a reversed sign changed meaning.",
+  "condition_or_scenario": "Needs Wealthsimple to put meaning in an unread field or send a reversal with a negative amount on a Paid/Received kind; never recorded.",
+  "user_impact": "none observed"
+ },
+ {
+  "number": 406,
+  "title": "A CSV row for a coin or event contract the book has not met stays unclassified",
+  "class": "hypothetical",
+  "evidence": "csv_import.rs:298-311 traded() `_ => None` for Crypto/EventContract; broker/src/csv.rs:719-723 'instrument-not-named'. held_by_symbol (entries.rs:106-111) finds any instrument the book has met, held or not, and the Wealthsimple pull reads each account's full history (docs/decisions.md:85), so every coin and contract of a connected account is already in the book.",
+  "condition_or_scenario": "Needs a CSV with a coin/event contract the pull never brought in (CSV imported without a connection, or for an account the pull does not read).",
+  "user_impact": "Such rows would sit unplaced and count in no figure."
+ },
+ {
+  "number": 407,
+  "title": "Statements are reconciled only where cash disagrees, only for cash, with windows fitted to the owner's data",
+  "class": "hypothetical",
+  "evidence": "broker/src/statements.rs:4-5, :727, :987-995, book/src/statements.rs:152-158 (still true). The windows come from this user's own 1,028 pairs, i.e. fit the one user; reading only where cash disagrees follows the owner's rule to keep Wealthsimple calls to what is necessary (docs/decisions.md:85); units are checked separately against positions (engine UnitsDisagree). No evidence Wealthsimple ever revised an issued monthly statement.",
+  "condition_or_scenario": "Needs Wealthsimple to revise a month already issued, or a units-only discrepancy the positions check misses.",
+  "user_impact": "none observed"
+ },
+ {
+  "number": 408,
+  "title": "Fees are not accounted for where they apply",
+  "class": "reachable",
+  "evidence": "wealthsimple/src/assemble.rs:95 reads the order (and its fee) only for OPTIONS_MULTILEG; mapping.rs:397-399 single() sets cash only; engine/src/cashflow.rs:66-72 has no Fee/Cashback row. Wealthsimple charges no fee on stocks and options (owner, docs/decisions.md:48), but the owner's crypto account states a fee on each purchase (SPEC.md movements-the-activity-feed-leaves-out-11: 'each purchase a buy and a fee', April 2025), and FEE, REIMBURSEMENT and PROMOTION rows occur (fixture types FEE ADMIN_FEE/MANAGEMENT_FEE, REIMBURSEMENT CASHBACK/ETF_REBATE).",
+  "condition_or_scenario": "Ordinary: a crypto buy in Wealthsimple Crypto -> the feed row's cash includes the fee -> single() books cash only -> the fill's price includes the fee and no fee is separated; a FEE or CASHBACK row -> booked to cash, no line of its own.",
+  "user_impact": "Crypto trades show a price that includes Wealthsimple's fee with no fee shown apart, and fee/cashback rows appear in no line of their own (P&L totals by net cash are unaffected)."
+ },
+ {
+  "number": 409,
+  "title": "Insider forms (3, 4, 5, 144) are not parsed",
+  "class": "reachable",
+  "evidence": "market/src/edgar.rs:373-377 enriches only SCHEDULE 13; other forms get formnames::title_of (edgar.rs:152 '4' -> 'Insider transaction'). The owner holds US issuers that file Forms 4 (BBAI, LUNR, ASTS, PLUG, QBTS, SMCI: docs/plans/stage-3a-sources.md:358). A missing enrichment, not a malfunction.",
+  "condition_or_scenario": "Ordinary: any Form 3/4/5/144 SEC publishes for a held US issuer is listed with its generic title only.",
+  "user_impact": "Insider filings show only 'Insider transaction' etc., without the insider, the transaction or the shares."
+ },
+ {
+  "number": 410,
+  "title": "A failed float lookup discards the short-interest figures",
+  "class": "hypothetical",
+  "evidence": "market/src/shorts.rs:1108 `float_of(&issuer)?` (still true). But a 429 is backed off without an error (shorts.rs:778-781), a non-200 is skipped, and a failed listing is read again at the next sweep every 30 min with the stored record standing (server/src/feeds.rs:2276, :2292-2316). An error needs Yahoo's session/crumb or transport to fail, or a Canadian fund's TMX/Cboe unit count to fail, at successive sweeps. No record of a persistent float failure.",
+  "condition_or_scenario": "Needs the float source to keep failing across sweeps while the regulator answers.",
+  "user_impact": "Short interest for a listing stays at its last stored report (or absent) while Yahoo keeps failing, though the regulator published a new one."
+ },
+ {
+  "number": 411,
+  "title": "A SEDAR+ issuer is taken from the first search match without checking its name",
+  "class": "hypothetical",
+  "evidence": "market/src/sedar.rs:563-568 takes matches[0]; rank (:536-544) only sorts, putting an exact profile number then a name containing the query first. The query is the security's name (sedar.rs:797-799). The only recorded search (tests/fixtures/reporting_issuers.html) is a generic alphabetical list, not a held issuer's search; no recorded case of a held listing resolving to another issuer.",
+  "condition_or_scenario": "Needs SEDAR+ to return several issuers for a holding's name with none containing the name (or the wrong one first).",
+  "user_impact": "A holding would show another issuer's SEDAR+ filings."
+ },
+ {
+  "number": 413,
+  "title": "Settings mix the person's preferences with one-time marks",
+  "class": "not-a-user-bug",
+  "evidence": "book/src/clear.rs:187, :193, :209-210 delete settings by key list (still true). Storage organisation; Clear does what each kind names today.",
+  "condition_or_scenario": "Structure.",
+  "user_impact": "none"
+ },
+ {
+  "number": 414,
+  "title": "Time zones fall back to UTC or a fixed zone in places, and the daily pull runs on the owner's clock",
+  "class": "hypothetical",
+  "evidence": "adapter.rs:430 and fidelity.rs:196 fall back to UTC only if a zone lookup fails, but jiff is built with tzdb-bundle-always (model/Cargo.toml:21, book/Cargo.toml:28; features unify), so it cannot; the container also installs tzdata (rust/Dockerfile). status.rs:517 today_local (America/Edmonton) only suffixes a version string; PULL_ZONE America/Edmonton 14:00 (broker_reads.rs:33-34) is this user's own zone (commits dated -0600, e.g. 8a11daed).",
+  "condition_or_scenario": "Needs the user outside Mountain time, or a zone database without America/Toronto.",
+  "user_impact": "none for this user"
+ },
+ {
+  "number": 415,
+  "title": "Paging through Wealthsimple's GraphQL has no guard against a repeated cursor",
+  "class": "hypothetical",
+  "evidence": "wealthsimple/src/client.rs:175-192 follows endCursor with no check or cap (still true). Every recorded reply has hasNextPage false; nothing shows Wealthsimple repeating a cursor.",
+  "condition_or_scenario": "Needs Wealthsimple to answer hasNextPage=true with the same endCursor.",
+  "user_impact": "A pull would loop without end."
+ },
+ {
+  "number": 416,
+  "title": "Source health and changed reply shapes are not shown",
+  "class": "hypothetical",
+  "evidence": "read_sources.rs:288-292 health::state only in the CLI; health::failures drops Answered rows (sources/src/health.rs:168), so an Answered reply with shape_change never reaches the header (still true). A reply that fails to parse already reaches the header (Mismatch). shape_change is a key-set difference on a reply that still parsed (sources/src/ask.rs:55).",
+  "condition_or_scenario": "Needs a source to change its reply in a way that still parses but changes meaning; no evidence.",
+  "user_impact": "none (a reply in a new shape that still reads is not mentioned)"
+ },
+ {
+  "number": 419,
+  "title": "An import links every CSV row ever imported against the whole ledger",
+  "class": "wrong",
+  "evidence": "At f89634de link() (csv_import.rs:445-453) takes f.links_pending() and link_keys (:455-470) matches only the movements a change queued (commit 06ac5350). PR #507: a 20-row import on a copy of the owner's book 23.2 ms; capacity import breadth 42,940 -> 42,979 steps (x1 -> x4). OVER_BUDGET still lists ('import', Depth, '#419') (capacity.rs:196-200), but import at 4x the owner's deepest listing is 155 ms on a Pi against 1,000 ms.",
+  "condition_or_scenario": "Stated code fact no longer true; the depth residue is within its wall budget.",
+  "user_impact": "none"
+ },
+ {
+  "number": 420,
+  "title": "Adding a trade does work that grows with the whole book",
+  "class": "wrong",
+  "evidence": "At f89634de entries::enter -> record_changed -> pulled applies a keyed delta from the change log under the lock (figures.rs:593-617, catch_up :96-130; commits 597336ba, ed25953c), not a rebuild from the book. PR #507 measured an added trade at 13.8 ms on a copy of the owner's book (88.7 ms before), breadth 7,226 -> 7,630 steps. It was real before: 729 ms on a Pi at the owner's size on d6824aa7 (docs/plans/stage-3-the-record-by-change.md:186) and 36-40 s with a year of balances (docs/plans/stage-p-capacity-and-process.md:45). Residue: depth pair over (109.4 ms Pi vs 100 at four times the owner's deepest listing; ('add-trade', Depth) in capacity.rs:199).",
+  "condition_or_scenario": "Stated code fact no longer true; the residue appears only at a listing four times deeper than the owner's deepest (349 rows).",
+  "user_impact": "none at the owner's size"
+ },
+ {
+  "number": 421,
+  "title": "Every signal wakes every stream and loop, and the status is rebuilt on each",
+  "class": "hypothetical",
+  "evidence": "events.rs:112-118 notify_all with no key, :417-418 status rebuilt every step, status.rs:78-120 reads files each time (unchanged since d6824aa7). The work per signal is constant, not growing with the book; PR #507's capacity table: feed-step 156.6 ms on a Pi at four times the owner's size, within its 168.1 ms budget; the feed-step entry on OVER_BUDGET is #426 (whole view serialised), not these wake-ups.",
+  "condition_or_scenario": "Needs a measured slowdown from the unkeyed wake-ups; none measured at or above the owner's size.",
+  "user_impact": "none measured"
+ },
+ {
+  "number": 422,
+  "title": "The book is opened anew on every call",
+  "class": "not-a-user-bug",
+  "evidence": "True at f89634de: figures.rs:349-350 `Book::open_in` per `book()` call (each open re-reads the file's header and schema count, sqlite/src/migrate.rs:121-131); notify.rs:322 BOOKS_KEPT=4 hand pool; the sqlite pool serves only the cache. But the operations that go through these opens are measured within their Pi budgets at four times the owner's size: startup 2,316 ms (budget 5,000), brokers 5.1 ms, price-changed 2.0 ms (docs/plans/stage-3-the-brokers-statements.md:160-167); they were taken off OVER_BUDGET (capacity.rs:196-203 lists only add-trade, import, feed-step).",
+  "condition_or_scenario": "A constant per-call cost (open + header check), not growth with the book; no measurement or report shows a slowdown from it.",
+  "user_impact": "none"
+ },
+ {
+  "number": 423,
+  "title": "The market cache syncs to disk on every quote and keeps a reads row forever",
+  "class": "hypothetical",
+  "evidence": "Code facts true: sqlite/src/lib.rs:45 synchronous=FULL for every connection; quotes.rs:50-51 `keep` -> cache.rs:222 `store_quote` autocommit per quote; cache.rs:561 `record` one transaction per outcome; reads rows never pruned (only migrations 003 delete). But the per-day `reads` rows come only from payers, rates, option chains and uncarried TMX listings (read.rs:90-93 called from payers/run.rs:253 and rates.rs:191; options.rs:143; quotes.rs:240), not from every quote, and each is read back only per subject (cache.rs:636-638). No measurement of fsync cost or cache growth exists in docs/ or capacity.rs (capacity counts reads, not syncs).",
+  "condition_or_scenario": "Needs a storage device on which ~one fsync per quote/outcome pushes a background quote pass past its minute, or years of daily reads rows for a subject; neither measured nor reported.",
+  "user_impact": "None observed; at most a slower background quote pass and a cache file growing by a few rows a day."
+ },
+ {
+  "number": 424,
+  "title": "The outcomes log is scanned on every pass",
+  "class": "not-a-user-bug",
+  "evidence": "True: due.rs:315-321 `rest_ends` loads every outcome of every source each pass; cache.rs:585-587 no LIMIT; `failures_in_a_row` (cache.rs:656-669) materialises the per-source log, called from due.rs:187, read.rs:70/84, figures.rs:400. But the log is capped at OUTCOMES_KEPT=1000 rows per source (cache.rs:41, pruned in `record` at cache.rs:573-577), so the scan is bounded and does not grow with the log or the book.",
+  "condition_or_scenario": "A bounded scan (<=1000 rows per source) per pass; no scale at which it becomes a user-visible slowdown.",
+  "user_impact": "none"
+ },
+ {
+  "number": 425,
+  "title": "The chart read-ahead fetches every trade's chart, and each one is served as if the person opened it",
+  "class": "reachable",
+  "evidence": "App.svelte:224-236 reads every trade then calls `readAhead` for every trade and holding; ahead.ts:46-53 reads each chart not kept, one after another, 1-3 `/api/history` reads per trade (ahead.ts:19-35, chart.ts:96); a null (pending, no bars) result is not remembered. The `ahead` flag stays in the page (reads.svelte.ts:115-116), and feeds.rs:3248-3271 starts a background source read for any span whose bars are not stored or are stale (history.rs:508-522, :592-614). The owner's book has 646 trades (docs/plans/stage-p-capacity-and-process.md:45).",
+  "condition_or_scenario": "1) The person runs Clear data with any kind ticked (clear.rs:155-157 renews the book id) or opens the app in a browser that has kept nothing (e.g. another device through the tunnel). 2) live.svelte.ts hello -> kept.ts:160-178 `bookIs` drops what was kept. 3) App.svelte:228-235 reads every trade; ahead.ts:46-53 then reads ~650 trades' and the holdings' charts, ~650-1,950 `/api/history` requests. 4) For each instrument whose bars are not stored (all of them after Clear with Market ticked), feeds.rs:3264-3271 starts a Yahoo read in the background. Ordinary: Clear data and a new browser are normal actions; 646 trades is this book.",
+  "user_impact": "After a Clear or in a new browser, the page sends hundreds to ~2,000 chart requests in the background and the server reads bars for every instrument it lacks; screens are not blocked and nothing shown is wrong."
+ },
+ {
+  "number": 426,
+  "title": "Views are rebuilt whole and serialised to tell whether they changed",
+  "class": "hypothetical",
+  "evidence": "Code facts true: views.rs:197-199 `version_of` serialises; views.rs:271-282, :324-335, :771-773, :830-841 rebuild and diff whole; events.rs:512-515. Measured: feed-step at four times the owner's size 48 ms on a Mac, 101 ms Pi-scaled against a 95 ms budget, allocations 148K -> 712K from x1 to x4 (docs/plans/stage-3-the-brokers-statements.md:167); listed in capacity.rs:201-202 OVER_BUDGET. The budget is a share of the 60-second quote pass, not a person waiting.",
+  "condition_or_scenario": "The measured miss is at four times the owner's size; at the owner's size the step is about a quarter of that (allocations 148K at x1). Needs a book ~4x larger to exceed even the background budget.",
+  "user_impact": "None at this book's size; at ~4x the book a stream step for one signal takes ~0.1 s on a Pi."
+ },
+ {
+  "number": 427,
+  "title": "A reconnecting page replays its first subscriptions, and stream ids restart at 1",
+  "class": "reachable",
+  "evidence": "live.svelte.ts:398-400 builds the EventSource URL once from `connectedWith` and the `have` of that moment; the browser's automatic reconnect reopens that URL; stream.rs:39-108 registers the URL's docs and sends their first messages at once (first=true, no wait); live.svelte.ts:430-446 applies a `snapshot` to whatever holder is wanted under that key, regardless of its params, and `keep(doc)` saves it under the current params (:506-520); only after `hello` does `sayWanted` post the current set (:408-429, :298-315). onerror (:484-488) only sets 'Could not reach Bagholder.'. The id restart is handled (:166 `if (n === 1) last = 0`).",
+  "condition_or_scenario": "1) Page open; the person changes a filter or sort on Trades, or scrolls so `limit` grows (subs.svelte.ts:101-103). 2) The stream drops: the server is restarted without a version change, the laptop sleeps and wakes, or the tunnel blips. 3) EventSource reconnects with the first-connect docs/have; the server snapshots Trades under the original params. 4) The page reconciles that into the current Trades holder and keeps it under the current params, until its own POST /api/events/watch lands and the right snapshot follows. Ordinary: restarts, sleep/wake and network drops.",
+  "user_impact": "After a reconnect, a list whose filter, sort or length changed since the page loaded briefly shows the first-load version (rows vanish then return), and that copy is kept in the browser until the correction arrives."
+ },
+ {
+  "number": 428,
+  "title": "Stream failures are swallowed",
+  "class": "hypothetical",
+  "evidence": "Code facts true: events.rs:442 catch_unwind then `continue`; events.rs:353 bad filters -> none (badge count only); docs.rs:164-167 `.ok()?`; stream.rs:119-124 `.ok()?`; live.svelte.ts:46-58 skips a patch to an unknown path. Each needs an internal failure: a panic in a document read, a SQLite error reading notifications, a page-built filter the server cannot parse, or a diff path the page lacks. The figure views already have a `refused` path. No commit, doc or issue records any of these occurring; the one real failure on record (8a11daed, a figures build refused at start) went through the header, not this path.",
+  "condition_or_scenario": "Needs a document read to panic or the store to error, or a page/server mismatch in filters or patch paths; no evidence any has occurred.",
+  "user_impact": "If it happened, a screen such as notifications would silently stop updating with no error in the header."
+ },
+ {
+  "number": 429,
+  "title": "The browser's kept store has no bound and keeps whole documents",
+  "class": "reachable",
+  "evidence": "main.ts:17-20 mounts the page only after `keptIn` (live.svelte.ts:199) = kept.ts:79-107 has read every entry for the book into memory. Every non-ephemeral read answer is saved whole (reads.svelte.ts:121-125) and every drawn chart again (`remember`, reads.svelte.ts:165-168), so the read-ahead (#425) leaves ~2 entries per trade/holding chart; documents are saved per (key, params) (kept.ts:135-153, live.svelte.ts:506-520). Nothing evicts: `bookIs` (kept.ts:160-178) drops only other books' keys, and returns early when the book is the same. The owner's book has 646 trades.",
+  "condition_or_scenario": "1) Ordinary use: the read-ahead keeps each trade's and holding's chart twice; each new filter/sort combination adds a document copy. 2) Every later page open (main.ts:17) waits for kept.ts:89-101 to cursor through all of them before the first frame. Growth is per trade and per parameter set, never trimmed.",
+  "user_impact": "Each page open waits for the browser to read every kept chart and screen before drawing; the wait and the storage grow with the trades and filter combinations used (size not measured)."
+ },
+ {
+  "number": 430,
+  "title": "The ETag is computed from the finished body, and each answer is kept twice in the page",
+  "class": "not-a-user-bug",
+  "evidence": "True: http/mod.rs:263-282 runs the route, hashes the body, then answers 304; reads.svelte.ts:124-125 keeps a memory and an IndexedDB copy. A 304 costs the server what a 200 costs minus the transfer; on loopback or a tunnel the person sees the same answer time. No measurement shows either costing the person time.",
+  "condition_or_scenario": "Constant overhead per conditional request and a second in-page copy; not growth the person meets as a slowdown (the stored-copy growth is #429).",
+  "user_impact": "none"
+ },
+ {
+  "number": 431,
+  "title": "On-demand reads are not refreshed when the stream says their data moved",
+  "class": "reachable",
+  "evidence": "reads.svelte.ts:108 returns this page load's memory answer with no age unless `maxAgeMs` is given; chart.ts:96-97 `loadHistory` gives none and keys by `t.id|tf` (opts.key overrides the query, so the `to` date in chartSpan, chart.ts:66-71, is not in the key); the read-ahead (ahead.ts:46-53) fills that memory for every trade and holding at page load; memory is cleared only on a server restart (`askAgain`, chart.ts:76-77 via state.svelte.ts:65-70). TradeDetail.svelte:69-70 calls loadHistory, which answers from memory.",
+  "condition_or_scenario": "1) The person opens the app in the morning; the read-ahead reads every holding's chart into memory. 2) The page stays open (the app is meant to stay open with live quotes). 3) Hours or days later they open a holding or open trade. 4) TradeDetail.svelte:70 -> reads.svelte.ts:108 answers from memory without asking; the server is not asked again until it restarts or the page reloads.",
+  "user_impact": "A holding's or open trade's chart opened in a page left open shows the bars as of page load, missing everything since, until the page is reloaded or the server restarts."
+ },
+ {
+  "number": 432,
+  "title": "The number of rows shown is part of a subscription, so scrolling starts a new one",
+  "class": "reachable",
+  "evidence": "views.rs:72-73 `limit` is a subscription param; views.rs:175-176 builds Trades/Cashflow with it; events.rs:194 and :408 drop a view whose params changed; subs.svelte.ts:71-77 opens a new subscription per params; subs.svelte.ts:92-103 FIRST_ROWS=100, `more` adds 100. The new subscription is snapshotted whole (events.rs:512-515). The owner's book has 646 trades and 3,296 cash-only transactions (docs/plans/stage-3-the-record-by-change.md:61).",
+  "condition_or_scenario": "1) The person scrolls the Trades list (646 rows) or Cashflow (thousands of rows) to the end of what is shown. 2) subs.svelte.ts:101-103 raises `limit` by 100. 3) The page subscribes again; events.rs:408 drops the built view; the server rebuilds it and resends every row up to the new limit. Reaching row N of Cashflow resends ~N^2/200 rows in total. Ordinary: scrolling a long list.",
+  "user_impact": "Each 'next 100 rows' waits for the server to rebuild and resend every row already shown; deep in Cashflow each step resends thousands of rows."
+ },
+ {
+  "number": 433,
+  "title": "Unused routes and stream messages are still served",
+  "class": "not-a-user-bug",
+  "evidence": "True: http/mod.rs:238 `/api/notifications/stream`, stream.rs:203-211; status.rs:70/:512 `StatusAnswer` at `/api/status`; the page uses neither (web/e2e/smoke.spec.ts:12-13 asserts it never asks). Nothing opens them, so the thread per open never runs in use.",
+  "condition_or_scenario": "Dead code; nothing the person does reaches it.",
+  "user_impact": "none"
+ },
+ {
+  "number": 434,
+  "title": "A hidden tab counts as watching",
+  "class": "reachable",
+  "evidence": "live.svelte.ts:288-297 `shownNow` sends every wanted doc with no `document.hidden` check (no visibility handling on subscriptions; only clock.svelte.ts and ShortInterest.svelte look at visibility); events.rs:225-227 `showing` is true while any stream holds a PRICED key; due.rs:158-160 then quotes every held listing, and due.rs re-arms every QUOTES_EVERY=60 s (due.rs:37).",
+  "condition_or_scenario": "1) The person leaves Bagholder on Portfolio or Markets in a background tab or minimised window (or leaves it open on another device). 2) The tab's EventSource stays open, its watch stands. 3) Every 60 s due.rs:128-129 quotes every held listing from the sources. Ordinary: a tab left in the background.",
+  "user_impact": "While no one looks, every holding is still quoted every minute; nothing on screen is wrong, only requests made for nobody."
+ },
+ {
+  "number": 435,
+  "title": "Each tab holds its own stream over HTTP/1.1",
+  "class": "hypothetical",
+  "evidence": "True: live.svelte.ts:400 one EventSource per tab, no SharedWorker/BroadcastChannel; server/Cargo.toml:50 axum `http1` only. Browsers allow six HTTP/1.1 connections per host. No doc, test or commit records the owner running six or more Bagholder tabs; a tunnel that speaks HTTP/2 to the browser would not hit the limit.",
+  "condition_or_scenario": "Needs six or more Bagholder tabs open at once in one browser on a plain HTTP/1.1 connection; no evidence it occurs.",
+  "user_impact": "A seventh tab's reads would wait for a connection that never frees, so it would hang loading."
+ },
+ {
+  "number": 436,
+  "title": "Nothing the server sends is compressed, and the chart library sits in the main bundle",
+  "class": "hypothetical",
+  "evidence": "True: server/Cargo.toml:52 no compression feature; http/mod.rs:247-251 no compression layer; fillsChart.ts:1 and tradeChart.ts:1-11 import lightweight-charts statically; vite.config.ts has no chunking. On loopback it costs nothing. The repo has no measurement of transfer size or load time over the owner's tunnel, and does not say which tunnel it is or whether it compresses.",
+  "condition_or_scenario": "Matters only on a link slow enough that uncompressed JSON and a larger first bundle are noticed; not measured or reported. Missing: the tunnel type and the transfer sizes.",
+  "user_impact": "A first load or read-ahead over a slow link would move more bytes than needed; on the desktop, nothing."
+ },
+ {
+  "number": 437,
+  "title": "The page announces what it wants once per document on first open",
+  "class": "not-a-user-bug",
+  "evidence": "True: live.svelte.ts:218-225 `primed` deletes one doc and calls `sayWanted` per arriving document, so a first open posts /api/events/watch once per primed screen (live.svelte.ts:228-242, :298-315). The count is the number of screens (a handful), not anything that grows with the book, and it happens only when nothing is kept (first open, after Clear).",
+  "condition_or_scenario": "A few extra small POSTs on a first open; no growth, no visible delay.",
+  "user_impact": "none"
+ },
+ {
+  "number": 438,
+  "title": "Quotes are asked again with no check of how fresh the last one is",
+  "class": "reachable",
+  "evidence": "docs.rs:189-195 `opened` wakes the scheduler for any newly watched PRICED key (positions, exposure, markets, heatmap, cashflow, trade: due.rs:40); events.rs:187-201 calls it for each key a page newly watches; due.rs:128-131 `demand` + `read_quotes` then quote every held listing (due.rs:158-160) with no read of the stored quote's age; quotes.rs:110-170 asks the source for each; the stored `allowance` (cache.rs:222-235) is read by no gate.",
+  "condition_or_scenario": "1) The person, on the Trades tab, opens one trade page after another (each watches `trade:<id>`, App.svelte:200), or switches Dashboard -> Portfolio -> Markets. 2) Each newly watched priced key -> docs.rs:189-195 wake -> due.rs:104-131 pass. 3) Every held listing is quoted again from Yahoo/TMX/Cboe/Coinbase, though quoted seconds earlier. Ordinary: browsing trades and tabs.",
+  "user_impact": "Every trade page or priced tab opened re-quotes every holding; nothing shown is wrong, but requests to the sources multiply with clicks (more chance a source refuses)."
+ },
+ {
+  "number": 439,
+  "title": "Background loops run with no page open",
+  "class": "reachable",
+  "evidence": "main.rs:237-252 spawns the loops at start. orders/readback.rs:477-498: with nothing open and nobody watching, `refresh_orders` still runs every ORDERS_IDLE_SEC=300 s (readback.rs:26) while signed in; feeds.rs:381-396 exposure loop runs `refresh_exposures` every 6 h; feeds.rs:3025-3056 archive loop re-reads bars when a stored read passes ARCHIVE_TOPUP_HOURS=20 (history.rs:693). None checks for an open page.",
+  "condition_or_scenario": "1) The app runs on the Pi (or desktop) with a saved Wealthsimple sign-in. 2) No browser has it open, e.g. overnight. 3) readback.rs:487-494 reads Wealthsimple's order feed every five minutes; the exposure and archive loops read sources on their timers. Ordinary: the app left running with no page.",
+  "user_impact": "With no page open, Wealthsimple's order feed is still read every five minutes around the clock, and fund exposures and price bars are read on timers; nothing on screen is wrong."
+ },
+ {
+  "number": 440,
+  "title": "The language model's file is hashed on every start, and its server is never stopped",
+  "class": "reachable",
+  "evidence": "main.rs:252 starts the disclosure reader at every start; feeds.rs:1541-1542 calls `summary_ensure` -> localmodel.rs:296-311 `ensure` -> `provision` (localmodel.rs:343-394), which, unless Ollama or BAGHOLDER_LLM_URL answers (localmodel.rs:188-201), calls `verified` twice (:365, :373), each a full SHA-256 read (localmodel.rs:396-413) of a 1,951,420,702-byte file (localmodel.rs:128-130). The model is on by default (decisions.md:22). `shutdown()` (localmodel.rs:517-532) has no caller; main.rs:280-287 stops without it.",
+  "condition_or_scenario": "1) The person starts Bagholder (or it restarts after an update). 2) The disclosure reader asks for the model; provision hashes the 1.95 GB llamafile twice before it starts the model server. 3) On exit, the model server is not stopped by the app; it survives wherever the exit does not signal the child (it is reused through its port on the next start, localmodel.rs:494-512). Ordinary: every start with the default model.",
+  "user_impact": "After every start, about 3.9 GB is read and hashed before filing titles and summaries can be written (tens of seconds of disk on a Pi's SD card, not measured); the model process can outlive the app holding its memory."
+ },
+ {
+  "number": 441,
+  "title": "Release binaries are not stripped and built without link-time optimisation",
+  "class": "not-a-user-bug",
+  "evidence": "True: rust/Cargo.toml:21-23 `strip = false`, no lto or codegen-units. Effect is binary size and possibly a few percent of speed; no measurement shows a user-visible effect.",
+  "condition_or_scenario": "Build configuration; nothing the person meets.",
+  "user_impact": "none"
+ },
+ {
+  "number": 442,
+  "title": "Instants are stored as text that does not sort",
+  "class": "hypothetical",
+  "evidence": "True: book/src/text.rs:67-70 stores `t.to_string()`, fraction trimmed; orders.rs:213-214, :366/:371 and facts.rs:280 order or compare by that text. Text order differs from time order only when one instant's shorter fraction is a prefix of the other's digits, i.e. the two are within 10^-k s (k = the shorter fraction's length) or one is a whole second in the same second. The values come from the local clock (ns on Linux, us on macOS). The broker check, the one place it once mattered, moved to integer ns in 93a0dca3, whose message records no observed misorder.",
+  "condition_or_scenario": "Needs two orders, brackets or declared reads stamped within ~10 ns-10 us of each other (or in the same second as a whole-second stamp); no evidence it has happened.",
+  "user_impact": "Two orders or brackets stamped at almost the same instant could list in the wrong order."
+ },
+ {
+  "number": 443,
+  "title": "Bars are fetched on a thread per symbol, with no bound",
+  "class": "hypothetical",
+  "evidence": "True: history.rs:991-1014 and :592-614 spawn one thread per symbol not already pending; each holds a cache connection from a pool that never waits (sqlite/src/pool.rs:11-13, history.rs:601-604) for the whole paced fetch. The burst is reachable: after Clear data with Market ticked (clear.rs:118-134, :157), the read-ahead (#425) asks every trade's chart and feeds.rs:3264-3271 starts a thread per instrument without bars (~200 here). The app raises no open-file limit (no setrlimit in rust/). No log, doc or commit records a failure from it.",
+  "condition_or_scenario": "Harm needs the burst to exhaust a process limit (threads, or open files: each pooled cache connection holds several descriptors; macOS's default soft limit is 256); never observed.",
+  "user_impact": "Usually nothing; at worst (not observed) ~200 simultaneous threads and cache connections could run the process out of files and make reads fail."
+ },
+ {
+  "number": 444,
+  "title": "The broker pull commits one row at a time",
+  "class": "reachable",
+  "evidence": "broker/src/pull.rs:226-240 stores rows in a loop via store_row (:532); book/src/records.rs:120-126 `store` wraps each in `atomically` (book/src/lib.rs:123-131, BEGIN IMMEDIATE + commit); nothing encloses the pull (broker_reads.rs:395). Every commit syncs (sqlite/src/lib.rs:45 synchronous=FULL). The owner's book holds 14,606 broker records (docs/plans/stage-p-capacity-and-process.md:45). Incremental pulls read only what changed (decisions.md:85), so the cost is in a full pull.",
+  "condition_or_scenario": "1) The person connects Wealthsimple on a fresh install (e.g. the Pi), or runs Clear data with Wealthsimple's records ticked and syncs again. 2) The pull reads every account in full. 3) pull.rs:226-240 commits each of ~14,600 records separately, each with an fsync. Ordinary: a first sync or a re-sync after Clear.",
+  "user_impact": "A full sync takes longer than a batched write would, by one disk sync per record (~14,600 here); the extra time is not measured."
+ },
+ {
+  "number": 445,
+  "title": "Clear data leaves the cleared bytes in the files, is not one operation, and deletes every snapshot",
+  "class": "hypothetical",
+  "evidence": "Code facts true: no VACUUM/secure_delete (only `VACUUM INTO`, migrate.rs:264); clear.rs:145-177 runs steps one by one, refusing only while syncing; balances_now writes without the flag; clear.rs:164 removes all of snapshots/. But the update's rollback reads only snapshots taken since that update was put in place (update.rs:617-622, migrate.rs:271-273), so a Clear before an update leaves its rollback intact; free-page bytes are visible only to someone reading the raw file; a balances read (every 5 min while a page is open) must land inside the Clear's few seconds.",
+  "condition_or_scenario": "Needs someone reading the raw database file, a Clear run during an update's trial window, or a balances read racing the Clear; no evidence of any.",
+  "user_impact": "Cleared data would stay readable in the file's free pages to anyone inspecting it; a rare race could leave a row or lose a rollback snapshot."
+ },
+ {
+  "number": 446,
+  "title": "The write-ahead log has no size limit",
+  "class": "hypothetical",
+  "evidence": "True: no journal_size_limit anywhere; passive checkpoint at 1,000 pages (sqlite/src/lib.rs:58, :93); TRUNCATE only for a replaced file (pool.rs:107). The -wal stays at its peak size until every connection closes (a restart). No doc, log or test records a large -wal on the owner's machines.",
+  "condition_or_scenario": "Needs a write large enough that the -wal it leaves matters for disk space; never observed.",
+  "user_impact": "The -wal file would stay as large as the largest write since start until the app restarts (disk space only)."
+ },
+ {
+  "number": 447,
+  "title": "Reading the book's id takes a write transaction",
+  "class": "hypothetical",
+  "evidence": "True: book/src/settings.rs:32-40 reads the id inside `atomically` (BEGIN IMMEDIATE, book/src/lib.rs:123-131); called from http/assets.rs:62 (every page load) and events.rs:300-301 (every stream connect). Writes are short transactions (import groups by percent, per-row pull commits); a failure returns '' and the page falls back to its last book (live.svelte.ts:178). No report of a slow page load.",
+  "condition_or_scenario": "Needs a long-held write lock (e.g. a large Clear) at the moment the page loads or a stream connects; none observed.",
+  "user_impact": "A page load would wait behind a long write."
+ },
+ {
+  "number": 448,
+  "title": "The background filing reader has no bound",
+  "class": "reachable",
+  "evidence": "feeds.rs:1645-1647 `wants_reading` has no recency or count bound; feeds.rs:1659 stores up to 200 documents per listing; the sweep refreshes every held/watched listing when stale (feeds.rs:851-862) and opening a listing's Disclosures does too (feeds.rs:1841-1853); the reader (feeds.rs:1535-1569) reads every stored row wanting reading, newest first, until none remain; a row its source cannot name exactly is downloaded and read by the local model (feeds.rs:2053-2079), on by default (decisions.md:22).",
+  "condition_or_scenario": "1) The person holds or watches listings with regulatory filings (ordinary), or opens a listing's Disclosures. 2) refresh_filings stores up to 200 documents for each. 3) disclosure_read_loop downloads and model-reads every one of them, one after another every ~2 s plus the read, until the backlog is gone.",
+  "user_impact": "After filings are stored, the app downloads and runs the local model over up to 200 documents per listing in the background until all are read, keeping the machine busy; nothing shown is wrong."
+ },
+ {
+  "number": 449,
+  "title": "The Canada heatmap asks one paced request per constituent",
+  "class": "reachable",
+  "evidence": "universes.rs:283-311 `fetch_canada`: one constituents call then one `getQuoteBySymbol` per S&P/TSX 60 constituent, each after `pace(\"app-money.tmx.com\", 0.6)`; a failed tile read is dropped by `.ok()` and the tile becomes `Not classified` (universes.rs:225), with no failure recorded. Read whenever a page shows the Canada heatmap and its rows are older than UNIVERSE_STALE_SEC=1800 (feeds.rs:2808-2818). Single failed requests do occur in the owner's use (decisions.md:34, 2026-10-02).",
+  "condition_or_scenario": "1) The person opens the heatmap on Canada with no rows stored, or keeps it shown past 30 minutes. 2) feeds.rs:2921 -> fetch_canada makes 61 requests at least 0.6 s apart: >= 36 s before the rows land. 3) If any one tile request fails, that constituent is filed under `Not classified` with no change, silently, until the next read.",
+  "user_impact": "The Canada heatmap takes at least ~36 s to fill each read, and a tile whose request failed sits under 'Not classified' for half an hour with nothing saying why."
+ },
+ {
+  "number": 450,
+  "title": "Requests have no total deadline, and retries and rests have no jitter",
+  "class": "hypothetical",
+  "evidence": "True: net/src/client.rs:141-169 per-operation timeouts only, no Instant/deadline in send_into (:655-789); sources/src/market.rs:86-92 pure doubling. A request hangs only if a source keeps the connection alive by dripping bytes slower than the read timeout; jitter matters for many clients retrying one server, not one person's app. No commit, doc or fixture records a stalled source.",
+  "condition_or_scenario": "Needs a source to trickle a response indefinitely (never observed); the missing jitter has no single-user effect.",
+  "user_impact": "A source that trickled bytes would hang that read and its loop indefinitely."
+ },
+ {
+  "number": 451,
+  "title": "Rows the book could not place are not listed, and an import reports only counts",
+  "class": "hypothetical",
+  "evidence": "True: csv_import.rs:124 REPORT_NOTES=8; status.rs:297-366 header sentences only; no list of unplaced rows with raw fields (owner settled it, decisions.md:52). But commit 0b8ae381 (2026-10-03), which added the header sentence, states 'The owner's book has none.' The 9,030-problem example in SPEC.md:75 comes from a browser test fixture (web/e2e/menu.spec.ts:171). The per-file import report is SPEC trade-39's own definition.",
+  "condition_or_scenario": "Needs Wealthsimple rows of a kind the mapping has no rule for, or a file naming an account the book does not hold; the owner's book had none as of 2026-10-03.",
+  "user_impact": "Rows the book could not place would be counted in the header with no way to see which rows they are."
+ },
+ {
+  "number": 452,
+  "title": "The order ticket silently rewrites what was typed",
+  "class": "reachable",
+  "evidence": "ticket/OrderTicket.svelte:58-70 `onBlur` drops the typed text and sets a quantity that is not > 0 to 1 (:65) and a bad price to null (:66-70); :78 `review()` does the same; :197 Review has no `disabled`; vals.ts:122-123 `parseNum` strips non-numeric characters, so empty or '0' -> 1. TradeDetail.svelte:150, :159 keep Buy on whatever the connection.",
+  "condition_or_scenario": "1) The person opens the ticket, clears the quantity to retype it (or types 0), then clicks elsewhere or presses Review. 2) OrderTicket.svelte:65 or :78 sets qty to 1 with no message; Review proceeds. Ordinary: editing a field.",
+  "user_impact": "A cleared or zero quantity silently becomes 1 share (and a bad price silently empties); the person learns of it only on the review screen."
+ },
+ {
+  "number": 453,
+  "title": "The trade list shows each trade's own currency but sorts and queues by CAD",
+  "class": "reachable",
+  "evidence": "views.rs:666 sorts the P&L column by `pnl_cad`; Trades.svelte:77 shows `money(t.pnl, t.currency)`; wire/build.rs:544 queues by `pnl_cad`. The owner trades in USD as well as CAD (US option contracts priced from Cboe's chains, decisions.md:90; USD-stated accounts, 8a11daed).",
+  "condition_or_scenario": "1) The book has a USD trade with P&L +100 (about +137 CAD) and a CAD trade with +120. 2) The person sorts Trades by P&L, descending. 3) views.rs:666 orders by CAD: the +100 USD row above the +120 CAD row. Ordinary: trades in two currencies.",
+  "user_impact": "Sorted by P&L, the Trades list's P&L column as shown is out of order wherever trades in different currencies interleave."
+ },
+ {
+  "number": 454,
+  "title": "The equity and monthly charts are not on a time axis, and the Value curve does not mark deposits",
+  "class": "reachable",
+  "evidence": "Dashboard.svelte:43-45 places points by index; engine/src/scope.rs:1117-1131 gives the P&L curve one point per day with a realized part; scope.rs:623-633 makes a month bar only where something was realized; wire/build.rs:507 points carry only date and value. Owner settled time spacing (decisions.md:52) and deposit marks (decisions.md:43), not built.",
+  "condition_or_scenario": "1) The book's sales are irregular in time (646 trades over three years). 2) The person opens the Dashboard's Equity card in P&L mode: days with sales are spaced evenly, so a quiet quarter takes the width of a busy week; the Monthly P&L skips months with no realized sale. 3) In Value mode no deposit or withdrawal is marked. Ordinary data.",
+  "user_impact": "The P&L curve and monthly bars misstate time (gaps vanish, busy stretches stretch), and the Value curve shows no deposits or withdrawals."
+ },
+ {
+  "number": 455,
+  "title": "An open trade's zero P&L is coloured as a gain, and the trade count disagrees with the P&L",
+  "class": "reachable",
+  "evidence": "fmt.ts:185-187 `color` gives var(--pos) for zero; Trades.svelte:77-78 and TradeDetail.svelte:284-285 use it; SPEC.md:39 (trade-4) makes an open trade's P&L 0.00 before a first sale. The count half is by definition: SPEC.md:437 (dashboard-4) states Realized P&L includes open trades' partial sales with the closed-trade count beside it (decisions.md:87, 2026-09-24); scope.rs:618-620, :686 implement exactly that.",
+  "condition_or_scenario": "1) The person holds any position with nothing sold yet (ordinary). 2) The Trades list shows its row with P&L $0.00 and 0%, coloured by fmt.ts:187 as positive.",
+  "user_impact": "Every open trade with nothing sold shows its $0.00 P&L in green, as a gain; the count/P&L split is the spec's own definition."
+ },
+ {
+  "number": 456,
+  "title": "The trade list is held in a fixed 620-pixel box",
+  "class": "reachable",
+  "evidence": "Trades.svelte:44-45: the card's `max-height:620px`, the wrapper only `min-height:380px`; the table scrolls inside (:47).",
+  "condition_or_scenario": "1) The person opens Trades on a window taller than about 750 px (any desktop monitor at full height). 2) The list stops at 620 px with its own scrollbar; the space below stays empty. Ordinary.",
+  "user_impact": "On a tall window the trade list scrolls inside a box at most 620 px high while the rest of the window stays empty."
+ },
+ {
+  "number": 457,
+  "title": "No screen adapts to a narrow window",
+  "class": "reachable",
+  "evidence": "web/src/app.css:138 and :436 are the only @media rules (reduced motion); Dashboard.svelte:217 and Cashflow.svelte:100 (also Skeleton.svelte:22, TradeDetail.svelte:314, markets/MarketTiles.svelte:179) use `repeat(6,minmax(0,1fr))`; Trades.svelte:48 table min-width 1150 px; e2e viewports are 1150-1680 px only. Owner decided every screen adapts (decisions.md:45), not built.",
+  "condition_or_scenario": "1) The person snaps the browser to half of a laptop screen (~700-960 px) or opens the app on a narrow device through the tunnel. 2) The six-tile rows squeeze to a sixth of the width each and tables scroll sideways in their cards; nothing reflows. Ordinary: resizing a window. (Not rendered here.)",
+  "user_impact": "Below about 1150-1200 px wide, tiles squeeze and tables need sideways scrolling; nothing rearranges."
+ },
+ {
+  "number": 458,
+  "title": "The order buttons in rows are small, faint targets",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: web/src/app.css:324 `.tk-rowbtn{width:22px;height:22px;...color:rgba(var(--ink-rgb),.5)}`, :325 `.off{...rgba(...,.18)...pointer-events:none}`, :321 `.funnel{color:rgba(var(--ink-rgb),.38)}`, :320 `.tk-rowbtns{gap:2px}`. Rendered in FilterPopover.svelte:470-496, TradeDetail.svelte:251-256, ticket/OrderTicket.svelte:149-150,177-178. Computed contrast of the icon colour on the theme surfaces: 0.5 alpha 4.11-4.56:1 (Nocturne, the default per theme.svelte.ts:26, and Midnight) and 3.17-3.24:1 (Light), all above 3:1; the 0.38 funnel 3.0-3.16:1 in the dark themes and 2.30-2.33:1 in Light. The .off span is aria-hidden and inert (exempt from 1.4.11). 22 px buttons 2 px apart sit 24 px centre to centre, which meets 2.5.8's spacing exception between neighbours (the clickable row around them makes that exception arguable).",
+  "condition_or_scenario": "Static styling met on every render: open the Cmd-K/filter list (FilterPopover.svelte:471-473), a trade page (TradeDetail.svelte:254) or the ticket's stop/target rows; the buttons draw at 22x22 px with half-alpha icons. The contrast shortfall the issue cites occurs only for the funnel icon, and only if the user switches to the Light theme.",
+  "user_impact": "Row buttons are 2 px under WCAG's 24 px target; their icons pass 3:1 contrast in the default dark theme, and only the funnel icon in Light theme is faint (2.3:1)."
+ },
+ {
+  "number": 459,
+  "title": "Per-unit amounts show a different number of decimals row by row",
+  "class": "reachable",
+  "evidence": "web/src/lib/Cashflow.svelte:19-20 `perUnit = ... money(v, '', absBelow(v, '1') ? 4 : 2)`, used at :181 (positions' Distribution column) and :265 (Distribution history). This is SPEC.md:374 formatting-8 verbatim (\"`$` with four decimals under $1, else two\"). Ordinary data crosses $1: the recorded YieldMax page for MSTY (rust/crates/sources/tests/replies/yieldmax/page-msty.html) lists $0.3421, $0.2395 ... $1.8541, $4.1286 per share, and the recorded Wealthsimple activity shows MSTY distributions paid into an account (wealthsimple/tests/replies/wealthsimple-pull/edited-activity-november.json, DIY_DIVIDEND/MANUFACTURED_DIVIDEND, USD). The repo's own screenshot docs/screenshots/desktop-cashflow.png (old app, same rule) shows `$0.9700` above `$1.12` in one column.",
+  "condition_or_scenario": "Hold any payer whose per-unit distribution has been both under and over $1 (MSTY's history alone does), or two payers on either side of $1 (a bank stock's quarterly $1.12 beside an ETF's $0.3220); Cashflow -> Distribution history / Cashflow Positions renders `$0.3421` and `$1.85` in the same column (Cashflow.svelte:20, :181, :265).",
+  "user_impact": "One column mixes four- and two-decimal amounts; every figure is correct, and the format is the one SPEC.md formatting-8 prescribes, so a change needs SPEC.md changed."
+ },
+ {
+  "number": 460,
+  "title": "The header scrolls away with the page",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: web/src/App.svelte:419 `<div id=\"hdr\" style=\"display:flex;...\">` has no position:sticky/fixed; web/src/app.css:39-40 make the document the scroll container (`body{...min-height:100vh;padding:24px}`, `#app{...overflow:hidden}`); the only sticky rules in web/src are table <th> cells. SPEC.md says nothing about the header staying in view.",
+  "condition_or_scenario": "Open Trades (or any long list), scroll down: the header with the sync line, Orders, bell, filter and menu buttons scrolls out of view (App.svelte:419); the user scrolls back up to reach them.",
+  "user_impact": "On long pages the header and its buttons scroll out of sight."
+ },
+ {
+  "number": 461,
+  "title": "A date preset is not counted as an active filter",
+  "class": "reachable",
+  "evidence": "web/src/lib/filters.svelte.ts:47-55 `activeCount()` counts lists, ranges, years, from/to and search, never `filters.preset`. Choosing a preset sets only the preset: FilterPopover.svelte:194 `setFilters({ preset: ..., years: [], from: '', to: '' })`. activeCount gates the filter button's dot (App.svelte:472) and Escape's clear (App.svelte:159). SPEC.md:1055 filters-29: \"With nothing open and nothing being typed, Escape clears every filter, the same as Clear all.\" The Date chip still shows (filters.svelte.ts:114-115, :161).",
+  "condition_or_scenario": "Open the filter popover, click 1M (FilterPopover.svelte:422 -> preset('1m')), close it: activeCount() is 0, so the filter button shows no dot (App.svelte:472) and Escape does nothing (App.svelte:159), though the view is narrowed to one month and a Date chip shows.",
+  "user_impact": "With only a date preset chosen, the filter button shows no active dot and Escape does not clear it, contrary to SPEC filters-29."
+ },
+ {
+  "number": 462,
+  "title": "Execution labels on the trade chart overlap",
+  "class": "reachable",
+  "evidence": "web/src/lib/actions/tradeChart.ts:107-113 labels every marker whenever <=40 executions are in view (`.length <= 40`), no collision check; web/src/lib/trade/chart.ts:142-151 gives each fill its own text `+qty @ price`, BUY below the bar, SELL above. The 40 rule is SPEC.md:537 trades-57; overlap is not specified. Framing (tradeChart.ts:116-131) spans first fill to last fill, or to the last bar for an open trade, plus 15%, so a long trade puts many bars in the view. lightweight-charts 5 (web/package.json:30) stacks markers on the same bar but not neighbouring bars' text.",
+  "condition_or_scenario": "Scale into a position over consecutive days (two or more buys a day or a few days apart) and hold it for months; open the trade/holding page: the view spans the whole holding at a few px per daily bar, the labels (~70 px wide, `+100 @ 12.34`) of the neighbouring buys are drawn under adjacent bars and overlap. Buying in pieces is ordinary trading.",
+  "user_impact": "Fill labels on the trade chart print over each other when same-side fills sit a few bars apart, making them unreadable until zoomed in."
+ },
+ {
+  "number": 463,
+  "title": "Light-theme contrast fails, text is 10 pixels, and there is no System theme",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: web/src/app.css:66 `.table th{font:500 10.5px/18px ...}`, :74 `.lbl{font-size:10px;...}` (every theme, every table header and tile label); :31 Light `--pos:#2e8a62;--neg:#c0505f` = 4.09/4.42:1 on --surface #fafafc and 3.74/4.04:1 on --bg #eef0f5 (below 4.5:1); :38 `html,body{...color-scheme:dark}` sets body dark even when :30 `html[data-theme=light]{color-scheme:light}` applies to html, so native controls in the page (the filter's date inputs, FilterPopover.svelte:431-433) are dark-styled in Light; theme.svelte.ts:13-17 offers Nocturne (default), Midnight, Light only. WCAG sets no minimum font size, so the 10 px part is legibility, not a WCAG failure.",
+  "condition_or_scenario": "Every screen shows 10-10.5 px uppercase labels and headers. The contrast and colour-scheme parts need the user to pick Light from the menu (an ordinary choice; which theme this user uses is not recorded anywhere): green/red figures then sit at 3.7-4.4:1 and the date pickers draw dark.",
+  "user_impact": "Small 10 px labels everywhere; in Light theme only, green/red figures fall slightly under AA contrast and native date inputs look dark. No 'follow the system' theme."
+ },
+ {
+  "number": 464,
+  "title": "Escape and the browser's Back behave differently on a trade and on a holding",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: web/src/App.svelte:158 `if (route.sub && route.tab === 'trades' && ...) { history.back(); return }`, then :159 `if (activeCount() > 0 && !isFieldFocused()) { resetFilters(); refilter(); return }`; web/src/lib/Trades.svelte:63 an open trade's row goes `goSub('portfolio', t.position)`, a closed one `goSub('trades', t.id)`; router.svelte.ts goSub pushes a hash entry, so Back leaves either page. No escapable is registered for a holding page. web/e2e/navigation.spec.ts:59-69 drives Escape/Back on a trade only.",
+  "condition_or_scenario": "Trades list -> click an open trade's row (Trades.svelte:63) -> the holding page (#portfolio/<id>) -> press Escape: route.tab is 'portfolio', so App.svelte:158 does not go back; :159 clears the filters if any are active, otherwise nothing happens. On a closed trade's page the same Escape returns to the list. Back works on both.",
+  "user_impact": "Escape closes a trade's page but not a holding's page, and on a holding page it silently clears active filters instead."
+ },
+ {
+  "number": 465,
+  "title": "The document title never changes",
+  "class": "reachable",
+  "evidence": "web/index.html:7 `<title>Bagholder</title>`; nothing in web/src sets document.title or uses <svelte:head> (web/src/no_title.test.ts forbids `.title =` from script, a tooltip lint that would also need adjusting).",
+  "condition_or_scenario": "Always: every tab, trade and holding page shows the browser tab title 'Bagholder', and every history entry (Back menu, history list) reads the same.",
+  "user_impact": "The browser tab and history entries always read 'Bagholder'; no wrong figure or failure."
+ },
+ {
+  "number": 466,
+  "title": "Numbers are formatted as US English for every viewer",
+  "class": "hypothetical",
+  "evidence": "web/src/lib/fmt.ts:40 `v.toLocaleString('en-US', ...)`, :145; dec.ts:107 `Intl.NumberFormat('en-US', ...)` (fmt.ts's only change since d6824aa7 is a gap word). SPEC.md:368-375 formatting-2..9 define the format itself (`$1,247.41`, `233,580`, `−$286.74`), which en-US produces; en-CA produces identical grouping and decimal marks. Nothing in the repo records the one user's browser locale; the owner writes in English.",
+  "condition_or_scenario": "Needs a viewer whose browser locale formats numbers differently from en-US (fr-CA's `1 247,41`, a European locale). No evidence the user uses one; for an English-Canadian viewer the output is identical, and it is the format SPEC.md specifies.",
+  "user_impact": "None for an English locale; a French-locale viewer would see English-style numbers, which is what SPEC.md specifies."
+ },
+ {
+  "number": 467,
+  "title": "Dialogs trap no focus, rows are not reachable by keyboard, and nothing is announced",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: ticket/OrderTicket.svelte:86, orders/OrdersPanel.svelte:50, notes/NotesPanel.svelte:57 are `role=\"dialog\"` with aria-label only (no aria-modal, no inert page, no Tab handling; grep finds no keydown/Tab code in OrderTicket); Trades.svelte:54-56 click-only <th> (no tabindex/aria-sort), :63 click-only <tr>; no aria-live in web/src. SPEC.md:811 order-ticket-5 \"While it is open the keyboard belongs to it\" (written about the tab arrows and Cmd-K). Accessibility as a page rework is deferred to docs/future.md (decisions 2026-09-26), not one of the three ruling-out decisions.",
+  "condition_or_scenario": "Reachable part: open the order ticket and Tab through its fields; past the last control focus moves to the page behind the scrim (OrderTicket.svelte:86 traps nothing), so Enter/Space then acts on a hidden control. The rest needs keyboard-only navigation of the Trades table or a screen reader; the record shows this user uses the mouse with arrow keys and Escape (decisions 2026-10-02) and nothing shows assistive technology.",
+  "user_impact": "Tabbing past the last field of an open ticket moves focus to the page behind it; table rows and sort headers cannot be reached by keyboard, and nothing is announced to a screen reader (moot unless the user uses one)."
+ },
+ {
+  "number": 468,
+  "title": "The annualised return's subtitle counts calendar years, and its span and the benchmark's are not the account's",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: web/src/lib/Dashboard.svelte:223 `'Over ' + ann.count + ' years'`; rust/crates/engine/src/stat/returns.rs:218 `count: used.len()` (calendar-year entries of >=30 days), while the rate is annualised over days (:216-217 `yrs = days/365.25`). SPEC.md:448 dashboard-14 names the subtitle \"Number of years used\", which this matches. Benchmark: :136-139 starts at the tracker's last level before `from`; for the first year with no prior stated day `from = base = start_day` (:162-165) while the account's chain starts after start_day, so the index covers one more session; later years and date ranges line up (equity-and-returns-8/12).",
+  "condition_or_scenario": "Any history whose first or current year is partial (always true mid-year): e.g. statements from March 2021 to 15 Oct 2026 give years 2021-2026 all >= 30 days, so the tile reads 'Over 6 years' for ~5.6 years; the rate itself is right. The benchmark's extra session affects only the first year's comparison.",
+  "user_impact": "The Avg annualized tile's subtitle overstates the span (counts calendar years touched, e.g. 'Over 6 years' for 5.6); the first year's index comparison includes one extra session."
+ },
+ {
+  "number": 469,
+  "title": "Days with large deposits or withdrawals are held in by ad-hoc floors",
+  "class": "hypothetical",
+  "evidence": "Unchanged at f89634de: returns.rs:130-131 1 % floor (SPEC.md:176 equity-and-returns-9 defines it), :182 `!factor.is_finite()` skip, :208 `y.r > -1.0`; stat/mod.rs:36-42 day_return `(after - flow)/before - 1`, flows at end of day per SPEC.md equity-and-returns-6. With daily values stated by Wealthsimple, an end-of-day flow convention is a usual daily TWR convention; the floors change the answer only on degenerate days. No engine case, fixture, doc or report shows such a day in the user's book.",
+  "condition_or_scenario": "Needs a day whose prior value is tiny next to the money moved and invested that day inside a year that otherwise clears the 1 % floor (an account drained to cents and refilled, viewed alone with the account filter), giving a huge finite factor; or a whole year under 1 % of the all-time peak; or a year at -100 %. None observed. Ordinary deposits into an account of comparable size shift only that day's return by the deposit's same-day move, per SPEC's convention.",
+  "user_impact": "If it happened: an absurd yearly or annualised return for an account emptied and refilled within a year, seen with that account filtered alone."
+ },
+ {
+  "number": 470,
+  "title": "The monthly income average divides by the months that paid",
+  "class": "reachable",
+  "evidence": "rust/crates/engine/src/scope.rs:986 (was 965) `paying_months = ... filter(|m| keep(m) && m.count > 0).count()`, used at :996 and :998; wire/build.rs:594 maps per_paying_month to per_month; web/src/lib/Cashflow.svelte:107 renders `money0(t.perMonth) + '/mo avg'`. SPEC.md:760-764 cashflow-4/5/8 define it as \"Average per paying month\", so the code matches the spec. The repo's screenshot docs/screenshots/desktop-cashflow.png shows `2024 $2,990 · $427/mo avg`, i.e. ÷7 paying months.",
+  "condition_or_scenario": "Any year/window with a month that paid nothing: the first year of payments (paid from March: ÷10 not ÷12), quarterly-only payers, a gap between holdings. The tile divides the year's total by paying months only (scope.rs:986, :996).",
+  "user_impact": "The '/mo avg' under a year's income tile is higher than total ÷ months whenever some month paid nothing (e.g. $427/mo instead of $249/mo); it is what SPEC.md defines, so a fix needs SPEC.md changed."
+ },
+ {
+  "number": 471,
+  "title": "The income tile sums only the payers with a known rate and says nothing of the rest",
+  "class": "reachable",
+  "evidence": "rust/crates/engine/src/scope.rs:1023 drops held payers with no rate record, :1048 `rated = ... projected_per_month_cad.is_ok()`, :1049-1050 book and per_month summed over `rated`, :1056 `left_out` computed; wire/build.rs:596 discards it with `..`; Cashflow.svelte:105 shows yield and `$x/mo` only. A payer whose record states no schedule is unrated: sources/src/payers/exchange.rs:127 `per_year: None` (Yahoo's record, every US listing no company reader serves) and payers/us_pages.rs:208 `per_year: None` (Defiance funds; recorded reply sources/tests/replies/defiance/page-qtum.html). SPEC.md cashflow-9 says \"all rated holdings\"; decisions 2026-09-25 forbid showing a count of what a total left out, and 2026-09-23 say a missing fact is found, never shown as a partial. The user holds US listings (a USD account: 8a11daed; MSTY rows in wealthsimple-pull/edited-activity-november.json).",
+  "condition_or_scenario": "Hold a US-listed dividend payer no US company reader states a schedule for (any US stock, a Defiance ETF such as QTUM): its rate's per_year is None (exchange.rs:127 / us_pages.rs:208), so it is not rated (scope.rs:1048); the Yield on cost tile and its $x/mo sum the other payers only, and the page says nothing (build.rs:596). Its own row shows a 'schedule' wait word.",
+  "user_impact": "The Yield on cost tile and projected $/mo leave out every held payer without a stated schedule, understating income with no sign that anything is missing."
+ },
+ {
+  "number": 472,
+  "title": "Drawdown shows a minus sign on zero",
+  "class": "reachable",
+  "evidence": "Unchanged at f89634de: web/src/lib/Dashboard.svelte:222 `'−' + Math.abs(dd.pct * 100).toFixed(1) + '%'` and `'−' + money0(...)`, class 'neg' for any non-null pct. rust/crates/engine/src/stat/returns.rs:235 drawdown starts `pct: Some(0.0), abs: Some(0.0)` and returns it when the index never falls; scope.rs:1099 computes it over the date-filtered series. SPEC.md:183 equity-and-returns-16: an index that never falls has a drawdown of 0.",
+  "condition_or_scenario": "Choose the 1D (or 1W) date preset (filters.svelte.ts:71) on a day the account rose: the filtered series never falls, drawdown pct = 0, and the Max drawdown tile reads '−0.0%' in red with '−$0'.",
+  "user_impact": "Max drawdown shows '−0.0%' in red and '−$0' when there was no drawdown."
+ },
+ {
+  "number": 473,
+  "title": "Every dividend subtype is read as a dividend, and a staking reward carries no cash",
+  "class": "hypothetical",
+  "evidence": "Code fact true at f89634de: rust/crates/wealthsimple/src/mapping.rs:197 `(\"DIVIDEND\", _) => r(Kind::Dividend, U::None, C::Received, true)`, :212 staking reward `C::None`; :386 `Cash::Received => amount.abs()`. A staking reward with no cash is SPEC.md:56 trade-20 (a lot at zero cost, `reward` flag). Every DIVIDEND row in the recorded Wealthsimple replies is a cash payment: subtypes null, DIY_DIVIDEND, CASH_DIVIDEND, MANUFACTURED_DIVIDEND (cash in lieu), all amountSign positive (edited-activity-one-per-kind.json, edited-activity-november.json). A reinvestment arrives as its own DIY_BUY/DIVIDEND_REINVESTMENT row (VEQT 91.56 beside the DIY_DIVIDEND of 91.56), so it is already a dividend plus a buy. Return of capital is not a Wealthsimple subtype in any reply (MSTY's mostly-ROC distributions arrive as DIY_DIVIDEND) and SPEC what-you-enter-9 has the person enter it.",
+  "condition_or_scenario": "Needs a DIVIDEND row of a subtype that is not cash income: a return-of-capital or reinvested subtype (never recorded), or a negative-sign MANUFACTURED_DIVIDEND charged on a short over an ex-date, which C::Received/abs() (mapping.rs:386) would book as income received; no such row exists in any recorded reply.",
+  "user_impact": "If it happened: a charge or a non-income distribution counted as dividend income in the Cashflow figures."
+ },
+ {
+  "number": 474,
+  "title": "A start that fails shows no page, only an exit status and a log line",
+  "class": "seen",
+  "evidence": "Seen on real use: 2.5.6 exited at every start on the owner's install in exactly this block (main.rs Figures::open Err -> `return 1` before the bind), and a service manager restarted it without end (commit 8a11daed message; origin/architecture-briefs:briefs/29-usd-accounts-hotfix.md \"The owner's install is down: 2.5.6 exits at every start\", and \"Installs stuck on 2.5.6 cannot take 2.5.7 from inside the app\" because no page means no update button; f5408a37). 2.5.7 made a failed figures build non-fatal (figures.rs:292-304). Still at f89634de: main.rs:137-146 Python adoption `return 1` (:143), :155-176 carry::from_old_store Err (:161) and Figures::open Err (:174) `return 1`, :179-182 cache `return 1` (:181), all before the bind at :198; figures.rs:286-291 legacy import, Book::open_in, MarketCache::open and rederive_all still return Err.",
+  "condition_or_scenario": "Seen trigger (fixed): a USD-stated account made the figures build fail at start. Remaining exits need a store that will not open or migrate, a failed rederive or carry, or a failed adoption of the Python database; none of these has been observed.",
+  "user_impact": "The app does not come up at all: the browser shows a connection error, no reason on the page, no update button, and a service manager restarts it into the same failure."
+ },
+ {
+  "number": 475,
+  "title": "There is no health endpoint, and an update is judged healthy by 20 seconds of uptime",
+  "class": "hypothetical",
+  "evidence": "Unchanged at f89634de: update.rs:21 `UPDATE_HEALTHY_SEC: u64 = 20`, :935-957 try_wait loop that marks the update good at 20 s and deletes previous/ and snapshots/; no health route in http/; no HEALTHCHECK in rust/Dockerfile or docker-compose.yml. The owner's Pi runs the container (briefs/15/arch.md arch-V-4, \"the Docker-on-a-Pi shape the owner names\"), where rust/Dockerfile:56 sets BAGHOLDER_NO_UPDATE=1, so this supervisor is not in use there. The one bad release seen (2.5.6) died at start, which the 20 s window would catch.",
+  "condition_or_scenario": "Needs an in-app update to a release that stays up past 20 s and then dies, or stays up without serving; then no rollback happens. No release has been seen doing that.",
+  "user_impact": "If it happened: a bad update would be kept with its rollback copy deleted, leaving the app down until reinstalled by hand."
+ },
+ {
+  "number": 476,
+  "title": "The updater checks the new version by substring",
+  "class": "hypothetical",
+  "evidence": "Unchanged at f89634de: update.rs:521-523 `if !out.status.success() || !text.contains(want)`; main.rs:297-298 prints `bagholder X.Y.Z`. release.yml:45-49 refuses to build a release whose rust/crates/server/src/app.rs APP_VERSION differs from the tag, so each archive's binary answers its own tag's version.",
+  "condition_or_scenario": "Needs a release archive whose binary answers a different version that contains the tag's (2.0.10 inside v2.0.1's archive), i.e. a mispackaged release that the release workflow's version check already prevents. Never observed.",
+  "user_impact": "If it happened: the wrong version would be installed without being refused."
+ },
+ {
+  "number": 477,
+  "title": "Release archives are not signed or checked for authorship",
+  "class": "hypothetical",
+  "evidence": "Unchanged at f89634de: update.rs:760-773 checks only a SHA-256 downloaded from the same release; release.yml:93-95 writes only .sha256 files.",
+  "condition_or_scenario": "Needs an attacker able to replace a release's assets and checksum (a compromised GitHub account or token). Security; no ordinary use triggers it and no evidence of it.",
+  "user_impact": "If it happened: a malicious binary would be installed by the in-app updater."
+ },
+ {
+  "number": 478,
+  "title": "Release archives miss platforms and depend on the system's OpenSSL and a recent glibc",
+  "class": "hypothetical",
+  "evidence": "Unchanged at f89634de: release.yml:31-34 four targets (no armv7, no x86_64-apple-darwin), Linux built on ubuntu-22.04/-arm with system libssl-dev (:52); net/market/server Cargo.toml `openssl = \"0.10\"` unvendored. The owner's Pi runs the arm64 Docker image (briefs/15/arch.md arch-V-4), built from those binaries on debian:bookworm-slim (glibc 2.36, OpenSSL 3), and 2.5.6 started there (it failed later on data); the owner's computer is an arm64 Mac (docs/plans/stage-3-the-record-by-change.md:182-184 'this Mac (arm64)'), which has an archive.",
+  "condition_or_scenario": "Needs a host the user does not use: 32-bit armv7, an Intel Mac, Linux older than glibc 2.35/OpenSSL 3 (e.g. Raspberry Pi OS Bullseye running the archive instead of the image), or a Mac without the OpenSSL the macOS build linked. No evidence.",
+  "user_impact": "If it happened: the downloaded app would not start on that machine."
+ },
+ {
+  "number": 479,
+  "title": "Settings are undocumented and `--help` starts the server",
+  "class": "hypothetical",
+  "evidence": "True at f89634de: main.rs:295-345 handles only --version/-V and subcommands; `--help` falls through to serve()/update::supervise. README.md documents BAGHOLDER_NO_BROWSER and BAGHOLDER_HOME only. The documentation half is not a user-facing failure.",
+  "condition_or_scenario": "Needs the user to run the binary by hand with --help; the user starts it with docker compose on the Pi and from the checkout/archive on the Mac, and nothing shows them using flags. If they did, a server would start (or be refused as a second copy on the same data folder).",
+  "user_impact": "If it happened: typing `bagholder --help` starts the app instead of printing usage."
+ },
+ {
+  "number": 480,
+  "title": "Outbound calls are not disclosed and cannot be turned off one by one",
+  "class": "not-a-user-bug",
+  "evidence": "Code facts true at f89634de: main.rs:241 update check spawned at every start; feeds.rs disclosure_read_loop calls summary_ensure() unconditionally; net/src/switch.rs has no per-host switch; README.md:3 'Nothing is uploaded anywhere.'; DISCLOSURES.md:98-101 says '~1.1 GB' 'the first time you open a filing' while localmodel.rs pins 1,951,420,702 bytes fetched by the read loop. The calls themselves are the owner's chosen behaviour (decisions 2026-10-04: the model stays on by default; an off setting 'could be acceptable').",
+  "condition_or_scenario": "The calls happen on every install as designed; what is wrong is documentation (stale size/trigger, 'nothing is uploaded') and missing per-host settings, which this single user, the owner who made the decision, meets as no wrong figure, failure or slowdown.",
+  "user_impact": "None beyond stale disclosure text and no per-source off switches."
+ },
+ {
+  "number": 481,
+  "title": "The image's CI build carries no labels and the compose file runs `:latest`",
+  "class": "not-a-user-bug",
+  "evidence": "Unchanged at f89634de (no .github or compose change since d6824aa7): docker.yml build step passes no `labels:`; docker-compose.yml:4 `image: ghcr.io/professorbagholder/bagholder:latest`. README's update path is `docker compose pull && docker compose up -d`, so `:latest` is how the user updates on purpose.",
+  "condition_or_scenario": "Image metadata and a compose convention; running `:latest` changes nothing until the user pulls, which is the documented update.",
+  "user_impact": "None."
+ },
+ {
+  "number": 482,
+  "title": "The service recipes in the README do not restart a crash",
+  "class": "hypothetical",
+  "evidence": "README.md:109-114 launchd plist with RunAtLoad only, :133 schtasks with no restart (unchanged); the systemd recipe has Restart=on-failure and compose has restart: unless-stopped. The supervisor does not restart a crashed child outside an update window (update.rs:986 `return code`). The owner's Pi runs compose, which restarts (the 2.5.6 loop shows a restarter at work there). Nothing records the user running the launchd or schtasks recipe; decisions 2026-09-26: the app never sets itself up to start at login.",
+  "condition_or_scenario": "Needs the user to run Bagholder on the Mac through the README's launchd recipe (or on Windows through schtasks) and the app to crash; neither is recorded.",
+  "user_impact": "If it happened: after a crash the Mac copy stays down until the next login or a manual start."
+ },
+ {
+  "number": 483,
+  "title": "The data folder has one name on every platform",
+  "class": "not-a-user-bug",
+  "evidence": "main.rs:46-52 `~/.bagholder-rust` (or BAGHOLDER_HOME) on every platform; the image sets BAGHOLDER_HOME=/data (rust/Dockerfile:52). A naming convention; nothing fails.",
+  "condition_or_scenario": "No failure: the folder works on every platform.",
+  "user_impact": "None."
+ },
+ {
+  "number": 484,
+  "title": "Docs still refer to screenshot baselines and other things that no longer exist",
+  "class": "not-a-user-bug",
+  "evidence": "Unchanged at f89634de: PLAN.template.md:35 'the screenshot baselines unchanged'; docs/decisions.md:93 'Held by: the page's screenshot baselines (`web/`)'; no toHaveScreenshot in web/. MOBILE.md:3's claim concerns the phone apps (on hold by the owner).",
+  "condition_or_scenario": "Documentation and process; nothing in the running app.",
+  "user_impact": "None."
+ },
+ {
+  "number": 485,
+  "title": "Held-by tests that do not assert the rule they hold",
+  "class": "not-a-user-bug",
+  "evidence": "Unchanged at f89634de: rust/crates/engine/tests/no_guesses.rs:59-60 scans for `FX_FALLBACK` and `1.35` only. Test quality; the rule itself is held by engine/tests/cases/rates.json.",
+  "condition_or_scenario": "Test coverage; nothing the user meets.",
+  "user_impact": "None."
+ },
+ {
+  "number": 486,
+  "title": "Decisions recorded from briefs carry no words of the owner's",
+  "class": "not-a-user-bug",
+  "evidence": "docs/decisions.md entries citing only a brief (e.g. :93-102, '(Brief 01 §0.)', '(Brief 02 #3.)') with no owner's words or 'unconfirmed' mark, against its own header (:3). File unchanged since d6824aa7.",
+  "condition_or_scenario": "Documentation/process.",
+  "user_impact": "None."
+ },
+ {
+  "number": 508,
+  "title": "The scheduler works out every fact the figures use after every change",
+  "class": "unknown",
+  "evidence": "True at f89634de: due.rs:101-142 `pass` runs on every wake; each record change wakes it (figures.rs:593-633 record_changed/pulled call wake()); it calls `e.needs()` (engine/src/needs.rs fact_needs: every transaction and every holding's unit history, in memory) and read_sources.rs:117-159 needs_of, which reads every transaction row from the book (`book.transactions()`, :124) and each payer's names (:155). At the owner's size (7,151 live transactions, 29 accounts, capacity.rs:58-73) this is a whole-book SQLite read per change, but on the scheduler thread, outside any request's answer (the added trade's answer is measured separately: 13.8 ms on the owner's copy, PR #507). No measurement of the pass exists.",
+  "condition_or_scenario": "Trigger is ordinary (any added trade, note, pull). Missing to decide: the time of one due::pass after one change on the owner's copy or the capacity pair, on a Pi or scaled, and whether it delays anything the user waits on (quotes, the next read).",
+  "user_impact": "Unknown; at worst some background CPU after each change, not a wait the user has been shown to meet."
+ },
+ {
+  "number": 509,
+  "title": "Two stock dividends of one event share one Cashflow row id",
+  "class": "hypothetical",
+  "evidence": "Code fact true: engine/src/ledger.rs:1837 each StockDividend takes `transaction: anchor.clone()`; cashflow.rs:95-108 uses it as the row id. But no production input creates a stock-dividend leg (from == to with `cost`, ledger.rs:1820-1840): the only adjustment drafts are wealthsimple/src/mapping.rs:726 (split/consolidation/code change: units_per_unit and cost_share) and book/src/person.rs:226-247 (CostOfArrival has no `from` and returns early at ledger.rs:1811-1812, SpinOff, ReturnOfCapital). Found only by the generated property test (engine/tests/by_change.rs, PR #507 brief 27 item 3).",
+  "condition_or_scenario": "Needs an event with two stock-dividend legs; no source mapping or entry form produces even one stock-dividend leg today, so no real data can reach it.",
+  "user_impact": "If it happened: one of two stock-dividend rows in Cashflow could fail to update on screen."
+ },
+ {
+  "number": 512,
+  "title": "A back-dated row matches its instrument's family from its first row, not from the row",
+  "class": "hypothetical",
+  "evidence": "True at f89634de: engine.rs:386-388 rematch_families matches each reached family whole (deep-history #514 not merged, so appended rows do the same). Measured (PR #507 body, CI run 38433354930): the depth pair, whose added trade targets a listing as deep as the owner's deepest (349 rows, capacity.rs:72), is within the 100 ms Pi budget at the owner's depth and misses it only at four times it (109.4 ms Pi); on a copy of the owner's book an added trade took 13.8 ms on the Mac. A back-dated row costs the same whole-family match as an appended one.",
+  "condition_or_scenario": "Back-dated rows are ordinary (a Wealthsimple revision, a back-dated Add trade, a CSV of older history), but the excess is bounded by re-matching at most the owner's deepest family (349 rows), measured within budget at the owner's size; a slowdown needs a listing about four times deeper than any the owner has.",
+  "user_impact": "None at the user's size; a back-dated change on a listing several times deeper than the owner's deepest could take a little over 100 ms on a Pi."
+ },
+ {
+  "number": 513,
+  "title": "A coin remainder judged while its day's rate is pending stays open after the rate arrives",
+  "class": "hypothetical",
+  "evidence": "Code facts true: engine.rs:673-680 Change::Rates calls derive() and no rematch; dust.rs:38 converts the remainder's value at the row's day's rate. But fx.rs:103-105 `convert` returns at once when the currencies match, and every Wealthsimple coin is a CAD security (all crypto securities in the recorded replies: DOGE, DOT, ETH, FARTCOIN, FTM, SOL, USDC, currency CAD) priced at its CAD fill while the coin minimum is CAD (wealthsimple/src/mapping.rs:68-70); other brokers have no coin minimum (engine_inputs.rs:21-22), so nothing is dust. No rate is consulted, so none can be pending.",
+  "condition_or_scenario": "Needs a coin whose currency differs from the broker's coin minimum's currency (a non-CAD coin at Wealthsimple) sold on a day whose Bank of Canada rate is not yet published; Wealthsimple has never sent such a coin.",
+  "user_impact": "If it happened: a dust remainder would show as an open coin holding until some later change."
+ },
+ {
+  "number": 516,
+  "title": "No step at start that depends on the data stops the server",
+  "class": "seen",
+  "evidence": "Crash class seen: 2.5.6 crash-looped on the owner's Pi at start (8a11daed: 'the refusal stopped the server at every start, so a service manager restarted it without end'; briefs/29-usd-accounts-hotfix.md 'The owner's install is down'). That step (the figures build) is fixed in 2.5.7 (figures.rs:292-304). The issue's two remaining steps are still fatal at f89634de: figures.rs:291 `rederive_all(&book, at)?` (-> main.rs:172-174 return 1) and main.rs:159-162 carry::from_old_store `return 1`; neither has been seen failing (no commit, brief, log or issue reports it).",
+  "condition_or_scenario": "Remaining steps, hypothetical: rederive_all fails (repair_merged_successions or a mapping's rederive returns Err on the stored rows, figures.rs:717-727) or the carry fails (an earlier store that will not open or prepare, carry.rs:267-280). Brief 29 notes both depend on the data.",
+  "user_impact": "The app does not start, shows no page and no update button, and a service manager restarts it into the same failure (as 2.5.6 did)."
+ }
+]
