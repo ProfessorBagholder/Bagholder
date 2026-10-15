@@ -39,4 +39,5 @@ Read from any checkout without switching branches:
 | 28 | [Verdict on the deep-history plan (#511), and brief 27's fixes as merged: Go with changes](28-deep-history-verdict.md) | Current |
 | 29 | [The 2.5.7 hotfix (#515): merge now, four fixes right after](29-usd-accounts-hotfix.md) | Current; verdict corrected 2026-10-14 |
 | 30 | [The deep-history build as built (#514): not yet, merge after the fixes](30-deep-history-as-built.md) | Current |
-| 31 | [#514 at its merged head 023e0174: the merges keep both sides; brief 30 stands, not yet](31-deep-history-merged-head.md) | Current; one defect on master from 2.5.7 |
+| 31 | [#514 at its merged head 023e0174: the merges keep both sides; brief 30 stands, not yet](31-deep-history-merged-head.md) | Superseded by 32; its master defect fixed by #518 |
+| 32 | [Brief 30's fixes on #514, and #518: #518 merges; #514 after five small changes](32-deep-history-fixes.md) | Current |
