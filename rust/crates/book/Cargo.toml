@@ -29,9 +29,12 @@ jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
 
 [features]
 pinned-tzdb = []
+# the test oracles (the names kept against their fold): enabled by every
+# consumer's dev-dependencies, never in a release build
+oracles = []
 
 [dev-dependencies]
-bagholder-book = { path = ".", features = ["pinned-tzdb"] }
+bagholder-book = { path = ".", features = ["pinned-tzdb", "oracles"] }
 tempfile = "3"
 
 [lints]

@@ -260,3 +260,76 @@ fn the_record_as_a_whole_and_each_benchmark_are_reported_when_they_move() {
         }
     }
 }
+
+/// A group's journal written alone moves the group's figure, as a fresh build
+/// has it: nothing else in the change reaches the groups (brief 30, C2).
+#[test]
+fn a_groups_journal_written_alone_moves_its_figure() {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
+    let case: Value = serde_json::from_str(&text).unwrap();
+    let mut b = build(&case);
+    let mut e = engine(&mut b);
+    let trade = e.figures().trades.iter().find_map(|t| t.trade).expect("a trade with an id");
+    let second = e.figures().positions.iter().find_map(|p| p.trade).expect("a position with an id");
+    let g = b.ids.group("G");
+    e.apply(Change::Ledger(LedgerDelta { groups: BTreeMap::from([(g, Some((rank(1000), Group { id: g, locked: true, members: vec![trade, second] })))]), ..LedgerDelta::default() }));
+    let base = e.clone();
+    let journal = LedgerDelta { journal: BTreeMap::from([(JournalSubject::Group(g), Some(JournalEntry { thesis: "a pair".into(), grade: Some(bagholder_core::journal::Grade::B), tags: vec!["pairs".into()] }))]), ..LedgerDelta::default() };
+    let c = Change::Ledger(journal);
+    let after = changed(base.inputs(), &c);
+    let moved = e.apply(c);
+    let fresh = Engine::build(after);
+    assert!(e.differences(&fresh).is_empty(), "the group's figure as a fresh build: {:?}", e.differences(&fresh).0);
+    let expected = fresh.differences(&base);
+    assert!(!expected.is_empty(), "the journal moved the group");
+    assert_eq!(moved, expected);
+}
+
+/// Cash dividends added, moved to another day, moved to another instrument and
+/// removed: each payer's rate, read from that payer's own payments, equals a fresh
+/// build's after each (brief 32, change 2).
+#[test]
+fn cash_dividends_added_moved_and_removed_leave_every_payer_as_a_fresh_build() {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
+    let case: Value = serde_json::from_str(&text).unwrap();
+    let mut b = build(&case);
+    let mut e = engine(&mut b);
+    let (x, f) = (b.ids.instrument("X"), b.ids.instrument("F"));
+    let record_of = |label: &str| b.tx[label].record;
+    let rows_of = |e: &Engine, r: bagholder_core::RecordId| -> (bagholder_engine::input::RecordInfo, Vec<bagholder_core::transaction::Transaction>) {
+        (e.inputs().ledger.records[&r].clone(), e.inputs().ledger.transactions.of_record(r).cloned().collect())
+    };
+    let step = |e: &mut Engine, r: bagholder_core::RecordId, now: Option<(bagholder_engine::input::RecordInfo, Vec<bagholder_core::transaction::Transaction>)>, what: &str| {
+        let c = Change::Ledger(LedgerDelta { records: BTreeMap::from([(r, now)]), ..LedgerDelta::default() });
+        let after = changed(e.inputs(), &c);
+        e.apply(c);
+        let fresh = Engine::build(after);
+        assert!(e.differences(&fresh).is_empty(), "{what}: {:?}", e.differences(&fresh).0);
+        assert_eq!(e.figures().payers, fresh.figures().payers, "{what}: the payers");
+    };
+    // a dividend on X, which has paid none
+    let (info, mut rows) = rows_of(&e, record_of("v1"));
+    let added = b.ids.record("x-dividend");
+    for t in &mut rows {
+        t.id = bagholder_core::TransactionId::new(added, t.id.leg.clone());
+        t.instrument = Some(x);
+    }
+    step(&mut e, added, Some((bagholder_engine::input::RecordInfo { source_key: "x-dividend".into(), ..info }, rows)), "a dividend added on X");
+    assert!(e.figures().payers.contains_key(&x), "X pays");
+    // one of F's moved to another day, then to another instrument
+    let v2 = record_of("v2");
+    let (info, mut rows) = rows_of(&e, v2);
+    for t in &mut rows {
+        t.trade_date = "2026-04-20".parse().unwrap();
+        t.occurred_at = Some("2026-04-20T11:00:00Z".parse().unwrap());
+    }
+    step(&mut e, v2, Some((info.clone(), rows.clone())), "a dividend moved to another day");
+    for t in &mut rows {
+        t.instrument = Some(x);
+    }
+    step(&mut e, v2, Some((info, rows)), "a dividend moved to another instrument");
+    // F's last and U's only, removed
+    step(&mut e, record_of("v1"), None, "a dividend removed");
+    step(&mut e, record_of("v3"), None, "a payer's only dividend removed");
+    assert!(!e.figures().payers.contains_key(&f) || e.inputs().facts.declared.contains_key(&f), "F paid nothing left");
+}

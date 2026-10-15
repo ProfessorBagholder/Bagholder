@@ -5,7 +5,8 @@
 //! two sides are two instruments, corporate events whose legs name other
 //! instruments, a row naming no instrument of a record whose legs are not
 //! stated, a record whose legs are two uncoupled instruments at one instant
-//! beside a sale of one of them, cash moved) have their records added, revised
+//! beside a sale of one of them, a record selling one instrument and buying
+//! another beside a timed buy of the one it sells, cash moved) have their records added, revised
 //! and removed in a random order, and after every step the engine equals one
 //! built fresh from the same inputs: its figures, its match whole and the
 //! trades' identity; what it says moved is what differs; and its match is the
@@ -55,7 +56,7 @@ fn generate(seed: u64) -> Value {
         let at = |m: u64| format!("{date}T15:{:02}:00Z", m % 60);
         let id = format!("t{n}");
         let acct = r.pick(&["A", "B", "D"]);
-        match r.below(17) {
+        match r.below(18) {
             0..=3 => {
                 let i = r.pick(&["X", "W", "V"]);
                 let q = 1 + r.below(50);
@@ -93,9 +94,11 @@ fn generate(seed: u64) -> Value {
                 tx.push(json!({"id": inn, "account": to, "day": date, "at": at(4), "kind": "transfer-in", "instrument": i, "qty": q.to_string()}));
                 links.push(json!({"out": out, "in": inn}));
             }
-            9 if r.below(2) == 0 => {
+            9 | 14 if r.below(4) != 0 => {
                 // a holding moved to another account whose row names no instrument:
-                // the units land under the instrument sent
+                // the units land under the instrument sent (common, so that the
+                // removal of its sending side, which leaves the receiving account
+                // holding none, is met in many books: brief 28, E)
                 let q = 1 + r.below(30);
                 let (out, inn) = (format!("{id}o"), format!("{id}i"));
                 tx.push(json!({"id": out, "account": "A", "day": date, "at": at(3), "kind": "transfer-out", "instrument": "X", "qty": format!("-{q}")}));
@@ -146,6 +149,28 @@ fn generate(seed: u64) -> Value {
                     {"from": "X", "to": "X", "units_per_unit": "0.1", "cost": "12.50"},
                     {"from": "W", "to": "W", "units_per_unit": "0.05", "cost": "3.25"}
                 ]}));
+            }
+            15 => {
+                // one record selling one instrument and buying another (a switch),
+                // its legs timed or not, beside a timed buy of the one it sells that
+                // day: the record is applied at its earliest leg, whichever family
+                // that leg is in (brief 30, B1)
+                let (sold, bought) = match r.below(3) {
+                    0 => ("X", "V"),
+                    1 => ("W", "X"),
+                    _ => ("V", "W"),
+                };
+                let q = 1 + r.below(20);
+                let rec = format!("r{n}");
+                tx.push(json!({"id": format!("{id}l"), "account": acct, "day": date, "at": at(1), "kind": "buy", "instrument": sold, "qty": q.to_string(), "cash": format!("-{}", q * 10)}));
+                let mut out = json!({"id": format!("{id}a"), "record": rec, "leg": "sell", "account": acct, "day": date, "kind": "sell", "instrument": sold, "qty": format!("-{q}"), "cash": (q * 11).to_string()});
+                let mut inn = json!({"id": format!("{id}b"), "record": rec, "leg": "buy", "account": acct, "day": date, "kind": "buy", "instrument": bought, "qty": q.to_string(), "cash": format!("-{}", q * 9)});
+                if r.below(2) == 0 {
+                    out["at"] = json!(at(r.below(3)));
+                    inn["at"] = json!(at(r.below(3)));
+                }
+                tx.push(out);
+                tx.push(inn);
             }
             _ => {
                 // cash moved
@@ -387,7 +412,14 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
                     d.records.insert(id, Some((info, txs)));
                 }
                 4 => {
-                    let Some(id) = k.present.keys().nth(r.below(k.present.len().max(1) as u64) as usize).copied() else { continue };
+                    // a record gone: as often as not a transfer's sending side
+                    let outs: Vec<RecordId> = k.present.iter().filter(|(_, (_, t))| t.iter().any(|t| t.kind == bagholder_core::transaction::Kind::TransferOut)).map(|(id, _)| *id).collect();
+                    let id = if !outs.is_empty() && r.below(2) == 0 {
+                        outs[r.below(outs.len() as u64) as usize]
+                    } else {
+                        let Some(id) = k.present.keys().nth(r.below(k.present.len().max(1) as u64) as usize).copied() else { continue };
+                        id
+                    };
                     k.present.remove(&id);
                     d.records.insert(id, None);
                 }

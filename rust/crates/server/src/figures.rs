@@ -101,8 +101,15 @@ fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, Stri
         let changes = book.changes_since(after).map_err(err)?;
         #[cfg(test)]
         BETWEEN_READS.with(|h| {
-            if let Some(f) = h.borrow_mut().take() {
-                f();
+            let mut h = h.borrow_mut();
+            match h.as_mut() {
+                Some((0, _)) => {
+                    if let Some((_, f)) = h.take() {
+                        f();
+                    }
+                }
+                Some((n, _)) => *n -= 1,
+                None => {}
             }
         });
         let delta = engine_inputs::delta(book, &changes)?;
@@ -132,8 +139,15 @@ fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, Stri
 #[cfg(test)]
 thread_local! {
     /// A write another writer commits between the log's read and the keyed reads
-    /// of the next catch-up on this thread (`tests::two_writers_racing…`).
-    static BETWEEN_READS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    /// of a catch-up on this thread, after as many catch-ups as the count says
+    /// (`tests::two_writers_racing…`).
+    static BETWEEN_READS: std::cell::RefCell<Option<(usize, Box<dyn FnOnce()>)>> = const { std::cell::RefCell::new(None) };
+    /// A write another writer commits between the engine naming trades to move or
+    /// orphan and the writes that do it, given those trades and the openings the
+    /// engine saw them on (`tests::a_trade_another_writer_settled…`).
+    static BEFORE_SETTLE_WRITES: std::cell::RefCell<Option<Box<dyn FnOnce(Vec<(bagholder_core::TradeId, bagholder_core::journal::Opening)>)>>> = const { std::cell::RefCell::new(None) };
+    /// A failure planted after a pull's first catch-up (`tests::a_pull_that_fails…`).
+    static AFTER_CATCH_UP: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<(), String>>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The log dropped up to `upto`, its failure said and not raised: the engine has
@@ -176,6 +190,11 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
             Some(Anchor::Opening(o)) => Some(o.clone()),
             _ => None,
         };
+        #[cfg(test)]
+        if !identity.moved.is_empty() || !identity.unclaimed.is_empty() {
+            let named: Vec<_> = identity.moved.iter().map(|(t, _)| t).chain(identity.unclaimed.iter()).filter_map(|t| seen(t).map(|s| (*t, s))).collect();
+            BEFORE_SETTLE_WRITES.with(|h| h.borrow_mut().take().map(|f| f(named)));
+        }
         let before = book.changes_upto().map_err(err)?;
         for (trade, key) in &identity.moved {
             if let Some(s) = seen(trade) {
@@ -494,8 +513,15 @@ impl Figures {
             return Ok(n.clone());
         }
         let book = self.book()?;
-        let n = self.read(|e| crate::wire::build::Names::load(&book, e.inputs())).unwrap_or_else(|| Ok(Default::default()))?;
+        // the engine's read lock held across the cache's write: an install or a
+        // pull cannot land between the read and the write and be overwritten
+        let engine = self.engine.read().unwrap_or_else(|e| e.into_inner());
+        let n = match engine.as_ref() {
+            Some(e) => crate::wire::build::Names::load(&book, e.inputs())?,
+            None => Default::default(),
+        };
         *self.names.write().unwrap_or_else(|e| e.into_inner()) = Some(n.clone());
+        drop(engine);
         Ok(n)
     }
 
@@ -614,24 +640,39 @@ impl Figures {
         // rows in the same write, read back with it
         let held = Held::new(&self.applied, &self.movements);
         let mut moved = catch_up(&book, e, &held)?;
-        merge(&mut moved, settle_trades(&book, e, &held, now)?);
-        let named = held.named.take();
-        let mut brokers = std::collections::BTreeMap::new();
-        for a in stated_for {
-            brokers.insert(*a, engine_inputs::broker_account(&book.stated(*a).map_err(|e| e.to_string())?));
-        }
-        for (a, now_stated) in brokers {
-            if e.inputs().market.brokers.get(&a) != now_stated.as_ref() {
-                merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
+        // once a catch-up has applied, what it named must reach the names the page
+        // holds, whatever fails after it: on a failure the names are read whole
+        // again when next asked (brief 28, E)
+        let rest = (|| -> Result<(), String> {
+            merge(&mut moved, settle_trades(&book, e, &held, now)?);
+            #[cfg(test)]
+            AFTER_CATCH_UP.with(|h| h.borrow_mut().take().map_or(Ok(()), |f| f()))?;
+            let mut brokers = std::collections::BTreeMap::new();
+            for a in stated_for {
+                brokers.insert(*a, engine_inputs::broker_account(&book.stated(*a).map_err(|e| e.to_string())?));
             }
+            for (a, now_stated) in brokers {
+                if e.inputs().market.brokers.get(&a) != now_stated.as_ref() {
+                    merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
+                }
+            }
+            Ok(())
+        })();
+        let named = held.named.take();
+        let mut names = self.names.write().unwrap_or_else(|e| e.into_inner());
+        // the broker's names of what the change named read again, where the page
+        // holds them; on a failure they are read whole again when next asked
+        let done = rest.and_then(|()| names.as_mut().map_or(Ok(()), |n| n.reload(&book, e.inputs(), named.instruments, named.accounts)));
+        if done.is_err() {
+            *names = None;
         }
-        // the broker's names of what the change named read again, where the page holds them
-        if let Some(n) = self.names.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            n.reload(&book, e.inputs(), named.instruments, named.accounts)?;
-        }
+        drop(names);
         drop(guard);
+        // what the applied catch-up moved reaches the pages whatever failed after
+        // it, and the scheduler looks again (brief 30, C6)
         self.wake();
-        Ok(self.moved(moved))
+        let moved = self.moved(moved);
+        done.map(|()| moved)
     }
 
     /// What the broker states of an account now (its cash, what it can borrow,
@@ -766,6 +807,10 @@ mod tests {
         let fresh = build(&book, &f.cache().unwrap(), clock(&zone, now).unwrap()).unwrap();
         let held = f.read(|e| e.differences(&fresh)).expect("built");
         assert!(held.is_empty(), "{held:?}");
+        // in the order shown, and in the match and the trades' identity (brief 28, E)
+        if let Some(why) = f.read(|e| e.match_disagrees(&fresh)).expect("built") {
+            panic!("{why}");
+        }
         // what the change log brought in is the record as a whole read gives it
         let (ledger, adjustments) = f.read(|e| (e.inputs().ledger.clone(), e.inputs().facts.adjustments.clone())).unwrap();
         assert!(ledger == engine_inputs::ledger(&book).unwrap(), "the ledger applied by key is not the ledger read whole");
@@ -819,12 +864,20 @@ mod tests {
         f.record_changed(now).unwrap();
         same_as_fresh(&f, now);
         assert!(f.read(|e| e.inputs().ledger.instruments[&head.parse().unwrap()].names.last().and_then(|n| n.name.clone())).unwrap().as_deref() == Some("Renamed Under The Member"), "the head kept its old name");
-        // a broker's id for it, under the member
-        book.conn_for_tests().execute("INSERT INTO instrument_refs (scheme, value, instrument_id) VALUES ('broker-security:wealthsimple', 'sec-s-another-id', ?1)", [&member]).unwrap();
+        // a broker's id for it, under the member, that the page names it by: the
+        // first of its ids (brief 28, E), so what is shown changes
+        book.conn_for_tests().execute("INSERT INTO instrument_refs (scheme, value, instrument_id) VALUES ('broker-security:wealthsimple', '0-sec-under-the-member', ?1)", [&member]).unwrap();
         f.record_changed(now).unwrap();
         same_as_fresh(&f, now);
-        // a record under the member removed
+        let head_id: bagholder_core::InstrumentId = head.parse().unwrap();
+        assert_eq!(f.names().unwrap().security.get(&head_id).map(String::as_str), Some("0-sec-under-the-member"), "the page does not name the head by the member's broker id");
+        // a record under the member: a sighting of a new name, the member's alone
         let record: String = book.conn_for_tests().query_row("SELECT t.record_id FROM transactions t JOIN source_records r ON r.id = t.record_id WHERE t.instrument_id = ?1 AND r.state = 'live' LIMIT 1", [&member], |r| r.get(0)).unwrap();
+        book.conn_for_tests().execute("INSERT INTO instrument_sightings (record_id, leg, instrument_id, symbol, day) VALUES (?1, 'extra', ?2, 'NEWSYM', '2099-02-01')", [&record, &member]).unwrap();
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+        assert_eq!(f.read(|e| e.inputs().ledger.instruments[&head_id].names.last().map(|n| n.symbol.clone())).unwrap().as_deref(), Some("NEWSYM"), "the head kept its old symbol");
+        // and that record removed
         book.mark_removed(record.parse().unwrap(), now).unwrap();
         f.record_changed(now).unwrap();
         same_as_fresh(&f, now);
@@ -853,12 +906,12 @@ mod tests {
         book.conn_for_tests().execute("INSERT INTO record_problems (record_id, code, detail) VALUES (?1, 'before', 'written before the read')", [revised.to_string()]).unwrap();
         let home_path = home.path().to_path_buf();
         BETWEEN_READS.with(|h| {
-            *h.borrow_mut() = Some(Box::new(move || {
+            *h.borrow_mut() = Some((0, Box::new(move || {
                 // the other writer, on a connection of its own
                 let (other, _) = Book::open_in(&home_path, crate::app::APP_VERSION, now).unwrap();
                 other.mark_removed(gone, now).unwrap();
                 other.conn_for_tests().execute("INSERT INTO record_problems (record_id, code, detail) VALUES (?1, 'raced', 'written between the reads')", [revised.to_string()]).unwrap();
-            }))
+            })))
         });
         // one catch-up alone: it saw `read` removed and nothing the other writer did
         {
@@ -919,6 +972,242 @@ mod tests {
         let named = held.named.take();
         f.read(|e| f.names.write().unwrap().as_mut().unwrap().reload(&book, e.inputs(), named.instruments, named.accounts).unwrap()).unwrap();
         same_as_fresh(&f, now);
+    }
+
+    /// The broker's own row for an order, as its pull stores it: what a read-back
+    /// fill gives way to.
+    struct BrokerRow;
+
+    impl bagholder_book::mapping::Mapping for BrokerRow {
+        fn source(&self) -> bagholder_core::SourceName {
+            bagholder_core::SourceName::named("wealthsimple")
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn map(&self, _ctx: &bagholder_book::mapping::MapContext, _payload: &str) -> bagholder_book::mapping::Mapped {
+            use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
+            let usd = bagholder_core::Currency::USD;
+            bagholder_book::mapping::Mapped {
+                legs: vec![bagholder_book::mapping::Draft {
+                    leg: bagholder_core::Leg::named("trade"),
+                    account: bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "acct-race"),
+                    occurred_at: None,
+                    trade_date: bagholder_core::jiff::civil::date(2025, 11, 19),
+                    settle_date: None,
+                    kind: bagholder_core::transaction::Kind::Buy,
+                    effect: None,
+                    instrument: Some(bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), "sec-race")], kind: InstrumentKind::Security, currency: usd, name: None, option: None, standing: None }),
+                    quantity: Some(bagholder_core::Dec::from_int(10)),
+                    price: None,
+                    cash: Some(bagholder_core::Money::new(bagholder_core::Dec::parse("-1012.5").unwrap(), usd)),
+                    fee: None,
+                    fx_rate: None,
+                    paid_on: None,
+                    value: None,
+                }],
+                problems: vec![],
+                adjustments: vec![],
+                hold: None,
+                orders: vec![],
+            }
+        }
+    }
+
+    /// An order's read-back fill racing the broker's own row (brief 26, 3; brief
+    /// 28, E): the fill opens a round trip, and while the trade it is given is
+    /// read back, another connection stores the broker's row and the fill gives
+    /// way to it. The stale-anchor guards of `settle_trades` meet the move: after
+    /// the next change the engine is a fresh build's, and the round trip keeps one
+    /// trade, orphaned by nothing.
+    #[test]
+    fn a_fill_giving_way_while_its_trade_is_read_back_orphans_no_trade() {
+        use bagholder_core::order::{Asker, BrokerStatus, OrderEvent, OrderKind, Reading, Side, TimeInForce};
+        let run = |race: bool| -> (usize, usize) {
+            let home = tempfile::tempdir().unwrap();
+            let now = at("2025-11-19T21:00:00Z");
+            {
+                let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+                let ws = bagholder_core::Broker::named("wealthsimple");
+                let conn = book.add_connection(&ws, "Wealthsimple", now).unwrap();
+                let kind = bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Margin, registration: bagholder_core::account::Registration::Unregistered, managed: false, joint: false };
+                book.add_account(conn, &[bagholder_core::account::AccountRef::new(ws, "acct-race")], &kind, bagholder_core::account::AccountStatus::Open, Some("Trading"), now).unwrap();
+            }
+            let f = Figures::open(home.path(), now).unwrap();
+            f.state_zone("America/Toronto", now).unwrap();
+            let book = f.book().unwrap();
+            let order = bagholder_book::orders::OrderRequest {
+                id: "order-race".into(),
+                broker: "wealthsimple".into(),
+                broker_account: "acct-race".into(),
+                broker_security: "sec-race".into(),
+                symbol: "RACE".into(),
+                currency: bagholder_core::Currency::USD,
+                side: Side::Buy,
+                kind: OrderKind::Limit,
+                quantity: bagholder_core::Dec::from_int(10),
+                limit_price: Some(bagholder_core::Dec::from_int(102)),
+                stop_price: None,
+                time_in_force: TimeInForce::Day,
+                bracket: None,
+                request: serde_json::json!({}),
+            };
+            book.write_order(&order, false, &Asker::Person, now).unwrap();
+            book.order_event("order-race", &Asker::Person, now, &OrderEvent::Accepted { broker_id: "ws-race".into() }).unwrap().unwrap();
+            let _ = book.order_event("order-race", &Asker::Engine, now, &OrderEvent::Read(Reading::of(BrokerStatus::Filled, bagholder_core::Dec::from_int(10), Some(bagholder_core::Dec::parse("101.25").unwrap())))).unwrap();
+            let give_way = {
+                let home = home.path().to_path_buf();
+                move || {
+                    // the pull, on a connection of its own: the broker's row, and the fill giving way to it
+                    let (other, _) = Book::open_in(&home, crate::app::APP_VERSION, now).unwrap();
+                    let conn = other.connections().unwrap()[0].id;
+                    other.store(&BrokerRow, &bagholder_book::records::Incoming { connection: Some(conn), source_key: "ws-race", payload: "{}", refs: vec![] }, now).unwrap();
+                    assert_eq!(other.fills_give_way(now).unwrap(), 1);
+                }
+            };
+            if race {
+                // between the reads of the catch-up that reads back the trade opened
+                // on the fill: the second on this thread (the first applies the fill)
+                BETWEEN_READS.with(|h| *h.borrow_mut() = Some((1, Box::new(give_way))));
+                f.record_changed(now).unwrap();
+                assert!(BETWEEN_READS.with(|h| h.borrow().is_none()), "the other writer ran inside the read-back");
+            } else {
+                f.record_changed(now).unwrap();
+                give_way();
+            }
+            f.record_changed(now).unwrap();
+            same_as_fresh(&f, now);
+            let trades = book.trades().unwrap();
+            (trades.iter().filter(|t| t.orphaned_reason().is_none()).count(), trades.iter().filter(|t| t.orphaned_reason().is_some()).count())
+        };
+        let (kept, orphaned) = run(true);
+        assert_eq!((kept, orphaned), (1, 0), "the round trip keeps one trade, and none is orphaned");
+        assert_eq!(run(false), (kept, orphaned), "the race left the trades otherwise than the same writes made in turn");
+    }
+
+    /// A sale of what `BrokerRow` buys, a day before it: a short the buy then closes.
+    struct EarlierRow;
+
+    impl bagholder_book::mapping::Mapping for EarlierRow {
+        fn source(&self) -> bagholder_core::SourceName {
+            BrokerRow.source()
+        }
+        fn version(&self) -> u32 {
+            BrokerRow.version()
+        }
+        fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+            let mut m = BrokerRow.map(ctx, payload);
+            for l in &mut m.legs {
+                l.trade_date = bagholder_core::jiff::civil::date(2025, 11, 18);
+                l.kind = bagholder_core::transaction::Kind::Sell;
+                l.effect = Some(bagholder_core::transaction::Effect::Open);
+                l.quantity = l.quantity.map(|q| q.neg());
+                l.cash = l.cash.map(|c| c.neg());
+            }
+            m
+        }
+    }
+
+    /// A trade the engine names to move, settled by another writer between the
+    /// naming and the write (brief 30, C1): the write is refused, since the trade
+    /// is no longer anchored where the engine saw it, and the next change decides
+    /// again, leaving the engine a fresh build's.
+    #[test]
+    fn a_trade_another_writer_settled_first_is_not_written_over() {
+        let home = tempfile::tempdir().unwrap();
+        let now = at("2025-11-19T21:00:00Z");
+        let conn = {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            let ws = bagholder_core::Broker::named("wealthsimple");
+            let conn = book.add_connection(&ws, "Wealthsimple", now).unwrap();
+            let kind = bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Margin, registration: bagholder_core::account::Registration::Unregistered, managed: false, joint: false };
+            book.add_account(conn, &[bagholder_core::account::AccountRef::new(ws, "acct-race")], &kind, bagholder_core::account::AccountStatus::Open, Some("Trading"), now).unwrap();
+            conn
+        };
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        // the broker's buy, its round trip given a trade; then a short sale the day
+        // before, which the buy closes: the buy opens no round trip any more, and the
+        // engine names its trade to move to the short's
+        book.store(&BrokerRow, &bagholder_book::records::Incoming { connection: Some(conn), source_key: "ws-b", payload: "{}", refs: vec![] }, now).unwrap();
+        f.record_changed(now).unwrap();
+        book.store(&EarlierRow, &bagholder_book::records::Incoming { connection: Some(conn), source_key: "ws-a", payload: "{}", refs: vec![] }, now).unwrap();
+        let settled = std::rc::Rc::new(std::cell::RefCell::new(None));
+        {
+            let (home, settled) = (home.path().to_path_buf(), settled.clone());
+            BEFORE_SETTLE_WRITES.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |named: Vec<(bagholder_core::TradeId, bagholder_core::journal::Opening)>| {
+                    // the other writer, on a connection of its own, settles the trade first
+                    let (other, _) = Book::open_in(&home, crate::app::APP_VERSION, now).unwrap();
+                    let (trade, seen) = named.into_iter().next().expect("the engine names a trade");
+                    assert!(other.orphan_unclaimed(trade, &seen).unwrap());
+                    *settled.borrow_mut() = Some(trade);
+                }))
+            });
+        }
+        f.record_changed(now).unwrap();
+        let trade = settled.borrow().expect("the other writer ran between the naming and the write");
+        let t = book.trade(trade).unwrap();
+        assert!(t.orphaned_reason().is_some() && !matches!(t.anchor, bagholder_core::journal::Anchor::Opening(_)), "the move was written over the other writer's settling: {t:?}");
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+    }
+
+    /// A pull that fails after its first catch-up (brief 28, E; brief 30, C6):
+    /// what that catch-up applied and named still reaches the names the page
+    /// holds, which are read whole again when next asked, and what it moved
+    /// reaches the pages.
+    #[test]
+    fn a_pull_that_fails_after_its_catch_up_keeps_the_names_right() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        f.names().unwrap();
+        let book = f.book().unwrap();
+        let instrument: String = book.conn_for_tests().query_row("SELECT instrument_id FROM transactions WHERE instrument_id IS NOT NULL LIMIT 1", [], |r| r.get(0)).unwrap();
+        book.conn_for_tests().execute("DELETE FROM instrument_refs WHERE instrument_id = ?1 AND scheme LIKE 'broker-security:%'", [&instrument]).unwrap();
+        book.conn_for_tests().execute("INSERT INTO instrument_refs (scheme, value, instrument_id) VALUES ('broker-security:wealthsimple', 'sec-s-before-the-failure', ?1)", [&instrument]).unwrap();
+        // and a record removed: what the catch-up moves on the figures
+        let removed = book.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap()[0];
+        book.mark_removed(removed, now).unwrap();
+        let (version, _) = (f.version(), f.woken());
+        AFTER_CATCH_UP.with(|h| *h.borrow_mut() = Some(Box::new(|| Err("a failure planted after the catch-up".into()))));
+        assert!(f.record_changed(now).is_err(), "the planted failure is the pull's");
+        // what the catch-up moved reached the pages, and the scheduler was asked to look (brief 30, C6)
+        assert!(f.version() > version, "what the catch-up moved was dropped with the failure");
+        assert!(f.woken(), "the scheduler was not asked to look again");
+        let id: bagholder_core::InstrumentId = instrument.parse().unwrap();
+        assert_eq!(f.names().unwrap().security.get(&id).map(String::as_str), Some("sec-s-before-the-failure"), "the names the page holds lost what the catch-up named");
+        same_as_fresh(&f, now);
+    }
+
+    /// The change log that cannot be trimmed (brief 27, 7): the pull's work stands,
+    /// the failure is logged, and the next change trims it.
+    #[test]
+    fn a_log_that_cannot_be_trimmed_leaves_the_pulls_work_standing() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        book.conn_for_tests().execute_batch("CREATE TRIGGER planted_no_trim BEFORE DELETE ON ledger_changes BEGIN SELECT RAISE(ABORT, 'planted'); END;").unwrap();
+        let record = book.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap()[0];
+        book.mark_removed(record, now).unwrap();
+        f.record_changed(now).expect("a log that cannot be trimmed does not fail the pull");
+        same_as_fresh(&f, now);
+        let left: i64 = book.conn_for_tests().query_row("SELECT COUNT(*) FROM ledger_changes", [], |r| r.get(0)).unwrap();
+        assert!(left > 0, "the planted fault kept the log");
+        book.conn_for_tests().execute_batch("DROP TRIGGER planted_no_trim;").unwrap();
+        let other = book.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap()[0];
+        book.mark_removed(other, now).unwrap();
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+        let left: i64 = book.conn_for_tests().query_row("SELECT COUNT(*) FROM ledger_changes", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "the next change trims what the log held");
     }
 
     /// An account its broker states in US dollars (2.5.6 refused it, and every

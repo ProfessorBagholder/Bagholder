@@ -186,18 +186,55 @@ impl Op {
     }
 }
 
-/// A test's planted whole pass inside the import probe's window.
+/// The rows the import probe's file holds, by pair. By depth, more than 100: the
+/// import then commits them in groups of two or more (`csv_import`, a group per
+/// hundredth of the file), so each row after a group's first is looked up inside
+/// a transaction that has written sightings not yet settled, on the deepest
+/// listing, where a lookup that folds the listing's history would show (brief 30,
+/// A3). By breadth, a file small beside the book, so one read of every row the
+/// book's files imported stands out against the import's own work (brief 27, 9).
+fn import_rows(pair: Pair) -> u64 {
+    match pair {
+        Pair::Depth => 150,
+        Pair::Breadth => 20,
+    }
+}
+
+/// Where the engine's log of matches stood before a probe's window, and the
+/// family the probe's listing is matched in.
+#[cfg(test)]
+fn paths_mark(f: &crate::figures::Figures, instrument: bagholder_core::InstrumentId) -> (usize, Option<bagholder_engine::families::Node>) {
+    f.read(|e| (e.paths().len(), Some(e.family_of(bagholder_engine::families::Node::Instrument(instrument))))).unwrap_or((0, None))
+}
+
+/// The window's matches of the probe's family, kept for the test that reads them.
+#[cfg(test)]
+fn paths_taken(f: &crate::figures::Figures, (from, family): (usize, Option<bagholder_engine::families::Node>)) {
+    let window = f.read(|e| e.paths()[from.min(e.paths().len())..].iter().filter(|(n, _)| Some(*n) == family).copied().collect()).unwrap_or_default();
+    PROBED_PATHS.with(|p| *p.borrow_mut() = window);
+}
+
+/// A test's planted read of every row any file imported, inside the import
+/// probe's window (brief 28, E).
 #[cfg(test)]
 static PLANT_WHOLE_READ: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+thread_local! {
+    /// The matches of the target listing's family in the last probe's window, and
+    /// whether each was continued.
+    static PROBED_PATHS: std::cell::RefCell<Vec<(bagholder_engine::families::Node, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A test's planted fold of the traded instrument's names from every sighting,
+/// inside the add-trade probe's window.
+#[cfg(test)]
+static PLANT_NAMES_FOLD: AtomicBool = AtomicBool::new(false);
 
 /// What is over budget today, each with its issue: the run fails when one off
 /// this list misses, and when one on it meets its budget and the growth rule,
 /// so the list only shrinks (`docs/architecture.md` §16).
 pub const OVER_BUDGET: &[(&str, Pair, &str)] = &[
-    // a change on one instrument matches again its family's whole history, and
-    // reads every name the instrument had from every sighting
-    ("add-trade", Pair::Depth, "#420"),
-    ("import", Pair::Depth, "#419"),
     // the whole view built and serialised to learn whether it changed
     ("feed-step", Pair::Breadth, "#426"),
 ];
@@ -289,11 +326,13 @@ struct Mark {
 
 fn mark() -> Mark {
     bagholder_sqlite::work::set_measuring(true);
+    bagholder_engine::set_oracles_off(true);
     Mark { at: std::time::Instant::now(), steps: bagholder_sqlite::work::steps(), allocs: allocs(), read: read_bytes() }
 }
 
 fn since(m: &Mark, divisor: u64) -> Measured {
     bagholder_sqlite::work::set_measuring(false);
+    bagholder_engine::set_oracles_off(false);
     Measured {
         wall_ns: m.at.elapsed().as_nanos() as u64,
         steps: bagholder_sqlite::work::steps() - m.steps,
@@ -618,18 +657,25 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
             let book = f.book()?;
-            // an account of the middle size among those holding anything, by the
-            // number of its holdings: a choice that means the same at every size of
-            // book, whichever ids a build drew
+            // an account of the broker's, of the middle size among those holding anything, by the
+            // number of its holdings, accounts of one size in the order of the
+            // broker's own ids for them, which the generated book states: a choice
+            // that means the same at every size of book and on every build, whatever
+            // ids the build drew (ties broken by those drew a different account, and
+            // a different cost, on each run)
+            let names = f.names()?;
             let account = f
                 .read(|e| {
                     let mut count: std::collections::BTreeMap<bagholder_core::AccountId, usize> = Default::default();
-                    for p in e.figures().positions {
+                    // the accounts the broker states (a statement for the manual account,
+                    // which no broker states, cannot happen in use: brief 32, change 3)
+                    let stated = |a: &bagholder_core::AccountId| e.inputs().ledger.accounts.get(a).is_some_and(|i| i.broker == bagholder_core::Broker::named("wealthsimple")) && names.account.contains_key(a);
+                    for p in e.figures().positions.iter().filter(|p| stated(&p.account)) {
                         *count.entry(p.account).or_default() += 1;
                     }
-                    let mut by_size: Vec<(usize, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, a)).collect();
+                    let mut by_size: Vec<(usize, String, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, names.account.get(&a).cloned().unwrap_or_default(), a)).collect();
                     by_size.sort();
-                    by_size.get(by_size.len() / 2).map(|(_, a)| *a)
+                    by_size.get(by_size.len() / 2).map(|(_, _, a)| *a)
                 })
                 .flatten()
                 .ok_or("nothing is held")?;
@@ -664,30 +710,50 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             Ok(since(&m, priced))
         }
         Op::AddTrade => {
-            let ((_, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
+            let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             // the page holds the broker's names: what a change does to them is in the window
             f.names()?;
+            #[cfg(test)]
+            let window = paths_mark(f, instrument);
+            #[cfg(not(test))]
+            let _ = instrument; // what the test's record of the window keys on
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
-            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
+            // a test's planted fold of the names, which the growth rule must catch
+            #[cfg(test)]
+            if PLANT_NAMES_FOLD.load(Ordering::SeqCst) {
+                let id = target(f, pair, min_rows, &held)?.0 .0;
+                f.book()?.names_as_folded(id).map_err(err)?;
+            }
+            let out = Measured { rows: Some(rows), ..since(&m, 1) };
+            #[cfg(test)]
+            paths_taken(f, window);
+            Ok(out)
         }
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
-            let ((_, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
+            let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             f.names()?;
-            for n in 0..20 {
+            #[cfg(test)]
+            let window = paths_mark(f, instrument);
+            #[cfg(not(test))]
+            let _ = instrument; // what the test's record of the window keys on
+            for n in 0..import_rows(pair) {
                 text.push_str(&format!("{},Buy,{symbol},1,{}.00,-{}.00,{currency}\n", made_up_today(), 10 + n, 10 + n));
             }
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
             let m = mark();
             crate::csv_import::import_from(f, "capacity.csv", &open, None, Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
-            // a test's planted whole pass, which the growth rule must catch
+            // a test's planted read of every file row, which the growth rule must catch
             #[cfg(test)]
             if PLANT_WHOLE_READ.load(Ordering::SeqCst) {
-                crate::csv_import::whole_plan(f);
+                f.book()?.live_records(&bagholder_broker::csv::source()).map_err(err)?;
             }
-            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
+            let out = Measured { rows: Some(rows), ..since(&m, 1) };
+            #[cfg(test)]
+            paths_taken(f, window);
+            Ok(out)
         }
     }
 }
@@ -938,6 +1004,17 @@ mod tests {
     use super::*;
 
     const SMALL: Size = Size { accounts: 12, instruments: 16, trades: 40, months: 4, seed: 3, deep: 0 };
+    const BROAD: Size = Size { accounts: SMALL.accounts * 32, instruments: SMALL.instruments * 32, trades: SMALL.trades * 32, ..SMALL };
+    const DEEP: Size = Size { deep: 320, ..SMALL };
+
+    /// The families a probe of `op` matched, and whether each was continued: the
+    /// probe run on a copy, its paths taken from this thread.
+    fn probe_paths(op: Op, pair: Pair, min_rows: u64, home: &Path) -> (Vec<(bagholder_engine::families::Node, bool)>, Measured) {
+        let c = tempfile::tempdir().unwrap();
+        copy_folder(home, c.path()).unwrap();
+        let m = probe(op, pair, min_rows, c.path()).unwrap();
+        (PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut())), m)
+    }
 
     fn counts(home: &Path) -> Vec<(String, i64)> {
         let c = rusqlite::Connection::open(home.join(bagholder_book::BOOK_FILE)).unwrap();
@@ -1085,16 +1162,23 @@ mod tests {
     #[test]
     fn test_every_operation_is_measured_and_the_growth_rule_judged() {
         let _g = crate::tests_common::guard();
+        // a book and thirty-two times it by breadth, and one listing twenty and
+        // three hundred and twenty round trips deep: large enough beside an
+        // operation's own work that one whole read is past the rule (brief 28, 14
+        // and E)
         let sizes = [
-            (Pair::Breadth, SMALL, Size { accounts: SMALL.accounts * 16, instruments: SMALL.instruments * 16, trades: SMALL.trades * 16, ..SMALL }, (0, 0)),
-            (Pair::Depth, Size { deep: 20, ..SMALL }, Size { deep: 80, ..SMALL }, (39, 159)),
+            (Pair::Breadth, SMALL, BROAD, (0, 0)),
+            (Pair::Depth, Size { deep: 20, ..SMALL }, DEEP, (39, 639)),
         ];
         for (pair, small, large, min) in sizes {
             let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
             build(one.path(), small, 2).unwrap();
             build(four.path(), large, 2).unwrap();
             for &op in pair.ops().iter().filter(|o| o.per_change()) {
-                let (a, b) = (probe(op, pair, min.0, one.path()).unwrap(), probe(op, pair, min.1, four.path()).unwrap());
+                let a = probe(op, pair, min.0, one.path()).unwrap();
+                let paths_a = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+                let b = probe(op, pair, min.1, four.path()).unwrap();
+                let paths_b = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
                 assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
                 // steps and allocations: what the process reads from storage at
@@ -1102,6 +1186,13 @@ mod tests {
                 // the capacity job at the owner's size instead
                 let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew") && !o.contains("bytes read")).collect();
                 assert!(growth.is_empty() || listed(op, pair), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
+                // an added trade and an import match the listing's family once, by
+                // continuing it, on each book (brief 30, C4)
+                if matches!(op, Op::AddTrade | Op::Import) {
+                    for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
+                        assert!(paths.len() == 1 && paths[0].1, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                    }
+                }
             }
         }
     }
@@ -1115,7 +1206,7 @@ mod tests {
         let _g = crate::tests_common::guard();
         let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         build(one.path(), SMALL, 2).unwrap();
-        build(four.path(), Size { accounts: SMALL.accounts * 16, instruments: SMALL.instruments * 16, trades: SMALL.trades * 16, ..SMALL }, 2).unwrap();
+        build(four.path(), BROAD, 2).unwrap();
         let measured = |plant: bool| {
             PLANT_WHOLE_READ.store(plant, Ordering::SeqCst);
             let copy = |d: &Path| {
@@ -1129,7 +1220,27 @@ mod tests {
             (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew") && !o.contains("bytes read")), ())
         };
         assert!(!measured(false).0, "the import grows with the book without the plant");
-        assert!(measured(true).0, "today's whole linking pass in the window went unseen");
+        assert!(measured(true).0, "one read of every file row in the window went unseen");
+    }
+
+    /// The growth rule catches the names folded from every sighting in an added
+    /// trade's window on the depth pair: kept as runs, they cost the same at any
+    /// depth, and the fold planted beside them fails the rule.
+    #[test]
+    fn the_names_folded_whole_in_an_added_trade_fail_the_growth_rule() {
+        let _g = crate::tests_common::guard();
+        let (one, deep) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        build(one.path(), Size { deep: 20, ..SMALL }, 2).unwrap();
+        build(deep.path(), DEEP, 2).unwrap();
+        let measured = |plant: bool| {
+            PLANT_NAMES_FOLD.store(plant, Ordering::SeqCst);
+            let (_, x) = probe_paths(Op::AddTrade, Pair::Depth, 39, one.path());
+            let (_, y) = probe_paths(Op::AddTrade, Pair::Depth, 639, deep.path());
+            PLANT_NAMES_FOLD.store(false, Ordering::SeqCst);
+            judge(Op::AddTrade, Pair::Depth, &x, &y).over.iter().any(|o| o.contains("grew") && !o.contains("bytes read"))
+        };
+        assert!(!measured(false), "an added trade grows with the listing's depth without the plant");
+        assert!(measured(true), "the names folded whole in the window went unseen");
     }
 
     /// The verdict: a listed operation within its budget fails the run as an

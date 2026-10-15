@@ -359,6 +359,9 @@ pub struct Matched {
     /// Each instrument's round trips (by the instrument each is keyed on): what a
     /// family's figures are rebuilt from without a pass over every round trip.
     pub trips_of: BTreeMap<InstrumentId, BTreeSet<TripKey>>,
+    /// The round trips each transaction is a fill of: what a trade anchored on a
+    /// fill is found a round trip by, without a pass over every round trip.
+    pub trips_by_fill: BTreeMap<TransactionId, BTreeSet<TripKey>>,
     /// The accounts holding a book or a count of units of each instrument.
     pub held_by: BTreeMap<InstrumentId, BTreeSet<AccountId>>,
 }
@@ -680,6 +683,11 @@ fn order_key(t: &Transaction, record_rank: u8, source_key: &str) -> (Date, u8, O
     (t.trade_date, bucket, t.occurred_at, record_rank, source_key.to_string(), leg_rank, content)
 }
 
+/// A row's place in the walk (`OrderKey`), ranked by its record's legs `legs`.
+pub fn order_key_of(t: &Transaction, legs: &[&Transaction], source_key: &str) -> OrderKey {
+    order_key(t, record_rank(legs), source_key)
+}
+
 /// The instant a transaction is applied at: its day, whether it states only its
 /// day (bringing units in, or not), and its time.
 fn instant(t: &Transaction) -> (Date, u8, Option<Timestamp>) {
@@ -704,9 +712,18 @@ fn record_rank(legs: &[&Transaction]) -> u8 {
     }
 }
 
-struct Matcher<'a> {
+struct Matcher<'a, 'm> {
     inputs: &'a Inputs,
-    out: Matched,
+    /// What the match writes: a fresh one for a family matched whole, the
+    /// engine's own for a family's match continued (`continue_family`).
+    out: &'m mut Matched,
+    /// The round trips written, and the holdings touched: what a continued
+    /// match's figures are worked out for.
+    touched_trips: BTreeSet<TripKey>,
+    touched_holdings: BTreeSet<(AccountId, InstrumentId)>,
+    /// The round trips each transaction closed lots of, in this walk: what a
+    /// roll's other leg is found by.
+    closed_by: BTreeMap<TransactionId, BTreeSet<TripKey>>,
     /// Contracts with open lots, by expiry.
     expiring: BTreeMap<Date, BTreeSet<(AccountId, InstrumentId)>>,
     /// What every contract on an underlying in an account waits on: a multi-leg
@@ -743,7 +760,7 @@ struct Matcher<'a> {
     rounding_held: BTreeMap<(AccountId, InstrumentId), Dec>,
 }
 
-impl<'a> Matcher<'a> {
+impl<'a, 'm> Matcher<'a, 'm> {
     fn info(&self, i: InstrumentId) -> Option<&'a InstrumentInfo> {
         self.inputs.ledger.instruments.get(&i)
     }
@@ -847,6 +864,7 @@ impl<'a> Matcher<'a> {
         let own = self.instrument_taint.get(&(account, instrument)).cloned();
         let whole = self.account_taint.get(&account).cloned();
         self.dirty.insert((account, instrument));
+        self.touched_holdings.insert((account, instrument));
         let book = self.out.books.entry((account, instrument)).or_default();
         for g in [under, own, whole].into_iter().flatten() {
             book.taint.merge(&g);
@@ -855,6 +873,7 @@ impl<'a> Matcher<'a> {
     }
 
     fn trip_mut(&mut self, key: &TripKey) -> &mut Trip {
+        self.touched_trips.insert(key.clone());
         self.out.trips.get_mut(key).expect("a lot's round trip exists")
     }
 
@@ -876,6 +895,7 @@ impl<'a> Matcher<'a> {
         if slot.is_none() {
             *slot = Some(key.clone());
         }
+        self.touched_trips.insert(key.clone());
         let trip = self.out.trips.entry(key.clone()).or_insert_with(|| Trip {
             key: key.clone(),
             account,
@@ -1051,6 +1071,9 @@ impl<'a> Matcher<'a> {
             value_left = fig_sub(&value_left, &exit);
             fee_left = fee_left.checked_sub(exit_fee)?;
             left = left.checked_sub(matched)?;
+            if let Closer::Transaction(id) = closer {
+                self.closed_by.entry(id.clone()).or_default().insert(trip_key.clone());
+            }
             let tr = self.trip_mut(&trip_key);
             tr.slices.push(slice);
             if let Closer::Transaction(id) = closer {
@@ -1213,12 +1236,14 @@ impl<'a> Matcher<'a> {
     /// at zero on its expiry date when its underlying's close that day shows it
     /// expired out of the money by its terms, otherwise left waiting for the
     /// broker's row.
-    fn expire_before(&mut self, day: Date) {
+    fn expire_before(&mut self, day: Date) -> Expired {
+        let mut out = Expired::default();
         while let Some((&expiry, _)) = self.expiring.iter().next() {
             if expiry >= day {
                 break;
             }
             let books = self.expiring.remove(&expiry).unwrap_or_default();
+            out.popped.insert(expiry, books.clone());
             for (account, instrument) in books {
                 let lots: Vec<(Direction, Dec)> = self.book(account, instrument).lots.iter().map(|l| (l.direction, l.qty)).collect();
                 if lots.is_empty() {
@@ -1229,6 +1254,7 @@ impl<'a> Matcher<'a> {
                 if self.ended_on_record.contains(&(account, instrument)) {
                     continue;
                 }
+                out.acted = true;
                 if !self.expired_worthless(instrument, expiry) {
                     self.taint(account, instrument, &Gaps::of(Gap::NoExpiryRecord(instrument)));
                     continue;
@@ -1245,6 +1271,7 @@ impl<'a> Matcher<'a> {
             }
             self.record_units(expiry);
         }
+        out
     }
 
     /// The units of every holding touched since the last record, at the end of `day`.
@@ -1551,8 +1578,11 @@ impl<'a> Matcher<'a> {
             if closed_dir != direction {
                 continue;
             }
-            if let Some(tr) = self.out.trips.values().find(|tr| tr.closed.contains(&leg.id) && tr.instruments.contains(&other)) {
-                return Some(tr.key.clone());
+            // the round trips the leg closed, found by the leg, never by a pass
+            // over every round trip (the first by key, as such a pass found it)
+            let closed = self.closed_by.get(&leg.id).into_iter().flatten();
+            if let Some(k) = closed.filter(|k| self.out.trips.get(k).is_some_and(|tr| tr.instruments.contains(&other))).min() {
+                return Some(k.clone());
             }
         }
         None
@@ -2159,64 +2189,87 @@ pub fn place_in_match(ledger: &crate::input::Ledger, t: &Transaction) -> (Date, 
 /// the record waits on are in the match's order (`place_in_match`), so the
 /// matches of several families put together are the whole match.
 pub fn match_over(inputs: &Inputs, txs: Vec<&Transaction>) -> Matched {
+    match_family(inputs, txs).0
+}
+
+/// A transaction's place in the walk, without its id: what "after everything a
+/// family matched" is decided by (`MatchState::last`). The walk breaks ties by
+/// the ledger's place.
+pub type OrderKey = (Date, u8, Option<Timestamp>, u8, String, u8, String);
+
+/// What a family's match keeps, to continue from for rows placed after
+/// everything it matched (`docs/plans/stage-3-a-change-on-a-deep-history.md`, B):
+/// every part of the matcher but its inputs and its output, as it stood before
+/// the last walk's expiry up to today, with what that expiry took off the
+/// calendar to be put back.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MatchState {
+    expiring: BTreeMap<Date, BTreeSet<(AccountId, InstrumentId)>>,
+    underlying_taint: BTreeMap<(AccountId, InstrumentId), Gaps>,
+    instrument_taint: BTreeMap<(AccountId, InstrumentId), Gaps>,
+    account_taint: BTreeMap<AccountId, Gaps>,
+    consumed: BTreeSet<TransactionId>,
+    links_out: BTreeMap<TransactionId, TransactionId>,
+    links_in: BTreeSet<TransactionId>,
+    event_groups: BTreeMap<TransactionId, TransactionId>,
+    lieu_fraction: BTreeMap<(AccountId, InstrumentId), Dec>,
+    ended_on_record: BTreeSet<(AccountId, InstrumentId)>,
+    pub places: BTreeMap<(InstrumentId, bagholder_core::SourceName), u32>,
+    rounding_held: BTreeMap<(AccountId, InstrumentId), Dec>,
+    /// The largest place walked.
+    pub last: Option<OrderKey>,
+    /// The holdings of the stated-Open rows walked at `last`'s instant, over every
+    /// walk at that instant: what the look-ahead of a close before an open reads.
+    pub opens_at_last: BTreeSet<(AccountId, InstrumentId)>,
+    /// What the expiry up to today took off the calendar, put back before the
+    /// next walk.
+    expired_at_end: BTreeMap<Date, BTreeSet<(AccountId, InstrumentId)>>,
+    /// Whether that expiry closed or marked any contract: a match it changed
+    /// cannot be continued, since rows placed before today would meet it.
+    pub ended_quiet: bool,
+}
+
+/// What a continued match wrote.
+#[derive(Clone, Debug, Default)]
+pub struct Continued {
+    pub trips: BTreeSet<TripKey>,
+    pub holdings: BTreeSet<(AccountId, InstrumentId)>,
+    /// The added rows' cash, by account.
+    pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
+}
+
+/// What an expiry pass took off the calendar, and whether it closed or marked a
+/// contract.
+#[derive(Debug, Default)]
+struct Expired {
+    popped: BTreeMap<Date, BTreeSet<(AccountId, InstrumentId)>>,
+    acted: bool,
+}
+
+/// What `txs` set up before they are walked: the transfer links each sends and
+/// receives, the contracts whose record says how they ended, each coin's finest
+/// place per source, and each event's rows.
+fn set_up(inputs: &Inputs, txs: &[&Transaction], s: &mut MatchState) {
     let ledger = &inputs.ledger;
-    let mine: BTreeSet<&TransactionId> = txs.iter().map(|t| &t.id).collect();
-    // every leg of every record of `txs`, each record whole
-    let mut by_record: BTreeMap<_, Vec<&Transaction>> = BTreeMap::new();
-    for t in &txs {
-        by_record.entry(t.id.record).or_insert_with(|| ledger.transactions.of_record(t.id.record).collect());
-    }
-    let key_of = |t: &Transaction| ledger.records.get(&t.id.record).map(|r| r.source_key.clone()).unwrap_or_default();
-    let place = |t: &Transaction| order_key(t, record_rank(&by_record[&t.id.record]), &key_of(t));
-    // a record whose legs share a day is applied at its first leg: where that leg
-    // is not one of `txs`, it is walked past to apply the others there
-    let one_day = |legs: &[&Transaction]| legs.len() > 1 && legs.iter().all(|l| l.trade_date == legs[0].trade_date);
-    let mut walk: Vec<&Transaction> = txs.clone();
-    for legs in by_record.values() {
-        if one_day(legs) {
-            if let Some(first) = legs.iter().min_by_key(|l| (place(l), l.id.clone())) {
-                if !mine.contains(&first.id) {
-                    walk.push(first);
-                }
+    for t in txs {
+        if let Some(i) = ledger.transfer_links.received_by(&t.id) {
+            s.links_out.insert(t.id.clone(), i.clone());
+        }
+        if ledger.transfer_links.sent_by(&t.id).is_some() {
+            s.links_in.insert(t.id.clone());
+        }
+        if matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise) {
+            if let Some(i) = t.instrument {
+                s.ended_on_record.insert((t.account, i));
+            }
+        }
+        if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
+            if ledger.instruments.get(&i).is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto) {
+                let e = s.places.entry((i, t.mapping.source.clone())).or_insert(0);
+                *e = (*e).max(q.places());
             }
         }
     }
-    // in the ledger's order first, so equal places keep it
-    walk.sort_by(|a, b| ledger.transactions.place_of(&a.id).cmp(&ledger.transactions.place_of(&b.id)));
-    walk.sort_by_cached_key(|t| place(t));
-
-    let mut m = Matcher {
-        inputs,
-        out: Matched::default(),
-        expiring: BTreeMap::new(),
-        underlying_taint: BTreeMap::new(),
-        instrument_taint: BTreeMap::new(),
-        account_taint: BTreeMap::new(),
-        consumed: BTreeSet::new(),
-        links_out: txs.iter().filter_map(|t| ledger.transfer_links.received_by(&t.id).map(|i| (t.id.clone(), i.clone()))).collect(),
-        links_in: txs.iter().filter(|t| ledger.transfer_links.sent_by(&t.id).is_some()).map(|t| t.id.clone()).collect(),
-        event_groups: BTreeMap::new(),
-        dirty: BTreeSet::new(),
-        lieu_fraction: BTreeMap::new(),
-        ended_on_record: txs
-            .iter()
-            .filter(|t| matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise))
-            .filter_map(|t| t.instrument.map(|i| (t.account, i)))
-            .collect(),
-        places: {
-            let mut p: BTreeMap<(InstrumentId, bagholder_core::SourceName), u32> = BTreeMap::new();
-            for t in &txs {
-                if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
-                    if ledger.instruments.get(&i).is_some_and(|x| x.instrument.kind == InstrumentKind::Crypto) {
-                        let e = p.entry((i, t.mapping.source.clone())).or_insert(0);
-                        *e = (*e).max(q.places());
-                    }
-                }
-            }
-            p
-        },
-        rounding_held: BTreeMap::new(),
-    };
     // each adjustment's event: its own row and the event rows of that account and
     // day on the instruments its legs name
     let mut anchors: Vec<&Transaction> = txs.iter().filter(|t| inputs.facts.adjustments.get(&t.id).is_some()).copied().collect();
@@ -2228,75 +2281,240 @@ pub fn match_over(inputs: &Inputs, txs: Vec<&Transaction>) -> Matched {
             continue;
         }
         let named: BTreeSet<InstrumentId> = adj.legs.iter().flat_map(|l| [l.from, l.to]).flatten().collect();
-        m.event_groups.insert(anchor.id.clone(), anchor.id.clone());
-        for t in &txs {
+        s.event_groups.insert(anchor.id.clone(), anchor.id.clone());
+        for t in txs {
             if t.kind == Kind::CorporateEvent && t.account == anchor.account && t.trade_date == anchor.trade_date && t.instrument.is_some_and(|i| named.contains(&i)) {
-                m.event_groups.entry(t.id.clone()).or_insert_with(|| anchor.id.clone());
+                s.event_groups.entry(t.id.clone()).or_insert_with(|| anchor.id.clone());
             }
         }
     }
-    // a record whose legs share a day is applied as one order where its first
-    // leg falls, each next leg the first that meets an opposite position, so a
-    // roll that states no effects closes the old contract before it opens the
-    // new one, whichever way its legs sort
-    let mut in_order: BTreeMap<_, Vec<&Transaction>> = BTreeMap::new();
-    for t in walk.iter().filter(|t| mine.contains(&t.id)) {
-        in_order.entry(t.id.record).or_default().push(t);
-    }
-    let mut done: BTreeSet<&TransactionId> = BTreeSet::new();
-    for (at, t) in walk.iter().enumerate() {
-        if done.contains(&t.id) {
-            continue;
+}
+
+impl<'a, 'm> Matcher<'a, 'm> {
+    fn from_state(inputs: &'a Inputs, out: &'m mut Matched, s: MatchState) -> Matcher<'a, 'm> {
+        let MatchState { expiring, underlying_taint, instrument_taint, account_taint, consumed, links_out, links_in, event_groups, lieu_fraction, ended_on_record, places, rounding_held, .. } = s;
+        Matcher {
+            inputs,
+            out,
+            touched_trips: BTreeSet::new(),
+            touched_holdings: BTreeSet::new(),
+            closed_by: BTreeMap::new(),
+            expiring,
+            underlying_taint,
+            instrument_taint,
+            account_taint,
+            consumed,
+            links_out,
+            links_in,
+            event_groups,
+            dirty: BTreeSet::new(),
+            lieu_fraction,
+            ended_on_record,
+            places,
+            rounding_held,
         }
-        // at one instant a stated close that meets a position goes before a
-        // stated open of the same contract, which would meet that position; an
-        // open goes first only where the close needs it (a short opened and
-        // covered at one instant)
-        if t.effect == Some(Effect::Open) && mine.contains(&t.id) {
-            let closes: Vec<&Transaction> = walk[at + 1..]
-                .iter()
-                .take_while(|c| instant(c) == instant(t))
-                .filter(|c| mine.contains(&c.id) && !done.contains(&c.id) && c.effect == Some(Effect::Close) && c.account == t.account && c.instrument == t.instrument && by_record.get(&c.id.record).is_some_and(|l| l.len() == 1))
-                .copied()
-                .collect();
-            for c in closes {
-                if m.meets_opposite(c) {
-                    done.insert(&c.id);
-                    m.expire_before(c.trade_date);
-                    m.apply(c, by_record.get(&c.id.record).map(|v| v.as_slice()).unwrap_or(&[]));
+    }
+
+    /// The matcher's part of the state, taken.
+    fn into_state(self, last: Option<OrderKey>, opens_at_last: BTreeSet<(AccountId, InstrumentId)>) -> (MatchState, BTreeSet<TripKey>, BTreeSet<(AccountId, InstrumentId)>) {
+        debug_assert!(self.dirty.is_empty(), "units recorded for every holding touched");
+        let Matcher { expiring, underlying_taint, instrument_taint, account_taint, consumed, links_out, links_in, event_groups, lieu_fraction, ended_on_record, places, rounding_held, touched_trips, touched_holdings, .. } = self;
+        (
+            MatchState { expiring, underlying_taint, instrument_taint, account_taint, consumed, links_out, links_in, event_groups, lieu_fraction, ended_on_record, places, rounding_held, last, opens_at_last, expired_at_end: BTreeMap::new(), ended_quiet: true },
+            touched_trips,
+            touched_holdings,
+        )
+    }
+
+    /// `txs` walked in the match's order: each record ranked, ordered and applied
+    /// by all its legs, as the whole match applies it. A record whose legs share a
+    /// day is applied where its first leg falls, whichever family that leg is in.
+    /// The largest place walked and the stated-Open holdings at its instant, from
+    /// `last` and `opens` on.
+    fn walk(&mut self, txs: &[&'a Transaction], last: &mut Option<OrderKey>, opens: &mut BTreeSet<(AccountId, InstrumentId)>) {
+        let ledger = &self.inputs.ledger;
+        let mine: BTreeSet<&TransactionId> = txs.iter().map(|t| &t.id).collect();
+        // every leg of every record of `txs`, each record whole
+        let mut by_record: BTreeMap<_, Vec<&'a Transaction>> = BTreeMap::new();
+        for t in txs {
+            by_record.entry(t.id.record).or_insert_with(|| ledger.transactions.of_record(t.id.record).collect());
+        }
+        let key_of = |t: &Transaction| ledger.records.get(&t.id.record).map(|r| r.source_key.clone()).unwrap_or_default();
+        let place = |t: &Transaction| order_key(t, record_rank(&by_record[&t.id.record]), &key_of(t));
+        // a record whose legs share a day is applied at its first leg: where that leg
+        // is not one of `txs`, it is walked past to apply the others there
+        let one_day = |legs: &[&Transaction]| legs.len() > 1 && legs.iter().all(|l| l.trade_date == legs[0].trade_date);
+        let mut walk: Vec<&'a Transaction> = txs.to_vec();
+        for legs in by_record.values() {
+            if one_day(legs) {
+                if let Some(first) = legs.iter().min_by_key(|l| (place(l), l.id.clone())) {
+                    if !mine.contains(&first.id) {
+                        walk.push(first);
+                    }
                 }
             }
         }
-        let legs = by_record.get(&t.id.record).map(|v| v.as_slice()).unwrap_or(&[]);
-        if !one_day(legs) {
-            m.expire_before(t.trade_date);
-            m.apply(t, legs);
-            m.record_units(t.trade_date);
-            continue;
+        // in the ledger's order first, so equal places keep it
+        walk.sort_by(|a, b| ledger.transactions.place_of(&a.id).cmp(&ledger.transactions.place_of(&b.id)));
+        walk.sort_by_cached_key(|t| place(t));
+        // the largest place walked, and the holdings of the stated-Open rows at its instant
+        for t in walk.iter().filter(|t| mine.contains(&t.id)) {
+            let k = place(t);
+            if last.as_ref().is_none_or(|l| k > *l) {
+                if last.as_ref().is_none_or(|l| (l.0, l.1, l.2) != (k.0, k.1, k.2)) {
+                    opens.clear();
+                }
+                *last = Some(k);
+            }
+            if t.effect == Some(Effect::Open) && last.as_ref().is_some_and(|l| instant(t) == (l.0, l.1, l.2)) {
+                if let Some(i) = t.instrument {
+                    opens.insert((t.account, i));
+                }
+            }
         }
-        let mut left = in_order.get(&t.id.record).cloned().unwrap_or_default();
-        m.expire_before(t.trade_date);
-        while !left.is_empty() {
-            let i = left.iter().position(|l| m.meets_opposite(l)).unwrap_or(0);
-            let leg = left.remove(i);
-            done.insert(&leg.id);
-            m.apply(leg, legs);
+        // a record whose legs share a day is applied as one order where its first
+        // leg falls, each next leg the first that meets an opposite position, so a
+        // roll that states no effects closes the old contract before it opens the
+        // new one, whichever way its legs sort
+        let mut in_order: BTreeMap<_, Vec<&Transaction>> = BTreeMap::new();
+        for t in walk.iter().filter(|t| mine.contains(&t.id)) {
+            in_order.entry(t.id.record).or_default().push(t);
         }
-        m.record_units(t.trade_date);
+        let mut done: BTreeSet<&TransactionId> = BTreeSet::new();
+        for (at, t) in walk.iter().enumerate() {
+            if done.contains(&t.id) {
+                continue;
+            }
+            // at one instant a stated close that meets a position goes before a
+            // stated open of the same contract, which would meet that position; an
+            // open goes first only where the close needs it (a short opened and
+            // covered at one instant)
+            if t.effect == Some(Effect::Open) && mine.contains(&t.id) {
+                let closes: Vec<&Transaction> = walk[at + 1..]
+                    .iter()
+                    .take_while(|c| instant(c) == instant(t))
+                    .filter(|c| mine.contains(&c.id) && !done.contains(&c.id) && c.effect == Some(Effect::Close) && c.account == t.account && c.instrument == t.instrument && by_record.get(&c.id.record).is_some_and(|l| l.len() == 1))
+                    .copied()
+                    .collect();
+                for c in closes {
+                    if self.meets_opposite(c) {
+                        done.insert(&c.id);
+                        self.expire_before(c.trade_date);
+                        self.apply(c, by_record.get(&c.id.record).map(|v| v.as_slice()).unwrap_or(&[]));
+                    }
+                }
+            }
+            let legs = by_record.get(&t.id.record).map(|v| v.as_slice()).unwrap_or(&[]);
+            if !one_day(legs) {
+                self.expire_before(t.trade_date);
+                self.apply(t, legs);
+                self.record_units(t.trade_date);
+                continue;
+            }
+            let mut left = in_order.get(&t.id.record).cloned().unwrap_or_default();
+            self.expire_before(t.trade_date);
+            while !left.is_empty() {
+                let i = left.iter().position(|l| self.meets_opposite(l)).unwrap_or(0);
+                let leg = left.remove(i);
+                done.insert(&leg.id);
+                self.apply(leg, legs);
+            }
+            self.record_units(t.trade_date);
+        }
     }
-    m.expire_before(inputs.clock.today);
-    for t in &txs {
+}
+
+/// Each account's cash `txs` move.
+fn cash_of(txs: &[&Transaction]) -> BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>> {
+    let mut out: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>> = BTreeMap::new();
+    for t in txs {
         if let Some(c) = t.cash {
-            let e = m.out.cash.entry(t.account).or_default().entry(c.currency).or_insert(Ok(Dec::ZERO));
+            let e = out.entry(t.account).or_default().entry(c.currency).or_insert(Ok(Dec::ZERO));
             if let Ok(total) = e {
                 *e = total.checked_add(c.amount).map_err(Gaps::from);
             }
         }
     }
-    let mut out = m.out;
-    out.in_match_order(ledger);
-    out.index();
     out
+}
+
+/// The match of `txs` alone, and what it keeps to be continued from: a set of
+/// transactions no other transaction's matching reaches (a family,
+/// `crate::families`), or every transaction. The lists of what the record waits
+/// on are in the match's order (`place_in_match`), so the matches of several
+/// families put together are the whole match.
+pub fn match_family(inputs: &Inputs, txs: Vec<&Transaction>) -> (Matched, MatchState) {
+    let mut out = Matched::default();
+    let mut state = MatchState::default();
+    set_up(inputs, &txs, &mut state);
+    let mut m = Matcher::from_state(inputs, &mut out, state);
+    let (mut last, mut opens) = (None, BTreeSet::new());
+    m.walk(&txs, &mut last, &mut opens);
+    // what the expiry up to today does is put back before a continued walk
+    let end = m.expire_before(inputs.clock.today);
+    let (mut state, _, _) = m.into_state(last, opens);
+    state.expired_at_end = end.popped;
+    state.ended_quiet = !end.acted;
+    out.cash = cash_of(&txs);
+    out.in_match_order(&inputs.ledger);
+    out.index();
+    (out, state)
+}
+
+/// A family's match continued in `out` from `state` for `added`, rows placed
+/// after everything the family matched, as the whole match of the family with
+/// them would leave it (`docs/plans/stage-3-a-change-on-a-deep-history.md`, B;
+/// the engine's guards decide when it may). What it wrote.
+pub fn continue_family(inputs: &Inputs, out: &mut Matched, state: &mut MatchState, added: Vec<&Transaction>) -> Continued {
+    let ledger = &inputs.ledger;
+    let mut s = std::mem::take(state);
+    // the calendar as it stood before the expiry up to today
+    for (day, books) in std::mem::take(&mut s.expired_at_end) {
+        s.expiring.entry(day).or_default().extend(books);
+    }
+    let (ended, events) = (s.ended_on_record.len(), s.event_groups.len());
+    set_up(inputs, &added, &mut s);
+    debug_assert!(s.ended_on_record.len() == ended && s.event_groups.len() == events, "a continued match adds no expiry, assignment, exercise or event");
+    let (mut last, mut opens) = (s.last.take(), std::mem::take(&mut s.opens_at_last));
+    // what each list held before, so the rows added are put in their places
+    let lens = (out.beyond.len(), out.dust.len(), out.arrived.len(), out.stock_dividends.len(), out.disagreements.len(), out.unit_disagreements.len(), out.unapplied.len());
+    let mut m = Matcher::from_state(inputs, out, s);
+    m.walk(&added, &mut last, &mut opens);
+    let end = m.expire_before(inputs.clock.today);
+    let (mut s, trips, holdings) = m.into_state(last, opens);
+    s.expired_at_end = end.popped;
+    s.ended_quiet = !end.acted;
+    *state = s;
+    // the rows added to the lists, each put in its place in the match's order
+    let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
+    fn place<T>(list: &mut Vec<T>, from: usize, key: impl Fn(&T) -> Option<(Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId)>) {
+        let added: Vec<T> = list.drain(from..).collect();
+        for row in added {
+            let k = key(&row);
+            let i = list.partition_point(|x| key(x) <= k);
+            list.insert(i, row);
+        }
+    }
+    place(&mut out.beyond, lens.0, |x| at(&x.transaction));
+    place(&mut out.dust, lens.1, |x| at(&x.transaction));
+    place(&mut out.arrived, lens.2, |x| at(&x.transaction));
+    place(&mut out.stock_dividends, lens.3, |x| at(&x.transaction));
+    place(&mut out.disagreements, lens.4, |x| at(x));
+    place(&mut out.unit_disagreements, lens.5, |x| at(&x.transaction));
+    place(&mut out.unapplied, lens.6, |x| at(&x.0));
+    // the indexes, for what was written
+    for k in &trips {
+        out.trips_of.entry(k.instrument).or_default().insert(k.clone());
+        for f in out.trips.get(k).into_iter().flat_map(|t| t.fills.iter()) {
+            out.trips_by_fill.entry(f.clone()).or_default().insert(k.clone());
+        }
+    }
+    for (a, i) in &holdings {
+        if out.books.contains_key(&(*a, *i)) || out.units.contains_key(&(*a, *i)) {
+            out.held_by.entry(*i).or_default().insert(*a);
+        }
+    }
+    Continued { trips, holdings, cash: cash_of(&added) }
 }
 
 impl Matched {
@@ -2310,6 +2528,10 @@ impl Matched {
         let tx_in = |id: &TransactionId| ledger.transactions.get(id).is_none_or(|t| region.contains(&node_of(t)));
         self.trips.retain(|k, _| !ins(&k.instrument));
         self.trips_of.retain(|i, _| !ins(i));
+        self.trips_by_fill.retain(|_, ks| {
+            ks.retain(|k| !ins(&k.instrument));
+            !ks.is_empty()
+        });
         self.held_by.retain(|i, _| !ins(i));
         self.books.retain(|(_, i), _| !ins(i));
         self.units.retain(|(_, i), _| !ins(i));
@@ -2324,7 +2546,7 @@ impl Matched {
         self.roles.retain(|x, _| !tx_in(x));
         self.waiting.retain(|x, _| !tx_in(x));
         // the lists kept in the match's order: each new row put in its place
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, held_by } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, trips_by_fill, held_by } = fresh;
         let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
         fn put<T>(list: &mut Vec<T>, rows: Vec<T>, key: impl Fn(&T) -> Option<(Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId)>) {
             for row in rows {
@@ -2341,15 +2563,19 @@ impl Matched {
         put(&mut self.disagreements, disagreements, |x| at(x));
         put(&mut self.unit_disagreements, unit_disagreements, |x| at(&x.transaction));
         put(&mut self.unapplied, unapplied, |x| at(&x.0));
-        self.absorb(Matched { trips, books, last_price, units, roles, waiting, trips_of, held_by, ..Matched::default() });
+        self.absorb(Matched { trips, books, last_price, units, roles, waiting, trips_of, trips_by_fill, held_by, ..Matched::default() });
     }
 
     /// The indexes worked out from what the match holds.
     fn index(&mut self) {
         self.trips_of.clear();
+        self.trips_by_fill.clear();
         self.held_by.clear();
-        for k in self.trips.keys() {
+        for (k, t) in &self.trips {
             self.trips_of.entry(k.instrument).or_default().insert(k.clone());
+            for f in &t.fills {
+                self.trips_by_fill.entry(f.clone()).or_default().insert(k.clone());
+            }
         }
         for (a, i) in self.books.keys().chain(self.units.keys()) {
             self.held_by.entry(*i).or_default().insert(*a);
@@ -2373,9 +2599,12 @@ impl Matched {
     /// Everything `fresh` holds put in beside what this holds, the cash totals
     /// aside (the caller's); the lists left for `in_match_order`.
     pub fn absorb(&mut self, fresh: Matched) {
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, held_by } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, trips_by_fill, held_by } = fresh;
         for (i, k) in trips_of {
             self.trips_of.entry(i).or_default().extend(k);
+        }
+        for (t, k) in trips_by_fill {
+            self.trips_by_fill.entry(t).or_default().extend(k);
         }
         for (i, a) in held_by {
             self.held_by.entry(i).or_default().extend(a);

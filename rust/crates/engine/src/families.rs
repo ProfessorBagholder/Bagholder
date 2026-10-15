@@ -157,6 +157,17 @@ impl Families {
         self.contracts.contains_key(&i)
     }
 
+    /// Whether a family holds the node.
+    pub fn has(&self, n: Node) -> bool {
+        self.family_of.contains_key(&n)
+    }
+
+    /// Whether a row naming no instrument, of a record whose legs are not
+    /// stated, makes the account one family (5).
+    pub fn is_whole(&self, a: AccountId) -> bool {
+        self.whole.contains_key(&a)
+    }
+
     /// The family a node is in (a node in none is a family of its own).
     pub fn of(&self, n: Node) -> Node {
         self.family_of.get(&n).copied().unwrap_or(n)

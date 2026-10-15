@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_core::journal::Anchor;
 use bagholder_core::{InstrumentId, TradeId};
 
+
 use crate::input::Ledger;
 use crate::ledger::{Matched, TripKey};
 
@@ -131,6 +132,74 @@ pub fn identify_in(ledger: &Ledger, matched: &Matched, instruments: &BTreeSet<In
     out
 }
 
+/// The identity of the round trips `trips` and of the trades `named`, with every
+/// trade anchored on a fill of one of `trips`: what a change that reached only
+/// those round trips moves (a continued match, a trade or its journal changed;
+/// `docs/plans/stage-3-a-change-on-a-deep-history.md`, C). Every round trip a
+/// trade of these can claim is one of `trips` (the caller's reach), so this is
+/// what `identify_in` gives them.
+pub fn identify_trips(ledger: &Ledger, matched: &Matched, trips: &BTreeSet<TripKey>, named: &BTreeSet<TradeId>) -> (Identity, BTreeSet<TradeId>) {
+    let mut out = Identity::default();
+    // the trades: the ones named, and every one anchored on a fill of a round trip reached
+    let mut trades: BTreeSet<TradeId> = named.clone();
+    for k in trips {
+        for f in matched.trips.get(k).into_iter().flat_map(|t| t.fills.iter()) {
+            trades.extend(ledger.trades.anchored_on(f).map(|t| t.id));
+        }
+    }
+    // the trade anchored on an opening (the last in the book's order where two are)
+    let anchored = |o: &TripKey| -> Option<TradeId> {
+        ledger.trades.anchored_on(&o.opening).filter(|t| matches!(&t.anchor, Anchor::Opening(x) if x.instrument == o.instrument)).last().map(|t| t.id)
+    };
+    for k in trips {
+        let Some(trip) = matched.trips.get(k) else { continue };
+        if managed(ledger, trip.account) {
+            continue;
+        }
+        let mut found = trip.openings.iter().filter_map(anchored);
+        match found.next() {
+            Some(keeps) => {
+                out.trade_of.insert(k.clone(), keeps);
+                for other in found {
+                    if other != keeps {
+                        out.joined.push((other, keeps));
+                    }
+                }
+            }
+            None => out.needs_trade.push(k.clone()),
+        }
+    }
+    // in the book's order, so of two trades that would move to one round trip the
+    // one made first takes it
+    let mut ordered: Vec<&bagholder_core::journal::Trade> = trades.iter().filter_map(|t| ledger.trades.get(t)).collect();
+    ordered.sort_by_key(|t| ledger.trades.rank(&t.id).cloned());
+    for t in ordered {
+        let Anchor::Opening(ref o) = t.anchor else { continue };
+        let key = TripKey { opening: o.transaction.clone(), instrument: o.instrument };
+        // an opening of some round trip, or not the trade that keeps its opening
+        let opens = matched.trips_by_fill.get(&o.transaction).into_iter().flatten().any(|k| matched.trips.get(k).is_some_and(|tr| tr.openings.contains(&key)));
+        if opens || anchored(&key) != Some(t.id) {
+            continue;
+        }
+        let mut holding = matched.trips_by_fill.get(&o.transaction).into_iter().flatten().filter_map(|k| matched.trips.get(k)).filter(|trip| trip.instruments.contains(&o.instrument));
+        let to = match (holding.next(), holding.next()) {
+            (Some(trip), None) if !managed(ledger, trip.account) && !out.trade_of.contains_key(&trip.key) => Some(trip.key.clone()),
+            _ => None,
+        };
+        match to {
+            Some(k) => {
+                out.needs_trade.retain(|n| *n != k);
+                out.trade_of.insert(k.clone(), t.id);
+                out.moved.push((t.id, k));
+            }
+            None => out.unclaimed.push(t.id),
+        }
+    }
+    out.trip_of = out.trade_of.iter().map(|(k, t)| (*t, k.clone())).collect();
+    out.in_book_order(ledger);
+    (out, trades)
+}
+
 impl Identity {
     /// The lists in one order, however the identity was put together: the round
     /// trips needing a trade by key (the order the book opens them in), the
@@ -142,6 +211,25 @@ impl Identity {
         self.joined.dedup();
         self.moved.sort_by_key(|(t, k)| (ledger.trades.rank(t).cloned(), k.clone()));
         self.unclaimed.sort_by_key(|t| (ledger.trades.rank(t).cloned(), *t));
+    }
+
+    /// What concerns the round trips `trips` and the trades `trades` taken out, and
+    /// `fresh`, their identity again (`identify_trips`), put in.
+    pub fn replace_trips(&mut self, ledger: &Ledger, trips: &BTreeSet<TripKey>, trades: &BTreeSet<TradeId>, fresh: Identity) {
+        self.trade_of.retain(|k, t| !trips.contains(k) && !trades.contains(t));
+        self.trip_of.retain(|t, k| !trips.contains(k) && !trades.contains(t));
+        self.needs_trade.retain(|k| !trips.contains(k));
+        self.joined.retain(|(o, k)| !(trades.contains(o) || trades.contains(k)));
+        self.moved.retain(|(t, k)| !trips.contains(k) && !trades.contains(t));
+        self.unclaimed.retain(|t| !trades.contains(t));
+        let Identity { trade_of, trip_of, needs_trade, joined, moved, unclaimed } = fresh;
+        self.trade_of.extend(trade_of);
+        self.trip_of.extend(trip_of);
+        self.needs_trade.extend(needs_trade);
+        self.joined.extend(joined);
+        self.moved.extend(moved);
+        self.unclaimed.extend(unclaimed);
+        self.in_book_order(ledger);
     }
 
     /// What concerns `instruments` taken out (the round trips keyed on them, and

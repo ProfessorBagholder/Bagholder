@@ -15,7 +15,7 @@ use crate::identity::{identify, Identity};
 use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, LedgerDelta, Quote, Rates, Sourced};
 use crate::families::{node_of, Families, Node};
 use crate::gap::Fig;
-use crate::ledger::{match_lots, match_over, Direction, Matched, TripKey};
+use crate::ledger::{match_family, match_lots, Direction, MatchState, Matched, TripKey};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
 use crate::trades::{build_trades, TradeFig, TradeKey};
@@ -206,6 +206,11 @@ impl Fields for Stated<'_> {
     }
 }
 
+/// A cash dividend of an instrument: a row its payer's rate is worked out from.
+fn pays_cash(r: &CashRow) -> bool {
+    r.instrument.is_some() && r.kind == crate::cashflow::Payment::Dividend && r.in_units.is_none()
+}
+
 fn diff<'a, T: Fields + 'a>(moved: &mut Moved, before: impl IntoIterator<Item = (Entity, &'a T)>, after: impl IntoIterator<Item = (Entity, &'a T)>) {
     let before: BTreeMap<Entity, &T> = before.into_iter().collect();
     let mut after: BTreeMap<Entity, &T> = after.into_iter().collect();
@@ -244,6 +249,10 @@ pub struct Engine {
     trades: Vec<TradeFig>,
     positions: Vec<PositionFig>,
     cash: Vec<CashRow>,
+    /// Each instrument's cash dividends among `cash`, in its order: what its
+    /// payer's rate is worked out from, read by key rather than by scanning
+    /// every cash row.
+    paid: BTreeMap<InstrumentId, Vec<CashRow>>,
     payers: BTreeMap<InstrumentId, PayerRate>,
     equity: BTreeMap<AccountId, AccountEquity>,
     checks: Vec<BrokerCheck>,
@@ -259,6 +268,35 @@ pub struct Engine {
     /// Each instrument by what it is called now (its symbol in ASCII capitals)
     /// and its currency: what a trade typed in by symbol is found by.
     symbols: BTreeMap<(String, bagholder_core::Currency), BTreeSet<InstrumentId>>,
+    /// Each family's match as it stood after its last walk: what a change that
+    /// only adds rows after it continues from (`ledger::continue_family`).
+    kept: BTreeMap<Node, MatchState>,
+    /// The round trips the saved groups hold.
+    group_held: BTreeSet<TripKey>,
+    /// Each family matched, and whether its match was continued, over the
+    /// engine's life: what a test reads, on whichever thread the change ran.
+    #[cfg(feature = "oracles")]
+    paths: Vec<(Node, bool)>,
+}
+
+#[cfg(feature = "oracles")]
+thread_local! {
+    /// Each family a change to the record matched, and whether its match was
+    /// continued: what a test compares with the path its own steps expect.
+    static PATHS: std::cell::RefCell<Vec<(Node, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The families matched since last asked on this thread, and whether each was
+/// continued.
+#[cfg(feature = "oracles")]
+pub fn take_paths() -> Vec<(Node, bool)> {
+    PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+#[cfg(feature = "oracles")]
+fn path(log: &mut Vec<(Node, bool)>, f: Node, continued: bool) {
+    log.push((f, continued));
+    PATHS.with(|p| p.borrow_mut().push((f, continued)));
 }
 
 /// What an instrument is found by when named: its current symbol in ASCII
@@ -270,22 +308,24 @@ fn symbol_key(i: &crate::input::InstrumentInfo) -> Option<(String, bagholder_cor
 /// Each account's cash a family's match gives, by family.
 type ByFamily = BTreeMap<Node, BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>;
 
-/// The match of each family named, put together in the match's order, and each
-/// one's share of the accounts' cash.
-fn match_families(inputs: &Inputs, families: &Families, names: impl IntoIterator<Item = Node>) -> (Matched, ByFamily) {
+/// The match of each family named, put together in the match's order, each
+/// one's share of the accounts' cash, and what each keeps to be continued from.
+fn match_families(inputs: &Inputs, families: &Families, names: impl IntoIterator<Item = Node>) -> (Matched, ByFamily, BTreeMap<Node, MatchState>) {
     let mut all = Matched::default();
     let mut shares = ByFamily::new();
+    let mut kept = BTreeMap::new();
     for f in names {
         let txs = families.transactions(&inputs.ledger, f);
         if txs.is_empty() {
             continue;
         }
-        let mut m = match_over(inputs, txs);
+        let (mut m, state) = match_family(inputs, txs);
         shares.insert(f, std::mem::take(&mut m.cash));
+        kept.insert(f, state);
         all.absorb(m);
     }
     all.in_match_order(&inputs.ledger);
-    (all, shares)
+    (all, shares, kept)
 }
 
 /// An account's cash in each currency: its families' shares added up, in the
@@ -329,6 +369,7 @@ impl Engine {
             trades: vec![],
             positions: vec![],
             cash: vec![],
+            paid: BTreeMap::new(),
             payers: BTreeMap::new(),
             equity: BTreeMap::new(),
             checks: vec![],
@@ -337,6 +378,10 @@ impl Engine {
             families,
             shares: BTreeMap::new(),
             symbols: BTreeMap::new(),
+            kept: BTreeMap::new(),
+            group_held: BTreeSet::new(),
+            #[cfg(feature = "oracles")]
+            paths: Vec::new(),
         };
         for (id, info) in &e.inputs.ledger.instruments {
             if let Some(k) = symbol_key(info) {
@@ -354,8 +399,13 @@ impl Engine {
     fn derive(&mut self) {
         let i = &self.inputs;
         self.trades = build_trades(i, &self.matched, &self.identity);
+        self.group_held = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
         self.positions = build_positions(i, &self.matched, &self.identity, None, None);
         self.cash = build_cashflow(i, &self.matched);
+        self.paid = BTreeMap::new();
+        for r in self.cash.iter().filter(|r| pays_cash(r)) {
+            self.paid.entry(r.instrument.expect("a dividend names its payer")).or_default().push(r.clone());
+        }
         self.payers = payer_rates(i, &self.cash, &self.matched);
         self.equity = build_equity(i, None);
         self.checks = broker_checks(i, &self.matched, None);
@@ -364,8 +414,13 @@ impl Engine {
     /// Every family matched again (the day turned: any contract's expiry).
     fn match_all(&mut self) {
         let names: Vec<Node> = self.families.all().map(|(n, _)| *n).collect();
-        let (matched, by_family) = match_families(&self.inputs, &self.families, names);
+        let (matched, by_family, kept) = match_families(&self.inputs, &self.families, names);
+        #[cfg(feature = "oracles")]
+        for f in kept.keys() {
+            path(&mut self.paths, *f, false);
+        }
         self.matched = matched;
+        self.kept = kept;
         self.shares.clear();
         for (f, accounts) in by_family {
             for (a, cash) in accounts {
@@ -385,7 +440,16 @@ impl Engine {
     /// to the record reaches, and nothing else.
     fn rematch_families(&mut self, seeds: BTreeSet<Node>) -> (crate::families::Regrouped, BTreeSet<AccountId>, bool) {
         let g = self.families.regroup(&self.inputs.ledger, &self.inputs.facts.adjustments, seeds);
-        let (fresh, by_family) = match_families(&self.inputs, &self.families, g.families.iter().copied());
+        let (fresh, by_family, kept) = match_families(&self.inputs, &self.families, g.families.iter().copied());
+        // the families that went keep nothing; the ones that took their place keep their own
+        for f in &g.gone {
+            self.kept.remove(f);
+        }
+        #[cfg(feature = "oracles")]
+        for f in &g.families {
+            path(&mut self.paths, *f, false);
+        }
+        self.kept.extend(kept);
         // what waits on the person in the region, before and after
         let in_region = |m: &Matched, l: &crate::input::Ledger| -> Vec<(bagholder_core::TransactionId, crate::ledger::Waiting)> {
             m.waiting.iter().filter(|(tx, w)| g.region.contains(&Node::Instrument(w.instrument)) || l.transactions.get(tx).is_none_or(|t| g.region.contains(&node_of(t)))).map(|(t, w)| (t.clone(), w.clone())).collect()
@@ -462,6 +526,18 @@ impl Engine {
             Some(day) => crate::scope::portfolio_as_of(filters, &self.inputs, self.past(day)),
             None => self.portfolio(filters),
         }
+    }
+
+    /// Each family matched over the engine's life, and whether its match was
+    /// continued.
+    #[cfg(feature = "oracles")]
+    pub fn paths(&self) -> &[(Node, bool)] {
+        &self.paths
+    }
+
+    /// The family a node is matched in (`crate::families`), by name.
+    pub fn family_of(&self, n: Node) -> Node {
+        self.families.of(n)
     }
 
     pub fn inputs(&self) -> &Inputs {
@@ -557,6 +633,9 @@ impl Engine {
         match change {
             Change::Ledger(mut delta) => {
                 let matching = delta.matches();
+                // the families whose match the change continues, with the rows it adds
+                let mut continued = if matching { self.continuable(&delta) } else { BTreeMap::new() };
+                let continued_nodes: BTreeSet<Node> = continued.keys().flat_map(|f| self.families.members(*f)).collect();
                 let mut seeds: BTreeSet<Node> = BTreeSet::new();
                 let records: Vec<bagholder_core::RecordId> = delta.records.keys().copied().collect();
                 let instruments: Vec<InstrumentId> = delta.instruments.keys().copied().collect();
@@ -565,22 +644,27 @@ impl Engine {
                 let was: BTreeMap<InstrumentId, Option<InstrumentId>> =
                     instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
                 self.seed(&mut seeds, &records, &was, &accounts);
-                // what the person keeps on the trades: the instruments they are anchored on, before and after
+                // what the person keeps on the trades: the round trips they are on, before and after
                 let mut reach = Reach::default();
-                for t in delta.trades.keys() {
-                    reach.instruments.extend(self.inputs.ledger.trades.get(t).and_then(crate::input::Keyed::instrument));
-                }
                 for (t, now) in &delta.trades {
-                    reach.instruments.extend(now.as_ref().and_then(|(_, t)| crate::input::Keyed::instrument(t)));
+                    reach.trips.extend(self.identity.trip_of.get(t).cloned());
+                    // the transactions anchored on, before and after: every trade on one
+                    // competes with this one for its round trip
+                    for trade in self.inputs.ledger.trades.get(t).into_iter().chain(now.as_ref().map(|(_, x)| x)) {
+                        reach.trips.extend(self.trips_anchored(trade));
+                        reach.anchors.extend(crate::input::Keyed::anchor(trade));
+                    }
                     reach.trades.insert(*t);
                 }
+                reach.groups = !delta.groups.is_empty();
                 for subject in delta.journal.keys() {
                     match subject {
                         bagholder_core::journal::JournalSubject::Trade(t) => {
                             reach.trades.insert(*t);
-                            reach.instruments.extend(self.identity.trip_of.get(t).map(|k| k.instrument));
+                            reach.trips.extend(self.identity.trip_of.get(t).cloned());
                         }
-                        bagholder_core::journal::JournalSubject::Group(_) => {}
+                        // a group's figure carries its journal: the groups are worked out again (brief 30, C2)
+                        bagholder_core::journal::JournalSubject::Group(_) => reach.groups = true,
                     }
                 }
                 // the adjustments: the rows they apply to, and every instrument their legs name before and after
@@ -626,17 +710,38 @@ impl Engine {
                 self.families.reindex(&self.inputs.ledger, &was, gone.iter(), come.iter(), &adjusted_was, &self.inputs.facts.adjustments);
                 let mut waiting_moved = false;
                 if matching {
-                    let (g, cash_moved, waited) = self.rematch_families(seeds);
-                    waiting_moved = waited;
-                    reach.accounts.extend(cash_moved);
-                    for n in &g.region {
-                        if let Node::Instrument(i) = n {
-                            reach.instruments.insert(*i);
+                    // a continued family's own rows are walked on from its state; what
+                    // is left, and every node of a family the change reaches otherwise,
+                    // is matched whole, as is a continued family the whole match takes in
+                    seeds.retain(|n| !continued_nodes.contains(n) && (self.families.has(*n) || self.holds_node(*n)));
+                    if !seeds.is_empty() {
+                        let (g, cash_moved, waited) = self.rematch_families(seeds);
+                        waiting_moved = waited;
+                        reach.accounts.extend(cash_moved);
+                        for n in &g.region {
+                            if let Node::Instrument(i) = n {
+                                reach.instruments.insert(*i);
+                            }
                         }
+                        continued.retain(|f, _| !g.gone.contains(f));
+                    }
+                    for (f, rows) in continued {
+                        let (c, waited) = self.continue_family(f, &rows);
+                        waiting_moved |= waited;
+                        reach.accounts.extend(c.cash.keys().copied());
+                        reach.accounts.extend(c.holdings.iter().map(|(a, _)| *a));
+                        reach.holdings.extend(c.holdings);
+                        reach.trips.extend(c.trips);
                     }
                     reach.matched = true;
                 }
-                // every instrument of a family reached: a round trip keyed on one holds lots of the others
+                // a trade's round trip after the change: the one holding its anchor
+                for t in &reach.trades {
+                    if let Some(trade) = self.inputs.ledger.trades.get(t) {
+                        reach.trips.extend(self.trips_anchored(trade));
+                    }
+                }
+                // every instrument of a family reached whole: a round trip keyed on one holds lots of the others
                 let fam: BTreeSet<InstrumentId> = reach.instruments.iter().flat_map(|i| self.families.members(self.families.of(Node::Instrument(*i)))).filter_map(|n| if let Node::Instrument(i) = n { Some(i) } else { None }).collect();
                 reach.instruments.extend(fam);
                 for i in &reach.instruments {
@@ -674,37 +779,52 @@ impl Engine {
                 let before = self.snapshot(Parts::ALL);
                 let live_before = self.live_rates_stated();
                 self.inputs.facts.rates = r;
+                // a coin's remainder is judged dust at the rate of its row's day: every
+                // family with a coin and a row from the first day that changed is
+                // matched again, its kept state with it (#513)
+                if let Some(day) = stale {
+                    let coin = |n: &Node| matches!(n, Node::Instrument(i) if self.inputs.ledger.instruments.get(i).is_some_and(|x| x.instrument.kind == bagholder_core::instrument::InstrumentKind::Crypto));
+                    let seeds: BTreeSet<Node> = self
+                        .kept
+                        .iter()
+                        .filter(|(_, k)| k.last.as_ref().is_some_and(|l| l.0 >= day))
+                        .map(|(f, _)| self.families.members(*f))
+                        .filter(|m| m.iter().any(coin))
+                        .flatten()
+                        .collect();
+                    if !seeds.is_empty() {
+                        self.rematch_families(seeds);
+                        self.identity = identify(&self.inputs.ledger, &self.matched);
+                    }
+                }
                 self.derive();
                 self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
                 self.compare(&before, &mut moved);
                 self.live_rates_moved(&live_before, &mut moved);
             }
             Change::Declared(i, d) => {
-                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
                 match d {
                     Some(d) => self.inputs.facts.declared.insert(i, d),
                     None => self.inputs.facts.declared.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
-                self.compare(&before, &mut moved);
+                // that payer's rate, from its own payments
+                self.payer_again(i, &mut moved);
             }
             Change::Frequency(i, s) => {
-                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
                 match s {
                     Some(s) => self.inputs.facts.frequencies.insert(i, s),
                     None => self.inputs.facts.frequencies.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
-                self.compare(&before, &mut moved);
+                // that payer's rate, from its own payments
+                self.payer_again(i, &mut moved);
             }
             Change::ExDividend(i, d) => {
-                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
                 match d {
                     Some(d) => self.inputs.market.ex_dividends.insert(i, d),
                     None => self.inputs.market.ex_dividends.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
-                self.compare(&before, &mut moved);
+                // that payer's rate, from its own payments
+                self.payer_again(i, &mut moved);
             }
             Change::Quote(i, q) => {
                 let was = match q.clone() {
@@ -807,24 +927,277 @@ impl Engine {
         }
     }
 
+    /// Whether the ledger holds rows of a node.
+    fn holds_node(&self, n: Node) -> bool {
+        let l = &self.inputs.ledger;
+        match n {
+            Node::Instrument(i) => l.instruments.contains_key(&i) || l.transactions.of_instrument(i).next().is_some(),
+            Node::Cash(a) => l.transactions.cash_of(a).next().is_some(),
+        }
+    }
+
+    /// The round trips a trade is on: the one its anchor opens, and each holding
+    /// its anchor as a fill of its instrument.
+    fn trips_anchored(&self, trade: &bagholder_core::journal::Trade) -> BTreeSet<TripKey> {
+        let bagholder_core::journal::Anchor::Opening(o) = &trade.anchor else { return BTreeSet::new() };
+        let m = &self.matched;
+        let mut out: BTreeSet<TripKey> = m.trips_by_fill.get(&o.transaction).into_iter().flatten().filter(|k| m.trips.get(k).is_some_and(|t| t.instruments.contains(&o.instrument))).cloned().collect();
+        let own = TripKey { opening: o.transaction.clone(), instrument: o.instrument };
+        if m.trips.contains_key(&own) {
+            out.insert(own);
+        }
+        out
+    }
+
+    /// The families whose match a change continues from their kept state, each
+    /// with the rows it adds (`docs/plans/stage-3-a-change-on-a-deep-history.md`,
+    /// B): only records added, every leg placed after everything the family
+    /// matched, no family joined or split, no row that decides an earlier one
+    /// (an expiry, an assignment, an exercise, an event, a transfer linked to a
+    /// row walked, a coin's finer place), nothing the match reads of an
+    /// instrument or an account changed, and the family's last expiry up to today
+    /// quiet. Every other family the change reaches is matched whole. Decided
+    /// from the change alone: no row of a family is read to decide it.
+    fn continuable(&self, delta: &LedgerDelta) -> BTreeMap<Node, Vec<TransactionId>> {
+        use bagholder_core::transaction::{Effect, Kind};
+        let l = &self.inputs.ledger;
+        let fams = &self.families;
+        let family = |n: Node| -> Option<Node> { fams.has(n).then(|| fams.of(n)) };
+        let mut blocked: BTreeSet<Node> = BTreeSet::new();
+        let mut added: BTreeMap<Node, Vec<TransactionId>> = BTreeMap::new();
+        let is_new = |r: &bagholder_core::RecordId| !l.records.contains_key(r) && l.transactions.of_record(*r).next().is_none();
+        let new_row = |id: &TransactionId| -> Option<&bagholder_core::transaction::Transaction> {
+            if !is_new(&id.record) {
+                return None;
+            }
+            delta.records.get(&id.record).and_then(|x| x.as_ref()).and_then(|(_, ts)| ts.iter().find(|t| t.id == *id))
+        };
+        for (r, now) in &delta.records {
+            if !is_new(r) || now.is_none() {
+                // 1: a record revised or removed
+                blocked.extend(l.transactions.of_record(*r).filter_map(|t| family(node_of(t))));
+                if let Some((_, txs)) = now {
+                    blocked.extend(txs.iter().filter_map(|t| family(node_of(t))));
+                }
+                continue;
+            }
+            let Some((info, txs)) = now else { continue };
+            let legs: Vec<&bagholder_core::transaction::Transaction> = txs.iter().collect();
+            // the walk applies a record whose legs share a day at its earliest leg,
+            // whichever family that leg is in: every family it touches must have
+            // walked nothing after that place (brief 30, B1)
+            let earliest = legs.iter().map(|t| crate::ledger::order_key_of(t, &legs, &info.source_key)).min();
+            let unstated = info.problems.iter().any(|p| p.code == "leg-unstated");
+            for t in txs {
+                // a node no family holds yet is matched whole, as a family of its own
+                let Some(fam) = family(node_of(t)) else { continue };
+                let ok = (|| {
+                    // 3: a record whose legs are not stated can make its account one family
+                    if unstated {
+                        return false;
+                    }
+                    // 4: a row that decides how an earlier one ends, or an event
+                    if matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise | Kind::CorporateEvent) {
+                        return false;
+                    }
+                    // 3 and 4: a transfer's other side is added too, in this family
+                    for (out, inn) in &delta.links {
+                        let other = if *out == t.id {
+                            inn
+                        } else if *inn == t.id {
+                            out
+                        } else {
+                            continue;
+                        };
+                        if new_row(other).map(node_of).and_then(family) != Some(fam) {
+                            return false;
+                        }
+                    }
+                    // 3: an account made one family holds it in that family already
+                    if fams.is_whole(t.account) && family(Node::Cash(t.account)) != Some(fam) {
+                        return false;
+                    }
+                    let Some(k) = self.kept.get(&fam) else { return false };
+                    // 7
+                    if !k.ended_quiet {
+                        return false;
+                    }
+                    // 2: after everything the family walked, and not a close the
+                    // look-ahead from a stated open at that instant would take first
+                    let Some(last) = &k.last else { return false };
+                    let key = crate::ledger::order_key_of(t, &legs, &info.source_key);
+                    if key <= *last || earliest.as_ref().is_some_and(|e| e <= last) {
+                        return false;
+                    }
+                    let same_instant = (key.0, key.1, key.2) == (last.0, last.1, last.2);
+                    if same_instant && t.effect == Some(Effect::Close) && txs.len() == 1 && t.instrument.is_some_and(|i| k.opens_at_last.contains(&(t.account, i))) {
+                        return false;
+                    }
+                    // 5: a coin's row no finer than its source's rows were
+                    if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
+                        let coin = l.instruments.get(&i).is_some_and(|x| x.instrument.kind == bagholder_core::instrument::InstrumentKind::Crypto);
+                        if coin && k.places.get(&(i, t.mapping.source.clone())).is_some_and(|p| q.places() > *p) {
+                            return false;
+                        }
+                    }
+                    true
+                })();
+                if ok {
+                    added.entry(fam).or_default().push(t.id.clone());
+                } else {
+                    blocked.insert(fam);
+                }
+            }
+        }
+        // 6: what the match reads of an instrument: its kind, currency and terms
+        for (i, now) in &delta.instruments {
+            let was = l.instruments.get(i);
+            let same = match (was, now) {
+                (Some(a), Some(b)) => a.instrument.kind == b.instrument.kind && a.instrument.currency == b.instrument.currency && a.terms == b.terms,
+                _ => false,
+            };
+            if !same {
+                blocked.extend(family(Node::Instrument(*i)));
+                for u in [was.and_then(|x| x.terms.as_ref()), now.as_ref().and_then(|x| x.terms.as_ref())].into_iter().flatten() {
+                    blocked.extend(family(Node::Instrument(u.underlying)));
+                }
+            }
+        }
+        // 6: an account that held rows before the change: anything of it changed
+        for (a, now) in &delta.accounts {
+            if let Some(was) = l.accounts.get(a) {
+                if now.as_ref() != Some(was) {
+                    blocked.extend(family(Node::Cash(*a)));
+                    blocked.extend(l.transactions.instruments_in(*a).filter_map(|i| family(Node::Instrument(i))));
+                }
+            }
+        }
+        // 1: an adjustment set or cleared
+        for (tx, list) in &delta.adjustments {
+            let was = self.inputs.facts.adjustments.get(tx);
+            if was.is_some() || !list.is_empty() {
+                blocked.extend(l.transactions.get(tx).map(node_of).and_then(family));
+                blocked.extend(was.into_iter().chain(list.iter()).flat_map(|x| x.legs.iter().flat_map(|g| [g.from, g.to])).flatten().filter_map(|i| family(Node::Instrument(i))));
+            }
+        }
+        added.retain(|f, _| !blocked.contains(f));
+        added
+    }
+
+    /// A family's match continued from its kept state for `rows`, its share of
+    /// each account's cash brought with it. What it wrote, and whether what waits
+    /// on the person moved.
+    fn continue_family(&mut self, family: Node, rows: &[TransactionId]) -> (crate::ledger::Continued, bool) {
+        let mut state = self.kept.remove(&family).expect("a family continued keeps its state");
+        let txs: Vec<&bagholder_core::transaction::Transaction> = rows.iter().filter_map(|id| self.inputs.ledger.transactions.get(id)).collect();
+        let waiting = self.matched.waiting.len();
+        let c = crate::ledger::continue_family(&self.inputs, &mut self.matched, &mut state, txs);
+        self.kept.insert(family, state);
+        for (a, cash) in &c.cash {
+            let share = self.shares.entry(*a).or_default().entry(family).or_default();
+            for (cur, v) in cash {
+                let e = share.entry(*cur).or_insert(Ok(bagholder_core::Dec::ZERO));
+                if let Ok(t) = e {
+                    *e = match v {
+                        Ok(v) => t.checked_add(*v).map_err(crate::gap::Gaps::from),
+                        Err(g) => Err(g.clone()),
+                    };
+                }
+            }
+            let t = total(&self.shares[a]);
+            self.matched.cash.insert(*a, t);
+        }
+        #[cfg(feature = "oracles")]
+        {
+            path(&mut self.paths, family, true);
+            if !crate::oracles_off() {
+                let txs = self.families.transactions(&self.inputs.ledger, family);
+                let (whole, whole_state) = match_family(&self.inputs, txs);
+                assert_eq!(&whole_state, &self.kept[&family], "the continued match of {family:?} keeps what a whole match keeps");
+                let mut expect = self.matched.clone();
+                let region: BTreeSet<Node> = self.families.members(family);
+                let shares = whole.cash.clone();
+                expect.replace(&self.inputs.ledger, &region, whole);
+                expect.cash = self.matched.cash.clone();
+                assert!(expect == self.matched, "the continued match of {family:?} equals a whole one");
+                for (a, s) in shares {
+                    assert_eq!(self.shares.get(&a).and_then(|x| x.get(&family)), Some(&s), "{family:?}'s share of {a}'s cash");
+                }
+            }
+        }
+        let moved = self.matched.waiting.len() != waiting;
+        (c, moved)
+    }
+
     /// The figures a change to the record reached, worked out again in place, and
-    /// what moved said (`docs/plans/stage-3-the-record-by-change.md`, B): the
-    /// trade identity, round trips and positions of `reach.instruments`, the
-    /// saved groups (their claims are settled over every group, in the book's
-    /// order), the cashflow rows of `reach.transactions` and of the stock
-    /// dividends of those instruments, the payers' rates of what those rows and
-    /// instruments are, and the checks of `reach.accounts`.
+    /// what moved said (`docs/plans/stage-3-the-record-by-change.md`, B, and
+    /// `docs/plans/stage-3-a-change-on-a-deep-history.md`, C): the trade
+    /// identity, round trips and positions of `reach.instruments` (a family
+    /// matched whole), and of the round trips `reach.trips` and the holdings
+    /// `reach.holdings` beyond them (a continued match, a trade or its journal);
+    /// the saved groups, where a round trip or a trade of theirs is reached or a
+    /// group changed (their claims are settled over every group, in the book's
+    /// order); the cashflow rows of `reach.transactions` and of the stock
+    /// dividends of those instruments; the payers' rates of what those rows and
+    /// instruments are, and of the holdings reached; and the checks of
+    /// `reach.accounts`.
     fn rederive(&mut self, reach: &Reach, moved: &mut Moved) {
         let instruments = &reach.instruments;
         let fresh = crate::identity::identify_in(&self.inputs.ledger, &self.matched, instruments);
         self.identity.replace(&self.inputs.ledger, instruments, fresh);
-        // the groups, every one: which round trips each holds turns on the earlier ones
-        let held_was: BTreeSet<TripKey> = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
-        let (groups, held) = crate::trades::groups_shown(&self.inputs, &self.matched, &self.identity);
+        // the round trips reached beyond the instruments reached whole, and the
+        // trades whose round trip can move: the ones named, those sharing their
+        // anchor, and every one on a round trip reached; closed over each other,
+        // so every round trip such a trade holds or could claim is worked out with it
+        let whole = |t: &bagholder_core::TradeId| self.inputs.ledger.trades.get(t).and_then(crate::input::Keyed::instrument).is_some_and(|i| instruments.contains(&i));
+        let on_anchors = reach.anchors.iter().flat_map(|a| self.inputs.ledger.trades.anchored_on(a).map(|t| t.id));
+        let mut named: BTreeSet<bagholder_core::TradeId> = reach.trades.iter().copied().chain(on_anchors).filter(|t| !whole(t)).collect();
+        let mut narrow: BTreeSet<TripKey> = reach.trips.iter().filter(|k| !instruments.contains(&k.instrument)).cloned().collect();
+        loop {
+            let mut more: BTreeSet<TripKey> = BTreeSet::new();
+            for t in &named {
+                more.extend(self.identity.trip_of.get(t).cloned());
+                if let Some(trade) = self.inputs.ledger.trades.get(t) {
+                    more.extend(self.trips_anchored(trade));
+                }
+            }
+            let mut trades: BTreeSet<bagholder_core::TradeId> = BTreeSet::new();
+            for k in narrow.iter().chain(more.iter()) {
+                for f in self.matched.trips.get(k).into_iter().flat_map(|t| t.fills.iter()) {
+                    trades.extend(self.inputs.ledger.trades.anchored_on(f).map(|t| t.id).filter(|t| !whole(t)));
+                }
+            }
+            let before = (narrow.len(), named.len());
+            narrow.extend(more.into_iter().filter(|k| !instruments.contains(&k.instrument)));
+            named.extend(trades);
+            if (narrow.len(), named.len()) == before {
+                break;
+            }
+        }
+        // the trades whose round trip can move: the ones named, and every one on a
+        // round trip reached
+        let mut identified: BTreeSet<bagholder_core::TradeId> = reach.trades.clone();
+        if !narrow.is_empty() || !named.is_empty() {
+            let (fresh, trades) = crate::identity::identify_trips(&self.inputs.ledger, &self.matched, &narrow, &named);
+            self.identity.replace_trips(&self.inputs.ledger, &narrow, &trades, fresh);
+            identified.extend(trades);
+        }
+        // the groups: which round trips each holds turns on the earlier ones, so all
+        // of them, where a round trip or a trade of one is reached or one changed
+        let member = |t: &bagholder_core::TradeId| self.inputs.ledger.groups.iter().any(|g| g.members.contains(t));
+        let groups_reached = !instruments.is_empty() || reach.groups || narrow.iter().any(|k| self.group_held.contains(k)) || identified.iter().any(member);
+        let held_was = self.group_held.clone();
+        let (groups, held) = if groups_reached {
+            let (g, h) = crate::trades::groups_shown(&self.inputs, &self.matched, &self.identity);
+            (Some(g), h)
+        } else {
+            (None, held_was.clone())
+        };
         let mut trips: BTreeSet<TripKey> = instruments.iter().flat_map(|i| self.matched.trips_of.get(i).into_iter().flatten().cloned()).collect();
+        trips.extend(narrow.iter().cloned());
         trips.extend(held_was.symmetric_difference(&held).cloned());
         let rebuilt = |k: &TradeKey| match k {
-            TradeKey::Group(_) => true,
+            TradeKey::Group(_) => groups.is_some(),
             TradeKey::Trip(t) => instruments.contains(&t.instrument) || trips.contains(t),
         };
         let mut was: Vec<TradeFig> = Vec::new();
@@ -836,30 +1209,40 @@ impl Engine {
                 true
             }
         });
-        let mut now: Vec<TradeFig> = groups;
+        let mut now: Vec<TradeFig> = groups.unwrap_or_default();
         for k in &trips {
             if held.contains(k) {
                 continue;
             }
             now.extend(crate::trades::trip_fig(&self.inputs, &self.matched, &self.identity, k));
         }
+        self.group_held = held;
         // each after every row it ties with: as a fresh build's stable sort leaves them
         for t in &now {
             let at = self.trades.partition_point(|x| crate::trades::shown_order(x, t) != std::cmp::Ordering::Greater);
             self.trades.insert(at, t.clone());
         }
         diff(moved, was.iter().map(|t| (trade_entity(t), t)), now.iter().map(|t| (trade_entity(t), t)));
-        // positions
+        // positions: of the instruments reached whole, of every holding with lots of
+        // a round trip reached (a roll's spans two), and of the holdings reached
+        let mut shown: BTreeSet<InstrumentId> = instruments.clone();
+        for k in &narrow {
+            if let Some(t) = self.matched.trips.get(k) {
+                shown.extend(t.instruments.iter().copied());
+            }
+            shown.insert(k.instrument);
+        }
+        shown.extend(reach.holdings.iter().map(|(_, i)| *i));
         let mut was: Vec<PositionFig> = Vec::new();
         self.positions.retain(|p| {
-            if instruments.contains(&p.instrument) {
+            if shown.contains(&p.instrument) {
                 was.push(p.clone());
                 false
             } else {
                 true
             }
         });
-        let now: Vec<PositionFig> = instruments.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i), None)).collect();
+        let now: Vec<PositionFig> = shown.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i), None)).collect();
         let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
         for p in &now {
             let at = self.positions.partition_point(|x| order(x) <= order(p));
@@ -881,23 +1264,42 @@ impl Engine {
             let at = self.cash.partition_point(|x| crate::cashflow::shown_order(x, r) != std::cmp::Ordering::Greater);
             self.cash.insert(at, r.clone());
         }
-        let payers: BTreeSet<InstrumentId> = was.iter().chain(now.iter()).filter_map(|r| r.instrument).chain(instruments.iter().copied()).collect();
+        for r in was.iter().filter(|r| pays_cash(r)) {
+            let i = r.instrument.expect("a dividend names its payer");
+            if let Some(rows) = self.paid.get_mut(&i) {
+                rows.retain(|x| x.id != r.id);
+                if rows.is_empty() {
+                    self.paid.remove(&i);
+                }
+            }
+        }
+        for r in now.iter().filter(|r| pays_cash(r)) {
+            let rows = self.paid.entry(r.instrument.expect("a dividend names its payer")).or_default();
+            let at = rows.partition_point(|x| crate::cashflow::shown_order(x, r) != std::cmp::Ordering::Greater);
+            rows.insert(at, r.clone());
+        }
+        let payers: BTreeSet<InstrumentId> = was.iter().chain(now.iter()).filter_map(|r| r.instrument).chain(instruments.iter().copied()).chain(reach.holdings.iter().map(|(_, i)| *i)).collect();
         diff(moved, was.iter().map(|r| (Entity::CashRow(r.id.clone()), r)), now.iter().map(|r| (Entity::CashRow(r.id.clone()), r)));
         // the payers' rates
         for i in payers {
-            let payments: Vec<&CashRow> = self.cash.iter().filter(|r| r.instrument == Some(i) && r.kind == crate::cashflow::Payment::Dividend && r.in_units.is_none()).collect();
-            let rate = crate::cashflow::payer_rate(&self.inputs, i, payments, &self.matched);
-            let before = self.payers.get(&i).cloned();
-            match rate.clone() {
-                Some(r) => self.payers.insert(i, r),
-                None => self.payers.remove(&i),
-            };
-            diff(moved, before.iter().map(|p| (Entity::Payer(i), p)), rate.iter().map(|p| (Entity::Payer(i), p)));
+            self.payer_again(i, moved);
         }
         // the checks with the brokers
         for a in &reach.accounts {
             self.recheck(*a, moved);
         }
+    }
+
+    /// One payer's rate worked out again from its own payments, and what moved said.
+    fn payer_again(&mut self, i: InstrumentId, moved: &mut Moved) {
+        let payments: Vec<&CashRow> = self.paid.get(&i).into_iter().flatten().collect();
+        let rate = crate::cashflow::payer_rate(&self.inputs, i, payments, &self.matched);
+        let before = self.payers.get(&i).cloned();
+        match rate.clone() {
+            Some(r) => self.payers.insert(i, r),
+            None => self.payers.remove(&i),
+        };
+        diff(moved, before.iter().map(|p| (Entity::Payer(i), p)), rate.iter().map(|p| (Entity::Payer(i), p)));
     }
 
     /// A price moved: that instrument's positions.
@@ -1095,10 +1497,20 @@ fn quote_moved(i: InstrumentId, was: Option<&Quote>, now: Option<&Quote>, moved:
 /// What a change to the record reached (`Engine::rederive`).
 #[derive(Default)]
 struct Reach {
+    /// Instruments whose figures are worked out whole: a family matched whole.
     instruments: BTreeSet<InstrumentId>,
+    /// Round trips beyond them: a continued match wrote them, or a trade or its
+    /// journal is on them.
+    trips: BTreeSet<TripKey>,
+    /// Holdings a continued match walked.
+    holdings: BTreeSet<(AccountId, InstrumentId)>,
     transactions: BTreeSet<bagholder_core::TransactionId>,
     accounts: BTreeSet<AccountId>,
     trades: BTreeSet<bagholder_core::TradeId>,
+    /// The transactions a trade the change names is anchored on, before and after.
+    anchors: BTreeSet<bagholder_core::TransactionId>,
+    /// A saved group changed.
+    groups: bool,
     matched: bool,
 }
 
