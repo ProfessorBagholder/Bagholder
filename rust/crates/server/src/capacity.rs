@@ -186,6 +186,34 @@ impl Op {
     }
 }
 
+/// The rows the import probe's file holds, by pair. By depth, more than 100: the
+/// import then commits them in groups of two or more (`csv_import`, a group per
+/// hundredth of the file), so each row after a group's first is looked up inside
+/// a transaction that has written sightings not yet settled, on the deepest
+/// listing, where a lookup that folds the listing's history would show (brief 30,
+/// A3). By breadth, a file small beside the book, so one read of every row the
+/// book's files imported stands out against the import's own work (brief 27, 9).
+fn import_rows(pair: Pair) -> u64 {
+    match pair {
+        Pair::Depth => 150,
+        Pair::Breadth => 20,
+    }
+}
+
+/// Where the engine's log of matches stood before a probe's window, and the
+/// family the probe's listing is matched in.
+#[cfg(test)]
+fn paths_mark(f: &crate::figures::Figures, instrument: bagholder_core::InstrumentId) -> (usize, Option<bagholder_engine::families::Node>) {
+    f.read(|e| (e.paths().len(), Some(e.family_of(bagholder_engine::families::Node::Instrument(instrument))))).unwrap_or((0, None))
+}
+
+/// The window's matches of the probe's family, kept for the test that reads them.
+#[cfg(test)]
+fn paths_taken(f: &crate::figures::Figures, (from, family): (usize, Option<bagholder_engine::families::Node>)) {
+    let window = f.read(|e| e.paths()[from.min(e.paths().len())..].iter().filter(|(n, _)| Some(*n) == family).copied().collect()).unwrap_or_default();
+    PROBED_PATHS.with(|p| *p.borrow_mut() = window);
+}
+
 /// A test's planted read of every row any file imported, inside the import
 /// probe's window (brief 28, E).
 #[cfg(test)]
@@ -193,7 +221,8 @@ static PLANT_WHOLE_READ: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 thread_local! {
-    /// The families the last probe's engine matched, and whether each was continued.
+    /// The matches of the target listing's family in the last probe's window, and
+    /// whether each was continued.
     static PROBED_PATHS: std::cell::RefCell<Vec<(bagholder_engine::families::Node, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -674,9 +703,13 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             Ok(since(&m, priced))
         }
         Op::AddTrade => {
-            let ((_, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
+            let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             // the page holds the broker's names: what a change does to them is in the window
             f.names()?;
+            #[cfg(test)]
+            let window = paths_mark(f, instrument);
+            #[cfg(not(test))]
+            let _ = instrument; // what the test's record of the window keys on
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
@@ -688,14 +721,18 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             }
             let out = Measured { rows: Some(rows), ..since(&m, 1) };
             #[cfg(test)]
-            PROBED_PATHS.with(|p| *p.borrow_mut() = f.read(|e| e.paths().to_vec()).unwrap_or_default());
+            paths_taken(f, window);
             Ok(out)
         }
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
-            let ((_, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
+            let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             f.names()?;
-            for n in 0..20 {
+            #[cfg(test)]
+            let window = paths_mark(f, instrument);
+            #[cfg(not(test))]
+            let _ = instrument; // what the test's record of the window keys on
+            for n in 0..import_rows(pair) {
                 text.push_str(&format!("{},Buy,{symbol},1,{}.00,-{}.00,{currency}\n", made_up_today(), 10 + n, 10 + n));
             }
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
@@ -708,7 +745,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             }
             let out = Measured { rows: Some(rows), ..since(&m, 1) };
             #[cfg(test)]
-            PROBED_PATHS.with(|p| *p.borrow_mut() = f.read(|e| e.paths().to_vec()).unwrap_or_default());
+            paths_taken(f, window);
             Ok(out)
         }
     }
@@ -1132,8 +1169,9 @@ mod tests {
             build(four.path(), large, 2).unwrap();
             for &op in pair.ops().iter().filter(|o| o.per_change()) {
                 let a = probe(op, pair, min.0, one.path()).unwrap();
+                let paths_a = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
                 let b = probe(op, pair, min.1, four.path()).unwrap();
-                let paths = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+                let paths_b = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
                 assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
                 // steps and allocations: what the process reads from storage at
@@ -1141,9 +1179,12 @@ mod tests {
                 // the capacity job at the owner's size instead
                 let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew") && !o.contains("bytes read")).collect();
                 assert!(growth.is_empty() || listed(op, pair), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
-                // an added trade and an import continue the family's match on both books
+                // an added trade and an import match the listing's family once, by
+                // continuing it, on each book (brief 30, C4)
                 if matches!(op, Op::AddTrade | Op::Import) {
-                    assert!(paths.last().is_some_and(|(_, continued)| *continued), "{op:?} ({pair:?}) did not continue its family's match: {:?}", paths.last());
+                    for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
+                        assert!(paths.len() == 1 && paths[0].1, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                    }
                 }
             }
         }

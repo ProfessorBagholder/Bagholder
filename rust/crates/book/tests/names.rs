@@ -64,10 +64,12 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
         f.account(&["a2"]);
         let m = Spelled::v(1);
         let other = Spelled { source: "other-broker", version: 1 };
+        // the person's own records (a CSV import) sighting the listings the broker's also do
+        let csv = Spelled { source: "csv", version: 1 };
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let mut keys: Vec<String> = Vec::new();
         for n in 0..60 {
-            let action = rng.below(12);
+            let action = rng.below(13);
             let step = format!("seed {seed}, step {n}, action {action}");
             match action {
                 // a record stored, or one stored before revised: a sighting under a
@@ -86,8 +88,12 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                         inst["venue"] = json!(rng.pick(&["TSX", "TSX-V"]));
                     }
                     let account = rng.pick(&["a1", "a2"]).to_string();
-                    // from either of two sources: a run's source is its last sighting's
-                    let source = if rng.below(3) == 0 { &other } else { &m };
+                    // from any of three sources: a run's source is its last sighting's
+                    let source = match rng.below(4) {
+                        0 => &other,
+                        1 => &csv,
+                        _ => &m,
+                    };
                     f.store(source, &key, &legs(vec![buy(&account, inst, "1", "-1", &format!("{day}T15:00:00Z"))]));
                     if !keys.contains(&key) {
                         keys.push(key);
@@ -112,8 +118,13 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                     let day = format!("2026-0{}-{:02}", 1 + rng.below(3), 1 + rng.below(28));
                     c.execute("UPDATE instrument_sightings SET day = ?1, name = NULL WHERE rowid = (SELECT rowid FROM instrument_sightings ORDER BY random() LIMIT 1)", [day]).unwrap();
                 }
+                // an upsert on a connection of its own, as any writer outside the book
+                // opens one: without the book's `recursive_triggers`, so a REPLACE
+                // fires no delete trigger for the row it replaces
                 8 => {
-                    let c = f.book.conn_for_tests();
+                    let c = rusqlite::Connection::open(f.dir.path().join(bagholder_book::BOOK_FILE)).unwrap();
+                    let recursive: i64 = c.query_row("PRAGMA recursive_triggers", [], |r| r.get(0)).unwrap();
+                    assert_eq!(recursive, 0);
                     c.execute(
                         "INSERT OR REPLACE INTO instrument_sightings (record_id, leg, instrument_id, symbol, venue_mic, venue_name, name, day)
                          SELECT record_id, leg, instrument_id, 'RPL', venue_mic, 'Replaced', name, day FROM instrument_sightings ORDER BY random() LIMIT 1",
@@ -125,6 +136,17 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                     let c = f.book.conn_for_tests();
                     c.execute("DELETE FROM instrument_sightings WHERE rowid = (SELECT rowid FROM instrument_sightings ORDER BY random() LIMIT 1)", []).unwrap();
                 }
+                // a plain INSERT of a sighting, around the book: another leg of a record
+                12 => {
+                    let c = f.book.conn_for_tests();
+                    let sym = rng.pick(&["AAA", "DDD"]).to_string();
+                    c.execute(
+                        "INSERT OR IGNORE INTO instrument_sightings (record_id, leg, instrument_id, symbol, venue_mic, venue_name, name, day)
+                         SELECT record_id, leg + 1000, instrument_id, ?1, venue_mic, venue_name, name, day FROM instrument_sightings ORDER BY random() LIMIT 1",
+                        [sym],
+                    )
+                    .unwrap();
+                }
                 // a succession joined, or parted again
                 10 => {
                     let ids = instruments(&f);
@@ -133,11 +155,27 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                     if joined > 0 && rng.below(2) == 0 {
                         c.execute("DELETE FROM instrument_joins", []).unwrap();
                     } else if ids.len() >= 2 && joined == 0 {
-                        c.execute("INSERT INTO instrument_joins (instrument_id, into_id) VALUES (?1, ?2)", [ids[0].to_string(), ids[1].to_string()]).unwrap();
+                        // any instrument into any other
+                        let from = rng.below(ids.len() as u64) as usize;
+                        let into = (from + 1 + rng.below(ids.len() as u64 - 1) as usize) % ids.len();
+                        c.execute("INSERT INTO instrument_joins (instrument_id, into_id) VALUES (?1, ?2)", [ids[from].to_string(), ids[into].to_string()]).unwrap();
                     }
                 }
+                // the person's entries cleared alone: the broker's sightings of the
+                // same listings stay, and the sequence goes on
+                11 if rng.below(3) == 0 => {
+                    f.book.clear(&Clearing { broker: false, entries: true, journal: false, market: false, orders: false, following: false }).unwrap();
+                    if f.book.accounts().unwrap().len() < 2 {
+                        // an account only the entries named went with them, and the
+                        // connection with it: the sequence ends here
+                        held(&f, &step);
+                        steps_run += 1;
+                        break;
+                    }
+                    keys.retain(|k| f.book.record_by_key(Some(f.connection), &bagholder_core::SourceName::named("test-broker"), k).unwrap().is_some());
+                }
                 // the broker's records cleared, or everything
-                11 if n > 30 && rng.below(3) == 0 => {
+                11 if n > 30 && rng.below(2) == 0 => {
                     let what = if rng.below(2) == 0 { Clearing { broker: true, entries: false, journal: false, market: false, orders: false, following: false } } else { Clearing::all() };
                     f.book.clear(&what).unwrap();
                     held(&f, &step);
@@ -178,4 +216,47 @@ fn an_instrument_whose_names_cannot_be_kept_fails_alone() {
     drop(f.book);
     let (book, _) = bagholder_book::Book::open_in(f.dir.path(), "test", t0()).unwrap();
     assert_eq!(book.current_symbol(ib).unwrap().as_deref(), Some("BBC"));
+}
+
+
+/// A join whose ids cannot be read fails its own instrument's names alone: a
+/// write of another instrument, and opening the book, go on (brief 30, A2).
+#[test]
+fn a_join_that_cannot_be_read_fails_its_instrument_alone() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    let a = f.store(&m, "r1", &legs(vec![buy("a1", share(ISINS[0], "AAA"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let b = f.store(&m, "r2", &legs(vec![buy("a1", share(ISINS[1], "BBB"), "1", "-1", "2026-01-03T15:00:00Z")]));
+    let (ia, ib) = (instrument_of(&f, a.record), instrument_of(&f, b.record));
+    // written around the book, with no foreign keys: an id no reader can read
+    let c = rusqlite::Connection::open(f.dir.path().join(bagholder_book::BOOK_FILE)).unwrap();
+    c.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+    c.execute("INSERT INTO instrument_joins (instrument_id, into_id) VALUES (?1, 'not an id')", [ia.to_string()]).unwrap();
+    // the successions taken as settled: what this test holds is the names' settle
+    c.execute("UPDATE successions_due SET settled = changed WHERE id = 1", []).unwrap();
+    drop(c);
+    // the other instrument's sighting renamed, through the book's own write
+    f.book.conn_for_tests().execute("UPDATE instrument_sightings SET symbol = 'BBC' WHERE record_id = ?1", [b.record.to_string()]).unwrap();
+    f.book.atomically(|| Ok(())).expect("a write beside the unreadable join");
+    assert_eq!(f.book.names_as_kept(ib).unwrap(), f.book.names_as_folded(ib).unwrap(), "the other instrument settled");
+    let due: Vec<String> = f.book.conn_for_tests().prepare("SELECT DISTINCT instrument_id FROM names_due").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(due, vec![ia.to_string()], "the unreadable one keeps its rows");
+    let (book, _) = bagholder_book::Book::open_in(f.dir.path(), "test", t0()).expect("the book opens");
+    assert_eq!(book.current_symbol(ib).unwrap().as_deref(), Some("BBC"));
+}
+
+/// Opening the book takes no lock: it opens while another connection holds the
+/// write lock, where an open that began a write would wait out the busy timeout
+/// and fail (brief 30, A1).
+#[test]
+fn opening_the_book_takes_no_lock() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    f.store(&Spelled::v(1), "r1", &legs(vec![buy("a1", share(ISINS[0], "AAA"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    let c = rusqlite::Connection::open(f.dir.path().join(bagholder_book::BOOK_FILE)).unwrap();
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let (book, _) = bagholder_book::Book::open_in(f.dir.path(), "test", t0()).expect("an open beside a writer");
+    assert!(!book.accounts().unwrap().is_empty());
+    c.execute_batch("ROLLBACK").unwrap();
 }

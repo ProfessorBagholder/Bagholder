@@ -37,6 +37,14 @@ CREATE INDEX names_due_instrument ON names_due (instrument_id);
 CREATE INDEX instrument_sightings_venue_named ON instrument_sightings (instrument_id, day, symbol) WHERE venue_name IS NOT NULL;
 CREATE INDEX instrument_sightings_named ON instrument_sightings (instrument_id, day, symbol) WHERE name IS NOT NULL;
 
+-- the row an upsert replaces, marked before it goes: a REPLACE fires no delete
+-- trigger on a connection without `recursive_triggers`, which a writer outside
+-- the book may be
+CREATE TRIGGER instrument_sightings_names_replaced BEFORE INSERT ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting)
+    SELECT instrument_id, day, symbol, rowid FROM instrument_sightings WHERE record_id = NEW.record_id AND leg = NEW.leg AND instrument_id = NEW.instrument_id;
+END;
+
 CREATE TRIGGER instrument_sightings_names_insert AFTER INSERT ON instrument_sightings BEGIN
     INSERT INTO names_due (instrument_id, day, symbol, sighting) VALUES (NEW.instrument_id, NEW.day, NEW.symbol, NEW.rowid);
 END;

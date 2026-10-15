@@ -80,6 +80,12 @@ enum Extra {
     /// The deposit `w1` is revised to a row whose record's legs are not stated:
     /// everything account A holds becomes one family.
     Unstated,
+    /// A record of the family revised (its quantity changed) in the same change.
+    Revise(&'static str),
+    /// A record of the family removed in the same change.
+    Remove(&'static str),
+    /// The row `a5` is given an adjustment whose legs name only T.
+    AdjustNamingT,
 }
 
 /// The book every sequence is written in: the base rows, and every row a step
@@ -107,6 +113,8 @@ fn universe(seed: u64) -> Value {
     add(json!({"id": "k1", "account": "C", "day": "2026-01-09", "at": "2026-01-09T15:00:00Z", "kind": "buy", "instrument": "K", "qty": "0.123456", "cash": "-50"}));
     add(json!({"id": "w1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "deposit", "cash": "5000"}));
     add(json!({"id": "k2", "account": "C", "day": "2026-06-30", "at": "2026-06-30T15:00:00Z", "kind": "sell", "instrument": "K", "qty": "-0.100000", "cash": "45"}));
+    add(json!({"id": "x0", "account": "A", "day": "2026-01-03", "at": "2026-01-03T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "1", "cash": "-10"}));
+    add(json!({"id": "y0", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "Y", "qty": "5", "cash": "-50"}));
     // the steps' rows
     add(json!({"id": "a1", "account": "A", "day": "2026-07-01", "kind": "buy", "instrument": "S", "qty": q(&mut r), "cash": format!("-{}", cash(&mut r))}));
     add(json!({"id": "a2", "account": "B", "day": "2026-07-02", "at": "2026-07-02T15:00:00Z", "kind": "sell", "instrument": "S", "qty": "-3", "cash": cash(&mut r)}));
@@ -135,11 +143,22 @@ fn universe(seed: u64) -> Value {
     add(json!({"id": "c1", "account": "B", "day": "2026-08-22", "at": "2026-08-22T15:00:00Z", "kind": "transfer-in", "instrument": "S", "qty": "3"}));
     add(json!({"id": "a7", "account": "B", "day": "2026-08-23", "at": "2026-08-23T15:00:00Z", "kind": "buy", "instrument": "S", "qty": "1", "cash": "-14"}));
     add(json!({"id": "a5", "account": "A", "day": "2026-08-20", "at": "2026-08-20T15:00:00Z", "kind": "buy", "instrument": "S", "qty": "1", "cash": "-14"}));
+    // a later sale of S beside a revised record; a row at o3's instant on another holding
+    add(json!({"id": "a8", "account": "A", "day": "2026-07-03", "at": "2026-07-03T15:00:00Z", "kind": "sell", "instrument": "S", "qty": "-2", "cash": "30"}));
+    add(json!({"id": "t3", "account": "B", "day": "2026-07-10", "at": "2026-07-10T15:00:00Z", "kind": "buy", "instrument": "T", "qty": "1", "cash": "-20"}));
+    // X bought at 15:00, then one record that day, untimed, selling X and buying Y:
+    // each leg after its own family's last row, the record's earliest before X's
+    add(json!({"id": "l1", "account": "A", "day": "2026-08-24", "at": "2026-08-24T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"}));
+    add(json!({"id": "bxs", "record": "bx", "leg": "sell", "account": "A", "day": "2026-08-24", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "110"}));
+    add(json!({"id": "bxb", "record": "bx", "leg": "buy", "account": "A", "day": "2026-08-24", "kind": "buy", "instrument": "Y", "qty": "5", "cash": "-60"}));
+    // the put Q assigned
+    add(json!({"id": "q2", "account": "A", "day": "2026-08-25", "at": "2026-08-25T21:30:00Z", "kind": "option-assignment", "instrument": "Q", "qty": "1", "cash": "-1000"}));
+    add(json!({"id": "a9", "account": "B", "day": "2026-08-26", "at": "2026-08-26T15:00:00Z", "kind": "sell", "instrument": "S", "qty": "-1", "cash": "15"}));
     json!({
         "today": "2026-12-31",
         "accounts": [{"id": "A", "kind": "margin"}, {"id": "B"}, {"id": "C", "coin_minimum": "1.00 CAD"}, {"id": "N"}],
         "instruments": [
-            {"id": "S"}, {"id": "T"}, {"id": "U"}, {"id": "K", "kind": "crypto"},
+            {"id": "S"}, {"id": "T"}, {"id": "U"}, {"id": "X"}, {"id": "Y"}, {"id": "K", "kind": "crypto"},
             {"id": "O", "kind": "option", "underlying": "T", "expiry": "2027-06-18", "strike": "20", "right": "call", "multiplier": "100"},
             {"id": "O2", "kind": "option", "underlying": "U", "expiry": "2026-03-20", "strike": "20", "right": "call", "multiplier": "100"},
             {"id": "O3", "kind": "option", "underlying": "T", "expiry": "2027-09-17", "strike": "25", "right": "call", "multiplier": "100"},
@@ -152,7 +171,7 @@ fn universe(seed: u64) -> Value {
     })
 }
 
-const BASE: &[&str] = &["s1", "s2", "s3", "s4o", "s4i", "s5o", "t1", "o1", "o2", "u1", "u2", "w1", "k1", "k2"];
+const BASE: &[&str] = &["s1", "s2", "s3", "s4o", "s4i", "s5o", "t1", "o1", "o2", "u1", "u2", "w1", "k1", "k2", "x0", "y0"];
 
 fn steps() -> Vec<Step> {
     use Extra as E;
@@ -162,6 +181,7 @@ fn steps() -> Vec<Step> {
         st(vec!["a1"], "S", Continued, E::None),
         st(vec!["a2"], "S", Continued, E::None),
         st(vec![], "S", None, E::TradeOn("a1")),
+        st(vec!["a8"], "S", Whole("a record of the family revised in the same change"), E::Revise("s3")),
         st(vec!["a3"], "S", Whole("a row placed before what the family matched"), E::None),
         st(vec!["k3"], "K", Continued, E::None),
         st(vec!["k4"], "K", Whole("a coin's row finer than its source's rows were"), E::None),
@@ -169,6 +189,8 @@ fn steps() -> Vec<Step> {
         st(vec!["a4o", "a4i"], "S", Continued, E::None),
         st(vec!["n1"], "S", Continued, E::NewAccount),
         st(vec!["o3"], "T", Continued, E::None),
+        // the stated open at the last instant is kept across a walk at that instant
+        st(vec!["t3"], "T", Continued, E::None),
         st(vec!["o4"], "T", Whole("a stated close at the instant of a stated open walked on its holding"), E::None),
         st(vec!["o5"], "T", Continued, E::None),
         st(vec![], "S", None, E::Group),
@@ -182,11 +204,18 @@ fn steps() -> Vec<Step> {
         st(vec![], "S", None, E::TradeGone),
         st(vec!["r1"], "T", Continued, E::None),
         st(vec!["r2c", "r2o"], "T", Continued, E::None),
+        // a trade on the old round trip after the roll: shown on the holding the roll moved to
+        st(vec![], "O3", None, E::TradeOn("r1")),
         st(vec!["r3"], "T", Continued, E::None),
         st(vec![], "S", Whole("the day turned"), E::Clock),
         st(vec!["a5"], "S", Continued, E::None),
         st(vec!["a6"], "S", Whole("an adjustment set on a row the family walked"), E::Split),
+        st(vec![], "T", Whole("an adjustment on another family's row names only this family"), E::AdjustNamingT),
         st(vec!["c1"], "S", Whole("a row's adjustment names an instrument of another family"), E::CostFromT),
+        st(vec!["l1"], "X", Continued, E::None),
+        st(vec!["bxs", "bxb"], "X", Whole("a record's earliest leg, on another family, is before what this family walked"), E::None),
+        st(vec!["q2"], "S", Whole("an assignment decides how an earlier lot ended"), E::None),
+        st(vec!["a9"], "S", Whole("a record of the family removed in the same change"), E::Remove("a2")),
         st(vec!["a7"], "S", Whole("a record made to wait joins the account's holdings into one family"), E::Unstated),
     ]
 }
@@ -295,6 +324,27 @@ fn a_continued_match_equals_a_whole_one_and_is_taken_where_the_guards_allow() {
                         _ => ("c1", bagholder_engine::input::AdjustmentLeg { from: Some(b.ids.instrument("T")), to: Some(b.ids.instrument("S")), cost: Some(bagholder_core::Money::new(bagholder_core::Dec::from_int(50), bagholder_core::Currency::CAD)), ..Default::default() }),
                     };
                     let tx = b.tx[row].clone();
+                    let a = vec![Adjustment { applies_to: tx.clone(), legs: vec![leg], source: bagholder_core::SourceName::person() }];
+                    adjustments.insert(tx.clone(), a.clone());
+                    d.adjustments.insert(tx, a);
+                }
+                Extra::Revise(label) => {
+                    let r = record_of(&b, label);
+                    let (info, mut txs) = present[&r].clone();
+                    for t in &mut txs {
+                        t.quantity = Some(bagholder_core::Dec::from_int(-1));
+                    }
+                    present.insert(r, (info.clone(), txs.clone()));
+                    d.records.insert(r, Some((info, txs)));
+                }
+                Extra::Remove(label) => {
+                    let r = record_of(&b, label);
+                    present.remove(&r);
+                    d.records.insert(r, None);
+                }
+                Extra::AdjustNamingT => {
+                    let tx = b.tx["a5"].clone();
+                    let leg = bagholder_engine::input::AdjustmentLeg { from: Some(b.ids.instrument("T")), to: Some(b.ids.instrument("T")), units_per_unit: Some(bagholder_core::Dec::from_int(1)), ..Default::default() };
                     let a = vec![Adjustment { applies_to: tx.clone(), legs: vec![leg], source: bagholder_core::SourceName::person() }];
                     adjustments.insert(tx.clone(), a.clone());
                     d.adjustments.insert(tx, a);

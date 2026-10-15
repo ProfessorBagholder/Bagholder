@@ -198,8 +198,29 @@ impl Book {
         self.runs_kept(head)?.iter().map(Run::name).collect()
     }
 
-    /// What the instrument is called now: the symbol of `names`' last.
+    /// What the instrument is called now: the symbol of `names`' last. Where
+    /// anything of its group is due (inside a write, before its commit settles
+    /// it) the newest live sighting of each member is read through its index
+    /// instead of folding every name the group had: a large import looks each of
+    /// its rows' instruments up inside its own transaction.
     pub fn current_symbol(&self, id: InstrumentId) -> Result<Option<String>> {
+        let head = self.canonical(id)?;
+        if self.names_due_for(head)? {
+            let mut st = self.conn().prepare_cached(
+                "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+                 WHERE s.instrument_id = ?1 ORDER BY s.day DESC, s.symbol DESC, s.rowid DESC LIMIT 1",
+            )?;
+            let mut newest: Option<Key> = None;
+            for m in self.group_of(head)? {
+                let row: Option<Key> = st.query_row([m], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+                if row > newest {
+                    newest = row;
+                }
+            }
+            if let Some((_, symbol, _)) = newest {
+                return Ok(Some(symbol));
+            }
+        }
         Ok(self.names(id)?.pop().map(|n| n.symbol))
     }
 
@@ -228,13 +249,24 @@ impl Book {
         }
         let mut by_head: BTreeMap<InstrumentId, Work> = BTreeMap::new();
         let mut unreadable: Vec<i64> = Vec::new();
+        let mut failed = BTreeSet::new();
         for (rowid, inst, day, symbol, sighting) in due {
             let Ok(id) = InstrumentId::parse(&inst) else {
                 // an id that names nothing an instrument can be: nothing to keep for it
                 unreadable.push(rowid);
                 continue;
             };
-            let head = self.canonical(id)?;
+            // a join that cannot be read fails this instrument alone: its due rows
+            // are kept and its reads fold, as a head that fails below
+            let head = match self.canonical(id) {
+                Ok(h) => h,
+                Err(e) => {
+                    if failed.insert(id) {
+                        bagholder_core::log::line(&format!("bagholder: the names of instrument {id} could not be kept (they are read from its sightings until they can): {e}"));
+                    }
+                    continue;
+                }
+            };
             let w = by_head.entry(head).or_default();
             w.rows.push(rowid);
             if head != id {
@@ -260,7 +292,6 @@ impl Book {
             Ok(())
         };
         forget(&unreadable)?;
-        let mut failed = Vec::new();
         for (head, w) in by_head {
             self.conn().execute_batch("SAVEPOINT names_settle")?;
             let done = (|| -> Result<()> {
@@ -286,11 +317,11 @@ impl Book {
                 Err(e) => {
                     self.conn().execute_batch("ROLLBACK TO names_settle; RELEASE names_settle")?;
                     bagholder_core::log::line(&format!("bagholder: the names of instrument {head} could not be kept (they are read from its sightings until they can): {e}"));
-                    failed.push(head);
+                    failed.insert(head);
                 }
             }
         }
-        Ok(failed)
+        Ok(failed.into_iter().collect())
     }
 
     fn keep_runs(&self, head: InstrumentId, runs: &[Run]) -> Result<()> {

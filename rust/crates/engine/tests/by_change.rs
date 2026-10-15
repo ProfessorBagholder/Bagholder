@@ -5,7 +5,8 @@
 //! two sides are two instruments, corporate events whose legs name other
 //! instruments, a row naming no instrument of a record whose legs are not
 //! stated, a record whose legs are two uncoupled instruments at one instant
-//! beside a sale of one of them, cash moved) have their records added, revised
+//! beside a sale of one of them, a record selling one instrument and buying
+//! another beside a timed buy of the one it sells, cash moved) have their records added, revised
 //! and removed in a random order, and after every step the engine equals one
 //! built fresh from the same inputs: its figures, its match whole and the
 //! trades' identity; what it says moved is what differs; and its match is the
@@ -55,7 +56,7 @@ fn generate(seed: u64) -> Value {
         let at = |m: u64| format!("{date}T15:{:02}:00Z", m % 60);
         let id = format!("t{n}");
         let acct = r.pick(&["A", "B", "D"]);
-        match r.below(17) {
+        match r.below(18) {
             0..=3 => {
                 let i = r.pick(&["X", "W", "V"]);
                 let q = 1 + r.below(50);
@@ -148,6 +149,28 @@ fn generate(seed: u64) -> Value {
                     {"from": "X", "to": "X", "units_per_unit": "0.1", "cost": "12.50"},
                     {"from": "W", "to": "W", "units_per_unit": "0.05", "cost": "3.25"}
                 ]}));
+            }
+            15 => {
+                // one record selling one instrument and buying another (a switch),
+                // its legs timed or not, beside a timed buy of the one it sells that
+                // day: the record is applied at its earliest leg, whichever family
+                // that leg is in (brief 30, B1)
+                let (sold, bought) = match r.below(3) {
+                    0 => ("X", "V"),
+                    1 => ("W", "X"),
+                    _ => ("V", "W"),
+                };
+                let q = 1 + r.below(20);
+                let rec = format!("r{n}");
+                tx.push(json!({"id": format!("{id}l"), "account": acct, "day": date, "at": at(1), "kind": "buy", "instrument": sold, "qty": q.to_string(), "cash": format!("-{}", q * 10)}));
+                let mut out = json!({"id": format!("{id}a"), "record": rec, "leg": "sell", "account": acct, "day": date, "kind": "sell", "instrument": sold, "qty": format!("-{q}"), "cash": (q * 11).to_string()});
+                let mut inn = json!({"id": format!("{id}b"), "record": rec, "leg": "buy", "account": acct, "day": date, "kind": "buy", "instrument": bought, "qty": q.to_string(), "cash": format!("-{}", q * 9)});
+                if r.below(2) == 0 {
+                    out["at"] = json!(at(r.below(3)));
+                    inn["at"] = json!(at(r.below(3)));
+                }
+                tx.push(out);
+                tx.push(inn);
             }
             _ => {
                 // cash moved

@@ -260,3 +260,27 @@ fn the_record_as_a_whole_and_each_benchmark_are_reported_when_they_move() {
         }
     }
 }
+
+/// A group's journal written alone moves the group's figure, as a fresh build
+/// has it: nothing else in the change reaches the groups (brief 30, C2).
+#[test]
+fn a_groups_journal_written_alone_moves_its_figure() {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
+    let case: Value = serde_json::from_str(&text).unwrap();
+    let mut b = build(&case);
+    let mut e = engine(&mut b);
+    let trade = e.figures().trades.iter().find_map(|t| t.trade).expect("a trade with an id");
+    let second = e.figures().positions.iter().find_map(|p| p.trade).expect("a position with an id");
+    let g = b.ids.group("G");
+    e.apply(Change::Ledger(LedgerDelta { groups: BTreeMap::from([(g, Some((rank(1000), Group { id: g, locked: true, members: vec![trade, second] })))]), ..LedgerDelta::default() }));
+    let base = e.clone();
+    let journal = LedgerDelta { journal: BTreeMap::from([(JournalSubject::Group(g), Some(JournalEntry { thesis: "a pair".into(), grade: Some(bagholder_core::journal::Grade::B), tags: vec!["pairs".into()] }))]), ..LedgerDelta::default() };
+    let c = Change::Ledger(journal);
+    let after = changed(base.inputs(), &c);
+    let moved = e.apply(c);
+    let fresh = Engine::build(after);
+    assert!(e.differences(&fresh).is_empty(), "the group's figure as a fresh build: {:?}", e.differences(&fresh).0);
+    let expected = fresh.differences(&base);
+    assert!(!expected.is_empty(), "the journal moved the group");
+    assert_eq!(moved, expected);
+}

@@ -862,8 +862,10 @@ impl Book {
     /// Note that a record's leg called the instrument this, on its day.
     fn record_sighting(&self, id: InstrumentId, n: &NameDraft, seen_by: &TransactionId) -> Result<()> {
         self.conn().execute(
-            // an upsert, not a replace: a REPLACE fires no delete trigger (no connection
-            // sets `recursive_triggers`), and the names' triggers must see the old row
+            // an upsert, so the update trigger logs the old key and the new: the
+            // names' triggers hold for a REPLACE too (the book's connection sets
+            // `recursive_triggers`, and a trigger before the insert marks the row a
+            // REPLACE on any other connection replaces), but an upsert says what it does
             "INSERT INTO instrument_sightings(record_id, leg, instrument_id, symbol, venue_mic, venue_name, name, day) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(record_id, leg, instrument_id) DO UPDATE SET symbol = excluded.symbol, venue_mic = excluded.venue_mic, venue_name = excluded.venue_name, name = excluded.name, day = excluded.day",
             params![seen_by.record.to_string(), seen_by.leg.as_str(), id.to_string(), n.symbol, n.venue_mic, n.venue_name, n.name, day(n.seen)],

@@ -206,6 +206,11 @@ impl Fields for Stated<'_> {
     }
 }
 
+/// A cash dividend of an instrument: a row its payer's rate is worked out from.
+fn pays_cash(r: &CashRow) -> bool {
+    r.instrument.is_some() && r.kind == crate::cashflow::Payment::Dividend && r.in_units.is_none()
+}
+
 fn diff<'a, T: Fields + 'a>(moved: &mut Moved, before: impl IntoIterator<Item = (Entity, &'a T)>, after: impl IntoIterator<Item = (Entity, &'a T)>) {
     let before: BTreeMap<Entity, &T> = before.into_iter().collect();
     let mut after: BTreeMap<Entity, &T> = after.into_iter().collect();
@@ -244,6 +249,10 @@ pub struct Engine {
     trades: Vec<TradeFig>,
     positions: Vec<PositionFig>,
     cash: Vec<CashRow>,
+    /// Each instrument's cash dividends among `cash`, in its order: what its
+    /// payer's rate is worked out from, read by key rather than by scanning
+    /// every cash row.
+    paid: BTreeMap<InstrumentId, Vec<CashRow>>,
     payers: BTreeMap<InstrumentId, PayerRate>,
     equity: BTreeMap<AccountId, AccountEquity>,
     checks: Vec<BrokerCheck>,
@@ -360,6 +369,7 @@ impl Engine {
             trades: vec![],
             positions: vec![],
             cash: vec![],
+            paid: BTreeMap::new(),
             payers: BTreeMap::new(),
             equity: BTreeMap::new(),
             checks: vec![],
@@ -392,6 +402,10 @@ impl Engine {
         self.group_held = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
         self.positions = build_positions(i, &self.matched, &self.identity, None, None);
         self.cash = build_cashflow(i, &self.matched);
+        self.paid = BTreeMap::new();
+        for r in self.cash.iter().filter(|r| pays_cash(r)) {
+            self.paid.entry(r.instrument.expect("a dividend names its payer")).or_default().push(r.clone());
+        }
         self.payers = payer_rates(i, &self.cash, &self.matched);
         self.equity = build_equity(i, None);
         self.checks = broker_checks(i, &self.matched, None);
@@ -649,7 +663,8 @@ impl Engine {
                             reach.trades.insert(*t);
                             reach.trips.extend(self.identity.trip_of.get(t).cloned());
                         }
-                        bagholder_core::journal::JournalSubject::Group(_) => {}
+                        // a group's figure carries its journal: the groups are worked out again (brief 30, C2)
+                        bagholder_core::journal::JournalSubject::Group(_) => reach.groups = true,
                     }
                 }
                 // the adjustments: the rows they apply to, and every instrument their legs name before and after
@@ -784,31 +799,28 @@ impl Engine {
                 self.compare(&before, &mut moved);
             }
             Change::Declared(i, d) => {
-                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
                 match d {
                     Some(d) => self.inputs.facts.declared.insert(i, d),
                     None => self.inputs.facts.declared.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
-                self.compare(&before, &mut moved);
+                // that payer's rate, from its own payments
+                self.payer_again(i, &mut moved);
             }
             Change::Frequency(i, s) => {
-                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
                 match s {
                     Some(s) => self.inputs.facts.frequencies.insert(i, s),
                     None => self.inputs.facts.frequencies.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
-                self.compare(&before, &mut moved);
+                // that payer's rate, from its own payments
+                self.payer_again(i, &mut moved);
             }
             Change::ExDividend(i, d) => {
-                let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
                 match d {
                     Some(d) => self.inputs.market.ex_dividends.insert(i, d),
                     None => self.inputs.market.ex_dividends.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
-                self.compare(&before, &mut moved);
+                // that payer's rate, from its own payments
+                self.payer_again(i, &mut moved);
             }
             Change::Quote(i, q) => {
                 let was = match q.clone() {
@@ -967,6 +979,10 @@ impl Engine {
             }
             let Some((info, txs)) = now else { continue };
             let legs: Vec<&bagholder_core::transaction::Transaction> = txs.iter().collect();
+            // the walk applies a record whose legs share a day at its earliest leg,
+            // whichever family that leg is in: every family it touches must have
+            // walked nothing after that place (brief 30, B1)
+            let earliest = legs.iter().map(|t| crate::ledger::order_key_of(t, &legs, &info.source_key)).min();
             let unstated = info.problems.iter().any(|p| p.code == "leg-unstated");
             for t in txs {
                 // a node no family holds yet is matched whole, as a family of its own
@@ -1006,7 +1022,7 @@ impl Engine {
                     // look-ahead from a stated open at that instant would take first
                     let Some(last) = &k.last else { return false };
                     let key = crate::ledger::order_key_of(t, &legs, &info.source_key);
-                    if key <= *last {
+                    if key <= *last || earliest.as_ref().is_some_and(|e| e <= last) {
                         return false;
                     }
                     let same_instant = (key.0, key.1, key.2) == (last.0, last.1, last.2);
@@ -1244,23 +1260,42 @@ impl Engine {
             let at = self.cash.partition_point(|x| crate::cashflow::shown_order(x, r) != std::cmp::Ordering::Greater);
             self.cash.insert(at, r.clone());
         }
+        for r in was.iter().filter(|r| pays_cash(r)) {
+            let i = r.instrument.expect("a dividend names its payer");
+            if let Some(rows) = self.paid.get_mut(&i) {
+                rows.retain(|x| x.id != r.id);
+                if rows.is_empty() {
+                    self.paid.remove(&i);
+                }
+            }
+        }
+        for r in now.iter().filter(|r| pays_cash(r)) {
+            let rows = self.paid.entry(r.instrument.expect("a dividend names its payer")).or_default();
+            let at = rows.partition_point(|x| crate::cashflow::shown_order(x, r) != std::cmp::Ordering::Greater);
+            rows.insert(at, r.clone());
+        }
         let payers: BTreeSet<InstrumentId> = was.iter().chain(now.iter()).filter_map(|r| r.instrument).chain(instruments.iter().copied()).chain(reach.holdings.iter().map(|(_, i)| *i)).collect();
         diff(moved, was.iter().map(|r| (Entity::CashRow(r.id.clone()), r)), now.iter().map(|r| (Entity::CashRow(r.id.clone()), r)));
         // the payers' rates
         for i in payers {
-            let payments: Vec<&CashRow> = self.cash.iter().filter(|r| r.instrument == Some(i) && r.kind == crate::cashflow::Payment::Dividend && r.in_units.is_none()).collect();
-            let rate = crate::cashflow::payer_rate(&self.inputs, i, payments, &self.matched);
-            let before = self.payers.get(&i).cloned();
-            match rate.clone() {
-                Some(r) => self.payers.insert(i, r),
-                None => self.payers.remove(&i),
-            };
-            diff(moved, before.iter().map(|p| (Entity::Payer(i), p)), rate.iter().map(|p| (Entity::Payer(i), p)));
+            self.payer_again(i, moved);
         }
         // the checks with the brokers
         for a in &reach.accounts {
             self.recheck(*a, moved);
         }
+    }
+
+    /// One payer's rate worked out again from its own payments, and what moved said.
+    fn payer_again(&mut self, i: InstrumentId, moved: &mut Moved) {
+        let payments: Vec<&CashRow> = self.paid.get(&i).into_iter().flatten().collect();
+        let rate = crate::cashflow::payer_rate(&self.inputs, i, payments, &self.matched);
+        let before = self.payers.get(&i).cloned();
+        match rate.clone() {
+            Some(r) => self.payers.insert(i, r),
+            None => self.payers.remove(&i),
+        };
+        diff(moved, before.iter().map(|p| (Entity::Payer(i), p)), rate.iter().map(|p| (Entity::Payer(i), p)));
     }
 
     /// A price moved: that instrument's positions.
