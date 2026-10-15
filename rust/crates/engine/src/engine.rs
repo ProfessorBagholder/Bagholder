@@ -663,17 +663,21 @@ impl Engine {
             }
             Change::Clock(c) => {
                 let before = self.snapshot(Parts::ALL);
+                let live_before = self.live_rates_stated();
                 self.inputs.clock = c;
                 self.rematch();
                 self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
                 self.compare(&before, &mut moved);
+                self.live_rates_moved(&live_before, &mut moved);
             }
             Change::Rates(r) => {
                 let before = self.snapshot(Parts::ALL);
+                let live_before = self.live_rates_stated();
                 self.inputs.facts.rates = r;
                 self.derive();
                 self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
                 self.compare(&before, &mut moved);
+                self.live_rates_moved(&live_before, &mut moved);
             }
             Change::Declared(i, d) => {
                 let before = self.snapshot(Parts { payers: true, ..Parts::NONE });
@@ -934,6 +938,35 @@ impl Engine {
             benchmarks: parts.benchmarks.then(|| self.benchmarks.clone()),
             brokers: parts.book.then(|| self.inputs.market.brokers.clone()),
             book: parts.book.then(|| self.book_fig()),
+        }
+    }
+
+    /// Per account, the live rate of each currency other than CAD its broker
+    /// states something in now (its value, cash, what it can borrow, what its
+    /// holdings are worth): what every figure that adds an account's statements
+    /// in CAD is converted at. None of the snapshot's entities holds it, so a
+    /// rates or clock change compares it here.
+    fn live_rates_stated(&self) -> BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Fig<(bagholder_core::Dec, Option<Date>)>>> {
+        let (rates, clock) = (&self.inputs.facts.rates, &self.inputs.clock);
+        self.inputs
+            .market
+            .brokers
+            .iter()
+            .map(|(a, b)| {
+                let currencies = b.net_value_now.map(|m| m.currency).into_iter().chain(b.cash.keys().copied()).chain(b.buying_power.iter().filter_map(|r| r.as_ref().ok().map(|m| m.currency))).chain(b.held_value.values().map(|m| m.currency));
+                (*a, currencies.filter(|c| *c != bagholder_core::Currency::CAD).map(|c| (c, crate::fx::live_rate(rates, clock, c))).collect())
+            })
+            .collect()
+    }
+
+    /// Each account whose statements are now converted at another live rate (or
+    /// wait where they did not, or no longer wait) moved: the views that add its
+    /// statements in CAD read it again.
+    fn live_rates_moved(&self, before: &BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Fig<(bagholder_core::Dec, Option<Date>)>>>, m: &mut Moved) {
+        for (a, now) in self.live_rates_stated() {
+            if before.get(&a) != Some(&now) {
+                m.0.entry(Entity::Broker(a)).or_default().insert("rate");
+            }
         }
     }
 

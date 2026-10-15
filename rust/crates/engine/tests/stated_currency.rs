@@ -85,3 +85,38 @@ fn deposits_restated_in_another_currency_form_no_flow() {
     assert!(eq.returns.iter().all(|(d, _, _)| d.to_string() == "2026-03-03"), "{:?}", eq.returns);
     assert!(eq.gaps.iter().any(|g| matches!(g, bagholder_engine::gap::Gap::DepositsRestated { account, day } if *account == u && day.to_string() == "2026-03-04")), "{:?}", eq.gaps);
 }
+
+/// A cash-only account stated in US dollars holds nothing the figures compare
+/// but its statement: when its live rate arrives, moves, or is found missing as
+/// the clock passes the Bank's publication, the account is reported moved, so
+/// the views that add it in CAD read it again.
+#[test]
+fn a_live_rate_that_moves_reports_the_accounts_stated_in_that_currency() {
+    use bagholder_engine::engine::{Change, Entity};
+    let mut c = case();
+    c["rates"] = json!({"USD": {"2026-03-02": "1.3000", "2026-03-03": "1.4000"}});
+    c["brokers"]["U"] = json!({"currency": "USD", "now": "1000", "cash": {"USD": "1000"}});
+    c["covered"] = json!({});
+    // 15:00 in Toronto: the day's rate is not due yet, so the live rate is the day before's
+    c["now"] = json!("2026-03-04T20:00:00Z");
+    let mut b = build(&c);
+    let u = b.ids.account("U");
+    let a = b.ids.account("A");
+    let mut e = Engine::build(b.inputs.clone());
+    assert_eq!(e.holdings(&Filters::default()).net_value, Some(Ok(cad("10400"))));
+    // 17:00: the day's rate is due and not read, so the total waits on it
+    let mut clock = b.inputs.clock.clone();
+    clock.now = "2026-03-04T22:00:00Z".parse().unwrap();
+    let moved = e.apply(Change::Clock(clock));
+    assert!(moved.0.contains_key(&Entity::Broker(u)), "the rate became due: {moved:?}");
+    assert!(matches!(e.holdings(&Filters::default()).net_value, Some(Err(_))));
+    let mut rates = b.inputs.facts.rates.clone();
+    rates.by_currency.get_mut(&Currency::USD).unwrap().insert("2026-03-04".parse().unwrap(), Dec::parse("1.5000").unwrap());
+    let moved = e.apply(Change::Rates(rates));
+    assert!(moved.0.contains_key(&Entity::Broker(u)), "the rate arrived: {moved:?}");
+    assert!(!moved.0.contains_key(&Entity::Broker(a)), "a CAD account did not move: {moved:?}");
+    assert_eq!(e.holdings(&Filters::default()).net_value, Some(Ok(cad("10500"))));
+    // the same rates again: nothing moved
+    let same = e.inputs().facts.rates.clone();
+    assert!(!e.apply(Change::Rates(same)).0.contains_key(&Entity::Broker(u)));
+}
