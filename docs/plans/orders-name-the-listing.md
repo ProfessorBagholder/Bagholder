@@ -120,14 +120,21 @@ If a holding's row in the book has no Wealthsimple id and Wealthsimple's search 
 
 ## Anti-stub self-check
 
-To be initialled at the build.
+- No definition nobody references: `OrderListing`, `ListingRef`, `ListingOf` and `OrderListingAnswer` are each read by the page or the server. — Claude
+- No field written and never read: `found_at` is read before every search; `TicketDraft.listing` is read on resume and on restore. — Claude
+- No branch only the switch knows: none. — Claude
+- No real-target run skipped: the suites ran, and the ticket was opened on the scratch server on a copy of the owner's book. — Claude
 
 ## Verification
 
-To be filled at the build.
+- `RUSTFLAGS="-D warnings" cargo test --workspace --no-fail-fast`: green; `cargo clippy --workspace --lib --bins`: clean. After master (#514) was merged in: `cargo test -p bagholder-server -p bagholder-market` green, and the release build succeeds.
+- `npm run check`: 0 errors; `npm test`: green, the draft test among them.
+- `npx playwright test`: the whole suite green, 312 tests, after the one test of the order's request shape was brought to the new shape.
+- `e2e/listingorders.spec.ts` run on master `f89634de` fails all five tests. The directory's NYSE row opened `quote:symbol=TD&security=sec-td&…&exchange=NYSE`: a ticket on the TSX holding, which is the bug.
+- The scratch server on a copy of the owner's book, at 1340 px: the ticket opens from the ⌘K row and from the holding's page on that holding's own listing, and says "Not connected." where the copy has no sign-in. The console is clean.
 
 ## Handoff
 
-To be filled at the build.
+Built in full; nothing open.
 
-**Nothing left running.**
+**Nothing left running.** The scratch server was stopped.
