@@ -35,11 +35,12 @@ TSX and TSX-V share one set of symbols (`sources/src/venue.rs:172–176`), so th
 - **The draft.** A saved ticket draft is restored by symbol and side, with no security id (`ticket.svelte.ts:180–198, 215`). So one listing's account, quantity, limit and bracket prices refill the other's ticket.
 - **What shows.** Holding RY on the TSX and pressing Buy on the NYSE RY page opens a ticket for, and places an order on, TSX RY. The only sign is the estimated cost in CAD.
 
-**Required:**
-- Every Buy and Sell carries the listing's security id, from the listing page, a search row, the palette and a notification.
-- The ticket and its draft hold that id, and a draft is restored only for the same id.
-- The server never chooses a listing by symbol when more than one instrument in the book has it, and never takes a found listing from a cache keyed by symbol alone.
-- An order request without a security id is refused.
+**Required:** the listing is decided where the ticket is opened, and never guessed.
+- **Every entry point has the listing.** A ticket opens only from a listing that is already known: a holding, a listing's page, a search result, the palette or a notification. Each of these has the listing's security id, and each passes it.
+- **The ticket keeps that id.** The ticket and its draft hold it, and a draft is restored only for the same id.
+- **The server's guess is removed.** Today, without an id, it picks the first instrument with that symbol. That is the bug. The found-listings cache keyed by symbol alone goes with it.
+- **The server rejects a request without an id.** Once every entry point passes it, this cannot happen through the app. It is a guard at the API boundary, so a future bug fails safe instead of guessing; it is never a state the person meets.
+- **A test over every entry point.** It holds that each one opens the ticket on the listing it was opened from, for two listings that share a ticker.
 
 This is a fix to shipped behaviour that places real orders, so it goes first, as its own PR.
 
