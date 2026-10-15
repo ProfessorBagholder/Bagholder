@@ -28,17 +28,19 @@ The old app opened its ticket from a symbol and looked the listing up by that sy
 
 ## How the leading products do it
 
-- **Interactive Brokers** (Web API, "New Order Example", read 2026-10-15, https://www.interactivebrokers.com/docs/web-api/trading/orders/new-order-example). An order names its instrument by `conid`, IBKR's contract id. One listing has one conid, and it is found first through `/iserver/secdef/search`. The order body has no symbol.
-- **Questrade** (API, "accounts/:id/orders" and "symbols/search", read 2026-10-15, https://www.questrade.com/api/documentation/rest-operations/order-calls/accounts-id-orders, https://invest.questrade.com/api/documentation/rest-operations/market-calls/symbols-search). An order names `symbolId`, an internal id per listing. The search's own example for BMO returns two results, NYSE and TSX, with different `symbolId`s and a `listingExchange` to tell them apart.
+- **Interactive Brokers** (Web API, "New Order Example", read 2026-10-15, https://www.interactivebrokers.com/docs/web-api/trading/orders/new-order-example). An order names its instrument by `conid`, IBKR's contract id, which must be obtained before the order is placed. The order body has no symbol.
+- **Questrade** (API, "accounts/:id/orders" and "symbols/search", read 2026-10-15, https://www.questrade.com/api/documentation/rest-operations/order-calls/accounts-id-orders, https://invest.questrade.com/api/documentation/rest-operations/market-calls/symbols-search). An order names `symbolId`, Questrade's "internal symbol identifier": every security has its own, and each search result states its `listingExchange`.
 - **Wealthsimple** (its own GraphQL, as the app already calls it). An order names `securityId`, one id per listing: `sec-s-…` for a share, `sec-o-…` for a contract. Search (`FetchSecuritySearchResult`) returns each listing with its `primaryExchange`.
 
 All three key an order by the listing's id and take the symbol as display. This plan does the same. The listing's id is Wealthsimple's `securityId`, the broker's reference recorded against the instrument (§5).
 
 ## Open questions
 
-None. Each listing a button can be pressed on is already known to the page, as one of two things:
-- **The book's own instrument.** It has an `InstrumentId`, and Wealthsimple's `securityId` where the broker has stated one (`Names::security`).
-- **A listing outside the book.** It has a symbol and an exchange, as the search row or the listing's page shows it. Wealthsimple's search is already matched on both exactly (`parse_listing_search`, `orders/ticket.rs:368–387`). Only the symbol-keyed cache and the fallback before it lose the exchange.
+None. Every place a ticket opens from has an exact listing, of one of two kinds (brief 35, 1):
+- **The book's own instrument,** by its `InstrumentId`. Wealthsimple's `securityId` is recorded against it as a reference where the broker has stated one (`Names::security`).
+- **A listing an exchange's own directory gave:** a symbol on a named venue, which is unique on that venue (`/api/symbols/search`, `http/markets.rs:61`).
+
+Turning either into Wealthsimple's id is looking up a reference by an exact identity, as Interactive Brokers needs a `conid` before an order. It is never a fallback from a ticker.
 
 ## Approach
 
@@ -47,19 +49,22 @@ None. Each listing a button can be pressed on is already known to the page, as o
 - `security_id` is Wealthsimple's id and is never empty; the others are what the ticket shows.
 - Every request that names a listing carries `security_id` as a required field: `Ticket`, the quote document's parameters and `PreviewRequest`. Each refuses a request without it (`deny_unknown_fields` is already on). `Ticket.symbol` is removed.
 
-**One way to get one.** `POST /api/order/listing` takes either:
-- `{ instrument }`, the book's own: Wealthsimple's id from `Names::security`. Where the broker has stated none (an instrument only entered by hand or imported), Wealthsimple's search is asked with the instrument's current symbol and venue (`InstrumentInfo::current_name`), matched on both; or
-- `{ symbol, exchange }`, a listing outside the book: Wealthsimple's search, matched on the bare symbol and the exchange exactly, as now.
+**One way to get one.** `POST /api/order/listing` takes a `ListingRef`, one of two variants, neither holding a symbol alone (brief 35, 1):
+- `Instrument { id }`: the book's own. Its answer is Wealthsimple's id from `Names::security`. Where the broker has stated none (an instrument only entered by hand or imported), Wealthsimple's search is asked with the instrument's current symbol and venue (`InstrumentInfo::current_name`). The id it finds is recorded in the book as the instrument's reference (`broker-security:wealthsimple`), so the next order reads it from the book (§5; brief 35, 3).
+- `Venue { symbol, venue }`: a listing a directory gave. The venue is required and never empty.
 
-It answers the `OrderListing`, or a refusal in the ticket's words ("Wealthsimple lists no RY on NYSE."). A search that finds two listings on one exchange with one symbol is a refusal too, never a choice. The cache of what the search found is keyed by `security_id` and by the exact (symbol, exchange) asked, never by symbol alone.
+The venue is matched as a market identifier code, never as a raw string (brief 35, 2). The directory's venue words and Wealthsimple's `primaryMic` are both mapped through the app's one venue table (`sources/src/venue.rs`, `mic_of`). The bare symbols must be equal and the MICs equal. A venue the table does not know is a refusal. The search counts the matches: none, or more than one, is a refusal in the ticket's words ("Wealthsimple lists no RY on the NYSE."), never a choice.
+
+It answers the `OrderListing`. The cache of what the search found is keyed by `security_id` and by the exact (symbol, MIC) asked, never by symbol alone.
 
 **The server takes the listing as given.** `resolve_security` becomes `listing(app, security_id)`. It reads the book's instrument for that id where the book holds it, else the cache by id, else Wealthsimple's own summary of the security (`fetch_quotes` already reads `SummarySecurity` by id: symbol, exchange, currency). The symbol branch and the "first instrument with that symbol" choice are deleted. `ticket_quote`, `preview_for` and `ticket_order` call `listing` with the request's `security_id`.
 
 **The page holds the listing.**
-- `openTicket(listing: OrderListing, side, holding?)`. Every caller either has an `OrderListing` (a holding or trade: `security`, `symbol`, `exchange` and `currency` are on the row already) or asks `POST /api/order/listing` first, through one helper `ticketOn(of, side)`. The helper says a refusal in the header and opens nothing.
+- `openTicket(listing: OrderListing, side, holding?)`. A caller that holds an `OrderListing` (a holding or trade with Wealthsimple's id on its row) passes it. Every other caller passes its `ListingRef` to one helper, `ticketOn(ref: ListingRef, side)`, which asks `POST /api/order/listing`, then opens the ticket, or says the refusal in the header and opens nothing.
+- **A listing page with no venue offers no Buy** (brief 35, 5). Notifications and the US heatmap's tiles open a listing page with an empty exchange (brief 34, page U6), so such a page has no exact listing to place an order on. Its Buy is not offered until brief 34's section 2 gives those pages their listing.
 - The `Ticket` state holds `listing: OrderListing`; `symbol`, `securityId` and `exchange` as separate fields go.
 - `tkLookup`'s match by symbol goes. The holding and position the ticket defaults from are found by the listing's `security_id`, or by the holding id the page passed.
-- The draft (`TicketDraft`) holds the listing. A draft is restored only onto a ticket for the same `security_id` and side. One saved before this change holds a symbol only: it is attached to the one listing the book holds under that symbol, and dropped where the book holds none or more than one. A draft for one listing never fills another's ticket.
+- The draft (`TicketDraft`) holds the listing. A draft is restored only onto a ticket for the same `security_id` and side; a draft for one listing never fills another's ticket. A draft saved before this change holds a symbol only, and is dropped: attaching it to a listing would be a lookup by ticker in the order path (brief 35, 4). A draft is unsent typing.
 
 **What stays:** the ticket's figures, its accounts, the bracket legs, the gate and the read-back, `OrderRequest`, the book's order tables, and every screen.
 
@@ -77,21 +82,26 @@ It answers the `OrderListing`, or a refusal in the ticket's words ("Wealthsimple
   - `tkLookup`'s symbol match, `resolve_security`'s symbol branch and the symbol-keyed `found` are gone;
   - `Ticket`, `PreviewRequest` and the quote document's parameters require `security_id`;
   - a request without it is refused, by a Rust test per request type.
-- [ ] **The rule over every kind of collision, server side.** A Rust test generates pairs of listings that share a ticker, of each kind brief 34 names: two venues, one company or two; a suffix stripped; an option and its underlying; a coin and a share. Both of each pair are in the book, and the test runs both orders of reading. For each listing, a quote, a preview and a placed order (dry) name that listing's `security_id` in the `OrderRequest` written, never the other's. It fails on today's code, shown in the PR.
+- [ ] **The rule over every kind of collision, server side.** A Rust test generates pairs of listings that share a ticker, of each kind brief 34 names: two venues, one company or two; a suffix stripped; an option and its underlying; a coin and a share. Each pair is tried with both in the book, and with one in the book and the other only outside it, in both orders of reading. For each listing, a quote, a preview and a placed order (dry) name that listing's `security_id` in the `OrderRequest` written, never the other's. It fails on today's code, shown in the PR.
 - [ ] **The resolver.** Rust tests:
-  - `{ symbol, exchange }` matches only the exact pair, against a recorded search answer holding the same symbol on two exchanges;
-  - it refuses when none or two match;
-  - `{ instrument }` answers that instrument's own id;
+  - `Venue` matches only the exact (symbol, MIC), against a recorded search answer holding one symbol on two venues;
+  - the venue words of every venue the directory search returns map to the MIC Wealthsimple answers for it;
+  - it refuses when none or two match, and on a venue the table does not know;
+  - `Instrument` answers that instrument's own id, and an id found by search is in the book afterwards;
   - the cache holds both listings of one symbol apart.
-- [ ] **Every entry point, in the browser.** The e2e book holds two listings with one ticker, one on the TSX and one on a US exchange, each held. A Playwright test opens the ticket from each entry point:
-  - the holding's page (Buy and Sell);
+- [ ] **Every entry point, in the browser** (brief 35, 6). The bug as found: one ticker held on the TSX, with Buy from the US listing's directory row or its page.
+  - The e2e book holds the TSX listing. The US listing with the same ticker is only a directory row, whose answer is from the offline stand-in.
+  - A second ticker is held on both venues, for the Sell entry points.
+
+  A Playwright test opens the ticket from:
+  - each holding's page (Buy and Sell);
   - the trade's page;
-  - the listing's page for the one not held;
-  - the ⌘K book row and the ⌘K row from outside the book;
+  - the US listing's page;
+  - the ⌘K book row and the ⌘K directory row;
   - the draft card's Resume.
 
-  Each time, the ticket's listing and the request it sends name that entry point's own listing. It fails on today's page, shown in the PR.
-- [ ] **The draft.** A Vitest test: a draft closed on one listing does not fill a ticket opened on the other listing with the same ticker. A draft of the old shape is attached where the book holds exactly one listing with its symbol, and dropped otherwise.
+  Each time, the ticket's listing and the request it sends name that entry point's own listing. A listing page with an empty exchange shows no Buy. It fails on today's page, shown in the PR.
+- [ ] **The draft.** A Vitest test: a draft closed on one listing does not fill a ticket opened on the other listing with the same ticker, and a draft of the old shape is dropped.
 - [ ] **Rendered.** The ticket opened from each entry point on the scratch server on a copy of the owner's book, at 1340 px, screenshots in the PR.
 - [ ] `docs/old-app-mistakes.md` has the entry, naming the tests above.
 
