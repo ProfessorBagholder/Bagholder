@@ -44,4 +44,5 @@ Read from any checkout without switching branches:
 | 33 | [The 106 open issues, by whether the failure can happen in use: 14 real bugs](33-open-issues-triage.md) | Current; verdicts in [33/](33/) |
 | 34 | [Listings keyed by ticker: an order can go to the wrong listing, and 37 places mix listings that share a ticker](34-listings-keyed-by-ticker.md) | Current; inventories in [34/](34/) |
 | 35 | [Verdict on plan #519, an order names its listing: Go with changes](35-orders-listing-plan-verdict.md) | Current |
-| 36 | [The order-listing build as built (#520): not yet](36-orders-listing-as-built.md) | Current |
+| 36 | [The order-listing build as built (#520): not yet](36-orders-listing-as-built.md) | Superseded by 37 |
+| 37 | [#520 after brief 36's changes: merge after six small changes](37-orders-listing-recheck.md) | Current |
