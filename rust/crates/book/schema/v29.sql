@@ -739,6 +739,10 @@ END;
 CREATE TRIGGER instrument_sightings_names_insert AFTER INSERT ON instrument_sightings BEGIN
     INSERT INTO names_due (instrument_id, day, symbol, sighting) VALUES (NEW.instrument_id, NEW.day, NEW.symbol, NEW.rowid);
 END;
+CREATE TRIGGER instrument_sightings_names_rekeyed BEFORE UPDATE OF record_id, leg, instrument_id ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting)
+    SELECT instrument_id, day, symbol, rowid FROM instrument_sightings WHERE record_id = NEW.record_id AND leg = NEW.leg AND instrument_id = NEW.instrument_id AND rowid <> OLD.rowid;
+END;
 CREATE TRIGGER instrument_sightings_names_replaced BEFORE INSERT ON instrument_sightings BEGIN
     INSERT INTO names_due (instrument_id, day, symbol, sighting)
     SELECT instrument_id, day, symbol, rowid FROM instrument_sightings WHERE record_id = NEW.record_id AND leg = NEW.leg AND instrument_id = NEW.instrument_id;

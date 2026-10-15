@@ -657,7 +657,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
             let book = f.book()?;
-            // an account of the middle size among those holding anything, by the
+            // an account of the broker's, of the middle size among those holding anything, by the
             // number of its holdings, accounts of one size in the order of the
             // broker's own ids for them, which the generated book states: a choice
             // that means the same at every size of book and on every build, whatever
@@ -667,7 +667,10 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             let account = f
                 .read(|e| {
                     let mut count: std::collections::BTreeMap<bagholder_core::AccountId, usize> = Default::default();
-                    for p in e.figures().positions {
+                    // the accounts the broker states (a statement for the manual account,
+                    // which no broker states, cannot happen in use: brief 32, change 3)
+                    let stated = |a: &bagholder_core::AccountId| e.inputs().ledger.accounts.get(a).is_some_and(|i| i.broker == bagholder_core::Broker::named("wealthsimple")) && names.account.contains_key(a);
+                    for p in e.figures().positions.iter().filter(|p| stated(&p.account)) {
                         *count.entry(p.account).or_default() += 1;
                     }
                     let mut by_size: Vec<(usize, String, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, names.account.get(&a).cloned().unwrap_or_default(), a)).collect();

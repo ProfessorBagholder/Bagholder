@@ -84,8 +84,9 @@ enum Extra {
     Revise(&'static str),
     /// A record of the family removed in the same change.
     Remove(&'static str),
-    /// The row `a5` is given an adjustment whose legs name only T.
-    AdjustNamingT,
+    /// The row added with the step (the first label) is given an adjustment whose
+    /// legs name only the instrument of the second label.
+    AdjustAdded(&'static str, &'static str),
 }
 
 /// The book every sequence is written in: the base rows, and every row a step
@@ -140,6 +141,8 @@ fn universe(seed: u64) -> Value {
     add(json!({"id": "r2o", "record": "roll", "leg": "open", "account": "A", "day": "2026-08-10", "at": "2026-08-10T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "O4", "qty": "-1", "cash": "18"}));
     add(json!({"id": "r3", "account": "A", "day": "2026-08-17", "at": "2026-08-17T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "O4", "qty": "1", "cash": "-9"}));
     add(json!({"id": "a6", "account": "B", "day": "2026-08-21", "at": "2026-08-21T15:00:00Z", "kind": "buy", "instrument": "S", "qty": "1", "cash": "-14"}));
+    add(json!({"id": "sd1", "account": "A", "day": "2026-08-21", "at": "2026-08-21T16:00:00Z", "kind": "dividend", "instrument": "S", "cash": "4"}));
+    add(json!({"id": "t4", "account": "A", "day": "2026-08-21", "at": "2026-08-21T16:30:00Z", "kind": "buy", "instrument": "T", "qty": "1", "cash": "-30"}));
     add(json!({"id": "c1", "account": "B", "day": "2026-08-22", "at": "2026-08-22T15:00:00Z", "kind": "transfer-in", "instrument": "S", "qty": "3"}));
     add(json!({"id": "a7", "account": "B", "day": "2026-08-23", "at": "2026-08-23T15:00:00Z", "kind": "buy", "instrument": "S", "qty": "1", "cash": "-14"}));
     add(json!({"id": "a5", "account": "A", "day": "2026-08-20", "at": "2026-08-20T15:00:00Z", "kind": "buy", "instrument": "S", "qty": "1", "cash": "-14"}));
@@ -153,6 +156,7 @@ fn universe(seed: u64) -> Value {
     add(json!({"id": "bxb", "record": "bx", "leg": "buy", "account": "A", "day": "2026-08-24", "kind": "buy", "instrument": "Y", "qty": "5", "cash": "-60"}));
     // the put Q assigned
     add(json!({"id": "q2", "account": "A", "day": "2026-08-25", "at": "2026-08-25T21:30:00Z", "kind": "option-assignment", "instrument": "Q", "qty": "1", "cash": "-1000"}));
+    add(json!({"id": "xd1", "account": "A", "day": "2026-09-01", "at": "2026-09-01T15:00:00Z", "kind": "dividend", "instrument": "X", "cash": "5"}));
     add(json!({"id": "a9", "account": "B", "day": "2026-08-26", "at": "2026-08-26T15:00:00Z", "kind": "sell", "instrument": "S", "qty": "-1", "cash": "15"}));
     json!({
         "today": "2026-12-31",
@@ -210,12 +214,19 @@ fn steps() -> Vec<Step> {
         st(vec![], "S", Whole("the day turned"), E::Clock),
         st(vec!["a5"], "S", Continued, E::None),
         st(vec!["a6"], "S", Whole("an adjustment set on a row the family walked"), E::Split),
-        st(vec![], "T", Whole("an adjustment on another family's row names only this family"), E::AdjustNamingT),
-        st(vec!["c1"], "S", Whole("a row's adjustment names an instrument of another family"), E::CostFromT),
+        // a dividend on S whose adjustment names only T, beside a buy of T: guard 1's
+        // leg clause keeps T from continuing apart from the S it now joins
+        st(vec!["sd1", "t4"], "T", Whole("an added row's adjustment names this family"), E::AdjustAdded("sd1", "T")),
+        st(vec!["c1"], "S", Whole("an added row's adjustment names another instrument"), E::CostFromT),
         st(vec!["l1"], "X", Continued, E::None),
         st(vec!["bxs", "bxb"], "X", Whole("a record's earliest leg, on another family, is before what this family walked"), E::None),
         st(vec!["q2"], "S", Whole("an assignment decides how an earlier lot ended"), E::None),
         st(vec!["a9"], "S", Whole("a record of the family removed in the same change"), E::Remove("a2")),
+        // an adjustment that names only another family, on a row added after its own
+        // family's last: the family it names is reached through the seeds (its
+        // legs), and joins the row's; and with a row of the named family added
+        // beside it, guard 1's leg clause keeps that family from continuing apart
+        st(vec!["xd1"], "X", Whole("an added row's adjustment names another family, which joins it"), E::AdjustAdded("xd1", "Y")),
         st(vec!["a7"], "S", Whole("a record made to wait joins the account's holdings into one family"), E::Unstated),
     ]
 }
@@ -342,9 +353,10 @@ fn a_continued_match_equals_a_whole_one_and_is_taken_where_the_guards_allow() {
                     present.remove(&r);
                     d.records.insert(r, None);
                 }
-                Extra::AdjustNamingT => {
-                    let tx = b.tx["a5"].clone();
-                    let leg = bagholder_engine::input::AdjustmentLeg { from: Some(b.ids.instrument("T")), to: Some(b.ids.instrument("T")), units_per_unit: Some(bagholder_core::Dec::from_int(1)), ..Default::default() };
+                Extra::AdjustAdded(row, named) => {
+                    let tx = b.tx[row].clone();
+                    let i = b.ids.instrument(named);
+                    let leg = bagholder_engine::input::AdjustmentLeg { from: Some(i), to: Some(i), units_per_unit: Some(bagholder_core::Dec::from_int(1)), ..Default::default() };
                     let a = vec![Adjustment { applies_to: tx.clone(), legs: vec![leg], source: bagholder_core::SourceName::person() }];
                     adjustments.insert(tx.clone(), a.clone());
                     d.adjustments.insert(tx, a);

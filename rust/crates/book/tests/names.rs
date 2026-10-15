@@ -69,7 +69,7 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let mut keys: Vec<String> = Vec::new();
         for n in 0..60 {
-            let action = rng.below(13);
+            let action = rng.below(14);
             let step = format!("seed {seed}, step {n}, action {action}");
             match action {
                 // a record stored, or one stored before revised: a sighting under a
@@ -135,6 +135,19 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                 9 => {
                     let c = f.book.conn_for_tests();
                     c.execute("DELETE FROM instrument_sightings WHERE rowid = (SELECT rowid FROM instrument_sightings ORDER BY random() LIMIT 1)", []).unwrap();
+                }
+                // an UPDATE OR REPLACE of a sighting onto another's key, on a connection
+                // without `recursive_triggers`: the row it replaces goes with no delete
+                // trigger (brief 32, change 4)
+                13 => {
+                    let c = rusqlite::Connection::open(f.dir.path().join(bagholder_book::BOOK_FILE)).unwrap();
+                    c.execute(
+                        "UPDATE OR REPLACE instrument_sightings SET record_id = t.record_id, leg = t.leg, instrument_id = t.instrument_id
+                         FROM (SELECT record_id, leg, instrument_id FROM instrument_sightings ORDER BY random() LIMIT 1) AS t
+                         WHERE instrument_sightings.rowid = (SELECT rowid FROM instrument_sightings ORDER BY random() LIMIT 1)",
+                        [],
+                    )
+                    .unwrap();
                 }
                 // a plain INSERT of a sighting, around the book: another leg of a record
                 12 => {
@@ -220,7 +233,8 @@ fn an_instrument_whose_names_cannot_be_kept_fails_alone() {
 
 
 /// A join whose ids cannot be read fails its own instrument's names alone: a
-/// write of another instrument, and opening the book, go on (brief 30, A2).
+/// write beside it goes on, and the other instrument's names settle (brief 30,
+/// A2). An open at the current schema settles nothing (A1), so it is not tried.
 #[test]
 fn a_join_that_cannot_be_read_fails_its_instrument_alone() {
     let f = Fixture::new();
@@ -242,8 +256,6 @@ fn a_join_that_cannot_be_read_fails_its_instrument_alone() {
     assert_eq!(f.book.names_as_kept(ib).unwrap(), f.book.names_as_folded(ib).unwrap(), "the other instrument settled");
     let due: Vec<String> = f.book.conn_for_tests().prepare("SELECT DISTINCT instrument_id FROM names_due").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
     assert_eq!(due, vec![ia.to_string()], "the unreadable one keeps its rows");
-    let (book, _) = bagholder_book::Book::open_in(f.dir.path(), "test", t0()).expect("the book opens");
-    assert_eq!(book.current_symbol(ib).unwrap().as_deref(), Some("BBC"));
 }
 
 /// Opening the book takes no lock: it opens while another connection holds the
