@@ -658,17 +658,21 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // kept, and that account's figures brought to it
             let book = f.book()?;
             // an account of the middle size among those holding anything, by the
-            // number of its holdings: a choice that means the same at every size of
-            // book, whichever ids a build drew
+            // number of its holdings, accounts of one size in the order of the
+            // broker's own ids for them, which the generated book states: a choice
+            // that means the same at every size of book and on every build, whatever
+            // ids the build drew (ties broken by those drew a different account, and
+            // a different cost, on each run)
+            let names = f.names()?;
             let account = f
                 .read(|e| {
                     let mut count: std::collections::BTreeMap<bagholder_core::AccountId, usize> = Default::default();
                     for p in e.figures().positions {
                         *count.entry(p.account).or_default() += 1;
                     }
-                    let mut by_size: Vec<(usize, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, a)).collect();
+                    let mut by_size: Vec<(usize, String, bagholder_core::AccountId)> = count.into_iter().map(|(a, n)| (n, names.account.get(&a).cloned().unwrap_or_default(), a)).collect();
                     by_size.sort();
-                    by_size.get(by_size.len() / 2).map(|(_, a)| *a)
+                    by_size.get(by_size.len() / 2).map(|(_, _, a)| *a)
                 })
                 .flatten()
                 .ok_or("nothing is held")?;
