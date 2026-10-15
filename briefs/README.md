@@ -32,7 +32,7 @@ Read from any checkout without switching branches:
 | 21 | [Verdict on the Stage P plan (capacity test and the process stage): Go with changes](21-stage-p-verdict.md) | Current |
 | 22 | [Verdict on the Stage 3 statements plan (#503): Go with changes](22-stage-3-statements-verdict.md) | Current |
 | 23 | [Debts held outside Wealthsimple, read from its net worth feature: findings and proposal](23-external-debt-from-wealthsimple.md) | Current; queries and sources in [23/](23/) |
-| 24 | [The 85 open issues re-checked against master d6824aa7: 83 stand, #412 closes, #442 narrows](24-issues-rechecked.md) | Current; evidence in [24/](24/) |
+| 24 | [The 85 open issues re-checked against master d6824aa7: 83 stand, #412 closes, #442 narrows](24-issues-rechecked.md) | Corrected 2026-10-15: 17 more (#383–#399) were left out; all present; evidence in [24/](24/) |
 | 25 | [The Stage 3 statements build as built (#503): accepted, one fix](25-stage-3-statements-as-built.md) | Current; verdicts in [25/](25/) |
 | 26 | [Verdict on the Stage 3 record-by-change plan (#506): Go with changes](26-record-by-change-verdict.md) | Current; findings in [26/](26/) |
 | 27 | [The record-by-change build as built (#507): sound, merge after the fixes](27-record-by-change-as-built.md) | Current; findings in [27/](27/) |
