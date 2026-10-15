@@ -42,3 +42,4 @@ Read from any checkout without switching branches:
 | 31 | [#514 at its merged head 023e0174: the merges keep both sides; brief 30 stands, not yet](31-deep-history-merged-head.md) | Superseded by 32; its master defect fixed by #518 |
 | 32 | [Brief 30's fixes on #514, and #518: #518 merges; #514 after five small changes](32-deep-history-fixes.md) | Current |
 | 33 | [The 106 open issues, by whether the failure can happen in use: 14 real bugs](33-open-issues-triage.md) | Current; verdicts in [33/](33/) |
+| 34 | [Listings keyed by ticker: an order can go to the wrong listing, and 37 places mix listings that share a ticker](34-listings-keyed-by-ticker.md) | Current; inventories in [34/](34/) |

@@ -1,0 +1,252 @@
+[
+  {
+    "id": "U1",
+    "location": "web/src/lib/trade/chart.ts:80-98 (historyQuery, keptHistory, loadHistory), :86-88 (historyKey); web/src/lib/TradeDetail.svelte:52-99; web/src/lib/trade/ahead.ts:43-53. Server: rust/crates/server/src/http/markets.rs:236-238 -> feeds.rs:3224-3298 history_payload; docs.rs:180 / feeds.rs:3140 history_pending; rust/crates/market/src/history.rs:508-590 (daily_due, fill_daily, stored_daily, daily_pending), :662-672 (chart_instrument), :971-985 (intraday_ready), :990-1000 (ensure_intraday_in_background)",
+    "key": "Page: the request carries symbol+exchange+currency+kind; the memo and IndexedDB key is t.id+'|'+tf and 'drawn:chart '+t.id (id-based); the watched doc is 'history:'+query(symbol,exchange,currency,kind,from,to,tf). Server: every bar store, fetch stamp, miss record and in-flight set is keyed by venues::tmx_symbol(symbol) = upper-cased ticker with .TO/.V/.CN/.NE stripped. Exchange, currency and kind are dropped. An option is mapped to its underlying's ticker (by design).",
+    "holds": "The chart's daily and intraday bars (price_history, history_fetches, price_bars, bar_fetches), whether a span is covered or due, and whether a read is pending. Read-ahead (ahead.ts) and remember('chart '+id) then store that answer in the browser under the trade's id.",
+    "collides": "RY on TSX and RY on NYSE; T on TSX (TELUS) and T on NYSE (AT&T); a coin and a share with the same ticker; RY.TO and RY (the same listing, harmless); an option and its underlying (intended: no source keeps contract history).",
+    "user_sees": "Whichever listing was read first fills the series, and once it is covered and fresh daily_due says nothing is due, so the other listing never reads its own. The NYSE RY page draws the TSX bars (CAD prices) with its own USD fills marked on them. One listing's pending read leaves the other's chart pending. The wrong chart is kept in IndexedDB under the trade id and drawn first on every later open. This is issue #397, and it covers 1h/4h as well as 1D.",
+    "identity_available": "Yes. The page sends exchange, currency and kind, and holds the trade's instrument id. The server discards them.",
+    "safe": false
+  },
+  {
+    "id": "U2",
+    "location": "web/src/lib/trade/discStore.svelte.ts:118 (discStore), :124-126 (discRereading, discRereadError), :128-130 (discSymbol), :141-172 (watching Map, showDisclosures), :178-188 (refreshDisclosures -> GET /api/filings), :191-209; web/src/lib/trade/Disclosures.svelte:29-30, 60-61, 120, 126, 146, 188-194; web/src/lib/markets/disc.svelte.ts:60; web/src/lib/markets/News.svelte:134-139, 157, 163-167 (chip -> discBySym); TradeDetail.svelte:398 renders <Disclosures> for every kind. Server: docs.rs:171 (filings: read uses only `symbol`), docs.rs:203-206 -> feeds.rs:1842 filings_shown; http/markets.rs:135-141 -> feeds.rs:1767 filings_payload, :1652-1712 refresh_filings (single_flight 'filings:'+sym, replace_filings per (sym, source), meta 'filings_sources:'+sym); feeds.rs:962-981 filings_feed and :767-822 known_filing_symbols (deduplicated by bare symbol); feeds.rs:988-1023 filed_releases (a chip reads filings_for(bare symbol))",
+    "key": "Page: discSymbol(t) = listingTicker(t).toUpperCase(), the bare ticker (an option's underlying), with no venue or currency. It keys discStore, watching, discRereading and discRereadError. The doc key 'filings:symbol=&name=&exchange=&currency=' does carry the venue, but the server reads the stored list by symbol alone.",
+    "holds": "A listing's disclosures list, its source statuses, the 'reading' shimmer ids, the re-read state and error, which card is watching, the News card's Disclosures tab under a chip, and the Releases tab's filed releases under a chip.",
+    "collides": "RY TSX and RY NYSE (same issuer, so harmless). T TELUS and T AT&T: the USD refresh stores AT&T's SEC rows under 'T'; the CAD refresh stores TELUS's SEDAR rows, and its name-guarded SEC answer comes back empty, so 'the stored rows stand'. One list ends up holding both issuers. A coin and a share: the card renders for Crypto, and a USD coin passes edgar::covers (currency USD), so a coin 'BTC' gets the SEC filer for the ticker BTC. An option and its underlying (intended).",
+    "user_sees": "Another issuer's filings in a listing's Disclosures card, and the same mixed list on both listings. 'Reading…' and re-read errors are shared. The scope feed lists one row per ticker, labelled with the first listing's exchange, so its chip goes to that venue.",
+    "identity_available": "Yes. The trade carries exchange, currency, kind and instrument, and the page sends exchange and currency in the doc key and the refresh. The page's own store key drops them, and so does the server's store.",
+    "safe": false
+  },
+  {
+    "id": "U3",
+    "location": "web/src/lib/trade/Disclosures.svelte:120; web/src/lib/markets/News.svelte:226-231; web/src/lib/notes/NotesPanel.svelte:46. Server: http/markets.rs:153-194 -> feeds.rs:1945-1959 filings_document",
+    "key": "GET /api/filings/doc?symbol=<bare ticker>&id=<document id>",
+    "holds": "Opens a stored filing in a new tab. The server looks it up as sf::filing(symbol, id). If that misses, it runs refresh_filings(symbol, None, None, None), which takes venue, currency and name from instrument_meta, the first security in the book with that ticker.",
+    "collides": "As U2, but only in the fallback.",
+    "user_sees": "Normally the right document, because the document id is unique. When the row is missing, the forced refresh can fetch the other listing's issuer under that ticker and write it into the shared store from U2.",
+    "identity_available": "The document id is used. The listing is named only by its bare ticker.",
+    "safe": false
+  },
+  {
+    "id": "U4",
+    "location": "web/src/lib/ticket/ticket.svelte.ts:39-61 (tkLookup `is`), :131-135 (heldIn), :140-149 (sideDefaults), :202-219 (openTicket), :235-263 (quote doc), :273-301 (submit). Callers with no securityId: TradeDetail.svelte:148-152 (listing page Buy), FilterPopover.svelte:494 (outside-the-book search row Buy), FilterPopover.svelte:472-473 when the book has no broker id, ticket.svelte.ts:304-308 (resumeDraft), TradeDetail.svelte:159-160 when trade.security is ''. Server: docs.rs:39-55 quote_shown and http/orders.rs:60-62 -> orders/ticket.rs:452-471 ticket_quote, :106-146 resolve_security, :389-403 lookup_listing (app.orders.found keyed by symbol), :662 order placement",
+    "key": "Page: when securityId is empty, `x.symbol === symbol` over positions, then book.options.instruments, and the first match wins. Server: resolve_security(symbol, '') takes the first book instrument whose current name is that symbol. Security kind sorts first, then the WS security id. The exchange is used only when the book has no instrument of that ticker. The cache of found listings is keyed by symbol alone.",
+    "holds": "The security an order ticket quotes and places, its kind, the holding Sell defaults to, and Sell's max quantity.",
+    "collides": "RY TSX and RY NYSE; T TELUS and T AT&T; a coin and a share with the same ticker (the share is preferred).",
+    "user_sees": "Buy on the NYSE RY listing page, or on an outside-the-book search row, opens a ticket on RY (TSX) in CAD, and Place sends the order for that listing. The ticket header shows the other venue. Sell defaults and max come from the other venue's holding.",
+    "identity_available": "Yes. The exchange is passed and ignored. The listing page's securityId from /api/listing is in the listing record, but TradeDetail.svelte:150 does not pass it. Book rows have the instrument id.",
+    "safe": false
+  },
+  {
+    "id": "U5",
+    "location": "web/src/lib/ticket/ticket.svelte.ts:180-198 (saveDraft, localStorage 'bh2.ticketDraft'), :215 (restore), :304-308 (resumeDraft); web/src/lib/orders/OrdersPanel.svelte:41-42, 69-76",
+    "key": "The draft is restored when `d.symbol === symbol && d.side === t.side`. The draft stores exchange but not securityId. resumeDraft calls openTicket(d.symbol, d.side, d.exchange, '').",
+    "holds": "The set-aside ticket: account, type, tif, qty, limit, stop, stop loss and take profit, the text typed, and its preview.",
+    "collides": "The same ticker on another venue (RY TSX and RY NYSE; T TELUS and T AT&T).",
+    "user_sees": "A draft left on RY (TSX) refills an RY (NYSE) ticket with its account, quantity and CAD limit and bracket prices. Resume reopens on whichever listing U4 resolves, which need not be the one drafted.",
+    "identity_available": "Yes. The ticket has securityId and exchange; neither is stored with the draft or compared on restore.",
+    "safe": false
+  },
+  {
+    "id": "U6",
+    "location": "web/src/lib/listing.svelte.ts:36-38 (listingId), :44-61 (known store, rememberListing), :64-69 (watch row match by listingId), :98-121 (loadListing: memo and IndexedDB key = listing id; applied Set). Callers: FilterPopover.svelte:211-216 (drops instrument id, currency and, for book rows, kind), Watchlist.svelte:142, Shorts.svelte:111, HeatBox.svelte:40-54, notes/channel.svelte.ts:104, notes/NotesPanel.svelte:50; App.svelte:265-273. Server: http/markets.rs:121-123 -> feeds.rs:2626-2731 listing_payload / listing_payload_in, :685-694 meta_of; senders of an empty exchange: feeds.rs:892 and :899 (notice_extra(&sym, None, …)), wire/markets.rs:437-441 (us and intl universe tiles have exchange ''), feeds.rs:2473-2477 (a TMX-placed listing gets exchange '' unless CSE or Cboe)",
+    "key": "'listing:' + bareSymbol(symbol) + '@' + EXCHANGE, with no currency, kind or instrument id. The /api/listing answer is memoised and kept in IndexedDB under that id, so a second ask with another currency is never sent in this page load. Server: holdings, trades and the watchlist match by bare ticker. Venue counts only when both sides have one (`exu.is_empty() || there.is_empty() || there == exu`), and currency never counts. Held returns the first matching position. Kind and securityId come from the first trade. Missing venue, currency and name come from meta_of, the first security with that ticker on any venue.",
+    "holds": "Which page a click on an unheld ticker opens (the listing page, or a redirect to a holding), the listing's name, currency, kind and securityId, its fills on the chart, and its glance price.",
+    "collides": "Any listing opened with an empty exchange: every disclosure and filed-release notification, every US and international heatmap universe tile, TMX-placed rows from the Shorts lookup, and manual-entry instruments with no venue. It matches every venue's holding of that ticker. Through meta_of, a known venue with no currency (FilterPopover drops it) takes the first security's currency.",
+    "user_sees": "Tapping the US-universe tile T (AT&T) or a 'T' disclosure notification redirects to the TELUS holding, because the server answers Held with the first T position. Unheld, one page merges every venue's trades' fills. An outside-the-book NYSE RY search row opens labelled CAD when the book's first RY security is the TSX one, and its glance is asked in CAD.",
+    "identity_available": "Partly. FilterPopover has the instrument id and options.instruments[].currency, Watchlist rows have id and currency, and search rows have currency; all are dropped. Notifications and universe tiles have no venue because the server sends none.",
+    "safe": false
+  },
+  {
+    "id": "U7",
+    "location": "web/src/lib/markets/Watchlist.svelte:93-94 (then :103-113 sugQuoteSchedule, :130-137 pick -> addWatch)",
+    "key": "positions.find((x) => x.symbol === m.symbol), the raw ticker with the exchange ignored.",
+    "holds": "The add-row suggestion's last price, day change and fallback currency, and whether a glance quote is asked for it (rows with `last` are skipped).",
+    "collides": "A search match RY@NYSE when the book holds RY@TSX, or the reverse; T TELUS and T AT&T.",
+    "user_sees": "The NYSE match shows the TSX holding's price and change in CAD, and its own glance is never asked. When the search gave no currency, picking it sends currency CAD for RY@NYSE, and the server's draft creates and follows an RY-on-XNYS-in-CAD instrument.",
+    "identity_available": "Yes. m.exchange and the position's exchange and instrument are both there.",
+    "safe": false
+  },
+  {
+    "id": "U8",
+    "location": "web/src/lib/markets/Watchlist.svelte:55-59, 173 (watchAlready)",
+    "key": "bareSymbol(w.symbol) === typed text, with the exchange ignored.",
+    "holds": "Whether the empty add list says 'Already on the watchlist.' or 'No listing by that name.'",
+    "collides": "The same ticker on another venue.",
+    "user_sees": "When the search shows nothing, typing RY while RY@TSX is watched says 'Already on the watchlist.', even when the person meant NYSE. The message is all that changes.",
+    "identity_available": "The watch rows carry exchange; typed text has none.",
+    "safe": false
+  },
+  {
+    "id": "U9",
+    "location": "web/src/lib/markets/News.svelte:114-122 (heldSym, watchedSym, chipPct), :168-174 (glance for the chip), :235-237 (chgVal)",
+    "key": "bareSymbol(p.symbol) === chip.symbol and bareSymbol(w.symbol) === chip.symbol, with the venue ignored. chgVal compares the tag's bare ticker to the chip's.",
+    "holds": "Whether the chip's listing counts as held or watched, which decides whether its glance quote is fetched and whether the Change column uses it.",
+    "collides": "A chip for RY@NYSE while RY@TSX is held or watched.",
+    "user_sees": "The chip listing's change shows '—' and no glance is asked. A story whose first tag is the other venue's same ticker, with no change of its own, gets the chip's change.",
+    "identity_available": "Yes. The chip has exchange, and the positions and watch rows have exchange.",
+    "safe": false
+  },
+  {
+    "id": "U10",
+    "location": "web/src/lib/markets/News.svelte:199-219; web/src/lib/markets/newsChip.ts:37-52 (bookListing, directoryListing)",
+    "key": "The first row in watchlist, then positions, then options.instruments, then search matches, whose bare ticker equals the typed key.",
+    "holds": "Which listing (symbol and venue) a typed ticker turns into as the News chip.",
+    "collides": "Every listing sharing the ticker: RY TSX and NYSE; T TELUS and AT&T.",
+    "user_sees": "Typing RY always takes the first one (for example the watched NYSE RY over the held TSX RY). The other venue's listing cannot be reached by typing; only its tag's chip button reaches it.",
+    "identity_available": "The rows carry exchange; the ambiguity is settled by list order.",
+    "safe": false
+  },
+  {
+    "id": "U11",
+    "location": "web/src/lib/markets/News.svelte:179-197. Server: http/markets.rs:230-232 -> feeds.rs:583-659 news_symbol_payload, :673-694 instrument_meta and meta_of",
+    "key": "GET /api/news/symbol?symbol&exchange&currency. Server: the name searched for is instrument_meta(symbol), the first security in the book with that ticker on any venue, even when an exchange is given. With no exchange, the venue is the first security's, else TMX's, else NASDAQ/USD. Items are stored under (symbol, exchange).",
+    "holds": "The news read on demand for a chip listing that has no items.",
+    "collides": "T@NYSE (AT&T) when the book's first T security is TELUS, and the reverse.",
+    "user_sees": "The AT&T chip's on-demand read searches Google for 'TELUS' and stores those stories under T@NYSE.",
+    "identity_available": "The exchange and currency are sent; the server ignores them for the name.",
+    "safe": false
+  },
+  {
+    "id": "U12",
+    "location": "web/src/lib/markets/Shorts.svelte:50-70 (found store, GET /api/shorts with exchange '' and currency ''), :61. Server: http/markets.rs:221-224 -> feeds.rs:2457-2505 shorts_payload",
+    "key": "found[typed ticker]. Server: venue and currency from the first security in the book with that ticker, else TMX (Canadian, exchange '' unless CSE or Cboe), else NASDAQ/USD. Name from the same first security.",
+    "holds": "The row the Short interest card shows for a typed ticker that is not in the feed.",
+    "collides": "RY TSX and RY NYSE; T TELUS and T AT&T. Line 61 also skips the lookup when any venue's row has that ticker.",
+    "user_sees": "One venue's short interest, chosen by the book's security order, and never the other. The row opens a listing with exchange '' (see U6).",
+    "identity_available": "No. The typed text has no venue, and the server picks the first match silently.",
+    "safe": false
+  },
+  {
+    "id": "U13",
+    "location": "web/src/lib/markets/News.svelte:243-254 (passReading). Server: feeds.rs:476-481 news_reading",
+    "key": "left.includes(bareSymbol(s)); the server lists bare tickers only.",
+    "holds": "Whether the empty card says 'Reading…' or 'No news.'",
+    "collides": "A chip on one venue while the other venue's listing with the same ticker is being read.",
+    "user_sees": "'Reading…' in place of 'No news.' until the other listing's read ends.",
+    "identity_available": "No. The server sends bare tickers.",
+    "safe": false
+  },
+  {
+    "id": "U14",
+    "location": "web/src/lib/ui.svelte.ts:294-302 (POST /api/entries trade); web/src/lib/Modals.svelte:84, 94. Server: http/model.rs:228-236 -> entries.rs:171-180, :106-111 held_by_symbol",
+    "key": "{instrument: null, symbol, currency}. Server: exactly one non-option instrument named so in that currency, else a new instrument named by the symbol.",
+    "holds": "Which instrument a hand-entered trade is booked on.",
+    "collides": "A coin and a share with the same ticker in the same currency. Neither is chosen, and a third instrument is made. Venues that differ in currency are told apart.",
+    "user_sees": "The manual trade lands on a new, separate instrument instead of the held one.",
+    "identity_available": "The book's options.instruments are loaded, but the form is free text and always sends instrument: null.",
+    "safe": false
+  },
+  {
+    "id": "S1",
+    "location": "web/src/lib/trade/shorts.svelte.ts:30-35 (discSymbol, shortsKey), :41-81 (ensureShorts); web/src/lib/trade/ShortInterest.svelte:30. Server: feeds.rs:2457-2505 (sf::shorts_for(sym, ex)), :2534-2577",
+    "key": "shortsStore and the read keys 'reading '/'trend ' + BARE|EXCHANGE. The request carries symbol, exchange and currency. Shares only (reportsShorts).",
+    "holds": "One listing's short-interest reading and trend.",
+    "collides": "None across venues, because the key and the server store include the exchange. Only the name the server passes to its reader comes from the first security with that ticker.",
+    "user_sees": "The right listing's figures.",
+    "identity_available": "The venue is used.",
+    "safe": true
+  },
+  {
+    "id": "S2",
+    "location": "web/src/lib/markets/quotes.svelte.ts:19-41 (sugQuotes, sugKey); Watchlist.svelte:43, 105, 162; News.svelte:121, 173. Server: http/markets.rs:111-118 -> following.rs:354-405 (memory key symbol@EXCHANGE|currency)",
+    "key": "BARE@EXCHANGE. The request carries symbol, exchange and currency.",
+    "holds": "A glance price and day change, remembered for a minute.",
+    "collides": "Only the same ticker on the same venue in two currencies (a coin with exchange CRYPTO). None seen in the callers: suggestions exclude rows with a kind.",
+    "user_sees": "The right glance.",
+    "identity_available": "The venue is used.",
+    "safe": true
+  },
+  {
+    "id": "S3",
+    "location": "web/src/lib/markets/Watchlist.svelte:37, 66-67, 91-92, 131-133, 162, 181-182, 187; web/src/lib/state.svelte.ts:131-155 (addWatch, removeWatch); http/markets.rs:263-284 -> following.rs:96-146, 283-316",
+    "key": "Row keys, de-duplication and the highlight use BARE@EXCHANGE. The add stub is de-duplicated by symbol+exchange. Remove is by instrument id. POST /api/watchlist/add sends symbol, exchange, name and currency, never an id, even for a holding suggestion. The server resolves through the directory, then CRYPTO, then venue MIC + currency + kind, and refuses two instruments it cannot tell apart.",
+    "holds": "Watchlist rows and following a listing.",
+    "collides": "None as long as the currency sent is right. U7 can send a wrong one.",
+    "user_sees": "The right row is followed and removed.",
+    "identity_available": "Removal uses the id. The add could send the holding's instrument id and does not.",
+    "safe": true
+  },
+  {
+    "id": "S4",
+    "location": "web/src/lib/markets/MarketTiles.svelte:52-81, 120-124, 128-175, 180-194; server http/markets.rs:301-304 -> following.rs:149-154, 320-338",
+    "key": "Tiles are removed, toggled, dragged, keyed in {#each} and marked 'on' in the picker by t.symbol alone. POST /api/tiles/set sends {symbol, exchange}.",
+    "holds": "The market tiles row.",
+    "collides": "None today. Tiles are directory instruments only, and the directory's 34 symbols are all distinct. Its test enforces only a unique SYMBOL@VENUE, so this is latent.",
+    "user_sees": "Correct today.",
+    "identity_available": "Each tile has an id and an exchange.",
+    "safe": true
+  },
+  {
+    "id": "S5",
+    "location": "web/src/lib/FilterPopover.svelte:45-49 (tkLookup by instrument), :75-76 (BARE|EXCHANGE de-duplication), :124 and :178-187 (symbol filter values are instrument ids), :213 (held by instrument); web/src/lib/filters.svelte.ts:121-123; web/src/lib/Dashboard.svelte:188-209",
+    "key": "Instrument id, or BARE|EXCHANGE.",
+    "holds": "The symbol filter, Buy/Sell eligibility, which holding a book row opens, and the By-symbol card's open and filter.",
+    "collides": "None.",
+    "user_sees": "Correct.",
+    "identity_available": "Used.",
+    "safe": true
+  },
+  {
+    "id": "S6",
+    "location": "web/src/lib/trade/chart.ts:37-40 (_tfByTrade by trade id), :92, :97 (key t.id|tf); TradeDetail.svelte:52, 60; ahead.ts:47, 52",
+    "key": "The trade, holding or listing id.",
+    "holds": "The chosen timeframe and the kept or drawn chart.",
+    "collides": "None on the page. The value it keeps can be the collided one from U1.",
+    "user_sees": "See U1.",
+    "identity_available": "Used.",
+    "safe": true
+  },
+  {
+    "id": "S7",
+    "location": "web/src/lib/markets/News.svelte:67-71 (headlines params symbol+exchange), :222-224, :285 (chip from a tag or disclosure row). Server: views.rs:148-160, wire/news.rs:175-177 listing_key, :315-330",
+    "key": "(root ticker, EXCHANGE), and kept.ts files the doc under book|key|JSON(params).",
+    "holds": "The stories under a chip.",
+    "collides": "None for stories. The Releases tab's filed releases under a chip read the bare-symbol filings store (U2).",
+    "user_sees": "The right stories.",
+    "identity_available": "The venue is used.",
+    "safe": true
+  },
+  {
+    "id": "S8",
+    "location": "rust/crates/server/src/wire/markets.rs:492-502 (heat tile key); web/src/lib/heatmap/HeatBox.svelte:27-35, 66, 50 (open by c.id)",
+    "key": "The server's tile key: the symbol, then symbol|exchange only for the second tile with that symbol, so it depends on order. A holding tile opens by id.",
+    "holds": "The heat tile's DOM identity and arrival animation.",
+    "collides": "RY TSX and RY NYSE in the 'both' universe can swap the key 'RY' when the order changes.",
+    "user_sees": "Data stays right. On a re-sort, one listing's animated node can travel to the other's slot.",
+    "identity_available": "c.id for holdings.",
+    "safe": true
+  },
+  {
+    "id": "S9",
+    "location": "web/src/lib/generated/keys.ts ('shorts' rows: symbol; 'headlines' items.*.tags: symbol; 'positions' portfolio.allocation: label; 'cashflow' cashflow.income: label); web/src/lib/live.svelte.ts:29-68, 93-142; rust/crates/diff/src/lib.rs:270-274, 300-331; feeds.rs:2337, 2511; wire/news.rs:59",
+    "key": "Differ row keys that are a ticker or a ticker label.",
+    "holds": "How patches find rows.",
+    "collides": "Two rows with the same ticker (ShortsFeedRow for RY TSX and RY NYSE; two tags on one story).",
+    "user_sees": "Nothing wrong. With duplicate keys, ids() and keysOf() fail and the list is sent and written whole.",
+    "identity_available": "Rows have positionId or id, but the differ keys on the symbol.",
+    "safe": true
+  },
+  {
+    "id": "S10",
+    "location": "web/src/lib/orders/orders.svelte.ts:56-57 (by id), 94-102, 266-293; OrdersPanel.svelte:80-131; TradeDetail.svelte:154-160 (Buy and Sell from a holding or trade pass trade.security and the holding id; when security is '' this becomes U4)",
+    "key": "Order, bracket and holding ids, plus the broker security id.",
+    "holds": "Order cards and actions, and a holding's own ticket.",
+    "collides": "None.",
+    "user_sees": "Correct.",
+    "identity_available": "Used.",
+    "safe": true
+  },
+  {
+    "id": "S11",
+    "location": "Display only: web/src/lib/sym.ts:4-9; Trades.svelte:66; Portfolio.svelte:147; Cashflow.svelte:176, 218, 232, 262; Dashboard.svelte:370, 388; Modals.svelte:60; EventEntry.svelte:22-23, 54; ConfirmDialog.svelte:20; OrderTicket.svelte:97, 201; ticket.svelte.ts:269; App.svelte:496; TradeDetail.svelte:254, 272-273 (listingTicker in the subtitle); HeatBox.svelte:72, 79; Watchlist.svelte:50, 183; News.svelte:148, 153, 263, 304; Shorts.svelte:79, 83-89, 93; Donut.svelte:60; filters.svelte.ts:123; ui.svelte.ts:489 (CSV); reads.svelte.ts:184-189 (search text memo)",
+    "key": "bareSymbol or symText for text, sort values and search text.",
+    "holds": "Labels, sorting and text search.",
+    "collides": "Same-ticker rows look alike on screen; each row is still its own.",
+    "user_sees": "Nothing wrong.",
+    "identity_available": "n/a",
+    "safe": true
+  }
+]
