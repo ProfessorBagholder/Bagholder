@@ -290,6 +290,9 @@ pub struct Figures {
     /// The ledger's rows by movement, and the movements touched since linking
     /// last looked (`csv_import::link`): kept with the engine.
     movements: std::sync::Mutex<crate::csv_import::Movements>,
+    /// The records were derived again under this build's mappings: false until
+    /// that succeeds, at the open or at a later pass, and nothing is built before.
+    rederived: std::sync::atomic::AtomicBool,
 }
 
 impl Figures {
@@ -304,13 +307,20 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), movements: Default::default() };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
-        rederive_all(&book, at)?;
-        // a record the figures cannot be built from is said on the page and tried
-        // again at the next pass; it never stops the server, which a service
-        // manager would only start again into the same failure
+        // records that cannot be derived again, and a record the figures cannot be
+        // built from, are said on the page and tried again at the next pass; they
+        // never stop the server, which a service manager would only start again
+        // into the same failure (#516)
+        match rederive_all(&book, at) {
+            Ok(()) => f.rederived.store(true, std::sync::atomic::Ordering::SeqCst),
+            Err(e) => crate::app::log(&format!("bagholder: {e}")),
+        }
+        if !f.rederived.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(f);
+        }
         if let Some(z) = book.zone().map_err(err)? {
             match built(home, &book, &cache, &z.zone, at) {
                 Ok(b) => {
@@ -326,6 +336,11 @@ impl Figures {
     /// The engine built where a zone is known and it is not built yet: what a
     /// pass needs first. Its failure is the pass's, said on the page.
     pub fn ensure_built(&self, now: Timestamp) -> Result<(), String> {
+        // the records derived again first, where that failed when the book opened
+        if !self.rederived.load(std::sync::atomic::Ordering::SeqCst) {
+            rederive_all(&self.book()?, now)?;
+            self.rederived.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         if self.engine.read().unwrap_or_else(|e| e.into_inner()).is_some() {
             return Ok(());
         }
@@ -797,6 +812,33 @@ mod tests {
             let m = mappings().into_iter().find(|m| m.source().as_str() == source).unwrap_or_else(|| panic!("no mapping for {source}"));
             assert_eq!(v, m.version() as i64, "{source}'s records follow its mapping's version");
         }
+    }
+
+    /// Records that cannot be derived again when the book opens never stop the
+    /// start (#516): the figure path opens, nothing is built from records left
+    /// as an older mapping read them, and the next pass derives them again and
+    /// builds, its failure the pass's, said in the header until then.
+    #[test]
+    fn records_that_cannot_be_derived_again_at_the_open_are_tried_again_by_the_pass() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let book_file = home.path().join(bagholder_book::BOOK_FILE);
+        let now = at("2025-11-20T12:00:00Z");
+        {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            book.state_zone("America/Toronto", now).unwrap();
+        }
+        // a record no reader can name, left for this build's mapping to derive
+        let c = rusqlite::Connection::open(&book_file).unwrap();
+        let source: String = c.query_row("SELECT source FROM source_records LIMIT 1", [], |r| r.get(0)).unwrap();
+        c.execute("INSERT INTO source_records(id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('not a record id', ?, 'k', 'live', 0, '2025-11-19T20:00:00Z', '2025-11-19T20:00:00Z')", [&source]).unwrap();
+        let f = Figures::open(home.path(), now).expect("the open never stops on it");
+        assert!(f.read(|_| ()).is_none(), "nothing is built from records not derived again");
+        assert!(f.ensure_built(now).unwrap_err().contains("could not be derived again"), "the pass's failure says why");
+        c.execute("DELETE FROM source_records WHERE id = 'not a record id'", []).unwrap();
+        f.ensure_built(now).unwrap();
+        assert!(f.read(|_| ()).is_some(), "the pass that derived them built the figures");
+        same_as_fresh(&f, now);
     }
 
     /// The engine the figure path holds, against one built fresh from the files.

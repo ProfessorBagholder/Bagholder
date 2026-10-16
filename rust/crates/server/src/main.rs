@@ -134,31 +134,43 @@ fn serve() -> i32 {
         }
     };
     // a first start with nothing of its own takes the Python app's database, which the start then imports
-    if let Some(python) = legacy_import::python_home(|k| std::env::var_os(k)) {
-        match legacy_import::adopt_python_database(&home, &python) {
-            Ok(Some(from)) => log(&format!("bagholder: a copy of the Python app's database {} is this app's first", from.display())),
-            Ok(None) => {}
-            Err(e) => {
-                log(&format!("bagholder: {e}"));
-                return 1;
-            }
-        }
-    }
+    let adopted = match legacy_import::python_home(|k| std::env::var_os(k)) {
+        Some(python) => legacy_import::adopt_python_database(&home, &python),
+        None => Ok(None),
+    };
     let a = app::App::new(home, root, bind_host.clone());
+    // a step here that reads the stored data never stops the server: a service
+    // manager would only start it again into the same failure, with no page and no
+    // update button. Each failure is said in the header until the next start (#516).
+    let failed = |e: String| {
+        log(&format!("bagholder: {e}"));
+        let mut st = a.state.lock().unwrap();
+        st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
+    };
     // an update the supervisor rolled back is said in the header by the server it started
     update::recall_failure(&a);
     // the local model keeps its file in this app's data folder, and is off until told so
     if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
         log(&format!("bagholder: the local model is off: {}", e));
     }
-    // the figure path: a book this build cannot open stops the server, saying why
-    match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
+    let opened = match adopted {
+        Ok(from) => {
+            if let Some(from) = from {
+                log(&format!("bagholder: a copy of the Python app's database {} is this app's first", from.display()));
+            }
+            // the figure path: a book this build cannot open is said, and nothing is
+            // opened in its place
+            figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now())
+        }
+        // no book is made beside a database not yet carried, so the next start tries again
+        Err(e) => Err(format!("the Python app's database could not be taken: {e}")),
+    };
+    match opened {
         Ok(f) => {
             // the earlier store, carried once into the book and the market cache;
             // nothing opens it after this
             if let Err(e) = carry::from_old_store(&a, &f, bagholder_core::jiff::Timestamp::now()) {
-                log(&format!("bagholder: {e}"));
-                return 1;
+                failed(e);
             }
             // what the last pull's statements said, until the next pull
             match f.book().and_then(|b| b.setting(status::STATEMENTS_SAID).map_err(|e| e.to_string())) {
@@ -169,16 +181,12 @@ fn serve() -> i32 {
             // the default tile row where none was chosen
             following::open(&a);
         }
-        Err(e) => {
-            log(&format!("bagholder: {e}"));
-            return 1;
-        }
+        Err(e) => failed(e),
     }
-    // the market cache's first borrow brings it to this build's schema, so one that
-    // cannot be opened stops the server here, saying why
+    // the market cache's first borrow brings it to this build's schema; one that
+    // cannot be opened is said, and each later borrow tries again
     if let Err(e) = a.cache() {
-        log(&format!("bagholder: the market cache could not be opened: {}", e));
-        return 1;
+        failed(format!("the market cache could not be opened: {e}"));
     }
     session::boot_session(&a);
 
