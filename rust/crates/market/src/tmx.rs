@@ -166,7 +166,7 @@ pub fn tmx_record_symbol(symbol: &str, exchange: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
-    bagholder_model::venues::tmx_form(exchange, "CAD").map(|form| format!("{}{}", s, form))
+    bagholder_model::venues::tmx_form(exchange).map(|form| format!("{}{}", s, form))
 }
 
 pub fn is_canadian_listing(exchange: &str, currency: &str) -> bool {

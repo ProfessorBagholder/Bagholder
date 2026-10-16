@@ -155,9 +155,9 @@ FROM (
     WHERE filer IS NOT NULL AND filer NOT IN ('', '0')
 )
 WHERE rank = 1;
--- what the carry dropped, for the record: rows that named no filer
+-- what the carry dropped, for the record, where it dropped any: rows that named no filer
 INSERT OR REPLACE INTO meta (key, value)
-SELECT 'carry:filings_without_a_filer', CAST(COUNT(*) AS TEXT) FROM filed WHERE filer IS NULL OR filer IN ('', '0');
+SELECT 'carry:filings_without_a_filer', CAST(COUNT(*) AS TEXT) FROM filed WHERE filer IS NULL OR filer IN ('', '0') HAVING COUNT(*) > 0;
 DROP TABLE filed;
 DROP TABLE filings;
 ALTER TABLE filings_v6 RENAME TO filings;

@@ -101,7 +101,7 @@ export function openNoteTarget(n: Note): boolean {
   if ((n.kind === 'disclosures' || n.kind === 'releases') && symbol) {
     ui.menuOpen = false
     ui.notesOpen = false
-    goSub('markets', rememberListing({ symbol: String(symbol), exchange: n.extra?.exchange }))
+    goSub('markets', rememberListing({ symbol: String(symbol), exchange: n.extra?.exchange, listing: String(n.extra?.listing || '') }))
     return true
   }
   return false

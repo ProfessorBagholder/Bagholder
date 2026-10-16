@@ -42,7 +42,7 @@ use crate::http::{router, AppState};
 
 /// An app on a temp home of its own -- nothing another test wrote is in it,
 /// and nothing this test writes is seen by another.
-fn isolated() -> Arc<App> {
+pub(crate) fn isolated() -> Arc<App> {
     let dir = std::env::temp_dir().join(format!("bh-routes-golden-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -59,7 +59,7 @@ fn isolated() -> Arc<App> {
     app
 }
 
-fn runtime() -> tokio::runtime::Runtime {
+pub(crate) fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap()
 }
 
@@ -72,7 +72,7 @@ fn upload(app: &Arc<App>, name: &str, account: &str, body: Body) -> Request<Body
     req
 }
 
-fn from_the_page(app: &Arc<App>, method: Method, uri: &str, body: Option<Value>) -> Request<Body> {
+pub(crate) fn from_the_page(app: &Arc<App>, method: Method, uri: &str, body: Option<Value>) -> Request<Body> {
     let host = format!("127.0.0.1:{}", *app.port.lock().unwrap());
     let mut req = Request::builder().method(method).uri(uri).header(header::HOST, host).header("sec-fetch-site", "same-origin");
     let text = body.map(|b| b.to_string());
@@ -99,7 +99,7 @@ fn ended(rt: &tokio::runtime::Runtime, app: &Arc<App>, answer: &Value) -> crate:
     })
 }
 
-async fn json_of(app: Arc<App>, req: Request<Body>) -> Value {
+pub(crate) async fn json_of(app: Arc<App>, req: Request<Body>) -> Value {
     let res = router(AppState { app }).oneshot(req).await.unwrap();
     let status = res.status().as_u16();
     let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
@@ -132,9 +132,10 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
         ("watchlist_remove_missing_symbol", req(Method::POST, "/api/watchlist/remove", Some(json!({})))),
         ("tiles_set_empty", req(Method::POST, "/api/tiles/set", Some(json!({"tiles": []})))),
         ("filings_missing_symbol", req(Method::GET, "/api/filings?symbol=%20", None)),
-        ("filings_no_documents", req(Method::GET, "/api/filings?symbol=GOLDEN", None)),
+        ("filings_no_exchange", req(Method::GET, "/api/filings?symbol=GOLDEN", None)),
+        ("filings_no_documents", req(Method::GET, "/api/filings?symbol=GOLDEN&exchange=NASDAQ", None)),
         ("filings_feed_empty", req(Method::GET, "/api/filings/feed", None)),
-        ("filings_enrich_no_such_doc", req(Method::GET, "/api/filings/enrich?symbol=GOLDEN&id=none", None)),
+        ("filings_enrich_no_such_doc", req(Method::GET, "/api/filings/enrich?source=SEC&id=none", None)),
         ("fear_empty", req(Method::GET, "/api/fear", None)),
         ("shorts_missing_symbol", req(Method::GET, "/api/shorts", None)),
         ("shorts_feed_empty", req(Method::GET, "/api/shorts/feed", None)),
@@ -350,7 +351,7 @@ fn test_every_write_to_the_book_reaches_the_stream() {
     std::fs::create_dir_all(&watched).unwrap();
     let writes: Vec<(&str, Method, &str, Option<Value>)> = vec![
         ("a journal note and grade", Method::POST, "/api/journal", Some(json!({"id": trade, "thesis": "a note", "grade": "B", "tags": ["setup"]}))),
-        ("a trade typed in", Method::POST, "/api/entries", Some(json!({"entry": "trade", "account": "", "instrument": null, "symbol": "ZZWRITE", "currency": "CAD", "day": "2026-09-01", "side": "BUY", "quantity": "10", "price": "1.50", "fee": "0"}))),
+        ("a trade typed in", Method::POST, "/api/entries", Some(json!({"entry": "trade", "account": "", "instrument": null, "symbol": "ZZWRITE", "exchange": "TSX", "currency": "CAD", "day": "2026-09-01", "side": "BUY", "quantity": "10", "price": "1.50", "fee": "0"}))),
         ("the tiles chosen", Method::POST, "/api/tiles/set", Some(json!({"tiles": []}))),
         ("the notification settings", Method::POST, "/api/notifications/settings", Some(json!({"fills": true}))),
         ("a folder watched", Method::POST, "/api/watch", Some(json!({"path": watched.to_string_lossy(), "account": ""}))),

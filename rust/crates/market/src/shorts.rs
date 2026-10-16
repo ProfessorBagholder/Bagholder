@@ -117,7 +117,7 @@ fn lenient_num<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D:
 /// The regulator that publishes for an instrument, or `None` for one no one
 /// reports short selling on -- a coin, an index, a futures or currency
 /// contract, an option.
-pub fn market_of(symbol: &str, exchange: &str, currency: &str) -> Option<ShortMarket> {
+pub fn market_of(symbol: &str, exchange: &str) -> Option<ShortMarket> {
     let sym = symbol.trim().to_uppercase();
     let ex = exchange.trim().to_uppercase();
     if sym.is_empty()
@@ -127,7 +127,7 @@ pub fn market_of(symbol: &str, exchange: &str, currency: &str) -> Option<ShortMa
     {
         return None;
     }
-    match bagholder_model::venues::tmx_form(&ex, currency) {
+    match bagholder_model::venues::tmx_form(&ex) {
         None => None,
         Some(":US") => Some(ShortMarket::Us),
         Some(_) => Some(ShortMarket::Ca),
@@ -400,8 +400,23 @@ pub fn us_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str
     newest_of(tries, |rows| !rows.is_empty())
 }
 
+/// The key a Canadian file's row is kept under: the listing its symbol and its
+/// venue code are (`ListingKey`), so one ticker on two venues is two rows; none
+/// for a code the files' table does not name.
+pub fn ciro_key(symbol: &str, code: &str) -> Option<String> {
+    let code = code.trim().to_uppercase();
+    let words = CA_VENUE_NAMES.iter().find(|(k, _)| *k == code)?.1;
+    bagholder_core::ListingKey::on(symbol, words).ok().map(|k| k.to_string())
+}
+
+/// The key a listing's row is looked up under in a Canadian file; none for a
+/// listing whose venue is none known here, which no row is.
+pub fn ca_row_key(symbol: &str, exchange: &str) -> Option<String> {
+    bagholder_core::ListingKey::on(symbol, exchange).ok().filter(|k| k.canadian()).map(|k| k.to_string())
+}
+
 /// CIRO's position report -- issue name, symbol,
-/// venue, shares short, net change.
+/// venue, shares short, net change -- each row by its listing.
 pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow> {
     let mut rows = HashMap::new();
     for r in grid {
@@ -410,11 +425,10 @@ pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow>
         }
         let sym = vs(Some(&r[1])).trim().to_uppercase();
         let shares = num(Some(&r[3]));
-        if sym.is_empty() || shares.is_none() {
-            continue;
-        }
-        rows.insert(sym, CaPositionRow {
-            venue: vs(Some(&r[2])).trim().to_uppercase(),
+        let venue = vs(Some(&r[2])).trim().to_uppercase();
+        let Some(key) = ciro_key(&sym, &venue).filter(|_| shares.is_some()) else { continue };
+        rows.insert(key, CaPositionRow {
+            venue,
             shares: shares.unwrap(),
             change: num(Some(&r[4])),
             name: vs(Some(&r[0])).trim().to_string(),
@@ -451,12 +465,12 @@ pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(
 
 /// A Canadian listing's own volume over the report's
 /// period, from TMX's daily series under the venue's own form.
-pub fn ca_traded(symbol: &str, exchange: &str, currency: &str, span: &str) -> Result<Option<f64>, String> {
+pub fn ca_traded(symbol: &str, exchange: &str, span: &str) -> Result<Option<f64>, String> {
     let (start, end) = match span.split_once('/') { Some((a, b)) => (a.to_string(), b.to_string()), None => (span.to_string(), String::new()) };
     if end.is_empty() {
         return Ok(None);
     }
-    let Some(code) = crate::quotes::tmx_quote_symbol(symbol, exchange, currency) else { return Ok(None) };
+    let Some(code) = crate::quotes::tmx_quote_symbol(symbol, exchange) else { return Ok(None) };
     let ask = |form: &str| -> Result<Option<Vec<bagholder_store::bars::DayBar>>, FetchError> {
         let data = post_json(crate::tmx::TMX_URL, &json!({
             "operationName": "getTimeSeriesData",
@@ -473,7 +487,7 @@ pub fn ca_traded(symbol: &str, exchange: &str, currency: &str, span: &str) -> Re
 }
 
 /// CIRO's short sale summary, the short part of a
-/// period's trading, per listing.
+/// period's trading, per listing (each row by its listing).
 pub fn parse_ca_volume(text: &str) -> Result<HashMap<String, CaVolumeRow>, String> {
     let mut rows = HashMap::new();
     for r in csv_records(text.trim_start_matches('\u{feff}'))? {
@@ -481,12 +495,11 @@ pub fn parse_ca_volume(text: &str) -> Result<HashMap<String, CaVolumeRow>, Strin
         let sym = field(&r, "Security").trim().to_uppercase();
         let short = num(get(&r, "Short Traded Volume"));
         let pct = num(get(&r, "% Total Traded Volume"));
-        if sym.is_empty() || short.is_none() {
-            continue;
-        }
+        let venue = field(&r, "Listing Market").trim().to_uppercase();
+        let Some(key) = ciro_key(&sym, &venue).filter(|_| short.is_some()) else { continue };
         let total = if truthy(pct) { finite(short.unwrap() / pct.unwrap() * 100.0) } else { None };
-        rows.insert(sym, CaVolumeRow {
-            venue: field(&r, "Listing Market").trim().to_uppercase(),
+        rows.insert(key, CaVolumeRow {
+            venue,
             short_volume: short.unwrap(),
             volume_pct: pct,
             total_volume: total,
@@ -536,17 +549,15 @@ pub fn ca_series(symbol: &str, exchange: &str, asof: &str, today: &str, back: us
 /// before the report on show, so each is published: one that cannot be read
 /// fails the run.
 pub fn ca_series_with<R: FnMut(&str) -> Result<HashMap<String, CaPositionRow>, String>>(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize, mut ca_positions_on: R) -> Result<Vec<ShortPoint>, String> {
-    let sym = symbol.trim().to_uppercase();
+    let Some(key) = ca_row_key(symbol, exchange) else { return Ok(vec![]) };
     let mut out: Vec<ShortPoint> = Vec::new();
     for day in position_dates(today, back) {
         if !asof.is_empty() && day.as_str() > asof {
             continue;
         }
         let rows = ca_positions_on(&day)?;
-        if let Some(row) = rows.get(&sym) {
-            if venue_fits(&row.venue, exchange) {
-                out.push(ShortPoint { date: day, shares: row.shares });
-            }
+        if let Some(row) = rows.get(&key) {
+            out.push(ShortPoint { date: day, shares: row.shares });
         }
     }
     out.sort_by(|a, b| a.date.cmp(&b.date));
@@ -650,22 +661,22 @@ pub fn parse_cboe_directory(text: &str) -> Option<HashMap<String, f64>> {
 
 /// The units an exchange-traded fund has in issue, from
 /// the market's own source. For a fund this is the float, not a stand-in.
-fn fund_units(symbol: &str, exchange: &str, currency: &str) -> Result<Option<f64>, String> {
-    fund_units_with(symbol, exchange, currency, tmx_units, cboe_units)
+fn fund_units(symbol: &str, exchange: &str) -> Result<Option<f64>, String> {
+    fund_units_with(symbol, exchange, tmx_units, cboe_units)
 }
 
 /// `fund_units` with TMX's count and the venue's directory handed in.
-pub fn fund_units_with<T, C>(symbol: &str, exchange: &str, currency: &str, tmx: T, cboe: C) -> Result<Option<f64>, String>
+pub fn fund_units_with<T, C>(symbol: &str, exchange: &str, tmx: T, cboe: C) -> Result<Option<f64>, String>
 where
     T: FnOnce(&str) -> Result<Option<f64>, String>,
     C: FnOnce(&str) -> Result<Option<f64>, String>,
 {
     let sym = symbol.trim().to_uppercase();
-    if market_of(&sym, exchange, currency) == Some(ShortMarket::Us) {
+    if market_of(&sym, exchange) == Some(ShortMarket::Us) {
         // the US count comes from Yahoo with the float
         return Ok(None);
     }
-    let count = match crate::quotes::tmx_quote_symbol(&sym, exchange, currency) {
+    let count = match crate::quotes::tmx_quote_symbol(&sym, exchange) {
         Some(code) => tmx(&code)?.filter(|c| *c != 0.0),
         None => None,
     };
@@ -714,7 +725,7 @@ fn floats() -> &'static Mutex<HashMap<String, Float>> {
 /// shares actually available to trade. For a company that is the free float
 /// Yahoo publishes, never swapped for the shares in issue; a fund's units in
 /// issue are its float, and stand in where no float is published for one.
-pub fn float_shares(symbol: &str, exchange: &str, currency: &str, name: &str) -> Result<Option<f64>, String> {
+pub fn float_shares(symbol: &str, exchange: &str, name: &str) -> Result<Option<f64>, String> {
     let mut slot = yahoo().lock().unwrap();
     let opened = yahoo_open(&mut slot)?;
     let ask = |form: &str| -> Result<(u16, String), String> {
@@ -723,8 +734,8 @@ pub fn float_shares(symbol: &str, exchange: &str, currency: &str, name: &str) ->
         let a = y.session.get(&url, Duration::from_secs(TIMEOUT_SEC)).map_err(|e| format!("the float of {form} from Yahoo Finance: {e}"))?;
         Ok((a.status, a.text()))
     };
-    float_shares_with(symbol, exchange, currency, name, opened, ask, crate::quotes::yahoo_may_ask, crate::quotes::yahoo_back_off, |sym, ccy| {
-        fund_units(sym, exchange, ccy)
+    float_shares_with(symbol, exchange, name, opened, ask, crate::quotes::yahoo_may_ask, crate::quotes::yahoo_back_off, |sym| {
+        fund_units(sym, exchange)
     })
 }
 
@@ -745,12 +756,12 @@ pub fn age_float(key: &str, secs: u64) {
 /// client to ask with at all. A request that fails, or a statistics answer
 /// that does not read, is the failure, and nothing is kept for it.
 #[allow(clippy::too_many_arguments)]
-pub fn float_shares_with<A, T, B, U>(symbol: &str, exchange: &str, currency: &str, name: &str, session: bool, mut ask: A, mut turn: T, mut back_off: B, units: U) -> Result<Option<f64>, String>
+pub fn float_shares_with<A, T, B, U>(symbol: &str, exchange: &str, name: &str, session: bool, mut ask: A, mut turn: T, mut back_off: B, units: U) -> Result<Option<f64>, String>
 where
     A: FnMut(&str) -> Result<(u16, String), String>,
     T: FnMut() -> bool,
     B: FnMut(),
-    U: FnOnce(&str, &str) -> Result<Option<f64>, String>,
+    U: FnOnce(&str) -> Result<Option<f64>, String>,
 {
     let sym = symbol.trim().to_uppercase();
     let key = format!("{}|{}", sym, exchange.trim().to_uppercase());
@@ -763,14 +774,10 @@ where
     let fund = bagholder_model::exposure::is_fund(name);
     // the symbol forms follow the market the venue already settled on, not the
     // currency the row happens to carry
-    let where_ = market_of(&sym, exchange, currency);
-    let ccy = if currency.trim().is_empty() { if where_ == Some(ShortMarket::Us) { "USD".to_string() } else { "CAD".to_string() } } else { currency.trim().to_string() };
     let mut count: Option<f64> = None;
     if session {
-        let mut forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(sym.clone(), exchange, ccy.clone(), ""));
-        if forms.is_empty() {
-            forms = vec![bagholder_model::venues::tmx_symbol(&sym)];
-        }
+        // the listing's own venue's forms alone: one whose venue is none known here is asked under none
+        let forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(sym.clone(), exchange, "", ""));
         for form in forms {
             if !turn() {
                 continue;
@@ -807,7 +814,7 @@ where
         }
     }
     if !truthy(count) && fund {
-        count = units(&sym, &ccy)?;
+        count = units(&sym)?;
     }
     let count = count.filter(|c| *c != 0.0);
     floats().lock().unwrap().insert(key, Float { value: count, at: Instant::now() });
@@ -827,15 +834,6 @@ fn truthy_json(v: &Value) -> bool {
     }
 }
 
-/// Whether a row's venue is the listing's.
-pub fn venue_fits(code: &str, exchange: &str) -> bool {
-    let ex = exchange.trim().to_uppercase();
-    if ex.is_empty() {
-        return true;
-    }
-    let code = code.trim().to_uppercase();
-    CA_VENUES.iter().find(|(k, _)| *k == code).map(|(_, v)| v.contains(&ex.as_str())).unwrap_or(false)
-}
 
 // --- one listing ---------------------------------------------------------------
 
@@ -953,8 +951,8 @@ where
     if held.key.is_empty() {
         return Ok(None);
     }
-    let row = held.rows.get(&symbol.trim().to_uppercase());
-    ca_volume_from(&held.key, row, exchange, || traded(&held.key))
+    let Some(key) = ca_row_key(symbol, exchange) else { return Ok(None) };
+    ca_volume_from(&held.key, held.rows.get(&key), || traded(&held.key))
 }
 
 pub fn us_volume_from(key: &str, rows: &HashMap<String, UsVolumeRow>, symbol: &str) -> Option<ShortVolume> {
@@ -974,10 +972,8 @@ pub fn ca_position(symbol: &str, exchange: &str, today: &str) -> Result<Position
 }
 
 pub fn ca_position_from(key: &str, rows: &HashMap<String, CaPositionRow>, symbol: &str, exchange: &str, today: &str) -> Position {
-    let row = match rows.get(&symbol.trim().to_uppercase()) { Some(r) => r, None => return Position::default() };
-    if !venue_fits(&row.venue, exchange) {
-        return Position::default();
-    }
+    // the row of this very listing: the same ticker on another venue is another row
+    let Some(row) = ca_row_key(symbol, exchange).and_then(|k| rows.get(&k)) else { return Position::default() };
     // the report before this one is the previous reporting date, which is what
     // the change is against
     let earlier: Vec<String> = position_dates(today, TRIES).into_iter().filter(|d| d.as_str() < key).collect();
@@ -999,13 +995,12 @@ pub fn ca_position_from(key: &str, rows: &HashMap<String, CaPositionRow>, symbol
 /// report's period. A listing the report does not carry was not sold short in
 /// it, so its short volume is none of its trading rather than unknown, and
 /// what it did trade comes from the exchange.
-pub fn ca_volume(symbol: &str, exchange: &str, currency: &str, today: &str) -> Result<Option<ShortVolume>, String> {
-    ca_volume_with(symbol, exchange, || ca_volume_file(today), |span| ca_traded(symbol, exchange, currency, span))
+pub fn ca_volume(symbol: &str, exchange: &str, today: &str) -> Result<Option<ShortVolume>, String> {
+    ca_volume_with(symbol, exchange, || ca_volume_file(today), |span| ca_traded(symbol, exchange, span))
 }
 
-pub fn ca_volume_from<F: FnOnce() -> Result<Option<f64>, String>>(key: &str, row: Option<&CaVolumeRow>, exchange: &str, traded: F) -> Result<Option<ShortVolume>, String> {
+pub fn ca_volume_from<F: FnOnce() -> Result<Option<f64>, String>>(key: &str, row: Option<&CaVolumeRow>, traded: F) -> Result<Option<ShortVolume>, String> {
     Ok(match row {
-        Some(r) if !venue_fits(&r.venue, exchange) => None,
         None => match traded()? {
             Some(t) if t != 0.0 => Some(ShortVolume { volume_of: key.to_string(), volume_span: VolumeSpan::Period, short_volume: Some(0.0), total_volume: finite(t), volume_pct: Some(0.0) }),
             _ => None,
@@ -1059,20 +1054,19 @@ pub fn for_listing(
     conn: &rusqlite::Connection,
     symbol: &str,
     exchange: &str,
-    currency: &str,
     today: &str,
     trend: bool,
     name: &str,
 ) -> Result<Option<Shorts>, String> {
     let sym = symbol.trim().to_uppercase();
-    let Some(market) = market_of(&sym, exchange, currency) else { return Ok(None) };
+    let Some(market) = market_of(&sym, exchange) else { return Ok(None) };
     let (position, volume) = if market == ShortMarket::Us {
         (us_position(&sym, today)?, us_volume(&sym, today)?)
     } else {
-        (ca_position(&sym, exchange, today)?, ca_volume(&sym, exchange, currency, today)?)
+        (ca_position(&sym, exchange, today)?, ca_volume(&sym, exchange, today)?)
     };
     finish(conn, position, volume, &sym, exchange, trend, market, |asof| ca_series(&sym, exchange, asof, today, SERIES), |issuer| {
-        float_shares(&sym, exchange, currency, if name.trim().is_empty() { issuer } else { name.trim() })
+        float_shares(&sym, exchange, if name.trim().is_empty() { issuer } else { name.trim() })
     })
     .map(Some)
 }

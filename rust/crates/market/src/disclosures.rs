@@ -109,6 +109,8 @@ pub trait Regulators {
     fn filer(&self, listing: &ListingKey, today: &str) -> Option<(Regulator, Fetched<Result<String, String>>)>;
     /// A filer's documents, newest first.
     fn documents(&self, filer: &Filer, limit: usize) -> Fetched<Vec<FiledDocument>>;
+    /// The TSX's interlisted list as published now: the day it is as of, and its pairs.
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)>;
 }
 
 /// The regulators themselves.
@@ -141,6 +143,14 @@ impl Regulators for Live {
             }
             Regulator::Sedar => crate::sedar::fetch_profile(&filer.id, limit),
         }
+    }
+
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+        crate::interlisted::fetch().map_err(|e| match e {
+            // a request refused by `BAGHOLDER_OFFLINE` asked nobody: kept in its own words, so the header knows it for none
+            crate::http::FetchError::Transport(m) if bagholder_net::client::is_offline_refusal(&m) => SourceError::Unavailable(m),
+            e => SourceError::Unavailable(crate::http::describe_failure(&e)),
+        })
     }
 }
 

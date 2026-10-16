@@ -174,7 +174,14 @@ pub fn write(home: &Path) -> Result<String, String> {
         let anchors: Vec<(Date, f64)> = fills
             .iter()
             .filter(|t| t.instrument == Some(i.id) && t.trade_date <= today)
-            .filter_map(|t| t.price.map(|p| (t.trade_date, p.amount.to_f64())))
+            // the price a fill states, else its cash over its units, as the made-up rows state neither apart
+            .filter_map(|t| {
+                let price = t.price.map(|p| p.amount.to_f64()).or_else(|| match (t.cash, t.quantity) {
+                    (Some(c), Some(q)) if !q.is_zero() => Some((c.amount.to_f64() / q.to_f64()).abs()),
+                    _ => None,
+                })?;
+                Some((t.trade_date, price))
+            })
             .collect();
         let bars = demo_bars(&anchors, today);
         if bars.is_empty() {
@@ -191,6 +198,77 @@ pub fn write(home: &Path) -> Result<String, String> {
             .store_quote(&StoredQuote { instrument: i.id, source: demo.clone(), price: Money::new(price, i.currency), change, change_pct, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: at })
             .map_err(err)?;
         quoted += 1;
+    }
+
+    // each share's short interest, under its own listing: two listings of one ticker
+    // (TD on the TSX and on the NYSE) each read as its own, a position of its own size
+    use bagholder_store::feeds::{self as sf, FiledDocument, Filer, Regulator, SettledBy, ShortMarket, Shorts, VolumeSpan};
+    let mut shorted = 0;
+    for (n, i) in book.instruments().map_err(err)?.iter().enumerate() {
+        if i.kind != bagholder_core::instrument::InstrumentKind::Security {
+            continue;
+        }
+        let Some(name) = book.names(i.id).map_err(err)?.last().cloned() else { continue };
+        let Ok(key) = bagholder_core::ListingKey::of(i.kind, &name) else { continue };
+        let shares = 1_000_000.0 + 250_000.0 * n as f64;
+        let rec = Shorts {
+            symbol: key.symbol().to_string(),
+            exchange: name.venue_name.clone().unwrap_or_default(),
+            market: if key.us() { ShortMarket::Us } else { ShortMarket::Ca },
+            name: name.name.clone().unwrap_or_default(),
+            as_of: "2026-08-29".into(),
+            shares: Some(shares),
+            previous: Some(shares * 0.95),
+            previous_of: "2026-08-14".into(),
+            change: Some(shares * 0.05),
+            days_to_cover: Some(1.5 + n as f64 / 10.0),
+            volume_of: "2026-09-08".into(),
+            volume_span: Some(VolumeSpan::Day),
+            short_volume: Some(shares / 20.0),
+            total_volume: Some(shares / 5.0),
+            volume_pct: Some(25.0),
+            series: Some(vec![]),
+            ..Shorts::default()
+        };
+        sf::save_shorts(&market, &key, &rec, SYNCED, crate::feeds::SHORTS_VERSION).map_err(err)?;
+        shorted += 1;
+    }
+
+    // filings, per filer: TD on the TSX and the NYSE, which the TSX's interlisted list
+    // pairs, each draws from both regulators; one made-up ticker on the TSX Venture and
+    // on Nasdaq, two companies, each lists only its own
+    let listing = |s: &str, v: &str| bagholder_core::ListingKey::on(s, v).map_err(err);
+    let (td_ca, td_us, zq_ca, zq_us) = (listing("TD", "TSX")?, listing("TD", "NYSE")?, listing("ZQX", "TSX-V")?, listing("ZQX", "NASDAQ")?);
+    sf::replace_interlisted(&market, &[sf::Interlisted { listing: td_ca.clone(), us_listing: td_us.clone(), name: "Toronto-Dominion Bank (The)".into() }], TODAY, SYNCED).map_err(err)?;
+    let filers = [
+        (&td_ca, Regulator::Sedar, "000001001", SettledBy::SedarName, "Toronto-Dominion Bank"),
+        (&td_us, Regulator::Sec, "9001", SettledBy::SecTicker, "Toronto-Dominion Bank"),
+        (&zq_ca, Regulator::Sedar, "000002002", SettledBy::SedarName, "Zeta Quarry Exploration Ltd."),
+        (&zq_us, Regulator::Sec, "9002", SettledBy::SecTicker, "Zenquix Software Inc."),
+    ];
+    let mut filed = 0;
+    for (n, (key, source, id, by, issuer)) in filers.iter().enumerate() {
+        sf::settle_listing_filers(&market, key, *source, Ok(&[(id.to_string(), *by)]), SYNCED).map_err(err)?;
+        let (tag, form, url) = match source {
+            Regulator::Sedar => ("sedar", "Interim financial statements", format!("https://www.sedarplus.ca/demo?drmKey={id}")),
+            Regulator::Sec => ("sec", "6-K", format!("https://www.sec.gov/Archives/edgar/data/{id}/demo.htm")),
+        };
+        let docs: Vec<FiledDocument> = (0..2)
+            .map(|k| FiledDocument {
+                id: format!("{tag}:demo-{id}-{k}"),
+                source: *source,
+                category: "Financials".into(),
+                profile_no: if *source == Regulator::Sedar { id.to_string() } else { String::new() },
+                issuer: issuer.to_string(),
+                form: form.into(),
+                title: format!("{issuer} {form} {}", 2 - k),
+                date: format!("2026-0{}-1{n}", 8 - k),
+                date_text: String::new(),
+                size: String::new(),
+                url: url.clone(),
+            })
+            .collect();
+        filed += sf::replace_filings(&market, &Filer { source: *source, id: id.to_string() }, &docs, SYNCED).map_err(err)?;
     }
 
     // each payer's record: every dividend it paid, declared a week before it was paid,
@@ -240,7 +318,7 @@ pub fn write(home: &Path) -> Result<String, String> {
         cache.store_benchmark_closes(b, &closes, &demo, at).map_err(err)?;
     }
 
-    Ok(format!("demo facts: {} currencies, {} daily bars, {} quotes, {} payers\n", currencies.len(), bars_written, quoted, paid.len()))
+    Ok(format!("demo facts: {} currencies, {} daily bars, {} quotes, {} short readings, {} filings, {} payers\n", currencies.len(), bars_written, quoted, shorted, filed, paid.len()))
 }
 
 pub fn cli(args: &[String]) -> i32 {

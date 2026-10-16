@@ -179,21 +179,21 @@
     }
   },
   "symbols_quote_empty": {
-    "status": 200,
+    "status": 400,
     "body": {
       "ok": false,
-      "error": "a symbol is required"
+      "error": "symbol required"
     }
   },
   "listing_missing_symbol": {
-    "status": 200,
+    "status": 400,
     "body": {
       "ok": false,
       "error": "symbol required"
     }
   },
   "news_symbol_missing": {
-    "status": 200,
+    "status": 400,
     "body": {
       "ok": false,
       "error": "symbol required"
@@ -226,18 +226,26 @@
       "error": "symbol required"
     }
   },
+  "filings_no_exchange": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "GOLDEN names no exchange: a ticker can be two companies on two exchanges"
+    }
+  },
   "filings_no_documents": {
     "status": 200,
     "body": {
       "ok": true,
       "symbol": "GOLDEN",
+      "listing": "GOLDEN@US",
       "available": true,
       "sources": {
         "SEC": {
-          "available": true,
+          "available": false,
           "matched": false,
           "filer": false,
-          "error": ""
+          "error": "SEC could not be asked who files GOLDEN · US: EDGAR request failed: <urlopen error offline: BAGHOLDER_OFFLINE is set>"
         },
         "SEDAR+": {
           "available": false,
@@ -258,7 +266,7 @@
       "profileNo": "",
       "fetchedAt": "<fetchedAt>",
       "refreshed": false,
-      "sourceUnavailable": false,
+      "sourceUnavailable": true,
       "filings": []
     }
   },
@@ -286,7 +294,7 @@
     }
   },
   "shorts_missing_symbol": {
-    "status": 200,
+    "status": 400,
     "body": {
       "ok": false,
       "error": "symbol required"

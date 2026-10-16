@@ -1,6 +1,6 @@
 //! What the market readers are asked for, read off the built model:
 //! `held_symbols`, `payer_symbols`, `intraday_archive_symbols`,
-//! `watch_exposure_key`, and the one-shot journal migration
+//! and the one-shot journal migration
 //! `migrate_legacy_notes`.
 
 use serde_json::{json, Map, Value};
@@ -52,10 +52,6 @@ pub fn intraday_archive_symbols(base: &Base) -> Vec<crate::input::Keyed> {
     out.into_values().collect()
 }
 
-/// `watch_exposure_key`.
-pub fn watch_exposure_key(symbol: &str, exchange: &str, currency: &str) -> String {
-    format!("share:{}:{}", crate::venues::tmx_symbol(symbol), crate::venues::tmx_form(exchange, currency).unwrap_or(""))
-}
 
 /// `migrate_legacy_notes`: the old page's note keys (a hash of the slices
 /// in a lane group) mapped onto round-trip ids, so an existing journal is not

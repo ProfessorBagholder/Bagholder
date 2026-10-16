@@ -74,7 +74,7 @@ fn a_trade_entered_by_hand_is_the_transaction_it_states() {
     // a purchase of a symbol the book has not met: an instrument named by it, in the account's connection
     let bought = f
         .book
-        .enter(&Entry::Trade { account, instrument: Traded::Named { symbol: " qnc ".into(), currency: Currency::USD, contract: None }, day: "2026-03-03".parse().unwrap(), side: Side::Buy, quantity: d("10"), price: Money::new(d("1.75"), Currency::USD), fee: None }, t0())
+        .enter(&Entry::Trade { account, instrument: Traded::Named { symbol: " qnc ".into(), currency: Currency::USD, contract: None, venue: None }, day: "2026-03-03".parse().unwrap(), side: Side::Buy, quantity: d("10"), price: Money::new(d("1.75"), Currency::USD), fee: None }, t0())
         .unwrap();
     let t = f.book.transactions_of(bought.record).unwrap().remove(0);
     let i = t.instrument.unwrap();
@@ -98,7 +98,7 @@ fn a_trade_the_book_cannot_stand_behind_is_refused_and_named() {
     assert!(refused(&trade("5", Money::new(d("1"), Currency::USD), None, Traded::Held(held))), "a price in another currency than the instrument's");
     assert!(refused(&trade("5", cad("-1"), None, Traded::Held(held))), "a negative price");
     assert!(refused(&trade("5", cad("1"), Some(cad("-1")), Traded::Held(held))), "a negative fee");
-    assert!(refused(&trade("5", cad("1"), None, Traded::Named { symbol: "  ".into(), currency: Currency::CAD, contract: None })), "no symbol");
+    assert!(refused(&trade("5", cad("1"), None, Traded::Named { symbol: "  ".into(), currency: Currency::CAD, contract: None, venue: None })), "no symbol");
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn a_contract_entered_by_hand_is_an_option_on_its_underlying_with_its_size_unsta
     let contract = Contract { underlying: Underlying::Held(held), expiry: "2027-01-15".parse().unwrap(), strike: d("12"), right: bagholder_core::instrument::OptionRight::Call };
     let stored = f
         .book
-        .enter(&Entry::Trade { account, instrument: Traded::Named { symbol: "XYZ 15JAN27 12.00 CALL".into(), currency: Currency::CAD, contract: Some(contract) }, day: "2026-03-02".parse().unwrap(), side: Side::Buy, quantity: d("2"), price: cad("1.10"), fee: None }, t0())
+        .enter(&Entry::Trade { account, instrument: Traded::Named { symbol: "XYZ 15JAN27 12.00 CALL".into(), currency: Currency::CAD, contract: Some(contract), venue: None }, day: "2026-03-02".parse().unwrap(), side: Side::Buy, quantity: d("2"), price: cad("1.10"), fee: None }, t0())
         .unwrap();
     let t = f.book.transactions_of(stored.record).unwrap().remove(0);
     let i = t.instrument.unwrap();

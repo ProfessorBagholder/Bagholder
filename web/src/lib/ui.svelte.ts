@@ -13,6 +13,7 @@ import type { ImportReport as ImportedFileReport, WatchStatus } from './generate
 import type { Imported } from './generated/status'
 import type { LoginInput } from './generated/session'
 import type { EntryRequest, Kind as DataKind } from './generated/model_api'
+import type { ResolvedListing } from './generated/markets'
 
 export interface TradeForm {
   /** A trade, or an opening balance: what units that arrived without a cost cost. */
@@ -20,6 +21,16 @@ export interface TradeForm {
   date: string
   account: string
   symbol: string
+  /**
+   * The listing a share typed in is (`SYMBOL@VENUE`), chosen from the listings the
+   * symbol resolves to: one is taken, two or more wait for the choice, and a ticker
+   * alone is never sent (plan `market-data-keyed-by-listing`, Approach, 5).
+   */
+  listing: string
+  /** The listings `listingsOf` resolved to, and why none could be read. */
+  listings: ResolvedListing[]
+  listingsOf: string
+  listingsError: string
   side: 'BUY' | 'SELL'
   qty: string
   price: string
@@ -41,7 +52,7 @@ function today(): string {
   return localDay()
 }
 function freshTradeForm(): TradeForm {
-  return { mode: 'trade', date: today(), account: '', symbol: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '' }
+  return { mode: 'trade', date: today(), account: '', symbol: '', listing: '', listings: [], listingsOf: '', listingsError: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '' }
 }
 
 export const ui = $state<{
@@ -295,7 +306,16 @@ export async function saveTrade(): Promise<void> {
       f.error = 'Date, symbol, a quantity and a price are required.'
       return
     }
-    body = { entry: 'trade', account: f.account, instrument: null, symbol: f.symbol.trim().toUpperCase(), currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
+    const symbol = f.symbol.trim().toUpperCase()
+    // the symbol typed and saved at once (Enter in its box) is resolved first
+    if (f.listingsOf !== symbol) await resolveTradeSymbol(symbol)
+    // a contract is written by its terms, which name no exchange; a share is its listing
+    const listed = isContract(symbol) ? null : f.listings.find((l) => l.listing === f.listing)
+    if (!isContract(symbol) && !listed) {
+      f.error = f.listings.length ? 'Choose the exchange it trades on.' : f.listingsError || 'No listing of ' + symbol + ' is found on an exchange.'
+      return
+    }
+    body = { entry: 'trade', account: f.account, instrument: null, symbol, exchange: listed?.exchange ?? '', currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
   }
   ui.busy = 'trade'
   f.error = ''
@@ -495,4 +515,31 @@ export async function exportCsv(): Promise<void> {
   a.download = 'bagholder-trades.csv'
   a.click()
   URL.revokeObjectURL(a.href)
+}
+
+/** A symbol written as a contract's terms (`LUNR 15JAN27 12.00 CALL`): its words after a space. */
+export const isContract = (symbol: string): boolean => /\s/.test(symbol.trim())
+
+/**
+ * Resolve what the Add trade form's symbol is: every listing of it, each with its
+ * venue. One is taken; two or more wait for the person's choice.
+ */
+export async function resolveTradeSymbol(symbol: string): Promise<void> {
+  const f = ui.tradeForm
+  const sym = symbol.trim().toUpperCase()
+  if (!sym || isContract(sym)) {
+    f.listings = []
+    f.listing = ''
+    f.listingsOf = sym
+    f.listingsError = ''
+    return
+  }
+  const r = await read('GET /api/listings', { query: { symbol: sym } })
+  if (ui.tradeForm !== f || f.symbol.trim().toUpperCase() !== sym) return
+  // the book's own listings come back even when the directories could not be asked
+  const listings: ResolvedListing[] = r.ok ? r.listings : []
+  f.listingsOf = sym
+  f.listings = listings
+  f.listingsError = r.ok ? r.unread : r.error
+  if (!listings.some((l) => l.listing === f.listing)) f.listing = listings.length === 1 ? listings[0].listing : ''
 }

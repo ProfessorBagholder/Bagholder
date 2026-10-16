@@ -140,6 +140,9 @@ impl Regulators for Regs {
             Regulator::Sec => self.sec.clone(),
         }
     }
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+        Ok(("2026-10-01".into(), vec![]))
+    }
 }
 
 fn ids(out: &Gathered) -> Vec<String> {

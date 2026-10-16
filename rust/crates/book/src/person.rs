@@ -36,8 +36,10 @@ pub enum Entry {
 pub enum Traded {
     Held(InstrumentId),
     /// `contract`: an option contract, by its terms; its size is left unstated,
-    /// so what depends on it waits on it (`multiplier-unstated`).
-    Named { symbol: String, currency: Currency, contract: Option<Contract> },
+    /// so what depends on it waits on it (`multiplier-unstated`). `venue`: the
+    /// listing's venue as a market identifier code, where the person named one,
+    /// which keys its market data (`ListingKey`); none leaves it waiting for one.
+    Named { symbol: String, currency: Currency, contract: Option<Contract>, venue: Option<String> },
 }
 
 /// An option contract's terms, as the person enters them.
@@ -77,6 +79,10 @@ enum Payload {
         currency: String,
         symbol: String,
         contract: Option<ContractTerms>,
+        /// the listing's venue as a code, where the person named one; a record
+        /// written before names none
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        venue: Option<String>,
         day: String,
         side: String,
         quantity: String,
@@ -116,6 +122,9 @@ pub struct Named {
     pub currency: String,
     pub symbol: String,
     pub contract: Option<ContractTerms>,
+    /// The listing's venue as a market identifier code, where named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub venue: Option<String>,
 }
 
 impl Named {
@@ -144,7 +153,7 @@ impl Named {
             refs: refs(&self.refs)?,
             kind: InstrumentKind::parse(&self.kind).map_err(|e| e.to_string())?,
             currency,
-            name: Some(NameDraft { symbol: self.symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
+            name: Some(NameDraft { symbol: self.symbol.clone(), venue_mic: self.venue.clone(), venue_name: None, name: None, seen: day }),
             option,
             standing: None,
         })
@@ -187,11 +196,11 @@ impl Mapping for PersonMapping {
             Ok(p) => p,
             Err(e) => return Mapped::unreadable(format!("an entry that does not read: {e}")),
         };
-        if let Payload::Trade { account, instrument, kind, currency, symbol, contract, day, side, quantity, price, fee } = &p {
+        if let Payload::Trade { account, instrument, kind, currency, symbol, contract, venue, day, side, quantity, price, fee } = &p {
             let read = || -> std::result::Result<Draft, String> {
                 let day: jiff::civil::Date = day.parse().map_err(|e: jiff::Error| e.to_string())?;
                 let q = Dec::parse(quantity).map_err(|e| e.to_string())?;
-                let named = Named { refs: instrument.clone(), kind: kind.clone(), currency: currency.clone(), symbol: symbol.clone(), contract: contract.clone() };
+                let named = Named { refs: instrument.clone(), kind: kind.clone(), currency: currency.clone(), symbol: symbol.clone(), contract: contract.clone(), venue: venue.clone() };
                 let instrument = named.draft(day)?;
                 let (kind_tx, q) = match side.as_str() {
                     "buy" => (Kind::Buy, q),
@@ -274,7 +283,7 @@ impl Book {
     /// its symbol and currency within the account's connection.
     pub fn name(&self, account: AccountId, traded: &Traded) -> Result<Named> {
         let a = self.account(account)?;
-        let (refs, kind, currency, symbol, contract) = match traded {
+        let (refs, kind, currency, symbol, contract, venue) = match traded {
             Traded::Held(i) => {
                 let held = self.instrument(*i)?;
                 let symbol = self.current_symbol(*i)?.ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?;
@@ -282,14 +291,23 @@ impl Book {
                     // one a connection names by its symbol: the same reference again
                     self.instrument_refs(*i)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {i} has no reference")))
                 })?;
-                (vec![strong], held.kind, held.currency, symbol, None)
+                (vec![strong], held.kind, held.currency, symbol, None, None)
             }
-            Traded::Named { symbol, currency, contract } => {
+            Traded::Named { symbol, currency, contract, venue } => {
                 let symbol = symbol.trim().to_uppercase();
                 if symbol.is_empty() {
                     return Err(BookError::Refused("a trade of no symbol".into()));
                 }
-                let r = Reference::connection_symbol(a.connection, &symbol, *currency);
+                // a venue named makes the listing its own: the same symbol and currency on
+                // two venues are two listings, never one by its symbol
+                let venue = match venue.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    Some(v) => Some(bagholder_core::listing::mic_of(v).ok_or_else(|| BookError::Refused(format!("{v:?} is no venue")))?.to_string()),
+                    None => None,
+                };
+                let r = match &venue {
+                    Some(mic) => Reference::new(bagholder_core::instrument::RefScheme::ConnectionSymbol(a.connection), format!("{symbol}|{currency}|{mic}")),
+                    None => Reference::connection_symbol(a.connection, &symbol, *currency),
+                };
                 let terms = match contract {
                     None => None,
                     Some(c) => {
@@ -316,10 +334,10 @@ impl Book {
                     }
                 };
                 let kind = if terms.is_some() { InstrumentKind::OptionContract } else { InstrumentKind::Security };
-                (vec![(r.scheme.to_text(), r.value)], kind, *currency, symbol, terms)
+                (vec![(r.scheme.to_text(), r.value)], kind, *currency, symbol, terms, venue)
             }
         };
-        Ok(Named { refs, kind: kind.as_str().to_string(), currency: currency.to_string(), symbol, contract })
+        Ok(Named { refs, kind: kind.as_str().to_string(), currency: currency.to_string(), symbol, contract, venue })
     }
 
     /// Keep an entry of the person's, each its own record. An entry the book
@@ -383,6 +401,7 @@ impl Book {
                     currency: named.currency,
                     symbol: named.symbol,
                     contract: named.contract,
+                    venue: named.venue,
                     day: day.to_string(),
                     side: match side {
                         Side::Buy => "buy",

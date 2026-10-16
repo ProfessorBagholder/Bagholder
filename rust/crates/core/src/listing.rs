@@ -37,23 +37,28 @@ pub const MARKET: &str = "MARKET";
 /// writes it in words or as a code (`TSX-V`, `NASDAQ`, `Cboe Canada`, `XNYS`);
 /// none for words no venue here is known by.
 pub fn mic_of(words: &str) -> Option<&'static str> {
-    match words.trim().to_ascii_uppercase().as_str() {
-        "TSX" | "TORONTO" | "TORONTO STOCK EXCHANGE" | "XTSE" => Some("XTSE"),
-        // `XTSV` is how some records write the TSX Venture's code
-        "TSX-V" | "TSXV" | "TSX VENTURE" | "TSX VENTURE EXCHANGE" | "VENTURE" | "CDNX" | "XTSX" | "XTSV" => Some("XTSX"),
-        "CSE" | "CANADIAN SECURITIES EXCHANGE" | "XCNQ" | "CNSX" => Some("XCNQ"),
-        "CBOE CANADA" | "CBOE CA" | "NEO" | "NEOE" | "AQL" => Some("NEOE"),
-        "ALPHA" | "ALPHA EXCHANGE" | "XATS" => Some("XATS"),
-        "NASDAQ" | "XNAS" => Some("XNAS"),
-        "NYSE" | "XNYS" => Some("XNYS"),
-        "NYSE ARCA" | "ARCA" | "ARCX" => Some("ARCX"),
-        "NYSE AMERICAN" | "AMEX" | "XASE" => Some("XASE"),
-        // `CBOE` alone is Cboe's US equities venue; Cboe Canada is named as such
-        "BATS" | "CBOE BZX" | "CBOE" => Some("BATS"),
-        "IEX" | "IEXG" => Some("IEXG"),
-        _ => None,
-    }
+    let words = words.trim().to_ascii_uppercase();
+    VENUE_WORDS.iter().find(|(_, w)| w.contains(&words.as_str())).map(|(mic, _)| *mic)
 }
+
+/// Each venue's code and the words it is written in (upper case), the code
+/// itself among them: the one table `mic_of` reads, and the one the page's key
+/// is made from (generated into `web/src/lib/generated/venues.ts`).
+pub const VENUE_WORDS: [(&str, &[&str]); 11] = [
+    ("XTSE", &["TSX", "TORONTO", "TORONTO STOCK EXCHANGE", "XTSE"]),
+    // `XTSV` is how some records write the TSX Venture's code
+    ("XTSX", &["TSX-V", "TSXV", "TSX VENTURE", "TSX VENTURE EXCHANGE", "VENTURE", "CDNX", "XTSX", "XTSV"]),
+    ("XCNQ", &["CSE", "CANADIAN SECURITIES EXCHANGE", "XCNQ", "CNSX"]),
+    ("NEOE", &["CBOE CANADA", "CBOE CA", "NEO", "NEOE", "AQL"]),
+    ("XATS", &["ALPHA", "ALPHA EXCHANGE", "XATS"]),
+    ("XNAS", &["NASDAQ", "XNAS"]),
+    ("XNYS", &["NYSE", "XNYS"]),
+    ("ARCX", &["NYSE ARCA", "ARCA", "ARCX"]),
+    ("XASE", &["NYSE AMERICAN", "AMEX", "XASE"]),
+    // `CBOE` alone is Cboe's US equities venue; Cboe Canada is named as such
+    ("BATS", &["BATS", "CBOE BZX", "CBOE"]),
+    ("IEXG", &["IEX", "IEXG"]),
+];
 
 /// The venue a listing on `mic` is keyed under: the code in Canada, `US` in the
 /// US; none for a code no venue here is.
@@ -67,13 +72,63 @@ pub fn listing_venue(mic: &str) -> Option<&str> {
     }
 }
 
+/// Each venue a key holds, by the name a person reads it under (`TD · TSX`):
+/// the one table the server's sentences and the page's labels name venues from.
+pub const VENUE_NAMES: [(&str, &str); 9] = [
+    ("XTSE", "TSX"),
+    ("XTSX", "TSX-V"),
+    ("XCNQ", "CSE"),
+    ("NEOE", "Cboe Canada"),
+    ("XATS", "Alpha"),
+    (US, "US"),
+    (CRYPTO, "crypto"),
+    (INDEX, "index"),
+    (OCC, "option"),
+];
+
+/// The market cache's meta keys that name a listing, each built by
+/// `ListingKey::meta` and by nothing else (held by
+/// `test_every_meta_key_that_names_a_listing_is_built_through_its_key`).
+pub mod meta {
+    /// The source that last answered for a listing's bars.
+    pub const BARS_SOURCE: &str = "bars_source";
+    /// A timeframe of a listing's bars no source had, `|<tf>` after the key.
+    pub const BARS_MISS: &str = "bars_miss";
+    /// When a listing's wire was last read.
+    pub const NEWS_FETCHED: &str = "news_fetched";
+    /// When a listing's news was last read from one source (`news_source_fetched:<source>:<key>`).
+    pub const NEWS_SOURCE_FETCHED: &str = "news_source_fetched";
+    /// What a listing's regulators last answered.
+    pub const FILINGS_SOURCES: &str = "filings_sources";
+    /// Every one, for a store cleared of them.
+    pub const ALL: [&str; 5] = [BARS_SOURCE, BARS_MISS, NEWS_FETCHED, NEWS_SOURCE_FETCHED, FILINGS_SOURCES];
+}
+
+/// The venue a share or fund on the venue `venue` names is keyed under: the code
+/// in Canada, `US` in the US, from words, a code or the key's own `US`; none for
+/// a venue no share is keyed by.
+pub fn key_venue(venue: &str) -> Option<&'static str> {
+    if venue.trim().eq_ignore_ascii_case(US) {
+        return Some(US);
+    }
+    let mic = mic_of(venue)?;
+    if US_MICS.contains(&mic) {
+        Some(US)
+    } else {
+        CANADA_MICS.iter().find(|m| **m == mic).copied()
+    }
+}
+
+/// The venue suffixes a Yahoo-style symbol carries, which a key's spelling drops.
+pub const VENUE_SUFFIXES: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
+
 /// A symbol in the one spelling a key holds: upper case, a Yahoo venue suffix a
 /// record may carry dropped (`ENB.TO` is `ENB` on the venue its record names),
 /// and a class written with a dot whichever way a source writes it (`BRK-B`,
 /// `BRK/B` and `BRK.B` are one symbol; `BRK` is another).
 pub fn spelling(symbol: &str) -> String {
     let s = symbol.trim().to_ascii_uppercase();
-    let s = [".TO", ".V", ".CN", ".NE"].iter().find_map(|suffix| s.strip_suffix(suffix)).map_or(s.clone(), str::to_string);
+    let s = VENUE_SUFFIXES.iter().find_map(|suffix| s.strip_suffix(suffix)).map_or(s.clone(), str::to_string);
     s.split_whitespace().collect::<Vec<_>>().join("").replace(['-', '/'], ".")
 }
 
@@ -97,11 +152,16 @@ impl fmt::Display for NotAListing {
 impl std::error::Error for NotAListing {}
 
 impl ListingKey {
-    /// A share or fund listed on the venue `venue` names, in words or as a code.
+    /// A listing on the venue `venue` names, in words or as a code, or as a key
+    /// writes it (`US`, `CRYPTO` for a coin, `INDEX`, `OCC`).
     pub fn on(symbol: &str, venue: &str) -> Result<ListingKey, NotAListing> {
-        // the US market itself, as a key names it
-        if venue.trim().eq_ignore_ascii_case(US) {
-            return Self::new(symbol, US);
+        match venue.trim().to_ascii_uppercase().as_str() {
+            // the US market itself, as a key names it
+            US => return Self::new(symbol, US),
+            CRYPTO => return Self::coin(symbol),
+            INDEX => return Self::index(symbol),
+            OCC => return Self::option(symbol),
+            _ => {}
         }
         let mic = mic_of(venue).ok_or_else(|| NotAListing(format!("{venue:?} is no venue a listing is keyed by")))?;
         let venue = listing_venue(mic).ok_or_else(|| NotAListing(format!("{mic} is no venue a listing is keyed by")))?;
@@ -182,19 +242,22 @@ impl ListingKey {
     /// The listing as a person reads it: its symbol and its venue in words
     /// (`TD · TSX`, `TD · US`).
     pub fn named(&self) -> String {
-        let venue = match self.venue.as_str() {
-            "XTSE" => "TSX",
-            "XTSX" => "TSX-V",
-            "XCNQ" => "CSE",
-            "NEOE" => "Cboe Canada",
-            "XATS" => "Alpha",
-            US => "US",
-            CRYPTO => "crypto",
-            INDEX => "index",
-            OCC => "option",
-            other => other,
-        };
+        let venue = VENUE_NAMES.iter().find(|(v, _)| *v == self.venue).map_or(self.venue.as_str(), |(_, n)| *n);
         format!("{} · {venue}", self.symbol)
+    }
+
+    /// The market cache's meta key for what is kept of this listing under
+    /// `prefix` (one of `meta`'s), its parts joined by `:` and the key last: the
+    /// one way such a key is built, so no meta key names a listing by its ticker.
+    pub fn meta(&self, prefix: &str, parts: &[&str]) -> String {
+        let mut out = String::from(prefix);
+        for p in parts {
+            out.push(':');
+            out.push_str(p);
+        }
+        out.push(':');
+        out.push_str(&self.to_string());
+        out
     }
 
     /// Whether the listing is on a Canadian venue.

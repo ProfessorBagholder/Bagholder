@@ -17,6 +17,7 @@ pub fn routes() -> Routed {
     let mut routed = api_routes! {
         get "/api/symbols/search" => symbol_search;
         get "/api/symbols/quote" => symbol_quote;
+        get "/api/listings" => listings;
         get "/api/listing" => listing;
         get "/api/filings" => filings;
         get "/api/filings/feed" => filings_feed;
@@ -39,6 +40,7 @@ pub fn routes() -> Routed {
 /// words (`TSX`, `NYSE`) or as a code (`XTSE`, `US`), with its currency and name
 /// where known.
 #[derive(Deserialize, TS)]
+#[ts(rename = "Listing")]
 pub struct ListingText {
     #[serde(default, deserialize_with = "text")]
     symbol: String,
@@ -54,15 +56,48 @@ pub struct ListingText {
 /// A request that names no venue, or a venue no listing is keyed by, does not
 /// parse: no route finds a listing by a bare ticker (plan
 /// `market-data-keyed-by-listing`, Approach, 5; rule test 3).
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[serde(try_from = "ListingText")]
-#[ts(as = "ListingText")]
 pub struct Listing {
     key: bagholder_core::ListingKey,
     symbol: String,
     exchange: String,
     currency: String,
     name: String,
+}
+
+/// On the wire a listing is the text it parses from: written by hand rather than
+/// with `ts(as)`, which cannot be flattened into the requests that carry one.
+impl TS for Listing {
+    type WithoutGenerics = Listing;
+    type OptionInnerType = Listing;
+    fn docs() -> Option<String> {
+        ListingText::docs()
+    }
+    fn ident(cfg: &ts_rs::Config) -> String {
+        ListingText::ident(cfg)
+    }
+    fn decl(cfg: &ts_rs::Config) -> String {
+        ListingText::decl(cfg)
+    }
+    fn decl_concrete(cfg: &ts_rs::Config) -> String {
+        ListingText::decl_concrete(cfg)
+    }
+    fn name(cfg: &ts_rs::Config) -> String {
+        ListingText::name(cfg)
+    }
+    fn inline(cfg: &ts_rs::Config) -> String {
+        ListingText::inline(cfg)
+    }
+    fn inline_flattened(cfg: &ts_rs::Config) -> String {
+        ListingText::inline_flattened(cfg)
+    }
+    fn visit_dependencies(v: &mut impl ts_rs::TypeVisitor) {
+        ListingText::visit_dependencies(v)
+    }
+    fn output_path() -> Option<std::path::PathBuf> {
+        ListingText::output_path()
+    }
 }
 
 impl TryFrom<ListingText> for Listing {
@@ -114,15 +149,15 @@ async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>)
     .await
 }
 
-/// The listings found, less any the book already holds (`SPEC.md` filters-24): the
-/// same symbol without a Canadian suffix, on the same venue as the app's venue table
-/// compares two sources' venues (`venue::listing_venue`: the code in Canada, the
-/// market in the US), so a listing the broker names on one NYSE venue and the
-/// directory on another is one listing, never a second row.
-fn not_held(app: &std::sync::Arc<crate::app::App>, matches: Vec<bagholder_model::wire::SymbolMatch>) -> Vec<bagholder_model::wire::SymbolMatch> {
-    use bagholder_sources::venue::{known_mic, listing_venue, mic_of};
-    let bare = |s: &str| crate::orders::bare_symbol(s);
-    let Some(held) = app.figures.get().and_then(|f| {
+/// The key of a listing a search found: a coin and a directory instrument by
+/// their kind, a share or fund by its symbol on the venue the source gave.
+fn match_key(m: &bagholder_model::wire::SymbolMatch) -> Option<bagholder_core::ListingKey> {
+    bagholder_model::input::Listing::new(m.symbol.as_str(), m.exchange.as_str(), m.currency.as_str(), m.kind.as_deref().unwrap_or("Shares")).key().ok()
+}
+
+/// The listing each book instrument is now, where its records name one.
+fn held_listings(app: &std::sync::Arc<crate::app::App>) -> Option<Vec<(bagholder_core::ListingKey, bagholder_model::wire::SymbolMatch)>> {
+    app.figures.get().and_then(|f| {
         f.read(|e| {
             e.inputs()
                 .ledger
@@ -130,14 +165,94 @@ fn not_held(app: &std::sync::Arc<crate::app::App>, matches: Vec<bagholder_model:
                 .values()
                 .filter_map(|i| {
                     let n = i.current_name()?;
-                    Some((bare(&n.symbol), known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref()).and_then(listing_venue)?))
+                    let key = bagholder_core::ListingKey::of(i.instrument.kind, n).ok()?;
+                    let exchange = n.venue_name.clone().or(n.venue_mic.clone()).unwrap_or_default();
+                    Some((key, bagholder_model::wire::SymbolMatch { symbol: n.symbol.clone(), name: n.name.clone().unwrap_or_default(), exchange, currency: i.instrument.currency.as_str().to_string(), kind: None, rank: None }))
                 })
-                .collect::<std::collections::BTreeSet<_>>()
+                .collect()
         })
-    }) else {
-        return matches;
-    };
-    matches.into_iter().filter(|m| !mic_of(&m.exchange).and_then(listing_venue).is_some_and(|v| held.contains(&(bare(&m.symbol), v)))).collect()
+    })
+}
+
+/// The listings found, less any the book already holds (`SPEC.md` filters-24): one
+/// listing is one key (`ListingKey`: the code in Canada, the market in the US), so
+/// a listing the broker names on one NYSE venue and the directory on another is one
+/// listing, never a second row.
+fn not_held(app: &std::sync::Arc<crate::app::App>, matches: Vec<bagholder_model::wire::SymbolMatch>) -> Vec<bagholder_model::wire::SymbolMatch> {
+    let Some(held) = held_listings(app) else { return matches };
+    let held: std::collections::BTreeSet<_> = held.into_iter().map(|(k, _)| k).collect();
+    matches.into_iter().filter(|m| !match_key(m).is_some_and(|k| held.contains(&k))).collect()
+}
+
+#[derive(Deserialize, TS)]
+pub struct Resolve {
+    #[serde(default, deserialize_with = "text")]
+    symbol: String,
+}
+
+/// One listing a symbol given with no venue may be.
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct ResolvedListing {
+    /// The listing (`SYMBOL@VENUE`).
+    pub listing: String,
+    pub symbol: String,
+    pub name: String,
+    pub exchange: String,
+    pub currency: String,
+    pub held: bool,
+}
+
+/// `GET /api/listings`: every listing of a symbol given with no venue (`SPEC.md`
+/// markets-60), each with its venue: the book's own, and those the exchanges'
+/// directories list under exactly that symbol. The page opens one directly and
+/// shows two or more as rows; nothing here reduces them to one.
+#[derive(Clone, Debug, Serialize, TS)]
+pub enum ResolveAnswer {
+    /// The listings found; where the directories could not be asked, the book's own
+    /// alone, with why the rest could not be read (`unread`, empty when they all answered).
+    #[serde(untagged)]
+    Ok {
+        #[ts(type = "true")]
+        ok: bool,
+        listings: Vec<ResolvedListing>,
+        unread: String,
+    },
+    /// A request that names no symbol.
+    #[serde(untagged)]
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+    },
+}
+
+/// The listings of `symbol`, the book's first: each key once.
+pub(crate) fn resolve(held: Vec<(bagholder_core::ListingKey, bagholder_model::wire::SymbolMatch)>, found: Vec<bagholder_model::wire::SymbolMatch>, symbol: &str) -> Vec<ResolvedListing> {
+    let want = bagholder_core::listing::spelling(symbol);
+    let mut out: Vec<ResolvedListing> = Vec::new();
+    let rows = held.into_iter().map(|(k, m)| (k, m, true)).chain(found.into_iter().filter_map(|m| Some((match_key(&m)?, m, false))));
+    for (key, m, held) in rows {
+        if key.symbol() != want || out.iter().any(|r| r.listing == key.to_string()) {
+            continue;
+        }
+        out.push(ResolvedListing { listing: key.to_string(), symbol: m.symbol, name: m.name, exchange: m.exchange, currency: m.currency, held });
+    }
+    out
+}
+
+async fn listings(State(state): State<AppState>, Params(r): Params<Resolve>) -> super::Api<ResolveAnswer> {
+    let app = state.app.clone();
+    answer(move || {
+        if r.symbol.is_empty() {
+            return ResolveAnswer::Err { ok: false, error: "symbol required".into() };
+        }
+        let held = held_listings(&app).unwrap_or_default();
+        match bagholder_market::search::symbol_search(&r.symbol) {
+            Ok(found) => ResolveAnswer::Ok { ok: true, listings: resolve(held, found, &r.symbol), unread: String::new() },
+            Err(unread) => ResolveAnswer::Ok { ok: true, listings: resolve(held, vec![], &r.symbol), unread },
+        }
+    })
+    .await
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
@@ -271,7 +386,7 @@ pub struct ShortsQuery {
 
 async fn shorts(State(state): State<AppState>, Params(q): Params<ShortsQuery>) -> Api<feeds::ShortsAnswer> {
     let l = q.listing;
-    answer(move || feeds::shorts_payload(&state.app, &l.key, &l.exchange, &l.currency, q.trend).into()).await
+    answer(move || feeds::shorts_payload(&state.app, &l.key, &l.exchange, q.trend).into()).await
 }
 
 async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsFeed> {
@@ -385,5 +500,55 @@ mod listings_held {
         let kept = super::not_held(&app, vec![row(&us, "NYSE Arca"), row(&us, "NYSE American"), row(&us, "NASDAQ"), row(&us, "TSX"), row("ZZZZQ", "NYSE")]);
         let kept: Vec<(String, String)> = kept.into_iter().map(|m| (m.symbol, m.exchange)).collect();
         assert_eq!(kept, vec![(us.clone(), "TSX".to_string()), ("ZZZZQ".to_string(), "NYSE".to_string())]);
+    }
+}
+
+#[cfg(test)]
+mod resolver {
+    use super::*;
+    use bagholder_core::listing::{CANADA_MICS, US_MICS};
+    use bagholder_model::wire::SymbolMatch;
+
+    fn row(symbol: &str, exchange: &str) -> SymbolMatch {
+        SymbolMatch { symbol: symbol.into(), name: format!("{symbol} on {exchange}"), exchange: exchange.into(), currency: "CAD".into(), kind: None, rank: None }
+    }
+
+    /// A symbol on k venues is k rows, each with its venue, whatever venues they
+    /// are: one listing written two ways is one row, the book's first, another
+    /// symbol is none, and nothing is ever reduced to one of several.
+    #[test]
+    fn a_symbol_resolves_to_every_listing_of_it_and_never_picks_one() {
+        let venues: Vec<&str> = CANADA_MICS.iter().chain(US_MICS.iter()).copied().collect();
+        for k in 1..=venues.len() {
+            let on: Vec<&str> = venues.iter().copied().cycle().skip(k).take(k).collect();
+            let mut found: Vec<SymbolMatch> = on.iter().map(|v| row("ZQ.B", v)).collect();
+            // the same listings again, as another source spells them; and another symbol
+            found.extend(on.iter().map(|v| row("zq-b", v)));
+            found.push(row("ZQ", on[0]));
+            let held_key = bagholder_core::ListingKey::on("ZQ.B", on[0]).unwrap();
+            let got = resolve(vec![(held_key.clone(), row("ZQ.B", on[0]))], found, "zq/b");
+            assert_eq!(got.first().map(|r| r.listing.clone()), Some(held_key.to_string()), "the book's own first");
+            assert!(got[0].held && got[1..].iter().all(|r| !r.held));
+            let mut keys: Vec<String> = got.iter().map(|r| r.listing.clone()).collect();
+            keys.sort();
+            let mut want: Vec<String> = on.iter().map(|v| bagholder_core::ListingKey::on("ZQ.B", v).unwrap().to_string()).collect();
+            want.sort();
+            want.dedup();
+            assert_eq!(keys, want, "{k} venues: {on:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod resolver_book {
+    /// The book's own listings answer the resolver, with no directory asked.
+    #[test]
+    fn the_books_listings_of_a_symbol_are_resolved_from_the_book() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let held = super::held_listings(&app).expect("the figures are open");
+        let (key, m) = held.iter().find(|(k, _)| k.venue() != "CRYPTO").expect("a listed instrument").clone();
+        let got = super::resolve(held.clone(), vec![], &m.symbol);
+        assert!(got.iter().any(|r| r.listing == key.to_string() && r.held), "{got:?} from {held:?}");
     }
 }

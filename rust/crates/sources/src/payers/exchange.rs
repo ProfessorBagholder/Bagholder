@@ -48,12 +48,11 @@ impl Payer for TmxRecord {
 
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
         let l = &need.listing;
-        // the venue's own form first, then the market's others: the quote's reader
-        // refuses an answer for another venue than the form's, so the form that
-        // answers is the listing's
+        // the venue's own form alone: the quote's reader refuses an answer for
+        // another venue than the form's, so the form that answers is the listing's
         let mut not_carried = format!("{} names no venue TMX carries", l.symbol);
         let mut found = None;
-        for form in venue::tmx_forms(&l.symbol, l.venue_mic.as_deref(), l.currency) {
+        for form in venue::tmx_forms(&l.symbol, l.venue_mic.as_deref()) {
             let quote = tmx::ask_quote(net, &form);
             match quote.outcome {
                 Outcome::Answered(q) => {
@@ -113,7 +112,7 @@ impl Payer for YahooRecord {
 
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record> {
         let l = &need.listing;
-        let Some(form) = venue::yahoo_forms_of(&l.symbol, l.venue_mic.as_deref(), l.currency).into_iter().next() else {
+        let Some(form) = venue::yahoo_forms_of(&l.symbol, l.venue_mic.as_deref()).into_iter().next() else {
             return Noted { outcome: Outcome::NotCarried(format!("{} names no venue Yahoo carries", l.symbol)), shape_change: None };
         };
         // every dividend event the chart holds, from before any fund's first trade

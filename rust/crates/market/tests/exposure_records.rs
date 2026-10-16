@@ -163,7 +163,7 @@ fn answers() -> Value {
         out.insert("classify_share_nothing_found".into(), cell(&exposure::classify_share("ZZZ", "CSE", "CAD").unwrap()));
     }
 
-    // --- share_exposure, cached by ticker and venue --------------------------
+    // --- share_exposure, cached by its listing ---------------------------------
     {
         let conn = db();
         set_classify(classified());
@@ -171,7 +171,7 @@ fn answers() -> Value {
         let rec = exposure::share_exposure(&c, "RY", "TSX", "CAD").unwrap();
         out.insert("share_exposure_ry".into(), cell(&rec));
         // read back from the cache it just wrote, under the same key
-        let cached = bagholder_store::feeds::exposure_record(&conn, "share:RY:").unwrap();
+        let cached = bagholder_store::feeds::exposure_record(&conn, "share:RY@XTSE").unwrap();
         out.insert("share_exposure_cache_key_hit".into(), json!(cached.is_some()));
     }
 
@@ -208,7 +208,7 @@ fn answers() -> Value {
         let c = ctx(&conn);
         let rec = exposure::fund_exposure(&c, "OUTER", "Test Outer ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
         out.insert("fund_exposure_fund_of_funds".into(), cell(&rec));
-        let inner = bagholder_store::feeds::exposure_record(&conn, "fund:INNER").unwrap().unwrap();
+        let inner = bagholder_store::feeds::exposure_record(&conn, "fund:INNER@XTSE").unwrap().unwrap();
         out.insert("fund_exposure_inner_fund_kept".into(), drop_fetched_at(cell(&inner)));
     }
 
@@ -251,7 +251,7 @@ fn answers() -> Value {
         hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(move |family, symbol, _, _| {
             assert_eq!(family, "harvest");
             if symbol == "APLE" {
-                Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![holding("AAPL", "AAPL", 100.0, "", "", "", "USD", false)], source: "t".into(), as_of: String::new() })
+                Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![holding("AAPL", "AAPL", 100.0, "", "", "US", "USD", false)], source: "t".into(), as_of: String::new() })
             } else { None }
         })));
         hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(|_| Some(Listed { symbol: "APLE".into(), exchange: "TSX".into(), currency: "CAD".into() }))));
@@ -272,24 +272,24 @@ fn answers() -> Value {
             sectors: Weights(vec![("Financials".to_string(), 1.0)]), countries: Weights(vec![("Canada".to_string(), 1.0)]),
             coverage: 1.0, source: "TMX Money".into(), as_of: String::new(), industry: "Banking".into(), error: String::new(),
         };
-        bagholder_store::feeds::replace_exposure(&conn, "share:RY:", &ry_rec, "2026-09-16T12:00:00Z").unwrap();
+        bagholder_store::feeds::replace_exposure(&conn, "share:RY@XTSE", &ry_rec, "2026-09-16T12:00:00Z").unwrap();
         let xeqt_rec = ExposureRecord {
             sectors: Weights(vec![("Financials".to_string(), 0.3), ("Information Technology".to_string(), 0.7)]),
             countries: Weights(vec![("Canada".to_string(), 0.6), ("United States".to_string(), 0.4)]),
             coverage: 0.9, source: "Yahoo Finance".into(), as_of: "2026-09-01".into(), industry: String::new(), error: String::new(),
         };
-        bagholder_store::feeds::replace_exposure(&conn, "fund:XEQT", &xeqt_rec, "2026-09-16T12:00:00Z").unwrap();
+        bagholder_store::feeds::replace_exposure(&conn, "fund:XEQT@XTSE", &xeqt_rec, "2026-09-16T12:00:00Z").unwrap();
         // a later write to the same key replaces it rather than merging
-        bagholder_store::feeds::replace_exposure(&conn, "share:RY:", &ry_rec, "2026-09-17T09:00:00Z").unwrap();
+        bagholder_store::feeds::replace_exposure(&conn, "share:RY@XTSE", &ry_rec, "2026-09-17T09:00:00Z").unwrap();
 
-        out.insert("store_exposure_record_ry".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "share:RY:").unwrap().unwrap()));
+        out.insert("store_exposure_record_ry".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "share:RY@XTSE").unwrap().unwrap()));
         out.insert("store_exposure_record_missing".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "nope").unwrap()));
 
         let snap_map = bagholder_store::feeds::all_exposures(&conn).unwrap();
         let mut snap_keys: Vec<&String> = snap_map.keys().collect();
         snap_keys.sort();
         out.insert("store_admin_exposures_map_keys".into(), cell(&snap_keys));
-        out.insert("store_admin_exposures_map_xeqt".into(), cell(&snap_map["fund:XEQT"]));
+        out.insert("store_admin_exposures_map_xeqt".into(), cell(&snap_map["fund:XEQT@XTSE"]));
 
         let rows_map = bagholder_store::rows::exposures(&conn).unwrap();
         let mut rows_out = Map::new();
@@ -302,7 +302,7 @@ fn answers() -> Value {
         let mut part_keys: Vec<&String> = part.keys().collect();
         part_keys.sort();
         out.insert("store_snapshot_exposures_part_keys".into(), cell(&part_keys));
-        out.insert("store_snapshot_exposures_part_ry".into(), cell(&part["share:RY:"]));
+        out.insert("store_snapshot_exposures_part_ry".into(), cell(&part["share:RY@XTSE"]));
     }
 
     Value::Object(out)

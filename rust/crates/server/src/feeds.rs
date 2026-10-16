@@ -15,7 +15,7 @@ use bagholder_diff_derive::Diff;
 
 use bagholder_market::{exposure, fear, history, news, shorts};
 use bagholder_model::instruments;
-use bagholder_model::venues::{tmx_form, tmx_symbol};
+use bagholder_model::venues::tmx_symbol;
 use bagholder_model::securities::Security;
 use bagholder_store::bars::ChartBars;
 use bagholder_store::feeds::{self as sf, NewsItem, StoredGauge, StoredShorts};
@@ -270,27 +270,32 @@ pub fn refresh_exposures(app: &Arc<App>) {
         Err(e) => return exposure_failed(e),
     };
     todo.sort_by_key(|sid| if exposure::is_fund(&secs[sid].name) { 1 } else { 0 });
+    // an option's underlying, on its own listing: the contract's record names the
+    // underlying's venue (brief 34, U21); one that names none is classified by no one
     let mut unders: Vec<(String, String)> = b
         .positions
         .iter()
         .filter(|p| p.kind == bagholder_model::activity::Kind::Options && !p.underlying.is_empty())
-        .map(|p| (p.underlying.to_uppercase(), p.currency.clone()))
+        .filter(|p| bagholder_model::venues::share_key_of(&p.underlying, &p.exchange).is_some())
+        .map(|p| (p.underlying.to_uppercase(), p.exchange.clone()))
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
     unders.sort();
     let mut stale_unders = Vec::new();
-    for (u, cc) in unders {
-        match stale(&[format!("{}{}:{}", exposure::SHARE_KEY, u, tmx_form("", &cc).unwrap_or(""))]) {
+    for (u, ex) in unders {
+        let Some(key) = bagholder_model::venues::share_key_of(&u, &ex) else { continue };
+        match stale(&[key]) {
             Ok(s) if s.is_empty() => {}
-            Ok(_) => stale_unders.push((u, cc)),
+            Ok(_) => stale_unders.push((u, ex)),
             Err(e) => return exposure_failed(e),
         }
     }
     let unders = stale_unders;
     let mut watched: Vec<(String, String, String)> = Vec::new();
     for w in b.watchlist.iter().filter(|w| instruments::find(&w.symbol, &w.exchange).is_none() && w.exchange.to_uppercase() != "CRYPTO") {
-        match stale(&[bagholder_model::symbols_of::watch_exposure_key(&w.symbol, &w.exchange, &w.currency)]) {
+        let Some(key) = bagholder_model::venues::share_key_of(&w.symbol, &w.exchange) else { continue };
+        match stale(&[key]) {
             Ok(s) if s.is_empty() => {}
             Ok(_) => watched.push((w.symbol.clone(), w.exchange.clone(), w.currency.clone())),
             Err(e) => return exposure_failed(e),
@@ -298,7 +303,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     }
 
     let mut jobs: Vec<ExposureJob> = todo.iter().map(|sid| ExposureJob::Sec(secs[sid].clone())).collect();
-    jobs.extend(unders.into_iter().map(|(u, cc)| ExposureJob::Under(u, cc)));
+    jobs.extend(unders.into_iter().map(|(u, ex)| ExposureJob::Under(u, ex)));
     jobs.extend(watched.into_iter().map(|(sy, e, cc)| ExposureJob::Watch(sy, e, cc)));
     drop(ctx);
     if jobs.is_empty() {
@@ -347,7 +352,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
                             continue;
                         }
                     },
-                    ExposureJob::Under(under, ccy) => match exposure::share_exposure(&ctx, &under, "", &ccy) {
+                    ExposureJob::Under(under, ex) => match exposure::share_exposure(&ctx, &under, &ex, "") {
                         Ok(_) => format!("bagholder exposure: {} (an option's underlying) classified", under),
                         Err(e) => {
                             failures.lock().unwrap_or_else(|p| p.into_inner()).push(format!("{under}: {e}"));
@@ -429,12 +434,13 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
         return;
     }
     let (symbol, exchange, currency) = (tmx_symbol(&n.symbol), n.exchange.clone(), n.currency.clone());
+    let said = bagholder_core::ListingKey::on(&n.symbol, &n.exchange).map_or_else(|_| format!("{} on {}", n.symbol, n.exchange), |k| k.named());
     let a = app.clone();
     spawn("watch-sector", move || {
         let (Ok(c), Ok(p)) = (conn(&a), pool(&a)) else { return }; // said in the header by `conn`
         let ctx = exposure::Ctx { conn: &c, pool: p, today: today() };
         if let Err(e) = exposure::share_exposure(&ctx, &symbol, &exchange, &currency) {
-            feed_failed(&a, EXPOSURE, format!("The sector of {symbol} could not be read: {e}"));
+            feed_failed(&a, EXPOSURE, format!("The sector of {said} could not be read: {e}"));
         }
     });
 }
@@ -484,7 +490,7 @@ pub fn news_reading(app: &Arc<App>) -> Vec<String> {
 }
 
 /// `news`: what a page showing the News card is sent beside the model's items -- the
-/// listings the running pass has still to read (`*` the market feed), so the card
+/// listings the running pass has still to read, by key (`*@MARKET` the market feed), so the card
 /// reads `Reading…` rather than `No news.` for a listing not read yet. A page showing
 /// it is also what the news is read for.
 #[derive(Clone, Debug, Serialize, TS, Diff)]
@@ -506,7 +512,8 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
         let listings = news_listings(app);
         let (today_s, now, _) = bagholder_market::clock_now();
         let clock = news::Clock { today: today_s, now: now as i64 };
-        let key = |l: &news::Listing| { let t = tmx_symbol(&l.symbol); (if t.is_empty() { l.symbol.clone() } else { t }).to_uppercase() };
+        // each listing by its key, the market's own feed `*@MARKET`: a listing still to read is never another of its ticker
+        let key = |l: &news::Listing| news::news_listing(&l.symbol, &l.exchange).map_or_else(|| format!("{}@", l.symbol.to_uppercase()), |k| k.to_string());
         let start = |due: &[news::Listing]| {
             *app.feeds.news_left.lock().unwrap() = due.iter().map(key).collect();
             app.events.signal(); // the status names the listings still to read
@@ -619,7 +626,7 @@ pub fn news_symbol_payload_with(
                     }
                 }
             }
-            Err(e) => return NewsSymbolAnswer::err(format!("{sym} could not be read: {e}")),
+            Err(e) => return NewsSymbolAnswer::err(format!("{} could not be read: {e}", key.named())),
         }
     }
     let (src, rows) = match news::read_listing(&c, readers, &sym, &ex, &ccy, &name, true, &clock, None) {
@@ -804,11 +811,11 @@ fn shorts_stale(rec: &StoredShorts) -> bool {
 /// kept. `None` for a market where no one publishes it; the store failing is
 /// the error. A source failing is said in the header until the listing's next
 /// read goes through, and the record kept stands.
-pub fn read_shorts(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, trend: bool, name: &str) -> Result<Option<StoredShorts>, String> {
+pub fn read_shorts(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, trend: bool, name: &str) -> Result<Option<StoredShorts>, String> {
     let c = conn(app)?;
     let symbol = key.symbol();
     let feed = format!("{SHORTS_OF}{key}");
-    let mut rec = match shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name) {
+    let mut rec = match shorts::for_listing(&c, symbol, exchange, &today(), trend, name) {
         Ok(Some(rec)) => {
             feed_answered(app, &feed);
             rec
@@ -827,14 +834,14 @@ pub fn read_shorts(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &
         rec.exchange = exchange.to_string();
     }
     let stored = StoredShorts { shorts: rec, fetched_at: now_iso(), read_version: SHORTS_VERSION };
-    sf::save_shorts(&c, key, &stored.shorts, &stored.fetched_at, SHORTS_VERSION).map_err(|e| format!("{symbol}'s short selling could not be kept: {e}"))?;
+    sf::save_shorts(&c, key, &stored.shorts, &stored.fetched_at, SHORTS_VERSION).map_err(|e| format!("{}'s short selling could not be kept: {e}", key.named()))?;
     Ok(Some(stored))
 }
 
 /// `read_shorts` from work that answers nobody: a failure is said in the header,
 /// under the listing's own entry, until its next read succeeds.
-fn read_shorts_said(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, trend: bool, name: &str) -> Option<StoredShorts> {
-    went(app, &format!("shorts-store:{key}"), read_shorts(app, key, exchange, currency, trend, name)).flatten()
+fn read_shorts_said(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, trend: bool, name: &str) -> Option<StoredShorts> {
+    went(app, &format!("shorts-store:{key}"), read_shorts(app, key, exchange, trend, name)).flatten()
 }
 
 /// One report of the position sold short.
@@ -969,29 +976,28 @@ impl From<Result<ShortsPayload, String>> for ShortsAnswer {
 }
 
 /// One listing's short selling, from the store at once where it was read before.
-pub fn shorts_payload(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, trend: bool) -> Result<ShortsPayload, String> {
+pub fn shorts_payload(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, trend: bool) -> Result<ShortsPayload, String> {
     let sym = key.symbol().to_string();
     let c = conn(app)?;
-    let (listed_as, known_ex, known_ccy) = instrument_meta(app, key);
+    let (listed_as, known_ex, _) = instrument_meta(app, key);
     // the venue in words the regulators' readers take: the request's, else the book's
     let ex = if exchange.trim().is_empty() { known_ex } else { exchange.trim().to_string() };
-    let ccy = if currency.trim().is_empty() { known_ccy } else { currency.trim().to_string() };
-    if shorts::market_of(&sym, &ex, &ccy).is_none() {
+    if shorts::market_of(&sym, &ex).is_none() {
         return Ok(ShortsPayload { ok: true, covered: false, shorts: None });
     }
-    if let Some(held) = sf::shorts_for(&c, key).map_err(|e| format!("{sym}'s short selling held could not be read: {e}"))? {
+    if let Some(held) = sf::shorts_for(&c, key).map_err(|e| format!("{}'s short selling held could not be read: {e}", key.named()))? {
         if !trend || held.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
             if shorts_stale(&held) {
-                let (k2, e2, c2, n2) = (key.clone(), ex.clone(), ccy.clone(), listed_as.clone());
+                let (k2, e2, n2) = (key.clone(), ex.clone(), listed_as.clone());
                 let a = app.clone();
                 app.kick(&format!("shorts:{key}"), move || {
-                    read_shorts_said(&a, &k2, &e2, &c2, true, &n2);
+                    read_shorts_said(&a, &k2, &e2, true, &n2);
                 });
             }
             return Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&held)?) });
         }
     }
-    match read_shorts(app, key, &ex, &ccy, trend, &listed_as)? {
+    match read_shorts(app, key, &ex, trend, &listed_as)? {
         Some(rec) => Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&rec)?) }),
         None => Ok(ShortsPayload { ok: true, covered: false, shorts: None }),
     }
@@ -1230,7 +1236,7 @@ pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(bagholder_core::List
     for (symbol, ex, ccy, name) in rows {
         // a listing that names no venue is read under none
         let Ok(key) = bagholder_core::ListingKey::on(symbol, ex) else { continue };
-        if shorts::market_of(key.symbol(), ex, ccy).is_none() || !seen.insert(key.clone()) {
+        if shorts::market_of(key.symbol(), ex).is_none() || !seen.insert(key.clone()) {
             continue;
         }
         out.push((key, ex.to_string(), ccy.to_string(), name.to_string()));
@@ -1245,7 +1251,7 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
     let mut due = Vec::new();
     for (key, ex, ccy, name) in shorts_listings(app, "all") {
         // a row held that cannot be read is read again from its source, and the store's failure said until it answers
-        let held = went(app, &format!("shorts-store:{key}"), sf::shorts_for(&c, &key).map_err(|e| format!("{}'s short selling held could not be read: {e}", key.symbol()))).flatten();
+        let held = went(app, &format!("shorts-store:{key}"), sf::shorts_for(&c, &key).map_err(|e| format!("{}'s short selling held could not be read: {e}", key.named()))).flatten();
         let fresh = held.as_ref().map(|h| h.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) && !shorts_stale(h)).unwrap_or(false);
         if !fresh {
             due.push((key, ex, ccy, name));
@@ -1262,8 +1268,8 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
         }
     }
     let _reset = Reset(app);
-    for (key, ex, ccy, name) in due {
-        if read_shorts_said(app, &key, &ex, &ccy, true, &name).is_some() {
+    for (key, ex, _, name) in due {
+        if read_shorts_said(app, &key, &ex, true, &name).is_some() {
             done += 1;
         }
         app.feeds.shorts_left.fetch_sub(1, Ordering::SeqCst);
@@ -1812,7 +1818,6 @@ mod tests {
     use crate::app::f;
     use crate::tests_common::app;
     use serde_json::{json, Value};
-    use std::cell::Cell;
 
     /// An app of its own on a home of its own, the recorded month in its book and
     /// its figures built.
@@ -1843,7 +1848,7 @@ mod tests {
         f.cache().unwrap().store_quote(&bagholder_sources::cache::StoredQuote { instrument: held, source: bagholder_core::SourceName::named("tmx"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("123.45").unwrap(), cur), change: None, change_pct: None, quoted_at: t, allowance: Default::default(), received_at: t }).unwrap();
         assert!(!f.price_changed(held).unwrap().is_empty(), "the quote moved the holding's figures");
         assert!(!listings_moved(&app, at), "a quote is no new listing");
-        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
+        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), exchange: "NASDAQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
         assert!(listings_moved(&app, at), "a holding that came");
         // a listing watched: a pass parked on the listings wakes on it, by the change
         // itself and not by a clock (parked before or after, it ends)
@@ -1872,591 +1877,6 @@ mod tests {
         let bar = |date: &str| bagholder_store::bars::DayBar { date: date.into(), px: bagholder_store::bars::Ohlcv { open: None, high: None, low: None, close: 10.0, volume: None } };
         let got = history::in_position_currency(&bank_rates(&app), &[bar("2025-11-18"), bar("2025-11-19")], "USD", "CAD").unwrap();
         assert_eq!(got.iter().map(|b| (b.date.as_str(), (b.px.close * 1000.0).round() / 1000.0)).collect::<Vec<_>>(), vec![("2025-11-18", 14.05), ("2025-11-19", 14.05)], "each day at its rate, or the last before it");
-    }
-
-    /// The market cache's schema, where the filings are kept.
-    fn store() -> Connection {
-        let c = Connection::open_in_memory().unwrap();
-        for m in &bagholder_sources::cache::MIGRATIONS {
-            c.execute_batch(m.sql).unwrap();
-        }
-        c
-    }
-
-    fn item(source: Regulator, i: i64, profile: &str) -> FiledDocument {
-        let sec = source == Regulator::Sec;
-        let tag = if sec { "sec" } else { "sedar" };
-        FiledDocument {
-            id: format!("{}:{}", tag, i),
-            source,
-            category: "Financials".into(),
-            profile_no: profile.into(),
-            issuer: String::new(),
-            form: if sec { "10-Q" } else { "Interim MD&A" }.into(),
-            title: if sec { "Quarterly report" } else { "" }.into(),
-            date: format!("2026-08-{:02}", 10 + i),
-            date_text: format!("2026-08-{:02}", 10 + i),
-            size: if sec { "" } else { "292 KB" }.into(),
-            url: if sec { format!("https://www.sec.gov/x/{}", i) } else { format!("https://www.sedarplus.ca/x?drmKey={}", i) },
-        }
-    }
-
-    fn replace(c: &Connection, sym: &str, src: Regulator, items: &[FiledDocument]) {
-        sf::replace_filings(c, sym, src, items, &now_iso()).unwrap();
-    }
-
-    fn enrichment(c: &Connection, sym: &str, id: &str, subject: &str, summary: &str, version: i64) {
-        sf::set_filing_enrichment(c, sym, id, Some(subject), Some(summary), Some(version), None, &now_iso()).unwrap();
-    }
-
-    /// A typed result as `filings_payload_in`/`filings_enrich_in` serve it: the
-    /// success shape, or `{"ok": false, "error": …}`.
-    fn v<T: serde::Serialize>(r: Result<T, String>) -> Value {
-        match r {
-            Ok(x) => serde_json::to_value(x).unwrap(),
-            Err(e) => json!({"ok": false, "error": e}),
-        }
-    }
-
-    // --- DisclosuresStoreTest
-
-    #[test]
-    fn test_rows_from_two_sources_merge_newest_first() {
-        let c = store();
-        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 3, "")]);
-        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 2, ""), item(Regulator::Sec, 4, "")]);
-        let rows = sf::filings_for(&c, "SHOP").unwrap();
-        assert_eq!(rows.len(), 4);
-        let dates: Vec<String> = rows.iter().map(|r| r.doc.date.clone()).collect();
-        let mut sorted = dates.clone();
-        sorted.sort();
-        sorted.reverse();
-        assert_eq!(dates, sorted);
-        let srcs: HashSet<Regulator> = rows.iter().map(|r| r.doc.source).collect();
-        assert_eq!(srcs, HashSet::from([Regulator::Sedar, Regulator::Sec]));
-    }
-
-    #[test]
-    fn test_replacing_one_source_leaves_the_other() {
-        let c = store();
-        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
-        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
-        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 9, "")]);
-        let rows = sf::filings_for(&c, "SHOP").unwrap();
-        let mut srcs: Vec<&str> = rows.iter().map(|r| r.doc.source.as_str()).collect();
-        srcs.sort();
-        assert_eq!(srcs, ["SEC", "SEDAR+"]);
-        assert_eq!(rows.iter().filter(|r| r.doc.source == Regulator::Sedar).count(), 1, "SEDAR+ replaced, not appended");
-        assert_eq!(rows.iter().filter(|r| r.doc.source == Regulator::Sec).count(), 1, "SEC untouched");
-    }
-
-    #[test]
-    fn test_a_single_row_is_fetchable_by_id_for_download() {
-        let c = store();
-        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 7, "")]);
-        let row = sf::filing(&c, "SHOP", "sec:7").unwrap().unwrap();
-        assert_eq!(row.doc.source, Regulator::Sec);
-        assert!(row.doc.url.starts_with("https://www.sec.gov/"));
-        assert!(sf::filing(&c, "SHOP", "sec:999").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_symbols_do_not_bleed_and_the_profile_is_remembered() {
-        let c = store();
-        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
-        replace(&c, "ATD", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
-        sf::mark_filings_fetched(&c, "ATD", "000012345", &now_iso()).unwrap();
-        assert_eq!(sf::filings_for(&c, "SHOP").unwrap().len(), 1);
-        assert_eq!(sf::filings_for(&c, "ATD").unwrap().len(), 2);
-        assert_eq!(sf::sedar_profile(&c, "ATD").unwrap(), "000012345");
-    }
-
-    #[test]
-    fn test_forget_clears_rows_and_stamps() {
-        let c = store();
-        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
-        sf::mark_filings_fetched(&c, "SHOP", "000037100", &now_iso()).unwrap();
-        sf::forget_filings(&c, "SHOP").unwrap();
-        assert!(sf::filings_for(&c, "SHOP").unwrap().is_empty());
-        assert_eq!(sf::filings_fetched_for(&c, "SHOP").unwrap(), "");
-        assert_eq!(sf::sedar_profile(&c, "SHOP").unwrap(), "");
-    }
-
-    // --- FilingsPayloadTest
-
-    fn stub(items: Vec<FiledDocument>, sources: &[(Regulator, SourceOutcome)]) -> impl Fn(&str, &str, &str, &str, &str) -> Gathered {
-        let sources: BTreeMap<Regulator, SourceOutcome> = sources.iter().cloned().collect();
-        move |_, _, _, _, _| Gathered { items: items.clone(), sources: sources.clone() }
-    }
-
-    fn outcome(available: bool, matched: bool, count: usize, error: &str) -> SourceOutcome {
-        SourceOutcome { available, matched, filer: false, count, error: error.to_string() }
-    }
-
-    fn payload(c: &Connection, sym: &str, fetch: &dyn Fn(&str, &str, &str, &str, &str) -> Gathered) -> Value {
-        let s = sym.trim().to_uppercase();
-        v(filings_payload_in(&app(), c, sym, true, &|| refresh_filings_in(&app(), c, &s, None, None, None, fetch)))
-    }
-
-    #[test]
-    fn test_stale_until_a_fetch_then_fresh_within_a_day() {
-        let c = store();
-        assert!(filings_stale(&c, "SHOP", None).unwrap());
-        sf::mark_filings_fetched(&c, "SHOP", "", &now_iso()).unwrap();
-        assert!(!filings_stale(&c, "SHOP", None).unwrap());
-    }
-
-    #[test]
-    fn test_a_day_old_stamp_is_stale() {
-        let c = store();
-        let old = crate::app::stamp_of(now_unix() as i64 - 25 * 3600);
-        sf::mark_filings_fetched(&c, "SHOP", "", &old).unwrap();
-        assert!(filings_stale(&c, "SHOP", None).unwrap());
-    }
-
-    #[test]
-    fn test_refresh_merges_sources_and_reports_status() {
-        let c = store();
-        let fetch = stub(
-            vec![item(Regulator::Sedar, 1, "000037100"), item(Regulator::Sec, 2, "")],
-            &[(Regulator::Sedar, outcome(true, true, 1, "")), (Regulator::Sec, outcome(true, true, 1, ""))],
-        );
-        let out = payload(&c, "SHOP", &fetch);
-        assert_eq!(out["ok"], true);
-        // `available` is whether a source can be reached on this machine
-        assert_eq!(out["available"], json!(disclosures::available()));
-        assert_eq!(out["refreshed"], true);
-        assert_eq!(out["filings"].as_array().unwrap().len(), 2);
-        assert_eq!(out["profileNo"], "000037100", "the SEDAR+ profile is remembered from the items");
-        let keys: HashSet<&str> = out["sources"].as_object().unwrap().keys().map(|k| k.as_str()).collect();
-        assert_eq!(keys, HashSet::from(["SEDAR+", "SEC"]));
-        assert!(out["categories"].as_array().unwrap().contains(&json!("Financials")));
-    }
-
-    #[test]
-    fn test_only_one_source_matches() {
-        let c = store();
-        let fetch = stub(
-            vec![item(Regulator::Sec, 1, "")],
-            &[(Regulator::Sedar, outcome(true, false, 0, "")), (Regulator::Sec, outcome(true, true, 1, ""))],
-        );
-        let out = payload(&c, "NVDA", &fetch);
-        let srcs: Vec<String> = out["filings"].as_array().unwrap().iter().map(|r| f(r, "source")).collect();
-        assert_eq!(srcs, ["SEC"]);
-        assert_eq!(out["sources"]["SEC"]["matched"], true);
-        assert_eq!(out["sources"]["SEDAR+"]["matched"], false);
-    }
-
-    #[test]
-    fn test_an_unreachable_source_reads_unavailable_and_carries_its_error() {
-        // SEDAR+ could not be reached (an outage, a maintenance page); SEC answered.
-        // The failed source must read as unavailable and carry its reason, so the card
-        // can say it is unavailable rather than assert the listing has no filer.
-        let c = store();
-        let fetch = stub(
-            vec![item(Regulator::Sec, 1, "")],
-            &[(Regulator::Sedar, outcome(false, false, 0, "SEDAR+ did not return the searchReportingIssuers form")), (Regulator::Sec, outcome(true, true, 1, ""))],
-        );
-        let out = payload(&c, "SHOP", &fetch);
-        assert_eq!(out["sources"]["SEDAR+"]["available"], false, "a source that failed to answer is unavailable, whatever its dependency");
-        assert_eq!(out["sources"]["SEDAR+"]["error"], "SEDAR+ did not return the searchReportingIssuers form");
-        assert_eq!(out["sources"]["SEC"]["error"], "", "the source that answered carries no error");
-    }
-
-    #[test]
-    fn test_all_sources_unreachable_is_reported() {
-        let c = store();
-        let fetch = stub(
-            vec![],
-            &[(Regulator::Sedar, outcome(false, false, 0, "the browser helper is missing")), (Regulator::Sec, outcome(false, false, 0, "network"))],
-        );
-        let out = payload(&c, "SHOP", &fetch);
-        assert_eq!(out["ok"], true, "the endpoint still answers cleanly");
-        assert_eq!(out["sourceUnavailable"], true);
-        assert_eq!(out["filings"], json!([]));
-    }
-
-    /// What the page is sent of a listing's disclosures, pinned in
-    /// `tests/golden/filings_payload.json` with what depends on this machine or
-    /// on the clock (whether a source is reachable here, the stamps, the local
-    /// model's state) left out. After an intended change:
-    /// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_disclosures_the_page_is_sent`.
-    #[test]
-    fn test_the_disclosures_the_page_is_sent_are_what_they_were() {
-        let _g = crate::tests_common::guard();
-        fn mask(v: &mut Value) {
-            match v {
-                Value::Object(m) => {
-                    for k in ["available", "fetchedAt", "enrichedAt", "summaryStatus", "summaryAvailable"] {
-                        if m.contains_key(k) {
-                            m.insert(k.into(), json!("*"));
-                        }
-                    }
-                    m.values_mut().for_each(mask);
-                }
-                Value::Array(a) => a.iter_mut().for_each(mask),
-                _ => {}
-            }
-        }
-        let c = store();
-        let mut form4 = item(Regulator::Sec, 5, "");
-        form4.form = "4".into();
-        form4.title = String::new();
-        let fetch = stub(
-            vec![item(Regulator::Sedar, 1, "000037100"), item(Regulator::Sedar, 3, "000037100"), item(Regulator::Sec, 2, ""), item(Regulator::Sec, 4, ""), form4],
-            &[
-                (Regulator::Sedar, SourceOutcome { available: true, matched: true, filer: true, count: 2, error: String::new() }),
-                (Regulator::Sec, SourceOutcome { available: true, matched: true, filer: true, count: 3, error: String::new() }),
-            ],
-        );
-        let first = payload(&c, "SHOP", &fetch);
-        enrichment(&c, "SHOP", "sec:2", "Quarterly report", "Revenue rose.", ENRICH_VERSION);
-        enrichment(&c, "SHOP", "sedar:1", "An old reading", "Read by an older logic.", ENRICH_VERSION - 1);
-        sf::set_filing_enrichment(&c, "SHOP", "sedar:3", Some("Interim MD&A"), None, Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
-        let again = v(filings_payload_in(&app(), &c, "SHOP", false, &|| panic!("fresh: not read again")));
-        let enriched = v(filings_enrich_in(&c, "SHOP", "sec:2", &fake(true, ("x", "y"), false)));
-        let mut have = json!({"first": first, "again": again, "enriched": enriched});
-        mask(&mut have);
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/filings_payload.json");
-        if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, serde_json::to_string_pretty(&have).unwrap() + "\n").unwrap();
-            return;
-        }
-        let want: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("tests/golden/filings_payload.json")).unwrap();
-        assert_eq!(have, want, "the disclosures the page is sent are not what they were");
-    }
-
-    #[test]
-    fn test_empty_symbol_is_rejected() {
-        let _g = crate::tests_common::guard();
-        assert!(matches!(filings_payload(&app(), "", false, None, None, None), FilingsAnswer::Refused(_)));
-    }
-
-    // --- EnrichTest
-
-    struct Fake {
-        model: bool,
-        status: &'static str,
-        wait: bool,
-        read: (&'static str, &'static str),
-        final_: bool,
-        reads: Cell<usize>,
-        waits: Cell<usize>,
-    }
-
-    impl Readers for Fake {
-        fn summary_available(&self) -> bool { self.model }
-        fn summary_status(&self) -> &'static str { self.status }
-        fn wait_for_summary(&self, _: f64) -> bool { self.waits.set(self.waits.get() + 1); self.wait }
-        fn disclosures_available(&self) -> bool { true }
-        fn enrichment(&self, _: &FiledDocument) -> Option<disclosures::Enrichment> { None }
-        fn content(&self, _: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> {
-            self.reads.set(self.reads.get() + 1);
-            Ok((b"%PDF-1.4 body".to_vec(), "application/pdf".into()))
-        }
-        fn enrich_document_of(&self, _: &str, _: &str, _: &[u8], _: &str) -> disclosures::Enrichment {
-            disclosures::Enrichment { subject: self.read.0.to_string(), summary: self.read.1.to_string(), final_: self.final_ }
-        }
-    }
-
-    fn fake(model: bool, read: (&'static str, &'static str), final_: bool) -> Fake {
-        Fake { model, status: if model { "ready" } else { "off" }, wait: false, read, final_, reads: Cell::new(0), waits: Cell::new(0) }
-    }
-
-    const DOC: &str = "sedar:1";
-
-    fn enrich_store() -> Connection {
-        let c = store();
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
-        c
-    }
-
-    fn stored(c: &Connection) -> (String, String, i64) {
-        let row = sf::filing(c, "QNC", DOC).unwrap().unwrap();
-        (row.subject, row.summary, row.enrich_version.unwrap_or(0))
-    }
-
-    fn run(c: &Connection, model: bool, read: (&'static str, &'static str), final_: bool) -> (Value, usize) {
-        let r = fake(model, read, final_);
-        let out = v(filings_enrich_in(c, "QNC", DOC, &r));
-        (out, r.reads.get())
-    }
-
-    fn halves(c: &Connection) -> (String, String) {
-        let s = stored(c);
-        (s.0, s.1)
-    }
-
-    fn pair(a: &str, b: &str) -> (String, String) {
-        (a.to_string(), b.to_string())
-    }
-
-    #[test]
-    fn test_a_row_with_both_halves_is_not_read_again() {
-        let c = enrich_store();
-        run(&c, true, ("A title", "A sentence."), false);
-        assert_eq!(halves(&c), pair("A title", "A sentence."));
-        let (out, reads) = run(&c, true, ("other", "other."), false);
-        assert_eq!(reads, 0);
-        assert_eq!(out["subject"], "A title");
-    }
-
-    #[test]
-    fn test_a_document_read_for_good_is_never_fetched_again_even_with_nothing_to_show() {
-        let c = enrich_store();
-        let (out, _) = run(&c, true, ("", ""), true);
-        assert_eq!((f(&out, "subject"), f(&out, "summary")), pair("", ""));
-        assert_eq!(stored(&c).2, ENRICH_VERSION, "stamped, so the row is done");
-        for _ in 0..3 {
-            let (_, reads) = run(&c, true, ("", ""), true);
-            assert_eq!(reads, 0, "the document is not fetched again");
-        }
-    }
-
-    #[test]
-    fn test_a_document_read_for_good_while_no_model_was_up_is_still_done() {
-        let c = enrich_store();
-        run(&c, false, ("Exempt distribution of $1,500,000", "$1,500,000 distributed."), true);
-        assert_eq!(halves(&c), pair("Exempt distribution of $1,500,000", "$1,500,000 distributed."));
-        let (_, reads) = run(&c, true, ("other", "other."), true);
-        assert_eq!(reads, 0, "a form needs no model, so a model arriving later changes nothing");
-    }
-
-    #[test]
-    fn test_a_row_holding_only_a_title_is_read_again_for_its_summary() {
-        let c = enrich_store();
-        run(&c, true, ("A title", ""), false);
-        assert_eq!(halves(&c), pair("A title", ""));
-        let (out, reads) = run(&c, true, ("A title", "The sentence."), false);
-        assert_eq!(reads, 1);
-        assert_eq!(out["summary"], "The sentence.");
-    }
-
-    #[test]
-    fn test_a_row_holding_only_a_summary_is_read_again_for_its_title() {
-        let c = enrich_store();
-        run(&c, true, ("", "A sentence."), false);
-        assert_eq!(halves(&c), pair("", "A sentence."));
-        let (out, reads) = run(&c, true, ("The title", "A sentence."), false);
-        assert_eq!(reads, 1);
-        assert_eq!(out["subject"], "The title");
-    }
-
-    #[test]
-    fn test_reading_again_fills_what_is_missing_and_empties_nothing() {
-        let c = enrich_store();
-        run(&c, true, ("A title", ""), false);
-        let (out, reads) = run(&c, true, ("", ""), false);
-        assert_eq!(reads, 1);
-        assert_eq!(out["subject"], "A title");
-        assert_eq!(stored(&c).0, "A title");
-    }
-
-    #[test]
-    fn test_the_first_read_under_the_current_logic_still_clears_an_older_junk_title() {
-        let c = enrich_store();
-        enrichment(&c, "QNC", DOC, "00012345.pdf", "", 1);
-        let (out, reads) = run(&c, true, ("", "A sentence."), false);
-        assert_eq!(reads, 1);
-        assert_eq!(out["subject"], "");
-        assert_eq!(out["summary"], "A sentence.");
-    }
-
-    #[test]
-    fn test_with_no_model_up_a_row_already_read_is_not_fetched_again() {
-        let c = enrich_store();
-        run(&c, true, ("A title", ""), false);
-        let (out, reads) = run(&c, false, ("A title", "never asked"), false);
-        assert_eq!(reads, 0);
-        assert_eq!(out["summary"], "");
-    }
-
-    #[test]
-    fn test_a_row_never_read_is_read_even_with_no_model() {
-        let c = enrich_store();
-        let (out, reads) = run(&c, false, ("A title", ""), false);
-        assert_eq!(reads, 1);
-        assert_eq!(out["subject"], "A title");
-        assert_eq!(halves(&c), pair("A title", ""), "the title found is kept and shown");
-    }
-
-    #[test]
-    fn test_a_row_that_found_no_model_waits_and_is_not_fetched_again_until_one_is_up() {
-        let c = enrich_store();
-        run(&c, false, ("A title", ""), false);
-        for _ in 0..3 {
-            let (_, reads) = run(&c, false, ("A title", ""), false);
-            assert_eq!(reads, 0, "with no model up, the document is not fetched from the regulator again");
-        }
-        let row = sf::filing(&c, "QNC", DOC).unwrap().unwrap();
-        assert!(wants_reading(&row) && !row.enrich_final, "the row waits rather than finishing");
-        let (out, reads) = run(&c, true, ("A title", "The sentence."), false);
-        assert_eq!(reads, 1, "a model coming up is what reads it again");
-        assert_eq!(out["summary"], "The sentence.");
-    }
-
-    #[test]
-    fn test_a_half_filled_row_is_read_at_most_twice_with_a_model_up_then_settles() {
-        for half in [("A title", ""), ("", "A sentence.")] {
-            let c = enrich_store();
-            let mut fetched = 0;
-            for _ in 0..6 {
-                fetched += run(&c, true, half, false).1;
-            }
-            assert_eq!(fetched, ENRICH_READS as usize, "two reads that could have answered, then no more");
-            let row = sf::filing(&c, "QNC", DOC).unwrap().unwrap();
-            assert_eq!((row.subject.as_str(), row.summary.as_str()), half, "it settles with whichever half it has");
-            assert!(row.enrich_final && !wants_reading(&row));
-        }
-    }
-
-    #[test]
-    fn test_reads_with_no_model_up_do_not_count_against_the_document() {
-        let c = enrich_store();
-        let mut fetched = 0;
-        for _ in 0..4 {
-            fetched += run(&c, false, ("A title", ""), false).1;
-        }
-        assert_eq!(fetched, 1);
-        let mut with_model = 0;
-        for _ in 0..4 {
-            with_model += run(&c, true, ("A title", ""), false).1;
-        }
-        assert_eq!(with_model, ENRICH_READS as usize, "the bound is reads a model could have answered, however many came before");
-    }
-
-    #[test]
-    fn test_reads_under_an_older_logic_do_not_count_under_this_one() {
-        let c = enrich_store();
-        run(&c, true, ("A title", ""), false);
-        run(&c, true, ("A title", ""), false);
-        assert!(sf::filing(&c, "QNC", DOC).unwrap().unwrap().enrich_final);
-        enrichment(&c, "QNC", DOC, "A title", "", ENRICH_VERSION - 1);
-        let mut fetched = 0;
-        for _ in 0..4 {
-            fetched += run(&c, true, ("A title", ""), false).1;
-        }
-        assert_eq!(fetched, ENRICH_READS as usize);
-    }
-
-    #[test]
-    fn test_a_count_survives_the_list_being_read_again() {
-        let c = enrich_store();
-        run(&c, true, ("A title", ""), false);
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
-        assert_eq!(sf::filing(&c, "QNC", DOC).unwrap().unwrap().enrich_reads, 1);
-    }
-
-    // --- the reader that works behind the page
-
-    #[test]
-    fn test_the_background_reader_picks_a_titled_row_without_its_sentence() {
-        let c = enrich_store();
-        run(&c, false, ("A title", ""), false);
-        let r = fake(true, ("A title", "The sentence."), false);
-        let mut passed = HashSet::new();
-        assert_eq!(read_one_in(&c, &["QNC".to_string()], &mut passed, &r), Ok(Some(Ok(()))));
-        assert_eq!(r.reads.get(), 1);
-        assert_eq!(halves(&c), pair("A title", "The sentence."));
-        assert_eq!(read_one_in(&c, &["QNC".to_string()], &mut passed, &r), Ok(None), "nothing is left to read");
-    }
-
-    #[test]
-    fn test_the_background_reader_ends_on_rows_it_cannot_move() {
-        let c = enrich_store();
-        run(&c, false, ("A title", ""), false);
-        let r = fake(false, ("A title", ""), false);
-        let mut passed = HashSet::new();
-        let mut tries = 0;
-        while read_one_in(&c, &["QNC".to_string()], &mut passed, &r).unwrap().is_some() {
-            tries += 1;
-            assert!(tries < 5, "a row a read cannot move is passed over, not read in a loop");
-        }
-        assert_eq!(r.reads.get(), 0);
-    }
-
-    #[test]
-    fn test_what_wants_reading() {
-        let c = enrich_store();
-        let row = || sf::filing(&c, "QNC", DOC).unwrap().unwrap();
-        assert!(wants_reading(&row()), "never read");
-        enrichment(&c, "QNC", DOC, "A title", "", ENRICH_VERSION);
-        assert!(wants_reading(&row()), "a title without its sentence");
-        enrichment(&c, "QNC", DOC, "", "A sentence.", ENRICH_VERSION);
-        assert!(wants_reading(&row()), "a sentence without its title");
-        enrichment(&c, "QNC", DOC, "A title", "A sentence.", ENRICH_VERSION);
-        assert!(!wants_reading(&row()), "both halves");
-        enrichment(&c, "QNC", DOC, "A title", "A sentence.", ENRICH_VERSION - 1);
-        assert!(wants_reading(&row()), "read under an older logic");
-        sf::set_filing_enrichment(&c, "QNC", DOC, Some("A title"), Some(""), Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
-        assert!(!wants_reading(&row()), "settled");
-    }
-
-    // --- WaitingForTheModelTest
-
-    #[test]
-    fn test_a_model_that_is_starting_is_waited_for_rather_than_the_read_wasted() {
-        let c = enrich_store();
-        let r = Fake { model: false, status: "ready", wait: true, read: ("A title", "A sentence."), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
-        let out = v(filings_enrich_in(&c, "QNC", DOC, &r));
-        assert_eq!(r.waits.get(), 1);
-        assert_eq!(out["summary"], "A sentence.");
-        assert_eq!(stored(&c), ("A title".to_string(), "A sentence.".to_string(), ENRICH_VERSION));
-    }
-
-    #[test]
-    fn test_a_model_that_never_comes_up_leaves_the_row_to_be_read_again() {
-        let c = enrich_store();
-        let r = Fake { model: false, status: "off", wait: false, read: ("A title", ""), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
-        let out = v(filings_enrich_in(&c, "QNC", DOC, &r));
-        assert_eq!(out["subject"], "A title");
-        let row = sf::filing(&c, "QNC", DOC).unwrap().unwrap();
-        assert!(wants_reading(&row) && !row.enrich_final && row.enrich_reads == 0, "the read did not count, and the row waits");
-    }
-
-    // --- RefreshKeepsWhatWasReadTest
-
-    #[test]
-    fn test_a_row_the_source_still_lists_keeps_its_subject_and_summary() {
-        let c = store();
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
-        enrichment(&c, "QNC", "sedar:1", "A title", "A sentence.", 9);
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, ""), item(Regulator::Sedar, 3, "")]);
-        let row = sf::filing(&c, "QNC", "sedar:1").unwrap().unwrap();
-        assert_eq!((row.subject, row.summary, row.enrich_version), ("A title".into(), "A sentence.".into(), Some(9)));
-    }
-
-    #[test]
-    fn test_what_the_source_says_about_a_row_is_still_refreshed() {
-        let c = store();
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
-        enrichment(&c, "QNC", "sedar:1", "A title", "A sentence.", 9);
-        let mut moved = item(Regulator::Sedar, 1, "");
-        moved.url = "https://www.sedarplus.ca/x?drmKey=fresh".into();
-        replace(&c, "QNC", Regulator::Sedar, &[moved]);
-        let row = sf::filing(&c, "QNC", "sedar:1").unwrap().unwrap();
-        assert_eq!(row.doc.url, "https://www.sedarplus.ca/x?drmKey=fresh");
-        assert_eq!(row.summary, "A sentence.");
-    }
-
-    #[test]
-    fn test_a_row_the_source_no_longer_lists_goes() {
-        let c = store();
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 2, "")]);
-        assert!(sf::filing(&c, "QNC", "sedar:1").unwrap().is_none());
-        assert!(sf::filing(&c, "QNC", "sedar:2").unwrap().is_some());
-    }
-
-    #[test]
-    fn test_another_sources_rows_are_untouched() {
-        let c = store();
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
-        replace(&c, "QNC", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
-        enrichment(&c, "QNC", "sec:1", "From EDGAR", "A sentence.", 9);
-        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
-        assert_eq!(sf::filing(&c, "QNC", "sec:1").unwrap().unwrap().subject, "From EDGAR");
     }
 
     // --- Fear & Greed: what a page showing a meter is told while it is read
@@ -2549,8 +1969,8 @@ mod tests {
         let (_home, a) = own_app();
         let read = |a: &Arc<App>| serde_json::to_value(crate::docs::read(a, "news").expect("the news card's document")).unwrap();
         assert_eq!(read(&a), json!({"reading": []}));
-        *a.feeds.news_left.lock().unwrap() = ["*".to_string(), "QNC".to_string()].into_iter().collect();
-        assert_eq!(read(&a), json!({"reading": ["*", "QNC"]}));
+        *a.feeds.news_left.lock().unwrap() = ["*@MARKET".to_string(), "QNC@XTSX".to_string()].into_iter().collect();
+        assert_eq!(read(&a), json!({"reading": ["*@MARKET", "QNC@XTSX"]}));
         a.feeds.news_left.lock().unwrap().clear();
         assert_eq!(read(&a), json!({"reading": []}));
     }
@@ -2606,7 +2026,8 @@ mod tests {
         let quote = move |_: &str, _: &str, _: &str| -> Result<crate::following::Glanced, String> {
             Ok(crate::following::Glanced { price: bagholder_core::Dec::parse(q.0).unwrap().into(), change: None, percent_change: Some(q.1) })
         };
-        serde_json::to_value(listing_payload_in(&[], positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)).unwrap()
+        let key = bagholder_core::ListingKey::on(args.0, args.1).unwrap();
+        serde_json::to_value(listing_payload_in(&[], positions, trades, watchlist, &key, args.1, args.2, args.3, &quote)).unwrap()
     }
 
     /// Each share count as the decimal the source stated, the float's rest and the
@@ -2636,7 +2057,7 @@ mod tests {
     #[test]
     fn test_a_listing_whose_quote_fails_says_so_in_place_of_the_price() {
         let failed = |_: &str, _: &str, _: &str| -> Result<crate::following::Glanced, String> { Err("Yahoo answered 429".into()) };
-        let out = serde_json::to_value(listing_payload_in(&[], &[], &[], &[], "RY", "TSX", "CAD", "", &failed)).unwrap();
+        let out = serde_json::to_value(listing_payload_in(&[], &[], &[], &[], &bagholder_core::ListingKey::on("RY", "TSX").unwrap(), "TSX", "CAD", "", &failed)).unwrap();
         assert_eq!((&out["ok"], &out["price"], &out["priceFailed"]), (&json!(true), &Value::Null, &json!("Yahoo answered 429")));
     }
 
@@ -2682,17 +2103,24 @@ mod tests {
         assert_eq!(out["price"].as_str(), Some("284.21"));
     }
 
+    /// A listing's page is its own venue's: a holding of the ticker on another venue
+    /// is not opened for it, and that venue's fills are not merged into it (brief
+    /// 34, U17), whichever of the two the page asks for.
     #[test]
-    fn test_a_ticker_with_no_venue_matches_the_book_whatever_venue_it_holds_it_on() {
-        let trades = [json!({"id": "t1", "symbol": "SHOP.TO", "exchange": "TSX", "currency": "CAD", "kind": "Shares", "name": "Shopify Inc.",
-                             "fills": [fill(FILL, "BUY", 10.0, 5.0)]})];
-        let out = listing(&[], &trades, &[], ("1.25", -0.02), ("SHOP", "", "", ""));
-        assert_eq!((f(&out, "symbol"), f(&out, "exchange"), f(&out, "name")), ("SHOP".into(), "TSX".into(), "Shopify Inc.".into()));
-        assert_eq!(out["fills"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_a_ticker_that_is_not_one_is_refused() {
-        assert_eq!(listing(&[], &[], &[], ("1.25", -0.02), ("  ", "", "", ""))["ok"], false);
+    fn test_a_listings_page_never_takes_another_venues_holding_or_fills() {
+        let held = [json!({"id": "rt:tsx", "symbol": "TD", "exchange": "TSX", "currency": "CAD", "kind": "Shares", "name": "Toronto-Dominion Bank"})];
+        let trades = [
+            json!({"id": "t1", "symbol": "TD", "exchange": "TSX", "currency": "CAD", "kind": "Shares", "name": "Toronto-Dominion Bank", "fills": [fill(FILL, "BUY", 10.0, 80.0)]}),
+            json!({"id": "t2", "symbol": "TD", "exchange": "NYSE", "currency": "USD", "kind": "Shares", "name": "Toronto-Dominion Bank", "fills": [fill(FILL, "BUY", 5.0, 60.0)]}),
+        ];
+        let tsx = listing(&held, &trades, &[], ("80", 0.1), ("TD", "TSX", "", ""));
+        assert_eq!(tsx["positionId"], "rt:tsx");
+        let nyse = listing(&held, &trades, &[], ("60", 0.1), ("TD", "NYSE", "", ""));
+        assert!(nyse["positionId"].is_null(), "the TSX holding is not the NYSE listing's");
+        let fills = nyse["fills"].as_array().unwrap();
+        assert_eq!(fills.len(), 1, "only the NYSE listing's own fills");
+        // a row of the book that names no venue is never taken for a listing
+        let unplaced = [json!({"id": "t3", "symbol": "TD", "exchange": "", "currency": "CAD", "kind": "Shares", "name": "", "fills": [fill(FILL, "BUY", 1.0, 1.0)]})];
+        assert_eq!(listing(&[], &unplaced, &[], ("80", 0.1), ("TD", "TSX", "", ""))["fills"], json!([]));
     }
 }

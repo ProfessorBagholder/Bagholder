@@ -104,7 +104,7 @@ fn a_market_series_top_up_returns_what_failed() {
 #[test]
 fn short_interest_from_a_regulator_that_did_not_answer_is_the_failure() {
     let conn = db();
-    let err = shorts::for_listing(&conn, "GME", "NYSE", "USD", "2026-09-16", false, "").unwrap_err();
+    let err = shorts::for_listing(&conn, "GME", "NYSE", "2026-09-16", false, "").unwrap_err();
     assert!(err.contains("FINRA"), "{err}");
 }
 
@@ -114,15 +114,15 @@ fn short_interest_from_a_regulator_that_did_not_answer_is_the_failure() {
 fn short_interest_whose_store_cannot_be_read_is_the_failure() {
     let conn = cache_db();
     let mut position = HashMap::new();
-    position.insert("QNC".to_string(), CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
+    position.insert("QNC@XTSX".to_string(), CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
     shorts::clear_files();
     shorts::ca_position_with("QNC", "TSX-V", "2026-09-16", || Ok(Some(("2026-09-15".to_string(), position)))).unwrap();
     let mut volume = HashMap::new();
-    volume.insert("QNC".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1_000_000.0, volume_pct: Some(20.0), total_volume: Some(5_000_000.0) });
+    volume.insert("QNC@XTSX".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1_000_000.0, volume_pct: Some(20.0), total_volume: Some(5_000_000.0) });
     shorts::warm_ca_volume("ca_volume", "2026-09-01/2026-09-15", volume);
-    assert!(shorts::for_listing(&conn, "QNC", "TSX-V", "CAD", "2026-09-16", false, "").unwrap().is_some());
+    assert!(shorts::for_listing(&conn, "QNC", "TSX-V", "2026-09-16", false, "").unwrap().is_some());
     conn.execute_batch("DROP TABLE benchmark_closes;").unwrap();
-    let err = shorts::for_listing(&conn, "QNC", "TSX-V", "CAD", "2026-09-16", false, "").unwrap_err();
+    let err = shorts::for_listing(&conn, "QNC", "TSX-V", "2026-09-16", false, "").unwrap_err();
     assert!(err.contains("could not be read"), "{err}");
 }
 

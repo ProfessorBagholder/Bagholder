@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { filingDocUrl } from '../trade/discStore.svelte'
   import { onDestroy } from 'svelte'
   import { notesStore, markAllRead, clearNotes, type Note } from './notes.svelte'
   import { ICONS } from '../icons'
@@ -43,11 +44,11 @@
     // an order's card opens the Orders panel at its tab
     if (n.kind === 'fills' || n.kind === 'problems') { openNoteTarget(n); return }
     const x = n.extra || {}
-    if (x.doc && x.source !== 'SEC') { window.open('/api/filings/doc?symbol=' + encodeURIComponent(x.symbol || '') + '&id=' + encodeURIComponent(x.doc), '_blank', 'noopener'); return }
+    if (x.doc && x.source !== 'SEC') { window.open(filingDocUrl(x.source || '', x.doc), '_blank', 'noopener'); return }
     if (x.url) { window.open(x.url, '_blank', 'noopener'); return }
     if (x.symbol) {
       onclose()
-      goSub('markets', rememberListing({ symbol: String(x.symbol), exchange: x.exchange }))
+      goSub('markets', rememberListing({ symbol: String(x.symbol), exchange: x.exchange, listing: String(x.listing || '') }))
     }
   }
 </script>

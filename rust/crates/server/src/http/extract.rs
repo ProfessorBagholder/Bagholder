@@ -2,7 +2,7 @@
 //! a JSON body into `T`. Both refuse what they cannot read with a 400 in the
 //! app's own error shape, rather than axum's plain-text rejections.
 
-use axum::extract::{FromRequest, FromRequestParts, Query, Request};
+use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::request::Parts;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
@@ -14,8 +14,9 @@ pub struct Params<T>(pub T);
 impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for Params<T> {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
-        Query::<T>::from_request_parts(parts, state).await.map(|q| Params(q.0)).map_err(|e| ApiError::BadRequest(e.body_text()))
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
+        // the reason a request is refused, said alone (a listing that names no venue)
+        serde_urlencoded::from_str::<T>(parts.uri.query().unwrap_or_default()).map(Params).map_err(|e| ApiError::BadRequest(e.to_string()))
     }
 }
 

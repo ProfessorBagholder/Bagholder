@@ -85,17 +85,17 @@ pub fn own_regulator(key: &ListingKey) -> Option<Regulator> {
 
 /// The TSX's interlisted list, read again when the copy kept is a day old; a read
 /// that fails keeps the last list and is said in the header until one goes through.
-fn interlisted_current(app: &Arc<App>, c: &Connection) -> Result<(), String> {
+fn interlisted_current(app: &Arc<App>, c: &Connection, regulators: &dyn disclosures::Regulators) -> Result<(), String> {
     let read = sf::interlisted_read_at(c).map_err(|e| e.to_string())?;
     if age_hours(&read).is_some_and(|h| h < bagholder_market::interlisted::READ_EVERY_HOURS) {
         return Ok(());
     }
-    match bagholder_market::interlisted::fetch() {
+    match regulators.interlisted() {
         Ok((as_of, rows)) => {
             sf::replace_interlisted(c, &rows, &as_of, &now_iso()).map_err(|e| e.to_string())?;
             crate::feeds::feed_answered(app, INTERLISTED);
         }
-        Err(e) => feed_failed(app, INTERLISTED, format!("The TSX's list of interlisted companies could not be read: {}.", bagholder_market::http::describe_failure(&e))),
+        Err(e) => feed_failed(app, INTERLISTED, format!("The TSX's list of interlisted companies could not be read: {e}")),
     }
     Ok(())
 }
@@ -116,7 +116,7 @@ fn settle_own(c: &Connection, key: &ListingKey, regulators: &dyn disclosures::Re
     // a regulator that could not be asked leaves what was settled before standing
     let found = match found {
         Ok(found) => found,
-        Err(e) => return Err(format!("{} could not be asked who files {key}: {e}", source.as_str())),
+        Err(e) => return Err(format!("{} could not be asked who files {}: {e}", source.as_str(), key.named())),
     };
     let by = if source == Regulator::Sec { sf::SettledBy::SecTicker } else { sf::SettledBy::SedarName };
     match found {
@@ -135,7 +135,7 @@ pub fn settled_filers(app: &Arc<App>, c: &Connection, key: &ListingKey, regulato
     if let Err(e) = settle_own(c, key, regulators) {
         failed.push(e);
     }
-    interlisted_current(app, c)?;
+    interlisted_current(app, c, regulators)?;
     if let Some(partner) = sf::interlisted_partner(c, key).map_err(|e| e.to_string())? {
         if let Err(e) = settle_own(c, &partner, regulators) {
             failed.push(e);
@@ -377,7 +377,7 @@ fn sweep_filings_in(app: &Arc<App>, c: &Connection, book: &bagholder_book::Book)
             }
             Ok(rows)
         })
-        .map_err(|e| format!("what is new in {sym}'s disclosures could not be told: {e}"))?;
+        .map_err(|e| format!("what is new in {}'s disclosures could not be told: {e}", key.named()))?;
         for row in &rows {
             notify::announce(app, row);
         }
@@ -630,15 +630,14 @@ pub fn stamp_day(iso: &str) -> String {
 /// is what the holder wants, and reading it from the record rather than the
 /// release's prose keeps it the same figure the Cashflow tab pays from.
 pub fn distribution_detail(app: &Arc<App>, key: &ListingKey) -> String {
-    let sym = key.symbol();
     let Some(f) = app.figures.get() else { return String::new() };
     // the release is the announcement; the record it comes from carries the figures, and it
     // is read now rather than when it is next due, so the notice is not a day behind it.
     // A notice that goes out without its figures says why in the header, until the next
     // one has them.
     let detail = read_record_for_notice(app, f, key)
-        .map_err(|e| format!("{sym}'s declared distributions could not be read again: {e}"))
-        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {sym}'s distributions: {e}")).and_then(|book| distribution_detail_in(&book, &read)));
+        .map_err(|e| format!("{}'s declared distributions could not be read again: {e}", key.named()))
+        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {}'s distributions: {e}", key.named())).and_then(|book| distribution_detail_in(&book, &read)));
     went(app, "distributions", detail).unwrap_or_default()
 }
 
@@ -798,7 +797,6 @@ pub fn note_wire_releases(app: &Arc<App>, symbol: &str, exchange: &str, rows: &[
     let scopes = notify::release_scopes(c).map_err(|e| e.to_string())?;
     // a listing that names no venue was read under none
     let Some(key) = news::news_listing(symbol, exchange) else { return Ok(()) };
-    let sym = key.symbol().to_string();
     if scopes.is_empty() || !in_release_scope(app, &key, &scopes)? {
         return Ok(());
     }
@@ -826,7 +824,7 @@ pub fn note_wire_releases(app: &Arc<App>, symbol: &str, exchange: &str, rows: &[
             None => Ok(None),
         }
     })
-    .map_err(|e| format!("what is new of {sym} could not be told: {e}"))?;
+    .map_err(|e| format!("what is new of {} could not be told: {e}", key.named()))?;
     if let Some(row) = &row {
         notify::announce(app, row);
     }
@@ -937,12 +935,12 @@ pub fn document_error_page(app: &Arc<App>, source: Regulator, doc_id: &str, why:
         let s = r.subject.trim();
         if !s.is_empty() { s.to_string() } else if !r.doc.title.trim().is_empty() { r.doc.title.trim().to_string() } else { r.doc.form.trim().to_string() }
     }).filter(|s| !s.is_empty()).unwrap_or_else(|| "This document".to_string());
-    let source = row.as_ref().map(|r| r.doc.source.as_str().to_string()).unwrap_or_else(|| "the regulator".to_string());
+    let again = format!("/api/filings/doc?source={}&id={}", url_quote(source.as_str()), url_quote(doc_id));
+    let source = source.as_str();
     let when = row.as_ref().map(|r| {
         let t = r.doc.date_text.trim();
         if !t.is_empty() { t.to_string() } else { r.doc.date.chars().take(10).collect() }
     }).unwrap_or_default();
-    let again = format!("/api/filings/doc?source={}&id={}", url_quote(source.as_str()), url_quote(doc_id));
     format!(
         "<!doctype html><meta charset=utf-8><title>{name}</title>\
 <style>:root{{color-scheme:dark light}}body{{margin:0;min-height:100vh;display:grid;place-items:center;\
@@ -1153,7 +1151,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, key: &ListingKey, regu
                 SourceOutcome { available: true, matched: true, filer: true, count: held, error: String::new() }
             }
             Ok(rows) => {
-                let n = sf::replace_filings(c, filer, &rows, &now).map_err(|e| format!("{key}'s {} filings could not be stored: {e}", filer.source.as_str()))?;
+                let n = sf::replace_filings(c, filer, &rows, &now).map_err(|e| format!("{}'s {} filings could not be stored: {e}", key.named(), filer.source.as_str()))?;
                 total += n as i64;
                 SourceOutcome { available: true, matched: n > 0, filer: true, count: n, error: String::new() }
             }
@@ -1177,7 +1175,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, key: &ListingKey, regu
     app.events.signal(); // the reading loop has something to look at
     let reached = outcomes.values().any(|o| o.available);
     let said = serde_json::to_string(&outcomes).expect("each regulator's outcome, keyed by its name, always serializes");
-    set_meta(c, &format!("filings_sources:{key}"), &said).map_err(|e| e.to_string())?;
+    set_meta(c, &key.meta(bagholder_core::listing::meta::FILINGS_SOURCES, &[]), &said).map_err(|e| e.to_string())?;
     Ok(if reached || outcomes.is_empty() { total } else { -1 })
 }
 
@@ -1196,11 +1194,11 @@ pub struct SourceStatus {
 /// (`"SEDAR+"`, `"SEC"`) rather than under `Regulator` itself.
 fn source_status(c: &Connection, key: &ListingKey) -> Result<BTreeMap<String, SourceStatus>, String> {
     // none stored before a first refresh; stored text that does not parse is an error
-    let raw = get_meta(c, &format!("filings_sources:{key}"), "").map_err(|e| e.to_string())?;
+    let raw = get_meta(c, &key.meta(bagholder_core::listing::meta::FILINGS_SOURCES, &[]), "").map_err(|e| e.to_string())?;
     let stored: BTreeMap<Regulator, SourceOutcome> = if raw.is_empty() {
         BTreeMap::new()
     } else {
-        serde_json::from_str(&raw).map_err(|e| format!("what {key}'s regulators last answered could not be read: {e}"))?
+        serde_json::from_str(&raw).map_err(|e| format!("what {}'s regulators last answered could not be read: {e}", key.named()))?
     };
     let have: HashSet<Regulator> = sf::filings_of(c, &filers_kept(c, key)?).map_err(|e| e.to_string())?.iter().map(|r| r.doc.source).collect();
     let mut out = BTreeMap::new();
@@ -1314,7 +1312,7 @@ pub fn filings_shown(app: Arc<App>, doc: String, key: ListingKey) {
             let refreshed = conn(&app).and_then(|c| filings_stale(&c, &key, None)).and_then(|stale| {
                 if stale { refresh_filings(&app, &key).map(|_| ()) } else { Ok(()) }
             });
-            went(&app, DISCLOSURES, refreshed.map_err(|e| format!("{}'s disclosures could not be brought up to date: {e}", key.symbol())));
+            went(&app, DISCLOSURES, refreshed.map_err(|e| format!("{}'s disclosures could not be brought up to date: {e}", key.named())));
             let mut tried: HashSet<(Regulator, String)> = HashSet::new();
             while app.events.watched(&doc) && !app.stopping() {
                 let left = conn(&app).and_then(|c| filers_kept(&c, &key).and_then(|f| sf::filings_of(&c, &f).map_err(|e| e.to_string())));
@@ -1327,7 +1325,7 @@ pub fn filings_shown(app: Arc<App>, doc: String, key: ListingKey) {
                 set_reading(&app, &key, left.iter().map(|r| r.doc.id.clone()).collect());
                 // waits for the local model itself when one is coming up; a document that
                 // could not be read is said in the header until one is
-                went(&app, DISCLOSURES_READING, filings_enrich_result(&app, next.0, &next.1).map_err(|e| format!("{}'s document {} could not be read: {e}", key.symbol(), next.1)));
+                went(&app, DISCLOSURES_READING, filings_enrich_result(&app, next.0, &next.1).map_err(|e| format!("{}'s document {} could not be read: {e}", key.named(), next.1)));
                 tried.insert(next);
                 if app.wait(Duration::from_millis(150)) { // a person's pace at the source
                     break;
@@ -1573,3 +1571,638 @@ pub fn filings_enrich_in(c: &Connection, source: Regulator, doc_id: &str, r: &dy
     Ok(answer(&subject, &summary, r.summary_available()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::f;
+    use serde_json::{json, Value};
+    use std::cell::Cell;
+
+    /// An app of its own on a home of its own, the recorded month in its book and
+    /// its figures built.
+    fn built_app() -> (tempfile::TempDir, Arc<App>) {
+        crate::tests_common::home(); // offline, dry orders
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let at: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        f.state_zone("America/Toronto", at).unwrap();
+        app.set_figures(f);
+        (home, app)
+    }
+
+    /// The market cache's schema, where the filings are kept.
+    fn store() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        for m in &bagholder_sources::cache::MIGRATIONS {
+            c.execute_batch(m.sql).unwrap();
+        }
+        c
+    }
+
+    fn item(source: Regulator, i: i64, profile: &str) -> FiledDocument {
+        let sec = source == Regulator::Sec;
+        let tag = if sec { "sec" } else { "sedar" };
+        FiledDocument {
+            id: format!("{}:{}", tag, i),
+            source,
+            category: "Financials".into(),
+            profile_no: profile.into(),
+            issuer: String::new(),
+            form: if sec { "10-Q" } else { "Interim MD&A" }.into(),
+            title: if sec { "Quarterly report" } else { "" }.into(),
+            date: format!("2026-08-{:02}", 10 + i),
+            date_text: format!("2026-08-{:02}", 10 + i),
+            size: if sec { "" } else { "292 KB" }.into(),
+            url: if sec { format!("https://www.sec.gov/x/{}", i) } else { format!("https://www.sedarplus.ca/x?drmKey={}", i) },
+        }
+    }
+
+    /// A filer standing in by name: `QNC`'s SEDAR+ profile, its SEC CIK.
+    fn filer(name: &str, source: Regulator) -> sf::Filer {
+        sf::Filer { source, id: name.into() }
+    }
+
+    fn replace(c: &Connection, name: &str, src: Regulator, items: &[FiledDocument]) {
+        sf::replace_filings(c, &filer(name, src), items, &now_iso()).unwrap();
+    }
+
+    /// The source a stand-in document's id names (`sedar:1`, `sec:2`).
+    fn src_of(id: &str) -> Regulator {
+        if id.starts_with("sec:") { Regulator::Sec } else { Regulator::Sedar }
+    }
+
+    fn enrichment(c: &Connection, id: &str, subject: &str, summary: &str, version: i64) {
+        sf::set_filing_enrichment(c, src_of(id), id, Some(subject), Some(summary), Some(version), None, &now_iso()).unwrap();
+    }
+
+    /// A typed result as `filings_payload_in`/`filings_enrich_in` serve it: the
+    /// success shape, or `{"ok": false, "error": …}`.
+    fn v<T: serde::Serialize>(r: Result<T, String>) -> Value {
+        match r {
+            Ok(x) => serde_json::to_value(x).unwrap(),
+            Err(e) => json!({"ok": false, "error": e}),
+        }
+    }
+
+
+    // --- the store: documents per filer
+
+    #[test]
+    fn test_rows_of_two_filers_merge_newest_first() {
+        let c = store();
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 3, "")]);
+        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 2, ""), item(Regulator::Sec, 4, "")]);
+        let rows = sf::filings_of(&c, &[filer("SHOP", Regulator::Sedar), filer("SHOP", Regulator::Sec)]).unwrap();
+        let dates: Vec<String> = rows.iter().map(|r| r.doc.date.clone()).collect();
+        assert_eq!(dates, ["2026-08-14", "2026-08-13", "2026-08-12", "2026-08-11"]);
+    }
+
+    #[test]
+    fn test_replacing_one_filer_leaves_the_others() {
+        let c = store();
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
+        replace(&c, "ATD", Regulator::Sedar, &[item(Regulator::Sedar, 5, "")]);
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 9, "")]);
+        assert_eq!(sf::filings_of(&c, &[filer("SHOP", Regulator::Sedar)]).unwrap().len(), 1, "replaced, not appended");
+        assert_eq!(sf::filings_of(&c, &[filer("ATD", Regulator::Sedar)]).unwrap().len(), 1, "another filer untouched");
+    }
+
+    #[test]
+    fn test_a_single_row_is_fetchable_by_its_source_and_id_for_download() {
+        let c = store();
+        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 7, "")]);
+        let row = sf::filing(&c, Regulator::Sec, "sec:7").unwrap().unwrap();
+        assert!(row.doc.url.starts_with("https://www.sec.gov/"));
+        assert!(sf::filing(&c, Regulator::Sec, "sec:999").unwrap().is_none());
+        assert!(sf::filing(&c, Regulator::Sedar, "sec:7").unwrap().is_none(), "the source is part of the document's name");
+    }
+
+    // --- which filers a listing's filings come from
+
+    /// The regulators standing in: who files each listing, each filer's documents,
+    /// and the TSX's interlisted list.
+    struct Regs {
+        filers: Vec<(ListingKey, Result<String, String>)>,
+        documents: Vec<(sf::Filer, disclosures::Fetched<Vec<FiledDocument>>)>,
+        pairs: Vec<(ListingKey, ListingKey)>,
+        asked: Cell<usize>,
+    }
+
+    impl Regs {
+        fn new() -> Regs {
+            Regs { filers: vec![], documents: vec![], pairs: vec![], asked: Cell::new(0) }
+        }
+    }
+
+    impl disclosures::Regulators for Regs {
+        fn filer(&self, listing: &ListingKey, _: &str) -> Option<(Regulator, disclosures::Fetched<Result<String, String>>)> {
+            self.asked.set(self.asked.get() + 1);
+            let source = own_regulator(listing)?;
+            let found = self.filers.iter().find(|(k, _)| k == listing).map(|(_, f)| f.clone()).unwrap_or_else(|| Err(format!("no filer for {listing}")));
+            Some((source, Ok(found)))
+        }
+        fn documents(&self, filer: &sf::Filer, _: usize) -> disclosures::Fetched<Vec<FiledDocument>> {
+            self.documents.iter().find(|(f, _)| f == filer).map(|(_, d)| d.clone()).unwrap_or(Ok(vec![]))
+        }
+        fn interlisted(&self) -> disclosures::Fetched<(String, Vec<sf::Interlisted>)> {
+            Ok(("2026-10-01".into(), self.pairs.iter().map(|(ca, us)| sf::Interlisted { listing: ca.clone(), us_listing: us.clone(), name: String::new() }).collect()))
+        }
+    }
+
+    fn on(symbol: &str, venue: &str) -> ListingKey {
+        ListingKey::on(symbol, venue).unwrap()
+    }
+
+    fn shown(c: &Connection, key: &ListingKey) -> Vec<String> {
+        let mut ids: Vec<String> = sf::filings_of(c, &filers_kept(c, key).unwrap()).unwrap().into_iter().map(|r| r.doc.id).collect();
+        ids.sort();
+        ids
+    }
+
+    /// For generated pairs of a Canadian and a US listing sharing a ticker, with
+    /// regulators' answers and the interlisted list: a listing shows exactly its
+    /// own filer's documents, and its partner's where the list pairs them; never
+    /// another company's, whatever the two names share (`Energy Fuels` and `Energy
+    /// Transfer`), and the outcome is the same in either order of reads.
+    #[test]
+    fn a_listings_filings_are_its_own_filers_and_its_interlisted_partners_and_never_another_companys() {
+        let (_home, app) = built_app();
+        for symbol in ["T", "EF", "BRK.B", "AB1"] {
+            for paired in [false, true] {
+                for us_first in [false, true] {
+                    let c = store();
+                    let (ca, us) = (on(symbol, "TSX"), on(symbol, "NYSE"));
+                    let mut r = Regs::new();
+                    r.filers = vec![(ca.clone(), Ok("000000001".into())), (us.clone(), Ok("1001".into()))];
+                    r.documents = vec![
+                        (filer("000000001", Regulator::Sedar), Ok(vec![item(Regulator::Sedar, 1, "000000001")])),
+                        (filer("1001", Regulator::Sec), Ok(vec![item(Regulator::Sec, 2, "")])),
+                    ];
+                    if paired {
+                        // the TSX's list pairs the Canadian listing with a US one under another symbol too
+                        r.pairs = vec![(ca.clone(), us.clone())];
+                    }
+                    let order = if us_first { [us.clone(), ca.clone()] } else { [ca.clone(), us.clone()] };
+                    for k in &order {
+                        refresh_filings_in(&app, &c, k, &r).unwrap();
+                    }
+                    let (ca_shows, us_shows) = (shown(&c, &ca), shown(&c, &us));
+                    if paired {
+                        assert_eq!(ca_shows, ["sec:2", "sedar:1"], "{symbol}: a paired listing shows both regulators'");
+                        assert_eq!(us_shows, ["sec:2", "sedar:1"], "{symbol}: either way round");
+                    } else {
+                        assert_eq!(ca_shows, ["sedar:1"], "{symbol}: unpaired, the TSX listing shows its own regulator's alone");
+                        assert_eq!(us_shows, ["sec:2"], "{symbol}: and the US listing its own");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A filer that could not be settled is said, and nothing is guessed in its place.
+    #[test]
+    fn a_listing_whose_filer_is_not_settled_shows_why_and_nothing_else() {
+        let (_home, app) = built_app();
+        let c = store();
+        let key = on("XYZ", "TSX");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Err("SEDAR+ lists no single issuer named Xyz Corp.".into()))];
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert!(shown(&c, &key).is_empty());
+        let out = v(filings_payload_in(&app, &c, &key, false, &|| panic!("settled a moment ago: not read again")));
+        assert_eq!(out["sources"]["SEDAR+"]["filer"], false);
+        assert_eq!(out["sources"]["SEDAR+"]["error"], "SEDAR+ lists no single issuer named Xyz Corp.");
+    }
+
+    #[test]
+    fn test_stale_until_its_filers_are_read_then_fresh_within_a_day() {
+        let (_home, app) = built_app();
+        let c = store();
+        let key = on("SHOP", "TSX");
+        assert!(filings_stale(&c, &key, None).unwrap(), "never settled");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert!(!filings_stale(&c, &key, None).unwrap());
+        let old = crate::app::stamp_of(now_unix() as i64 - 25 * 3600);
+        c.execute("UPDATE filer_fetches SET fetched_at = ?", [&old]).unwrap();
+        assert!(filings_stale(&c, &key, None).unwrap(), "a filer read a day ago");
+    }
+
+    /// A regulator that could not be reached reads as unavailable and carries its
+    /// reason; the other's documents still stand.
+    #[test]
+    fn test_an_unreachable_regulator_reads_unavailable_and_carries_its_error() {
+        let (_home, app) = built_app();
+        let c = store();
+        let (ca, us) = (on("SHOP", "TSX"), on("SHOP", "NYSE"));
+        let mut r = Regs::new();
+        r.filers = vec![(ca.clone(), Ok("000000001".into())), (us.clone(), Ok("1001".into()))];
+        r.pairs = vec![(ca.clone(), us.clone())];
+        r.documents = vec![
+            (filer("000000001", Regulator::Sedar), Err(disclosures::SourceError::Unavailable("SEDAR+ did not return the searchReportingIssuers form".into()))),
+            (filer("1001", Regulator::Sec), Ok(vec![item(Regulator::Sec, 1, "")])),
+        ];
+        let out = v(filings_payload_in(&app, &c, &ca, true, &|| refresh_filings_in(&app, &c, &ca, &r)));
+        assert_eq!(out["sources"]["SEDAR+"]["available"], false, "a source that failed to answer is unavailable, whatever its dependency");
+        assert_eq!(out["sources"]["SEDAR+"]["error"], "SEDAR+ did not return the searchReportingIssuers form");
+        assert_eq!(out["sources"]["SEC"]["error"], "", "the source that answered carries no error");
+        let srcs: Vec<String> = out["filings"].as_array().unwrap().iter().map(|r| f(r, "source")).collect();
+        assert_eq!(srcs, ["SEC"]);
+    }
+
+    #[test]
+    fn test_every_regulator_unreachable_is_reported() {
+        let (_home, app) = built_app();
+        let c = store();
+        let key = on("SHOP", "TSX");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        r.documents = vec![(filer("000000001", Regulator::Sedar), Err(disclosures::SourceError::Unavailable("the browser helper is missing".into())))];
+        let out = v(filings_payload_in(&app, &c, &key, true, &|| refresh_filings_in(&app, &c, &key, &r)));
+        assert_eq!(out["ok"], true, "the endpoint still answers cleanly");
+        assert_eq!(out["sourceUnavailable"], true);
+        assert_eq!(out["filings"], json!([]));
+    }
+
+    /// What the page is sent of a listing's disclosures, pinned in
+    /// `tests/golden/filings_payload.json` with what depends on this machine or
+    /// on the clock (whether a source is reachable here, the stamps, the local
+    /// model's state) left out. After an intended change:
+    /// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_disclosures_the_page_is_sent`.
+    #[test]
+    fn test_the_disclosures_the_page_is_sent_are_what_they_were() {
+        let _g = crate::tests_common::guard();
+        fn mask(v: &mut Value) {
+            match v {
+                Value::Object(m) => {
+                    for k in ["available", "fetchedAt", "enrichedAt", "summaryStatus", "summaryAvailable"] {
+                        if m.contains_key(k) {
+                            m.insert(k.into(), json!("*"));
+                        }
+                    }
+                    m.values_mut().for_each(mask);
+                }
+                Value::Array(a) => a.iter_mut().for_each(mask),
+                _ => {}
+            }
+        }
+        let (_home, app) = built_app();
+        let c = store();
+        let (ca, us) = (on("SHOP", "TSX"), on("SHOP", "NYSE"));
+        let mut form4 = item(Regulator::Sec, 5, "");
+        form4.form = "4".into();
+        form4.title = String::new();
+        let mut r = Regs::new();
+        r.filers = vec![(ca.clone(), Ok("000037100".into())), (us.clone(), Ok("1594805".into()))];
+        r.pairs = vec![(ca.clone(), us.clone())];
+        r.documents = vec![
+            (filer("000037100", Regulator::Sedar), Ok(vec![item(Regulator::Sedar, 1, "000037100"), item(Regulator::Sedar, 3, "000037100")])),
+            (filer("1594805", Regulator::Sec), Ok(vec![item(Regulator::Sec, 2, ""), item(Regulator::Sec, 4, ""), form4])),
+        ];
+        let first = v(filings_payload_in(&app, &c, &ca, true, &|| refresh_filings_in(&app, &c, &ca, &r)));
+        enrichment(&c, "sec:2", "Quarterly report", "Revenue rose.", ENRICH_VERSION);
+        enrichment(&c, "sedar:1", "An old reading", "Read by an older logic.", ENRICH_VERSION - 1);
+        sf::set_filing_enrichment(&c, Regulator::Sedar, "sedar:3", Some("Interim MD&A"), None, Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
+        let again = v(filings_payload_in(&app, &c, &ca, false, &|| panic!("fresh: not read again")));
+        let enriched = v(filings_enrich_in(&c, Regulator::Sec, "sec:2", &fake(true, ("x", "y"), false)));
+        let mut have = json!({"first": first, "again": again, "enriched": enriched});
+        mask(&mut have);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/filings_payload.json");
+        if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string_pretty(&have).unwrap() + "\n").unwrap();
+            return;
+        }
+        let want: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("tests/golden/filings_payload.json")).unwrap();
+        assert_eq!(have, want, "the disclosures the page is sent are not what they were");
+    }
+
+    // --- EnrichTest
+
+    struct Fake {
+        model: bool,
+        status: &'static str,
+        wait: bool,
+        read: (&'static str, &'static str),
+        final_: bool,
+        reads: Cell<usize>,
+        waits: Cell<usize>,
+    }
+
+    impl Readers for Fake {
+        fn summary_available(&self) -> bool { self.model }
+        fn summary_status(&self) -> &'static str { self.status }
+        fn wait_for_summary(&self, _: f64) -> bool { self.waits.set(self.waits.get() + 1); self.wait }
+        fn disclosures_available(&self) -> bool { true }
+        fn enrichment(&self, _: &FiledDocument) -> Option<disclosures::Enrichment> { None }
+        fn content(&self, _: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> {
+            self.reads.set(self.reads.get() + 1);
+            Ok((b"%PDF-1.4 body".to_vec(), "application/pdf".into()))
+        }
+        fn enrich_document_of(&self, _: &str, _: &str, _: &[u8], _: &str) -> disclosures::Enrichment {
+            disclosures::Enrichment { subject: self.read.0.to_string(), summary: self.read.1.to_string(), final_: self.final_ }
+        }
+    }
+
+    fn fake(model: bool, read: (&'static str, &'static str), final_: bool) -> Fake {
+        Fake { model, status: if model { "ready" } else { "off" }, wait: false, read, final_, reads: Cell::new(0), waits: Cell::new(0) }
+    }
+
+    const DOC: &str = "sedar:1";
+
+    fn enrich_store() -> Connection {
+        let c = store();
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        c
+    }
+
+    fn stored(c: &Connection) -> (String, String, i64) {
+        let row = sf::filing(c, src_of(DOC), DOC).unwrap().unwrap();
+        (row.subject, row.summary, row.enrich_version.unwrap_or(0))
+    }
+
+    fn run(c: &Connection, model: bool, read: (&'static str, &'static str), final_: bool) -> (Value, usize) {
+        let r = fake(model, read, final_);
+        let out = v(filings_enrich_in(c, src_of(DOC), DOC, &r));
+        (out, r.reads.get())
+    }
+
+    fn halves(c: &Connection) -> (String, String) {
+        let s = stored(c);
+        (s.0, s.1)
+    }
+
+    fn pair(a: &str, b: &str) -> (String, String) {
+        (a.to_string(), b.to_string())
+    }
+
+    #[test]
+    fn test_a_row_with_both_halves_is_not_read_again() {
+        let c = enrich_store();
+        run(&c, true, ("A title", "A sentence."), false);
+        assert_eq!(halves(&c), pair("A title", "A sentence."));
+        let (out, reads) = run(&c, true, ("other", "other."), false);
+        assert_eq!(reads, 0);
+        assert_eq!(out["subject"], "A title");
+    }
+
+    #[test]
+    fn test_a_document_read_for_good_is_never_fetched_again_even_with_nothing_to_show() {
+        let c = enrich_store();
+        let (out, _) = run(&c, true, ("", ""), true);
+        assert_eq!((f(&out, "subject"), f(&out, "summary")), pair("", ""));
+        assert_eq!(stored(&c).2, ENRICH_VERSION, "stamped, so the row is done");
+        for _ in 0..3 {
+            let (_, reads) = run(&c, true, ("", ""), true);
+            assert_eq!(reads, 0, "the document is not fetched again");
+        }
+    }
+
+    #[test]
+    fn test_a_document_read_for_good_while_no_model_was_up_is_still_done() {
+        let c = enrich_store();
+        run(&c, false, ("Exempt distribution of $1,500,000", "$1,500,000 distributed."), true);
+        assert_eq!(halves(&c), pair("Exempt distribution of $1,500,000", "$1,500,000 distributed."));
+        let (_, reads) = run(&c, true, ("other", "other."), true);
+        assert_eq!(reads, 0, "a form needs no model, so a model arriving later changes nothing");
+    }
+
+    #[test]
+    fn test_a_row_holding_only_a_title_is_read_again_for_its_summary() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        assert_eq!(halves(&c), pair("A title", ""));
+        let (out, reads) = run(&c, true, ("A title", "The sentence."), false);
+        assert_eq!(reads, 1);
+        assert_eq!(out["summary"], "The sentence.");
+    }
+
+    #[test]
+    fn test_a_row_holding_only_a_summary_is_read_again_for_its_title() {
+        let c = enrich_store();
+        run(&c, true, ("", "A sentence."), false);
+        assert_eq!(halves(&c), pair("", "A sentence."));
+        let (out, reads) = run(&c, true, ("The title", "A sentence."), false);
+        assert_eq!(reads, 1);
+        assert_eq!(out["subject"], "The title");
+    }
+
+    #[test]
+    fn test_reading_again_fills_what_is_missing_and_empties_nothing() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        let (out, reads) = run(&c, true, ("", ""), false);
+        assert_eq!(reads, 1);
+        assert_eq!(out["subject"], "A title");
+        assert_eq!(stored(&c).0, "A title");
+    }
+
+    #[test]
+    fn test_the_first_read_under_the_current_logic_still_clears_an_older_junk_title() {
+        let c = enrich_store();
+        enrichment(&c, DOC, "00012345.pdf", "", 1);
+        let (out, reads) = run(&c, true, ("", "A sentence."), false);
+        assert_eq!(reads, 1);
+        assert_eq!(out["subject"], "");
+        assert_eq!(out["summary"], "A sentence.");
+    }
+
+    #[test]
+    fn test_with_no_model_up_a_row_already_read_is_not_fetched_again() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        let (out, reads) = run(&c, false, ("A title", "never asked"), false);
+        assert_eq!(reads, 0);
+        assert_eq!(out["summary"], "");
+    }
+
+    #[test]
+    fn test_a_row_never_read_is_read_even_with_no_model() {
+        let c = enrich_store();
+        let (out, reads) = run(&c, false, ("A title", ""), false);
+        assert_eq!(reads, 1);
+        assert_eq!(out["subject"], "A title");
+        assert_eq!(halves(&c), pair("A title", ""), "the title found is kept and shown");
+    }
+
+    #[test]
+    fn test_a_row_that_found_no_model_waits_and_is_not_fetched_again_until_one_is_up() {
+        let c = enrich_store();
+        run(&c, false, ("A title", ""), false);
+        for _ in 0..3 {
+            let (_, reads) = run(&c, false, ("A title", ""), false);
+            assert_eq!(reads, 0, "with no model up, the document is not fetched from the regulator again");
+        }
+        let row = sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap();
+        assert!(wants_reading(&row) && !row.enrich_final, "the row waits rather than finishing");
+        let (out, reads) = run(&c, true, ("A title", "The sentence."), false);
+        assert_eq!(reads, 1, "a model coming up is what reads it again");
+        assert_eq!(out["summary"], "The sentence.");
+    }
+
+    #[test]
+    fn test_a_half_filled_row_is_read_at_most_twice_with_a_model_up_then_settles() {
+        for half in [("A title", ""), ("", "A sentence.")] {
+            let c = enrich_store();
+            let mut fetched = 0;
+            for _ in 0..6 {
+                fetched += run(&c, true, half, false).1;
+            }
+            assert_eq!(fetched, ENRICH_READS as usize, "two reads that could have answered, then no more");
+            let row = sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap();
+            assert_eq!((row.subject.as_str(), row.summary.as_str()), half, "it settles with whichever half it has");
+            assert!(row.enrich_final && !wants_reading(&row));
+        }
+    }
+
+    #[test]
+    fn test_reads_with_no_model_up_do_not_count_against_the_document() {
+        let c = enrich_store();
+        let mut fetched = 0;
+        for _ in 0..4 {
+            fetched += run(&c, false, ("A title", ""), false).1;
+        }
+        assert_eq!(fetched, 1);
+        let mut with_model = 0;
+        for _ in 0..4 {
+            with_model += run(&c, true, ("A title", ""), false).1;
+        }
+        assert_eq!(with_model, ENRICH_READS as usize, "the bound is reads a model could have answered, however many came before");
+    }
+
+    #[test]
+    fn test_reads_under_an_older_logic_do_not_count_under_this_one() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        run(&c, true, ("A title", ""), false);
+        assert!(sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap().enrich_final);
+        enrichment(&c, DOC, "A title", "", ENRICH_VERSION - 1);
+        let mut fetched = 0;
+        for _ in 0..4 {
+            fetched += run(&c, true, ("A title", ""), false).1;
+        }
+        assert_eq!(fetched, ENRICH_READS as usize);
+    }
+
+    #[test]
+    fn test_a_count_survives_the_list_being_read_again() {
+        let c = enrich_store();
+        run(&c, true, ("A title", ""), false);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        assert_eq!(sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap().enrich_reads, 1);
+    }
+
+    // --- the reader that works behind the page
+
+    #[test]
+    fn test_the_background_reader_picks_a_titled_row_without_its_sentence() {
+        let c = enrich_store();
+        run(&c, false, ("A title", ""), false);
+        let r = fake(true, ("A title", "The sentence."), false);
+        let mut passed = HashSet::new();
+        assert_eq!(read_one_in(&c, &[filer("QNC", Regulator::Sedar)], &mut passed, &r), Ok(Some(Ok(()))));
+        assert_eq!(r.reads.get(), 1);
+        assert_eq!(halves(&c), pair("A title", "The sentence."));
+        assert_eq!(read_one_in(&c, &[filer("QNC", Regulator::Sedar)], &mut passed, &r), Ok(None), "nothing is left to read");
+    }
+
+    #[test]
+    fn test_the_background_reader_ends_on_rows_it_cannot_move() {
+        let c = enrich_store();
+        run(&c, false, ("A title", ""), false);
+        let r = fake(false, ("A title", ""), false);
+        let mut passed = HashSet::new();
+        let mut tries = 0;
+        while read_one_in(&c, &[filer("QNC", Regulator::Sedar)], &mut passed, &r).unwrap().is_some() {
+            tries += 1;
+            assert!(tries < 5, "a row a read cannot move is passed over, not read in a loop");
+        }
+        assert_eq!(r.reads.get(), 0);
+    }
+
+    #[test]
+    fn test_what_wants_reading() {
+        let c = enrich_store();
+        let row = || sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap();
+        assert!(wants_reading(&row()), "never read");
+        enrichment(&c, DOC, "A title", "", ENRICH_VERSION);
+        assert!(wants_reading(&row()), "a title without its sentence");
+        enrichment(&c, DOC, "", "A sentence.", ENRICH_VERSION);
+        assert!(wants_reading(&row()), "a sentence without its title");
+        enrichment(&c, DOC, "A title", "A sentence.", ENRICH_VERSION);
+        assert!(!wants_reading(&row()), "both halves");
+        enrichment(&c, DOC, "A title", "A sentence.", ENRICH_VERSION - 1);
+        assert!(wants_reading(&row()), "read under an older logic");
+        sf::set_filing_enrichment(&c, src_of(DOC), DOC, Some("A title"), Some(""), Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
+        assert!(!wants_reading(&row()), "settled");
+    }
+
+    // --- WaitingForTheModelTest
+
+    #[test]
+    fn test_a_model_that_is_starting_is_waited_for_rather_than_the_read_wasted() {
+        let c = enrich_store();
+        let r = Fake { model: false, status: "ready", wait: true, read: ("A title", "A sentence."), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
+        let out = v(filings_enrich_in(&c, src_of(DOC), DOC, &r));
+        assert_eq!(r.waits.get(), 1);
+        assert_eq!(out["summary"], "A sentence.");
+        assert_eq!(stored(&c), ("A title".to_string(), "A sentence.".to_string(), ENRICH_VERSION));
+    }
+
+    #[test]
+    fn test_a_model_that_never_comes_up_leaves_the_row_to_be_read_again() {
+        let c = enrich_store();
+        let r = Fake { model: false, status: "off", wait: false, read: ("A title", ""), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
+        let out = v(filings_enrich_in(&c, src_of(DOC), DOC, &r));
+        assert_eq!(out["subject"], "A title");
+        let row = sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap();
+        assert!(wants_reading(&row) && !row.enrich_final && row.enrich_reads == 0, "the read did not count, and the row waits");
+    }
+
+    // --- RefreshKeepsWhatWasReadTest
+
+    #[test]
+    fn test_a_row_the_source_still_lists_keeps_its_subject_and_summary() {
+        let c = store();
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
+        enrichment(&c, "sedar:1", "A title", "A sentence.", 9);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, ""), item(Regulator::Sedar, 3, "")]);
+        let row = sf::filing(&c, src_of("sedar:1"), "sedar:1").unwrap().unwrap();
+        assert_eq!((row.subject, row.summary, row.enrich_version), ("A title".into(), "A sentence.".into(), Some(9)));
+    }
+
+    #[test]
+    fn test_what_the_source_says_about_a_row_is_still_refreshed() {
+        let c = store();
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        enrichment(&c, "sedar:1", "A title", "A sentence.", 9);
+        let mut moved = item(Regulator::Sedar, 1, "");
+        moved.url = "https://www.sedarplus.ca/x?drmKey=fresh".into();
+        replace(&c, "QNC", Regulator::Sedar, &[moved]);
+        let row = sf::filing(&c, src_of("sedar:1"), "sedar:1").unwrap().unwrap();
+        assert_eq!(row.doc.url, "https://www.sedarplus.ca/x?drmKey=fresh");
+        assert_eq!(row.summary, "A sentence.");
+    }
+
+    #[test]
+    fn test_a_row_the_source_no_longer_lists_goes() {
+        let c = store();
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 2, "")]);
+        assert!(sf::filing(&c, src_of("sedar:1"), "sedar:1").unwrap().is_none());
+        assert!(sf::filing(&c, src_of("sedar:2"), "sedar:2").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_another_sources_rows_are_untouched() {
+        let c = store();
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        replace(&c, "QNC", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
+        enrichment(&c, "sec:1", "From EDGAR", "A sentence.", 9);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        assert_eq!(sf::filing(&c, src_of("sec:1"), "sec:1").unwrap().unwrap().subject, "From EDGAR");
+    }
+}

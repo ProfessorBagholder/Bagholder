@@ -75,6 +75,9 @@ impl Regulators for Regs {
             Regulator::Sedar => self.sedar.documents.clone(),
         }
     }
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+        Ok(("2026-10-01".into(), vec![]))
+    }
 }
 
 fn answers() -> Value {

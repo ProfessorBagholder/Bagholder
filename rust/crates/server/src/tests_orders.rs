@@ -240,6 +240,7 @@ fn listing_search_picks_the_symbol_on_its_exchange() {
     // sources name the NYSE's venues differently
     assert_eq!(pick("BBAI", "XNAS").unwrap().id, "sec-s-bbai");
     assert_eq!(pick("BBAI", "ARCX").unwrap().id, "sec-s-bbai");
+    assert_eq!(pick("BBAI", "US").unwrap().id, "sec-s-bbai", "a listing's key names the US market itself");
     assert!(pick("BBAI", "XTSE").is_err(), "a Canadian venue is its own");
     // two listings of one symbol on one venue: said, never chosen between
     let mut two = a.clone();
@@ -364,7 +365,7 @@ fn listings_of_one_ticker_in_and_outside_the_book_each_open_on_their_own() {
     let now = Timestamp::now();
     let day = now.to_zoned(jiff::tz::TimeZone::get("America/Toronto").unwrap()).date().to_string();
     for currency in ["CAD", "USD"] {
-        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "TWN".into(), currency: currency.into(), day: day.clone(), side: "BUY".into(), quantity: "1".into(), price: "10".into(), fee: String::new() };
+        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "TWN".into(), exchange: "TSX".into(), currency: currency.into(), day: day.clone(), side: "BUY".into(), quantity: "1".into(), price: "10".into(), fee: String::new() };
         crate::entries::enter(f, &req, now).unwrap();
     }
     let book = f.book().unwrap();

@@ -13,8 +13,10 @@ fn test_quote_sources_cover_every_held_kind() {
     }
     assert_eq!(quotes::yahoo_forms(&Listing::new("PLTR", "NASDAQ", "", "")), ["PLTR"]);
     assert_eq!(quotes::yahoo_forms(&Listing::new("HHIS.U", "TSX", "USD", ""))[0], "HHIS-U.TO", "a Toronto listing in US dollars is still Toronto's");
-    assert_eq!(quotes::yahoo_forms(&Listing::new("QNC", "", "", ""))[0], "QNC.TO", "no venue and no currency: Canada, as before");
-    assert_eq!(quotes::yahoo_forms(&Listing::new("ASTS", "", "USD", "")), ["ASTS"]);
+    // no venue: no form, whatever the currency, since a currency names no venue
+    for currency in ["", "CAD", "USD"] {
+        assert!(quotes::yahoo_forms(&Listing::new("QNC", "", currency, "")).is_empty(), "{currency}");
+    }
 }
 
 #[test]

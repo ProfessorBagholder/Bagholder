@@ -9,14 +9,12 @@
 //! its own (`ENB.TO` from a file import); the venue the record names decides the
 //! form, never that suffix.
 //!
-//! A listing whose venue the record does not name, or names by a code or words
-//! no table here knows (an OTC venue, a file-imported row), follows its currency
-//! (`SPEC.md` §2, TMX Money; §4, Short interest): a CAD listing is asked as a
-//! Canadian one, from TMX's bare form and Yahoo's `.TO`, a USD listing as a US one.
-//! Each source is then asked the other forms of that market in turn, so a venue
-//! the record names wrongly still finds the listing.
-
-use bagholder_core::Currency;
+//! A listing is asked under its own venue's forms only. One whose record names no
+//! venue, or names one by a code or words no table here knows (an OTC venue, a
+//! file-imported row), is asked of no source: its venue is never guessed from its
+//! currency, and another venue's form is never asked for it, since either reads
+//! another listing's data as this one's (plan `market-data-keyed-by-listing`, The
+//! old app here). Its market data waits for a record that names its venue.
 
 use crate::contract::Market;
 
@@ -32,16 +30,6 @@ pub fn market_of(mic: Option<&str>) -> Option<Market> {
         m if bagholder_core::listing::US_MICS.contains(&m) => Some(Market::UnitedStates),
         _ => None,
     }
-}
-
-/// The market of a listing: its venue's, else its currency's (CAD, Canada; USD,
-/// the US), else none.
-pub fn market_of_listing(mic: Option<&str>, currency: Currency) -> Option<Market> {
-    market_of(mic).or(match currency {
-        Currency::CAD => Some(Market::Canada),
-        Currency::USD => Some(Market::UnitedStates),
-        _ => None,
-    })
 }
 
 /// The venue a record names, as a code this module knows: its code, else its
@@ -127,41 +115,11 @@ pub fn tmx_form(symbol: &str, mic: &str) -> Option<String> {
     tmx_suffix(mic).map(|s| format!("{r}{s}"))
 }
 
-/// The Canadian venues, the likelier first: the forms asked after a listing's
-/// own, when its venue is wrong or missing.
-const CANADIAN_VENUES: [&str; 4] = ["XTSE", "XTSX", "XCNQ", "NEOE"];
-/// The US venues asked after a listing's own: Yahoo writes every US listing bare.
-const US_VENUES: [&str; 1] = ["XNAS"];
-
-/// The venues a listing is asked on, in order: its own, then the other venues
-/// of its market (by its currency where its venue is none known here).
-fn venues_of(mic: Option<&str>, currency: Currency) -> Vec<&str> {
-    let own = mic.filter(|m| market_of(Some(m)).is_some());
-    let others: &[&str] = match market_of_listing(own, currency) {
-        Some(Market::Canada | Market::CboeCanada) => &CANADIAN_VENUES,
-        Some(Market::UnitedStates) => &US_VENUES,
-        _ => &[],
-    };
-    own.into_iter().chain(others.iter().copied()).collect()
-}
-
-/// TMX's forms of a Canadian listing, its venue's own first (bare where the
-/// venue is none TMX names), then the other Canadian venues' (bare, `:CNX`,
-/// `:AQL`). TMX answers each form on the venue it names, which the reader
-/// checks, so at most the listing's own venue answers for it.
-pub fn tmx_forms(symbol: &str, mic: Option<&str>, currency: Currency) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for v in venues_of(mic, currency) {
-        if matches!(market_of(Some(v)), Some(Market::UnitedStates)) {
-            continue;
-        }
-        if let Some(f) = tmx_form(symbol, v) {
-            if !out.contains(&f) {
-                out.push(f);
-            }
-        }
-    }
-    out
+/// TMX's form of a Canadian listing, on its own venue; none for a listing whose
+/// venue is none known here, or a US one (asked of other sources).
+pub fn tmx_forms(symbol: &str, mic: Option<&str>) -> Vec<String> {
+    let Some(mic) = mic.filter(|m| matches!(market_of(Some(m)), Some(Market::Canada | Market::CboeCanada))) else { return vec![] };
+    tmx_form(symbol, mic).into_iter().collect()
 }
 
 /// Yahoo's suffixes for a venue, the likelier first. Alpha (TSX Alpha
@@ -191,19 +149,10 @@ pub fn yahoo_forms(symbol: &str, mic: &str) -> Vec<String> {
     yahoo_suffixes(mic).iter().map(|s| format!("{r}{s}")).collect()
 }
 
-/// The Yahoo forms a listing is asked under, in order: its venue's own, then
-/// the other venues' of its market (`.TO`, `.V`, `.CN`, `.NE` for a Canadian
-/// listing; bare for a US one), its currency's where its venue is none known.
-pub fn yahoo_forms_of(symbol: &str, mic: Option<&str>, currency: Currency) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for v in venues_of(mic, currency) {
-        for f in yahoo_forms(symbol, v) {
-            if !out.contains(&f) {
-                out.push(f);
-            }
-        }
-    }
-    out
+/// The Yahoo forms a listing is asked under: its own venue's; none for a listing
+/// whose venue is none known here.
+pub fn yahoo_forms_of(symbol: &str, mic: Option<&str>) -> Vec<String> {
+    mic.map(|m| yahoo_forms(symbol, m)).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -268,21 +217,19 @@ mod tests {
         assert_eq!(known_mic(Some("OTCM"), Some("OTC Markets")), None);
     }
 
+    /// A listing is asked under its own venue's forms alone, on every venue the
+    /// table knows; one whose venue is none known is asked under none.
     #[test]
-    fn a_listing_whose_venue_is_none_known_follows_its_currency() {
-        use bagholder_core::Currency;
-        assert_eq!(market_of_listing(None, Currency::CAD), Some(Market::Canada));
-        assert_eq!(market_of_listing(Some("OTCM"), Currency::USD), Some(Market::UnitedStates));
-        assert_eq!(market_of_listing(Some("NEOE"), Currency::USD), Some(Market::CboeCanada));
-        // TMX's forms: the venue's own first, then the other Canadian venues'
-        assert_eq!(tmx_forms("ENB", None, Currency::CAD), ["ENB", "ENB:CNX", "ENB:AQL"]);
-        assert_eq!(tmx_forms("ENB", Some("XCNQ"), Currency::CAD), ["ENB:CNX", "ENB", "ENB:AQL"]);
-        assert_eq!(tmx_forms("HBIX", Some("NEOE"), Currency::CAD), ["HBIX:AQL", "HBIX", "HBIX:CNX"]);
-        assert!(tmx_forms("SPY", Some("ARCX"), Currency::USD).is_empty());
-        // Yahoo's: the venue's own, then its market's others
-        assert_eq!(yahoo_forms_of("ONE", Some("XATS"), Currency::CAD), ["ONE.TO", "ONE.V", "ONE.CN", "ONE.NE"]);
-        assert_eq!(yahoo_forms_of("BRK.B", None, Currency::USD), ["BRK-B"]);
-        assert!(yahoo_forms_of("X", None, Currency::parse("EUR").unwrap()).is_empty());
+    fn a_listing_is_asked_under_its_own_venue_s_forms_only() {
+        for mic in bagholder_core::listing::CANADA_MICS.iter().chain(bagholder_core::listing::US_MICS.iter()) {
+            let tmx = tmx_forms("ENB", Some(mic));
+            let canadian = matches!(market_of(Some(mic)), Some(Market::Canada | Market::CboeCanada));
+            assert_eq!(tmx, if canadian { vec![tmx_form("ENB", mic).unwrap()] } else { vec![] }, "{mic}");
+            assert_eq!(yahoo_forms_of("ENB", Some(mic)), yahoo_forms("ENB", mic), "{mic}");
+        }
+        for unknown in [None, Some("OTCM"), Some("XLON"), Some("")] {
+            assert!(tmx_forms("ENB", unknown).is_empty() && yahoo_forms_of("ENB", unknown).is_empty(), "{unknown:?}");
+        }
     }
 
     #[test]

@@ -17,6 +17,7 @@ test('Enter in the Add trade boxes submits the trade', async ({ page }) => {
   await page.goto('/')
   let sent: Record<string, unknown> | null = null
   await page.route('**/api/entries', (route) => { sent = route.request().postDataJSON(); return route.fulfill({ status: 400, json: { ok: false, error: 'not in this test' } }) })
+  await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread: '', listings: [{ listing: 'ZZZQ@XTSE', symbol: 'ZZZQ', name: 'Zzzq Corp', exchange: 'TSX', currency: 'CAD', held: false }] } }))
   await page.getByRole('button', { name: 'Menu' }).click()
   await page.getByText('Add trade').click()
   await page.getByPlaceholder('e.g. LUNR or LUNR 15JAN27 12.00 CALL').fill('ZZZQ')

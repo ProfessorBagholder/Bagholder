@@ -404,7 +404,7 @@ pub fn replace_news(conn: &Connection, listing: &ListingKey, exchange: &str, row
         }
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            rusqlite::params![format!("news_fetched:{key}"), now],
+            rusqlite::params![listing.meta(bagholder_core::listing::meta::NEWS_FETCHED, &[]), now],
         )?;
         Ok(())
     })
@@ -459,12 +459,13 @@ pub fn has_wire_release(conn: &Connection, listing: &ListingKey) -> Result<bool>
 }
 
 pub fn news_fetched_at(conn: &Connection) -> Result<HashMap<String, String>> {
-    let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'news_fetched:%'")?;
-    let mut rows = stmt.query([])?;
+    let prefix = format!("{}:", bagholder_core::listing::meta::NEWS_FETCHED);
+    let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE ? || '%'")?;
+    let mut rows = stmt.query([&prefix])?;
     let mut out = HashMap::new();
     while let Some(r) = rows.next()? {
         let key: String = r.get(0)?;
-        out.insert(key["news_fetched:".len()..].to_string(), r.get::<_, Option<String>>(1)?.unwrap_or_default());
+        out.insert(key[prefix.len()..].to_string(), r.get::<_, Option<String>>(1)?.unwrap_or_default());
     }
     Ok(out)
 }
@@ -475,8 +476,8 @@ pub fn forget_news(conn: &Connection, listing: &ListingKey) -> Result<()> {
         conn.execute("DELETE FROM news WHERE listing = ?", rusqlite::params![key])?;
         let tail = format!(":{key}");
         conn.execute(
-            "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
-            rusqlite::params![format!("news_fetched:{key}"), tail, tail],
+            "DELETE FROM meta WHERE key = ? OR (key LIKE ? || ':%' AND substr(key, -length(?)) = ?)",
+            rusqlite::params![listing.meta(bagholder_core::listing::meta::NEWS_FETCHED, &[]), bagholder_core::listing::meta::NEWS_SOURCE_FETCHED, tail, tail],
         )?;
         Ok(())
     })

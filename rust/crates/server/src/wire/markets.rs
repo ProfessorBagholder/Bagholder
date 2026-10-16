@@ -77,8 +77,9 @@ pub struct UniverseRow {
 /// The market's context tables, as the builders ask of them.
 pub trait Tables {
     /// A holding's record, by its broker's security id (a contract's by its
-    /// underlying's share record, on the venue its currency suggests first).
-    fn holding(&self, kind: InstrumentKind, security: &str, underlying: &str, currency: Currency) -> Option<Record>;
+    /// underlying's share record, on the underlying's own listing; none where the
+    /// underlying's record names no venue).
+    fn holding(&self, kind: InstrumentKind, security: &str, underlying: Option<&bagholder_core::ListingKey>) -> Option<Record>;
     /// A listing's record, by its symbol and venue as the watchlist names it.
     fn listing(&self, symbol: &str, exchange: &str, currency: Currency) -> Option<Record>;
     /// A market universe's constituents, in the source's order: `ca`, `us`, `intl`.
@@ -392,8 +393,15 @@ fn holding_sector(engine: &Engine, names: &Names, t: &dyn Tables, p: &PositionFi
     }
     let inputs = engine.inputs();
     let security = names.security.get(&p.instrument).cloned().unwrap_or_default();
-    let underlying = build::shown(inputs, bagholder_engine::scope::underlying_of(inputs, p.instrument)).symbol;
-    t.holding(p.kind, &security, &underlying, p.currency).map(|r| r.dominant_sector()).unwrap_or_else(|| UNCLASSIFIED.to_string())
+    let underlying = underlying_listing(inputs, p.instrument);
+    t.holding(p.kind, &security, underlying.as_ref()).map(|r| r.dominant_sector()).unwrap_or_else(|| UNCLASSIFIED.to_string())
+}
+
+/// The listing an option contract's underlying is now, from the contract's own
+/// terms and the underlying's record (brief 34, U21); none where it names no venue.
+pub(crate) fn underlying_listing(inputs: &bagholder_engine::input::Inputs, contract: bagholder_core::InstrumentId) -> Option<bagholder_core::ListingKey> {
+    let under = inputs.ledger.instruments.get(&bagholder_engine::scope::underlying_of(inputs, contract))?;
+    bagholder_core::ListingKey::of(under.instrument.kind, under.current_name()?).ok()
 }
 
 /// One tile per symbol held, its value in CAD summed over the accounts holding
@@ -631,8 +639,8 @@ pub fn exposure_doc(engine: &Engine, names: &Names, pf: &Portfolio, t: &dyn Tabl
             Record { sectors: vec![(DIGITAL_ASSETS.to_string(), bagholder_core::Dec::ONE)], countries: vec![] }
         } else {
             let security = names.security.get(&p.instrument).cloned().unwrap_or_default();
-            let underlying = build::shown(inputs, bagholder_engine::scope::underlying_of(inputs, p.instrument)).symbol;
-            t.holding(p.kind, &security, &underlying, p.currency).unwrap_or_default()
+            let underlying = underlying_listing(inputs, p.instrument);
+            t.holding(p.kind, &security, underlying.as_ref()).unwrap_or_default()
         };
         for (name, w) in &record.sectors {
             sectors.add(name, part(v.amount, *w));

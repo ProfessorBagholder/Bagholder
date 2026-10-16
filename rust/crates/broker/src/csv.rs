@@ -336,6 +336,9 @@ pub struct Stated {
     pub kind: Kind,
     /// The instrument, by the symbol the row gives and what kind it is.
     pub instrument: Option<(String, InstrumentKind)>,
+    /// The exchange the row names its symbol on, where the file has an
+    /// `exchange` column: a ticker alone can be two companies on two exchanges.
+    pub exchange: Option<String>,
     /// Signed: into the account is positive.
     pub quantity: Option<Dec>,
     pub price: Option<Dec>,
@@ -431,6 +434,7 @@ fn activities(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
     let commission = opt_number(cells, "commission", "commission")?;
     let direction = cell(cells, "direction").unwrap_or("").to_uppercase();
     let mut out = Stated {
+        exchange: cell(cells, "exchange").map(str::to_string),
         day: date,
         settle,
         kind: Kind::Unclassified,
@@ -518,6 +522,7 @@ fn statement(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
     let description = cell(cells, "description").unwrap_or("");
     let amount = number("amount", cell(cells, "amount").ok_or_else(|| unreadable("the row has no amount".into()))?)?;
     let mut out = Stated {
+        exchange: cell(cells, "exchange").map(str::to_string),
         day: date,
         settle: None,
         kind: Kind::Unclassified,
@@ -573,6 +578,7 @@ fn simple(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         (None, None) => None,
     };
     let mut out = Stated {
+        exchange: cell(cells, "exchange").map(str::to_string),
         day: date,
         settle: None,
         kind: Kind::Unclassified,
@@ -871,7 +877,7 @@ mod tests {
     fn a_row_maps_to_its_transaction_in_the_file_s_currency() {
         let (zones, record) = ctx();
         let c = MapContext { connection: None, record, zones: &zones };
-        let named = Named { refs: vec![("isin".into(), "US0000000001".into())], kind: "security".into(), currency: "USD".into(), symbol: "ZZZ".into(), contract: None };
+        let named = Named { refs: vec![("isin".into(), "US0000000001".into())], kind: "security".into(), currency: "USD".into(), symbol: "ZZZ".into(), contract: None, venue: None };
         let m = CsvMapping.map(&c, &payload(Layout::Simple, cells(&[("date", "2024-03-01"), ("action", "buy"), ("symbol", "ZZZ"), ("quantity", "5"), ("price", "20"), ("amount", "100"), ("currency", "USD")]), Some(named)));
         assert!(m.problems.is_empty(), "{:?}", m.problems);
         let d = &m.legs[0];

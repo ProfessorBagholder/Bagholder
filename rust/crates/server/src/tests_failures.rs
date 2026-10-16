@@ -50,7 +50,7 @@ fn test_a_market_cache_that_will_not_open_is_said_by_the_pass_that_met_it_until_
     assert_eq!(said.matches("The market cache could not be opened").count(), 1, "said once, by the pass and the header alike: {said}");
     // the request that meets it answers it, not an empty or a default answer
     assert!(crate::status::answer(&app).unwrap_err().contains("The market cache could not be opened"));
-    assert!(crate::feeds::filings_stored(&app, "QNC").unwrap_err().contains("The market cache could not be opened"));
+    assert!(crate::feeds::filings_stored(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap()).unwrap_err().contains("The market cache could not be opened"));
     mend_cache(home.path());
     assert_eq!(crate::feeds::sweep_shorts(&app), 0);
     assert_eq!(error(&app), "", "the next pass that opens it takes the failure away");
@@ -60,13 +60,16 @@ fn test_a_market_cache_that_will_not_open_is_said_by_the_pass_that_met_it_until_
 #[test]
 fn test_a_read_that_fails_is_the_answer_of_the_request_never_an_empty_list() {
     let (_home, app) = fresh();
-    assert!(crate::feeds::filings_stored(&app, "QNC").unwrap().filings.is_empty());
+    let qnc = bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap();
+    assert!(crate::feeds::filings_stored(&app, &qnc).unwrap().filings.is_empty());
     let c = app.cache().unwrap();
+    // its filer settled, so its filings are read
+    bagholder_store::feeds::settle_listing_filers(&c, &qnc, bagholder_store::feeds::Regulator::Sedar, Ok(&[("000012345".to_string(), bagholder_store::feeds::SettledBy::SedarName)]), "2026-09-15T00:00:00Z").unwrap();
     c.execute("ALTER TABLE filings RENAME TO filings_away", []).unwrap();
-    let e = crate::feeds::filings_stored(&app, "QNC").unwrap_err();
+    let e = crate::feeds::filings_stored(&app, &qnc).unwrap_err();
     assert!(e.contains("filings"), "{e}");
     c.execute("ALTER TABLE filings_away RENAME TO filings", []).unwrap();
-    assert!(crate::feeds::filings_stored(&app, "QNC").is_ok());
+    assert!(crate::feeds::filings_stored(&app, &qnc).is_ok());
 }
 
 #[test]
@@ -209,12 +212,12 @@ fn test_a_distribution_notice_whose_record_cannot_be_read_says_why_until_one_can
     *app.feeds.record_fails.lock().unwrap() = Some("TMX Money could not be reached".into());
     use bagholder_store::feeds::{Feed, NewsItem, NewsKind};
     let item = |id: &str| NewsItem { id: id.into(), headline: "Announces Monthly Distribution".into(), source: String::new(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: NewsKind::Release, via: Feed::Tmx };
-    crate::feeds::release_notice(&app, "QNC", &[item("tmx:1")]);
-    assert!(!error(&app).contains("QNC's declared distributions"), "one failure is not said");
-    crate::feeds::release_notice(&app, "QNC", &[item("tmx:1")]);
-    assert!(error(&app).contains("QNC's declared distributions could not be read again: TMX Money could not be reached"), "{}", error(&app));
+    crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:1")]);
+    assert!(!error(&app).contains("declared distributions"), "one failure is not said");
+    crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:1")]);
+    assert!(error(&app).contains("QNC · TSX-V's declared distributions could not be read again: TMX Money could not be reached"), "{}", error(&app));
     *app.feeds.record_fails.lock().unwrap() = None;
-    crate::feeds::release_notice(&app, "QNC", &[item("tmx:2")]);
+    crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:2")]);
     assert_eq!(error(&app), "");
 }
 
@@ -224,16 +227,16 @@ fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
     // each failed twice in a row, so each is said
     for _ in 0..2 {
         for sym in ["ASTS", "LUNR", "MU"] {
-            crate::feeds::feed_failed(&app, &format!("shorts:{sym}"), "FINRA could not be reached".into());
+            crate::feeds::feed_failed(&app, &format!("shorts:{sym}@US"), "FINRA could not be reached".into());
         }
-        crate::feeds::feed_failed(&app, "shorts:VEQT", "CIRO could not be reached".into());
+        crate::feeds::feed_failed(&app, "shorts:VEQT@XTSE", "CIRO could not be reached".into());
     }
     assert_eq!(
         error(&app),
-        "The short interest of ASTS, LUNR, MU could not be read: FINRA could not be reached. The short interest of VEQT could not be read: CIRO could not be reached."
+        "The short interest of ASTS · US, LUNR · US, MU · US could not be read: FINRA could not be reached. The short interest of VEQT · TSX could not be read: CIRO could not be reached."
     );
-    crate::feeds::feed_answered(&app, "shorts:LUNR");
-    assert!(error(&app).starts_with("The short interest of ASTS, MU could not be read"), "{}", error(&app));
+    crate::feeds::feed_answered(&app, "shorts:LUNR@US");
+    assert!(error(&app).starts_with("The short interest of ASTS · US, MU · US could not be read"), "{}", error(&app));
 }
 
 /// A single failed request to an outside source is not told to the person: the
@@ -242,14 +245,14 @@ fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
 #[test]
 fn test_a_single_failed_request_to_a_source_is_not_said() {
     let (_home, app) = fresh();
-    let feed = "shorts:ZZQQ";
+    let feed = "shorts:ZZQQ@XTSE";
     crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403".into());
     assert_eq!(error(&app), "", "one failure");
     crate::feeds::feed_answered(&app, feed);
     crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403".into());
     assert_eq!(error(&app), "", "one failure after an answer");
     crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403".into());
-    assert_eq!(error(&app), "The short interest of ZZQQ could not be read: CIRO: HTTP 403.");
+    assert_eq!(error(&app), "The short interest of ZZQQ · TSX could not be read: CIRO: HTTP 403.");
     crate::feeds::feed_answered(&app, feed);
     assert_eq!(error(&app), "");
 }

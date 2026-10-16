@@ -91,7 +91,7 @@ pub fn history_candidates(rec: &Listing) -> Vec<(String, String)> {
         return vec![];
     }
     let mut out = Vec::new();
-    if let Some(k) = tmx_quote_symbol(&rec.symbol, &rec.exchange, &ccy) {
+    if let Some(k) = tmx_quote_symbol(&rec.symbol, &rec.exchange) {
         out.push(("tmx".to_string(), k));
     }
     out.extend(yahoo_forms(rec).into_iter().map(|f| ("yahoo".to_string(), f)));
@@ -99,7 +99,7 @@ pub fn history_candidates(rec: &Listing) -> Vec<(String, String)> {
 }
 
 fn bars_meta_key(rec: &Keyed) -> String {
-    format!("bars_source:{}", rec.key)
+    rec.key.meta(bagholder_core::listing::meta::BARS_SOURCE, &[])
 }
 
 /// The candidates with the remembered winner
@@ -601,7 +601,7 @@ pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Po
             fill_daily(&conn, &rates, &rec, &start, &today, &stamp)
         });
         daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != sym);
-        done(read.map_err(|e| format!("The daily bars of {sym} could not be stored: {e}")));
+        done(read.map_err(|e| format!("The daily bars of {} could not be stored: {e}", sym.named())));
     };
     if std::thread::Builder::new().name("bagholder-daily".into()).spawn(run).is_err() {
         // no thread to read on: nothing is under way, so nothing is left pending
@@ -929,7 +929,7 @@ pub fn available_timeframes(rec: &Listing, start: &str, today: &str) -> Vec<&'st
 }
 
 fn miss_key(listing: &ListingKey, tf: &str) -> String {
-    format!("bars_miss:{listing}|{tf}")
+    format!("{}|{tf}", listing.meta(bagholder_core::listing::meta::BARS_MISS, &[]))
 }
 
 pub fn record_intraday_miss(conn: &rusqlite::Connection, listing: &ListingKey, tf: &str, now_stamp: &str) -> rusqlite::Result<()> {
@@ -1001,7 +1001,7 @@ pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool:
             ensure_intraday(&conn, &rates, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true)
         });
         PENDING.lock().unwrap().retain(|s| *s != sym);
-        done(read.map(|_| ()).map_err(|e| format!("The hourly bars of {sym} could not be stored: {e}")));
+        done(read.map(|_| ()).map_err(|e| format!("The hourly bars of {} could not be stored: {e}", sym.named())));
     };
     if std::thread::Builder::new().name(format!("bagholder-intraday-{}", left)).spawn(run).is_err() {
         // no thread to read on: nothing is under way, so nothing is left pending

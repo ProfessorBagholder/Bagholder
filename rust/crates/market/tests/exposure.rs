@@ -147,7 +147,8 @@ fn test_yahoo_summary() {
     let (sectors, holdings) = exposure::parse_yahoo_summary(&data).unwrap();
     assert_eq!(sectors.0, vec![("Real Estate".to_string(), 2.0), ("Information Technology".to_string(), 30.0), ("Financials".to_string(), 20.0)]);
     let got: Vec<(String, f64, String)> = holdings.iter().map(|r| (r.ticker.clone(), r.weight, r.exchange.clone())).collect();
-    assert_eq!(got, vec![("AAPL".to_string(), 7.0, "".to_string()), ("RY.TO".to_string(), 3.0, "TSX".to_string())]);
+    // Yahoo writes a US listing with no market suffix, every other market's with one
+    assert_eq!(got, vec![("AAPL".to_string(), 7.0, "US".to_string()), ("RY.TO".to_string(), 3.0, "TSX".to_string())]);
 }
 
 // --- LookthroughTest
@@ -223,7 +224,7 @@ fn test_a_fund_held_by_a_fund_is_looked_through() {
     close(weight_of(&rec.countries, "Canada"), 0.5);
     close(weight_of(&rec.countries, "United States"), 0.5);
     assert_eq!(rec.coverage, 1.0);
-    let inner = bagholder_store::feeds::exposure_record(&conn, "fund:INNER").unwrap().unwrap();
+    let inner = bagholder_store::feeds::exposure_record(&conn, "fund:INNER@XTSE").unwrap().unwrap();
     assert_eq!(inner.record.coverage, 1.0, "the inner fund's record is kept for the next fund that holds it");
 }
 
@@ -248,7 +249,7 @@ fn test_a_fund_named_without_a_ticker_is_resolved_then_looked_through() {
         assert_eq!(family, "harvest");
         s2.borrow_mut().push(symbol.to_string());
         if symbol == "APLE" {
-            Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![holding("AAPL", "AAPL", 100.0, "", "", "", "USD", false)], source: "t".into(), as_of: String::new() })
+            Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![holding("AAPL", "AAPL", 100.0, "", "", "US", "USD", false)], source: "t".into(), as_of: String::new() })
         } else { None }
     })));
     hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(|_| Some(Listed { symbol: "APLE".into(), exchange: "TSX".into(), currency: "CAD".into() }))));
@@ -367,11 +368,12 @@ fn test_positions_spread_by_their_records() {
         json!({"mv": 300.0, "currency": "CAD", "securityId": "c", "short": false, "kind": "Shares"}),
         json!({"mv": 100.0, "currency": "CAD", "securityId": "a", "short": true, "kind": "Shares"}),
         json!({"mv": 200.0, "currency": "CAD", "securityId": "btc", "short": false, "kind": "Crypto"}),
-        json!({"mv": 50.0, "currency": "USD", "securityId": "opt", "short": true, "kind": "Options", "underlying": "AAPL"}),
+        // a contract is its underlying's listing's record: the venue its record names
+        json!({"mv": 50.0, "currency": "USD", "securityId": "opt", "short": true, "kind": "Options", "underlying": "AAPL", "exchange": "NASDAQ"}),
     ];
     let exposures = obj(json!({"a": {"sectors": {"Financials": 1.0}, "countries": {"Canada": 1.0}, "coverage": 1.0},
         "b": {"sectors": {"Information Technology": 0.5, "Energy": 0.25}, "countries": {"United States": 0.75}, "coverage": 0.75},
-        "share:AAPL::US": {"sectors": {"Information Technology": 1.0}, "countries": {"United States": 1.0}, "coverage": 1.0}}));
+        "share:AAPL@US": {"sectors": {"Information Technology": 1.0}, "countries": {"United States": 1.0}, "coverage": 1.0}}));
     let cad = |v: f64, c: &str| v * if c == "USD" { 2.0 } else { 1.0 };
     let (sectors, regions) = bagholder_model::exposure::exposure_slices(&held(&positions).iter().collect::<Vec<_>>(), &read(&exposures), &cad);
     let f = |n: &str, v: f64| (n.to_string(), v);
@@ -399,13 +401,13 @@ fn test_heatmap_tiles_take_the_dominant_sector() {
         json!({"id": "p1", "mv": 1000.0, "currency": "CAD", "securityId": "a", "short": false, "kind": "Shares", "symbol": "XEQT", "exchange": "TSX", "percentChange": 0.4}),
         json!({"id": "p2", "mv": 500.0, "currency": "USD", "securityId": "b", "short": false, "kind": "Shares", "symbol": "NVDA", "exchange": "NASDAQ", "percentChange": -1.2}),
         json!({"id": "p3", "mv": 200.0, "currency": "CAD", "securityId": "btc", "short": false, "kind": "Crypto", "symbol": "BTC", "exchange": "Crypto", "percentChange": null}),
-        json!({"id": "p4", "mv": 50.0, "currency": "USD", "securityId": "opt", "short": false, "kind": "Options", "symbol": "AAPL 20DEC26 200.00 CALL", "underlying": "AAPL", "exchange": "", "percentChange": 3.0}),
+        json!({"id": "p4", "mv": 50.0, "currency": "USD", "securityId": "opt", "short": false, "kind": "Options", "symbol": "AAPL 20DEC26 200.00 CALL", "underlying": "AAPL", "exchange": "NASDAQ", "percentChange": 3.0}),
         json!({"id": "p5", "mv": 0.0, "currency": "CAD", "securityId": "z", "short": false, "kind": "Shares", "symbol": "ZERO", "exchange": "TSX", "percentChange": null}),
         json!({"id": "p6", "mv": 250.0, "currency": "USD", "securityId": "b", "short": false, "kind": "Shares", "symbol": "NVDA", "exchange": "NASDAQ", "percentChange": -1.2}),
     ];
     let exposures = obj(json!({"a": {"sectors": {"Financials": 0.3, "Information Technology": 0.45, "Energy": 0.25}},
                                "b": {"sectors": {"Information Technology": 1.0}},
-                               "share:AAPL::US": {"sectors": {"Information Technology": 1.0}}}));
+                               "share:AAPL@US": {"sectors": {"Information Technology": 1.0}}}));
     let tiles = bagholder_model::markets::heatmap_items(&held(&positions).iter().collect::<Vec<_>>(), &read(&exposures), &|v, c| v * if c == "USD" { 2.0 } else { 1.0 });
     let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&tiles).iter().map(|t| row(t, &["symbol", "value", "sector", "percentChange"])).collect();
     assert_eq!(got, vec![
@@ -418,7 +420,7 @@ fn test_heatmap_tiles_take_the_dominant_sector() {
 
 #[test]
 fn test_watch_rows_carry_the_quote_the_sector_and_the_holding() {
-    let snapshot = json!({"exposures": {"share:SHOP:": {"sectors": {"Information Technology": 1.0}}},
+    let snapshot = json!({"exposures": {"share:SHOP@XTSE": {"sectors": {"Information Technology": 1.0}}},
         "watchlist": [{"symbol": "SHOP", "exchange": "TSX", "name": "Shopify Inc.", "currency": "CAD"}, {"symbol": "RKLB", "exchange": "NASDAQ", "name": "Rocket Lab", "currency": "USD"}]});
     let market = json!({"quotes": {"SHOP@TSX": {"price": 212.06, "priceChange": 1.56, "percentChange": 0.74}}});
     let base = bagholder_model::base::build_base(&snapshot, &market, &Default::default(), Some("2026-09-16"));

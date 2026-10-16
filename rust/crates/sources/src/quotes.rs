@@ -175,18 +175,17 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
     Ok(())
 }
 
-/// Read a Canadian listing's quote from TMX: the form that answered last first,
-/// else the book's, else its venue's own; where that is not carried, the other
-/// Canadian forms in turn, unless none answered earlier today.
+/// Read a Canadian listing's quote from TMX: the book's form for it first, then its
+/// venue's own. No other venue's form is asked, and a form another venue answered
+/// before is not asked again: either reads another listing's quote as this one's.
 fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
     let id = l.id;
     let source = tmx::source();
     let routed = l.route(&RefScheme::TmxForm).map(str::to_string);
     // the venue's own form, where the book names a venue TMX does
     let own = l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic));
-    let won = ctx.cache.winner(id, DataKind::Quote)?.filter(|(by, _)| *by == source).map(|w| w.1);
     let mut forms: Vec<String> = Vec::new();
-    for f in won.into_iter().chain(routed.clone()).chain(venue::tmx_forms(&l.symbol, l.venue_mic.as_deref(), l.currency)) {
+    for f in routed.clone().into_iter().chain(venue::tmx_forms(&l.symbol, l.venue_mic.as_deref())) {
         if !forms.contains(&f) {
             forms.push(f);
         }
@@ -385,10 +384,10 @@ pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BT
             other => other.failed().unwrap_or(Outcome::Unreachable("no reply".into())),
         };
     }
-    match venue::market_of_listing(g.venue_mic.as_deref(), g.currency) {
+    match venue::market_of(g.venue_mic.as_deref()) {
         Some(Market::Canada) => {
             let mut last = not_carried(format!("{} names no venue TMX quotes", g.symbol));
-            for form in venue::tmx_forms(&g.symbol, g.venue_mic.as_deref(), g.currency) {
+            for form in venue::tmx_forms(&g.symbol, g.venue_mic.as_deref()) {
                 let mut noted = tmx::ask_quote(net, &form);
                 same_currency_as(&mut noted.outcome, |q| q.currency, &g.symbol, g.currency);
                 match noted.outcome {
@@ -411,7 +410,7 @@ pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BT
             Outcome::Answered(cboe_ca::CboeAnswer::NoTradeYet { prev_close }) => Outcome::Answered(Glance { price: Money::new(prev_close, g.currency), change: None, change_pct: None }),
             other => other.failed().unwrap_or(Outcome::Unreachable("no reply".into())),
         },
-        Some(Market::UnitedStates) => yahoo_first(venue::yahoo_forms_of(&g.symbol, g.venue_mic.as_deref(), g.currency)),
+        Some(Market::UnitedStates) => yahoo_first(venue::yahoo_forms_of(&g.symbol, g.venue_mic.as_deref())),
         _ => not_carried(format!("{} names no venue a source quotes", g.symbol)),
     }
 }

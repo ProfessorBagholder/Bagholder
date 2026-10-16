@@ -106,17 +106,21 @@ fn a_coins_day_settles_at_the_end_of_the_utc_day_every_day() {
     assert_eq!(market::coin_pairs(&n.listing), vec!["BTC-CAD".to_string(), "BTC-USD".to_string()]);
 }
 
+/// A share is asked under its own venue's forms alone, in every currency: one
+/// whose record names no venue known here is asked of no source, whatever its
+/// currency, since a currency names no venue (plan `market-data-keyed-by-listing`).
 #[test]
-fn a_listing_whose_venue_is_none_known_follows_its_currency_then_the_markets_other_forms() {
-    // a CAD listing with no venue, or one no table here knows: Canadian, `.TO` first
-    let none = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", None);
-    assert_eq!(none.market(), Some(Market::Canada));
-    assert_eq!(market::yahoo_forms(&none), ["ENB.TO", "ENB.V", "ENB.CN", "ENB.NE"]);
-    let otc = listing(2, InstrumentKind::Security, Currency::USD, "BRK.B", Some("OTCM"));
-    assert_eq!(otc.market(), Some(Market::UnitedStates));
-    assert_eq!(market::yahoo_forms(&otc), ["BRK-B"]);
-    // a venue named: its own form first, then its market's others
-    assert_eq!(market::yahoo_forms(&listing(3, InstrumentKind::Security, Currency::CAD, "QNC", Some("XTSX"))), ["QNC.V", "QNC.TO", "QNC.CN", "QNC.NE"]);
+fn a_listing_is_asked_under_its_own_venue_alone_and_one_with_none_known_is_asked_of_none() {
+    for currency in [Currency::CAD, Currency::USD, Currency::parse("EUR").unwrap()] {
+        for mic in [None, Some("OTCM"), Some("XLON")] {
+            let l = listing(1, InstrumentKind::Security, currency, "ENB", mic);
+            assert_eq!(l.market(), None, "{currency:?} {mic:?}");
+            assert!(market::yahoo_forms(&l).is_empty(), "{currency:?} {mic:?}");
+        }
+    }
+    // a venue named: its own forms, never its market's others
+    assert_eq!(market::yahoo_forms(&listing(3, InstrumentKind::Security, Currency::CAD, "QNC", Some("XTSX"))), ["QNC.V"]);
+    assert_eq!(market::yahoo_forms(&listing(3, InstrumentKind::Security, Currency::USD, "BRK.B", Some("XNYS"))), ["BRK-B"]);
     // a currency no market here trades in, with no venue: none
     assert_eq!(listing(4, InstrumentKind::Security, Currency::parse("EUR").unwrap(), "X", None).market(), None);
     // an option contract not in US dollars is none of the US chains'

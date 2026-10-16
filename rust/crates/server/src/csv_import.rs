@@ -22,7 +22,7 @@ use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, Currency, RecordId, Rounding, SourceName};
 use bagholder_engine::Engine;
 
-use crate::entries::{contract_by_terms, held_by_symbol, manual_account, Refused};
+use crate::entries::{contract_by_terms, held_by_symbol, held_on_listing, manual_account, Refused};
 use crate::figures::Figures;
 
 /// A row the report names: its line in the file and what it says.
@@ -222,7 +222,7 @@ pub fn import_from(
                 };
                 let instrument = match &stated {
                     Ok(s) => match (&s.instrument, s.currency) {
-                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, *kind, currency)? {
+                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency)? {
                             Some(t) => Some(book.name(placed, &t).map_err(|e| match e {
                                 bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
                                 other => Refused::Failed(other.to_string()),
@@ -291,19 +291,36 @@ pub fn import_from(
     Ok(report)
 }
 
-/// What a row's symbol trades, as the book knows it: the instrument it holds by
-/// that symbol in that currency, else a contract by its terms or a security the
-/// book has not met. `None` for a kind neither is (a coin the book does not
-/// hold, an option whose name states no terms): the row names nothing.
-fn traded(f: &Figures, symbol: &str, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
+/// What a row's symbol trades, as the book knows it. A row that names its
+/// exchange is the listing it names: the security the book holds there, else a
+/// security the book has not met, on that venue. A row that names none is the
+/// instrument the book holds by that symbol in that currency, else a contract by
+/// its terms or a security whose records state no venue, which gets no market
+/// data until one does (plan `market-data-keyed-by-listing`, Approach, 5).
+/// `None` for a kind neither is (a coin the book does not hold, an option whose
+/// name states no terms): the row names nothing.
+fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
     let symbol = symbol.trim().to_uppercase();
+    let listing = match exchange.map(str::trim).filter(|ex| !ex.is_empty() && kind == InstrumentKind::Security) {
+        Some(ex) => {
+            let mic = bagholder_core::listing::mic_of(ex).ok_or_else(|| Refused::Entry(format!("{ex:?} is not an exchange")))?;
+            Some((bagholder_core::ListingKey::on(&symbol, mic).map_err(|e| Refused::Entry(e.to_string()))?, Some(mic.to_string())))
+        }
+        None => None,
+    };
     f.read(|e| {
+        if let Some((key, venue)) = &listing {
+            return Some(match held_on_listing(e, key, currency) {
+                Some(id) => Traded::Held(id),
+                None => Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: venue.clone() },
+            });
+        }
         if let Some(id) = held_by_symbol(e, &symbol, currency, |k| k == kind) {
             return Some(Traded::Held(id));
         }
         match kind {
             InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency),
-            InstrumentKind::Security => Some(Traded::Named { symbol, currency, contract: None }),
+            InstrumentKind::Security => Some(Traded::Named { symbol, currency, contract: None, venue: None }),
             _ => None,
         }
     })

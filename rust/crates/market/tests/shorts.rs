@@ -66,26 +66,29 @@ fn approx(a: f64, b: f64) {
 
 #[test]
 fn test_each_market_goes_to_the_regulator_that_publishes_for_it() {
-    assert_eq!(shorts::market_of("GME", "NYSE", "USD"), Some(ShortMarket::Us));
-    assert_eq!(shorts::market_of("AAPL", "NASDAQ", "USD"), Some(ShortMarket::Us));
-    assert_eq!(shorts::market_of("QNC", "TSX-V", "CAD"), Some(ShortMarket::Ca));
-    assert_eq!(shorts::market_of("TGIF", "CSE", "CAD"), Some(ShortMarket::Ca));
-    assert_eq!(shorts::market_of("HBIX", "Cboe Canada", "CAD"), Some(ShortMarket::Ca));
+    assert_eq!(shorts::market_of("GME", "NYSE"), Some(ShortMarket::Us));
+    assert_eq!(shorts::market_of("AAPL", "NASDAQ"), Some(ShortMarket::Us));
+    assert_eq!(shorts::market_of("QNC", "TSX-V"), Some(ShortMarket::Ca));
+    assert_eq!(shorts::market_of("TGIF", "CSE"), Some(ShortMarket::Ca));
+    assert_eq!(shorts::market_of("HBIX", "Cboe Canada"), Some(ShortMarket::Ca));
 }
 
+/// A listing whose venue is none known goes to no regulator: neither its
+/// currency nor its ticker stands in for its venue.
 #[test]
-fn test_a_venue_the_book_does_not_name_follows_the_currency_as_the_quotes_do() {
-    assert_eq!(shorts::market_of("SHOP", "", "CAD"), Some(ShortMarket::Ca));
-    assert_eq!(shorts::market_of("F", "", "USD"), Some(ShortMarket::Us));
+fn test_a_listing_that_names_no_venue_goes_to_no_regulator() {
+    for (sym, ex) in [("SHOP", ""), ("F", ""), ("SHOP", "OTC"), ("F", "XLON")] {
+        assert_eq!(shorts::market_of(sym, ex), None, "{sym} on {ex:?}");
+    }
 }
 
 #[test]
 fn test_nothing_is_claimed_for_an_instrument_no_one_reports() {
-    assert_eq!(shorts::market_of("BTC", "Crypto", "USD"), None);
-    assert_eq!(shorts::market_of("SPX", "Index", "USD"), None);
-    assert_eq!(shorts::market_of("ES", "CME", "USD"), None);
-    assert_eq!(shorts::market_of("AAPL  260117C00150000", "NASDAQ", "USD"), None);
-    assert_eq!(shorts::market_of("", "NYSE", "USD"), None);
+    assert_eq!(shorts::market_of("BTC", "Crypto"), None);
+    assert_eq!(shorts::market_of("SPX", "Index"), None);
+    assert_eq!(shorts::market_of("ES", "CME"), None);
+    assert_eq!(shorts::market_of("AAPL  260117C00150000", "NASDAQ"), None);
+    assert_eq!(shorts::market_of("", "NYSE"), None);
 }
 
 // --- ReportDateTest ------------------------------------------------------------
@@ -133,8 +136,8 @@ fn test_the_daily_us_file_gives_the_short_part_of_each_symbols_volume() {
 #[test]
 fn test_the_canadian_position_report_gives_shares_short_and_the_change() {
     let rows = shorts::parse_ca_positions(&ca_grid());
-    assert_eq!(rows["QNC"], CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
-    assert_eq!(rows["TGIF"].venue, "CSE");
+    assert_eq!(rows["QNC@XTSX"], CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
+    assert_eq!(rows["TGIF@XCNQ"].venue, "CSE");
     assert!(!rows.contains_key("NIL"));
     assert!(!rows.contains_key("OOPS"));
     assert!(!rows.contains_key("Security Symbol"));
@@ -143,18 +146,28 @@ fn test_the_canadian_position_report_gives_shares_short_and_the_change() {
 #[test]
 fn test_the_canadian_volume_report_gives_the_short_share_of_trading() {
     let rows = shorts::parse_ca_volume(CA_CSV).unwrap();
-    assert_eq!(rows["QNC"].short_volume, 1197633.0);
-    assert_eq!(rows["QNC"].volume_pct, Some(21.319));
-    approx(rows["QNC"].total_volume.unwrap(), 1197633.0 / 21.319 * 100.0);
-    assert!(rows["TGIF"].total_volume.is_none());
+    assert_eq!(rows["QNC@XTSX"].short_volume, 1197633.0);
+    assert_eq!(rows["QNC@XTSX"].volume_pct, Some(21.319));
+    approx(rows["QNC@XTSX"].total_volume.unwrap(), 1197633.0 / 21.319 * 100.0);
+    assert!(rows["TGIF@XCNQ"].total_volume.is_none());
 }
 
+/// A Canadian file's row is its listing's, by its symbol and its venue code:
+/// one ticker on two venues is two rows, each found by its own listing alone,
+/// and a listing whose venue is none known is found in none.
 #[test]
-fn test_a_row_is_only_used_for_the_venue_it_was_filed_under() {
-    assert!(shorts::venue_fits("TSXV", "TSX-V"));
-    assert!(shorts::venue_fits("AQL", "Cboe Canada"));
-    assert!(shorts::venue_fits("TSX", ""));
-    assert!(!shorts::venue_fits("TSX", "CSE"));
+fn test_a_row_is_only_used_for_the_listing_it_was_filed_under() {
+    let codes = ["TSX", "TSXV", "CSE", "AQL"];
+    for code in codes {
+        let key = shorts::ciro_key("ZQ", code).unwrap();
+        for (_, words) in shorts::CA_VENUE_NAMES {
+            assert_eq!(shorts::ca_row_key("ZQ", words).as_deref() == Some(key.as_str()), shorts::ciro_key("ZQ", code) == shorts::ca_row_key("ZQ", words), "{code} {words}");
+        }
+        assert_eq!(codes.iter().filter(|c| shorts::ciro_key("ZQ", c).as_deref() == Some(key.as_str())).count(), 1, "{code} is its own venue");
+    }
+    assert_eq!(shorts::ca_row_key("ZQ", ""), None);
+    assert_eq!(shorts::ca_row_key("ZQ", "NASDAQ"), None, "a US listing is in no Canadian file");
+    assert_eq!(shorts::ciro_key("ZQ", "XYZ"), None);
 }
 
 // --- ListingTest ---------------------------------------------------------------
@@ -251,7 +264,7 @@ fn test_a_listing_filed_under_another_venue_is_not_read_as_this_one() {
 #[test]
 fn test_nothing_is_read_for_an_instrument_no_one_reports() {
     let c = conn();
-    assert_eq!(shorts::for_listing(&c, "BTC", "Crypto", "USD", TODAY, false, ""), Ok(None));
+    assert_eq!(shorts::for_listing(&c, "BTC", "Crypto", TODAY, false, ""), Ok(None));
 }
 
 #[test]
@@ -379,15 +392,15 @@ impl Yahoo {
     }
 }
 
-fn float(y: &Yahoo, sym: &str, ex: &str, ccy: &str, name: &str) -> Option<f64> {
-    shorts::float_shares_with(sym, ex, ccy, name, true, |f| y.get(f), || true, || {}, |_, _| Ok(None)).unwrap()
+fn float(y: &Yahoo, sym: &str, ex: &str, name: &str) -> Option<f64> {
+    shorts::float_shares_with(sym, ex, name, true, |f| y.get(f), || true, || {}, |_| Ok(None)).unwrap()
 }
 
 #[test]
 fn test_the_float_is_read_under_the_venues_own_symbol() {
     let _g = serial();
     let y = Yahoo::new(vec![("QNC.V", stats(json!(212448707)), 200)]);
-    assert_eq!(float(&y, "QNC", "TSX-V", "CAD", ""), Some(212448707.0));
+    assert_eq!(float(&y, "QNC", "TSX-V", ""), Some(212448707.0));
     assert!(y.asked_with("QNC.V") > 0);
 }
 
@@ -395,29 +408,29 @@ fn test_the_float_is_read_under_the_venues_own_symbol() {
 fn test_a_form_the_source_does_not_carry_falls_to_the_next() {
     let _g = serial();
     let y = Yahoo::new(vec![("QNC.TO", "{}".into(), 404), ("QNC.V", stats(json!(1000.0)), 200)]);
-    assert_eq!(float(&y, "QNC", "TSX-V", "CAD", ""), Some(1000.0));
+    assert_eq!(float(&y, "QNC", "TSX-V", ""), Some(1000.0));
 }
 
 #[test]
 fn test_a_listing_with_no_float_published_reports_none() {
     let _g = serial();
     let y = Yahoo::new(vec![("HBIX", stats(Value::Null), 200)]);
-    assert_eq!(float(&y, "HBIX", "Cboe Canada", "CAD", ""), None);
+    assert_eq!(float(&y, "HBIX", "Cboe Canada", ""), None);
 }
 
 #[test]
 fn test_it_is_read_once_and_kept() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(463550645)), 200)]);
-    float(&y, "GME", "NYSE", "USD", "");
-    float(&y, "GME", "NYSE", "USD", "");
+    float(&y, "GME", "NYSE", "");
+    float(&y, "GME", "NYSE", "");
     assert_eq!(y.asked_with("GME"), 1);
 }
 
 #[test]
 fn test_without_the_browser_client_the_float_is_simply_unknown() {
     let _g = serial();
-    let got = shorts::float_shares_with("GME", "NYSE", "USD", "", false, |_| panic!("asked"), || true, || {}, |_, _| Ok(None));
+    let got = shorts::float_shares_with("GME", "NYSE", "", false, |_| panic!("asked"), || true, || {}, |_| Ok(None));
     assert_eq!(got, Ok(None));
 }
 
@@ -437,7 +450,7 @@ fn test_a_company_with_no_float_published_is_never_given_its_share_count() {
     let _g = serial();
     let answer = json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": null, "sharesOutstanding": {"raw": 500.0}}}]}}).to_string();
     let y = Yahoo::new(vec![("QNC", answer, 200)]);
-    let got = shorts::float_shares_with("QNC", "TSX-V", "CAD", "Quantum eMotion Corp", true, |f| y.get(f), || true, || {}, |_, _| panic!("asked for units"));
+    let got = shorts::float_shares_with("QNC", "TSX-V", "Quantum eMotion Corp", true, |f| y.get(f), || true, || {}, |_| panic!("asked for units"));
     assert_eq!(got, Ok(None));
 }
 
@@ -446,7 +459,7 @@ fn test_a_fund_falls_back_to_the_units_the_exchange_publishes() {
     let _g = serial();
     let answer = json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": null, "sharesOutstanding": null}}]}}).to_string();
     let y = Yahoo::new(vec![("RDDY", answer, 200)]);
-    let got = shorts::float_shares_with("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF", true, |f| y.get(f), || true, || {}, |_, _| Ok(Some(20075000.0)));
+    let got = shorts::float_shares_with("RDDY", "TSX", "Harvest Reddit Enhanced High Income Shares ETF", true, |f| y.get(f), || true, || {}, |_| Ok(Some(20075000.0)));
     assert_eq!(got, Ok(Some(20075000.0)));
 }
 
@@ -455,7 +468,7 @@ fn test_a_us_fund_takes_the_count_from_the_same_answer_as_the_float() {
     let _g = serial();
     let answer = json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": null, "sharesOutstanding": {"raw": 4000.0}}}]}}).to_string();
     let y = Yahoo::new(vec![("SPY", answer, 200)]);
-    assert_eq!(float(&y, "SPY", "NYSE", "USD", "SPDR S&P 500 ETF Trust"), Some(4000.0));
+    assert_eq!(float(&y, "SPY", "NYSE", "SPDR S&P 500 ETF Trust"), Some(4000.0));
 }
 
 #[test]
@@ -463,7 +476,7 @@ fn test_a_float_that_is_published_is_still_what_a_fund_is_measured_against() {
     let _g = serial();
     let answer = json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": {"raw": 111.0}, "sharesOutstanding": {"raw": 999.0}}}]}}).to_string();
     let y = Yahoo::new(vec![("XIU", answer, 200)]);
-    assert_eq!(float(&y, "XIU", "TSX", "CAD", "iShares S&P/TSX 60 Index ETF"), Some(111.0));
+    assert_eq!(float(&y, "XIU", "TSX", "iShares S&P/TSX 60 Index ETF"), Some(111.0));
 }
 
 // --- SearchedListingTest -------------------------------------------------------
@@ -472,7 +485,7 @@ fn searched(exchange: &str, name: &str) -> (bagholder_store::feeds::Shorts, Vec<
     let _g = serial();
     let c = conn();
     let mut rows = HashMap::new();
-    rows.insert("SHOP".to_string(), CaPositionRow { venue: "TSX".into(), shares: 7573829.0, change: Some(41206.0), name: "SHOPIFY INC. CL 'A' SV".into() });
+    rows.insert("SHOP@XTSE".to_string(), CaPositionRow { venue: "TSX".into(), shares: 7573829.0, change: Some(41206.0), name: "SHOPIFY INC. CL 'A' SV".into() });
     let position = shorts::ca_position_from("2026-08-31", &rows, "SHOP", exchange, TODAY);
     let seen = RefCell::new(vec![]);
     let out = shorts::finish(&c, position, None, "SHOP", exchange, false, ShortMarket::Ca, |_| Ok(vec![]), |issuer| {
@@ -485,11 +498,18 @@ fn searched(exchange: &str, name: &str) -> (bagholder_store::feeds::Shorts, Vec<
     (out, seen.into_inner())
 }
 
+/// The report names the issuer where the book knows no name; a listing whose
+/// venue is none known is found in no report, whatever its ticker.
 #[test]
-fn test_the_report_names_the_venue_and_the_issuer_where_the_book_knows_neither() {
-    let (rec, seen) = searched("", "");
+fn test_the_report_names_the_issuer_where_the_book_knows_none_and_no_venue_finds_nothing() {
+    let (rec, seen) = searched("TSX", "");
     assert_eq!((rec.exchange.as_str(), rec.name.as_str()), ("TSX", "SHOPIFY INC. CL 'A' SV"));
     assert_eq!(seen, vec!["SHOPIFY INC. CL 'A' SV"]);
+    let mut rows = HashMap::new();
+    rows.insert("SHOP@XTSE".to_string(), CaPositionRow { venue: "TSX".into(), shares: 1.0, change: None, name: String::new() });
+    for venue in ["", "CSE", "NASDAQ", "OTC"] {
+        assert_eq!(shorts::ca_position_from("2026-08-31", &rows, "SHOP", venue, TODAY), Position::default(), "{venue:?}");
+    }
 }
 
 #[test]
@@ -517,7 +537,7 @@ fn test_the_count_is_the_capitalisation_over_the_price_for_the_venues_own_funds(
     let calls = Cell::new(0);
     // TMX carries no count for these
     let units = |sym: &str| {
-        shorts::fund_units_with(sym, "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || { calls.set(calls.get() + 1); Ok(directory()) })).unwrap()
+        shorts::fund_units_with(sym, "CBOE CANADA", |_| Ok(None), |s| shorts::cboe_units_with(s, || { calls.set(calls.get() + 1); Ok(directory()) })).unwrap()
     };
     assert_eq!(units("HBIX"), Some(6900000.0));
     assert_eq!(units("BCBN"), None, "a company's shares in issue are not its float");
@@ -528,13 +548,13 @@ fn test_the_count_is_the_capitalisation_over_the_price_for_the_venues_own_funds(
 
 #[test]
 fn test_a_listing_on_another_venue_never_takes_a_count_from_this_one() {
-    let got = shorts::fund_units_with("HBIX", "TSX", "CAD", |_| Ok(Some(0.0)), |_| panic!("asked anyway"));
+    let got = shorts::fund_units_with("HBIX", "TSX", |_| Ok(Some(0.0)), |_| panic!("asked anyway"));
     assert_eq!(got, Ok(None));
 }
 
 #[test]
 fn test_the_venue_is_asked_only_where_tmx_has_no_count() {
-    let got = shorts::fund_units_with("XYZ", "CBOE CANADA", "CAD", |_| Ok(Some(4200.0)), |_| panic!("asked anyway"));
+    let got = shorts::fund_units_with("XYZ", "CBOE CANADA", |_| Ok(Some(4200.0)), |_| panic!("asked anyway"));
     assert_eq!(got, Ok(Some(4200.0)));
 }
 
@@ -544,8 +564,8 @@ fn test_the_venue_is_asked_only_where_tmx_has_no_count() {
 fn test_a_figure_is_read_once_and_kept() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(463550645)), 200)]);
-    float(&y, "GME", "NYSE", "USD", "GameStop Corp.");
-    float(&y, "GME", "NYSE", "USD", "GameStop Corp.");
+    float(&y, "GME", "NYSE", "GameStop Corp.");
+    float(&y, "GME", "NYSE", "GameStop Corp.");
     assert_eq!(y.asked_with("GME"), 1);
 }
 
@@ -553,19 +573,19 @@ fn test_a_figure_is_read_once_and_kept() {
 fn test_a_lookup_that_answered_with_nothing_is_asked_again() {
     let _g = serial();
     let empty = Yahoo::new(vec![("ASTS", stats(Value::Null), 200)]);
-    assert_eq!(float(&empty, "ASTS", "NASDAQ", "USD", "AST SpaceMobile Inc."), None);
+    assert_eq!(float(&empty, "ASTS", "NASDAQ", "AST SpaceMobile Inc."), None);
     shorts::age_float("ASTS|NASDAQ", shorts::FLOAT_MISS_MIN * 60 + 1);
     let good = Yahoo::new(vec![("ASTS", stats(json!(266440743)), 200)]);
-    assert_eq!(float(&good, "ASTS", "NASDAQ", "USD", "AST SpaceMobile Inc."), Some(266440743.0));
+    assert_eq!(float(&good, "ASTS", "NASDAQ", "AST SpaceMobile Inc."), Some(266440743.0));
 }
 
 #[test]
 fn test_a_figure_is_not_asked_again_that_soon() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(463550645)), 200)]);
-    float(&y, "GME", "NYSE", "USD", "GameStop Corp.");
+    float(&y, "GME", "NYSE", "GameStop Corp.");
     shorts::age_float("GME|NYSE", shorts::FLOAT_MISS_MIN * 60 + 1);
-    float(&y, "GME", "NYSE", "USD", "GameStop Corp.");
+    float(&y, "GME", "NYSE", "GameStop Corp.");
     assert_eq!(y.asked_with("GME"), 1);
 }
 
@@ -576,7 +596,7 @@ fn test_each_lookup_takes_its_turn_and_leaves_the_next_slot() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(1.0)), 200)]);
     let turns = Cell::new(0);
-    shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || { turns.set(turns.get() + 1); true }, || {}, |_, _| Ok(None)).unwrap();
+    shorts::float_shares_with("GME", "NYSE", "GameStop Corp.", true, |f| y.get(f), || { turns.set(turns.get() + 1); true }, || {}, |_| Ok(None)).unwrap();
     assert_eq!(turns.get(), 1, "the lookup takes Yahoo's turn");
 }
 
@@ -584,7 +604,7 @@ fn test_each_lookup_takes_its_turn_and_leaves_the_next_slot() {
 fn test_nothing_is_asked_while_a_backoff_stands() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", stats(json!(1.0)), 200)]);
-    let got = shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || false, || {}, |_, _| Ok(None));
+    let got = shorts::float_shares_with("GME", "NYSE", "GameStop Corp.", true, |f| y.get(f), || false, || {}, |_| Ok(None));
     assert_eq!(got, Ok(None));
     assert_eq!(y.asked_with("quoteSummary"), 0);
 }
@@ -594,7 +614,7 @@ fn test_a_refusal_starts_the_backoff_the_whole_app_honours() {
     let _g = serial();
     let y = Yahoo::new(vec![("GME", "{}".into(), 429)]);
     let backed = Cell::new(false);
-    let got = shorts::float_shares_with("GME", "NYSE", "USD", "GameStop Corp.", true, |f| y.get(f), || true, || backed.set(true), |_, _| Ok(None));
+    let got = shorts::float_shares_with("GME", "NYSE", "GameStop Corp.", true, |f| y.get(f), || true, || backed.set(true), |_| Ok(None));
     assert_eq!(got, Ok(None));
     assert!(backed.get());
 }
@@ -605,7 +625,7 @@ fn test_a_refusal_starts_the_backoff_the_whole_app_honours() {
 fn test_a_us_listing_with_no_currency_on_its_row_is_still_asked_for_as_one() {
     let _g = serial();
     let y = Yahoo::new(vec![("quoteSummary/ASTS?", stats(json!(266440743)), 200)]);
-    assert_eq!(float(&y, "ASTS", "NASDAQ", "", "AST SpaceMobile Inc."), Some(266440743.0));
+    assert_eq!(float(&y, "ASTS", "NASDAQ", "AST SpaceMobile Inc."), Some(266440743.0));
     assert!(y.asked.borrow().iter().all(|u| !u.contains(".TO") && !u.contains(".V")), "asked under a Canadian suffix");
 }
 
@@ -613,7 +633,7 @@ fn test_a_us_listing_with_no_currency_on_its_row_is_still_asked_for_as_one() {
 fn test_a_canadian_listing_with_no_currency_keeps_its_own_suffixes() {
     let _g = serial();
     let y = Yahoo::new(vec![("QNC.V", stats(json!(212448707)), 200)]);
-    assert_eq!(float(&y, "QNC", "TSX-V", "", "Quantum eMotion Corp"), Some(212448707.0));
+    assert_eq!(float(&y, "QNC", "TSX-V", "Quantum eMotion Corp"), Some(212448707.0));
     assert!(y.asked_with("QNC.V") > 0);
 }
 
@@ -654,7 +674,7 @@ fn test_a_listing_the_report_omits_and_the_exchange_has_no_volume_for_says_nothi
 fn test_a_listing_the_report_carries_is_read_from_the_report() {
     let _g = serial();
     let mut rows = HashMap::new();
-    rows.insert("QNC".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1197633.0, volume_pct: Some(21.319), total_volume: Some(5617679.0) });
+    rows.insert("QNC@XTSX".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1197633.0, volume_pct: Some(21.319), total_volume: Some(5617679.0) });
     warm(rows);
     let out = shorts::ca_volume_with("QNC", "TSX-V", || panic!("read again"), |_| panic!("asked the exchange anyway")).unwrap().unwrap();
     assert_eq!(out.volume_pct, Some(21.319));

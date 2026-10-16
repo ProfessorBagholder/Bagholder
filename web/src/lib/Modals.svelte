@@ -2,7 +2,7 @@
   import { book, status } from './subs.svelte'
   // The three menu modals — Add trade, Import CSV report, Load folder — ported
   // from tradeModalHtml / importModalHtml / folderModalHtml + modalShell.
-  import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch, stopImport } from './ui.svelte'
+  import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch, stopImport, isContract, resolveTradeSymbol } from './ui.svelte'
   import type { ImportReport as FileReport } from './generated/model_api'
   import { symText } from './sym'
   import { relTime } from './fmt'
@@ -81,7 +81,14 @@
             {#each accounts.filter((a) => a.name && a.brokerAccount !== 'manual') as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
           </select>
         </div>
-        <div><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
+        <div><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} onchange={() => resolveTradeSymbol(f.symbol)} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
+        <div><div class="lbl" style="margin-bottom:5px">Exchange</div>
+          <!-- each listing of the symbol, by its venue: one is taken, two or more wait for the choice -->
+          <select class="input" bind:value={f.listing} aria-label="Exchange" disabled={isContract(f.symbol) || f.listings.length < 2}>
+            {#if f.listings.length !== 1}<option value="">{isContract(f.symbol) ? 'Written by its terms' : f.listingsOf && f.listingsOf === f.symbol.trim().toUpperCase() && !f.listings.length ? 'Not listed' : ''}</option>{/if}
+            {#each f.listings as l (l.listing)}<option value={l.listing}>{l.exchange}{l.name ? ' · ' + l.name : ''}</option>{/each}
+          </select>
+        </div>
         <div><div class="lbl" style="margin-bottom:5px">Side</div>
           <div class="seg">
             {#each ['BUY', 'SELL'] as o (o)}<label class="seg-opt" class:on={f.side === o}><input type="radio" bind:group={f.side} value={o} />{o}</label>{/each}

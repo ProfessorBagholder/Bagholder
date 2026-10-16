@@ -436,7 +436,7 @@ mod tests {
         app.set_figures(f);
         let f = app.figures.get().unwrap();
         // a contract entered by hand, held today
-        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ 15JAN27 12.00 CALL".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "BUY".into(), quantity: "2".into(), price: "0.40".into(), fee: String::new() };
+        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ 15JAN27 12.00 CALL".into(), exchange: "".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "BUY".into(), quantity: "2".into(), price: "0.40".into(), fee: String::new() };
         crate::entries::enter(f, &req, now).unwrap();
         let book = f.book().unwrap();
         let n = f.read(|e| e.needs()).unwrap();

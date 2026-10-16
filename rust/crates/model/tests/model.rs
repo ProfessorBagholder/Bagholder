@@ -88,7 +88,8 @@ fn held_symbols(base: &Base) -> Vec<Value> {
 }
 
 fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
-    sent(&bagholder_model::symbols_of::intraday_archive_symbols(&bagholder_model::context::MarketBase::of_base(base)))
+    let keyed = bagholder_model::symbols_of::intraday_archive_symbols(&bagholder_model::context::MarketBase::of_base(base));
+    sent(&keyed.iter().map(|k| k.listing()).collect::<Vec<_>>())
 }
 
 fn snap(acts: Vec<Value>) -> Value {
@@ -1393,14 +1394,20 @@ fn test_portfolio_tiles_sum_wealthsimple_figures_over_the_accounts_in_scope() {
 
 #[test]
 fn test_intraday_archive_covers_recent_trades_and_holdings() {
-    let t = json!({"accountType": "TFSA"});
+    // each listing names its exchange, from its security record: one that names none is archived under no key
+    let t = |sym: &str| json!({"accountType": "TFSA", "securityId": format!("sec-s-{sym}")});
     let acts = vec![
-        buy_x("b1", "OLD", 10, 5, "2024-01-05", t.clone()), sell_x("s1", "OLD", 10, 6, "2024-02-05", t.clone()),
-        buy_x("b2", "NEW", 10, 5, "2026-03-01", t.clone()), sell_x("s2", "NEW", 10, 6, "2026-04-01", t.clone()),
-        buy_x("b3", "NEW", 10, 5, "2026-06-01", t.clone()), sell_x("s3", "NEW", 10, 6, "2026-07-01", t.clone()),
-        buy_x("b4", "HELD", 10, 5, "2025-05-01", t.clone()),
+        buy_x("b1", "OLD", 10, 5, "2024-01-05", t("OLD")), sell_x("s1", "OLD", 10, 6, "2024-02-05", t("OLD")),
+        buy_x("b2", "NEW", 10, 5, "2026-03-01", t("NEW")), sell_x("s2", "NEW", 10, 6, "2026-04-01", t("NEW")),
+        buy_x("b3", "NEW", 10, 5, "2026-06-01", t("NEW")), sell_x("s3", "NEW", 10, 6, "2026-07-01", t("NEW")),
+        buy_x("b4", "HELD", 10, 5, "2025-05-01", t("HELD")),
     ];
-    let base = base_of(&snap(acts.clone()), empty_market(), json!({}), "2026-09-07");
+    let securities = || {
+        json!(["OLD", "NEW", "HELD", "LUNR"].iter().map(|s| json!({"id": format!("sec-s-{s}"), "symbol": s, "primaryExchange": if *s == "LUNR" { "NASDAQ" } else { "TSX" }})).chain([json!({"id": "sec-o-1", "symbol": "LUNR", "underlyingId": "sec-s-LUNR"})]).collect::<Vec<_>>())
+    };
+    let mut snapshot = snap(acts.clone());
+    snapshot["securities"] = securities();
+    let base = base_of(&snapshot, empty_market(), json!({}), "2026-09-07");
     let recs = intraday_archive_symbols(&base);
     let by = by_key(&recs, "symbol");
     assert!(!by.contains_key("OLD"), "closed long before the window");
@@ -1408,7 +1415,9 @@ fn test_intraday_archive_covers_recent_trades_and_holdings() {
     assert_eq!(by["HELD"]["start"], "2025-09-07", "an old holding is wanted from the window start");
     let mut opt_acts = acts;
     opt_acts.push(opt(json!({"id": "o1", "category": "trade", "activityType": "BUY", "rawType": "OPTIONS_BUY", "quantity": 2, "unitPrice": 0.10, "netCashAmount": -20, "transactionDate": "2026-05-05", "symbol": "LUNR 15JAN27 10.00 CALL", "currency": "USD", "accountType": "TFSA", "securityId": "sec-o-1"})));
-    let base = base_of(&snap(opt_acts), empty_market(), json!({}), "2026-09-07");
+    let mut snapshot = snap(opt_acts);
+    snapshot["securities"] = securities();
+    let base = base_of(&snapshot, empty_market(), json!({}), "2026-09-07");
     let recs = intraday_archive_symbols(&base);
     let by = by_key(&recs, "symbol");
     assert!(by.contains_key("LUNR"), "an option position is archived as its underlying");

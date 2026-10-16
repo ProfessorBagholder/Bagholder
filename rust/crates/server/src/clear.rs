@@ -71,6 +71,15 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("history_fetches", Place::Of(Kind::Market)),
     ("price_bars", Place::Of(Kind::Market)),
     ("bar_fetches", Place::Of(Kind::Market)),
+    // which filers a listing's filings come from, and the TSX's interlisted list
+    // (migration 6): each can be asked again
+    ("listing_filers", Place::Of(Kind::Market)),
+    ("listing_filer_misses", Place::Of(Kind::Market)),
+    ("filer_fetches", Place::Of(Kind::Market)),
+    ("interlisted", Place::Of(Kind::Market)),
+    // the tickers the filings were kept under before migration 6, for carrying the
+    // book's told marks once
+    ("filings_carried", Place::Of(Kind::Market)),
     ("meta", Place::Meta),
     ("gen", Place::Kept),
     ("schema_migrations", Place::Kept),
@@ -283,7 +292,7 @@ mod tests {
     fn filled(app: &Arc<App>) {
         let f = app.figures.get().unwrap();
         let t = now();
-        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
+        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), exchange: "NASDAQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
         crate::csv_import::import(f, "a.csv", "Date,Action,Symbol,Quantity,Price,Amount,Currency\n2025-11-18,Buy,ZZQR,1,1,1,USD\n11/18/2025,Buy,ZZQR,1,1,1,USD\n", None, t).unwrap();
         let trade = f.read(|e| e.figures().trades.iter().find_map(|x| x.trade)).unwrap().expect("a trade");
         f.write_journal(&trade.to_string(), &bagholder_core::journal::JournalEntry { thesis: "why".into(), grade: None, tags: vec!["t".into()] }, t).unwrap();

@@ -54,14 +54,15 @@ fn a_payer_has_its_companys_reader_else_its_markets_record() {
         assert_eq!(source(&p).as_deref(), Some(want), "{mic}");
         assert!(run::unread(std::slice::from_ref(&p)).is_empty());
     }
-    // a listing on a venue none of the tables knows follows its currency, as its quote does
-    let otc = payer(3, "ZZZ", "XXXX", Currency::CAD, "An Issuer No Reader Knows - Income Fund");
-    assert_eq!(source(&otc).as_deref(), Some("tmx"));
-    assert_eq!(source(&payer(3, "ZZZ", "OTCM", Currency::USD, "An Issuer No Reader Knows - Income Fund")).as_deref(), Some("yahoo"));
-    // and in a currency no market here trades in, it waits on it, named
-    let unknown = payer(4, "ZZZ", "XXXX", Currency::parse("EUR").unwrap(), "An Issuer No Reader Knows - Income Fund");
-    assert_eq!(source(&unknown), None);
-    assert_eq!(run::unread(std::slice::from_ref(&unknown)).len(), 1);
+    // a listing on a venue none of the tables knows waits on its venue, named, in
+    // every currency: a currency names no venue, as its quote's does not
+    for currency in [Currency::CAD, Currency::USD, Currency::parse("EUR").unwrap()] {
+        for mic in ["XXXX", "OTCM"] {
+            let unknown = payer(4, "ZZZ", mic, currency, "An Issuer No Reader Knows - Income Fund");
+            assert_eq!(source(&unknown), None, "{mic} {currency:?}");
+            assert_eq!(run::unread(std::slice::from_ref(&unknown)).len(), 1);
+        }
+    }
 }
 
 #[test]

@@ -715,9 +715,8 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             f.names()?;
             #[cfg(test)]
             let window = paths_mark(f, instrument);
-            #[cfg(not(test))]
-            let _ = instrument; // what the test's record of the window keys on
-            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
+            // the holding by its id, as the page names one it holds
+            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
             // a test's planted fold of the names, which the growth rule must catch

@@ -14,17 +14,20 @@
   import { signedPct, newsWhen, discDate } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, sortRows } from '../sort.svelte'
-  import { book as bookDoc } from '../subs.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import { discFeed, discBySym, showDiscFeed, showDisclosures, discTitleComing, type DiscRow } from './disc.svelte'
   import { titleComing } from '../trade/discStore.svelte'
   import Mseg from './Mseg.svelte'
+  import ListingChoice from './ListingChoice.svelte'
   import GridHead from './GridHead.svelte'
   import { call } from '../api'
   import { tell } from '../ui.svelte'
-  import { read, searchSymbols } from '../reads.svelte'
+  import { read } from '../reads.svelte'
   import { atEnd } from '../actions/atEnd'
-  import { tickerKey, bookListing, directoryListing, type Chip } from './newsChip'
+  import { tickerKey, chipKey, type Chip } from './newsChip'
+  import { listingKey } from '../listingKey'
+  import { filingDocUrl } from '../trade/discStore.svelte'
+  import type { ResolvedListing } from '../generated/markets'
   import { escapable } from '../escape'
 
   // Shown, the card says so: the news is read for a page showing it (and for a
@@ -111,13 +114,15 @@
     try { localStorage.setItem('bh2.newsKind', kind) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
 
-  const heldSym = (s: string) => (positions.data?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === s)
-  const watchedSym = (s: string) => (markets.data?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === s)
+  // a listing is held or watched by its key: the same ticker on another venue is another listing
+  const heldKey = (k: string) => (positions.data?.positions || []).some((p) => listingKey(p.symbol, p.exchange) === k)
+  const watchedKey = (k: string) => (markets.data?.watchlist || []).some((w) => listingKey(w.symbol, w.exchange) === k)
+  const symKey = $derived(sym ? chipKey(sym) : '')
 
   // --- the chip's own change, when the listing is neither held nor watched ---
   const chipPct = $derived.by<number | null>(() => {
     const only = sym
-    if (!only || heldSym(only.symbol) || watchedSym(only.symbol)) return null
+    if (!only || heldKey(symKey) || watchedKey(symKey)) return null
     return sugQuotes[sugKey(only)]?.percentChange ?? null
   })
 
@@ -131,11 +136,11 @@
     let empty = 'Nothing filed.'
     // pure read only — loading and enrichment run in the effects below
     if (only) {
-      const rec = discBySym[only.symbol]
+      const rec = discBySym[symKey]
       if (!rec || rec.loading) return { state: 'reading' as const }
       if (rec.error) return { state: 'error' as const, error: rec.error }
       const p = rec.payload!
-      rows = (p.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '' }))
+      rows = (p.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '', listing: symKey }))
       if (!rows.length) empty = Object.values(p.sources || {}).some((x) => x && x.filer) ? 'Nothing filed.' : 'No regulatory filer for this listing.'
     } else {
       const f = discFeed[scope]?.data
@@ -154,7 +159,7 @@
     return { state: 'rows' as const, rows, empty }
   })
 
-  const coming = (f: DiscRow) => (sym ? titleComing(f, sym.symbol.toUpperCase()) : discTitleComing(f, scope))
+  const coming = (f: DiscRow) => (sym ? titleComing(f, symKey) : discTitleComing(f, scope))
 
   // The disclosures this view shows are sent while it shows them, and stop when it
   // stops: one listing's under the chip, or the scope's feed. The server reads the
@@ -168,7 +173,7 @@
   // A chip for a listing the book neither holds nor watches: fetch its quote.
   $effect(() => {
     const only = sym
-    if (!only || heldSym(only.symbol) || watchedSym(only.symbol)) return
+    if (!only || heldKey(symKey) || watchedKey(symKey)) return
     // asked again only once the one remembered is a minute old
     sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
   })
@@ -184,7 +189,7 @@
     lookedUp = null
     if (c.stories || c.releases) return
     const only = l.chip
-    reading = only.symbol
+    reading = chipKey(only)
     read('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
       reading = ''
       if (!r.ok) {
@@ -195,25 +200,30 @@
       // the items it read reach the card as rows of its list
     })
   })
+  // a ticker typed is every listing of it (`/api/listings`): exactly one takes the chip,
+  // two or more are offered by venue and none is chosen for the person; a word no
+  // exchange lists stays a text search
+  let choices = $state<{ key: string; listings: ResolvedListing[] } | null>(null)
+  function takeChip(only: Chip) {
+    choices = null
+    newsChip(only)
+    query = ''
+    if (kind !== 'disc') lookedUp = { chip: only, v: headlines.v }
+  }
+  const chipOf = (l: ResolvedListing): Chip => ({ symbol: bareSymbol(l.symbol).toUpperCase(), exchange: String(l.exchange || '').toUpperCase(), name: l.name, currency: l.currency })
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     const key = tickerKey(query)
     clearTimeout(lookupTimer)
+    if (choices && choices.key !== key) choices = null
     if (sym || !key) return
     lookupTimer = setTimeout(() => {
       if (sym || query.trim().toUpperCase() !== key) return
-      const take = (only: Chip) => {
-        if (query.trim().toUpperCase() !== key) return
-        newsChip(only)
-        query = ''
-        if (kind !== 'disc') lookedUp = { chip: only, v: headlines.v }
-      }
-      const book = bookListing(key, [...(markets.data?.watchlist || []), ...(positions.data?.positions || []), ...(bookDoc.data?.options.instruments || [])])
-      if (book) return take(book)
-      // a word no directory names as a ticker stays a text search
-      searchSymbols(key).then((m) => {
-        const listed = directoryListing(key, m)
-        if (listed) take(listed)
+      read('GET /api/listings', { query: { symbol: key } }).then((r) => {
+        if (sym || query.trim().toUpperCase() !== key) return
+        const listings = r.ok ? r.listings : []
+        if (listings.length === 1) return takeChip(chipOf(listings[0]))
+        choices = listings.length > 1 ? { key, listings } : null
       })
     }, 500)
   })
@@ -227,13 +237,13 @@
     if (n.url) window.open(n.url, '_blank', 'noopener')
   }
   function openDisc(f: { id: string; sym?: string; source?: string; url?: string }) {
-    const durl = f.source === 'SEC' && f.url ? f.url : '/api/filings/doc?symbol=' + encodeURIComponent(f.sym || '') + '&id=' + encodeURIComponent(f.id)
+    const durl = f.source === 'SEC' && f.url ? f.url : filingDocUrl(f.source || '', f.id)
     window.open(durl, '_blank', 'noopener')
   }
 
   const first = (n: Headline) => n.tags[0] || ({} as NewsTag)
   function chgVal(t: NewsTag): number | null {
-    return t.percentChange == null && sym && bareSymbol(t.symbol).toUpperCase() === sym.symbol ? chipPct : t.percentChange
+    return t.percentChange == null && sym && listingKey(t.symbol, t.exchange) === symKey ? chipPct : t.percentChange
   }
   const chgColor = (v: number | null) => (v == null ? 'var(--ink55)' : v >= 0 ? 'var(--pos)' : 'var(--neg)')
 
@@ -241,16 +251,17 @@
   // the card shows: the chip's own lookup, or the server's pass with a listing in the
   // card's scope (or the chip) still to read (the status names them; `*` is the market's feed)
   const passReading = $derived.by(() => {
-    if (sym && reading === sym.symbol) return true
+    if (sym && reading === symKey) return true
+    // the server names each listing still to read by its key, the market's feed `*@MARKET`
     const left = pass.data?.reading ?? []
     if (!left.length) return false
-    const has = (s: string) => left.includes(bareSymbol(s).toUpperCase())
-    if (sym) return has(sym.symbol)
-    const held = (positions.data?.positions ?? []).map((p) => p.symbol)
-    const watched = (markets.data?.watchlist ?? []).map((w) => w.symbol)
+    const has = (k: string | null) => !!k && left.includes(k)
+    if (sym) return has(symKey)
+    const held = (positions.data?.positions ?? []).map((p) => listingKey(p.symbol, p.exchange))
+    const watched = (markets.data?.watchlist ?? []).map((w) => listingKey(w.symbol, w.exchange))
     if (scope === 'holdings') return held.some(has)
     if (scope === 'watchlist') return watched.some(has)
-    return kind === 'releases' ? held.concat(watched).some(has) : left.includes('*')
+    return kind === 'releases' ? held.concat(watched).some(has) : left.includes('*@MARKET')
   })
 </script>
 
@@ -267,7 +278,9 @@
     </div>
   </div>
 
-  {#if kind === 'disc'}
+  {#if choices}
+    <ListingChoice listings={choices.listings} onpick={(l) => takeChip(chipOf(l))} />
+  {:else if kind === 'disc'}
     {#if discView.state === 'reading'}
       <div class="muted" style="font-size:12px">Reading…</div>
     {:else if discView.state === 'error'}

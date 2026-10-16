@@ -47,7 +47,7 @@
         "weight": 4.11,
         "sector": "Information Technology",
         "country": "United States",
-        "exchange": "",
+        "exchange": "US",
         "currency": "",
         "fund": false
       },
@@ -72,7 +72,7 @@
         "weight": 130.3,
         "sector": "Digital assets",
         "country": "United States",
-        "exchange": "",
+        "exchange": "US",
         "currency": "",
         "fund": true
       }
@@ -136,7 +136,7 @@
         "weight": 7.0,
         "sector": "",
         "country": "",
-        "exchange": "",
+        "exchange": "US",
         "currency": "",
         "fund": false
       },
@@ -147,7 +147,7 @@
         "sector": "",
         "country": "",
         "exchange": "TSX",
-        "currency": "CAD",
+        "currency": "",
         "fund": false
       }
     ]
@@ -332,8 +332,8 @@
   },
   "store_exposure_record_missing": null,
   "store_admin_exposures_map_keys": [
-    "fund:XEQT",
-    "share:RY:"
+    "fund:XEQT@XTSE",
+    "share:RY@XTSE"
   ],
   "store_admin_exposures_map_xeqt": {
     "sectors": {
@@ -352,7 +352,7 @@
     "fetchedAt": "2026-09-16T12:00:00Z"
   },
   "store_rows_exposures": {
-    "share:RY:": {
+    "share:RY@XTSE": {
       "sectors": [
         [
           "Financials",
@@ -366,7 +366,7 @@
         ]
       ]
     },
-    "fund:XEQT": {
+    "fund:XEQT@XTSE": {
       "sectors": [
         [
           "Financials",
@@ -390,8 +390,8 @@
     }
   },
   "store_snapshot_exposures_part_keys": [
-    "fund:XEQT",
-    "share:RY:"
+    "fund:XEQT@XTSE",
+    "share:RY@XTSE"
   ],
   "store_snapshot_exposures_part_ry": {
     "sectors": {

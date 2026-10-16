@@ -15,13 +15,21 @@ vi.mock(import('../live.svelte'), async (original) => ({
     return () => {}
   }) as never,
 }))
-// a ticker read on its own: every one answers with a row of its own
+// a ticker typed resolves to the listings `listedOn` names (NYSE where none is named),
+// and each listing read on its own answers with a row of its own
 const asked: string[] = []
+let listedOn: Record<string, string[]> = {}
 vi.mock(import('../api'), async (original) => ({
   ...(await original()),
-  call: ((_key: string, input: { query: { symbol: string } }) => {
-    asked.push(input.query.symbol)
-    return Promise.resolve({ ok: true, covered: true, shorts: row(input.query.symbol, 5, { exchange: 'NYSE' }) })
+  call: ((key: string, input: { query: { symbol: string; exchange?: string } }) => {
+    const s = input.query.symbol
+    if (key === 'GET /api/listings') {
+      const on = listedOn[s] ?? ['NYSE']
+      const key = (ex: string) => s + '@' + (ex === 'TSX' ? 'XTSE' : 'US')
+      return Promise.resolve({ ok: true, unread: '', listings: on.map((ex) => ({ listing: key(ex), symbol: s, name: s + ' Inc.', exchange: ex, currency: 'USD', held: false })) })
+    }
+    asked.push(s + '@' + input.query.exchange)
+    return Promise.resolve({ ok: true, covered: true, shorts: row(s, 5, { exchange: input.query.exchange }) })
   }) as never,
 }))
 
@@ -58,12 +66,14 @@ async function type(c: HTMLElement, text: string) {
 beforeEach(() => {
   vi.useFakeTimers()
   asked.length = 0
+  listedOn = {}
 })
 afterEach(() => vi.useRealTimers())
 
 describe('a ticker searched for', () => {
   it('outside the scope, is shown from the book\'s own row, in every scope that leaves it out', async () => {
     const book = [row('HH', 40, { held: true }), row('WW', 80, { watched: true })]
+    listedOn = { HH: ['NASDAQ'], WW: ['NASDAQ'] }
     for (const [scope, outside] of [['holdings', 'WW'], ['watchlist', 'HH']]) {
       const c = await show(book, scope)
       await type(c, outside)
@@ -75,14 +85,25 @@ describe('a ticker searched for', () => {
   it('among prefix matches, is added as a row of its own beside them', async () => {
     const c = await show([row('TD', 40, { held: true }), row('TRP', 20, { held: true })], 'all')
     await type(c, 'T')
-    expect(asked).toEqual(['T'])
+    expect(asked).toEqual(['T@NYSE'])
     expect(symbols(c)?.sort()).toEqual(['T', 'TD', 'TRP'])
   })
 
   it('that is in scope, is not read again nor shown twice', async () => {
     const c = await show([row('TD', 40, { held: true }), row('TDB', 20, { held: true })], 'holdings')
+    listedOn = { TD: ['NASDAQ'] }
     await type(c, 'TD')
     expect(asked).toEqual([])
     expect(symbols(c)?.sort()).toEqual(['TD', 'TDB'])
+  })
+
+  it('on two venues, is two rows, each read on its own venue and the one held not read again', async () => {
+    const c = await show([row('RY', 40, { held: true, exchange: 'NYSE' })], 'all')
+    listedOn = { RY: ['NYSE', 'TSX'] }
+    await type(c, 'RY')
+    expect(asked).toEqual(['RY@TSX'])
+    const exchanges = [...c.querySelectorAll('.si-row > div:nth-child(2)')].map((e) => e.textContent)
+    expect(symbols(c)).toEqual(['RY', 'RY'])
+    expect(exchanges.sort()).toEqual(['NYSE', 'TSX'])
   })
 })

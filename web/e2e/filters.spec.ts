@@ -114,7 +114,8 @@ test('a listing found outside the book carries the three icons in their places, 
       ] }),
     }),
   )
-  const found: [string, string][] = [['ZQVX', 'CBOE'], ['ZQVS', 'NYSE']]
+  // each row and the listing its page opens on, by its key: the US market's own for both venues
+  const found: [string, string][] = [['ZQVX', 'US'], ['ZQVS', 'US']]
   await open(page)
   await page.keyboard.type('ZQV')
   // funnel, Buy, Sell: three in every row, in the same places

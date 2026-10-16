@@ -32,8 +32,7 @@ pub const PACE: Duration = Duration::from_millis(600);
 pub const MAX_DEPTH: usize = 3;
 /// A breakdown older than this is fetched again.
 pub const FRESH_DAYS: i64 = 7;
-pub const SHARE_KEY: &str = "share:";
-pub const FUND_KEY: &str = "fund:";
+pub use bagholder_model::venues::{FUND_KEY, SHARE_KEY};
 
 /// What one pass of classification works in: the database, and the pool it came
 /// from, for the name search that opens its own reader.
@@ -235,6 +234,18 @@ const BLOOMBERG_COUNTRY: [(&str, &str); 36] = [
     ("BZ", "Brazil"), ("SS", "Sweden"), ("DC", "Denmark"), ("NO", "Norway"), ("FH", "Finland"), ("BB", "Belgium"), ("ID", "Ireland"), ("SP", "Singapore"), ("MM", "Mexico"), ("CH", "China"),
 ];
 
+/// The listing venue a Bloomberg market code states, where it states one: `US`
+/// and the US exchanges' codes are the US market, `CT` Toronto, `CV` the TSX
+/// Venture; a country composite (`CN`, Canada) names no venue.
+fn bloomberg_venue(code: &str) -> &'static str {
+    match code.to_uppercase().as_str() {
+        "US" | "UN" | "UW" | "UQ" | "UA" => bagholder_core::listing::US,
+        "CT" => "XTSE",
+        "CV" => "XTSX",
+        _ => "",
+    }
+}
+
 fn bloomberg(code: &str) -> String {
     let c = code.to_uppercase();
     if c == "C1" {
@@ -324,14 +335,16 @@ pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<Sh
         return Ok(v);
     }
     let sym = bagholder_model::venues::tmx_symbol(symbol);
-    let country = venue_country(exchange);
+    // the listing the venue names; one it names none of is classified by no source
+    let Ok(listing) = bagholder_core::ListingKey::on(symbol, exchange) else { return Ok(ShareClass::default()) };
+    let country = if listing.us() { "United States".to_string() } else if listing.canadian() { "Canada".to_string() } else { venue_country(exchange) };
     let mut sector = String::new();
     let mut industry = String::new();
     let mut out_country = country.clone();
     let mut source = String::new();
     // the listing's own form, by the venue it names; a listing that names none is
     // never classified under a guessed venue's
-    let key = crate::quotes::tmx_quote_symbol(symbol, exchange, currency);
+    let key = crate::quotes::tmx_quote_symbol(symbol, exchange);
     if let Some(k) = key.filter(|k| !k.is_empty()) {
         let tmx_failed = |e: FetchError| format!("TMX Money: {e}");
         let mut rec = tmx_record(&k).map_err(tmx_failed)?;
@@ -354,7 +367,7 @@ pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<Sh
             source = "TMX Money".into();
         }
     }
-    if sector.is_empty() && (country == "United States" || currency.to_uppercase() == "USD") && !sym.is_empty() && !sym.contains(' ') {
+    if sector.is_empty() && listing.us() && !sym.is_empty() && !sym.contains(' ') {
         let (nsec, nind) = nasdaq_summary(&sym)?;
         if !nsec.is_empty() {
             sector = norm_sector(&nsec);
@@ -714,7 +727,8 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Holding>, Strin
                 if country.is_empty() {
                     country = bloomberg(&code);
                 }
-                holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector, country, exchange: String::new(), currency: String::new(), fund: is_fund(&nm) });
+                // the market code states the venue where it names one (`AAPL US`), and the ticker is that listing's
+                holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector, country, exchange: bloomberg_venue(&code).to_string(), currency: String::new(), fund: is_fund(&nm) });
             }
             continue;
         }
@@ -891,7 +905,7 @@ pub fn parse_evolve_page(html: &str) -> Result<(Weights, Vec<Holding>), serde_js
             if ctry.is_empty() {
                 ctry = bloomberg(&code);
             }
-            holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector: norm_sector(&r.gics_sector), country: ctry, exchange: String::new(), currency: String::new(), fund: is_fund(&nm) });
+            holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector: norm_sector(&r.gics_sector), country: ctry, exchange: bloomberg_venue(&code).to_string(), currency: String::new(), fund: is_fund(&nm) });
         }
     }
     Ok((sectors, holdings))
@@ -906,11 +920,9 @@ fn evolve(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
 }
 
 /// Yahoo's form of a listing on the venue it names (`bagholder_sources::venue`);
-/// a venue the app does not name leaves the bare symbol.
-pub fn yahoo_symbol(symbol: &str, exchange: &str) -> String {
-    crate::quotes::venue_mic(trim_space(exchange))
-        .and_then(|mic| bagholder_sources::venue::yahoo_forms(symbol, mic).into_iter().next())
-        .unwrap_or_else(|| bagholder_model::venues::tmx_symbol(symbol))
+/// none for a venue the app does not name, which is never asked under a guessed one.
+pub fn yahoo_symbol(symbol: &str, exchange: &str) -> Option<String> {
+    crate::quotes::venue_mic(trim_space(exchange)).and_then(|mic| bagholder_sources::venue::yahoo_forms(symbol, mic).into_iter().next())
 }
 
 /// `round(x, 4)`.
@@ -989,7 +1001,10 @@ pub fn parse_yahoo_summary(data: &Value) -> Result<(Weights, Vec<Holding>), serd
         let sym = trim_space(&h.symbol).to_string();
         let raw = h.holding_percent.0;
         if !sym.is_empty() && raw > 0.0 {
-            let mut ex = "";
+            // Yahoo's own convention states the venue: a Canadian suffix names its
+            // exchange, a symbol with no market suffix is a US listing (Yahoo
+            // writes every other market's with one, `7203.T`, `SAP.DE`)
+            let mut ex = if sym.contains('.') { "" } else { bagholder_core::listing::US };
             for (suf, venue) in [(".TO", "TSX"), (".V", "TSX-V"), (".CN", "CSE"), (".NE", "CBOE CANADA")] {
                 if sym.to_uppercase().ends_with(suf) {
                     ex = venue;
@@ -998,7 +1013,7 @@ pub fn parse_yahoo_summary(data: &Value) -> Result<(Weights, Vec<Holding>), serd
             let name = h.holding_name.clone();
             holdings.push(Holding {
                 ticker: sym, name: name.clone(), weight: round4(raw * 100.0), sector: String::new(), country: String::new(), exchange: ex.to_string(),
-                currency: if ex.is_empty() { String::new() } else { "CAD".to_string() }, fund: is_fund(&name),
+                currency: String::new(), fund: is_fund(&name),
             });
         }
     }
@@ -1006,8 +1021,9 @@ pub fn parse_yahoo_summary(data: &Value) -> Result<(Weights, Vec<Holding>), serd
 }
 
 fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchError> {
+    let Some(form) = yahoo_symbol(symbol, exchange) else { return Ok(None) };
     // the statistics session the float is read with: Yahoo answers these only to a browser's handshake
-    let Some((status, raw)) = crate::shorts::yahoo_quote_summary(&yahoo_symbol(symbol, exchange), "topHoldings").map_err(FetchError::Transport)? else {
+    let Some((status, raw)) = crate::shorts::yahoo_quote_summary(&form, "topHoldings").map_err(FetchError::Transport)? else {
         return Err(FetchError::Transport("Yahoo Finance: the browser helper that opens its session could not be started".into()));
     };
     if status != 200 {
@@ -1096,10 +1112,12 @@ fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) -> Result<(), Stri
     bagholder_store::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp()).map_err(stored)
 }
 
-/// A classified share as an exposure record, cached
-/// by ticker and venue form.
+/// A classified share as an exposure record, cached by its listing
+/// (`share:<ListingKey>`). A listing whose venue is none known here has no
+/// record: nothing is classified by its ticker alone.
 pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Result<ExposureRecord, String> {
-    let key = format!("{}{}:{}", SHARE_KEY, bagholder_model::venues::tmx_symbol(symbol), bagholder_model::venues::tmx_form(exchange, currency).unwrap_or(""));
+    let Ok(listing) = bagholder_core::ListingKey::on(symbol, exchange) else { return Ok(ExposureRecord::default()) };
+    let key = bagholder_model::venues::share_key(&listing);
     if let Some(hit) = cache_get(ctx, &key)? {
         return Ok(hit);
     }
@@ -1150,9 +1168,12 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
             }
         }
         let mut sub: Option<ExposureRecord> = None;
-        // every fund source is asked by ticker: a fund no directory names is the
-        // remainder no record covers, never a request for an empty symbol
-        if h.fund && depth < MAX_DEPTH && !tk.is_empty() {
+        // a row is looked up only as the listing the file names, by its own exchange
+        // column (or the listing its name resolves to): a row that names none is
+        // what its own sector and country columns say, and never a ticker's lookup
+        // (brief 34, U18, U19)
+        let listed = bagholder_core::ListingKey::on(&tk, &ex).is_ok();
+        if h.fund && depth < MAX_DEPTH && listed {
             sub = fund_exposure(ctx, &tk, &name, &ex, depth + 1, seen)?;
         }
         if let Some(sb) = sub.as_ref() {
@@ -1167,10 +1188,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
                 continue;
             }
         }
-        if !tk.is_empty() {
-            if ex.is_empty() && ctry == "United States" && ccy.is_empty() {
-                ccy = "USD".into();
-            }
+        if listed {
             let c = share_exposure(ctx, &tk, &ex, &ccy)?;
             if sec.is_empty() {
                 sec = c.sectors.first_name().unwrap_or("").to_string();
@@ -1197,11 +1215,10 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
 /// covers its family or the source answered nothing. A source that failed,
 /// with none after it answering, is the failure.
 pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Result<Option<ExposureRecord>, String> {
-    // every source is asked by ticker: with none there is nothing to ask
-    if symbol.trim().is_empty() {
-        return Ok(None);
-    }
-    let key = format!("{}{}", FUND_KEY, bagholder_model::venues::tmx_symbol(symbol));
+    // a fund is its listing: one whose venue is none known here is asked of no
+    // source, and two listings of one ticker are two records
+    let Ok(listing) = bagholder_core::ListingKey::on(symbol, exchange) else { return Ok(None) };
+    let key = bagholder_model::venues::fund_key(&listing);
     if seen.contains(&key) {
         return Ok(None);
     }
@@ -1279,12 +1296,14 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
 /// classified. A read that failed stores nothing: the record kept stands, and
 /// the failure is returned.
 pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) -> Result<ExposureRecord, String> {
+    // the venue the broker's record names: its code where the table knows it, else its words
+    let venue = if bagholder_core::listing::mic_of(&sec.primary_mic).is_some() { sec.primary_mic.as_str() } else { sec.primary_exchange.as_str() };
     let rec = if is_fund(&sec.name) {
         // a fund no source covers is unclassified: its venue says nothing about what it holds
         let mut seen = Vec::new();
-        fund_exposure(ctx, &sec.symbol, &sec.name, &sec.primary_exchange, 0, &mut seen)?.unwrap_or_default()
+        fund_exposure(ctx, &sec.symbol, &sec.name, venue, 0, &mut seen)?.unwrap_or_default()
     } else {
-        share_exposure(ctx, &sec.symbol, &sec.primary_exchange, &sec.currency)?
+        share_exposure(ctx, &sec.symbol, venue, &sec.currency)?
     };
     store_exposure(ctx, &sec.id, &rec)?;
     Ok(rec)
