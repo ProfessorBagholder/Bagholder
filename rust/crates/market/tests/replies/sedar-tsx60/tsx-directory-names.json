@@ -1,0 +1,422 @@
+[
+ {
+  "symbol": "RY",
+  "tmx": "Royal Bank of Canada",
+  "directory": [
+   "Royal Bank of Canada"
+  ]
+ },
+ {
+  "symbol": "SHOP",
+  "tmx": "Shopify Inc. Class A Subordinate Voting Shares",
+  "directory": [
+   "Shopify Inc."
+  ]
+ },
+ {
+  "symbol": "TD",
+  "tmx": "Toronto-Dominion Bank (The)",
+  "directory": [
+   "Toronto-Dominion Bank (The)"
+  ]
+ },
+ {
+  "symbol": "BMO",
+  "tmx": "Bank of Montreal",
+  "directory": [
+   "Bank of Montreal"
+  ]
+ },
+ {
+  "symbol": "BNS",
+  "tmx": "Bank of Nova Scotia (The)",
+  "directory": [
+   "Bank of Nova Scotia (The)"
+  ]
+ },
+ {
+  "symbol": "CNQ",
+  "tmx": "Canadian Natural Resources Limited",
+  "directory": [
+   "Canadian Natural Resources Limited"
+  ]
+ },
+ {
+  "symbol": "ENB",
+  "tmx": "Enbridge Inc.",
+  "directory": [
+   "Enbridge Inc."
+  ]
+ },
+ {
+  "symbol": "CM",
+  "tmx": "Canadian Imperial Bank Of Commerce",
+  "directory": [
+   "Canadian Imperial Bank Of Commerce"
+  ]
+ },
+ {
+  "symbol": "AEM",
+  "tmx": "Agnico Eagle Mines Limited",
+  "directory": [
+   "Agnico Eagle Mines Limited"
+  ]
+ },
+ {
+  "symbol": "SU",
+  "tmx": "Suncor Energy Inc.",
+  "directory": [
+   "Suncor Energy Inc."
+  ]
+ },
+ {
+  "symbol": "BN",
+  "tmx": "Brookfield Corporation Class A Limited Voting Shares",
+  "directory": [
+   "Brookfield Corporation"
+  ]
+ },
+ {
+  "symbol": "CP",
+  "tmx": "Canadian Pacific Kansas City Limited",
+  "directory": [
+   "Canadian Pacific Kansas City Limited"
+  ]
+ },
+ {
+  "symbol": "BAM",
+  "tmx": "Brookfield Asset Management Ltd. Class A Limited Voting Shares",
+  "directory": [
+   "Brookfield Asset Management Ltd."
+  ]
+ },
+ {
+  "symbol": "CNR",
+  "tmx": "Canadian National Railway Company",
+  "directory": [
+   "Canadian National Railway Company"
+  ]
+ },
+ {
+  "symbol": "MFC",
+  "tmx": "Manulife Financial Corporation",
+  "directory": [
+   "Manulife Financial Corporation"
+  ]
+ },
+ {
+  "symbol": "ABX",
+  "tmx": "Barrick Mining Corporation",
+  "directory": [
+   "Barrick Mining Corporation"
+  ]
+ },
+ {
+  "symbol": "IMO",
+  "tmx": "Imperial Oil Limited",
+  "directory": [
+   "Imperial Oil Limited"
+  ]
+ },
+ {
+  "symbol": "TRP",
+  "tmx": "TC Energy Corporation",
+  "directory": [
+   "TC Energy Corporation"
+  ]
+ },
+ {
+  "symbol": "WPM",
+  "tmx": "Wheaton Precious Metals Corp.",
+  "directory": [
+   "Wheaton Precious Metals Corp."
+  ]
+ },
+ {
+  "symbol": "CVE",
+  "tmx": "Cenovus Energy Inc.",
+  "directory": [
+   "Cenovus Energy Inc."
+  ]
+ },
+ {
+  "symbol": "L",
+  "tmx": "Loblaw Companies Limited",
+  "directory": [
+   "Loblaw Companies Limited"
+  ]
+ },
+ {
+  "symbol": "NA",
+  "tmx": "National Bank of Canada",
+  "directory": [
+   "National Bank of Canada"
+  ]
+ },
+ {
+  "symbol": "ATD",
+  "tmx": "Alimentation Couche-Tard Inc.",
+  "directory": [
+   "Alimentation Couche-Tard Inc."
+  ]
+ },
+ {
+  "symbol": "CSU",
+  "tmx": "Constellation Software Inc.",
+  "directory": [
+   "Constellation Software Inc."
+  ]
+ },
+ {
+  "symbol": "TRI",
+  "tmx": "Thomson Reuters Corporation",
+  "directory": [
+   "Thomson Reuters Corporation"
+  ]
+ },
+ {
+  "symbol": "FNV",
+  "tmx": "Franco-Nevada Corporation",
+  "directory": [
+   "Franco-Nevada Corporation"
+  ]
+ },
+ {
+  "symbol": "SLF",
+  "tmx": "Sun Life Financial Inc.",
+  "directory": [
+   "Sun Life Financial Inc."
+  ]
+ },
+ {
+  "symbol": "WCN",
+  "tmx": "Waste Connections Inc.",
+  "directory": [
+   "Waste Connections, Inc."
+  ]
+ },
+ {
+  "symbol": "CLS",
+  "tmx": "Celestica Inc.",
+  "directory": [
+   "Celestica Inc."
+  ]
+ },
+ {
+  "symbol": "DOL",
+  "tmx": "Dollarama Inc.",
+  "directory": [
+   "Dollarama Inc."
+  ]
+ },
+ {
+  "symbol": "POW",
+  "tmx": "Power Corporation of Canada Subordinate Voting Shares",
+  "directory": [
+   "Power Corporation of Canada"
+  ]
+ },
+ {
+  "symbol": "CCO",
+  "tmx": "Cameco Corporation",
+  "directory": [
+   "Cameco Corporation"
+  ]
+ },
+ {
+  "symbol": "NTR",
+  "tmx": "Nutrien Ltd.",
+  "directory": [
+   "Nutrien Ltd."
+  ]
+ },
+ {
+  "symbol": "FFH",
+  "tmx": "Fairfax Financial Holdings Limited Subordinate Voting Shares",
+  "directory": [
+   "Fairfax Financial Holdings Limited"
+  ]
+ },
+ {
+  "symbol": "TECK.B",
+  "tmx": "Teck Resources Limited Class B Subordinate Voting Shares",
+  "directory": [
+   "Teck Resources Limited"
+  ]
+ },
+ {
+  "symbol": "IFC",
+  "tmx": "Intact Financial Corporation",
+  "directory": [
+   "Intact Financial Corporation"
+  ]
+ },
+ {
+  "symbol": "WN",
+  "tmx": "George Weston Limited",
+  "directory": [
+   "George Weston Limited"
+  ]
+ },
+ {
+  "symbol": "K",
+  "tmx": "Kinross Gold Corporation",
+  "directory": [
+   "Kinross Gold Corporation"
+  ]
+ },
+ {
+  "symbol": "PPL",
+  "tmx": "Pembina Pipeline Corporation",
+  "directory": [
+   "Pembina Pipeline Corporation"
+  ]
+ },
+ {
+  "symbol": "FTS",
+  "tmx": "Fortis Inc.",
+  "directory": [
+   "Fortis Inc."
+  ]
+ },
+ {
+  "symbol": "QSR",
+  "tmx": "Restaurant Brands International Inc.",
+  "directory": [
+   "Restaurant Brands International Inc."
+  ]
+ },
+ {
+  "symbol": "H",
+  "tmx": "Hydro One Limited",
+  "directory": [
+   "Hydro One Limited"
+  ]
+ },
+ {
+  "symbol": "FM",
+  "tmx": "First Quantum Minerals Ltd.",
+  "directory": [
+   "First Quantum Minerals Ltd."
+  ]
+ },
+ {
+  "symbol": "BCE",
+  "tmx": "BCE Inc.",
+  "directory": [
+   "BCE Inc."
+  ]
+ },
+ {
+  "symbol": "TOU",
+  "tmx": "Tourmaline Oil Corp.",
+  "directory": [
+   "Tourmaline Oil Corp."
+  ]
+ },
+ {
+  "symbol": "MG",
+  "tmx": "Magna International Inc.",
+  "directory": [
+   "Magna International Inc."
+  ]
+ },
+ {
+  "symbol": "BIP.UN",
+  "tmx": "Brookfield Infrastructure Partners L.P.",
+  "directory": [
+   "Brookfield Infrastructure Partners L.P."
+  ]
+ },
+ {
+  "symbol": "WSP",
+  "tmx": "WSP Global Inc.",
+  "directory": [
+   "WSP Global Inc."
+  ]
+ },
+ {
+  "symbol": "EMA",
+  "tmx": "Emera Incorporated",
+  "directory": [
+   "Emera Incorporated"
+  ]
+ },
+ {
+  "symbol": "MRU",
+  "tmx": "Metro Inc.",
+  "directory": [
+   "Metro Inc."
+  ]
+ },
+ {
+  "symbol": "GIB.A",
+  "tmx": "CGI Inc. Class A Subordinate Voting Shares",
+  "directory": [
+   "CGI Inc."
+  ]
+ },
+ {
+  "symbol": "RCI.B",
+  "tmx": "Rogers Communications Inc. Class B Non-voting Shares",
+  "directory": [
+   "Rogers Communications Inc."
+  ]
+ },
+ {
+  "symbol": "T",
+  "tmx": "TELUS Corporation",
+  "directory": [
+   "TELUS Corporation"
+  ]
+ },
+ {
+  "symbol": "SAP",
+  "tmx": "Saputo Inc.",
+  "directory": [
+   "Saputo Inc."
+  ]
+ },
+ {
+  "symbol": "CCL.B",
+  "tmx": "CCL Industries Inc. Unlimited Class B Non-Voting Shares",
+  "directory": [
+   "CCL Industries Inc."
+  ]
+ },
+ {
+  "symbol": "GIL",
+  "tmx": "Gildan Activewear Inc.",
+  "directory": [
+   "Gildan Activewear Inc."
+  ]
+ },
+ {
+  "symbol": "CAE",
+  "tmx": "CAE Inc.",
+  "directory": [
+   "CAE Inc."
+  ]
+ },
+ {
+  "symbol": "CTC.A",
+  "tmx": "Canadian Tire Corporation Limited Class A Non-Voting Shares",
+  "directory": [
+   "Canadian Tire Corporation, Limited"
+  ]
+ },
+ {
+  "symbol": "OTEX",
+  "tmx": "Open Text Corporation",
+  "directory": [
+   "Open Text Corporation"
+  ]
+ },
+ {
+  "symbol": "FSV",
+  "tmx": "FirstService Corporation",
+  "directory": [
+   "FirstService Corporation"
+  ]
+ }
+]

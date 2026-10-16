@@ -56,10 +56,16 @@ Each was read 2026-10-16.
 
 ## Open questions
 
-1. **Does SEDAR+'s reporting-issuer search settle every large Canadian issuer to exactly one profile by exact legal name?**
-   - *Objective:* rule 2 under Approach, 2 picks a profile only on an exact name.
-   - *Known:* nothing yet. SEDAR+'s bot gate refuses plain clients, and the reviewer could not check it. The app reaches SEDAR+ through its browser-handshake helper (`market/src/sedar.rs`).
-   - *How it is settled:* the first step of the build records SEDAR+'s answers, as fixtures, for every member of the S&P/TSX 60 (the TMX constituents list the heatmap already reads). It reports which members settle to one profile and which do not, with SEDAR+'s answer for each. That is the direct way to the one missing fact, so it comes before anything else is built.
+1. **Settled 2026-10-16: does SEDAR+ settle each large Canadian issuer to exactly one profile by exact legal name?**
+   - *How:* every S&P/TSX 60 member was taken from TMX's constituents list, its company name from the TSX directory (each of the 60 is held by exactly one company record), and that name asked of SEDAR+ through the repo's own `sedar resolve`.
+   - *Result: 59 of 60 settle to one profile*, once two facts SEDAR+'s answers show are built in:
+     - **The query.** SEDAR+'s search matches names by their leading words, and punctuation in the query breaks it ("Waste Connections, Inc" finds nothing; "Waste Connections" finds the one profile). The query is the name up to its first comma, period or parenthesis, with "The" taken off either end.
+     - **The comparison.** SEDAR+ writes the same legal names in other forms: "Bank of Nova Scotia, The", "First Quantum Minerals Ltd" with no period, and notes such as "(formerly Progressive Waste Solutions Ltd.)". Names are compared ignoring case, spacing, periods and commas, the placement of "The" (leading, ", The" or "(The)"), and a "formerly" note.
+   - *The one tie is TELUS:* two profiles are both named "TELUS Corporation".
+     - 000001114 reports in Nova Scotia only, and last filed in December 1998.
+     - 000011998 is the current issuer, and last filed in July 2026.
+   - *Proposed rule, for the gate:* a listed issuer files annual financial statements every year (National Instrument 51-102, s. 4.2: within 90 days of year-end, or 120 for a venture issuer). Among profiles with the same exact name, one with no filing in the last 12 months plus 120 days is not a listed issuer's, and is set aside. With that rule all 60 settle; without it, TELUS shows "SEDAR+ lists no single issuer named TELUS Corporation".
+   - *The answers are kept* as fixtures in `rust/crates/market/tests/replies/sedar-tsx60/`, and the reader's tests run against them.
 
 ## Approach
 
@@ -81,7 +87,7 @@ Each was read 2026-10-16.
    - The bare-ticker match for a non-US listing and its `names_match` guard go.
 2. **A Canadian listing → its SEDAR+ profile.**
    - *The issuer name comes from the listing's exchange:* for the TSX and TSX-V, the TSX directory's company record that holds the symbol (`market/src/search.rs`); for the CSE and Cboe Canada, the name TMX's quote gives.
-   - *The profile is settled only on an exact match:* SEDAR+'s reporting-issuer search is asked with that name, and the profile is settled only when exactly one profile's English or French legal name equals it. Letter case and spacing are ignored, and a trailing "(The)" reads as a leading "The".
+   - *The profile is settled only on an exact match:* SEDAR+'s reporting-issuer search is asked with the name up to its first comma, period or parenthesis, and the profile is settled only when exactly one profile's English or French legal name equals the full name, compared as Open questions, 1 states. A profile with no filing in the last 12 months plus 120 days is set aside first (the proposed rule there).
    - *With none or two,* nothing is picked, and the page says `SEDAR+ lists no single issuer named …`.
 3. **Cross-listing comes only from the TSX's interlisted list.** A row pairs `<symbol>@XTSE` or `@XTSX` with `<US symbol>@US`. Each listing in a pair shows both filers' documents.
    - A listing not on the list shows its own regulator's filings only. That includes one inter-listed from the CSE or Cboe Canada, which the list does not cover.
@@ -220,6 +226,6 @@ To be filled at the PR.
 
 ## Handoff
 
-Not started. The first step is the SEDAR+ fixtures.
+The SEDAR+ check is done (Open questions, 1). Building next.
 
 **Nothing left running.**
