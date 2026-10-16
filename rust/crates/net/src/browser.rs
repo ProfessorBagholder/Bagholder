@@ -114,6 +114,8 @@ impl Session {
         timeout: Duration,
         binary: bool,
     ) -> Result<Answer, String> {
+        // counted, named and, offline, refused, as every request the client sends
+        crate::client::leave(method, url).map_err(|e| e.to_string())?;
         let hdrs: Vec<Value> = headers.iter().map(|(k, v)| json!([k, v])).collect();
         let mut req = json!({"method": method, "url": url, "timeout": timeout.as_secs(), "headers": hdrs, "binary": binary});
         if let Some(b) = body {
