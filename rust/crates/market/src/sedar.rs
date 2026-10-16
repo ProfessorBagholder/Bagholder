@@ -573,12 +573,15 @@ fn strip_the(name: &str) -> String {
     }
 }
 
-/// An issuer's legal name as names are compared: without letter case, spacing,
-/// periods or commas, the placement of "The", or a "formerly" note SEDAR+ adds
-/// ("Waste Connections, Inc. (formerly Progressive Waste Solutions Ltd.)").
+/// An issuer's legal name as names are compared, the one rule applied to both
+/// names a comparison takes (brief 41): without letter case, spacing, periods or
+/// commas, the placement of "The", or a note SEDAR+ adds after the name, a
+/// "formerly" ("Waste Connections, Inc. (formerly Progressive Waste Solutions
+/// Ltd.)") or an "Operating name" ("Royal Bank of Canada … Operating name: RBC").
 pub fn comparable(name: &str) -> String {
     let lower = name.to_lowercase();
-    let cut = match lower.find("formerly") {
+    let cut = ["operating name", "formerly"].iter().filter_map(|note| lower.find(note)).min();
+    let cut = match cut {
         Some(i) => lower[..i].trim_end().trim_end_matches('(').to_string(),
         None => lower,
     };
@@ -603,8 +606,11 @@ pub const LISTED_FILING_WINDOW_DAYS: i64 = 365 + 120;
 /// The one profile an issuer's name settles to: among SEDAR+'s answer, the profiles
 /// whose English or French legal name is the name; of two or more, those that have
 /// filed within `LISTED_FILING_WINDOW_DAYS` of `today` (`newest` gives a profile's
-/// newest filing day). The profile, or why none settles: never one picked from
-/// several.
+/// newest filing day). The rule only narrows the exact matches, never adds one, and
+/// settles only where exactly one remains; it is decided again each time the
+/// listing's filer is checked. An answer with no exact match, a page SEDAR+ filled
+/// with other names among them, is a miss. The profile, or why none settles: never
+/// one picked from several, nor by the order SEDAR+ answered in (brief 41).
 pub fn pick_profile(name: &str, answer: &[ReportingIssuer], today: &str, newest: &dyn Fn(&str) -> Fetched<Option<String>>) -> Fetched<Result<String, String>> {
     let want = comparable(name);
     let mut named: Vec<&ReportingIssuer> = answer.iter().filter(|r| legal_names(&r.name).iter().any(|l| comparable(l) == want)).collect();
@@ -895,5 +901,83 @@ pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
     match download_bytes(&row.profile_no, &row.id, if issuer.is_empty() { None } else { Some(&issuer) })? {
         Some(x) => Ok(x),
         None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&row.id), row.profile_no))),
+    }
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::*;
+
+    fn issuer(name: &str, profile: &str) -> ReportingIssuer {
+        ReportingIssuer { name: name.into(), profile_no: profile.into(), ..Default::default() }
+    }
+
+    /// For generated sets of profiles sharing an exact name, with newest filings on
+    /// either side of the bound, exactly the ones that filed within it are kept, and
+    /// a profile settles only where one remains, in either order SEDAR+ answers.
+    #[test]
+    fn a_tie_settles_only_on_the_one_profile_that_filed_within_the_bound() {
+        let today = "2026-10-16";
+        let bound = bagholder_model::dates::shift_date(today, -LISTED_FILING_WINDOW_DAYS);
+        let inside = [bound.clone(), bagholder_model::dates::shift_date(&bound, 1), today.to_string()];
+        let outside = [bagholder_model::dates::shift_date(&bound, -1), "1998-12-08".to_string()];
+        for n_in in 0..=3usize {
+            for n_out in 0..=3usize {
+                if n_in + n_out < 2 {
+                    continue;
+                }
+                let mut answer = Vec::new();
+                let mut newest: std::collections::HashMap<String, Option<String>> = Default::default();
+                for i in 0..n_in {
+                    let p = format!("{:09}", 100 + i);
+                    answer.push(issuer("Acme Corporation / Acme Corporation", &p));
+                    newest.insert(p, Some(inside[i % inside.len()].clone()));
+                }
+                for i in 0..n_out {
+                    let p = format!("{:09}", 200 + i);
+                    answer.push(issuer("Acme Corporation / Acme Corporation", &p));
+                    // a profile that never filed is outside the bound too
+                    newest.insert(p, if i == 2 { None } else { Some(outside[i % outside.len()].clone()) });
+                }
+                // a profile under another name never joins the tie, whenever it filed
+                answer.push(issuer("Acme Corporation Holdings / Acme Corporation Holdings", "000000999"));
+                newest.insert("000000999".into(), Some(today.into()));
+                for reversed in [false, true] {
+                    let mut a = answer.clone();
+                    if reversed {
+                        a.reverse();
+                    }
+                    let got = pick_profile("Acme Corporation", &a, today, &|p| Ok(newest[p].clone())).unwrap();
+                    match n_in {
+                        1 => assert_eq!(got, Ok("000000100".to_string()), "{n_in} in, {n_out} out"),
+                        _ => assert!(got.is_err(), "{n_in} in, {n_out} out: {got:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_names_are_read_by_one_rule_and_a_note_after_the_name_is_not_the_name() {
+        for (a, b) in [
+            ("Royal Bank of Canada", "Royal Bank of Canada / Banque Royale du Canada Operating name: RBC"),
+            ("Toronto-Dominion Bank (The)", "The Toronto-Dominion Bank / La Banque Toronto-Dominion"),
+            ("Bank of Nova Scotia (The)", "Bank of Nova Scotia, The / La Banque de Nouvelle - Ecosse"),
+            ("Waste Connections, Inc.", "Waste Connections, Inc. (formerly Progressive Waste Solutions Ltd.) / Waste Connections, Inc."),
+            ("First Quantum Minerals Ltd.", "First Quantum Minerals Ltd / First Quantum Minerals Ltd"),
+        ] {
+            assert!(legal_names(b).iter().any(|l| comparable(l) == comparable(a)), "{a} and {b}");
+            // one rule, whichever side a name is on
+            assert_eq!(comparable(&comparable(a)), comparable(a));
+        }
+        assert_ne!(comparable("Energy Fuels Inc."), comparable("Energy Transfer LP"));
+        assert_ne!(comparable("TELUS Corporation"), comparable("AT&T Inc."));
+    }
+
+    /// An answer with no exact match, however full, is a miss, never its first row.
+    #[test]
+    fn an_answer_with_no_exact_match_is_a_miss() {
+        let a: Vec<ReportingIssuer> = (0..100).map(|i| issuer(&format!("Acme Corporation {i} / Acme Corporation {i}"), &format!("{i:09}"))).collect();
+        assert!(pick_profile("Acme Corporation", &a, "2026-10-16", &|_| Ok(Some("2026-10-01".into()))).unwrap().is_err());
     }
 }

@@ -64,8 +64,13 @@ Each was read 2026-10-16.
    - *The one tie is TELUS:* two profiles are both named "TELUS Corporation".
      - 000001114 reports in Nova Scotia only, and last filed in December 1998.
      - 000011998 is the current issuer, and last filed in July 2026.
-   - *Proposed rule, for the gate:* a listed issuer files annual financial statements every year (National Instrument 51-102, s. 4.2: within 90 days of year-end, or 120 for a venture issuer). Among profiles with the same exact name, one with no filing in the last 12 months plus 120 days is not a listed issuer's, and is set aside. With that rule all 60 settle; without it, TELUS shows "SEDAR+ lists no single issuer named TELUS Corporation".
+   - *Rule, accepted by brief 41 on its conditions:* a listed issuer files annual financial statements every year (National Instrument 51-102, s. 4.2: within 90 days of year-end, or 120 for a venture issuer). Among profiles with the same exact name, one with no filing in the last 12 months plus 120 days is not a listed issuer's, and is set aside. With that rule all 60 settle; without it, TELUS shows "SEDAR+ lists no single issuer named TELUS Corporation".
    - *The answers are kept* as fixtures in `rust/crates/market/tests/replies/sedar-tsx60/`, and the reader's tests run against them.
+   - *Brief 41's conditions, each held by a test in `market/src/sedar.rs` (`settle_tests`) and `market/tests/sedar_tsx60.rs`:*
+     - the one normalization is applied to both names, and a note SEDAR+ adds after a name ("formerly …", "Operating name: …") is not the name;
+     - an answer with no exact match, however full the page, is a miss, said as one;
+     - the tie rule only narrows the exact matches, settles only where exactly one remains, bounds at 12 months + 120 days before the check, and is decided again at every re-check of the listing's filer;
+     - generated tie sets with newest filings on either side of the bound, and the recorded TELUS answer.
 
 ## Approach
 
