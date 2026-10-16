@@ -4,12 +4,14 @@ Brief 34, sections 2 and 3. Section 1 (orders) shipped in #520.
 
 ## For the owner to decide
 
-**1. Should the app ask OpenFIGI, a free public directory, which listings are the same company?**
-- **Why it matters.** `SPEC.md` (Disclosures) says a company listed in Canada and the US shows its filings from both regulators on both listings. Today that only works by accident. Filings are stored under the bare ticker, so TSX RY and NYSE RY share them, but so do TELUS and AT&T, which are both "T". Once filings are kept per company, the app needs evidence that a TSX listing and a NYSE listing are one company.
-  - The SEC's own list ties a US ticker to its filer, and the SEC filer to its US listings.
-  - Nothing the app reads today ties a Canadian listing to a US one, except a match on the company's name, which is how the SEC reader decides now (`market/src/edgar.rs:296–302`).
-- **The option.** OpenFIGI (Bloomberg's open identifier service) states, for a ticker on an exchange, a share-class identifier that is the same for every listing of one share class in every country. It is free, needs no key, and allows 25 requests a minute ([openfigi.com/api/documentation](https://www.openfigi.com/api/documentation), read 2026-10-16). The app would ask it once per listing, the first time that listing's filings are read, and keep the answer.
-- **Recommendation: yes.** Without it, a cross-listed company's two listings are joined only by an exact match on the company's legal name. That join stays, marked as weaker, and the person can always separate the two. If you say no, the name match is the only join, and two companies with the same name and ticker in Canada and the US would share filings.
+Nothing open.
+
+How two listings are found to be one company needed no decision. No source the app reads states a shared identifier (checked 2026-10-16):
+- Wealthsimple's web app requests 94 fields on a security, and none is an ISIN, a CUSIP or a company.
+- The SEC's ticker list covers US listings only.
+- SEDAR+ names Canadian issuers only.
+
+Each regulator does name its filer by its legal name. A listing in Canada and one in the US under the same ticker root are one company when the two regulators' own names for their filers agree (Approach, 4). No new source is read.
 
 ## Scope
 
@@ -34,14 +36,14 @@ The old app named every instrument by its ticker, and its caches followed (`docs
 
 This plan carries nothing over from the old readers' keys. It does carry over two things, each checked:
 - **The readers' source chains and parsing.** They are not about identity, and their fixtures stay.
-- **The SEC reader's name match.** It is kept, but only as the weaker way to join two listings to one company (decision 1). It is never used to pick a listing.
+- **The SEC reader's name match** (`market/src/edgar.rs:296–302`). It compares Wealthsimple's name for the listing with the SEC's. It is replaced by a comparison of the two regulators' own names for their filers (Approach, 4), and it is never used to pick a listing.
 
 A new entry in `docs/old-app-mistakes.md` records what was wrong: the market cache, filings and notices kept per ticker, and what holds the fix (the three rule tests).
 
 ## How the leading products do it
 
 - **Interactive Brokers** gives every listing its own contract id. The same product in another market or currency is another contract, and IBKR tells API users to name a contract by its id and exchange, never by its symbol ([Contract IDs](https://www.interactivebrokers.com/docs/web-api/trading/instrument-discovery/contract-i-ds), [best practices](https://www.interactivebrokers.com/docs/general/contracts/contract-management/best-practices.md), read 2026-10-16). Their ids never change.
-- **FIGI** (the open standard behind OpenFIGI) has three levels ([openfigi.com/api/documentation](https://www.openfigi.com/api/documentation), read 2026-10-16):
+- **FIGI** (the open identifier standard) has three levels ([openfigi.com/api/documentation](https://www.openfigi.com/api/documentation), read 2026-10-16):
   - a listing on one venue;
   - a composite for one country;
   - a share class across countries.
@@ -94,7 +96,7 @@ The in-memory maps (pending reads U4, chart notes U5, the archive set U22, the n
 Every reader in `market/src/history.rs`, `tmx.rs`, `exposure.rs` and `shorts.rs` takes the sources crate's `Listing`, which carries its id, in place of a bare symbol.
 
 ### 3. Filings and their notices keyed by company (book migration v30)
-- **`issuer_refs(scheme, value, issuer_id)`.** A new book table, mirroring `instrument_refs`. It holds the SEC CIK, the SEDAR+ profile number and, with decision 1, the share-class FIGI. `book/src/identity.rs` already has `issuers`, `add_issuer`, `attach_issuer` and `listings(issuer)`. Nothing in production calls them yet; this plan is their first user.
+- **`issuer_refs(scheme, value, issuer_id)`.** A new book table, mirroring `instrument_refs`. It holds the SEC CIK and the SEDAR+ profile number. `book/src/identity.rs` already has `issuers`, `add_issuer`, `attach_issuer` and `listings(issuer)`. Nothing in production calls them yet; this plan is their first user.
 - **Filings move into the book's company scope.** `filings` and its stamps (`store/src/feeds.rs`) are keyed by `issuer_id`.
   - The SEDAR+ profile is an issuer reference, so `sedar_profile:<SYM>` goes.
   - A filing's document is opened by (issuer, id).
@@ -104,12 +106,9 @@ Every reader in `market/src/history.rs`, `tmx.rs`, `exposure.rs` and `shorts.rs`
 - **The rest of the release and payer paths match by id**, never by ticker: release scope (U12), the "a wire already carried it" check (U13), and the payer read (U15).
 
 ### 4. Which listings are one company
-Two listings are one company when they share any of:
-- the SEC CIK (from the SEC's ticker list, for a US listing);
-- the SEDAR+ profile;
-- the share-class FIGI (decision 1).
-
-They are also joined, marked as the weaker join, when the issuer's legal name matches exactly across the two markets, which is the SEC reader's rule today. The person can split a join, as §5 allows for instruments. A join is read, never merged, as §5 already does for successions.
+- **Within one market, the regulator's own number decides.** Two listings are one company when they map to the same SEC CIK (the SEC's ticker list, for US listings) or the same SEDAR+ profile.
+- **Across the two markets, the regulators' own names decide.** A Canadian listing and a US listing with the same ticker root are one company when the SEDAR+ issuer name and the SEC filer name match under `names_match`, the rule the SEC reader uses today (`market/src/edgar.rs`). Wealthsimple's name for the listing is never one of the two. So TELUS Corporation and AT&T Inc., both T, stay two companies, and Royal Bank of Canada on both markets is one.
+- **A join is read, never merged**, as §5 already does for successions. It is decided again whenever either name is read.
 
 `SPEC.md` market-data-17 gains one sentence saying so.
 
@@ -130,7 +129,7 @@ They are also joined, marked as the weaker join, when the issuer's legal name ma
   It is shown failing on master in the PR.
 - [ ] **Rule test 2** (a schema test): every table in the market cache with a per-listing or per-company row has `instrument_id` or `issuer_id` in its key, and no meta key is written whose name holds a ticker. It reads the schema and every `meta` write in the workspace's source, and is shown failing on master.
 - [ ] **Rule test 3** (a boundary test): every route the page calls that takes a symbol refuses when the book holds two listings with it and the request names no venue, and resolves to the one id when it names one. It drives the routes through the router's own list, and is shown failing on master.
-- [ ] **A company test.** Two listings sharing a CIK, a SEDAR+ profile or a share-class FIGI show one set of filings. Two companies sharing a ticker never do. One notice is told once across the old marks the migration carried.
+- [ ] **A company test.** Two listings sharing a CIK or a SEDAR+ profile, or a Canadian and a US listing whose regulators name their filers alike, show one set of filings. Two companies sharing a ticker never do, generated across names and tickers. One notice is told once across the old marks the migration carried.
 - [ ] **The browser test** on the signed-in server's made-up book, which holds TD on the TSX and the NYSE: each listing's page draws its own chart and its own short interest. The demo book gains a second company with a shared ticker (made up, `demo_book.rs`): each listing's page lists only its own company's filings.
 - [ ] **Migrations:**
   - market cache v6 on a copy of the owner's cache: it opens, and charts read again;
@@ -150,7 +149,7 @@ They are also joined, marked as the weaker join, when the issuer's legal name ma
 
 ## Right to refuse
 
-Nothing found conflicts with `SPEC.md` or `docs/decisions.md`. If decision 1 is no, `SPEC.md` market-data-17's "a cross-listed issuer draws from both" then rests on the name match alone. That is said in `SPEC.md`, not hidden.
+Nothing found conflicts with `SPEC.md` or `docs/decisions.md`.
 
 ## Anti-stub self-check
 
