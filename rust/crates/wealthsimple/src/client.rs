@@ -140,7 +140,7 @@ impl<'n> Client<'n> {
                 headers.extend([("x-ws-operation-name", op), ("x-ws-operation-hash", p.hash), ("x-ws-device-id", device), ("x-ws-page", p.page), ("x-web-version", WEB_VERSION)]);
             }
             self.sent.fetch_add(1, Ordering::Relaxed);
-            crate::hosts::named_call(&format!("graphql {op}"));
+            bagholder_net::client::named_call("wealthsimple", &format!("graphql {op}"));
             let reply = self.net.send(&Ask::post(&crate::hosts::graphql_url(), &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
             if reply.status == 401 || reply.status == 403 {
                 if refreshed {

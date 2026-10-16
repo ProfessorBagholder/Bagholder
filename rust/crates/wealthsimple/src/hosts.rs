@@ -33,15 +33,6 @@ pub fn token_url() -> String {
     }
 }
 
-/// Names a call this client makes to Wealthsimple, as it is made, when every
-/// request is named (`BAGHOLDER_LOG_REQUESTS=1`): what a test checks the stand-in
-/// answered, so a call sent anywhere else is seen (brief 39, 2).
-pub fn named_call(what: &str) {
-    if bagholder_net::client::logging_requests() {
-        eprintln!("wealthsimple {what}");
-    }
-}
-
 /// The sign-in page, which the sign-in browser opens and the client id is read from.
 pub fn login_url() -> String {
     format!("{}/app/login", web())

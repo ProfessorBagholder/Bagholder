@@ -547,6 +547,16 @@ pub fn logging_requests() -> bool {
     *LOGGED.get_or_init(|| crate::switch::switch_on("BAGHOLDER_LOG_REQUESTS"))
 }
 
+/// Names a call a client makes to a service a test stands in for (Wealthsimple),
+/// as it is made, when every request is named (`BAGHOLDER_LOG_REQUESTS=1`),
+/// beside the `outbound` line its request makes: what a test checks the stand-in
+/// answered, so a call sent anywhere else is seen (briefs 39, 41).
+pub fn named_call(service: &str, what: &str) {
+    if logging_requests() {
+        eprintln!("{service} {what}");
+    }
+}
+
 /// How many requests this process has tried to send off the machine.
 pub fn outbound_requests() -> usize {
     OUTBOUND.load(std::sync::atomic::Ordering::SeqCst)

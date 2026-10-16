@@ -160,7 +160,7 @@ fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
     body.insert("client_id".to_string(), Value::String(held.client_id.clone()));
     let body = Value::Object(body).canonical();
     let headers = [("Content-Type", "application/json"), ("Accept", "application/json")];
-    crate::hosts::named_call("oauth token");
+    bagholder_net::client::named_call("wealthsimple", "oauth token");
     let reply = match net.send(&Ask::post(&crate::hosts::token_url(), &headers, body.as_bytes())) {
         Ok(r) => r,
         Err(e) => {
