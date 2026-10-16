@@ -15,7 +15,7 @@ struct Shared(Arc<Token>);
 
 impl bagholder_net::Transport for Shared {
     fn answer(&self, ask: &bagholder_net::Ask) -> Result<bagholder_net::Answer, bagholder_net::NetError> {
-        assert_eq!(ask.url, bagholder_wealthsimple::session::TOKEN_URL, "only the token endpoint is asked");
+        assert_eq!(ask.url, bagholder_wealthsimple::hosts::token_url(), "only the token endpoint is asked");
         let (status, body) = self.0 .0.lock().unwrap().remove(0);
         if status == 0 {
             return Err(bagholder_net::NetError::Unreachable(body.into()));

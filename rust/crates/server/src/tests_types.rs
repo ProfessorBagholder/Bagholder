@@ -20,7 +20,7 @@ use bagholder_store::feeds::{Notification, NotificationExtra};
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
 use crate::http::orders::{Adjust, Modify, Named, QuoteOf, RefreshAndOrders};
 use crate::orders::{
-    BracketCard, Filled, Leg, OrderAccount, OrderActionAnswer, OrderCard, OrdersDoc, PageDec, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
+    BracketCard, Filled, Leg, ListingOf, ListingRef, OrderAccount, SecurityId, OrderListing, OrderListingAnswer, OrderActionAnswer, OrderCard, OrdersDoc, PageDec, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
 };
 
 fn declarations() -> String {
@@ -31,7 +31,7 @@ fn declarations() -> String {
     let decls: Vec<String> = decls![
         Filled, Leg, OrderCard, BracketCard, OrdersDoc, PageDec,
         OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders, QuoteOf, OrderAccount, TicketQuoteDetail, TicketQuoteOk, TicketQuote, TicketStop, TicketTarget, Ticket,
-        PlaceTicketAnswer,
+        PlaceTicketAnswer, SecurityId, OrderListing, ListingRef, ListingOf, OrderListingAnswer,
         crate::orders::preview::StopInput, crate::orders::preview::TargetInput, crate::orders::preview::QuoteInput, crate::orders::preview::PreviewRequest, crate::orders::preview::Preview,
     ];
     let mut out = String::from("// Generated from the server's orders document and routes (rust/crates/server/src/orders). Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\nimport type { Dec } from '../dec'\nimport type { Fig } from './figures'\n\n");
@@ -358,7 +358,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" => "notifications",
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
-        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
+        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",
         "LegacyNote" => "book",
         "StatusAnswer" => "status",
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",

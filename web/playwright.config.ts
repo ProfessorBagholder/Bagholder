@@ -24,13 +24,30 @@ export default defineConfig({
     // the viewer's zone, pinned: a machine's own zone never changes an expected time
     timezoneId: 'America/Toronto',
   },
-  ...(URL ? { testMatch: 'dryorder.spec.ts' } : {}),
-  webServer: URL ? undefined : {
-    command: 'node e2e/serve.mjs',
-    url: `http://127.0.0.1:${PORT}/api/status`,
-    reuseExistingServer: false,
-    timeout: 600_000, // a cold `cargo build` on a fresh machine
-    stdout: 'ignore',
-    stderr: 'ignore',
-  },
+  // the signed-in tests run against a second server, the same made-up book with a
+  // saved Wealthsimple sign-in and Wealthsimple's search stood in (`serve.mjs --signed-in`)
+  projects: URL
+    ? [{ name: 'image', testMatch: 'dryorder.spec.ts' }]
+    : [
+        { name: 'app', testIgnore: 'signedin*.spec.ts' },
+        { name: 'signed-in', testMatch: 'signedin*.spec.ts', use: { baseURL: `http://127.0.0.1:${PORT + 1}` } },
+      ],
+  webServer: URL ? undefined : [
+    {
+      command: 'node e2e/serve.mjs',
+      url: `http://127.0.0.1:${PORT}/api/status`,
+      reuseExistingServer: false,
+      timeout: 600_000, // a cold `cargo build` on a fresh machine
+      stdout: 'ignore',
+      stderr: 'ignore',
+    },
+    {
+      command: `node e2e/serve.mjs --signed-in --port=${PORT + 1}`,
+      url: `http://127.0.0.1:${PORT + 1}/api/status`,
+      reuseExistingServer: false,
+      timeout: 600_000,
+      stdout: 'ignore',
+      stderr: 'ignore',
+    },
+  ],
 })

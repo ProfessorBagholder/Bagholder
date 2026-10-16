@@ -44,6 +44,15 @@ function entry(id: string): Known {
   if (!known[id]) known[id] = parsed(id)
   return known[id]
 }
+/**
+ * The venue the listing's own address names, empty where it names none (a heatmap
+ * tile, a notification): an order is placed only on a listing named exactly, so
+ * the venue is never taken from anything found by the ticker (brief 36, 2).
+ */
+export function listingVenue(id: string): string {
+  return parsed(id).exchange
+}
+
 /** What the address itself says of a listing: its symbol and venue. */
 function parsed(id: string): Known {
   const [symbol, exchange = ''] = id.slice('listing:'.length).split('@')
@@ -101,9 +110,13 @@ export async function loadListing(id: string, heldBy: (positionId: string) => vo
   const q = { query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name } }
   // what was last known of it is taken at once: a listing the book turned out to hold opens its holding's page
   const had = await heldOnceRead('GET /api/listing', q, { key: id })
+  // a holding found by the ticker alone is not this page's: only an address that
+  // names its venue opens the holding's page (brief 34, U17)
+  const named = !!listingVenue(id)
   if (had?.ok) {
-    if ('positionId' in had) return heldBy(had.positionId)
-    take(l, had)
+    if ('positionId' in had) {
+      if (named) return heldBy(had.positionId)
+    } else take(id, l, had)
   }
   const d = await read('GET /api/listing', q, { key: id })
   if (!d.ok) {
@@ -112,15 +125,23 @@ export async function loadListing(id: string, heldBy: (positionId: string) => vo
     l.fills = []
     return
   }
-  if ('positionId' in d) return heldBy(d.positionId)
+  if ('positionId' in d) {
+    if (named) heldBy(d.positionId)
+    return
+  }
   if (applied.has(id)) return
   applied.add(id)
-  take(l, d)
+  take(id, l, d)
 }
 
-/** What the server knows of a listing, written where it differs from what is shown. */
-function take(l: Known, d: { exchange?: string; currency?: string; name?: string; kind?: string; securityId?: string; fills: Fill[]; price?: Dec | null; percentChange?: number | null }): void {
-  for (const k of ['exchange', 'currency', 'name', 'kind', 'securityId'] as const) {
+/**
+ * What the server knows of a listing, written where it differs from what is shown.
+ * A page whose address names no venue takes no venue and no broker id from it: the
+ * server can only have found those by the ticker.
+ */
+function take(id: string, l: Known, d: { exchange?: string; currency?: string; name?: string; kind?: string; securityId?: string; fills: Fill[]; price?: Dec | null; percentChange?: number | null }): void {
+  const keys = listingVenue(id) ? (['exchange', 'currency', 'name', 'kind', 'securityId'] as const) : (['currency', 'name', 'kind'] as const)
+  for (const k of keys) {
     if (!l[k] && d[k]) l[k] = d[k] as string
   }
   if (JSON.stringify(l.fills) !== JSON.stringify(d.fills)) l.fills = d.fills

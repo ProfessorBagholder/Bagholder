@@ -84,9 +84,11 @@ pub struct OrdersState {
     /// Shares per unit of a security the book does not hold, as Wealthsimple's quote
     /// stated it, by its id.
     pub(crate) units: Mutex<HashMap<String, bagholder_core::Dec>>,
-    /// Listings the book does not hold, as Wealthsimple's search found them, by
-    /// symbol: a ticket on one asks the search once while the app runs.
+    /// Listings Wealthsimple's search found while the app runs, by Wealthsimple's id.
     pub(crate) found: Mutex<HashMap<String, bagholder_model::securities::Security>>,
+    /// What each search was asked for, the bare symbol on a venue's code, and the id
+    /// it found: one listing is asked for once. Never keyed by a symbol alone.
+    pub(crate) found_at: Mutex<HashMap<(String, String), String>>,
     /// Orders Wealthsimple reports that were not placed here (its own app's): they are
     /// Wealthsimple's, not the app's, so they are held here and never in the book.
     pub(crate) elsewhere: Mutex<Vec<Elsewhere>>,
@@ -120,6 +122,7 @@ impl OrdersState {
             read_asked: AtomicBool::new(false),
             units: Mutex::new(HashMap::new()),
             found: Mutex::new(HashMap::new()),
+            found_at: Mutex::new(HashMap::new()),
             elsewhere: Mutex::new(Vec::new()),
             quote_problem: Mutex::new(crate::app::Confirmed::default()),
             watch_problem: Mutex::new(crate::app::Confirmed::default()),

@@ -14,8 +14,6 @@ use bagholder_sources::reply::Node;
 use crate::adapter::Source;
 use crate::session::{self, SessionFile, Tokens};
 
-pub const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
-
 /// The least time between two requests to Wealthsimple.
 pub const PACE: std::time::Duration = std::time::Duration::from_millis(150);
 
@@ -92,7 +90,7 @@ impl<'n> Client<'n> {
     /// request at most every 150 ms, the pace the owner's own capture of their
     /// whole history kept without a refusal (2026-09-24).
     pub fn new(net: &'n Net, file: SessionFile) -> Client<'n> {
-        let host = bagholder_net::host_of(GRAPHQL);
+        let host = bagholder_net::host_of(&crate::hosts::graphql_url());
         let pace = net.limiter().pace(&host);
         if pace.gap < PACE {
             net.limiter().configure(&host, bagholder_net::Pace { gap: PACE, ..pace });
@@ -145,7 +143,7 @@ impl<'n> Client<'n> {
                 headers.extend([("x-ws-operation-name", op), ("x-ws-operation-hash", p.hash), ("x-ws-device-id", device), ("x-ws-page", p.page), ("x-web-version", WEB_VERSION)]);
             }
             self.sent.fetch_add(1, Ordering::Relaxed);
-            let reply = self.net.send(&Ask::post(GRAPHQL, &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
+            let reply = self.net.send(&Ask::post(&crate::hosts::graphql_url(), &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
             if reply.status == 401 || reply.status == 403 {
                 if refreshed {
                     return Err(Failure::Lapsed(format!("{op}: Wealthsimple answered {} after a refresh", reply.status)));

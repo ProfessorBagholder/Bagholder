@@ -66,6 +66,11 @@ fn set_gql<F: Fn(&str, &Value) -> Result<Value, CallError> + Send + Sync + 'stat
     *app.orders.seam.gql.lock().unwrap() = Some(Arc::new(f));
 }
 
+/// Wealthsimple's id for a listing, as a test names it.
+fn sid(s: &str) -> o::SecurityId {
+    o::SecurityId::parse(s).expect("an id")
+}
+
 fn jv(v: &impl serde::Serialize) -> Value {
     serde_json::to_value(v).unwrap()
 }
@@ -82,18 +87,29 @@ fn no() -> PageDec {
     PageDec(Ok(None))
 }
 
+/// The listings the tests' tickets are on, as Wealthsimple's summary stated them when
+/// the ticket's quote was read: an order is recorded with Wealthsimple's words for its
+/// listing, never the page's.
+fn quoted(app: &App) {
+    let mut found = app.orders.found.lock().unwrap();
+    for id in ["sec-s-us", "sec"] {
+        found.insert(id.into(), bagholder_model::securities::Security { id: id.into(), symbol: "QNC".into(), name: "Quantum Emotion Corp".into(), primary_exchange: "NYSE".into(), primary_mic: "XNYS".into(), currency: "USD".into(), underlying_id: String::new() });
+    }
+}
+
 /// An app of its own holding the ticket's accounts, with orders live against the fake.
 fn ticket_app() -> (tempfile::TempDir, Arc<App>, Arc<FakeBroker>) {
     let (h, app, fake) = fresh();
     crate::tests_common::order_accounts_in(&app);
+    quoted(&app);
     (h, app, fake)
 }
 
 /// The ticket as the page sends it, with `over` in place of its fields.
 fn ticket_json(over: Value) -> Value {
     // each ticket its own review, so its own order id
-    let mut body = json!({"id": crate::app::uuid4(), "symbol": "QNC", "securityId": "sec-s-us", "accountId": "acct-margin", "side": "BUY", "type": "LIMIT", "tif": "DAY",
-        "quantity": 25, "limitPrice": 165.4, "stopPrice": null, "currency": "USD",
+    let mut body = json!({"id": crate::app::uuid4(), "listing": {"securityId": "sec-s-us", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}, "accountId": "acct-margin", "side": "BUY", "type": "LIMIT", "tif": "DAY",
+        "quantity": 25, "limitPrice": 165.4, "stopPrice": null,
         "stopLoss": {"kind": "stop", "price": 157.13}, "takeProfit": {"price": 181.94}});
     for (k, v) in over.as_object().unwrap() {
         body[k] = v.clone();
@@ -158,25 +174,28 @@ fn the_ticket_offers_the_open_self_directed_accounts_that_trade_securities() {
 }
 
 #[test]
-fn a_listing_resolves_from_the_book_by_its_id_or_the_symbol_it_is_known_by() {
+fn a_listing_resolves_from_the_book_by_its_id_never_by_its_symbol() {
     let _g = crate::tests_common::guard();
     let a = crate::tests_common::app();
-    let resolve = |sym: &str, sid: &str| o::resolve_security(&a, sym, sid).unwrap();
     // a holding of the recorded month, as the book names it
     let f = a.figures.get().unwrap();
     let names = f.names().unwrap();
-    let (sid, symbol, currency) = f
+    let (instrument, sid, symbol, currency) = f
         .read(|e| {
             let p = e.figures().positions.iter().find(|p| p.kind == bagholder_core::instrument::InstrumentKind::Security).unwrap();
             let info = &e.inputs().ledger.instruments[&p.instrument];
-            (names.security[&p.instrument].clone(), info.current_name().unwrap().symbol.clone(), info.instrument.currency.as_str().to_string())
+            (p.instrument, names.security[&p.instrument].clone(), info.current_name().unwrap().symbol.clone(), info.instrument.currency.as_str().to_string())
         })
         .unwrap();
-    let by_symbol = resolve(&symbol.to_lowercase(), "").unwrap();
-    assert_eq!((by_symbol.id.clone(), by_symbol.symbol.clone(), by_symbol.currency.clone()), (sid.clone(), symbol.clone(), currency), "the book's record of it, whatever the case typed");
-    assert_eq!(resolve("", &sid).unwrap().symbol, symbol, "by the broker's id");
-    assert!(resolve("NOPE", "").is_none());
-    assert_eq!(resolve("NVDA", "sec-nvda").unwrap().id, "sec-nvda", "an id the book does not hold is taken as given");
+    let known = o::known_listing(&a, &sid).unwrap().expect("the book's record of it");
+    assert_eq!((known.id.as_str(), known.symbol.as_str(), known.currency.as_str()), (sid.as_str(), symbol.as_str(), currency.as_str()));
+    assert!(o::known_listing(&a, "").unwrap().is_none(), "no id, no listing");
+    assert!(o::known_listing(&a, &symbol).unwrap().is_none(), "a symbol is not an id");
+    // the book's instrument answers its own id, asking nothing of Wealthsimple
+    match o::resolve_listing(&a, &o::ListingRef::Instrument { id: instrument.to_string() }, jiff::Timestamp::now()) {
+        o::OrderListingAnswer::Ok { listing, .. } => assert_eq!((listing.security_id.as_str(), listing.symbol.as_str()), (sid.as_str(), symbol.as_str())),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -211,13 +230,407 @@ fn search_answer() -> Value {
 #[test]
 fn listing_search_picks_the_symbol_on_its_exchange() {
     let a = search_answer();
-    let pick = |sym: &str, ex: &str| o::parse_listing_search(&serde_json::from_value(a.clone()).unwrap(), sym, ex);
-    assert_eq!(pick("BBAI", "NYSE").unwrap().id, "sec-s-bbai");
-    assert_eq!(pick("bbai", "nyse").unwrap().currency, "USD");
-    let ca = pick("QNC", "TSX-V").unwrap();
+    let pick = |sym: &str, mic: &str| o::parse_listing_search(&serde_json::from_value(a.clone()).unwrap(), sym, mic, "");
+    assert_eq!(pick("BBAI", "XNYS").unwrap().id, "sec-s-bbai");
+    assert_eq!(pick("bbai", "XNYS").unwrap().currency, "USD");
+    let ca = pick("QNC", "XTSX").unwrap();
     assert_eq!((ca.id.as_str(), ca.symbol.as_str()), ("sec-s-qnc-ca", "QNC.TO"), "a Canadian suffix on either side is ignored");
-    assert!(pick("QNC", "NYSE").is_none(), "the NYSE result is an option, not the share");
-    assert!(pick("BBAI", "NASDAQ").is_none());
+    assert_eq!(pick("QNC", "XNYS").unwrap_err(), "Wealthsimple lists no QNC on XNYS.", "the NYSE result is an option, not the share");
+    // the US is one market: a symbol names one listing across its exchanges, and the
+    // sources name the NYSE's venues differently
+    assert_eq!(pick("BBAI", "XNAS").unwrap().id, "sec-s-bbai");
+    assert_eq!(pick("BBAI", "ARCX").unwrap().id, "sec-s-bbai");
+    assert!(pick("BBAI", "XTSE").is_err(), "a Canadian venue is its own");
+    // two listings of one symbol on one venue: said, never chosen between
+    let mut two = a.clone();
+    two["securitySearch"]["results"].as_array_mut().unwrap().push(json!({"id": "sec-s-bbai-2", "buyable": true, "status": "TRADING", "currency": "USD", "securityType": "EQUITY", "stock": {"symbol": "BBAI", "name": "Another", "primaryExchange": "NYSE", "primaryMic": "XNYS"}}));
+    assert!(o::parse_listing_search(&serde_json::from_value(two).unwrap(), "BBAI", "XNYS", "NYSE").unwrap_err().contains("more than one"));
+}
+
+/// Each venue the app's venue table knows, with words a directory writes it in.
+const VENUE_WORDS: [(&str, &str); 9] = [("XTSE", "TSX"), ("XTSX", "TSX-V"), ("XCNQ", "CSE"), ("NEOE", "Cboe Canada"), ("XNAS", "NASDAQ"), ("XNYS", "NYSE"), ("ARCX", "NYSE Arca"), ("XASE", "NYSE American"), ("BATS", "Cboe BZX")];
+
+/// splitmix64: the same seed, the same cases.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+/// A search answer row: a share or fund on a venue, an option, or a coin.
+fn found_row(id: &str, symbol: &str, kind: &str, mic: &str, words: &str, currency: &str) -> Value {
+    json!({"id": id, "buyable": true, "status": "TRADING", "currency": currency, "securityType": kind, "wsTradeEligible": true,
+        "stock": {"symbol": symbol, "name": format!("{symbol} {kind}"), "primaryExchange": words, "primaryMic": mic}})
+}
+
+/// The quote and the order, for the listing a ticket opened on, name that listing.
+fn ordered_as(app: &Arc<App>, listing: &o::OrderListing) -> String {
+    let t = ticket(json!({"listing": jv(listing), "stopLoss": null, "takeProfit": null}));
+    let asked = o::ticket_order(app, &t).expect("a ticket on a listing");
+    let q = jv(&o::ticket_quote(app, &listing.security_id, "acct-margin"));
+    assert_eq!(q["quote"]["securityId"], json!(listing.security_id), "{q}");
+    let r = o::preview::PreviewRequest { security_id: listing.security_id.clone(), side: "BUY".into(), kind: "MARKET".into(), quantity: Some("1".into()), ..Default::default() };
+    o::preview::preview_for(app, &r).expect("a preview of the listing");
+    asked.order.broker_security
+}
+
+/// Listings that share a ticker, generated over every pair of venues the venue table
+/// knows, a Canadian suffix on the symbol asked, an option and a coin of the same
+/// ticker beside them, the search's rows in either order: each listing a ticket opens
+/// from resolves to itself, and its quote, preview and order name it, never the other
+/// (brief 34, section 1).
+#[test]
+fn every_listing_that_shares_a_ticker_is_quoted_and_ordered_as_itself() {
+    let _g = crate::tests_common::guard();
+    let (_h, app, _fake) = ticket_app();
+    set_session(&app, Some(tok()));
+    let mut r = Rng(34);
+    let mut cases = 0;
+    for a in 0..VENUE_WORDS.len() {
+        for b in 0..VENUE_WORDS.len() {
+            // two listings of one symbol share a market only in Canada: in the US a
+            // symbol names one listing across the exchanges
+            let us = |mic: &str| bagholder_sources::venue::listing_venue(mic).as_deref() == Some("US");
+            if a == b || (us(VENUE_WORDS[a].0) && us(VENUE_WORDS[b].0)) {
+                continue;
+            }
+            let ticker: String = (0..2 + r.below(3)).map(|_| (b'A' + r.below(26) as u8) as char).collect();
+            let ((mic_a, words_a), (mic_b, words_b)) = (VENUE_WORDS[a], VENUE_WORDS[b]);
+            let currency = |mic: &str| bagholder_sources::venue::currency_of(mic).map(|c| c.as_str().to_string()).unwrap_or_default();
+            // a Canadian listing as the source writes it, with its suffix, or bare
+            let written = |mic: &str, r: &mut Rng| if bagholder_sources::venue::currency_of(mic) == Some(bagholder_core::Currency::CAD) && r.below(2) == 0 { format!("{ticker}.TO") } else { ticker.clone() };
+            let (sym_a, sym_b) = (written(mic_a, &mut r), written(mic_b, &mut r));
+            let (id_a, id_b) = (format!("sec-s-{cases}-a"), format!("sec-s-{cases}-b"));
+            let mut rows = vec![
+                found_row(&id_a, &sym_a, "EQUITY", mic_a, words_a, &currency(mic_a)),
+                found_row(&id_b, &sym_b, "EXCHANGE_TRADED_FUND", mic_b, words_b, &currency(mic_b)),
+                found_row(&format!("sec-o-{cases}"), &ticker, "OPTION", mic_a, words_a, "USD"),
+                found_row(&format!("sec-z-{cases}"), &ticker, "CRYPTOCURRENCY", "", "", "CAD"),
+            ];
+            if r.below(2) == 0 {
+                rows.reverse();
+            }
+            let answer = json!({"securitySearch": {"results": rows}});
+            let quoted = answer.clone();
+            set_gql(&app, move |op, vars| match op {
+                "FetchSecuritySearchResult" => Ok(answer.clone()),
+                "FetchSecuritiesSummary" => {
+                    let id = vars["ids"][0].as_str().unwrap();
+                    let row = quoted["securitySearch"]["results"].as_array().unwrap().iter().find(|x| x["id"] == json!(id)).unwrap().clone();
+                    let mut node = row;
+                    node["quoteV2"] = json!({"__typename": "EquityQuote", "ask": 10.02, "bid": 10.0, "price": 10.01, "previousBaseline": 9.9, "marketStatus": "OPEN"});
+                    Ok(json!({"securities": [node]}))
+                }
+                "FetchSecurityMarketData" => Ok(json!({"security": {"allowedOrderSubtypes": ["MARKET", "LIMIT"]}})),
+                "FetchTradingBalanceBuyingPower" => Ok(buying_power(9000.0, 100.0)),
+                _ => panic!("{op}"),
+            });
+            app.orders.found.lock().unwrap().clear();
+            app.orders.found_at.lock().unwrap().clear();
+            // read in either order: the second never takes the first's listing
+            let order: [(&str, &str, &String); 2] = if r.below(2) == 0 { [(words_a, &ticker, &id_a), (words_b, &ticker, &id_b)] } else { [(words_b, &ticker, &id_b), (words_a, &ticker, &id_a)] };
+            for (words, asked, want) in order {
+                // the directory writes the symbol bare or with its suffix: either finds it
+                let asked = if r.below(2) == 0 { asked.to_string() } else { format!("{asked}.TO") };
+                let got = jv(&o::resolve_listing(&app, &o::ListingRef::Venue { symbol: asked.clone(), venue: words.into() }, jiff::Timestamp::now()));
+                let listing: o::OrderListing = serde_json::from_value(got["listing"].clone()).unwrap_or_else(|_| panic!("{asked} on {words}: {got}"));
+                assert_eq!(listing.security_id.as_str(), want.as_str(), "{asked} on {words}");
+                assert_eq!(&ordered_as(&app, &listing), want, "the order for {asked} on {words}");
+            }
+            cases += 1;
+        }
+    }
+    assert!(cases >= 40, "{cases} pairs");
+}
+
+/// Two instruments of the book under one ticker, and the same ticker outside the
+/// book on another venue: each opens a ticket on its own listing. An id the search
+/// finds for a book instrument is recorded against it in the book.
+#[test]
+fn listings_of_one_ticker_in_and_outside_the_book_each_open_on_their_own() {
+    use bagholder_core::instrument::{RefScheme, Reference};
+    let _g = crate::tests_common::guard();
+    let (_h, app, _fake) = ticket_app();
+    set_session(&app, Some(tok()));
+    let f = app.figures.get().unwrap();
+    let now = Timestamp::now();
+    let day = now.to_zoned(jiff::tz::TimeZone::get("America/Toronto").unwrap()).date().to_string();
+    for currency in ["CAD", "USD"] {
+        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "TWN".into(), currency: currency.into(), day: day.clone(), side: "BUY".into(), quantity: "1".into(), price: "10".into(), fee: String::new() };
+        crate::entries::enter(f, &req, now).unwrap();
+    }
+    let book = f.book().unwrap();
+    let ours: Vec<(bagholder_core::InstrumentId, String)> = f
+        .read(|e| e.inputs().ledger.instruments.iter().filter(|(_, i)| i.current_name().is_some_and(|n| n.symbol == "TWN")).map(|(id, i)| (*id, i.instrument.currency.as_str().to_string())).collect())
+        .unwrap();
+    assert_eq!(ours.len(), 2, "two instruments under one ticker");
+    for (id, currency) in &ours {
+        book.add_instrument_ref(*id, &Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), &format!("sec-s-twn-{currency}"))).unwrap();
+    }
+    f.record_changed(now).unwrap();
+    set_gql(&app, |op, vars| match op {
+        "FetchSecuritySearchResult" => Ok(json!({"securitySearch": {"results": [found_row("sec-s-twn-nyse", "TWN", "EQUITY", "XNYS", "NYSE", "USD")]}})),
+        "FetchSecuritiesSummary" => Ok(json!({"securities": [found_row(vars["ids"][0].as_str().unwrap(), "TWN", "EQUITY", "XNYS", "NYSE", "USD")]})),
+        "FetchSecurityMarketData" => Ok(json!({"security": {"allowedOrderSubtypes": ["MARKET", "LIMIT"]}})),
+        "FetchTradingBalanceBuyingPower" => Ok(buying_power(9000.0, 100.0)),
+        _ => panic!("{op}"),
+    });
+    for (id, currency) in &ours {
+        let got = jv(&o::resolve_listing(&app, &o::ListingRef::Instrument { id: id.to_string() }, now));
+        let listing: o::OrderListing = serde_json::from_value(got["listing"].clone()).unwrap_or_else(|_| panic!("{got}"));
+        let want = format!("sec-s-twn-{currency}");
+        assert_eq!(listing.security_id.as_str(), want);
+        assert_eq!(ordered_as(&app, &listing), want);
+    }
+    let got = jv(&o::resolve_listing(&app, &o::ListingRef::Venue { symbol: "TWN".into(), venue: "NYSE".into() }, now));
+    assert_eq!(got["listing"]["securityId"], json!("sec-s-twn-nyse"), "the listing outside the book, never the book's own: {got}");
+}
+
+/// A book instrument the broker has stated no id for is asked of the search on its
+/// own venue, and the id found is recorded against it: the next ticket reads it from
+/// the book.
+#[test]
+fn an_id_the_search_finds_for_a_book_instrument_is_kept_in_the_book() {
+    let _g = crate::tests_common::guard();
+    // the book a pull of Wealthsimple's records makes, its listings on their venues
+    let home = tempfile::tempdir().unwrap();
+    crate::tests_common::pulled_book(home.path());
+    let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+    let now = Timestamp::now();
+    app.set_figures(crate::figures::Figures::open(home.path(), now).unwrap());
+    crate::tests_common::order_accounts_in(&app);
+    set_session(&app, Some(tok()));
+    let f = app.figures.get().unwrap();
+    let book = f.book().unwrap();
+    // a listing of the book whose broker id is not recorded (as one only imported from
+    // a file), its venue known
+    let found = f
+        .read(|e| {
+            e.inputs().ledger.instruments.iter().find_map(|(id, i)| {
+                let n = i.current_name()?;
+                let mic = bagholder_sources::venue::known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref())?;
+                (i.instrument.kind == bagholder_core::instrument::InstrumentKind::Security).then(|| (*id, n.symbol.clone(), mic.to_string(), n.venue_name.clone().unwrap_or_default(), i.instrument.currency.as_str().to_string()))
+            })
+        })
+        .unwrap()
+        .expect("a share of the book on a known venue");
+    let (id, symbol, mic, words, currency) = found;
+    book.conn_for_tests().execute("DELETE FROM instrument_refs WHERE instrument_id = ?1 AND scheme LIKE 'broker-security:%'", [id.to_string()]).unwrap();
+    f.record_changed(now).unwrap();
+    assert!(f.names().unwrap().security.get(&id).is_none());
+    // the same symbol on another market
+    let other = if bagholder_sources::venue::listing_venue(&mic).as_deref() == Some("US") { ("XTSE", "TSX") } else { ("XNAS", "NASDAQ") };
+    let asked: Arc<Mutex<u32>> = Arc::default();
+    let n = asked.clone();
+    let (symbol, mic, words, currency) = (symbol.clone(), mic.clone(), words.clone(), currency.clone());
+    set_gql(&app, move |op, _| match op {
+        "FetchSecuritySearchResult" => {
+            *n.lock().unwrap() += 1;
+            Ok(json!({"securitySearch": {"results": [found_row("sec-s-other-venue", &symbol, "EQUITY", other.0, other.1, if other.0 == "XTSE" { "CAD" } else { "USD" }), found_row("sec-s-own", &symbol, "EQUITY", &mic, &words, &currency)]}}))
+        }
+        _ => panic!("{op}"),
+    });
+    let got = jv(&o::resolve_listing(&app, &o::ListingRef::Instrument { id: id.to_string() }, now));
+    assert_eq!(got["listing"]["securityId"], json!("sec-s-own"), "{got}");
+    assert_eq!(f.names().unwrap().security.get(&id).map(String::as_str), Some("sec-s-own"), "recorded against the instrument");
+    app.orders.found.lock().unwrap().clear();
+    app.orders.found_at.lock().unwrap().clear();
+    let again = jv(&o::resolve_listing(&app, &o::ListingRef::Instrument { id: id.to_string() }, now));
+    assert_eq!(again["listing"]["securityId"], json!("sec-s-own"));
+    assert_eq!(*asked.lock().unwrap(), 1, "the second ticket reads it from the book");
+    // another instrument of the book whose search finds an id this one already holds:
+    // the id names the listing, so the ticket opens on it, and nothing is recorded
+    let second = f
+        .read(|e| {
+            e.inputs().ledger.instruments.iter().find_map(|(other, i)| {
+                let n = i.current_name()?;
+                let mic = bagholder_sources::venue::known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref())?;
+                (*other != id && i.instrument.kind == bagholder_core::instrument::InstrumentKind::Security).then(|| (*other, n.symbol.clone(), mic.to_string(), n.venue_name.clone().unwrap_or_default(), i.instrument.currency.as_str().to_string()))
+            })
+        })
+        .unwrap()
+        .expect("a second share of the book");
+    let (other, symbol2, mic2, words2, currency2) = second;
+    book.conn_for_tests().execute("DELETE FROM instrument_refs WHERE instrument_id = ?1 AND scheme LIKE 'broker-security:%'", [other.to_string()]).unwrap();
+    f.record_changed(now).unwrap();
+    set_gql(&app, move |op, _| match op {
+        "FetchSecuritySearchResult" => Ok(json!({"securitySearch": {"results": [found_row("sec-s-own", &symbol2, "EQUITY", &mic2, &words2, &currency2)]}})),
+        _ => panic!("{op}"),
+    });
+    let got = jv(&o::resolve_listing(&app, &o::ListingRef::Instrument { id: other.to_string() }, now));
+    assert_eq!(got["listing"]["securityId"], json!("sec-s-own"), "{got}");
+    assert!(f.names().unwrap().security.get(&other).is_none(), "an id another instrument holds is not recorded");
+}
+
+/// An order on an id neither the book nor this run's search holds (after a restart,
+/// or a draft resumed) is recorded with Wealthsimple's own symbol and currency for
+/// it, read by the id, never the page's; an id Wealthsimple does not know is refused
+/// (brief 36, 4).
+#[test]
+fn an_order_is_recorded_in_wealthsimples_words_for_its_listing_never_the_pages() {
+    let _g = crate::tests_common::guard();
+    let (_h, app, _fake) = ticket_app();
+    set_session(&app, Some(tok()));
+    set_gql(&app, |op, vars| match op {
+        "FetchSecuritiesSummary" if vars["ids"] == json!(["sec-s-ry-us"]) => Ok(json!({"securities": [found_row("sec-s-ry-us", "RY", "EQUITY", "XNYS", "NYSE", "USD")]})),
+        "FetchSecuritiesSummary" => Ok(json!({"securities": []})),
+        _ => panic!("{op}"),
+    });
+    let page = json!({"listing": {"securityId": "sec-s-ry-us", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
+    let asked = o::ticket_order(&app, &ticket(page)).expect("an order on the listing");
+    assert_eq!((asked.order.broker_security.as_str(), asked.order.symbol.as_str(), asked.order.currency), ("sec-s-ry-us", "RY", bagholder_core::Currency::USD));
+    let unknown = json!({"listing": {"securityId": "sec-s-nowhere", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
+    assert_eq!(o::ticket_order(&app, &ticket(unknown)).unwrap_err(), "Wealthsimple does not know TD on TSX.");
+    // a listing whose summary states no currency, or no symbol, is never ordered in the
+    // page's words
+    set_gql(&app, |op, vars| match op {
+        "FetchSecuritiesSummary" => {
+            let id = vars["ids"][0].as_str().unwrap().to_string();
+            let (symbol, currency) = if id == "sec-s-nocur" { ("RY", "") } else { ("", "USD") };
+            Ok(json!({"securities": [found_row(&id, symbol, "EQUITY", "XNYS", "NYSE", currency)]}))
+        }
+        _ => panic!("{op}"),
+    });
+    for id in ["sec-s-nocur", "sec-s-nosym"] {
+        let page = json!({"listing": {"securityId": id, "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
+        assert_eq!(o::ticket_order(&app, &ticket(page)).unwrap_err(), "Wealthsimple states no symbol or no currency for TD on TSX.", "{id}");
+    }
+}
+
+/// The preview's figures in CAD are at the listing's own currency, as the book or
+/// Wealthsimple states it, whatever currency the page's quote names (brief 37, 3).
+#[test]
+fn the_preview_is_in_the_listings_currency_never_the_pages() {
+    use crate::orders::preview::{preview_for, PreviewRequest, QuoteInput};
+    let _g = crate::tests_common::guard();
+    let a = crate::tests_common::app();
+    let f = a.figures.get().unwrap();
+    // a currency the figures hold a rate for, other than CAD
+    let usd = f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, bagholder_core::Currency::USD, e.inputs().clock.today)).unwrap();
+    a.orders.found.lock().unwrap().insert("sec-s-usd-listing".into(), bagholder_model::securities::Security { id: "sec-s-usd-listing".into(), symbol: "QNC".into(), currency: "USD".into(), ..Default::default() });
+    let r = PreviewRequest {
+        security_id: sid("sec-s-usd-listing"),
+        side: "BUY".into(),
+        kind: "LIMIT".into(),
+        quantity: Some("10".into()),
+        limit: Some("100".into()),
+        // the page says CAD
+        quote: QuoteInput { last: Some("100".into()), currency: "CAD".into(), ..Default::default() },
+        nav: Some("10000".into()),
+        ..Default::default()
+    };
+    let p = preview_for(&a, &r).unwrap();
+    // at the listing's USD rate, or waiting on it: never the page's CAD, 1:1
+    let want = match usd {
+        Ok(rate) => Fig::Stated(crate::wire::Dec(d("1000").checked_mul(rate).unwrap())),
+        Err(g) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
+    };
+    assert_eq!(p.cad, Some(want));
+    assert_ne!(p.cad, Some(Fig::Stated(crate::wire::Dec(d("1000")))));
+}
+
+/// An id the search finds is recorded against the book's instrument only where the
+/// listing found is a share or fund in the instrument's own currency: a listing in
+/// another currency, or an instrument that is not a share, opens the ticket on what
+/// was found and records nothing (brief 37, 3).
+#[test]
+fn an_id_is_recorded_only_for_a_share_in_the_instruments_own_currency() {
+    let _g = crate::tests_common::guard();
+    for case in ["another currency", "not a share"] {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = Timestamp::now();
+        app.set_figures(crate::figures::Figures::open(home.path(), now).unwrap());
+        crate::tests_common::order_accounts_in(&app);
+        set_session(&app, Some(tok()));
+        let f = app.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let (id, symbol, mic, words, currency) = f
+            .read(|e| {
+                e.inputs().ledger.instruments.iter().find_map(|(id, i)| {
+                    let n = i.current_name()?;
+                    let mic = bagholder_sources::venue::known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref())?;
+                    (i.instrument.kind == bagholder_core::instrument::InstrumentKind::Security).then(|| (*id, n.symbol.clone(), mic.to_string(), n.venue_name.clone().unwrap_or_default(), i.instrument.currency))
+                })
+            })
+            .unwrap()
+            .expect("a share of the book on a known venue");
+        book.conn_for_tests().execute("DELETE FROM instrument_refs WHERE instrument_id = ?1 AND scheme LIKE 'broker-security:%'", [id.to_string()]).unwrap();
+        let found_in = if case == "another currency" {
+            if currency == bagholder_core::Currency::USD { "CAD" } else { "USD" }
+        } else {
+            book.conn_for_tests().execute("UPDATE instruments SET kind = 'crypto' WHERE id = ?1", [id.to_string()]).unwrap();
+            currency.as_str()
+        }
+        .to_string();
+        f.rebuild(now).unwrap();
+        set_gql(&app, move |op, _| match op {
+            "FetchSecuritySearchResult" => Ok(json!({"securitySearch": {"results": [found_row("sec-s-found", &symbol, "EQUITY", &mic, &words, &found_in)]}})),
+            _ => panic!("{op}"),
+        });
+        let got = jv(&o::resolve_listing(&app, &o::ListingRef::Instrument { id: id.to_string() }, now));
+        assert_eq!(got["listing"]["securityId"], json!("sec-s-found"), "{case}: {got}");
+        assert!(f.names().unwrap().security.get(&id).is_none(), "{case}: nothing recorded");
+    }
+}
+
+/// Every request that names a listing refuses one without Wealthsimple's id.
+#[test]
+fn a_request_without_a_listing_is_refused() {
+    assert!(serde_json::from_value::<Ticket>(ticket_json(json!({"listing": {"securityId": " ", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}}))).is_err(), "an empty id is no listing");
+    assert!(serde_json::from_value::<Ticket>(ticket_json(json!({"listing": null}))).is_err(), "nor is none");
+    assert!(serde_json::from_value::<Ticket>(json!({"id": crate::app::uuid4(), "symbol": "QNC", "accountId": "acct-margin"})).is_err(), "a ticker is no field of an order");
+    assert!(o::SecurityId::parse(" ").is_err(), "no id names no listing: a request without one is not read");
+    assert!(serde_json::from_value::<o::preview::PreviewRequest>(json!({"side": "BUY", "type": "MARKET"})).is_err(), "a preview names its listing");
+    assert!(serde_json::from_value::<o::ListingOf>(json!({})).is_err(), "a listing asked for names one");
+    assert!(serde_json::from_value::<o::ListingRef>(json!({"kind": "symbol", "symbol": "QNC"})).is_err(), "no listing is a symbol alone");
+}
+
+/// Wealthsimple's own recorded statement of the listings an account held, against
+/// what the Nasdaq directory says of a US listing under every exchange code it uses:
+/// each US listing Wealthsimple states (it states the NYSE group as `XNYS`) is found
+/// from a directory row under any of those codes, so a row's Buy is never refused for
+/// a real listing (brief 36, 1).
+#[test]
+fn every_us_listing_wealthsimple_states_is_found_from_the_directorys_row_whatever_its_exchange_code() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../wealthsimple/tests/replies/wealthsimple/positions@anon-personal-24@2025-05-14.json");
+    let recorded: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let securities: Vec<Value> = recorded["data"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|a| a["financials"]["current"]["positionsAsOfDate"]["edges"].as_array().cloned().unwrap_or_default())
+        .map(|e| e["node"]["security"].clone())
+        .filter(|s| bagholder_sources::venue::mic_of(s["stock"]["primaryMic"].as_str().unwrap_or("")).and_then(bagholder_sources::venue::listing_venue).as_deref() == Some("US"))
+        .filter(|s| o::LOOKUP_TYPES.contains(&s["securityType"].as_str().unwrap_or("")))
+        .collect();
+    assert!(securities.len() >= 2, "the recording holds US listings");
+    let mut tried = 0;
+    for sec in &securities {
+        let symbol = sec["stock"]["symbol"].as_str().unwrap();
+        let mut row = sec.clone();
+        row["currency"] = json!("USD");
+        row["status"] = json!("TRADING");
+        let answer: bagholder_ws::wire::SecuritySearchAnswer = serde_json::from_value(json!({"securitySearch": {"results": [row]}})).unwrap();
+        for (code, ..) in bagholder_market::search::NASDAQ_EXCHANGES {
+            let directory = bagholder_market::search::parse_nasdaq_search(&json!({"data": [{"symbol": symbol, "name": "x", "exchange": code, "asset": "ETF"}]}));
+            let words = &directory[0].exchange;
+            let mic = bagholder_sources::venue::mic_of(words).unwrap_or_else(|| panic!("{code}: {words}"));
+            let found = o::parse_listing_search(&answer, symbol, mic, words).unwrap_or_else(|e| panic!("{symbol} from a {code} row: {e}"));
+            assert_eq!(found.id, sec["id"].as_str().unwrap());
+            tried += 1;
+        }
+    }
+    assert!(tried >= 16);
 }
 
 fn summary(id: &str, symbol: &str) -> Value {
@@ -231,7 +644,7 @@ fn buying_power(bp: f64, cash: f64) -> Value {
 }
 
 #[test]
-fn a_ticket_on_a_symbol_the_book_never_held_asks_wealthsimples_search_once_and_keeps_the_listing() {
+fn a_listing_the_book_never_held_is_found_on_its_venue_once_and_kept_by_its_id() {
     let _g = crate::tests_common::guard();
     let (_h, app, _fake) = ticket_app();
     let searches: Arc<Mutex<Vec<Value>>> = Arc::default();
@@ -250,12 +663,14 @@ fn a_ticket_on_a_symbol_the_book_never_held_asks_wealthsimples_search_once_and_k
         _ => panic!("{op}"),
     });
     set_session(&app, Some(tok()));
-    let r = jv(&o::ticket_quote(&app, "NEVERHELD", "", "acct-margin", "NYSE"));
-    assert_eq!((r["ok"].clone(), r["quote"]["securityId"].clone()), (json!(true), json!("sec-s-never")), "{r}");
-    let again = jv(&o::ticket_quote(&app, "NEVERHELD", "", "acct-margin", "NYSE"));
-    assert_eq!(again["ok"], json!(true), "{again}");
+    let venue = o::ListingRef::Venue { symbol: "NEVERHELD".into(), venue: "NYSE".into() };
+    let found = jv(&o::resolve_listing(&app, &venue, jiff::Timestamp::now()));
+    assert_eq!(found["listing"]["securityId"], json!("sec-s-never"), "{found}");
+    assert_eq!(jv(&o::resolve_listing(&app, &venue, jiff::Timestamp::now()))["listing"]["securityId"], json!("sec-s-never"));
     assert_eq!(*searches.lock().unwrap(), vec![json!("NEVERHELD")], "Wealthsimple's search is asked once");
-    assert_eq!(o::resolve_security(&app, "NEVERHELD", "").unwrap().expect("known while the app runs").id, "sec-s-never");
+    let r = jv(&o::ticket_quote(&app, &sid("sec-s-never"), "acct-margin"));
+    assert_eq!((r["ok"].clone(), r["quote"]["securityId"].clone()), (json!(true), json!("sec-s-never")), "{r}");
+    assert_eq!(o::known_listing(&app, "sec-s-never").unwrap().expect("known while the app runs").symbol, "NEVERHELD");
 }
 
 #[test]
@@ -264,13 +679,15 @@ fn a_quote_for_a_listing_wealthsimple_lacks_says_so() {
     let (_h, app, _fake) = ticket_app();
     set_session(&app, Some(tok()));
     set_gql(&app, |_, _| Ok(json!({"securitySearch": {"results": []}})));
-    let r = jv(&o::ticket_quote(&app, "NEWCO", "", "acct-margin", "NYSE"));
-    assert_eq!((r["ok"].clone(), r["error"].clone()), (json!(false), json!("No listing stored for NEWCO.")), "{r}");
+    let r = jv(&o::resolve_listing(&app, &o::ListingRef::Venue { symbol: "NEWCO".into(), venue: "NYSE".into() }, jiff::Timestamp::now()));
+    assert_eq!((r["ok"].clone(), r["error"].clone()), (json!(false), json!("Wealthsimple lists no NEWCO on NYSE.")), "{r}");
     set_gql(&app, |op, _| panic!("no call: {op}"));
-    assert_eq!(jv(&o::ticket_quote(&app, "NEWCO", "", "acct-margin", ""))["error"], json!("No listing stored for NEWCO."), "no exchange named: nothing to search on");
+    let r = jv(&o::resolve_listing(&app, &o::ListingRef::Venue { symbol: "NEWCO".into(), venue: String::new() }, jiff::Timestamp::now()));
+    assert_eq!(r["ok"], json!(false), "no venue named: nothing to search on, {r}");
+    assert!(o::SecurityId::parse(" ").is_err(), "no id names no listing: a request without one is not read");
     // a listing with no quote at Wealthsimple
     set_gql(&app, |_, _| Ok(json!({"securities": []})));
-    assert_eq!(jv(&o::ticket_quote(&app, "QNC", "sec-s-us", "acct-margin", ""))["error"], json!("Wealthsimple has no quote for QNC."));
+    assert_eq!(jv(&o::ticket_quote(&app, &sid("sec-s-us"), "acct-margin"))["error"], json!("Wealthsimple has no quote for QNC."));
 }
 
 #[test]
@@ -287,7 +704,7 @@ fn a_quote_on_a_collateral_account_carries_the_margin_of_the_account_it_backs() 
         _ => panic!("{op}"),
     });
     set_session(&app, Some(tok()));
-    let r = jv(&o::ticket_quote(&app, "QNC", "sec-s-us", "acct-tfsa", ""));
+    let r = jv(&o::ticket_quote(&app, &sid("sec-s-us"), "acct-tfsa"));
     assert_eq!(r["ok"], json!(true), "{r}");
     assert_eq!((r["cash"].as_f64(), r["marginAvailable"].as_f64()), (Some(500.0), Some(12680.45)), "the margin of the account the TFSA backs");
     assert_eq!(r["account"]["marginAccountId"], json!("acct-margin"));
@@ -303,7 +720,7 @@ fn a_read_the_ticket_could_not_make_is_said_and_the_order_types_stay_wealthsimpl
         _ => panic!("{op}"),
     });
     set_session(&app, Some(tok()));
-    let r = jv(&o::ticket_quote(&app, "QNC", "sec-s-us", "acct-margin", ""));
+    let r = jv(&o::ticket_quote(&app, &sid("sec-s-us"), "acct-margin"));
     assert_eq!(r["ok"], json!(true), "{r}");
     assert_eq!(r["orderTypes"], json!(["MARKET", "LIMIT", "STOP", "STOP_LIMIT"]), "the types are Wealthsimple's by product, never a read's");
     let unread: Vec<&str> = r["unread"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
@@ -329,7 +746,7 @@ fn the_quote_answers_with_everything_the_ticket_shows() {
     });
     set_session(&app, Some(tok()));
     app.set_orders_live(true);
-    let r = jv(&o::ticket_quote(&app, "QNC", "sec-s-us", "acct-margin", ""));
+    let r = jv(&o::ticket_quote(&app, &sid("sec-s-us"), "acct-margin"));
     assert_eq!(r["ok"], json!(true), "{r}");
     assert_eq!(r["quote"]["symbol"], json!("QNC"));
     // Wealthsimple takes the four on every stock and ETF: its per-security list is not read
@@ -341,11 +758,11 @@ fn the_quote_answers_with_everything_the_ticket_shows() {
     assert_eq!(names, ["TFSA", "Trading"], "the accounts the ticket offers, by name");
     assert_eq!((r["account"]["id"].clone(), r["live"].clone()), (json!("acct-margin"), json!(true)));
     set_session(&app, None);
-    assert_eq!(jv(&o::ticket_quote(&app, "QNC", "sec-s-us", "acct-margin", ""))["error"], json!("Not connected."));
+    assert_eq!(jv(&o::ticket_quote(&app, &sid("sec-s-us"), "acct-margin"))["error"], json!("Not connected."));
     set_session(&app, Some(tok()));
     set_gql(&app, |_, _| Err(CallError::NotAuthorized));
-    assert_eq!(jv(&o::ticket_quote(&app, "QNC", "sec-s-us", "acct-margin", ""))["error"], json!("Wealthsimple refused the session. Connect Wealthsimple again."));
-    assert_eq!(jv(&o::ticket_quote(&app, "NOPE", "", "acct-margin", ""))["error"], json!("No listing stored for NOPE."));
+    assert_eq!(jv(&o::ticket_quote(&app, &sid("sec-s-us"), "acct-margin"))["error"], json!("Wealthsimple refused the session. Connect Wealthsimple again."));
+    assert!(o::SecurityId::parse(" ").is_err(), "no id names no listing: a request without one is not read");
 }
 
 /// The request as Wealthsimple's web app sends it, its external id left out.
@@ -453,7 +870,8 @@ fn a_bad_ticket_is_refused_in_words_and_nothing_is_recorded() {
     for account in ["acct-crypto", "acct-managed", "acct-old", "nope"] {
         assert_eq!(bad(json!({"accountId": account})), "Choose an account.", "{account}");
     }
-    assert_eq!(bad(json!({"symbol": "NOPE", "securityId": ""})), "No listing stored for NOPE.");
+    assert!(serde_json::from_value::<Ticket>(ticket_json(json!({"listing": {"securityId": "", "symbol": "NOPE", "exchange": "NYSE", "currency": "USD"}}))).is_err(), "a ticket with no listing is not read");
+    assert!(serde_json::from_value::<Ticket>(ticket_json(json!({"symbol": "QNC"}))).is_err(), "a symbol is not a field of the ticket");
     assert_eq!(bad(json!({"side": "HOLD"})), "Side must be Buy or Sell.");
     assert_eq!(bad(json!({"id": ""})), "The order has no id: review it again.", "an order is made at its review");
     assert_eq!(bad(json!({"id": "order-1; drop"})), "The order has no id: review it again.");
@@ -467,9 +885,14 @@ fn a_bad_ticket_is_refused_in_words_and_nothing_is_recorded() {
     assert_eq!(bad(json!({"stopLoss": {"kind": "trail", "trail": 5, "trailUnit": "bps"}})), "A trail is a percent or an amount.");
     assert_eq!(bad(json!({"takeProfit": {"price": null}})), "A take profit price is required.");
     assert_eq!(bad(json!({"takeProfit": {"price": "lots"}})), "The take profit price \"lots\" is not a number.");
-    assert_eq!(bad(json!({"securityId": "", "symbol": "QNC", "currency": "ZZZZ"})), "No listing stored for QNC.");
+    // an id neither the book nor a quote has seen is asked of Wealthsimple, never
+    // taken in the page's words: with no session, it is refused
+    assert_eq!(bad(json!({"listing": {"securityId": "sec-s-elsewhere", "symbol": "QNC", "exchange": "", "currency": "ZZZZ"}})), "Not connected.");
+    // a listing Wealthsimple states in a currency the app does not know
+    app.orders.found.lock().unwrap().insert("sec-s-odd".into(), bagholder_model::securities::Security { id: "sec-s-odd".into(), symbol: "QNC".into(), currency: "ZZZZ".into(), ..Default::default() });
+    assert_eq!(bad(json!({"listing": {"securityId": "sec-s-odd", "symbol": "QNC", "exchange": "", "currency": "USD"}})), "The currency of QNC is not known.");
     // numbers typed as text are numbers, whatever the case of the words
-    let t: Ticket = serde_json::from_value(json!({"id": crate::app::uuid4().to_uppercase(), "side": "buy", "type": "limit", "quantity": "25", "limitPrice": "165.40", "symbol": "QNC", "securityId": "sec-s-us", "accountId": "acct-margin", "currency": "USD", "stopLoss": null, "takeProfit": null})).unwrap();
+    let t: Ticket = serde_json::from_value(json!({"id": crate::app::uuid4().to_uppercase(), "side": "buy", "type": "limit", "quantity": "25", "limitPrice": "165.40", "listing": {"securityId": "sec-s-us", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}, "accountId": "acct-margin", "stopLoss": null, "takeProfit": null})).unwrap();
     let asked = o::ticket_order(&app, &t).expect("numbers typed as text are numbers");
     assert_eq!((asked.order.quantity, asked.order.limit_price, asked.stop, asked.target), (d("25"), Some(d("165.40")), None, None));
     assert_eq!(asked.order.request["orderType"], json!("BUY_QUANTITY"));
@@ -512,6 +935,7 @@ fn a_ticket_placed_on_the_books_accounts_is_written_then_sent_once_and_answered_
     let _g = crate::tests_common::guard();
     crate::tests_common::order_accounts_in_book();
     let app = crate::tests_common::app();
+    quoted(&app);
     let _restore = SharedSeams(app.clone());
     let fake = FakeBroker::install(&app);
     set_session(&app, Some(tok()));
@@ -575,12 +999,13 @@ fn a_submit_with_no_session_is_written_with_its_failure_and_touches_no_bracket()
     let _g = crate::tests_common::guard();
     let mut w = armed_now(World::stop("95"), None);
     crate::tests_common::order_accounts_in(&w.app);
+    quoted(&w.app);
     let before = w.bracket_of("b1");
     // Wealthsimple itself, not the fake: with no session nothing leaves the app
     *w.app.orders.gate.broker.lock().unwrap() = None;
     set_session(&w.app, None);
     for side in ["BUY", "SELL"] {
-        let r = o::place_ticket(&w.app, &ticket(json!({"side": side, "securityId": "sec", "stopLoss": null, "takeProfit": null})));
+        let r = o::place_ticket(&w.app, &ticket(json!({"side": side, "listing": {"securityId": "sec", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}, "stopLoss": null, "takeProfit": null})));
         assert_eq!((r.ok, r.error.as_deref(), r.status.as_deref()), (false, Some("Not sent: Not connected."), Some("failed")), "{side}: {r:?}");
         let row = w.book.order(r.id.as_deref().expect("the answer names the order it wrote")).unwrap().unwrap();
         assert_eq!((row.fold.state, row.fold.why.as_deref()), (OrderState::Failed, Some("Not connected.")), "{side}");
@@ -1702,12 +2127,18 @@ fn the_reviews_value_in_cad_is_at_the_figures_rate_for_any_currency() {
     use crate::orders::preview::{preview_for, PreviewRequest, QuoteInput};
     let _g = crate::tests_common::guard();
     let a = crate::tests_common::app();
+    quoted(&a);
     let f = a.figures.get().unwrap();
     let (mut rated, mut waiting) = (0, 0);
     for code in ["CAD", "USD", "EUR", "GBP", "JPY", "AUD", "CHF", "HKD", "MXN", "ZZZ"] {
         let currency = bagholder_core::Currency::parse(code).unwrap();
         let expected = f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, currency, e.inputs().clock.today)).unwrap();
+        // a listing in that currency, as Wealthsimple states it: the preview's currency
+        // is the listing's own
+        let id = format!("sec-s-{}", code.to_lowercase());
+        a.orders.found.lock().unwrap().insert(id.clone(), bagholder_model::securities::Security { id: id.clone(), symbol: "QNC".into(), currency: code.into(), ..Default::default() });
         let r = PreviewRequest {
+            security_id: sid(&id),
             side: "BUY".into(),
             kind: "LIMIT".into(),
             quantity: Some("10".into()),

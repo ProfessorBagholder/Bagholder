@@ -123,7 +123,7 @@ export type Adjust = { id: string, leg: string, price: PageDec, trail: PageDec, 
 
 export type RefreshAndOrders = { read: RefreshOrdersAnswer, orders: OrdersDoc, };
 
-export type QuoteOf = { symbol: string, security: string, account: string, exchange: string, };
+export type QuoteOf = { security: SecurityId, account: string, };
 
 export type OrderAccount = { id: string, name: string, margin: boolean, 
 /**
@@ -160,7 +160,12 @@ export type Ticket = {
  * The order's id, made by the page when it opened the review: the same order
  * submitted twice is one order (brief 15 §2; brief 19, change 8).
  */
-id: string, symbol: string, securityId: string, accountId: string, 
+id: string, 
+/**
+ * The listing the order is on, by Wealthsimple's id for it: the ticket opened
+ * on it, and nothing here looks one up by its symbol.
+ */
+listing: OrderListing, accountId: string, 
 /**
  * `BUY` or `SELL`.
  */
@@ -172,13 +177,23 @@ type: string,
 /**
  * `DAY` or `UNTIL_CANCEL`; a day order when absent.
  */
-tif: string | null, quantity: PageDec, limitPrice: PageDec, stopPrice: PageDec, currency: string | null, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
+tif: string | null, quantity: PageDec, limitPrice: PageDec, stopPrice: PageDec, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
 
 export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string, 
 /**
  * Where the order stands after the answer: `dry`, `unconfirmed`, `pending`, …
  */
 status?: string, bracketId?: string, };
+
+export type SecurityId = string;
+
+export type OrderListing = { securityId: SecurityId, symbol: string, exchange: string, currency: string, };
+
+export type ListingRef = { "kind": "instrument", id: string, } | { "kind": "venue", symbol: string, venue: string, };
+
+export type ListingOf = { of: ListingRef, };
+
+export type OrderListingAnswer = { ok: true, listing: OrderListing, } | { ok: false, error: string, };
 
 export type StopInput = { on: boolean, 
 /**
@@ -207,6 +222,11 @@ export type QuoteInput = { last: string | null, ask: string | null, bid: string 
 multiplier: string | null, currency: string, };
 
 export type PreviewRequest = { 
+/**
+ * The listing the ticket is on, by Wealthsimple's id: required, as on every
+ * order request (brief 34, section 1); its currency is the listing's own.
+ */
+securityId: SecurityId, 
 /**
  * `BUY` or `SELL`.
  */

@@ -536,54 +536,75 @@
   },
   "listingSearch": {
     "the equity, not the option": {
-      "id": "sec-s-bbai",
-      "symbol": "BBAI",
-      "name": "BigBear.ai Holdings Inc",
-      "primaryExchange": "nyse",
-      "primaryMic": "XNYS",
-      "currency": "USD",
-      "underlyingId": null
+      "Ok": {
+        "id": "sec-s-bbai",
+        "symbol": "BBAI",
+        "name": "BigBear.ai Holdings Inc",
+        "primaryExchange": "nyse",
+        "primaryMic": "XNYS",
+        "currency": "USD",
+        "underlyingId": null
+      }
     },
     "an ETF": {
-      "id": "sec-s-baig",
-      "symbol": "BAIG",
-      "name": "2X Long Bbai Daily ETF",
-      "primaryExchange": "NASDAQ",
-      "primaryMic": "XNAS",
-      "currency": "USD",
-      "underlyingId": null
+      "Ok": {
+        "id": "sec-s-baig",
+        "symbol": "BAIG",
+        "name": "2X Long Bbai Daily ETF",
+        "primaryExchange": "NASDAQ",
+        "primaryMic": "XNAS",
+        "currency": "USD",
+        "underlyingId": null
+      }
     },
     "a Canadian suffix on either side": {
-      "id": "sec-s-qnc-ca",
-      "symbol": "QNC.TO",
-      "name": "Quantum Emotion Corp",
-      "primaryExchange": "TSX-V",
-      "primaryMic": "XTSX",
-      "currency": "CAD",
-      "underlyingId": null
+      "Ok": {
+        "id": "sec-s-qnc-ca",
+        "symbol": "QNC.TO",
+        "name": "Quantum Emotion Corp",
+        "primaryExchange": "TSX-V",
+        "primaryMic": "XTSX",
+        "currency": "CAD",
+        "underlyingId": null
+      }
     },
-    "the wrong exchange": null,
+    "another market": {
+      "Err": "Wealthsimple lists no BBAI on XTSE."
+    },
+    "another exchange of the US market": {
+      "Ok": {
+        "id": "sec-s-bbai",
+        "symbol": "BBAI",
+        "name": "BigBear.ai Holdings Inc",
+        "primaryExchange": "nyse",
+        "primaryMic": "XNYS",
+        "currency": "USD",
+        "underlyingId": null
+      }
+    },
     "a listing without a stock": {
-      "id": "sec-s-nostock",
-      "symbol": "",
-      "name": "",
-      "primaryExchange": "",
-      "primaryMic": "",
-      "currency": "CAD",
-      "underlyingId": null
+      "Err": "Wealthsimple lists no  on ."
     },
     "numbers where text is": {
-      "id": "991",
-      "symbol": "NUM",
-      "name": "7",
-      "primaryExchange": "TSX",
-      "primaryMic": "",
-      "currency": "5",
-      "underlyingId": null
+      "Ok": {
+        "id": "991",
+        "symbol": "NUM",
+        "name": "7",
+        "primaryExchange": "TSX",
+        "primaryMic": "",
+        "currency": "5",
+        "underlyingId": null
+      }
     },
-    "no results": null,
-    "results not a list": null,
-    "no search": null,
+    "no results": {
+      "Err": "Wealthsimple lists no BBAI on XNYS."
+    },
+    "results not a list": {
+      "Err": "Wealthsimple lists no BBAI on XNYS."
+    },
+    "no search": {
+      "Err": "Wealthsimple lists no BBAI on XNYS."
+    },
     "data null": {
       "failed": "graphql failed: golden"
     }

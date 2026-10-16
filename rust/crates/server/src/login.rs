@@ -20,7 +20,6 @@ use crate::http::OkOr;
 pub const CAPTURE_WAIT: Duration = Duration::from_secs(180);
 pub const OAUTH_COOKIE: &str = "_oauth2_access_v2";
 pub const DEVICE_COOKIE: &str = "wssdi";
-pub const LOGIN_URL: &str = "https://my.wealthsimple.com/app/login";
 /// Each DevTools call while capturing: short, so a closed window is noticed.
 pub const CAPTURE_CALL: Duration = Duration::from_secs(2);
 pub const WINDOW_CHECK: Duration = Duration::from_millis(500);
@@ -1199,7 +1198,7 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
         args.extend(["--no-sandbox".into(), "--disable-gpu".into(), "--disable-dev-shm-usage".into(), "--window-position=0,0".into(), "--hide-crash-restore-bubble".into(),
                      format!("--window-size={},{}", LOGIN_VIEW_SIZE.0, LOGIN_VIEW_SIZE.1)]);
     }
-    args.push(LOGIN_URL.into());
+    args.push(bagholder_wealthsimple::hosts::login_url());
     // the endpoint an earlier window named is not this one's
     match std::fs::remove_file(devtools_file(app)) {
         Ok(()) => {}

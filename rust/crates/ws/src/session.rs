@@ -20,6 +20,7 @@ pub const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
 pub const GRAPHQL_VERSION: &str = "12";
 pub const WS_CLIENT: &str = "@wealthsimple/wealthsimple";
 pub const OAUTH: &str = "https://api.production.wealthsimple.com/v1/oauth/v2";
+const WEB: &str = "https://my.wealthsimple.com";
 
 /// Where GraphQL and OAuth calls go. `BAGHOLDER_WS_BASE` points both at a
 /// stand-in server, for testing the client against recorded answers.
@@ -27,6 +28,15 @@ pub fn graphql_url() -> String {
     match std::env::var("BAGHOLDER_WS_BASE") {
         Ok(b) if !b.is_empty() => format!("{}/graphql", b.trim_end_matches('/')),
         _ => GRAPHQL.to_string(),
+    }
+}
+
+/// The origin Wealthsimple's own web app sends its API calls from, which those
+/// calls carry: the stand-in's where one is named.
+pub fn web_origin() -> String {
+    match std::env::var("BAGHOLDER_WS_BASE") {
+        Ok(b) if !b.is_empty() => b.trim_end_matches('/').to_string(),
+        _ => WEB.to_string(),
     }
 }
 
@@ -623,8 +633,8 @@ impl<'a> Client<'a> {
             ("x-ws-locale", "en-CA".to_string()),
             ("x-platform-os", "web".to_string()),
             ("Content-Type", "application/json".to_string()),
-            ("Origin", "https://my.wealthsimple.com".to_string()),
-            ("Referer", "https://my.wealthsimple.com/app/trade".to_string()),
+            ("Origin", web_origin()),
+            ("Referer", format!("{}/app/trade", web_origin())),
         ];
         extra.retain(|(k, v)| !(*k == "Authorization" && v == "Bearer "));
         let ua = self.home.cached_user_agent().map_err(|e| CallError::Failed(ua_failed(e)))?;
@@ -701,8 +711,8 @@ impl Client<'_> {
             ("x-ws-api-version", GRAPHQL_VERSION.to_string()),
             ("x-ws-locale", "en-CA".to_string()),
             ("x-platform-os", "web".to_string()),
-            ("Origin", "https://my.wealthsimple.com".to_string()),
-            ("Referer", "https://my.wealthsimple.com/app/trade".to_string()),
+            ("Origin", web_origin()),
+            ("Referer", format!("{}/app/trade", web_origin())),
         ];
         // nothing is sent without the user agent: the order is not placed
         let ua = match self.home.cached_user_agent() {

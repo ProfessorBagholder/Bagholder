@@ -11,7 +11,6 @@ use bagholder_ws::session::{Client, Session};
 use crate::app::{now_iso, now_unix, App};
 use crate::http::OkOr;
 
-pub const LOGIN_URL: &str = "https://my.wealthsimple.com/app/login";
 
 /// The saved login: `None` where none is saved. A file that cannot be read, or
 /// that holds no login, is the error, for the caller to say: never read as no
@@ -213,13 +212,13 @@ pub fn scrape_client_id(app: &Arc<App>) -> String {
     };
     let hdrs: Vec<(&str, &str)> = if ua.is_empty() { vec![] } else { vec![("User-Agent", ua.as_str())] };
     let get = |url: &str| bagholder_net::client::request("GET", url, &hdrs, None, Duration::from_secs(20)).ok().map(|r| r.text());
-    let html = match get(LOGIN_URL) { Some(h) => h, None => return String::new() };
+    let html = match get(&bagholder_wealthsimple::hosts::login_url()) { Some(h) => h, None => return String::new() };
     let script = regex::Regex::new(r#"(?i)<script[^>]+src="([^"]*app-[a-f0-9]+\.js[^"]*)""#).unwrap();
     let mut js_url = match script.captures(&html) { Some(c) => c[1].to_string(), None => return String::new() };
     if js_url.starts_with("//") {
         js_url = format!("https:{}", js_url);
     } else if js_url.starts_with('/') {
-        js_url = format!("https://my.wealthsimple.com{}", js_url);
+        js_url = format!("{}{}", bagholder_wealthsimple::hosts::web(), js_url);
     }
     let js = match get(&js_url) { Some(j) => j, None => return String::new() };
     match regex::Regex::new(r#"(?s)production:.*?clientId:"([a-f0-9]+)""#).unwrap().captures(&js) {

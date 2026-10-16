@@ -38,20 +38,26 @@ pub const RESOLVE_RETRY_DAYS: i64 = 1;
 
 /// The venue a TMX quote names, in the app's own
 /// words.
-const EXCHANGE_NAMES: [(&str, &str); 8] = [
-    ("VENTURE", "TSX-V"),
-    ("TORONTO", "TSX"),
-    ("CANADIAN SECURITIES", "CSE"),
-    ("CBOE", "Cboe Canada"),
-    ("NEO", "Cboe Canada"),
-    ("NASDAQ", "NASDAQ"),
-    ("NYSE", "NYSE"),
-    ("NEW YORK", "NYSE"),
+/// A mark in TMX's name for an exchange, the venue's words, and the market identifier
+/// code those words are read as: first match wins, so a venue whose name holds
+/// another's (NYSE American, NYSE Arca) comes before it.
+pub const EXCHANGE_NAMES: [(&str, &str, &str); 11] = [
+    ("VENTURE", "TSX-V", "XTSX"),
+    ("TORONTO", "TSX", "XTSE"),
+    ("CANADIAN SECURITIES", "CSE", "XCNQ"),
+    ("CBOE", "Cboe Canada", "NEOE"),
+    ("NEO", "Cboe Canada", "NEOE"),
+    ("NASDAQ", "NASDAQ", "XNAS"),
+    ("NYSE AMERICAN", "NYSE American", "XASE"),
+    ("AMEX", "NYSE American", "XASE"),
+    ("NYSE ARCA", "NYSE Arca", "ARCX"),
+    ("NYSE", "NYSE", "XNYS"),
+    ("NEW YORK", "NYSE", "XNYS"),
 ];
 
 pub fn tmx_venue(name: &str) -> String {
     let up = name.to_uppercase();
-    for (mark, venue) in EXCHANGE_NAMES {
+    for (mark, venue, _) in EXCHANGE_NAMES {
         if up.contains(mark) {
             return venue.to_string();
         }
@@ -266,12 +272,14 @@ pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Re
         return Ok(None);
     }
     let name = if q.name.is_empty() { bare.clone() } else { q.name };
+    // the venue's own currency where TMX states none, by the app's one venue table
     let currency = if !q.currency.is_empty() {
         q.currency
-    } else if venue == "NYSE" || venue == "NASDAQ" {
-        "USD".into()
     } else {
-        "CAD".into()
+        match bagholder_sources::venue::mic_of(&venue).and_then(bagholder_sources::venue::currency_of) {
+            Some(c) => c.as_str().to_string(),
+            None => return Ok(None),
+        }
     };
     Ok(Some(bagholder_model::wire::SymbolMatch { symbol: bare, name, exchange: venue.to_string(), currency, ..Default::default() }))
 }

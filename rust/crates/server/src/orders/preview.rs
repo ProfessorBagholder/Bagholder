@@ -17,31 +17,76 @@ use crate::wire::Fig;
 
 /// What the ticket holds, as the page sends it: every amount as the text typed or
 /// the quote's own figure, none where it is not set.
-#[derive(Clone, Debug, Default, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(Clone, Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreviewRequest {
+    /// The listing the ticket is on, by Wealthsimple's id: required, as on every
+    /// order request (brief 34, section 1); its currency is the listing's own.
+    pub security_id: super::ticket::SecurityId,
     /// `BUY` or `SELL`.
+    #[serde(default)]
     pub side: String,
     /// `MARKET`, `LIMIT`, `STOP` or `STOP_LIMIT`.
     #[serde(rename = "type")]
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub quantity: Option<String>,
     /// The order's value typed in Amount: the quantity becomes the whole units it buys.
+    #[serde(default)]
     pub amount: Option<String>,
+    #[serde(default)]
     pub limit: Option<String>,
+    #[serde(default)]
     pub stop: Option<String>,
+    #[serde(default)]
     pub sl: StopInput,
+    #[serde(default)]
     pub tp: TargetInput,
+    #[serde(default)]
     pub quote: QuoteInput,
+    #[serde(default)]
     pub margin_rate: Option<String>,
+    #[serde(default)]
     pub margin_available: Option<String>,
+    #[serde(default)]
     pub cash: Option<String>,
+    #[serde(default)]
     pub buying_power: Option<String>,
     /// The account borrows; `linked_margin`, it backs a margin account.
+    #[serde(default)]
     pub margin: bool,
+    #[serde(default)]
     pub linked_margin: bool,
     /// The accounts' value, CAD.
+    #[serde(default)]
     pub nav: Option<String>,
+}
+
+/// A request with nothing typed, on a test's listing: what a test fills in.
+#[cfg(test)]
+impl Default for PreviewRequest {
+    fn default() -> PreviewRequest {
+        PreviewRequest {
+            security_id: crate::orders::SecurityId::parse("sec-s-us").expect("an id"),
+            side: String::new(),
+            kind: String::new(),
+            quantity: None,
+            amount: None,
+            limit: None,
+            stop: None,
+            sl: StopInput::default(),
+            tp: TargetInput::default(),
+            quote: QuoteInput::default(),
+            margin_rate: None,
+            margin_available: None,
+            cash: None,
+            buying_power: None,
+            margin: false,
+            linked_margin: false,
+            nav: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, TS)]
@@ -191,6 +236,11 @@ pub type ToCad = Option<Result<Dec, Vec<String>>>;
 /// figures (the Bank of Canada's, for today).
 pub fn preview_for(app: &std::sync::Arc<crate::app::App>, r: &PreviewRequest) -> Result<Preview, crate::http::ApiError> {
     use crate::http::ApiError;
+    // the listing's currency as the book or Wealthsimple states it, never the page's
+    let listing = super::ticket::listing_by_id(app, &r.security_id, "the listing").map_err(ApiError::Failed)?;
+    let mut r = r.clone();
+    r.quote.currency = listing.currency.clone();
+    let r = &r;
     let named = r.quote.currency.trim();
     let to_cad: ToCad = if named.is_empty() {
         None
@@ -406,6 +456,7 @@ mod tests {
     /// A Buy limit of 10 at 100, a 5% stop and a 10% target, quoted 99/101 last 100 in USD.
     fn ticket() -> PreviewRequest {
         PreviewRequest {
+            security_id: crate::orders::SecurityId::parse("sec-s-us").unwrap(),
             side: "BUY".into(),
             kind: "LIMIT".into(),
             quantity: t("10"),

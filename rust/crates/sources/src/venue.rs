@@ -72,6 +72,19 @@ pub fn mic_of(words: &str) -> Option<&'static str> {
     }
 }
 
+/// What two sources' venues for one listing are compared on: the venue's code in
+/// Canada, where each venue lists its own issues; the market in the US, where a
+/// symbol names one listing across every exchange and the sources state the NYSE
+/// group differently (Wealthsimple states an NYSE Arca or NYSE American listing as
+/// `XNYS`, the Nasdaq directory as `PSE` or `AMEX`). None for a venue this table
+/// does not know.
+pub fn listing_venue(mic: &str) -> Option<String> {
+    match market_of(Some(mic))? {
+        Market::UnitedStates => Some("US".into()),
+        _ => Some(mic.to_string()),
+    }
+}
+
 /// The currency a venue's listings trade in, where the venue says it.
 pub fn currency_of(mic: &str) -> Option<bagholder_core::Currency> {
     match market_of(Some(mic))? {

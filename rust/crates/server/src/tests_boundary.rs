@@ -267,3 +267,53 @@ fn the_whole_read_check_finds_a_call_and_not_a_definition_a_method_a_comment_or_
     let planted = "#[cfg(test)]\nuse crate::fake;\nstruct S {\n    #[cfg(test)]\n    seen: u8,\n}\nfn sweep() { let m = crate::figures::market(&book, &cache)?; }\n#[cfg(test)]\nmod t {}";
     assert_eq!(whole_reads(planted), vec!["market"]);
 }
+
+/// Each line of a file's code, outside its tests and comments, that names one of
+/// Wealthsimple's hosts.
+fn wealthsimple_hosts(text: &str) -> Vec<String> {
+    let code = &production(text);
+    code.lines().filter(|l| !l.trim_start().starts_with("//") && l.contains("wealthsimple.com")).map(|l| l.trim().to_string()).collect()
+}
+
+/// Every Wealthsimple address the app asks comes from one place that the stand-in's
+/// variable (`BAGHOLDER_WS_BASE`) redirects: the newer client's `hosts` module, and
+/// the older client's own reading of it. Any other crate's code naming a host would
+/// reach Wealthsimple itself from a test's signed-in server (brief 37, 6).
+#[test]
+fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    const ALLOWED: [&str; 2] = ["wealthsimple/src/hosts.rs", "ws/src/session.rs"];
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for c in std::fs::read_dir(&crates).unwrap().flatten() {
+        let src = c.path().join("src");
+        if src.is_dir() {
+            walk(&src, &mut files);
+        }
+    }
+    assert!(files.len() > 100, "every crate's source is read");
+    let mut found = Vec::new();
+    for f in files {
+        let rel = f.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/");
+        // a module that is only a test's (`tests_*.rs`) holds no code the app runs
+        let test_only = f.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tests_"));
+        if ALLOWED.contains(&rel.as_str()) || test_only {
+            continue;
+        }
+        for l in wealthsimple_hosts(&std::fs::read_to_string(&f).unwrap()) {
+            found.push(format!("{rel}: {l}"));
+        }
+    }
+    assert!(found.is_empty(), "Wealthsimple named outside its hosts module:\n{}", found.join("\n"));
+    assert_eq!(wealthsimple_hosts("const X: &str = \"https://my.wealthsimple.com/x\";"), vec!["const X: &str = \"https://my.wealthsimple.com/x\";"]);
+    assert!(wealthsimple_hosts("/// help.wealthsimple.com\nfn f() {}").is_empty());
+}

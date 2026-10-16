@@ -35,6 +35,21 @@ impl<S: Send + Sync, T: DeserializeOwned + Default> FromRequest<S> for Body<T> {
     }
 }
 
+/// A JSON body every field of which the route reads as it is: no body, or one
+/// without a required field, is refused, never read as a default. For a request
+/// that names what it acts on (an order's listing), so a request that names
+/// nothing cannot be written.
+pub struct Required<T>(pub T);
+
+impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Required<T> {
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
+        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+        serde_json::from_slice(&bytes).map(Required).map_err(|e| ApiError::BadRequest(format!("the body is not what this route reads: {}", e)))
+    }
+}
+
 /// A file the page sends as it is, never held whole: its body, read a chunk at a
 /// time by the route, and the size the request states, where it states one.
 pub struct Upload {

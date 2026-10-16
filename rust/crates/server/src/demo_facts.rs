@@ -125,17 +125,40 @@ pub fn write(home: &Path) -> Result<String, String> {
         }
     }
 
-    // a quote for each listing the book holds a record of, from its demo bars
+    // a quote for each listing the book holds a record of, from its demo bars: the
+    // earlier store keeps one history per ticker, so a listing whose ticker another
+    // listing of the book shares is quoted from its own last fill instead, never
+    // from bars that may be the other listing's
     let mut quoted = 0;
-    for i in book.instruments().map_err(err)? {
-        let Some(symbol) = book.names(i.id).map_err(err)?.last().map(|n| n.symbol.clone()) else { continue };
-        let closes: Vec<f64> = old
-            .prepare("SELECT close FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 2")
-            .map_err(err)?
-            .query_map(rusqlite::params![symbol, TODAY], |r| r.get::<_, f64>(0))
-            .map_err(err)?
-            .collect::<Result<_, _>>()
-            .map_err(err)?;
+    let instruments = book.instruments().map_err(err)?;
+    let mut tickers: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut named = Vec::new();
+    for i in &instruments {
+        let symbol = book.names(i.id).map_err(err)?.last().map(|n| n.symbol.clone());
+        if let Some(s) = &symbol {
+            *tickers.entry(s.clone()).or_default() += 1;
+        }
+        named.push((i, symbol));
+    }
+    for (i, symbol) in named {
+        let Some(symbol) = symbol else { continue };
+        let closes: Vec<f64> = if tickers[&symbol] > 1 {
+            book.transactions()
+                .map_err(err)?
+                .iter()
+                .filter(|t| t.instrument == Some(i.id) && t.trade_date.to_string().as_str() <= TODAY)
+                .filter_map(|t| t.price.map(|p| (t.trade_date, p.amount.to_f64())))
+                .max_by_key(|(d, _)| *d)
+                .map(|(_, p)| vec![p])
+                .unwrap_or_default()
+        } else {
+            old.prepare("SELECT close FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 2")
+                .map_err(err)?
+                .query_map(rusqlite::params![symbol, TODAY], |r| r.get::<_, f64>(0))
+                .map_err(err)?
+                .collect::<Result<_, _>>()
+                .map_err(err)?
+        };
         let (Some(last), prev) = (closes.first(), closes.get(1)) else { continue };
         let price = Dec::parse(&format!("{last:.2}")).map_err(err)?;
         let change = prev.map(|p| Dec::parse(&format!("{:.2}", last - p))).transpose().map_err(err)?;

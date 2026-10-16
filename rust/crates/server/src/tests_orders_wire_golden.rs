@@ -155,16 +155,17 @@ fn search_answer() -> Value {
 
 fn search_cases() -> Vec<(&'static str, Value, &'static str, &'static str)> {
     vec![
-        ("the equity, not the option", search_answer(), "BBAI", "NYSE"),
-        ("an ETF", search_answer(), "BAIG", "nasdaq"),
-        ("a Canadian suffix on either side", search_answer(), "QNC.V", "TSX-V"),
-        ("the wrong exchange", search_answer(), "BBAI", "NASDAQ"),
+        ("the equity, not the option", search_answer(), "BBAI", "XNYS"),
+        ("an ETF", search_answer(), "BAIG", "XNAS"),
+        ("a Canadian suffix on either side", search_answer(), "QNC.V", "XTSX"),
+        ("another market", search_answer(), "BBAI", "XTSE"),
+        ("another exchange of the US market", search_answer(), "BBAI", "XNAS"),
         ("a listing without a stock", search_answer(), "", ""),
-        ("numbers where text is", search_answer(), "NUM", "TSX"),
-        ("no results", json!({"securitySearch": {"results": []}}), "BBAI", "NYSE"),
-        ("results not a list", json!({"securitySearch": {"results": {"id": "x"}}}), "BBAI", "NYSE"),
-        ("no search", json!({"securitySearch": null}), "BBAI", "NYSE"),
-        ("data null", Value::Null, "BBAI", "NYSE"),
+        ("numbers where text is", search_answer(), "NUM", "XTSE"),
+        ("no results", json!({"securitySearch": {"results": []}}), "BBAI", "XNYS"),
+        ("results not a list", json!({"securitySearch": {"results": {"id": "x"}}}), "BBAI", "XNYS"),
+        ("no search", json!({"securitySearch": null}), "BBAI", "XNYS"),
+        ("data null", Value::Null, "BBAI", "XNYS"),
     ]
 }
 
@@ -252,7 +253,7 @@ fn test_every_order_answer_wealthsimple_gives_is_read_as_the_golden_pins() {
 
     let mut search = Map::new();
     for (name, data, sym, ex) in search_cases() {
-        search.insert(name.into(), read(&data, |d: bagholder_ws::wire::SecuritySearchAnswer| serde_json::to_value(o::parse_listing_search(&d, sym, ex)).unwrap()));
+        search.insert(name.into(), read(&data, |d: bagholder_ws::wire::SecuritySearchAnswer| serde_json::to_value(o::parse_listing_search(&d, sym, ex, "")).unwrap()));
     }
     got.insert("listingSearch".into(), Value::Object(search));
 

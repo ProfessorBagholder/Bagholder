@@ -247,7 +247,7 @@ test('Esc closes an open editor first, then the panel', async ({ page, request }
 
 test('a closed-without-sending draft is an amber card above Pending, with Resume and Discard', async ({ page, request }) => {
   const draft = {
-    symbol: 'QNC', side: 'BUY', exchange: 'TSX-V', at: '2026-09-19T16:00:00Z',
+    listing: { securityId: 'sec-td', symbol: 'TD', exchange: 'TSX', currency: 'CAD' }, side: 'BUY', at: '2026-09-19T16:00:00Z',
     accountId: 'acct-tfsa', type: 'LIMIT', tif: 'DAY', qty: 1, limit: 1.72, stop: null,
     sl: { on: true, kind: 'stop', price: 1.6, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: false, price: null, pct: null, unit: 'amt' },
@@ -259,7 +259,7 @@ test('a closed-without-sending draft is an amber card above Pending, with Resume
   await openPanel(page, request, noOrders, { openOrders: 0 })
   const card = page.locator('.od-card.draft')
   await expect(card.locator('.od-draft')).toHaveText('Draft')
-  await expect(card.locator('.od-title')).toContainText('TSX-V: QNC')
+  await expect(card.locator('.od-title')).toContainText('TSX: TD')
   await expect(card.locator('.od-value')).toHaveText('$1.72')
   await expect(card.locator('.od-line')).toHaveText('Buy 1 at 1.72 limit · Day')
   await expect(card.locator('.od-leg')).toHaveCount(1)
@@ -273,7 +273,7 @@ test('a closed-without-sending draft is an amber card above Pending, with Resume
 
 test('Discard removes the draft card', async ({ page, request }) => {
   const draft = {
-    symbol: 'QNC', side: 'BUY', exchange: 'TSX-V', at: '2026-09-19T16:00:00Z',
+    listing: { securityId: 'sec-qnc', symbol: 'QNC', exchange: 'TSX-V', currency: 'CAD' }, side: 'BUY', at: '2026-09-19T16:00:00Z',
     accountId: 'acct-tfsa', type: 'LIMIT', tif: 'DAY', qty: 1, limit: 1.72, stop: null,
     sl: { on: false, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: false, price: null, pct: null, unit: 'amt' },
