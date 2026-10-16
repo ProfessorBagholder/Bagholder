@@ -15,6 +15,7 @@ pub mod ids;
 pub mod json;
 pub mod instrument;
 pub mod journal;
+pub mod listing;
 pub mod log;
 pub mod money;
 pub mod order;
@@ -24,6 +25,7 @@ pub mod sessions;
 pub mod transaction;
 
 pub use dec::{Dec, DecError, Rounding};
+pub use listing::ListingKey;
 pub use ids::{AccountId, ConnectionId, GroupId, IdError, InstrumentId, IssuerId, Leg, LinkId, RecordId, TradeId, TransactionId};
 pub use money::{Currency, Money, MoneyError};
 pub use names::{Broker, MappingVersion, SourceName};

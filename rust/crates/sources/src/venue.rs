@@ -26,10 +26,10 @@ pub fn market_of(mic: Option<&str>) -> Option<Market> {
     match mic? {
         // the TSX, the TSX Venture, the CSE, and Alpha (TSX Alpha Exchange, a
         // venue trading both the TSX's and the TSX Venture's issues)
-        "XTSE" | "XTSX" | "XCNQ" | "XATS" => Some(Market::Canada),
         "NEOE" => Some(Market::CboeCanada),
+        m if bagholder_core::listing::CANADA_MICS.contains(&m) => Some(Market::Canada),
         // Nasdaq, the NYSE, NYSE Arca, NYSE American, Cboe's US equities (BZX), IEX
-        "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" | "IEXG" => Some(Market::UnitedStates),
+        m if bagholder_core::listing::US_MICS.contains(&m) => Some(Market::UnitedStates),
         _ => None,
     }
 }
@@ -52,24 +52,9 @@ pub fn known_mic(mic: Option<&str>, words: Option<&str>) -> Option<&'static str>
 
 /// The market identifier code of a venue as a broker, a directory or a person
 /// writes it in words (`TSX-V`, `NASDAQ`, `Cboe Canada`); none for words no venue
-/// here is known by.
+/// here is known by. One table, `bagholder_core::listing`'s, for every crate.
 pub fn mic_of(words: &str) -> Option<&'static str> {
-    match words.trim().to_ascii_uppercase().as_str() {
-        "TSX" | "TORONTO" | "TORONTO STOCK EXCHANGE" | "XTSE" => Some("XTSE"),
-        // `XTSV` is how some records write the TSX Venture's code
-        "TSX-V" | "TSXV" | "TSX VENTURE" | "TSX VENTURE EXCHANGE" | "VENTURE" | "CDNX" | "XTSX" | "XTSV" => Some("XTSX"),
-        "CSE" | "CANADIAN SECURITIES EXCHANGE" | "XCNQ" => Some("XCNQ"),
-        "CBOE CANADA" | "CBOE CA" | "NEO" | "NEOE" => Some("NEOE"),
-        "ALPHA" | "ALPHA EXCHANGE" | "XATS" => Some("XATS"),
-        "NASDAQ" | "XNAS" => Some("XNAS"),
-        "NYSE" | "XNYS" => Some("XNYS"),
-        "NYSE ARCA" | "ARCA" | "ARCX" => Some("ARCX"),
-        "NYSE AMERICAN" | "AMEX" | "XASE" => Some("XASE"),
-        // `CBOE` alone is Cboe's US equities venue; Cboe Canada is named as such
-        "BATS" | "CBOE BZX" | "CBOE" => Some("BATS"),
-        "IEX" | "IEXG" => Some("IEXG"),
-        _ => None,
-    }
+    bagholder_core::listing::mic_of(words)
 }
 
 /// What two sources' venues for one listing are compared on: the venue's code in
@@ -79,10 +64,7 @@ pub fn mic_of(words: &str) -> Option<&'static str> {
 /// `XNYS`, the Nasdaq directory as `PSE` or `AMEX`). None for a venue this table
 /// does not know.
 pub fn listing_venue(mic: &str) -> Option<String> {
-    match market_of(Some(mic))? {
-        Market::UnitedStates => Some("US".into()),
-        _ => Some(mic.to_string()),
-    }
+    bagholder_core::listing::listing_venue(mic).map(str::to_string)
 }
 
 /// The currency a venue's listings trade in, where the venue says it.
