@@ -6,6 +6,7 @@
 //! that is down does not empty what another put there. What has been read out
 //! of a document survives a refresh of the list it came from.
 
+use bagholder_core::ListingKey;
 use rusqlite::{Connection, Result, Row};
 use std::collections::{HashMap, HashSet};
 use serde::Serialize;
@@ -342,7 +343,9 @@ pub struct NewsItem {
 #[serde(rename_all = "camelCase")]
 pub struct StoredNews {
     pub id: String,
-    pub symbol: String,
+    /// The listing it was read for (`*@MARKET` for the market's own news).
+    pub listing: ListingKey,
+    /// The venue in the words the listing was read under, for display alone.
     pub exchange: String,
     /// The feed it was read from; `None` for a stored value that names none.
     #[serde(rename = "source")]
@@ -373,27 +376,23 @@ impl StoredNews {
     }
 }
 
-/// `news_key`.
-pub fn news_key(symbol: &str, exchange: &str) -> String {
-    format!("{}@{}", up(symbol), up(exchange))
-}
-
 /// `replace_news`: a listing's latest items, in place of what it had. Each
-/// row is stored under the feed it was read from (`via`).
-pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], now: &str) -> Result<()> {
+/// row is stored under the feed it was read from (`via`); `exchange` is the venue
+/// in the words the listing was read under, kept for display.
+pub fn replace_news(conn: &Connection, listing: &ListingKey, exchange: &str, rows: &[NewsItem], now: &str) -> Result<()> {
     crate::atomically(conn, || {
-        let sym = up(symbol);
+        let key = listing.to_string();
         let ex = up(exchange);
-        let changed = crate::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex], || {
-        conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
+        let changed = crate::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE listing = ?", rusqlite::params![key], || {
+        conn.execute("DELETE FROM news WHERE listing = ?", rusqlite::params![key])?;
         for r in rows {
             if r.id.is_empty() {
                 continue;
             }
             conn.execute(
-                "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO news (id, listing, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    r.id, sym, ex, r.via.as_str(), r.headline, r.source,
+                    r.id, key, ex, r.via.as_str(), r.headline, r.source,
                     r.url, r.published_at, now, r.kind.as_str(), r.summary,
                 ],
             )?;
@@ -401,11 +400,11 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, rows: &[New
         Ok(())
         })?;
         if !changed {
-            conn.execute("UPDATE news SET fetched_at = ? WHERE symbol = ? AND exchange = ?", rusqlite::params![now, sym, ex])?;
+            conn.execute("UPDATE news SET fetched_at = ? WHERE listing = ?", rusqlite::params![now, key])?;
         }
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            rusqlite::params![format!("news_fetched:{}", news_key(&sym, &ex)), now],
+            rusqlite::params![format!("news_fetched:{key}"), now],
         )?;
         Ok(())
     })
@@ -418,9 +417,10 @@ fn news_from_row(r: &Row) -> Result<StoredNews> {
     let id = text(r, "id")?;
     let source = text(r, "source")?;
     let feed = Feed::parse(&source).or_else(|| Feed::of_id(&id));
+    let listing = text(r, "listing")?;
     Ok(StoredNews {
         id,
-        symbol: text(r, "symbol")?,
+        listing: listing.parse().map_err(|e: bagholder_core::listing::NotAListing| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
         exchange: text(r, "exchange")?,
         feed,
         headline: text(r, "headline")?,
@@ -434,30 +434,25 @@ fn news_from_row(r: &Row) -> Result<StoredNews> {
 }
 
 /// `news_for`: a listing's stored items, newest first.
-pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<StoredNews>> {
-    let mut stmt = conn.prepare("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id")?;
-    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], news_from_row)?;
+pub fn news_for(conn: &Connection, listing: &ListingKey) -> Result<Vec<StoredNews>> {
+    let mut stmt = conn.prepare("SELECT * FROM news WHERE listing = ? ORDER BY published_at DESC, id")?;
+    let rows = stmt.query_map(rusqlite::params![listing.to_string()], news_from_row)?;
     rows.collect()
 }
 
 /// `news_ids`: the ids a listing's stored items carry, so a wire's new
 /// items can be told from the ones it had.
-pub fn news_ids(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT id FROM news WHERE symbol = ? AND exchange = ?")?;
-    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], |r| r.get::<_, String>(0))?;
+pub fn news_ids(conn: &Connection, listing: &ListingKey) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM news WHERE listing = ?")?;
+    let rows = stmt.query_map(rusqlite::params![listing.to_string()], |r| r.get::<_, String>(0))?;
     rows.collect()
 }
 
-/// `has_wire_release`: whether a wire has carried a release for this
-/// ticker under any venue and any form the book writes it.
-pub fn has_wire_release(conn: &Connection, symbol: &str) -> Result<bool> {
-    let sym = up(symbol);
-    if sym.is_empty() {
-        return Ok(false);
-    }
+/// `has_wire_release`: whether a wire has carried a release for this listing.
+pub fn has_wire_release(conn: &Connection, listing: &ListingKey) -> Result<bool> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM news WHERE kind = 'release' AND (symbol = ? OR symbol LIKE ?) LIMIT 1)",
-        rusqlite::params![sym, format!("{}.%", sym)],
+        "SELECT COUNT(*) FROM (SELECT 1 FROM news WHERE kind = 'release' AND listing = ? LIMIT 1)",
+        rusqlite::params![listing.to_string()],
         |r| r.get(0),
     )?;
     Ok(n > 0)
@@ -474,13 +469,14 @@ pub fn news_fetched_at(conn: &Connection) -> Result<HashMap<String, String>> {
     Ok(out)
 }
 
-pub fn forget_news(conn: &Connection, symbol: &str, exchange: &str) -> Result<()> {
+pub fn forget_news(conn: &Connection, listing: &ListingKey) -> Result<()> {
     crate::atomically(conn, || {
-        conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![up(symbol), up(exchange)])?;
-        let tail = format!(":{}", news_key(symbol, exchange));
+        let key = listing.to_string();
+        conn.execute("DELETE FROM news WHERE listing = ?", rusqlite::params![key])?;
+        let tail = format!(":{key}");
         conn.execute(
             "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
-            rusqlite::params![format!("news_fetched:{}", news_key(symbol, exchange)), tail, tail],
+            rusqlite::params![format!("news_fetched:{key}"), tail, tail],
         )?;
         Ok(())
     })

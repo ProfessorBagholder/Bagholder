@@ -150,8 +150,8 @@ fn test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue() 
     };
     let net = Net { get: &no_get, post: &post, article: &news::no_article, pace: false };
     let clock = Clock::at(at(2026, 9, 16, 12, 0));
-    let (src, rows) = news::fetch_symbol(&d.conn, &net, "QIMC", "CSE", "CAD", &clock);
-    news::fetch_symbol(&d.conn, &net, "CH", "TSX-V", "CAD", &clock);
+    let (src, rows) = news::fetch_symbol(&net, "QIMC", "CSE", "CAD", &clock);
+    news::fetch_symbol(&net, "CH", "TSX-V", "CAD", &clock);
     assert_eq!((src, asked.lock().unwrap().clone()), (Feed::Tmx, vec!["QIMC:CNX".to_string(), "QIMC:CNX".into(), "CH".into(), "CH".into()]),
                "each listing under the code its quote uses, once for each of TMX's two tabs");
     let rows = rows.unwrap().rows;
@@ -160,7 +160,7 @@ fn test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue() 
     // (the form TMX's resolver verified, remembered as a miss would be, so nothing is asked of the network)
     bagholder_store::tables::set_meta(&d.conn, "tmx_form:QIMC", "none@2026-09-16").unwrap();
     asked.lock().unwrap().clear();
-    let (_, found) = news::fetch_symbol(&d.conn, &net, "QIMC", "TSX-V", "CAD", &clock);
+    let (_, found) = news::fetch_symbol(&net, "QIMC", "TSX-V", "CAD", &clock);
     assert_eq!((asked.lock().unwrap().clone(), ids(&found.unwrap().rows)), (vec!["QIMC".to_string(), "QIMC".into()], Vec::<String>::new()),
                "a form TMX cannot place answers nothing, under both tabs");
 }
@@ -212,7 +212,7 @@ fn test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases(
         tabs.lock().unwrap().push(media);
         Ok(json!({"data": {"news": [if media { kraken_story() } else { kraken_release() }]}}))
     };
-    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &post, article: &news::no_article, pace: false }, "PNG", "TSX-V", "CAD", &clock);
+    let (src, rows) = news::fetch_symbol(&Net { get: &no_get, post: &post, article: &news::no_article, pace: false }, "PNG", "TSX-V", "CAD", &clock);
     assert_eq!((src, tabs.lock().unwrap().clone()), (Feed::Tmx, vec![false, true]));
     let mut got: Vec<(String, &str)> = rows.unwrap().rows.iter().map(|r| (r.id.clone(), r.kind.as_str())).collect();
     got.sort();
@@ -223,7 +223,7 @@ fn test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases(
         }
         Ok(json!({"data": {"news": [kraken_release()]}}))
     };
-    let (_, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &failing, article: &news::no_article, pace: false }, "PNG", "TSX-V", "CAD", &clock);
+    let (_, rows) = news::fetch_symbol(&Net { get: &no_get, post: &failing, article: &news::no_article, pace: false }, "PNG", "TSX-V", "CAD", &clock);
     assert_eq!(ids(&rows.unwrap().rows), vec!["tmx:10"], "the releases still arrive when the stories tab fails");
 }
 
@@ -249,13 +249,11 @@ fn test_yahoo_keeps_what_its_ticker_tags_name() {
     let got: Vec<(&str, &str, &str, &str)> = rows.iter().map(|r| (r.id.as_str(), r.kind.as_str(), r.source.as_str(), r.published_at.as_str())).collect();
     assert_eq!(got, vec![("yahoo:a1", "release", "Newsfile", "2026-09-14T13:13:00Z"), ("yahoo:a3", "story", "The Globe and Mail", "2026-09-15T10:00:00Z")],
                "an item Yahoo tags with other tickers is theirs; a wire's item is a release");
-    let d = db();
-    bagholder_store::tables::set_meta(&d.conn, "tmx_form:QIMC", "@:CNX").unwrap();
     let forms: Vec<String> = [("PNG", "TSX-V", "CAD"), ("HG", "CSE", "CAD"), ("HBIX", "Cboe Canada", "CAD"), ("ASTS", "NASDAQ", "USD"),
                               ("LUNR", "NASDAQ", ""), ("QIMC", "", "CAD"), ("VEQT", "", "CAD"), ("F", "", "")]
-        .iter().map(|(a, b, c)| news::yahoo_form(&d.conn, a, b, c).unwrap()).collect();
-    assert_eq!(forms, ["PNG.V", "HG.CN", "HBIX.NE", "ASTS", "LUNR", "QIMC.CN", "VEQT.TO", ""],
-               "the venue decides before the currency: a US listing with no currency is not `LUNR.TO`, another company");
+        .iter().map(|(a, b, c)| news::yahoo_form(a, b, c)).collect();
+    assert_eq!(forms, ["PNG.V", "HG.CN", "HBIX.NE", "ASTS", "LUNR", "", "", ""],
+               "the venue decides, never the currency: a US listing with no currency is not `LUNR.TO`, another company, and a listing that names no venue is read under none");
 }
 
 #[test]
@@ -421,8 +419,8 @@ fn test_google_items_lose_the_publisher_suffix_quote_pages_and_undated_pages() {
 // the merge
 // ---------------------------------------------------------------------------
 
-fn wire_of(answer: Option<Vec<NewsItem>>) -> impl Fn(&Connection, &str, &str, &str, &Clock) -> (Feed, Option<WireAnswer>) + Sync {
-    move |_, _, _, _, _| (Feed::Tmx, answer.clone().map(WireAnswer::of))
+fn wire_of(answer: Option<Vec<NewsItem>>) -> impl Fn(&str, &str, &str, &Clock) -> (Feed, Option<WireAnswer>) + Sync {
+    move |_, _, _, _| (Feed::Tmx, answer.clone().map(WireAnswer::of))
 }
 
 fn stored(conn: &Connection, sym: &str, ex: &str) -> Vec<StoredNews> {
@@ -500,7 +498,7 @@ fn test_a_release_is_new_once_whichever_source_carries_it_and_a_first_read_sourc
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
     let told = Mutex::new(Vec::<Vec<String>>::new());
-    let on_new = |_: &Connection, _: &str, _: &str, _: &[NewsItem], new: &[String]| {
+    let on_new = |_: &str, _: &str, _: &[NewsItem], new: &[String]| {
         let mut n = new.to_vec();
         n.sort();
         told.lock().unwrap().push(n);
@@ -535,7 +533,7 @@ fn test_a_headline_repeated_months_later_is_a_new_release() {
     let first = wire_of(Some(vec![halt("tmx:1", "2026-06-10T14:00:00Z")]));
     news::read_listing(&d.conn, &Readers { wire: &first, extra: &nothing }, "QNC", "TSX-V", "CAD", "", false, &Clock::at(now), None).unwrap();
     let second = wire_of(Some(vec![halt("tmx:2", "2026-09-16T13:00:00Z"), halt("tmx:1", "2026-06-10T14:00:00Z")]));
-    let on_new = |_: &Connection, _: &str, _: &str, _: &[NewsItem], new: &[String]| told.lock().unwrap().push(new.to_vec());
+    let on_new = |_: &str, _: &str, _: &[NewsItem], new: &[String]| told.lock().unwrap().push(new.to_vec());
     let (_, rows) = news::read_listing(&d.conn, &Readers { wire: &second, extra: &nothing }, "QNC", "TSX-V", "CAD", "", false, &Clock::at(now + 16 * 60), Some(&on_new)).unwrap();
     assert_eq!((ids(&rows.unwrap()), told.lock().unwrap().clone()), (vec!["tmx:2".to_string(), "tmx:1".into()], vec![vec!["tmx:2".to_string()]]),
                "the same words months apart are two halts, the second one new");
@@ -557,7 +555,7 @@ fn test_a_wire_feed_that_fails_keeps_its_stored_items() {
     let nothing = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(None) };
     let read = |post: &news::PostFn<'_>, minutes: i64| {
         let net = Net { get: &no_get, post, article: &news::no_article, pace: false };
-        let wire = |c: &Connection, sy: &str, ex: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, sy, ex, cc, cl);
+        let wire = |sy: &str, ex: &str, cc: &str, cl: &Clock| news::fetch_symbol(&net, sy, ex, cc, cl);
         news::read_listing(&d.conn, &Readers { wire: &wire, extra: &nothing }, "PNG", "TSX-V", "CAD", "", false, &Clock::at(now + minutes * 60), None).unwrap().1.unwrap()
     };
     read(&both, 0);
@@ -596,7 +594,7 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
     let listings = vec![listing("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), listing("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.")];
     let syms = |ls: Vec<news::Listing>| ls.into_iter().map(|l| l.symbol).collect::<Vec<_>>();
     assert_eq!(syms(news::stale(&d.conn, &listings, now + 60, 15).unwrap()), ["CH", "HG"], "the wire is fresh, the other sources never read");
-    assert!(!news::sources_for(&d.conn, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.").unwrap().contains(&Feed::Sa), "Seeking Alpha has no CSE feed");
+    assert!(!news::sources_for("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.").unwrap().contains(&Feed::Sa), "Seeking Alpha has no CSE feed");
     let (started, landed) = (Mutex::new(Vec::<String>::new()), Mutex::new(Vec::<(String, bool)>::new()));
     let wire = wire_of(Some(vec![]));
     let empty = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };
@@ -617,7 +615,7 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
 #[test]
 fn test_a_listing_with_no_venue_is_left_to_the_wire() {
     let d = db();
-    let wire = |_: &Connection, _: &str, _: &str, _: &str, _: &Clock| (Feed::Nasdaq, Some(WireAnswer::default()));
+    let wire = |_: &str, _: &str, _: &str, _: &Clock| (Feed::Nasdaq, Some(WireAnswer::default()));
     let extra = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { panic!("no other source is asked") };
     news::read_listing(&d.conn, &Readers { wire: &wire, extra: &extra }, "F", "", "", "", false, &Clock::at(at(2026, 9, 16, 12, 0)), None).unwrap();
 }
@@ -631,7 +629,7 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
         ("NVDA".to_string(), vec![row("nasdaq:9", "Nine", "2026-09-11T15:00:00Z", "Zacks", "story")]),
     ]));
     let calls = Mutex::new(Vec::<String>::new());
-    let fake = |_: &Connection, symbol: &str, exchange: &str, _: &str, _: &Clock| {
+    let fake = |symbol: &str, exchange: &str, _: &str, _: &Clock| {
         calls.lock().unwrap().push(symbol.to_string());
         (if exchange == "TSX" { Feed::Tmx } else { Feed::Nasdaq }, answers.lock().unwrap().get(symbol).cloned().map(WireAnswer::of))
     };
@@ -667,7 +665,7 @@ fn test_a_ticker_with_no_venue_is_never_asked_of_tmx() {
     let get = |_: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
         Ok(r#"{"data": {"rows": [{"id": 5, "title": "Ford declares dividend", "publisher": "PR Newswire", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/a", "related_symbols": ["f|stocks"]}]}}"#.into())
     };
-    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, article: &news::no_article, pace: false }, "F", "", "", &Clock::at(at(2026, 9, 15, 12, 0)));
+    let (src, rows) = news::fetch_symbol(&Net { get: &get, post: &no_post, article: &news::no_article, pace: false }, "F", "", "", &Clock::at(at(2026, 9, 15, 12, 0)));
     assert_eq!(src, Feed::Nasdaq, "no venue: TMX is never asked");
     let got: Vec<(&str, &str)> = rows.as_ref().unwrap().rows.iter().map(|r| (r.kind.as_str(), r.headline.as_str())).collect();
     assert_eq!(got, vec![("release", "Ford declares dividend")]);
@@ -685,7 +683,7 @@ fn test_a_us_listing_reads_its_releases_beside_its_news_each_once() {
             r#"{"data": {"rows": [{"id": 1, "title": "Why SHOP", "publisher": "Zacks", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/a", "related_symbols": ["shop|stocks"]}, {"id": 2, "title": "Shopify Delivers Big", "publisher": "GlobeNewswire", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/articles/b", "related_symbols": ["shop|stocks"]}]}}"#
         }.into())
     };
-    let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, article: &news::no_article, pace: false }, "SHOP", "NASDAQ", "USD", &Clock::at(at(2026, 9, 15, 12, 0)));
+    let (src, rows) = news::fetch_symbol(&Net { get: &get, post: &no_post, article: &news::no_article, pace: false }, "SHOP", "NASDAQ", "USD", &Clock::at(at(2026, 9, 15, 12, 0)));
     assert_eq!(src, Feed::Nasdaq);
     let got: Vec<(&str, &str, &str)> = rows.as_ref().unwrap().rows.iter().map(|r| (r.id.as_str(), r.kind.as_str(), r.source.as_str())).collect();
     assert_eq!(got, vec![("nasdaq:1", "story", "Zacks"), ("nasdaq:2", "release", "GlobeNewswire"), ("nasdaq:3", "release", "Nasdaq")],

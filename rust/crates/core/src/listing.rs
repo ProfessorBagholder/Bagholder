@@ -30,6 +30,8 @@ pub const INDEX: &str = "INDEX";
 pub const OCC: &str = "OCC";
 /// The venue every US exchange's listings are keyed under.
 pub const US: &str = "US";
+/// The market's own news, which no one listing carries, is kept under `*@MARKET`.
+pub const MARKET: &str = "MARKET";
 
 /// The market identifier code of a venue as a broker, a directory or a person
 /// writes it in words or as a code (`TSX-V`, `NASDAQ`, `Cboe Canada`, `XNYS`);
@@ -137,6 +139,36 @@ impl ListingKey {
         Ok(ListingKey { symbol, venue: venue.into() })
     }
 
+    /// The key a book instrument's market data is kept under, from what it is and
+    /// what it is called now: a coin by its asset, a directory instrument (an
+    /// index, a future, a rate, a currency pair) by its symbol, a share or fund by
+    /// its symbol on the venue its records name. None for an option contract
+    /// (charted as its underlying) or a prediction market's contract, and for an
+    /// instrument whose records name no venue a key is made from: it gets no
+    /// market data until a record states one.
+    pub fn of(kind: crate::instrument::InstrumentKind, name: &crate::instrument::Name) -> Result<ListingKey, NotAListing> {
+        use crate::instrument::InstrumentKind as K;
+        match kind {
+            K::Crypto => ListingKey::coin(&name.symbol),
+            K::Index | K::Future | K::Rate | K::CurrencyPair => ListingKey::index(&name.symbol),
+            K::Security => {
+                let venue = name.venue_mic.as_deref().or(name.venue_name.as_deref()).ok_or_else(|| NotAListing(format!("{} names no venue", name.symbol)))?;
+                ListingKey::on(&name.symbol, venue)
+            }
+            K::OptionContract | K::EventContract => Err(NotAListing(format!("{} is not a listing market data is kept for", name.symbol))),
+        }
+    }
+
+    /// The key the market's own news is kept under (`*@MARKET`).
+    pub fn market_feed() -> ListingKey {
+        ListingKey { symbol: "*".into(), venue: MARKET.into() }
+    }
+
+    /// Whether this is the market's own news rather than a listing's.
+    pub fn is_market_feed(&self) -> bool {
+        self.venue == MARKET
+    }
+
     /// The symbol, in the key's one spelling.
     pub fn symbol(&self) -> &str {
         &self.symbol
@@ -174,6 +206,7 @@ impl std::str::FromStr for ListingKey {
             CRYPTO => ListingKey::coin(symbol),
             INDEX => ListingKey::index(symbol),
             OCC => ListingKey::option(symbol),
+            MARKET if symbol == "*" => Ok(ListingKey::market_feed()),
             US => ListingKey::new(symbol, US),
             mic if CANADA_MICS.contains(&mic) => ListingKey::new(symbol, mic),
             other => Err(NotAListing(format!("{other:?} is no venue a listing is keyed by"))),

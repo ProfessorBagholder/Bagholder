@@ -140,6 +140,8 @@ CREATE TABLE meta (
 CREATE TABLE news (
     id TEXT NOT NULL,
     listing TEXT NOT NULL,
+    -- the venue in the words the listing was read under, for display alone
+    exchange TEXT NOT NULL DEFAULT '',
     source TEXT,
     headline TEXT,
     wire TEXT,
@@ -266,7 +268,7 @@ CREATE TRIGGER gen_filings_ins AFTER INSERT ON filings BEGIN UPDATE gen SET n = 
 CREATE TRIGGER gen_filings_upd AFTER UPDATE ON filings WHEN OLD."source" IS NOT NEW."source" OR OLD."id" IS NOT NEW."id" OR OLD."filer" IS NOT NEW."filer" OR OLD."category" IS NOT NEW."category" OR OLD."issuer" IS NOT NEW."issuer" OR OLD."type" IS NOT NEW."type" OR OLD."title" IS NOT NEW."title" OR OLD."date" IS NOT NEW."date" OR OLD."date_text" IS NOT NEW."date_text" OR OLD."size" IS NOT NEW."size" OR OLD."url" IS NOT NEW."url" OR OLD."subject" IS NOT NEW."subject" OR OLD."summary" IS NOT NEW."summary" OR OLD."enrich_version" IS NOT NEW."enrich_version" OR OLD."enrich_final" IS NOT NEW."enrich_final" BEGIN UPDATE gen SET n = n + 1 WHERE name = 'filings'; END;
 CREATE TRIGGER gen_news_del AFTER DELETE ON news BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
 CREATE TRIGGER gen_news_ins AFTER INSERT ON news BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
-CREATE TRIGGER gen_news_upd AFTER UPDATE ON news WHEN OLD."id" IS NOT NEW."id" OR OLD."listing" IS NOT NEW."listing" OR OLD."source" IS NOT NEW."source" OR OLD."headline" IS NOT NEW."headline" OR OLD."wire" IS NOT NEW."wire" OR OLD."url" IS NOT NEW."url" OR OLD."published_at" IS NOT NEW."published_at" OR OLD."kind" IS NOT NEW."kind" OR OLD."summary" IS NOT NEW."summary" BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
+CREATE TRIGGER gen_news_upd AFTER UPDATE ON news WHEN OLD."id" IS NOT NEW."id" OR OLD."listing" IS NOT NEW."listing" OR OLD."exchange" IS NOT NEW."exchange" OR OLD."source" IS NOT NEW."source" OR OLD."headline" IS NOT NEW."headline" OR OLD."wire" IS NOT NEW."wire" OR OLD."url" IS NOT NEW."url" OR OLD."published_at" IS NOT NEW."published_at" OR OLD."kind" IS NOT NEW."kind" OR OLD."summary" IS NOT NEW."summary" BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
 CREATE TRIGGER gen_universes_del AFTER DELETE ON universes BEGIN UPDATE gen SET n = n + 1 WHERE name = 'universes'; END;
 CREATE TRIGGER gen_universes_ins AFTER INSERT ON universes BEGIN UPDATE gen SET n = n + 1 WHERE name = 'universes'; END;
 CREATE TRIGGER gen_universes_upd AFTER UPDATE ON universes WHEN OLD."key" IS NOT NEW."key" OR OLD."symbol" IS NOT NEW."symbol" OR OLD."name" IS NOT NEW."name" OR OLD."value" IS NOT NEW."value" OR OLD."percent_change" IS NOT NEW."percent_change" OR OLD."sector" IS NOT NEW."sector" OR OLD."country" IS NOT NEW."country" BEGIN UPDATE gen SET n = n + 1 WHERE name = 'universes'; END;

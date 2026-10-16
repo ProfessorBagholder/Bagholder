@@ -73,6 +73,7 @@ fn db() -> Connection {
     hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|_| None)));
     let conn = Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     conn
 }
 
@@ -148,18 +149,18 @@ fn answers() -> Value {
 
     // --- classify_share, with the depositary-receipt retry ------------------
     {
-        let conn = db();
+        db();
         hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|k| match k {
             "PLTR" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir CDR (CAD Hedged)".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Toronto Stock Exchange".into() }),
             "PLTR:US" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir Technologies Inc.".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Nasdaq Global Select".into() }),
             _ => None,
         })));
-        out.insert("classify_share_cdr_retry".into(), cell(&exposure::classify_share(&ctx(&conn), "PLTR", "", "").unwrap()));
+        out.insert("classify_share_cdr_retry".into(), cell(&exposure::classify_share("PLTR", "TSX", "CAD").unwrap()));
     }
     {
-        let conn = db();
+        db();
         // no TMX record and not a US-shaped symbol: nothing is guessed
-        out.insert("classify_share_nothing_found".into(), cell(&exposure::classify_share(&ctx(&conn), "ZZZ", "CSE", "CAD").unwrap()));
+        out.insert("classify_share_nothing_found".into(), cell(&exposure::classify_share("ZZZ", "CSE", "CAD").unwrap()));
     }
 
     // --- share_exposure, cached by ticker and venue --------------------------

@@ -159,6 +159,8 @@ fn db() -> Connection {
     hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|_| None)));
     let conn = Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     conn
 }
 
@@ -263,15 +265,18 @@ fn test_a_fund_named_without_a_ticker_is_resolved_then_looked_through() {
 }
 
 #[test]
-fn test_a_bare_ticker_answered_with_a_depositary_receipt_is_retried_as_the_us_listing() {
-    let conn = db();
+fn test_a_tsx_listing_that_is_a_depositary_receipt_is_classified_as_the_us_company() {
+    db();
     hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|k| match k {
         "PLTR" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir CDR (CAD Hedged)".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Toronto Stock Exchange".into() }),
         "PLTR:US" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir Technologies Inc.".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Nasdaq Global Select".into() }),
         _ => None,
     })));
-    let c = exposure::classify_share(&ctx(&conn), "PLTR", "", "").unwrap();
+    let c = exposure::classify_share("PLTR", "TSX", "CAD").unwrap();
     assert_eq!((c.sector, c.country), ("Information Technology".to_string(), "United States".to_string()));
+    // a listing that names no venue is classified under no guessed one
+    let none = exposure::classify_share("PLTR", "", "").unwrap();
+    assert_eq!((none.sector.as_str(), none.country.as_str()), ("", ""));
 }
 
 #[test]

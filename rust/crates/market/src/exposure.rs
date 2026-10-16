@@ -319,7 +319,7 @@ fn nasdaq_summary(symbol: &str) -> Result<(String, String), String> {
 /// {sector, industry, country, source} for one
 /// listing, from TMX's record, Nasdaq's for a US listing TMX has no sector for;
 /// the country is the venue's.
-pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Result<ShareClass, String> {
+pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<ShareClass, String> {
     if let Some(v) = hooks::CLASSIFY.with(|h| h.borrow().as_ref().map(|f| f(symbol, exchange, currency))) {
         return Ok(v);
     }
@@ -329,34 +329,28 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
     let mut industry = String::new();
     let mut out_country = country.clone();
     let mut source = String::new();
-    let mut key = crate::quotes::tmx_quote_symbol(symbol, exchange, currency);
-    if key.is_none() && !sym.is_empty() && !sym.contains(' ') {
-        key = Some(format!("{}{}", sym, if currency.to_uppercase() == "USD" { ":US" } else { "" }));
-    }
+    // the listing's own form, by the venue it names; a listing that names none is
+    // never classified under a guessed venue's
+    let key = crate::quotes::tmx_quote_symbol(symbol, exchange, currency);
     if let Some(k) = key.filter(|k| !k.is_empty()) {
-        // a stand-in for TMX's record answers the whole lookup: the lookup's
-        // fallback, resolving another of TMX's forms, asks TMX itself
-        let stood_in = hooks::TMX_RECORD.with(|h| h.borrow().is_some());
         let tmx_failed = |e: FetchError| format!("TMX Money: {e}");
-        let (mut rec, _) = if stood_in {
-            (tmx_record(&k).map_err(tmx_failed)?, k.clone())
-        } else {
-            crate::tmx::tmx_lookup_try(ctx.conn, &k, &ctx.today, tmx_record).map_err(|e| e.to_string())?
-        };
+        let mut rec = tmx_record(&k).map_err(tmx_failed)?;
+        let mut receipt = false;
         static CDR: OnceLock<Regex> = OnceLock::new();
         if let Some(r) = rec.as_ref() {
-            if country.is_empty() && CDR.get_or_init(|| Regex::new(r"\bCDR\b").unwrap()).is_match(&r.name) && !k.ends_with(":US") {
-                // a bare ticker answered with the Canadian depositary receipt of a
-                // US company; the company itself is the US listing
+            if CDR.get_or_init(|| Regex::new(r"\bCDR\b").unwrap()).is_match(&r.name) && !k.ends_with(":US") {
+                // a Canadian depositary receipt of a US company: what it holds is the
+                // company, so it is classified as the company's US listing is
                 if let Some(us) = tmx_record(&format!("{}:US", crate::tmx::tmx_bare(&k))).map_err(tmx_failed)? {
                     rec = Some(us);
+                    receipt = true;
                 }
             }
         }
         if let Some(r) = rec {
             sector = norm_sector(&r.sector);
             industry = trim_space(&r.industry).to_string();
-            out_country = if country.is_empty() { venue_country(&r.exchange_name) } else { country.clone() };
+            out_country = if receipt || country.is_empty() { venue_country(&r.exchange_name) } else { country.clone() };
             source = "TMX Money".into();
         }
     }
@@ -1055,12 +1049,12 @@ pub fn name_queries(name: &str) -> Vec<String> {
 
 /// A holding named without a ticker: the directories' first match on its name,
 /// searched as `name_queries` gives it.
-pub fn resolve_name(ctx: &Ctx, name: &str) -> Result<Option<Listed>, String> {
+pub fn resolve_name(name: &str) -> Result<Option<Listed>, String> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
         return Ok(v);
     }
     for q in name_queries(name) {
-        let rows = crate::search::symbol_search(&ctx.pool, &q)?;
+        let rows = crate::search::symbol_search(&q)?;
         if let Some(m) = rows.first() {
             return Ok(Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() }));
         }
@@ -1109,7 +1103,7 @@ pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
     if let Some(hit) = cache_get(ctx, &key)? {
         return Ok(hit);
     }
-    let c = classify_share(ctx, symbol, exchange, currency)?;
+    let c = classify_share(symbol, exchange, currency)?;
     let mut sectors = Weights::default();
     if !c.sector.is_empty() {
         sectors.add(&c.sector, 1.0);
@@ -1149,7 +1143,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
         }
         let name = h.name.clone();
         if tk.is_empty() && !name.is_empty() {
-            if let Some(m) = resolve_name(ctx, &name)? {
+            if let Some(m) = resolve_name(&name)? {
                 tk = m.symbol;
                 ex = m.exchange;
                 ccy = m.currency;

@@ -19,6 +19,7 @@ fn db() -> rusqlite::Connection {
     offline();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     conn
 }
 

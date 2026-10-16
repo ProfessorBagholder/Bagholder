@@ -18,17 +18,19 @@ use crate::app::{log, App};
 use crate::clear::Kind;
 use crate::figures::{Figures, CACHE_FILE, OLD_FILE};
 
-/// The earlier readers' tables, carried whole into the market cache.
-pub const MARKET_TABLES: [&str; 10] =
-    ["news", "filings", "exposures", "gauges", "shorts", "universes", "price_history", "history_fetches", "price_bars", "bar_fetches"];
+/// The earlier readers' tables carried whole into the market cache: those not
+/// kept per listing. What the earlier store kept per listing it kept by a bare
+/// ticker two listings could share (charts, short interest, news, a share's or a
+/// fund's breakdown), so it cannot be told apart and is read again (plan
+/// `market-data-keyed-by-listing`, Approach, 4); filings are carried to their
+/// filers (`bagholder_sources::cache::carry_filings`).
+pub const MARKET_TABLES: [&str; 3] = ["exposures", "gauges", "universes"];
 
 /// The earlier store's `meta` keys the market readers remember by, by what each
-/// begins with: a symbol's form at TMX, the source that answered a chart or a
-/// listing's filings, a miss remembered for the day, when a listing's news was read.
-pub const MARKET_META_PREFIXES: [&str; 11] = [
-    "tmx_form:", "bars_source:", "bars_miss:", "coinbase_product:", "coinbase_prev:", "yahoo_miss:",
-    "news_fetched:", "news_source_fetched:", "filings_fetched:", "filings_sources:", "sedar_profile:",
-];
+/// begins with: each names one listing by the source's own name for it (a
+/// Coinbase market, a Yahoo symbol), so it is carried; a key naming a bare
+/// ticker is not.
+pub const MARKET_META_PREFIXES: [&str; 3] = ["coinbase_product:", "coinbase_prev:", "yahoo_miss:"];
 
 /// The earlier store's `meta` keys carried whole: the disclosures' hold on what
 /// cannot be named yet, and the update check.
@@ -42,6 +44,8 @@ pub const CARRIED: &str = "carried.earlier-store";
 pub struct CarriedMarket {
     pub rows: Vec<(String, i64)>,
     pub keys: i64,
+    /// Filings that named no filer, so could not be carried.
+    pub dropped_filings: i64,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -91,8 +95,16 @@ pub fn carry_market(old: Option<&Path>, cache: &Path, at: Timestamp) -> Result<O
             let theirs = cols("old")?;
             let both: Vec<String> = cols("main")?.into_iter().filter(|x| theirs.contains(x)).map(|x| format!("\"{x}\"")).collect();
             let list = both.join(", ");
-            let n = c.execute(&format!("INSERT INTO main.\"{t}\" ({list}) SELECT {list} FROM old.\"{t}\""), [])?;
+            // a share's or a fund's breakdown was kept by ticker, and is read again
+            let only = if t == "exposures" { " WHERE key NOT LIKE 'share:%' AND key NOT LIKE 'fund:%'" } else { "" };
+            let n = c.execute(&format!("INSERT INTO main.\"{t}\" ({list}) SELECT {list} FROM old.\"{t}\"{only}"), [])?;
             out.rows.push((t.to_string(), n as i64));
+        }
+        let there: i64 = c.query_row("SELECT COUNT(*) FROM old.sqlite_master WHERE type = 'table' AND name = 'filings'", [], |r| r.get(0))?;
+        if there > 0 {
+            let (carried, dropped) = bagholder_sources::cache::carry_filings(&c, "old")?;
+            out.rows.push(("filings".into(), carried as i64));
+            out.dropped_filings = dropped as i64;
         }
         let keys: Vec<(String, Option<String>)> = c.prepare("SELECT key, value FROM old.meta ORDER BY key")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         for (key, value) in keys.into_iter().filter(|(k, _)| market_key(k)) {
@@ -378,9 +390,12 @@ mod tests {
         crate::tests_common::pulled_book(home.path());
         let old = bagholder_store::connect(home.path()).unwrap();
         bagholder_store::relabel::ensure(&old).unwrap();
-        for t in MARKET_TABLES.iter().chain(&["notifications", "told"]) {
+        for t in MARKET_TABLES.iter().chain(&["notifications", "told", "filings", "price_history", "news", "shorts"]) {
             fill(&old, t);
         }
+        // the filled filings name a filer: a SEDAR+ profile, or an SEC address
+        old.execute("UPDATE filings SET source = 'SEDAR+', profile_no = '000012345' WHERE rowid = 1", []).unwrap();
+        old.execute("UPDATE filings SET source = 'SEC', url = 'https://www.sec.gov/Archives/edgar/data/0000320193/1/a.htm' WHERE rowid = 2", []).unwrap();
         for (k, v) in KEYS {
             bagholder_store::tables::set_meta(&old, k, v).unwrap();
         }
@@ -408,13 +423,21 @@ mod tests {
             assert_eq!(was.len(), 2, "{t} held rows to carry");
             assert_eq!(is, was, "the market cache's {t}");
         }
+        // filings carried to their filers, with what they held
+        let filed: Vec<(String, String, String)> = cache.prepare("SELECT source, id, filer FROM filings ORDER BY source").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(filed, vec![("SEC".into(), "filings.id.2".into(), "320193".into()), ("SEDAR+".into(), "filings.id.1".into(), "000012345".into())]);
+        // what was kept by a bare ticker is read again, never carried
+        for t in ["price_history", "news", "shorts"] {
+            let n: i64 = cache.query_row(&format!("SELECT COUNT(*) FROM \"{t}\""), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{t} is read again");
+        }
         for t in ["notifications", "told"] {
             let cols = columns(book.notices(), t);
             assert_eq!(rows(book.notices(), t, &cols), rows(&old, t, &cols), "the book's {t}");
         }
         let kept: BTreeMap<String, String> = cache.prepare("SELECT key, value FROM meta WHERE key != ?").unwrap().query_map([CARRIED], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         let want: BTreeMap<String, String> = KEYS.iter().filter(|(k, _)| market_key(k)).map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        assert_eq!(want.len(), 13, "every reader's key, the update check among them");
+        assert_eq!(want.len(), 5, "every reader's key that names a listing by a source's own name, the update check among them");
         assert_eq!(kept, want, "the readers' keys and nothing else");
         assert_eq!(book.setting(crate::notify::SETTINGS_KEY).unwrap().as_deref(), Some("{\"fills\":true,\"releasesAll\":true}"));
         assert_eq!(book.setting(&format!("{}news:QNC@TSX", crate::notify::WATERMARK)).unwrap().as_deref(), Some("2026-09-25T10:00:00Z|a"));

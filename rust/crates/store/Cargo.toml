@@ -9,6 +9,8 @@ bagholder-diff = { path = "../diff" }
 # the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
 # model's are: the two sides of the wire cannot drift
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings", "indexmap-impl"] }
+# the listing key every per-listing table is kept by (`ListingKey`)
+bagholder-core = { path = "../core" }
 bagholder-model = { path = "../model" }
 # the database plumbing (opening a file, transactions, the pool), shared with the book
 bagholder-sqlite = { path = "../sqlite" }

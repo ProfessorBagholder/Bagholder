@@ -77,6 +77,8 @@ DROP TABLE news;
 CREATE TABLE news (
     id TEXT NOT NULL,
     listing TEXT NOT NULL,
+    -- the venue in the words the listing was read under, for display alone
+    exchange TEXT NOT NULL DEFAULT '',
     source TEXT,
     headline TEXT,
     wire TEXT,
@@ -90,7 +92,7 @@ CREATE TABLE news (
 CREATE INDEX news_published ON news (published_at);
 CREATE TRIGGER gen_news_ins AFTER INSERT ON news BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
 CREATE TRIGGER gen_news_del AFTER DELETE ON news BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
-CREATE TRIGGER gen_news_upd AFTER UPDATE ON news WHEN OLD."id" IS NOT NEW."id" OR OLD."listing" IS NOT NEW."listing" OR OLD."source" IS NOT NEW."source" OR OLD."headline" IS NOT NEW."headline" OR OLD."wire" IS NOT NEW."wire" OR OLD."url" IS NOT NEW."url" OR OLD."published_at" IS NOT NEW."published_at" OR OLD."kind" IS NOT NEW."kind" OR OLD."summary" IS NOT NEW."summary" BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
+CREATE TRIGGER gen_news_upd AFTER UPDATE ON news WHEN OLD."id" IS NOT NEW."id" OR OLD."listing" IS NOT NEW."listing" OR OLD."exchange" IS NOT NEW."exchange" OR OLD."source" IS NOT NEW."source" OR OLD."headline" IS NOT NEW."headline" OR OLD."wire" IS NOT NEW."wire" OR OLD."url" IS NOT NEW."url" OR OLD."published_at" IS NOT NEW."published_at" OR OLD."kind" IS NOT NEW."kind" OR OLD."summary" IS NOT NEW."summary" BEGIN UPDATE gen SET n = n + 1 WHERE name = 'news'; END;
 
 -- a share's and a fund's breakdowns were kept by ticker (`share:<SYM>:<form>`,
 -- `fund:<SYM>`); they are read again under the listing's key

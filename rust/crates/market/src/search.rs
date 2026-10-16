@@ -114,7 +114,7 @@ fn cache() -> &'static Mutex<HashMap<String, Vec<SymbolMatch>>> {
 /// remembered for the process. A source that fails leaves the others' answer;
 /// nothing is remembered when one failed. `Err` is every source's own failure,
 /// joined into one message.
-pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &str) -> Result<Vec<SymbolMatch>, String> {
+pub fn symbol_search(text: &str) -> Result<Vec<SymbolMatch>, String> {
     let text = bagholder_model::textrules::trim_space(text).to_string();
     if text.is_empty() {
         return Ok(vec![]);
@@ -166,14 +166,11 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
     let mut found: Vec<SymbolMatch> = jobs.iter().flat_map(|(n, _)| answers.get(*n).cloned().unwrap_or_default()).collect();
     if found.is_empty() && text.chars().count() <= 6 && !text.contains(' ') {
         // the directories carry the TSX and Nasdaq registries alone, so a CSE
-        // or Cboe Canada listing is in none of them: TMX is asked what it
-        // knows the ticker as
-        let conn = pool.get().map_err(|e| format!("Search failed: the store could not be opened: {e}"))?;
-        let (today, _, _) = crate::clock_now();
+        // or Cboe Canada listing is in none of them: TMX is asked every listing
+        // it knows the ticker as, each its own row with its venue
         // TMX not answering is one more search that failed, said as the directories' are
-        match crate::tmx::tmx_listing(&conn, &text, &today) {
-            Ok(Some(hit)) => found = vec![hit],
-            Ok(None) => {}
+        match crate::tmx::tmx_listings(&text) {
+            Ok(hits) => found = hits,
             Err(e) => errors.push(e.to_string()),
         }
     }

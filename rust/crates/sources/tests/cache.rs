@@ -362,3 +362,13 @@ fn migration_6_carries_every_filing_it_can_attribute_with_its_read_text() {
     let left: i64 = conn.query_row("SELECT COUNT(*) FROM meta WHERE key LIKE 'sedar_profile:%'", [], |r| r.get(0)).unwrap();
     assert_eq!(left, 0, "no meta key names a ticker");
 }
+
+/// Migration 6 attributes filers by the one rule `carry_filings` uses for an
+/// earlier store, so a filing carries to the same filer whichever way it came.
+#[test]
+fn migration_6_attributes_filers_by_the_one_rule() {
+    let sql = MIGRATIONS[5].sql;
+    let rule = bagholder_sources::cache::FILER_OF_ROW.replace("{meta}", "meta");
+    let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(squash(sql).contains(&squash(&rule)), "migration 6 attributes filers by FILER_OF_ROW");
+}

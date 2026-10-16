@@ -49,6 +49,42 @@ fn wave(base: f64, swing: f64, d: Date, period: f64, places: u32) -> Dec {
     Dec::parse(&format!("{v:.p$}", p = places as usize)).expect("a made-up value is a decimal")
 }
 
+/// A listing's made-up daily bars: closes that pass through the prices it was
+/// traded at on the days it was traded, with a small fixed ripple between them,
+/// from a month before its first fill through `today`, weekdays only.
+fn demo_bars(fills: &[(Date, f64)], today: Date) -> Vec<bagholder_store::bars::DayBar> {
+    let mut anchors: Vec<(Date, f64)> = fills.to_vec();
+    anchors.sort_by(|x, y| x.0.cmp(&y.0));
+    anchors.dedup_by_key(|x| x.0);
+    let Some(&(first, _)) = anchors.first() else { return vec![] };
+    let Ok(start) = first.checked_sub(bagholder_core::jiff::Span::new().days(30)) else { return vec![] };
+    let n = |d: Date| (d - Date::constant(1970, 1, 1)).get_days() as f64;
+    let at = |day: Date| -> f64 {
+        match anchors.iter().position(|x| x.0 >= day) {
+            Some(0) => anchors[0].1,
+            None => anchors[anchors.len() - 1].1,
+            Some(k) => {
+                let ((d0, p0), (d1, p1)) = (anchors[k - 1], anchors[k]);
+                p0 + (p1 - p0) * (n(day) - n(d0)) / (n(d1) - n(d0))
+            }
+        }
+    };
+    let round = |v: f64| (v * 100.0).round_ties_even() / 100.0;
+    let mut out = Vec::new();
+    let mut prev = at(start);
+    for day in days(start, today).filter(|d| weekday(*d)) {
+        let traded = anchors.iter().any(|x| x.0 == day);
+        let ripple = if traded { 0.0 } else { 0.012 * (n(day) * 0.9).sin() + 0.007 * (n(day) * 0.23).cos() };
+        let close = round(at(day) * (1.0 + ripple));
+        out.push(bagholder_store::bars::DayBar {
+            date: day.to_string(),
+            px: bagholder_store::bars::Ohlcv { open: Some(prev), high: Some(round(prev.max(close) * 1.004)), low: Some(round(prev.min(close) * 0.996)), close, volume: Some(100000.0 + (n(day) % 17.0) * 5000.0) },
+        });
+        prev = close;
+    }
+    out
+}
+
 pub fn write(home: &Path) -> Result<String, String> {
     let at: Timestamp = SYNCED.parse().map_err(err)?;
     let today: Date = TODAY.parse().map_err(err)?;
@@ -125,44 +161,32 @@ pub fn write(home: &Path) -> Result<String, String> {
         }
     }
 
-    // a quote for each listing the book holds a record of, from its demo bars: the
-    // earlier store keeps one history per ticker, so a listing whose ticker another
-    // listing of the book shares is quoted from its own last fill instead, never
-    // from bars that may be the other listing's
+    // each listing's daily bars, under its own key, from its own fills, and its
+    // quote from the last two of them: two listings that share a ticker each draw
+    // and are quoted from their own
+    let market = bagholder_sqlite::open_db(&home.join(crate::figures::CACHE_FILE)).map_err(err)?;
+    let fills = book.transactions().map_err(err)?;
     let mut quoted = 0;
-    let instruments = book.instruments().map_err(err)?;
-    let mut tickers: std::collections::BTreeMap<String, usize> = Default::default();
-    let mut named = Vec::new();
-    for i in &instruments {
-        let symbol = book.names(i.id).map_err(err)?.last().map(|n| n.symbol.clone());
-        if let Some(s) = &symbol {
-            *tickers.entry(s.clone()).or_default() += 1;
+    let mut bars_written = 0;
+    for i in book.instruments().map_err(err)? {
+        let Some(name) = book.names(i.id).map_err(err)?.last().cloned() else { continue };
+        let Ok(key) = bagholder_core::ListingKey::of(i.kind, &name) else { continue };
+        let anchors: Vec<(Date, f64)> = fills
+            .iter()
+            .filter(|t| t.instrument == Some(i.id) && t.trade_date <= today)
+            .filter_map(|t| t.price.map(|p| (t.trade_date, p.amount.to_f64())))
+            .collect();
+        let bars = demo_bars(&anchors, today);
+        if bars.is_empty() {
+            continue;
         }
-        named.push((i, symbol));
-    }
-    for (i, symbol) in named {
-        let Some(symbol) = symbol else { continue };
-        let closes: Vec<f64> = if tickers[&symbol] > 1 {
-            book.transactions()
-                .map_err(err)?
-                .iter()
-                .filter(|t| t.instrument == Some(i.id) && t.trade_date.to_string().as_str() <= TODAY)
-                .filter_map(|t| t.price.map(|p| (t.trade_date, p.amount.to_f64())))
-                .max_by_key(|(d, _)| *d)
-                .map(|(_, p)| vec![p])
-                .unwrap_or_default()
-        } else {
-            old.prepare("SELECT close FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 2")
-                .map_err(err)?
-                .query_map(rusqlite::params![symbol, TODAY], |r| r.get::<_, f64>(0))
-                .map_err(err)?
-                .collect::<Result<_, _>>()
-                .map_err(err)?
-        };
-        let (Some(last), prev) = (closes.first(), closes.get(1)) else { continue };
+        bars_written += bagholder_store::market::upsert_price_history(&market, &key, &bars, "demo").map_err(err)?;
+        bagholder_store::market::mark_history_fetched(&market, &key, &bars[0].date, SYNCED).map_err(err)?;
+        let last = bars[bars.len() - 1].px.close;
+        let prev = bars.len().checked_sub(2).map(|k| bars[k].px.close);
         let price = Dec::parse(&format!("{last:.2}")).map_err(err)?;
         let change = prev.map(|p| Dec::parse(&format!("{:.2}", last - p))).transpose().map_err(err)?;
-        let change_pct = prev.filter(|p| **p != 0.0).map(|p| Dec::parse(&format!("{:.2}", (last / p - 1.0) * 100.0))).transpose().map_err(err)?;
+        let change_pct = prev.filter(|p| *p != 0.0).map(|p| Dec::parse(&format!("{:.2}", (last / p - 1.0) * 100.0))).transpose().map_err(err)?;
         cache
             .store_quote(&StoredQuote { instrument: i.id, source: demo.clone(), price: Money::new(price, i.currency), change, change_pct, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: at })
             .map_err(err)?;
@@ -216,7 +240,7 @@ pub fn write(home: &Path) -> Result<String, String> {
         cache.store_benchmark_closes(b, &closes, &demo, at).map_err(err)?;
     }
 
-    Ok(format!("demo facts: {} currencies, {} quotes, {} payers\n", currencies.len(), quoted, paid.len()))
+    Ok(format!("demo facts: {} currencies, {} daily bars, {} quotes, {} payers\n", currencies.len(), bars_written, quoted, paid.len()))
 }
 
 pub fn cli(args: &[String]) -> i32 {

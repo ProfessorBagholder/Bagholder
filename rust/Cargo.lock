@@ -340,6 +340,7 @@ dependencies = [
 name = "bagholder-store"
 version = "2.5.7"
 dependencies = [
+ "bagholder-core",
  "bagholder-diff",
  "bagholder-diff-derive",
  "bagholder-model",

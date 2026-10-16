@@ -531,7 +531,7 @@ pub fn fetch_for(
     chains: &mut std::collections::HashMap<String, OptionChain>,
 ) -> Result<Option<SourceQuote>, String> {
     Ok(match source {
-        "tmx" => tmx::fetch_tmx_quote(conn, key, today).map_err(|e| e.to_string())?,
+        "tmx" => tmx::fetch_tmx_quote(key).map_err(|e| e.to_string())?,
         "cboe_ca" => fetch_cboe_ca_quote(key),
         "coinbase" => {
             let (_, now_unix, _) = crate::clock_now();

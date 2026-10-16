@@ -451,7 +451,7 @@ pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(
 
 /// A Canadian listing's own volume over the report's
 /// period, from TMX's daily series under the venue's own form.
-pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, span: &str, today: &str) -> Result<Option<f64>, String> {
+pub fn ca_traded(symbol: &str, exchange: &str, currency: &str, span: &str) -> Result<Option<f64>, String> {
     let (start, end) = match span.split_once('/') { Some((a, b)) => (a.to_string(), b.to_string()), None => (span.to_string(), String::new()) };
     if end.is_empty() {
         return Ok(None);
@@ -466,7 +466,8 @@ pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, curr
         let bars = crate::parse::parse_tmx_history(&data);
         Ok(if bars.is_empty() { None } else { Some(bars) })
     };
-    let bars = crate::tmx::tmx_lookup_try(conn, &code, today, ask).map_err(|e| format!("the traded volume from TMX Money: {e}"))?.0.unwrap_or_default();
+    // the listing's own form; nothing there is this listing's miss
+    let bars = ask(&code).map_err(|e| format!("the traded volume from TMX Money: {e}"))?.unwrap_or_default();
     let traded: Vec<f64> = bars.iter().filter_map(|b| b.px.volume.filter(|v| *v != 0.0)).collect();
     Ok(if traded.is_empty() { None } else { Some(traded.iter().sum()) })
 }
@@ -649,8 +650,8 @@ pub fn parse_cboe_directory(text: &str) -> Option<HashMap<String, f64>> {
 
 /// The units an exchange-traded fund has in issue, from
 /// the market's own source. For a fund this is the float, not a stand-in.
-fn fund_units(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, today: &str) -> Result<Option<f64>, String> {
-    fund_units_with(symbol, exchange, currency, |code| tmx_units(conn, code, today), cboe_units)
+fn fund_units(symbol: &str, exchange: &str, currency: &str) -> Result<Option<f64>, String> {
+    fund_units_with(symbol, exchange, currency, tmx_units, cboe_units)
 }
 
 /// `fund_units` with TMX's count and the venue's directory handed in.
@@ -680,7 +681,7 @@ where
     cboe(&sym)
 }
 
-fn tmx_units(conn: &rusqlite::Connection, code: &str, today: &str) -> Result<Option<f64>, String> {
+fn tmx_units(code: &str) -> Result<Option<f64>, String> {
     let count: Option<f64>;
     {
         let ask = |form: &str| -> Result<Option<Value>, FetchError> {
@@ -692,7 +693,8 @@ fn tmx_units(conn: &rusqlite::Connection, code: &str, today: &str) -> Result<Opt
             let q = answered.get("data").and_then(|d| d.get("getQuoteBySymbol")).cloned().unwrap_or(Value::Null);
             Ok(match &q { Value::Object(m) if !m.is_empty() => Some(q), _ => None })
         };
-        let (q, _) = crate::tmx::tmx_lookup_try(conn, code, today, ask).map_err(|e| format!("the units in issue from TMX Money: {e}"))?;
+        // the listing's own form; nothing there is this listing's miss
+        let q = ask(code).map_err(|e| format!("the units in issue from TMX Money: {e}"))?;
         count = q.and_then(|q| num(q.get("shareOutStanding"))).filter(|c| *c != 0.0);
     }
     Ok(count)
@@ -712,7 +714,7 @@ fn floats() -> &'static Mutex<HashMap<String, Float>> {
 /// shares actually available to trade. For a company that is the free float
 /// Yahoo publishes, never swapped for the shares in issue; a fund's units in
 /// issue are its float, and stand in where no float is published for one.
-pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, name: &str, today: &str) -> Result<Option<f64>, String> {
+pub fn float_shares(symbol: &str, exchange: &str, currency: &str, name: &str) -> Result<Option<f64>, String> {
     let mut slot = yahoo().lock().unwrap();
     let opened = yahoo_open(&mut slot)?;
     let ask = |form: &str| -> Result<(u16, String), String> {
@@ -722,7 +724,7 @@ pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, c
         Ok((a.status, a.text()))
     };
     float_shares_with(symbol, exchange, currency, name, opened, ask, crate::quotes::yahoo_may_ask, crate::quotes::yahoo_back_off, |sym, ccy| {
-        fund_units(conn, sym, exchange, ccy, today)
+        fund_units(sym, exchange, ccy)
     })
 }
 
@@ -997,8 +999,8 @@ pub fn ca_position_from(key: &str, rows: &HashMap<String, CaPositionRow>, symbol
 /// report's period. A listing the report does not carry was not sold short in
 /// it, so its short volume is none of its trading rather than unknown, and
 /// what it did trade comes from the exchange.
-pub fn ca_volume(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, today: &str) -> Result<Option<ShortVolume>, String> {
-    ca_volume_with(symbol, exchange, || ca_volume_file(today), |span| ca_traded(conn, symbol, exchange, currency, span, today))
+pub fn ca_volume(symbol: &str, exchange: &str, currency: &str, today: &str) -> Result<Option<ShortVolume>, String> {
+    ca_volume_with(symbol, exchange, || ca_volume_file(today), |span| ca_traded(symbol, exchange, currency, span))
 }
 
 pub fn ca_volume_from<F: FnOnce() -> Result<Option<f64>, String>>(key: &str, row: Option<&CaVolumeRow>, exchange: &str, traded: F) -> Result<Option<ShortVolume>, String> {
@@ -1067,10 +1069,10 @@ pub fn for_listing(
     let (position, volume) = if market == ShortMarket::Us {
         (us_position(&sym, today)?, us_volume(&sym, today)?)
     } else {
-        (ca_position(&sym, exchange, today)?, ca_volume(conn, &sym, exchange, currency, today)?)
+        (ca_position(&sym, exchange, today)?, ca_volume(&sym, exchange, currency, today)?)
     };
     finish(conn, position, volume, &sym, exchange, trend, market, |asof| ca_series(&sym, exchange, asof, today, SERIES), |issuer| {
-        float_shares(conn, &sym, exchange, currency, if name.trim().is_empty() { issuer } else { name.trim() }, today)
+        float_shares(&sym, exchange, currency, if name.trim().is_empty() { issuer } else { name.trim() })
     })
     .map(Some)
 }

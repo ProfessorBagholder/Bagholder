@@ -159,10 +159,10 @@ fn answers() -> Value {
     let tmx_half = Net { get: &no_get, post: &one, article: &news::no_article, pace: false };
     let us_net = Net { get: &nasdaq_get, post: &no_post, article: &news::no_article, pace: false };
     let dead = Net { get: &no_get, post: &no_post, article: &news::no_article, pace: false };
-    out.insert("wire_tmx".into(), wire(&news::fetch_symbol(&conn, &tmx_net, "PNG", "TSX-V", "CAD", &clock).1));
-    out.insert("wire_tmx_media_down".into(), wire(&news::fetch_symbol(&conn, &tmx_half, "PNG", "TSX-V", "CAD", &clock).1));
-    out.insert("wire_us".into(), wire(&news::fetch_symbol(&conn, &us_net, "SHOP", "NASDAQ", "USD", &clock).1));
-    out.insert("wire_us_down".into(), wire(&news::fetch_symbol(&conn, &dead, "SHOP", "NASDAQ", "USD", &clock).1));
+    out.insert("wire_tmx".into(), wire(&news::fetch_symbol(&tmx_net, "PNG", "TSX-V", "CAD", &clock).1));
+    out.insert("wire_tmx_media_down".into(), wire(&news::fetch_symbol(&tmx_half, "PNG", "TSX-V", "CAD", &clock).1));
+    out.insert("wire_us".into(), wire(&news::fetch_symbol(&us_net, "SHOP", "NASDAQ", "USD", &clock).1));
+    out.insert("wire_us_down".into(), wire(&news::fetch_symbol(&dead, "SHOP", "NASDAQ", "USD", &clock).1));
 
     // the merge, over three passes of one listing
     let told = Mutex::new(Vec::<Value>::new());
@@ -176,7 +176,7 @@ fn answers() -> Value {
     };
 
     // first: every source answers
-    let full_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &tmx_net, s, e, cc, cl);
+    let full_wire = |s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(&tmx_net, s, e, cc, cl);
     let all_extra = |key: Feed, _: &news::Ask| {
         Ok(Some(match key {
             Feed::Yahoo => news::parse_yahoo_news(&yahoo_news(), "PNG.V", "PNG", "Kraken Robotics Inc."),
@@ -187,12 +187,12 @@ fn answers() -> Value {
     out.insert("merge_first".into(), pass(&conn, &Readers { wire: &full_wire, extra: &all_extra }, &clock));
 
     // sixteen minutes on: the stories tab fails, Yahoo fails, the rest are not due
-    let half_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &tmx_half, s, e, cc, cl);
+    let half_wire = |s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(&tmx_half, s, e, cc, cl);
     let failing = |_: Feed, _: &news::Ask| Err(down());
     out.insert("merge_stand_in".into(), pass(&conn, &Readers { wire: &half_wire, extra: &failing }, &Clock::at(now + 16 * 60)));
 
     // an hour on: nothing answers at all, and the stored list stands
-    let dead_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &dead, s, e, cc, cl);
+    let dead_wire = |s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(&dead, s, e, cc, cl);
     out.insert("merge_none".into(), pass(&conn, &Readers { wire: &dead_wire, extra: &failing }, &Clock::at(now + 60 * 60)));
 
     out.insert("told".into(), Value::Array(told.into_inner().unwrap()));
