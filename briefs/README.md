@@ -47,3 +47,4 @@ Read from any checkout without switching branches:
 | 36 | [The order-listing build as built (#520): not yet](36-orders-listing-as-built.md) | Superseded by 37 |
 | 37 | [#520 after brief 36's changes: merge after six small changes](37-orders-listing-recheck.md) | Superseded by 38 |
 | 38 | [#520 at 068fb766: merge; close #519 as superseded](38-orders-listing-merge.md) | Current |
+| 39 | [#521: merge after two changes. Plan #522 (market data by listing): not yet](39-hosts-followups-and-market-data-plan.md) | Current |
