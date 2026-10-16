@@ -250,8 +250,9 @@ mod tests {
         let t = tools();
         let names: Vec<&str> = t.as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["disclosures_list", "disclosures_document", "sedar_resolve_profile"]);
-        assert_eq!(t[0]["inputSchema"]["required"], json!(["symbol"]));
-        assert_eq!(t[1]["inputSchema"]["required"], json!(["symbol", "id"]));
+        // a ticker can be two companies on two exchanges: the exchange is required
+        assert_eq!(t[0]["inputSchema"]["required"], json!(["symbol", "exchange"]));
+        assert_eq!(t[1]["inputSchema"]["required"], json!(["symbol", "exchange", "id"]));
         assert_eq!(t[2]["inputSchema"]["required"], json!(["query"]));
         // every tool but the SEDAR lookup takes the name/exchange/currency hints
         for i in [0, 1] {

@@ -1,8 +1,9 @@
 //! EDGAR. No network: the ticker map is primed and the
 //! submissions, index and document requests are given as closures.
-use bagholder_market::disclosures::{self as d, Fetched, Gathered, Provider, SourceError};
+use bagholder_core::ListingKey;
+use bagholder_market::disclosures::{self as d, Fetched, Gathered, Regulators, SourceError};
 use bagholder_market::edgar;
-use bagholder_store::feeds::{FiledDocument, Regulator};
+use bagholder_store::feeds::{FiledDocument, Filer, Regulator};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 
@@ -19,20 +20,29 @@ fn submissions() -> Value {
     })
 }
 
+/// The SEC's ticker list as it publishes it: fields, then rows.
+fn ticker_list() -> Value {
+    json!({
+        "fields": ["cik", "name", "ticker", "exchange"],
+        "data": [
+            [1045810, "NVIDIA CORP", "NVDA", "Nasdaq"],
+            [1594805, "SHOPIFY INC.", "SHOP", "NYSE"],
+            [1067983, "BERKSHIRE HATHAWAY INC", "BRK-B", "NYSE"],
+            [9999, "SOME OTC CO", "OTCX", "OTC"],
+        ],
+    })
+}
+
 fn set_up() {
-    let mut m = edgar::Tickers::new();
-    m.insert("NVDA".into(), (1045810, "NVIDIA CORP".into()));
-    m.insert("SHOP".into(), (1594805, "SHOPIFY INC.".into()));
-    edgar::set_ticker_map(m);
+    edgar::set_ticker_map(edgar::parse_tickers(&ticker_list()).unwrap());
 }
 
 fn subs(_: &str) -> Fetched<Value> {
     Ok(submissions())
 }
 
-fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str) -> Vec<FiledDocument> {
-    set_up();
-    edgar::fetch_with(symbol, name, exchange, currency, 200, &subs).unwrap()
+fn fetch(cik: i64) -> Vec<FiledDocument> {
+    edgar::fetch_with(cik, 200, &subs).unwrap()
 }
 
 /// A minimal document, with everything but `form` and `url` blank.
@@ -44,13 +54,16 @@ fn doc(source: Regulator, form: &str, url: &str) -> FiledDocument {
     }
 }
 
+fn on(symbol: &str, venue: &str) -> ListingKey {
+    ListingKey::on(symbol, venue).unwrap()
+}
+
 // --- EdgarUnitTest
 
 #[test]
-fn test_bare_ticker_strips_venue_and_dots() {
-    assert_eq!(edgar::bare("SHOP.TO"), "SHOP");
-    assert_eq!(edgar::bare("BRK.B"), "BRK-B");
-    assert_eq!(edgar::bare("nvda"), "NVDA");
+fn test_a_listing_is_written_as_the_sec_writes_its_ticker() {
+    assert_eq!(edgar::sec_ticker(&on("BRK.B", "NYSE")), "BRK-B");
+    assert_eq!(edgar::sec_ticker(&on("nvda", "NASDAQ")), "NVDA");
 }
 
 #[test]
@@ -65,17 +78,28 @@ fn test_forms_map_to_the_shared_categories() {
     assert_eq!(edgar::category("NT 10-K"), d::OTHER);
 }
 
+/// A US listing's filer is the SEC's own for its ticker on a US exchange; a
+/// listing on another market is never matched to a US filer by its ticker.
 #[test]
-fn test_covers_a_us_listing_and_a_known_ticker() {
+fn test_a_us_listing_is_its_secs_filer_and_no_other_market_is_matched_by_ticker() {
     set_up();
-    assert!(edgar::covers("NVDA", "NASDAQ", "USD"));
-    assert!(edgar::covers("SHOP", "TSX", "CAD"), "a cross-listed ticker SEC knows");
-    assert!(!edgar::covers("QNC", "TSX-V", "CAD"), "a pure-Canadian ticker SEC does not know");
+    assert_eq!(edgar::filer_of(&on("NVDA", "NASDAQ")).unwrap().map(|f| f.0), Some(1045810));
+    assert_eq!(edgar::filer_of(&on("BRK.B", "NYSE")).unwrap().map(|f| f.0), Some(1067983));
+    assert_eq!(edgar::filer_of(&on("SHOP", "TSX")).unwrap(), None, "the TSX listing reaches the SEC only through the interlisted list");
+    assert_eq!(edgar::filer_of(&on("ZZZZ", "NASDAQ")).unwrap(), None);
+    assert_eq!(edgar::filer_of(&on("OTCX", "NYSE")).unwrap(), None, "an over-the-counter row is no listing on a US exchange");
+}
+
+#[test]
+fn test_a_ticker_list_that_is_not_the_secs_shape_does_not_read() {
+    for bad in [json!({}), json!({"fields": ["cik", "ticker"], "data": []}), json!([])] {
+        assert!(edgar::parse_tickers(&bad).is_err(), "{bad}");
+    }
 }
 
 #[test]
 fn test_fetch_normalizes_rows_with_source_and_url() {
-    let items = fetch("NVDA", "NVIDIA Corporation", "NASDAQ", "USD");
+    let items = fetch(1045810);
     assert_eq!(items.len(), 7);
     let first = &items[0];
     assert_eq!(first.source, Regulator::Sec);
@@ -87,61 +111,34 @@ fn test_fetch_normalizes_rows_with_source_and_url() {
 
 #[test]
 fn test_a_missing_document_url_falls_back_to_the_company_page() {
-    let items = fetch("NVDA", "", "NASDAQ", "USD");
+    let items = fetch(1045810);
     let nt = items.iter().find(|i| i.form == "NT 10-K").unwrap();
     assert!(nt.url.contains("browse-edgar"));
 }
 
-#[test]
-fn test_name_guard_rejects_a_canadian_ticker_colliding_with_a_us_filer() {
-    let items = fetch("NVDA", "Northvolt Canada Mining Corp.", "TSX-V", "CAD");
-    assert!(items.is_empty(), "the SEC 'NVIDIA CORP' entity does not match the Canadian name");
+// --- the gathering of a listing's regulators
+
+/// Two regulators standing in, each with its documents or its failure.
+struct Regs {
+    sedar: Fetched<Vec<FiledDocument>>,
+    sec: Fetched<Vec<FiledDocument>>,
 }
 
-#[test]
-fn test_unknown_ticker_returns_empty() {
-    assert!(fetch("ZZZZ", "", "NASDAQ", "USD").is_empty());
-}
-
-// --- NameMatchTest
-
-#[test]
-fn test_matches_ignore_corporate_suffixes_and_case() {
-    assert!(d::names_match("Shopify Inc.", "SHOPIFY INC."));
-    assert!(d::names_match("NVIDIA Corporation", "NVIDIA CORP"));
-}
-
-#[test]
-fn test_unrelated_names_do_not_match() {
-    assert!(!d::names_match("Quantum eMotion Corp.", "QUALCOMM INC"));
-    assert!(!d::names_match("", "Anything"));
-}
-
-// --- DispatcherTest
-
-struct Prov {
-    source: Regulator,
-    items: Vec<FiledDocument>,
-    avail: bool,
-    covers: bool,
-    raises: Option<SourceError>,
-}
-
-impl Prov {
-    fn new(source: Regulator, items: Vec<FiledDocument>) -> Prov {
-        Prov { source, items, avail: true, covers: true, raises: None }
+impl Regulators for Regs {
+    fn filer(&self, listing: &ListingKey, _: &str) -> Option<(Regulator, Fetched<Result<String, String>>)> {
+        if listing.us() {
+            Some((Regulator::Sec, Ok(Ok("1".into()))))
+        } else if listing.canadian() {
+            Some((Regulator::Sedar, Ok(Ok("000000001".into()))))
+        } else {
+            None
+        }
     }
-}
-
-impl Provider for Prov {
-    fn source(&self) -> Regulator { self.source }
-    fn available(&self) -> bool { self.avail }
-    fn covers(&self, _: &str, _: &str, _: &str) -> bool { self.covers }
-    fn fetch(&self, _: &str, _: &str, _: &str, _: &str, _: &str) -> Fetched<Vec<FiledDocument>> {
-        match &self.raises { Some(e) => Err(e.clone()), None => Ok(self.items.clone()) }
-    }
-    fn document(&self, _: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
-        Ok((b"%PDF-".to_vec(), "application/pdf".into()))
+    fn documents(&self, filer: &Filer, _: usize) -> Fetched<Vec<FiledDocument>> {
+        match filer.source {
+            Regulator::Sedar => self.sedar.clone(),
+            Regulator::Sec => self.sec.clone(),
+        }
     }
 }
 
@@ -149,41 +146,36 @@ fn ids(out: &Gathered) -> Vec<String> {
     out.items.iter().map(|i| i.id.clone()).collect()
 }
 
-#[test]
-fn test_items_from_both_providers_merge_newest_first() {
-    let a = Prov::new(Regulator::Sedar, vec![FiledDocument { id: "a:1".into(), date: "2026-01-01".into(), ..doc(Regulator::Sedar, "", "") }]);
-    let b = Prov::new(Regulator::Sec, vec![FiledDocument { id: "b:1".into(), date: "2026-05-01".into(), ..doc(Regulator::Sec, "", "") }]);
-    let out = d::fetch_from(&[&a, &b], "X", "", "", "", 200, "");
-    assert_eq!(ids(&out), ["b:1", "a:1"]);
-    assert_eq!(out.sources[&Regulator::Sedar].matched, true);
-    assert_eq!(out.sources[&Regulator::Sec].matched, true);
+fn dated(source: Regulator, id: &str, date: &str) -> FiledDocument {
+    FiledDocument { id: id.into(), date: date.into(), ..doc(source, "", "") }
 }
 
 #[test]
-fn test_a_failing_source_is_recorded_and_the_other_still_returns() {
-    let mut a = Prov::new(Regulator::Sedar, vec![]);
-    a.raises = Some(SourceError::Unavailable("down".into()));
-    let b = Prov::new(Regulator::Sec, vec![FiledDocument { id: "b:1".into(), date: "2026-05-01".into(), ..doc(Regulator::Sec, "", "") }]);
-    let out = d::fetch_from(&[&a, &b], "X", "", "", "", 200, "");
+fn test_a_listing_and_its_interlisted_partner_merge_newest_first() {
+    let r = Regs { sedar: Ok(vec![dated(Regulator::Sedar, "a:1", "2026-01-01")]), sec: Ok(vec![dated(Regulator::Sec, "b:1", "2026-05-01")]) };
+    let out = d::gather(&r, &on("X", "TSX"), Some(&on("X", "NYSE")), "2026-09-16", 200);
+    assert_eq!(ids(&out), ["b:1", "a:1"]);
+    assert!(out.sources[&Regulator::Sedar].matched && out.sources[&Regulator::Sec].matched);
+    // unpaired, the listing shows its own regulator's alone
+    let alone = d::gather(&r, &on("X", "TSX"), None, "2026-09-16", 200);
+    assert_eq!(ids(&alone), ["a:1"]);
+    assert!(!alone.sources.contains_key(&Regulator::Sec));
+}
+
+#[test]
+fn test_a_failing_regulator_is_recorded_and_the_other_still_returns() {
+    let r = Regs { sedar: Err(SourceError::Unavailable("down".into())), sec: Ok(vec![dated(Regulator::Sec, "b:1", "2026-05-01")]) };
+    let out = d::gather(&r, &on("X", "TSX"), Some(&on("X", "NYSE")), "2026-09-16", 200);
     assert_eq!(ids(&out), ["b:1"]);
-    assert_eq!(out.sources[&Regulator::Sedar].available, false);
+    assert!(!out.sources[&Regulator::Sedar].available);
     assert!(out.sources[&Regulator::Sedar].error.contains("down"));
 }
 
 #[test]
-fn test_a_source_that_does_not_cover_is_skipped() {
-    let mut a = Prov::new(Regulator::Sedar, vec![FiledDocument { id: "a:1".into(), date: "2026-01-01".into(), ..doc(Regulator::Sedar, "", "") }]);
-    a.covers = false;
-    let out = d::fetch_from(&[&a], "X", "", "", "", 200, "");
-    assert!(out.items.is_empty());
-    assert_eq!(out.sources[&Regulator::Sedar].matched, false);
-}
-
-#[test]
-fn test_document_routes_to_the_rows_source() {
-    let a = Prov::new(Regulator::Sedar, vec![]);
-    let (_, ct) = d::document_from(&[&a], &doc(Regulator::Sedar, "", "")).unwrap();
-    assert_eq!(ct, "application/pdf");
+fn test_a_listing_no_regulator_covers_gathers_nothing() {
+    let r = Regs { sedar: Ok(vec![dated(Regulator::Sedar, "a:1", "2026-01-01")]), sec: Ok(vec![]) };
+    let out = d::gather(&r, &ListingKey::coin("BTC").unwrap(), None, "2026-09-16", 200);
+    assert!(out.items.is_empty() && out.sources.is_empty());
 }
 
 // --- ContentResolutionTest

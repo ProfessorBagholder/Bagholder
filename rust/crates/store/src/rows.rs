@@ -132,9 +132,13 @@ pub fn watchlist(conn: &Connection) -> Result<Vec<WatchRow>> {
 pub fn news(conn: &Connection) -> Result<Vec<NewsRow>> {
     all(conn, "SELECT * FROM news ORDER BY published_at DESC, id", |r| {
         let kind = text(r, "kind")?;
+        // a row is kept under its listing's key; the symbol is the key's, the venue the
+        // words it was read under
+        let listing = text(r, "listing")?;
+        let symbol = listing.rsplit_once('@').map_or(listing.as_str(), |(s, _)| s).to_string();
         Ok(NewsRow {
             id: text(r, "id")?,
-            symbol: text(r, "symbol")?,
+            symbol,
             exchange: text(r, "exchange")?,
             headline: text(r, "headline")?,
             wire: text(r, "wire")?,

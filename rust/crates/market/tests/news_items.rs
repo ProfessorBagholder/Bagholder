@@ -152,6 +152,8 @@ fn answers() -> Value {
     let d = tempfile::tempdir().unwrap();
     let conn = bagholder_store::connect(d.path()).unwrap();
     bagholder_store::relabel::ensure(&conn).unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     let clock = Clock::at(now);
     let both = tmx_post(false);
     let one = tmx_post(true);
@@ -169,7 +171,7 @@ fn answers() -> Value {
     let on_new = |_: &rusqlite::Connection, sym: &str, ex: &str, rows: &[_], ids: &[String]| {
         told.lock().unwrap().push(json!({"symbol": sym, "exchange": ex, "rows": cell(rows), "new": ids}));
     };
-    let stored = |conn: &rusqlite::Connection| cell(&bagholder_store::feeds::news_for(conn, "PNG", "TSX-V").unwrap());
+    let stored = |conn: &rusqlite::Connection| cell(&bagholder_store::feeds::news_for(conn, &bagholder_core::ListingKey::on("PNG", "TSX-V").unwrap()).unwrap());
     let pass = |conn: &rusqlite::Connection, readers: &Readers, clock: &Clock| {
         let (src, rows) = news::read_listing(conn, readers, "PNG", "TSX-V", "CAD", "Kraken Robotics Inc.", false, clock, Some(&on_new)).unwrap();
         json!({"source": src, "rows": rows.as_ref().map(|r| cell(r)), "stored": stored(conn)})

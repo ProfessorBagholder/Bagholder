@@ -170,17 +170,17 @@ fn answers() -> Value {
 
     // --- store round trip ---------------------------------------------------
     let store_conn = conn();
-    bagholder_store::feeds::save_shorts(&store_conn, &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
-    let read_back = bagholder_store::feeds::shorts_for(&store_conn, "GME", "NYSE").unwrap().unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap(), &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
+    let read_back = bagholder_store::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap()).unwrap().unwrap();
     out.insert("store_shorts_for_after_save".into(), cell(&read_back));
 
-    bagholder_store::feeds::save_shorts(&store_conn, &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
     // a second save whose record carries no "series" keeps the series
     // already stored, rather than clearing it
     let mut ca_rec_no_series = out_ca_trend.clone();
     ca_rec_no_series.series = None;
-    bagholder_store::feeds::save_shorts(&store_conn, &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
-    let qnc_after_reserve = bagholder_store::feeds::shorts_for(&store_conn, "QNC", "TSX-V").unwrap().unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
+    let qnc_after_reserve = bagholder_store::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap()).unwrap().unwrap();
     out.insert("store_series_kept_when_a_later_save_omits_it".into(), cell(&qnc_after_reserve));
 
     let mut all = bagholder_store::feeds::all_shorts(&store_conn).unwrap();

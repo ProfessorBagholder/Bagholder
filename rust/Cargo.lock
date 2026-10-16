@@ -344,6 +344,7 @@ dependencies = [
  "bagholder-diff",
  "bagholder-diff-derive",
  "bagholder-model",
+ "bagholder-sources",
  "bagholder-sqlite",
  "indexmap",
  "regex",

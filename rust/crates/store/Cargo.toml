@@ -32,6 +32,8 @@ indexmap = { version = "2", features = ["serde"] }
 # tests read the time zone rules built into jiff, never the machine's
 bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"
+# the market cache's per-listing tables (its migration 6), which the readers here write
+bagholder-sources = { path = "../sources" }
 
 [[bin]]
 name = "demo-book"

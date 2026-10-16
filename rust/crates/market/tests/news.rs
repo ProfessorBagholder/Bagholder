@@ -89,6 +89,8 @@ fn db() -> Db {
     let dir = tempfile::tempdir().unwrap();
     let conn = bagholder_store::connect(dir.path()).unwrap();
     bagholder_store::relabel::ensure(&conn).unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     Db { dir, conn }
 }
 
@@ -204,7 +206,6 @@ fn kraken_story() -> Value {
 
 #[test]
 fn test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases() {
-    let d = db();
     let clock = Clock::at(at(2026, 9, 16, 12, 0));
     let tabs = Mutex::new(Vec::<bool>::new());
     let post = |_: &str, body: &Value, _: &[(&str, &str)]| -> Result<Value, NetError> {
@@ -424,7 +425,11 @@ fn wire_of(answer: Option<Vec<NewsItem>>) -> impl Fn(&str, &str, &str, &Clock) -
 }
 
 fn stored(conn: &Connection, sym: &str, ex: &str) -> Vec<StoredNews> {
-    bagholder_store::feeds::news_for(conn, sym, ex).unwrap()
+    bagholder_store::feeds::news_for(conn, &key(sym, ex)).unwrap()
+}
+
+fn key(sym: &str, ex: &str) -> bagholder_core::ListingKey {
+    bagholder_core::ListingKey::on(sym, ex).unwrap()
 }
 
 #[test]
@@ -498,7 +503,7 @@ fn test_a_release_is_new_once_whichever_source_carries_it_and_a_first_read_sourc
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
     let told = Mutex::new(Vec::<Vec<String>>::new());
-    let on_new = |_: &str, _: &str, _: &[NewsItem], new: &[String]| {
+    let on_new = |_: &Connection, _: &str, _: &str, _: &[NewsItem], new: &[String]| {
         let mut n = new.to_vec();
         n.sort();
         told.lock().unwrap().push(n);
@@ -533,7 +538,7 @@ fn test_a_headline_repeated_months_later_is_a_new_release() {
     let first = wire_of(Some(vec![halt("tmx:1", "2026-06-10T14:00:00Z")]));
     news::read_listing(&d.conn, &Readers { wire: &first, extra: &nothing }, "QNC", "TSX-V", "CAD", "", false, &Clock::at(now), None).unwrap();
     let second = wire_of(Some(vec![halt("tmx:2", "2026-09-16T13:00:00Z"), halt("tmx:1", "2026-06-10T14:00:00Z")]));
-    let on_new = |_: &str, _: &str, _: &[NewsItem], new: &[String]| told.lock().unwrap().push(new.to_vec());
+    let on_new = |_: &Connection, _: &str, _: &str, _: &[NewsItem], new: &[String]| told.lock().unwrap().push(new.to_vec());
     let (_, rows) = news::read_listing(&d.conn, &Readers { wire: &second, extra: &nothing }, "QNC", "TSX-V", "CAD", "", false, &Clock::at(now + 16 * 60), Some(&on_new)).unwrap();
     assert_eq!((ids(&rows.unwrap()), told.lock().unwrap().clone()), (vec!["tmx:2".to_string(), "tmx:1".into()], vec![vec!["tmx:2".to_string()]]),
                "the same words months apart are two halts, the second one new");
@@ -589,8 +594,8 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
     let stamp = Clock::at(now).stamp();
-    bagholder_store::feeds::replace_news(&d.conn, "CH", "TSX-V", &[row("tmx:1", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
-    bagholder_store::feeds::replace_news(&d.conn, "HG", "CSE", &[row("tmx:2", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
+    bagholder_store::feeds::replace_news(&d.conn, &key("CH", "TSX-V"), "TSX-V", &[row("tmx:1", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
+    bagholder_store::feeds::replace_news(&d.conn, &key("HG", "CSE"), "CSE", &[row("tmx:2", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
     let listings = vec![listing("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), listing("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.")];
     let syms = |ls: Vec<news::Listing>| ls.into_iter().map(|l| l.symbol).collect::<Vec<_>>();
     assert_eq!(syms(news::stale(&d.conn, &listings, now + 60, 15).unwrap()), ["CH", "HG"], "the wire is fresh, the other sources never read");
@@ -652,7 +657,7 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
     let rows: Vec<[String; 3]> = bagholder_store::rows::news(&d.conn).unwrap().iter().map(|r| [r.id.clone(), r.symbol.clone(), r.wire.clone()]).collect();
     assert_eq!(rows, vec![["tmx:2".to_string(), "SHOP".into(), "CNW".into()], ["nasdaq:9".to_string(), "NVDA".into(), "Zacks".into()]],
                "newest first; a listing's rows are replaced by its wire's latest");
-    bagholder_store::feeds::forget_news(&d.conn, "SHOP", "TSX").unwrap();
+    bagholder_store::feeds::forget_news(&d.conn, &key("SHOP", "TSX")).unwrap();
     assert_eq!(bagholder_store::rows::news(&d.conn).unwrap().iter().map(|r| r.id.clone()).collect::<Vec<_>>(), vec!["nasdaq:9"]);
     assert_eq!(news::stale(&d.conn, &[listing("SHOP", "TSX", "CAD", "")], later, 15).unwrap(), vec![listing("SHOP", "TSX", "CAD", "")], "forgotten means stale");
 }
@@ -661,7 +666,6 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
 fn test_a_ticker_with_no_venue_is_never_asked_of_tmx() {
     // TMX's news answers on the bare ticker whatever venue it is asked under, so a name with no
     // venue would come back as another company's. Only Nasdaq, whose items name their symbols.
-    let d = db();
     let get = |_: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
         Ok(r#"{"data": {"rows": [{"id": 5, "title": "Ford declares dividend", "publisher": "PR Newswire", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/a", "related_symbols": ["f|stocks"]}]}}"#.into())
     };
@@ -673,7 +677,6 @@ fn test_a_ticker_with_no_venue_is_never_asked_of_tmx() {
 
 #[test]
 fn test_a_us_listing_reads_its_releases_beside_its_news_each_once() {
-    let d = db();
     let asked = Mutex::new(Vec::<String>::new());
     let get = |url: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
         asked.lock().unwrap().push(url.to_string());

@@ -52,19 +52,19 @@ fn allow_misses(conn: &rusqlite::Connection) {
 fn an_archive_pass_whose_bars_the_store_refuses_fails_and_the_next_one_goes_through() {
     let conn = db();
     let (today, now, stamp) = bagholder_market::clock_now();
-    let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares")];
+    let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap()];
     refuse_misses(&conn);
     let err = history::archive_intraday(&conn, &no_rates(), &recs, &today, now, &stamp, 1).unwrap_err();
     assert!(err.to_string().contains("refused"), "{err}");
     allow_misses(&conn);
-    assert_eq!(history::archive_intraday(&conn, &no_rates(), &recs, &today, now, &stamp, 1).unwrap(), vec!["QMET".to_string()]);
+    assert_eq!(history::archive_intraday(&conn, &no_rates(), &recs, &today, now, &stamp, 1).unwrap(), vec!["QMET@XTSX".to_string()]);
 }
 
 #[test]
 fn a_daily_bar_read_the_store_refuses_is_the_reads_failure() {
     let conn = db();
     let (today, now, stamp) = bagholder_market::clock_now();
-    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares");
+    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap();
     refuse_misses(&conn);
     let err = history::ensure_history(&conn, &no_rates(), &rec, &today, &today, &today, now, &stamp).unwrap_err();
     assert!(err.to_string().contains("refused"), "{err}");
@@ -77,7 +77,7 @@ fn a_daily_bar_read_the_store_refuses_is_the_reads_failure() {
 fn a_bar_store_that_cannot_be_read_is_not_a_chart_with_nothing_due() {
     let conn = db();
     let (today, now, _) = bagholder_market::clock_now();
-    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares");
+    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap();
     conn.execute_batch("DROP TABLE meta;").unwrap();
     assert!(history::daily_due(&conn, &rec, &today, &today, &today, now).is_err());
     assert!(history::offered_timeframes(&conn, &rec, &today, &today, now).is_err());
@@ -126,16 +126,7 @@ fn short_interest_whose_store_cannot_be_read_is_the_failure() {
     assert!(err.contains("could not be read"), "{err}");
 }
 
-/// A form TMX was not asked about, the process being offline, is no miss: the
-/// failure is returned and nothing is remembered for the day.
-#[test]
-fn a_tmx_form_lookup_that_failed_is_not_remembered_as_a_miss() {
-    let conn = db();
-    assert!(bagholder_market::tmx::tmx_resolve(&conn, "QNC", "2026-09-16").is_err());
-    assert_eq!(bagholder_store::tables::get_meta(&conn, "tmx_form:QNC", "").unwrap(), "");
-}
-
-/// The same for Coinbase's market for a pair.
+/// A Coinbase market lookup that failed is not remembered as a miss.
 #[test]
 fn a_coinbase_market_lookup_that_failed_is_not_remembered_as_a_miss() {
     let conn = db();

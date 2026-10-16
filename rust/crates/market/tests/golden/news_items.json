@@ -329,7 +329,7 @@
     "stored": [
       {
         "id": "gnews:38e74dcf0780acee",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "gnews",
         "headline": "Kraken Robotics lands sonar order",
@@ -342,7 +342,7 @@
       },
       {
         "id": "sa:38c38fb566fc9995",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "sa",
         "headline": "Kraken Robotics: Undersea Batteries Drive Growth",
@@ -355,7 +355,7 @@
       },
       {
         "id": "gnews:45ccd879d6906e79",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "gnews",
         "headline": "Kraken Robotics Closes $40M Financing Round",
@@ -368,7 +368,7 @@
       },
       {
         "id": "tmx:10",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx",
         "headline": "Kraken Closes $40M Financing Round",
@@ -381,7 +381,7 @@
       },
       {
         "id": "yahoo:a1",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "yahoo",
         "headline": "Kraken Robotics Announces Q2 Results",
@@ -394,7 +394,7 @@
       },
       {
         "id": "yahoo:a3",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "yahoo",
         "headline": "Kraken Wins Navy Contract",
@@ -407,7 +407,7 @@
       },
       {
         "id": "tmx:11",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx-media",
         "headline": "3 Top Canadian Defence Stocks",
@@ -420,7 +420,7 @@
       },
       {
         "id": "tmx:12",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx",
         "headline": "Kraken to Present at Conference",
@@ -516,7 +516,7 @@
     "stored": [
       {
         "id": "gnews:38e74dcf0780acee",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "gnews",
         "headline": "Kraken Robotics lands sonar order",
@@ -529,7 +529,7 @@
       },
       {
         "id": "sa:38c38fb566fc9995",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "sa",
         "headline": "Kraken Robotics: Undersea Batteries Drive Growth",
@@ -542,7 +542,7 @@
       },
       {
         "id": "gnews:45ccd879d6906e79",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "gnews",
         "headline": "Kraken Robotics Closes $40M Financing Round",
@@ -555,7 +555,7 @@
       },
       {
         "id": "tmx:10",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx",
         "headline": "Kraken Closes $40M Financing Round",
@@ -568,7 +568,7 @@
       },
       {
         "id": "yahoo:a1",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "yahoo",
         "headline": "Kraken Robotics Announces Q2 Results",
@@ -581,7 +581,7 @@
       },
       {
         "id": "yahoo:a3",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "yahoo",
         "headline": "Kraken Wins Navy Contract",
@@ -594,7 +594,7 @@
       },
       {
         "id": "tmx:11",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx-media",
         "headline": "3 Top Canadian Defence Stocks",
@@ -607,7 +607,7 @@
       },
       {
         "id": "tmx:12",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx",
         "headline": "Kraken to Present at Conference",
@@ -626,7 +626,7 @@
     "stored": [
       {
         "id": "gnews:38e74dcf0780acee",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "gnews",
         "headline": "Kraken Robotics lands sonar order",
@@ -639,7 +639,7 @@
       },
       {
         "id": "sa:38c38fb566fc9995",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "sa",
         "headline": "Kraken Robotics: Undersea Batteries Drive Growth",
@@ -652,7 +652,7 @@
       },
       {
         "id": "gnews:45ccd879d6906e79",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "gnews",
         "headline": "Kraken Robotics Closes $40M Financing Round",
@@ -665,7 +665,7 @@
       },
       {
         "id": "tmx:10",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx",
         "headline": "Kraken Closes $40M Financing Round",
@@ -678,7 +678,7 @@
       },
       {
         "id": "yahoo:a1",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "yahoo",
         "headline": "Kraken Robotics Announces Q2 Results",
@@ -691,7 +691,7 @@
       },
       {
         "id": "yahoo:a3",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "yahoo",
         "headline": "Kraken Wins Navy Contract",
@@ -704,7 +704,7 @@
       },
       {
         "id": "tmx:11",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx-media",
         "headline": "3 Top Canadian Defence Stocks",
@@ -717,7 +717,7 @@
       },
       {
         "id": "tmx:12",
-        "symbol": "PNG",
+        "listing": "PNG@XTSX",
         "exchange": "TSX-V",
         "source": "tmx",
         "headline": "Kraken to Present at Conference",
