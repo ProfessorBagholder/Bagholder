@@ -224,6 +224,25 @@ impl Book {
         Ok(self.names(id)?.pop().map(|n| n.symbol))
     }
 
+    /// The venue the instrument is listed on now, as a market identifier code: the
+    /// newest live sighting of its group that names a venue, read through the
+    /// sightings' index (the work of one lookup, however deep its history).
+    pub fn current_venue(&self, id: InstrumentId) -> Result<Option<String>> {
+        let head = self.canonical(id)?;
+        let mut st = self.conn().prepare_cached(
+            "SELECT s.day, s.venue_mic, s.venue_name FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+             WHERE s.instrument_id = ?1 AND (s.venue_mic IS NOT NULL OR s.venue_name IS NOT NULL) ORDER BY s.day DESC, s.rowid DESC LIMIT 1",
+        )?;
+        let mut newest: Option<(String, Option<String>, Option<String>)> = None;
+        for m in self.group_of(head)? {
+            let row: Option<(String, Option<String>, Option<String>)> = st.query_row([m], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+            if row.as_ref().map(|r| &r.0) > newest.as_ref().map(|r| &r.0) {
+                newest = row;
+            }
+        }
+        Ok(newest.and_then(|(_, mic, words)| mic.as_deref().and_then(bagholder_core::listing::mic_of).or_else(|| words.as_deref().and_then(bagholder_core::listing::mic_of)).map(str::to_string)))
+    }
+
     /// Every due row settled: the runs around each changed sighting re-formed,
     /// one instrument at a time under its own savepoint, so one whose rows
     /// cannot be read fails alone, its error logged and its due rows kept. The

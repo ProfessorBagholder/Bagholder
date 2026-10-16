@@ -71,6 +71,17 @@ fn a_trade_entered_by_hand_is_the_transaction_it_states() {
     let t = f.book.transactions_of(sold.record).unwrap().remove(0);
     assert_eq!((t.kind, t.instrument, t.quantity, t.price, t.fee, t.cash), (bagholder_core::transaction::Kind::Sell, Some(held), Some(d("-40")), Some(cad("12.5")), Some(cad("4.95")), None), "the price and the fee as entered, no cash worked out");
     assert_eq!(t.trade_date, "2026-03-02".parse().unwrap());
+    // a trade on a listing the book holds keeps it that listing, on every venue: the
+    // record names it on its own venue, never with none (it would lose its market data)
+    for v in bagholder_core::listing::CANADA_MICS.iter().chain(bagholder_core::listing::US_MICS.iter()) {
+        let on = |instrument| Entry::Trade { account, instrument, day: "2026-03-02".parse().unwrap(), side: Side::Buy, quantity: d("1"), price: Money::new(d("1"), Currency::USD), fee: None };
+        let named = f.book.enter(&on(Traded::Named { symbol: format!("ZQ{v}"), currency: Currency::USD, contract: None, venue: Some(v.to_string()) }), t0()).unwrap();
+        let i = f.book.transactions_of(named.record).unwrap().remove(0).instrument.unwrap();
+        f.book.enter(&on(Traded::Held(i)), t0()).unwrap();
+        let key = |n: &bagholder_core::instrument::Name| bagholder_core::ListingKey::of(bagholder_core::instrument::InstrumentKind::Security, n).ok();
+        let names = f.book.names(i).unwrap();
+        assert_eq!(key(names.last().unwrap()), bagholder_core::ListingKey::on(&format!("ZQ{v}"), v).ok(), "{v}: {names:?}");
+    }
     // a purchase of a symbol the book has not met: an instrument named by it, in the account's connection
     let bought = f
         .book

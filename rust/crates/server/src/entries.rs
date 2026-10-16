@@ -351,24 +351,52 @@ mod tests {
 
     /// A share typed in is its listing: the held one only on the venue it is held
     /// on; on every other venue, the same ticker is another instrument; with none,
-    /// it is refused (plan `market-data-keyed-by-listing`, Approach, 5).
+    /// it is refused (plan `market-data-keyed-by-listing`, Approach, 5). Over every
+    /// share the book holds, each on every venue the table knows.
     #[test]
     fn a_trade_by_hand_on_another_venue_is_never_the_holding_of_that_ticker() {
         use bagholder_core::listing::{listing_venue, CANADA_MICS, US_MICS};
         let (_h, f) = figures();
-        let (symbol, currency, account, instrument, venue) = held(&f);
-        let held_key = bagholder_core::ListingKey::on(&symbol, &venue).unwrap();
-        match enter(&f, &trade(&account, &symbol, "", &currency, "buy", "1", "1", ""), now()) {
-            Err(Refused::Entry(why)) => assert!(why.contains("names no exchange"), "{why}"),
-            other => panic!("{other:?}"),
-        }
-        for (n, mic) in CANADA_MICS.iter().chain(US_MICS.iter()).enumerate() {
-            // each entry its own quantity, so it is found whatever else the book renumbers
-            let units = (n + 1).to_string();
-            enter(&f, &trade(&account, &symbol, mic, &currency, "buy", &units, "1", ""), now()).unwrap();
-            let new = person_trades(&f).into_iter().find(|t| t.quantity == Some(Dec::parse(&units).unwrap())).expect("the trade entered");
-            let same = listing_venue(mic) == Some(held_key.venue());
-            assert_eq!(new.instrument == Some(instrument), same, "{symbol} on {mic}, held on {venue}");
+        let shares: Vec<(String, String, String, InstrumentId, String)> = f
+            .read(|e| {
+                e.figures()
+                    .positions
+                    .iter()
+                    .filter(|p| p.kind == InstrumentKind::Security)
+                    .filter_map(|p| {
+                        let info = &e.inputs().ledger.instruments[&p.instrument];
+                        let name = info.current_name()?;
+                        let venue = name.venue_mic.clone().or(name.venue_name.clone())?;
+                        Some((name.symbol.clone(), info.instrument.currency.as_str().to_string(), p.account.to_string(), p.instrument, venue))
+                    })
+                    .collect()
+            })
+            .unwrap();
+        assert!(shares.iter().any(|s| bagholder_core::ListingKey::on(&s.0, &s.4).unwrap().us()) && shares.iter().any(|s| bagholder_core::ListingKey::on(&s.0, &s.4).unwrap().canadian()), "the fixture holds a share in each market");
+        let mut units = 0u32;
+        for (symbol, currency, account, instrument, venue) in shares {
+            let held_key = bagholder_core::ListingKey::on(&symbol, &venue).unwrap();
+            match enter(&f, &trade(&account, &symbol, "", &currency, "buy", "1", "1", ""), now()) {
+                Err(Refused::Entry(why)) => assert!(why.contains("names no exchange"), "{why}"),
+                other => panic!("{other:?}"),
+            }
+            for mic in CANADA_MICS.iter().chain(US_MICS.iter()) {
+                // each entry its own quantity, so it is found whatever else the book renumbers
+                units += 1;
+                let q = units.to_string();
+                enter(&f, &trade(&account, &symbol, mic, &currency, "buy", &q, "1", ""), now()).unwrap();
+                let new = person_trades(&f).into_iter().find(|t| t.quantity == Some(Dec::parse(&q).unwrap())).expect("the trade entered");
+                let same = listing_venue(mic) == Some(held_key.venue());
+                if (new.instrument == Some(instrument)) != same {
+                    // what the engine and the book hold of the ticker, to say why
+                    let seen = f.read(|e| {
+                        let listed: Vec<_> = e.listed(&held_key, Currency::parse(&currency).unwrap()).collect();
+                        let all: Vec<String> = e.inputs().ledger.instruments.iter().filter(|(_, i)| i.current_name().is_some_and(|n| n.symbol == symbol)).map(|(id, i)| format!("{id} {:?} {:?}", i.instrument.currency, i.names)).collect();
+                        format!("listed {listed:?}; instruments {all:#?}")
+                    });
+                    panic!("{symbol} on {mic}, held on {venue} as {instrument}: booked on {:?}; {seen:?}", new.instrument);
+                }
+            }
         }
     }
 
