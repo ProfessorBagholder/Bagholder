@@ -29,6 +29,8 @@ What was run, all passing:
 
 ## Plan #522 at `9642f1e9`
 
+**Superseded by brief 40**, which gives the design for each problem below. Read brief 40, not this section.
+
 **Reviewed:** the plan against brief 34's inventories, `docs/architecture.md` §5 and §6, `SPEC.md`, and master `7e0782f1`. One reader checked every claim the plan makes about the code, and I checked the findings. The update at `9642f1e9` changed only how two listings are found to be one company. Everything below except item 1 applies to both versions.
 
 ### Verdict
