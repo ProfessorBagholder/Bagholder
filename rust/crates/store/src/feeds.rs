@@ -1350,6 +1350,10 @@ pub fn mark_told(conn: &Connection, scope: &str, events: &[String], now: &str) -
 pub struct NotificationExtra {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub symbol: String,
+    /// The listing it is about (`SYMBOL@VENUE`): what the card opens, never a
+    /// listing found by its ticker alone. Empty on a notice stored before.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub listing: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub exchange: String,
     #[serde(skip_serializing_if = "String::is_empty")]

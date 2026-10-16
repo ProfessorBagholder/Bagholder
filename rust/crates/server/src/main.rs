@@ -24,6 +24,7 @@ mod pull_broker;
 mod read_sources;
 mod events;
 mod feeds;
+mod filings;
 mod http;
 mod legacy_import;
 mod legacy_orders;

@@ -179,6 +179,24 @@ impl ListingKey {
         &self.venue
     }
 
+    /// The listing as a person reads it: its symbol and its venue in words
+    /// (`TD · TSX`, `TD · US`).
+    pub fn named(&self) -> String {
+        let venue = match self.venue.as_str() {
+            "XTSE" => "TSX",
+            "XTSX" => "TSX-V",
+            "XCNQ" => "CSE",
+            "NEOE" => "Cboe Canada",
+            "XATS" => "Alpha",
+            US => "US",
+            CRYPTO => "crypto",
+            INDEX => "index",
+            OCC => "option",
+            other => other,
+        };
+        format!("{} · {venue}", self.symbol)
+    }
+
     /// Whether the listing is on a Canadian venue.
     pub fn canadian(&self) -> bool {
         CANADA_MICS.contains(&self.venue.as_str())

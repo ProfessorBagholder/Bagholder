@@ -101,7 +101,14 @@ impl Tables for Door<'_> {
         if let Some(rows) = kept.get(&key) {
             return Ok(rows.clone());
         }
-        let rows = Arc::new(crate::feeds::filed_releases(self.app, scope, chip)?);
+        // a chip names its listing by symbol and venue; one that names no venue has none kept
+        let rows = match chip {
+            Some((s, e)) => match bagholder_core::ListingKey::on(s, e) {
+                Ok(listing) => Arc::new(crate::feeds::filed_releases(self.app, scope, Some((&listing, e)))?),
+                Err(_) => Arc::new(vec![]),
+            },
+            None => Arc::new(crate::feeds::filed_releases(self.app, scope, None)?),
+        };
         kept.insert(key, rows.clone());
         Ok(rows)
     }

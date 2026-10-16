@@ -13,19 +13,19 @@ use ts_rs::TS;
 
 use bagholder_diff_derive::Diff;
 
-use bagholder_market::disclosures::{self, Gathered, SourceOutcome};
-use bagholder_market::{edgar, enrich, exposure, fear, history, localmodel, news, sedar, shorts};
+use bagholder_market::{exposure, fear, history, news, shorts};
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_model::securities::Security;
 use bagholder_store::bars::ChartBars;
-use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge, StoredShorts};
+use bagholder_store::feeds::{self as sf, NewsItem, StoredGauge, StoredShorts};
 
-use bagholder_store::tables::{get_meta, set_meta};
 
-use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, ENRICH_VERSION};
+use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App};
 use crate::http::OkOr;
 use crate::notify;
+// the disclosures and the release notices, kept per listing and per filer
+pub use crate::filings::*;
 
 /// The market-data loops' own state: what they are reading now, and for whom.
 #[derive(Default)]
@@ -34,9 +34,9 @@ pub struct FeedsState {
     news_left: Mutex<HashSet<String>>,
     /// The listing whose disclosures were asked for last: the one someone is
     /// looking at, and so the one whose documents are read first.
-    looking_at: Mutex<String>,
+    pub(crate) looking_at: Mutex<String>,
     /// The listing(s) whose disclosures are being read now, by document key.
-    reading_now: Mutex<HashMap<String, Vec<String>>>,
+    pub(crate) reading_now: Mutex<HashMap<String, Vec<String>>>,
     /// What the market universes' reads have come to.
     universes: Mutex<UniverseReads>,
     /// The Fear & Greed indexes being read from their publishers this moment.
@@ -113,17 +113,18 @@ pub(crate) fn feed_answered(app: &Arc<App>, feed: &str) {
 pub fn feed_failures(app: &Arc<App>) -> Vec<String> {
     let failing = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = Vec::new();
-    let mut shorts: Vec<(String, Vec<&str>)> = Vec::new();
+    let mut shorts: Vec<(String, Vec<String>)> = Vec::new();
     for (feed, why) in failing.iter() {
-        match feed.strip_prefix(SHORTS_OF) {
-            Some(symbol) => match shorts.iter_mut().find(|(w, _)| w == why) {
-                Some((_, symbols)) => symbols.push(symbol),
-                None => shorts.push((why.clone(), vec![symbol])),
+        // each listing by its own key, named with its venue: two listings of one ticker are two
+        match feed.strip_prefix(SHORTS_OF).and_then(|k| k.parse::<bagholder_core::ListingKey>().ok()) {
+            Some(listing) => match shorts.iter_mut().find(|(w, _)| w == why) {
+                Some((_, named)) => named.push(listing.named()),
+                None => shorts.push((why.clone(), vec![listing.named()])),
             },
             None => out.push(why.clone()),
         }
     }
-    out.extend(shorts.into_iter().map(|(why, symbols)| format!("The short interest of {} could not be read: {why}", symbols.join(", "))));
+    out.extend(shorts.into_iter().map(|(why, named)| format!("The short interest of {} could not be read: {why}", named.join(", "))));
     out
 }
 
@@ -141,11 +142,11 @@ const CONTEXT: &str = "context";
 const NOTICE_SETTINGS: &str = "notify-settings";
 /// The header's entries for the disclosures: the sweep and each listing's
 /// refresh; the stored lists pages are sent; the reading of documents.
-const DISCLOSURES: &str = "disclosures";
-const DISCLOSURES_STORED: &str = "disclosures-stored";
-const DISCLOSURES_READING: &str = "disclosures-reading";
+pub(crate) const DISCLOSURES: &str = "disclosures";
+pub(crate) const DISCLOSURES_STORED: &str = "disclosures-stored";
+pub(crate) const DISCLOSURES_READING: &str = "disclosures-reading";
 /// The header's entry for the press releases a wire answered with.
-const RELEASES: &str = "releases";
+pub(crate) const RELEASES: &str = "releases";
 /// The header's entry for the exposure records' pass.
 const EXPOSURE: &str = "exposure";
 /// The header's entry for the short selling held, as the table reads it.
@@ -167,7 +168,7 @@ pub(crate) fn went<T>(app: &Arc<App>, feed: &str, r: Result<T, String>) -> Optio
 
 /// The market cache, on loan from the pool; one that will not open is said in
 /// the header (`CACHE`) until one does.
-fn conn(app: &Arc<App>) -> Result<bagholder_sqlite::pool::Pooled<'_>, String> {
+pub(crate) fn conn(app: &Arc<App>) -> Result<bagholder_sqlite::pool::Pooled<'_>, String> {
     let c = app.cache().map_err(|e| format!("The market cache could not be opened: {e}"));
     if let Err(why) = &c {
         feed_failed(app, CACHE, why.clone());
@@ -179,7 +180,7 @@ fn conn(app: &Arc<App>) -> Result<bagholder_sqlite::pool::Pooled<'_>, String> {
 
 /// The market cache's pool itself, for a reader that borrows on threads of its
 /// own. Said as `conn` is.
-fn pool(app: &Arc<App>) -> Result<Arc<bagholder_sqlite::pool::Pool>, String> {
+pub(crate) fn pool(app: &Arc<App>) -> Result<Arc<bagholder_sqlite::pool::Pool>, String> {
     went(app, CACHE, app.cache_pool().map_err(|e| format!("The market cache could not be opened: {e}")))
         .ok_or_else(|| "The market cache could not be opened".to_string())
 }
@@ -196,7 +197,7 @@ fn own_conn(app: &Arc<App>) -> Result<Connection, String> {
 
 /// The book the notices are kept in; one that will not open is said in the
 /// header (`NOTICES_BOOK`) until one does.
-fn notices(app: &Arc<App>) -> Result<notify::NoticesBook<'_>, String> {
+pub(crate) fn notices(app: &Arc<App>) -> Result<notify::NoticesBook<'_>, String> {
     let b = notify::book(app).map_err(|e| format!("The book could not be opened for the notifications: {e}"));
     went(app, NOTICES_BOOK, b.as_ref().map(|_| ()).map_err(String::clone));
     b
@@ -205,7 +206,7 @@ fn notices(app: &Arc<App>) -> Result<notify::NoticesBook<'_>, String> {
 /// The market's context the earlier readers are given (stage 5 moves them): none
 /// before the figures are built (no page has stated its zone yet), which is no
 /// failure; one that cannot be read is said in the header until it can.
-fn base(app: &Arc<App>) -> Result<Option<Arc<bagholder_model::context::MarketBase>>, String> {
+pub(crate) fn base(app: &Arc<App>) -> Result<Option<Arc<bagholder_model::context::MarketBase>>, String> {
     if !app.figures.get().is_some_and(|f| f.read(|_| ()).is_some()) {
         return Ok(None);
     }
@@ -216,16 +217,16 @@ fn base(app: &Arc<App>) -> Result<Option<Arc<bagholder_model::context::MarketBas
 
 /// The notification settings a sweep reads: settings that cannot be read are said
 /// in the header, and a sweep reading them does nothing until they can.
-fn notice_settings<T>(app: &Arc<App>, r: rusqlite::Result<T>) -> Option<T> {
+pub(crate) fn notice_settings<T>(app: &Arc<App>, r: rusqlite::Result<T>) -> Option<T> {
     went(app, NOTICE_SETTINGS, r.map_err(|e| format!("The notification settings could not be read: {e}")))
 }
 
 
-fn today() -> String {
+pub(crate) fn today() -> String {
     bagholder_market::clock_now().0
 }
 
-fn sha1_hex12(text: &str) -> String {
+pub(crate) fn sha1_hex12(text: &str) -> String {
     let d = openssl::sha::sha1(text.as_bytes());
     d.iter().map(|b| format!("{:02x}", b)).collect::<String>()[..12].to_string()
 }
@@ -440,8 +441,10 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
 
 /// Forget the news read for a listing no longer watched.
 pub fn forget_news(app: &Arc<App>, symbol: &str, exchange: &str) -> Result<(), String> {
+    // a listing that names no venue had no news kept under a key
+    let Some(key) = news::news_listing(symbol, exchange) else { return Ok(()) };
     let c = conn(app)?;
-    sf::forget_news(&c, &tmx_symbol(symbol), exchange).map_err(|e| e.to_string())?;
+    sf::forget_news(&c, &key).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -580,71 +583,43 @@ impl NewsSymbolAnswer {
     }
 }
 
-pub fn news_symbol_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str) -> NewsSymbolAnswer {
-    news_symbol_payload_with(app, symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today).map_err(|e| e.to_string()))
+pub fn news_symbol_payload(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str) -> NewsSymbolAnswer {
+    news_symbol_payload_with(app, key, exchange, currency, &news::LIVE_READERS, &|sym| bagholder_market::tmx::tmx_listings(sym).map_err(|e| e.to_string()))
 }
 
+/// `news_symbol_payload` with the readers and TMX's listings of a symbol given.
 pub fn news_symbol_payload_with(
     app: &Arc<App>,
-    symbol: &str,
+    key: &bagholder_core::ListingKey,
     exchange: &str,
     currency: &str,
     readers: &news::Readers,
-    listing_of: &dyn Fn(&Connection, &str, &str) -> Result<Option<bagholder_model::wire::SymbolMatch>, String>,
+    listings_of: &dyn Fn(&str) -> Result<Vec<bagholder_model::wire::SymbolMatch>, String>,
 ) -> NewsSymbolAnswer {
-    let sym = symbol.trim().to_uppercase();
-    if sym.is_empty() {
-        return NewsSymbolAnswer::err("symbol required");
-    }
+    let sym = key.symbol().to_string();
     let c = match conn(app) {
         Ok(c) => c,
         Err(e) => return NewsSymbolAnswer::err(e),
     };
     let (today_s, now, _) = bagholder_market::clock_now();
     let clock = news::Clock { today: today_s.clone(), now: now as i64 };
-    let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
-    // the name is what Google is searched for: the security record's, else the one TMX's quote gives
-    let (known, known_ex, known_ccy) = instrument_meta(app, &sym);
-    let mut name = if known != sym { known } else { String::new() };
-    if ex.is_empty() {
-        // the venue from what the app already knows: the security records the
-        // sync brought, then TMX's own resolver, which names the venue it
-        // verified by the quote and so covers the venues no public directory
-        // carries (the CSE, Cboe Canada). Nothing is guessed: a ticker TMX
-        // cannot place is a US one, and Nasdaq keeps only the items that name it.
-        ex = known_ex;
-        if !known_ccy.is_empty() {
-            ccy = known_ccy;
-        }
-    }
-    let mut listing = None;
-    if ex.is_empty() || (name.is_empty() && !matches!(tmx_form(&ex, &ccy), None | Some(":US"))) {
-        listing = match listing_of(&c, &sym, &today_s) {
-            Ok(l) => l,
-            Err(e) => return NewsSymbolAnswer::err(format!("{sym} could not be placed: {e}")),
-        };
-    }
-    if let Some(l) = &listing {
-        if name.is_empty() && l.name.to_uppercase() != sym {
-            name = l.name.clone();
-        }
-        if ex.is_empty() {
-            ex = l.exchange.clone();
-            ccy = l.currency.clone();
-        }
-    }
-    if ex.is_empty() {
-        let form = match bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today_s) {
-            Ok(f) => f,
-            Err(e) => return NewsSymbolAnswer::err(format!("{sym} could not be placed: {e}")),
-        };
-        if !form.is_empty() && !form.ends_with(":US") {
-            if ccy.is_empty() {
-                ccy = "CAD".into();
+    // the name is what Google is searched for: the book's security on this listing's,
+    // else the one TMX's quote gives this listing on this venue, never another listing's
+    let (known, known_ex, known_ccy) = instrument_meta(app, key);
+    let ex = if exchange.trim().is_empty() { known_ex } else { exchange.trim().to_string() };
+    let mut ccy = if currency.trim().is_empty() { known_ccy } else { currency.trim().to_string() };
+    let mut name = known;
+    if name.is_empty() && key.canadian() {
+        match listings_of(&sym) {
+            Ok(found) => {
+                if let Some(l) = found.into_iter().find(|l| bagholder_core::ListingKey::on(&l.symbol, &l.exchange).is_ok_and(|k| k == *key)) {
+                    name = l.name;
+                    if ccy.is_empty() {
+                        ccy = l.currency;
+                    }
+                }
             }
-        } else {
-            ex = "NASDAQ".into();
-            ccy = "USD".into();
+            Err(e) => return NewsSymbolAnswer::err(format!("{sym} could not be read: {e}")),
         }
     }
     let (src, rows) = match news::read_listing(&c, readers, &sym, &ex, &ccy, &name, true, &clock, None) {
@@ -656,1466 +631,6 @@ pub fn news_symbol_payload_with(
         return NewsSymbolAnswer::err(format!("The news could not be kept to its limit: {e}"));
     }
     NewsSymbolAnswer::Ok { ok: true, count: rows.len(), source: src.as_str().to_string(), exchange: ex }
-}
-
-// ---------------------------------------------------------------------------
-// disclosures
-// ---------------------------------------------------------------------------
-
-pub const FILINGS_STALE_HOURS: f64 = 24.0;
-pub const FILINGS_SWEEP_EVERY_SEC: u64 = 300;
-pub const FILINGS_HOLD_MAX_MIN: f64 = 120.0;
-pub const FILINGS_HOLD_KEY: &str = "filings:held-since";
-pub const FILINGS_SWEEP_AGE_MIN: f64 = 30.0;
-
-/// (issuer name, exchange, currency) the book
-/// holds for a symbol, else the bare symbol.
-pub fn instrument_meta(app: &App, symbol: &str) -> (String, String, String) {
-    let secs = match crate::market_context::securities(app) {
-        Ok(v) => v,
-        Err(e) => {
-            log(&format!("bagholder: the book's securities could not be read for {symbol}: {e}"));
-            vec![]
-        }
-    };
-    meta_of(&secs, symbol)
-}
-
-/// (issuer name, exchange, currency) of the first of `secs` under `symbol`, else the bare symbol.
-pub fn meta_of(secs: &[Security], symbol: &str) -> (String, String, String) {
-    let sym = symbol.trim().to_uppercase();
-    for sec in secs {
-        if sec.symbol.trim().to_uppercase() == sym {
-            let name = sec.name.trim().to_string();
-            return (if name.is_empty() { sym } else { name }, sec.primary_exchange.trim().to_string(), sec.currency.trim().to_string());
-        }
-    }
-    (sym, String::new(), String::new())
-}
-
-pub fn filings_stale(c: &Connection, symbol: &str, hours: Option<f64>) -> Result<bool, String> {
-    let when = sf::filings_fetched_for(c, symbol).map_err(|e| e.to_string())?;
-    if when.is_empty() {
-        return Ok(true);
-    }
-    Ok(match parse_instant(&when) {
-        Some(then) => now_unix() - then > hours.unwrap_or(FILINGS_STALE_HOURS) * 3600.0,
-        None => true,
-    })
-}
-
-fn can_name_documents() -> bool {
-    if enrich::summary_available() {
-        return true;
-    }
-    let status = enrich::summary_status();
-    if localmodel::COMING_UP.contains(&status) {
-        return enrich::wait_for_summary(enrich::SUMMARY_WAIT_SEC);
-    }
-    status != "downloading"
-}
-
-/// A bounded hold on what cannot be named yet.
-fn naming_held(c: &Connection, holding: bool) -> Result<bool, String> {
-    if !holding {
-        set_meta(c, FILINGS_HOLD_KEY, "").map_err(|e| e.to_string())?;
-        return Ok(false);
-    }
-    let since = get_meta(c, FILINGS_HOLD_KEY, "").map_err(|e| e.to_string())?;
-    if since.is_empty() {
-        set_meta(c, FILINGS_HOLD_KEY, &now_iso()).map_err(|e| e.to_string())?;
-        return Ok(true);
-    }
-    Ok(match parse_instant(&since) {
-        Some(then) => now_unix() - then <= FILINGS_HOLD_MAX_MIN * 60.0,
-        None => true,
-    })
-}
-
-/// What makes a filing itself.
-pub fn filing_mark(r: &Filing) -> [String; 5] {
-    [r.doc.source.as_str().to_string(), r.doc.date.clone(), r.doc.form.clone(), r.doc.title.clone(), r.doc.size.clone()]
-}
-
-fn providers_cover(sym: &str, ex: &str, ccy: &str) -> bool {
-    (sedar::available() && sedar::covers(sym, ex, ccy)) || (edgar::available() && edgar::covers(sym, ex, ccy))
-}
-
-/// A ticker as a filings sweep or read considers it: its symbol, venue and
-/// what kind of instrument it is, before it is known to be one the sweep
-/// tracks.
-#[derive(Clone, Debug, Default)]
-struct FilingCandidate {
-    symbol: String,
-    exchange: String,
-    currency: String,
-    kind: String,
-    name: String,
-}
-
-/// A ticker known for filings: what a sweep or a single read fetches and
-/// files it under.
-#[derive(Clone, Debug, Default)]
-pub struct FilingSymbol {
-    pub symbol: String,
-    pub name: String,
-    pub exchange: String,
-    pub currency: String,
-}
-
-/// The tickers to watch for filings; the book's listings not read is an error.
-pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Result<Vec<FilingSymbol>, String> {
-    let has = |k: &str| scopes.iter().any(|x| x == k);
-    let mut rows: Vec<FilingCandidate> = Vec::new();
-    let mut b = None;
-    if has("held") || has("all") {
-        b = base(app)?;
-    }
-    if let Some(b) = &b {
-        rows.extend(bagholder_model::symbols_of::held_symbols(b).iter().map(|l| FilingCandidate {
-            symbol: l.symbol.clone(),
-            exchange: l.exchange.clone(),
-            currency: l.currency.clone(),
-            kind: l.kind.clone(),
-            name: String::new(),
-        }));
-        if has("all") {
-            for t in b.traded.iter() {
-                let mut rec = FilingCandidate { symbol: t.symbol.clone(), exchange: t.exchange.clone(), currency: t.currency.clone(), kind: t.kind.to_string(), name: String::new() };
-                if rec.kind == "Options" {
-                    let under = bagholder_model::symbols::underlying_symbol(&rec.symbol);
-                    if under.is_empty() || under == "—" {
-                        continue;
-                    }
-                    rec = FilingCandidate { symbol: under, exchange: rec.exchange, currency: rec.currency, kind: "Shares".to_string(), name: String::new() };
-                }
-                rows.push(rec);
-            }
-        }
-    }
-    if has("watched") || has("all") {
-        {
-            let watchlist = base(app)?.map(|b| b.watchlist.clone()).unwrap_or_default();
-            rows.extend(watchlist.iter().map(|w| FilingCandidate {
-                symbol: w.symbol.clone(),
-                exchange: w.exchange.clone(),
-                currency: w.currency.clone(),
-                kind: String::new(),
-                name: w.name.clone(),
-            }));
-        }
-    }
-    let mut out = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for r in rows {
-        let sym = r.symbol.trim().to_uppercase();
-        if sym.is_empty() || seen.contains(&sym) || sym.contains(' ') || r.kind == "Options" || r.kind == "Crypto" {
-            continue;
-        }
-        if !providers_cover(&sym, &r.exchange, &r.currency) {
-            continue;
-        }
-        seen.insert(sym.clone());
-        out.push(FilingSymbol { symbol: sym, name: r.name, exchange: r.exchange, currency: r.currency });
-    }
-    Ok(out)
-}
-
-/// While a Disclosures or Releases set is on, each
-/// chosen ticker not read within half an hour is read again and what is new is
-/// told. Returns how many tickers had something new; a read or a write of the
-/// store that fails fails the sweep, which is said in the header until the
-/// next one succeeds.
-pub fn sweep_filings(app: &Arc<App>) -> usize {
-    // said in the header by `conn` and `notices`
-    let (Ok(c), Ok(book)) = (conn(app), notices(app)) else { return 0 };
-    went(app, DISCLOSURES, sweep_filings_in(app, &c, &book).map_err(|e| format!("The disclosures could not be swept: {e}"))).unwrap_or(0)
-}
-
-/// The sweep, the disclosures read and kept in the market cache (`c`), what is
-/// told of them and the marks of what was met kept in the book.
-fn sweep_filings_in(app: &Arc<App>, c: &Connection, book: &bagholder_book::Book) -> Result<usize, String> {
-    let scopes = notify::disclosure_scopes(book).map_err(|e| e.to_string())?;
-    let rel_scopes = notify::release_scopes(book).map_err(|e| e.to_string())?;
-    if scopes.is_empty() && rel_scopes.is_empty() {
-        return Ok(0);
-    }
-    let mut told = 0;
-    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(app, &scopes)?.iter().map(|i| i.symbol.clone()).collect() };
-    let hold = !disc_syms.is_empty() && naming_held(&c, !can_name_documents())?;
-    let mut both: Vec<String> = scopes.clone();
-    for r in &rel_scopes {
-        if !both.contains(r) {
-            both.push(r.clone());
-        }
-    }
-    for inst in known_filing_symbols(app, &both)? {
-        let sym = inst.symbol.clone();
-        if !filings_stale(&c, &sym, Some(FILINGS_SWEEP_AGE_MIN / 60.0))? {
-            continue;
-        }
-        if hold && disc_syms.contains(&sym) {
-            continue;
-        }
-        let before: HashSet<[String; 5]> = sf::filings_for(&c, &sym).map_err(|e| e.to_string())?.iter().map(filing_mark).collect();
-        let name = inst.name.clone();
-        let wrote = refresh_filings(app, &sym, if name.is_empty() { None } else { Some(&name) }, Some(&inst.exchange), Some(&inst.currency))?;
-        if wrote < 0 {
-            continue;
-        }
-        let mut by_source: Vec<(Regulator, Vec<Filing>)> = Vec::new();
-        for r in sf::filings_for(&c, &sym).map_err(|e| e.to_string())? {
-            let src = r.doc.source;
-            match by_source.iter_mut().find(|(k, _)| *k == src) {
-                Some((_, v)) => v.push(r),
-                None => by_source.push((src, vec![r])),
-            }
-        }
-        // what each source shows now, read first; its marks are kept below with what is told of it
-        let mut new: Vec<Filing> = Vec::new();
-        let mut marks: Vec<(String, Vec<String>, Option<(String, String)>)> = Vec::new();
-        for (src, rows) in &by_source {
-            let scope = format!("filings:{}:{}", sym, src.as_str());
-            let events: Vec<String> = rows.iter().map(|r| filing_mark(r).join("|")).collect();
-            let met = sf::events_told(book.notices(), &scope, &events).map_err(|e| e.to_string())?;
-            let fresh = notify::fresh_in(book, &scope, rows, |r| r.doc.date.clone(), |r| filing_mark(r).join("|"), |r| {
-                before.contains(&filing_mark(r)) || met.contains(&filing_mark(r).join("|"))
-            }).map_err(|e| e.to_string())?;
-            new.extend(fresh.items);
-            marks.push((scope, events, fresh.mark));
-        }
-        let rel: Vec<Filing> = new.iter().filter(|r| is_news_release(r)).cloned().collect();
-        let rest: Vec<Filing> = new.iter().filter(|r| !is_news_release(r)).cloned().collect();
-        let mut notices: Vec<(&str, String, String, String, sf::NotificationExtra)> = Vec::new();
-        if !rel.is_empty() && in_release_scope(app, &sym, &rel_scopes)? && !sf::has_wire_release(c, &sym).map_err(|e| e.to_string())? {
-            let (t, bd) = release_notice(app, &sym, &rel);
-            notices.push(("releases", release_key(&sym, &rel), t, bd, notice_extra(&sym, None, &rel)));
-        }
-        if !rest.is_empty() && disc_syms.contains(&sym) {
-            let (t, bd) = filings_notice(app, &sym, &rest);
-            let mut marked: Vec<String> = rest.iter().map(|r| filing_mark(r).join("/")).collect();
-            marked.sort();
-            let digest = sha1_hex12(&marked.join("|"));
-            notices.push(("disclosures", format!("filings:{}:{}", sym, digest), t, bd, notice_extra(&sym, None, &rest)));
-        }
-        // the marks and the notices kept together: a mark not kept would tell these
-        // again, a notice not kept would never tell them; either fails the sweep and
-        // leaves both as they were
-        let now = now_iso();
-        let rows = bagholder_sqlite::atomically(book.notices(), || {
-            for (scope, events, mark) in &marks {
-                notify::keep_mark(book, mark)?;
-                sf::mark_told(book.notices(), scope, events, &now)?;
-            }
-            let mut rows = vec![];
-            for (kind, key, t, bd, extra) in &notices {
-                rows.extend(notify::record(book, kind, key, t, bd, Some(extra.clone()))?);
-            }
-            Ok(rows)
-        })
-        .map_err(|e| format!("what is new in {sym}'s disclosures could not be told: {e}"))?;
-        for row in &rows {
-            notify::announce(app, row);
-        }
-        if !rows.is_empty() {
-            told += 1;
-        }
-    }
-    Ok(told)
-}
-
-fn feed_scope(key: &str) -> Vec<String> {
-    vec![match key {
-        "holdings" => "held",
-        "watchlist" => "watched",
-        _ => "all",
-    }
-    .to_string()]
-}
-
-/// One filing as a feed across listings carries it: the filing itself, with
-/// which listing it belongs to.
-#[derive(Clone, Debug, Serialize, TS, Diff)]
-#[serde(rename_all = "camelCase")]
-#[diff(key = id)]
-pub struct FeedFiling {
-    #[serde(flatten)]
-    #[ts(flatten)]
-    pub filing: Filing,
-    pub symbol: String,
-    pub exchange: String,
-}
-
-/// The newest disclosures across a set of listings, as a page shows them.
-#[derive(Clone, Debug, Serialize, TS, Diff)]
-#[serde(rename_all = "camelCase")]
-pub struct FilingsFeed {
-    #[ts(type = "true")]
-    pub ok: bool,
-    pub scope: String,
-    pub filings: Vec<FeedFiling>,
-    pub reading: bool,
-}
-
-/// The stored disclosures of every ticker in a set,
-/// newest first. The store failing is said in the header until it answers.
-pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> FilingsFeed {
-    let key = { let k = scope.trim().to_lowercase(); if k.is_empty() { "all".to_string() } else { k } };
-    let read = || -> Result<Vec<FeedFiling>, String> {
-        let c = conn(app)?;
-        let mut rows: Vec<FeedFiling> = Vec::new();
-        for inst in known_filing_symbols(app, &feed_scope(&key))? {
-            let sym = inst.symbol.clone();
-            for r in fresh_filings(&c, &sym)? {
-                rows.push(FeedFiling { filing: r, symbol: sym.clone(), exchange: inst.exchange.clone() });
-            }
-        }
-        Ok(rows)
-    };
-    let Some(mut rows) = went(app, DISCLOSURES_STORED, read().map_err(|e| format!("The disclosures held could not be read: {e}"))) else {
-        return FilingsFeed { ok: true, scope: key, filings: vec![], reading: false };
-    };
-    rows.sort_by(|a, b| b.filing.doc.date.cmp(&a.filing.doc.date));
-    rows.truncate(limit.max(1) as usize);
-    FilingsFeed { ok: true, scope: key, filings: rows, reading: enrich::summary_available() }
-}
-
-/// The issuers' own news releases as they filed them, for the News card's
-/// Releases tab: every listing's in `scope` (`all`, `holdings`, `watchlist`), or
-/// the chip's listing's alone. Read as stored, a named document's title as its
-/// name gives it, and nothing written: a title is read by the disclosures'
-/// own reading.
-pub fn filed_releases(app: &Arc<App>, scope: &str, chip: Option<(&str, &str)>) -> Result<Vec<crate::wire::news::FiledRelease>, String> {
-    let c = conn(app)?;
-    let listings: Vec<(String, String)> = match chip {
-        Some((symbol, exchange)) => vec![(symbol.trim().to_uppercase(), exchange.to_string())],
-        None => known_filing_symbols(app, &feed_scope(scope))?.into_iter().map(|f| (f.symbol, f.exchange)).collect(),
-    };
-    let reading = enrich::summary_available();
-    let mut out = Vec::new();
-    for (symbol, exchange) in listings {
-        for mut r in sf::filings_for(&c, &symbol).map_err(|e| e.to_string())? {
-            if !is_news_release(&r) {
-                continue;
-            }
-            if r.enrich_version.unwrap_or(0) < ENRICH_VERSION {
-                r.subject = String::new();
-            }
-            if r.subject.is_empty() {
-                if let Some(t) = disclosures::quick_title(&r.doc) {
-                    r.subject = t;
-                }
-            }
-            out.push(crate::wire::news::FiledRelease {
-                pending: r.subject.is_empty() && !r.enrich_final && reading,
-                id: r.doc.id.clone(),
-                symbol: symbol.clone(),
-                exchange: exchange.clone(),
-                subject: r.subject.clone(),
-                form: r.doc.form.clone(),
-                source: r.doc.source.as_str().to_string(),
-                url: r.doc.url.clone(),
-                date: r.doc.date.clone(),
-            });
-        }
-    }
-    Ok(out)
-}
-
-/// A filed document that is the company's own
-/// press release.
-pub fn is_news_release(filing: &Filing) -> bool {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&filing.doc.form)
-}
-
-pub fn in_release_scope(app: &Arc<App>, sym: &str, scopes: &[String]) -> Result<bool, String> {
-    if scopes.is_empty() {
-        return Ok(false);
-    }
-    if scopes.iter().any(|x| x == "all") {
-        return Ok(true);
-    }
-    let sym = sym.trim().to_uppercase();
-    let same = |x: &str| {
-        let t = tmx_symbol(x);
-        (if t.is_empty() { x.to_string() } else { t }).trim().to_uppercase() == sym
-    };
-    let Some(b) = base(app)? else { return Ok(false) };
-    if scopes.iter().any(|x| x == "held") && b.positions.iter().any(|p| same(&p.symbol)) {
-        return Ok(true);
-    }
-    if scopes.iter().any(|x| x == "watched") {
-        return Ok(b.watchlist.iter().any(|w| same(&w.symbol)));
-    }
-    Ok(false)
-}
-
-/// What a notice is told of: a wire's item or a filed document.
-pub trait Notable: Clone {
-    fn id(&self) -> String;
-    /// What it says it is: a headline, else a filing's subject, else its type.
-    fn heading(&self) -> String;
-    /// When its source dates it.
-    fn moment(&self) -> String;
-    fn summary(&self) -> String;
-    fn url(&self) -> String;
-    /// The regulator a filed document came from ("SEDAR+", "SEC", "SEC EDGAR"), opened through the app.
-    fn filed_source(&self) -> Option<String>;
-    fn is_release(&self) -> bool;
-}
-
-impl Notable for NewsItem {
-    fn id(&self) -> String {
-        self.id.clone()
-    }
-    fn heading(&self) -> String {
-        self.headline.clone()
-    }
-    fn moment(&self) -> String {
-        self.published_at.clone()
-    }
-    fn summary(&self) -> String {
-        self.summary.clone()
-    }
-    fn url(&self) -> String {
-        self.url.clone()
-    }
-    fn filed_source(&self) -> Option<String> {
-        None
-    }
-    fn is_release(&self) -> bool {
-        self.kind == sf::NewsKind::Release
-    }
-}
-
-impl Notable for Filing {
-    fn id(&self) -> String {
-        self.doc.id.clone()
-    }
-    fn heading(&self) -> String {
-        // a filing has no headline
-        if self.subject.is_empty() { self.doc.form.clone() } else { self.subject.clone() }
-    }
-    fn moment(&self) -> String {
-        self.doc.date.clone()
-    }
-    fn summary(&self) -> String {
-        self.summary.clone()
-    }
-    fn url(&self) -> String {
-        self.doc.url.clone()
-    }
-    fn filed_source(&self) -> Option<String> {
-        Some(self.doc.source.as_str().to_string())
-    }
-    fn is_release(&self) -> bool {
-        is_news_release(self)
-    }
-}
-
-pub fn release_notice<T: Notable>(app: &Arc<App>, sym: &str, rows: &[T]) -> (String, String) {
-    let first = newest_of(rows);
-    let mut head = first.heading();
-    if head.is_empty() {
-        head = "A new release.".into();
-    }
-    let title = if rows.len() == 1 { "Press release · ".to_string() } else { format!("{} press releases · ", rows.len()) } + sym;
-    // A release announcing distributions carries the figures beneath the headline, since the
-    // headline alone ("Announces August 2026 Distributions") says nothing a holder can act on.
-    let mut detail = if is_distribution_release(&head) { distribution_detail(app, sym) } else { String::new() };
-    if detail.is_empty() {
-        // what the source said beneath its own headline, where it said anything
-        detail = first.summary().trim().to_string();
-    }
-    if !detail.is_empty() {
-        head = format!("{}\n{}", head, detail);
-    }
-    (title, head)
-}
-
-/// A release whose subject is a distribution or a dividend.
-pub fn is_distribution_release(headline: &str) -> bool {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?i)\b(distribution|distributions|dividend|dividends)\b").unwrap()).is_match(headline)
-}
-
-/// `2026-08-31` as `Aug 31`, and a year that is not this one carries it.
-pub fn stamp_day(iso: &str) -> String {
-    let day = bagholder_model::dates::head10(iso);
-    let (y, m, d) = match bagholder_model::dates::parse_iso(&day) { Some(x) => x, None => return String::new() };
-    if !(1..=12).contains(&m) || d == 0 || d > bagholder_model::dates::days_in_month(y, m) {
-        return String::new();
-    }
-    let text = format!("{} {}", bagholder_model::dates::MONTHS[(m - 1) as usize], d);
-    let this_year: i64 = bagholder_model::clock::now_utc_stamp()[..4].parse().unwrap_or(0);
-    if y == this_year { text } else { format!("{} {}", text, y) }
-}
-
-/// What a distribution release means for this listing, from the issuer's own
-/// declared record: the amount just announced, when it goes ex and when it is
-/// paid, and the one it replaces.
-///
-/// A release headline says only that distributions were announced; the figure
-/// is what the holder wants, and reading it from the record rather than the
-/// release's prose keeps it the same figure the Cashflow tab pays from.
-pub fn distribution_detail(app: &Arc<App>, sym: &str) -> String {
-    let Some(f) = app.figures.get() else { return String::new() };
-    // the release is the announcement; the record it comes from carries the figures, and it
-    // is read now rather than when it is next due, so the notice is not a day behind it.
-    // A notice that goes out without its figures says why in the header, until the next
-    // one has them.
-    let detail = read_record_for_notice(app, f, sym)
-        .map_err(|e| format!("{sym}'s declared distributions could not be read again: {e}"))
-        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {sym}'s distributions: {e}")).and_then(|book| distribution_detail_in(&book, &read)));
-    went(app, "distributions", detail).unwrap_or_default()
-}
-
-/// The payers held under `sym`, their records read again.
-#[cfg(not(test))]
-fn read_record_for_notice(app: &Arc<App>, f: &crate::figures::Figures, sym: &str) -> Result<Vec<bagholder_core::InstrumentId>, String> {
-    crate::due::read_payer_now(app, f, sym, bagholder_core::jiff::Timestamp::now())
-}
-
-/// A test counts the reads rather than reaching the source, and finds the
-/// instruments by the symbol the book calls them.
-#[cfg(test)]
-fn read_record_for_notice(app: &Arc<App>, f: &crate::figures::Figures, sym: &str) -> Result<Vec<bagholder_core::InstrumentId>, String> {
-    app.feeds.record_reads.fetch_add(1, Ordering::SeqCst);
-    if let Some(why) = app.feeds.record_fails.lock().unwrap().clone() {
-        return Err(why);
-    }
-    let book = f.book()?;
-    let mut out = vec![];
-    for i in book.instruments().map_err(|e| e.to_string())? {
-        if book.names(i.id).map_err(|e| e.to_string())?.last().is_some_and(|n| n.symbol.eq_ignore_ascii_case(sym)) {
-            out.push(i.id);
-        }
-    }
-    Ok(out)
-}
-
-/// A distribution a unit, exactly as the record states it, never fewer than cents.
-fn per_unit(m: &bagholder_core::Money) -> String {
-    let text = m.amount.to_text();
-    let (whole, cents) = text.split_once('.').unwrap_or((&text, ""));
-    let sign = if m.currency.as_str() == "USD" { "US$" } else { "$" };
-    format!("{sign}{whole}.{cents:0<2}")
-}
-
-/// How often a payer pays, in words.
-fn frequency_word(per_year: u32) -> String {
-    match per_year {
-        52 => "weekly".into(),
-        12 => "monthly".into(),
-        4 => "quarterly".into(),
-        2 => "semi-annual".into(),
-        1 => "annual".into(),
-        n => format!("{n} a year"),
-    }
-}
-
-/// The payer's own declared record, as the book keeps it: the newest declaration
-/// of the instruments given (the one listing a symbol names), its frequency where
-/// one is stated, and the amount it replaces when that differs.
-pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId]) -> Result<String, String> {
-    let [id] = instruments else { return Ok(String::new()) };
-    let (declared, frequencies) = match (book.declared(), book.frequencies()) {
-        (Ok(d), Ok(f)) => (d, f),
-        (Err(e), _) | (_, Err(e)) => return Err(format!("The declared distributions could not be read: {e}")),
-    };
-    let Some(read) = declared.get(id) else { return Ok(String::new()) };
-    let mut items: Vec<&bagholder_book::facts::DeclaredRow> = read.items.iter().collect();
-    items.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
-    let Some(latest) = items.first() else { return Ok(String::new()) };
-    let mut out = format!("{} a share", per_unit(&latest.amount));
-    if let Some(f) = frequencies.get(id) {
-        out += &format!(", {}", frequency_word(f.per_year));
-    }
-    out += &format!(" · ex {}", stamp_day(&latest.ex_date.to_string()));
-    if let Some(p) = latest.pay_date {
-        out += &format!(", paid {}", stamp_day(&p.to_string()));
-    }
-    if let Some(was) = items.get(1) {
-        if was.amount != latest.amount {
-            out += &format!(" · was {}", per_unit(&was.amount));
-        }
-    }
-    Ok(out)
-}
-
-/// When the newest of these happened, as its source dates it.
-///
-/// A release found today can have been published weeks ago -- the app reads a
-/// listing's back catalogue the first time it sees it -- and a notice that
-/// shows only when it was told reads as news that is not new.
-pub fn notice_moment<T: Notable>(rows: &[T]) -> String {
-    newest_of(rows).moment()
-}
-
-/// Where a notification's rows can be read: the newest one's own page, and,
-/// for a filed document, the regulator it opens through.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct NoticeLink {
-    pub url: String,
-    pub doc: String,
-    pub source: String,
-}
-
-/// Where a notification's rows can be read: the newest one's own page.
-///
-/// A filed document is opened through the app, which is what the Disclosures
-/// table does, so it opens the same way from here; anything else carries the
-/// source's own link.
-pub fn notice_link<T: Notable>(rows: &[T]) -> NoticeLink {
-    let newest = newest_of(rows);
-    let url = newest.url();
-    let id = newest.id();
-    if let Some(source) = newest.filed_source() {
-        if !id.is_empty() {
-            return NoticeLink { url, doc: id, source };
-        }
-    }
-    NoticeLink { url, ..NoticeLink::default() }
-}
-
-/// The newest row by its own moment.
-fn newest_of<T: Notable>(rows: &[T]) -> &T {
-    let mut sorted: Vec<&T> = rows.iter().collect();
-    sorted.sort_by(|a, b| b.moment().cmp(&a.moment()));
-    sorted[0]
-}
-
-/// A notification's extra: the symbol, the moment and the link, in one struct.
-fn notice_extra<T: Notable>(sym: &str, exchange: Option<&str>, rows: &[T]) -> bagholder_store::feeds::NotificationExtra {
-    let (at, link) = (notice_moment(rows), notice_link(rows));
-    bagholder_store::feeds::NotificationExtra {
-        symbol: sym.to_string(),
-        exchange: exchange.unwrap_or_default().to_string(),
-        at,
-        url: link.url,
-        doc: link.doc,
-        source: link.source,
-    }
-}
-
-/// What a release *is*, independent of the id, the source and the date each
-/// carries: the story its headline tells.
-///
-/// TMX, Yahoo, Seeking Alpha and Google all carry the same release under their
-/// own ids, a week apart in their own timestamps; keyed by id, one release is
-/// four events.
-pub fn release_event<T: Notable>(row: &T) -> String {
-    news::news_text(&row.heading())
-}
-
-fn release_key<T: Notable>(sym: &str, rows: &[T]) -> String {
-    let mut ids: Vec<String> = rows.iter().map(release_event).collect();
-    ids.sort();
-    format!("release:{}:{}", sym, sha1_hex12(&ids.join("|")))
-}
-
-/// The press releases a wire answered with that
-/// are newer than any it showed for the listing.
-///
-/// A read or a write of the book that fails is the error: a mark not kept
-/// would tell the same release twice.
-pub fn note_wire_releases(app: &Arc<App>, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) -> Result<(), String> {
-    let book = notify::book(app).map_err(|e| e.to_string())?;
-    let c = &*book;
-    let scopes = notify::release_scopes(c).map_err(|e| e.to_string())?;
-    let t = tmx_symbol(symbol);
-    let sym = (if t.is_empty() { symbol.to_string() } else { t }).trim().to_uppercase();
-    if scopes.is_empty() || !in_release_scope(app, &sym, &scopes)? {
-        return Ok(());
-    }
-    let rel: Vec<NewsItem> = rows.iter().filter(|r| r.is_release()).cloned().collect();
-    // An event is told once. The stream keeps what it has met, by what the thing is rather than by
-    // the id a source gave it, so the same release reaching the app again -- from another source,
-    // under another id, dated a week apart, or simply returning to a search's results after
-    // dropping out of them -- is recognised and passed over. Everything met is recorded, told or
-    // not, so the back catalogue a first read brings can never ring later.
-    let scope = format!("news:{}", sf::news_key(symbol, exchange));
-    let events: Vec<String> = rel.iter().map(release_event).collect();
-    let met = sf::events_told(c.notices(), &scope, &events).map_err(|e| e.to_string())?;
-    let fresh = notify::fresh_in(c, &scope, &rel, |r: &NewsItem| r.published_at.clone(), |r: &NewsItem| r.id.clone(), |r: &NewsItem| {
-        !new_ids.contains(&r.id) || met.contains(&release_event(r))
-    }).map_err(|e| e.to_string())?;
-    // the notice is worded first (it may read the issuer's record); then the marks and
-    // the notice are kept together, so a failure of either leaves the release to tell again
-    let notice = if fresh.items.is_empty() { None } else { Some((release_key(&sym, &fresh.items), release_notice(app, &sym, &fresh.items), notice_extra(&sym, Some(exchange), &fresh.items))) };
-    let now = now_iso();
-    let row = bagholder_sqlite::atomically(c.notices(), || {
-        notify::keep_mark(c, &fresh.mark)?;
-        sf::mark_told(c.notices(), &scope, &events, &now)?;
-        match &notice {
-            Some((key, (title, body), extra)) => notify::record(c, "releases", key, title, body, Some(extra.clone())),
-            None => Ok(None),
-        }
-    })
-    .map_err(|e| format!("what is new of {sym} could not be told: {e}"))?;
-    if let Some(row) = &row {
-        notify::announce(app, row);
-    }
-    Ok(())
-}
-
-/// `note_wire_releases` from the news pass: a failure is said in the header until
-/// a wire's releases are next noted.
-pub(crate) fn note_wire_releases_said(app: &Arc<App>, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) {
-    went(app, RELEASES, note_wire_releases(app, symbol, exchange, rows, new_ids).map_err(|e| format!("The press releases could not be told: {e}")));
-}
-
-/// `New disclosure · QNC` and what was filed.
-pub fn filings_notice(app: &Arc<App>, sym: &str, new: &[Filing]) -> (String, String) {
-    let (mut named, mut said): (Vec<String>, String) = (Vec::new(), String::new());
-    for r in new.iter().take(3) {
-        let mut title = r.subject.trim().to_string();
-        let mut summary = r.summary.trim().to_string();
-        if (title.is_empty() || summary.is_empty()) && !r.doc.id.is_empty() {
-            if let Ok(read) = filings_enrich_result(app, sym, &r.doc.id) {
-                if title.is_empty() {
-                    title = read.subject.trim().to_string();
-                }
-                if summary.is_empty() {
-                    summary = read.summary.trim().to_string();
-                }
-            }
-        }
-        if title.is_empty() {
-            title = form_name(&r.doc.form);
-        }
-        if !title.is_empty() && !named.contains(&title) {
-            named.push(title);
-        }
-        if said.is_empty() {
-            said = summary;
-        }
-    }
-    let mut sources: Vec<String> = Vec::new();
-    for r in new {
-        let src = r.doc.source.as_str().trim().to_string();
-        if !src.is_empty() && !sources.contains(&src) {
-            sources.push(src);
-        }
-    }
-    let label = |x: &str| match x.to_lowercase().as_str() {
-        "sedar" | "sedar+" => "SEDAR+".to_string(),
-        "sec" | "sec edgar" => "SEC EDGAR".to_string(),
-        _ => x.to_string(),
-    };
-    let tail = sources.iter().map(|x| label(x)).collect::<Vec<_>>().join(", ");
-    let head = named.join(", ") + if new.len() > 3 { " and more" } else { "" };
-    let mut body = head.clone() + if !head.is_empty() && !tail.is_empty() { " · " } else { "" } + &tail;
-    if body.is_empty() {
-        body = "A new filing.".into();
-    }
-    // the sentence the document itself yielded, under the line that names it: a form code and a
-    // regulator say what arrived, never what it says
-    if !said.is_empty() && news::news_text(&said) != news::news_text(&head) {
-        body = format!("{}\n{}", body, said);
-    }
-    let title = if new.len() == 1 { "New disclosure · ".to_string() } else { format!("{} new disclosures · ", new.len()) } + sym;
-    (title, body)
-}
-
-/// What a form is, for the forms whose code is all a row carries until a
-/// document has been read.
-///
-/// A code names the form and not what happened, and "4" alone tells a holder
-/// nothing at all.
-pub const FORM_NAMES: &[(&str, &str)] = &[
-    ("3", "Insider's first report (Form 3)"),
-    ("4", "Insider transaction (Form 4)"),
-    ("5", "Insider's annual report (Form 5)"),
-    ("8-K", "Material event (8-K)"),
-    ("6-K", "Foreign issuer report (6-K)"),
-    ("10-K", "Annual report (10-K)"),
-    ("10-Q", "Quarterly report (10-Q)"),
-    ("144", "Notice of proposed sale (144)"),
-    ("S-1", "Registration (S-1)"),
-    ("SC 13D", "Beneficial ownership (13D)"),
-    ("SC 13G", "Beneficial ownership (13G)"),
-    ("DEF 14A", "Proxy statement (DEF 14A)"),
-    ("424B5", "Prospectus supplement (424B5)"),
-    ("FWP", "Free writing prospectus (FWP)"),
-];
-
-/// A form's code as words where the app knows the form, the code itself
-/// otherwise.
-pub fn form_name(code: &str) -> String {
-    let key = code.trim().to_uppercase();
-    FORM_NAMES.iter().find(|(c, _)| *c == key).map(|(_, n)| n.to_string()).unwrap_or_else(|| code.trim().to_string())
-}
-
-/// What a tab shows when a regulator would not serve a document.
-///
-/// SEDAR+ mints a document's address inside a live session and puts a bot gate
-/// in front of it, so a refusal is ordinary and a retry often works; the page
-/// says that in words, names the document, and retries on a click.
-pub fn document_error_page(app: &Arc<App>, symbol: &str, doc_id: &str, why: &str) -> String {
-    // the document's record names it; one that cannot be read is said beside the source's refusal
-    let (row, why) = match conn(app).and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).map_err(|e| e.to_string())) {
-        Ok(row) => (row, why.to_string()),
-        Err(e) => (None, format!("{} The document's record could not be read: {e}", if why.is_empty() { "The source did not answer." } else { why })),
-    };
-    let why = why.as_str();
-    let name = row.as_ref().map(|r| {
-        let s = r.subject.trim();
-        if !s.is_empty() { s.to_string() } else if !r.doc.title.trim().is_empty() { r.doc.title.trim().to_string() } else { r.doc.form.trim().to_string() }
-    }).filter(|s| !s.is_empty()).unwrap_or_else(|| "This document".to_string());
-    let source = row.as_ref().map(|r| r.doc.source.as_str().to_string()).unwrap_or_else(|| "the regulator".to_string());
-    let when = row.as_ref().map(|r| {
-        let t = r.doc.date_text.trim();
-        if !t.is_empty() { t.to_string() } else { r.doc.date.chars().take(10).collect() }
-    }).unwrap_or_default();
-    let again = format!("/api/filings/doc?symbol={}&id={}", url_quote(symbol), url_quote(doc_id));
-    format!(
-        "<!doctype html><meta charset=utf-8><title>{name}</title>\
-<style>:root{{color-scheme:dark light}}body{{margin:0;min-height:100vh;display:grid;place-items:center;\
-background:#0e1118;color:#e8ecf3;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}\
-main{{max-width:34rem;padding:2rem}}h1{{font:600 16px/1.4 inherit;margin:0 0 .75rem}}p{{margin:0 0 .75rem;color:#aab3c2}}\
-b{{color:#e8ecf3;font-weight:500}}a{{color:#7aa2f7}}</style>\
-<main><h1>{source} would not serve this document just now</h1>\
-<p><b>{name}</b>{when}</p>\
-<p>{why}</p>\
-<p>SEDAR+ builds a document&rsquo;s address inside a live session and puts a bot gate in front of it, so a \
-refusal is ordinary rather than a sign the document is gone. <a href=\"{again}\">Try again</a>.</p></main>",
-        name = html_escape(&name),
-        source = html_escape(&source),
-        when = html_escape(&if when.is_empty() { String::new() } else { format!(" · {}", when) }),
-        why = html_escape(if why.is_empty() { "The source did not answer." } else { why }),
-        again = html_escape(&again),
-    )
-}
-
-/// `html.escape`: the five characters that must not read as markup.
-fn html_escape(t: &str) -> String {
-    t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
-}
-
-/// `urllib.parse.quote`: everything but the unreserved characters and `/`.
-fn url_quote(t: &str) -> String {
-    let mut out = String::new();
-    for b in t.bytes() {
-        if b.is_ascii_alphanumeric() || b"_.-~/".contains(&b) {
-            out.push(b as char);
-        } else {
-            out += &format!("%{:02X}", b);
-        }
-    }
-    out
-}
-
-pub fn filings_sweep_loop(app: Arc<App>) {
-    // The regulators publish no feed to subscribe to, so telling someone of a new
-    // filing means asking; but only while they have asked to be told. With no
-    // Disclosures or Releases set on, this waits for one to be switched on.
-    let wanted = || {
-        notices(&app).is_ok_and(|b| {
-            notice_settings(&app, notify::disclosure_scopes(&b).and_then(|d| Ok(!d.is_empty() || !notify::release_scopes(&b)?.is_empty()))).unwrap_or(false)
-        })
-    };
-    while app.events.park_until(&app, wanted) {
-        sweep_filings(&app);
-        if app.wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
-            return;
-        }
-    }
-}
-
-/// How long the reader waits between documents, and after a pass that found
-/// nothing left to read.
-pub const READ_GAP_SEC: u64 = 2;
-
-/// Documents the app reads on its own, newest first, for the listings it
-/// follows: a title and a sentence cost a download and a reading each, and a
-/// list is no use standing still while someone waits for them. One at a time,
-/// paced, and only while a model is up to do the reading.
-pub fn disclosure_read_loop(app: Arc<App>) {
-    // Reads while there is something unread and a model to read it; otherwise waits
-    // for one of the two to change -- a filing stored (`FILINGS_STORED`) or the
-    // model coming up (`localmodel::on_change`) -- and consults nothing in between.
-    use bagholder_market::enrich::{summary_ensure, summary_ready};
-    loop {
-        let stored = FILINGS_STORED.load(Ordering::SeqCst);
-        summary_ensure();
-        if !app.events.park_until(&app, || summary_ready() || FILINGS_STORED.load(Ordering::SeqCst) != stored) {
-            return;
-        }
-        if !summary_ready() {
-            continue; // more was stored and there is still no model: try bringing one up again
-        }
-        // a row a read moved nothing on (the fetch failed, or the model went away
-        // under it) is passed over until the loop is woken again, so it neither
-        // holds the others back nor is fetched over and over
-        let mut passed: HashSet<(String, String)> = HashSet::new();
-        loop {
-            match read_one_unread(&app, &mut passed) {
-                Ok(None) => break,
-                // a document that could not be read is said in the header until one is, and passed over
-                Ok(Some(read)) => {
-                    went(&app, DISCLOSURES_READING, read);
-                }
-                // the store failing is said the same way, and the loop waits for a change rather than asking again
-                Err(e) => {
-                    feed_failed(&app, DISCLOSURES_READING, format!("The documents could not be read: {e}"));
-                    break;
-                }
-            }
-            if app.wait(Duration::from_secs(READ_GAP_SEC)) {
-                return;
-            }
-        }
-        if !app.events.park_until(&app, || FILINGS_STORED.load(Ordering::SeqCst) != stored || !summary_ready()) {
-            return;
-        }
-    }
-}
-
-/// Counts the times filings were stored: what the reading loop waits on.
-static FILINGS_STORED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The newest stored filing a reading could still add to, read: the listing on
-/// screen first, then everything else. False when there is none left to try.
-fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(String, String)>) -> Result<Option<Result<(), String>>, String> {
-    let open = app.feeds.looking_at.lock().unwrap().clone();
-    if !open.is_empty() {
-        if let Some(read) = read_one_of(app, &open, passed)? {
-            return Ok(Some(read));
-        }
-    }
-    read_one_of(app, "", passed)
-}
-
-/// One document of `only`, or of every followed listing when it is empty, that a
-/// reading could still add to (`wants_reading`): one never read, and one holding a
-/// title without its sentence or the other way round. True when there was one to
-/// try, with how its read went; one the read moved nothing on, or whose read
-/// failed, is added to `passed`. The store failing is the error.
-fn read_one_of(app: &Arc<App>, only: &str, passed: &mut HashSet<(String, String)>) -> Result<Option<Result<(), String>>, String> {
-    let c = conn(app)?;
-    let list: Vec<String> = if only.is_empty() {
-        known_filing_symbols(app, &["held".to_string(), "watched".to_string()])?.into_iter().map(|i| i.symbol).collect()
-    } else {
-        vec![only.to_string()]
-    };
-    read_one_in(&c, &list, passed, &LiveReaders)
-}
-
-/// `read_one_of` on one connection, for the listings given, with the readers given.
-fn read_one_in(c: &Connection, symbols: &[String], passed: &mut HashSet<(String, String)>, readers: &dyn Readers) -> Result<Option<Result<(), String>>, String> {
-    let mut best: Option<(String, String, Filing)> = None;   // date, symbol, row
-    for sym in symbols {
-        let sym = sym.trim().to_uppercase();
-        for r in sf::filings_for(c, &sym).map_err(|e| e.to_string())? {
-            if !wants_reading(&r) || passed.contains(&(sym.clone(), r.doc.id.clone())) {
-                continue;
-            }
-            let date = r.doc.date.clone();
-            if best.as_ref().map(|(d, _, _)| date > *d).unwrap_or(true) {
-                best = Some((date, sym.clone(), r));
-            }
-        }
-    }
-    let (_, sym, before) = match best { Some(b) => b, None => return Ok(None) };
-    if let Err(e) = filings_enrich_in(c, &sym, &before.doc.id, readers) {
-        passed.insert((sym.clone(), before.doc.id.clone()));
-        return Ok(Some(Err(format!("{sym}'s document {} could not be read: {e}", before.doc.id))));
-    }
-    let after = sf::filing(c, &sym, &before.doc.id).map_err(|e| e.to_string())?;
-    let moved = after.as_ref().map_or(false, |a| {
-        (&a.subject, &a.summary, a.enrich_version, a.enrich_final, a.enrich_reads)
-            != (&before.subject, &before.summary, before.enrich_version, before.enrich_final, before.enrich_reads)
-    });
-    if !moved {
-        passed.insert((sym, before.doc.id));
-    }
-    Ok(Some(Ok(())))
-}
-
-/// Two reads that could have answered bound a document's reading: what they
-/// cannot produce, the document does not have, and the row settles with
-/// whichever half it has (SPEC §4 Disclosures).
-pub const ENRICH_READS: i64 = 2;
-
-/// Whether a reading could still add to a stored row: it was never read under the
-/// current logic, or it holds a title without its sentence (or the other way
-/// round) and has not settled. What every reader of documents picks rows by.
-pub fn wants_reading(r: &Filing) -> bool {
-    r.enrich_version.unwrap_or(0) < ENRICH_VERSION || (!r.enrich_final && (r.subject.is_empty() || r.summary.is_empty()))
-}
-
-/// One symbol's disclosures from every covering
-/// source, stored per source. The total written, or -1 when no source could be
-/// reached; the store failing is the error.
-pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> Result<i64, String> {
-    let sym = symbol.trim().to_uppercase();
-    if sym.is_empty() {
-        return Ok(0);
-    }
-    app.single_flight(&format!("filings:{}", sym), Ok(0), || {
-        let c = conn(app)?;
-        refresh_filings_in(app, &c, &sym, name, exchange, currency, &|s, n, e, cy, p| disclosures::fetch(s, n, e, cy, 200, p))
-    })
-}
-
-/// The disclosures gathering `fetch_filings` gives: (symbol, name, exchange,
-/// currency, known SEDAR+ profile) to every covering source's documents.
-pub type FetchFilings<'a> = &'a dyn Fn(&str, &str, &str, &str, &str) -> Gathered;
-
-/// `refresh_filings` on one connection with the gathering given.
-pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>, fetch_filings: FetchFilings) -> Result<i64, String> {
-    {
-        let c = c;
-        let sym = sym.to_string();
-        let (mut iname, ex, cur) = instrument_meta(app, &sym);
-        if let Some(n) = name.filter(|n| !n.is_empty()) {
-            iname = n.to_string();
-        }
-        let exchange_ = exchange.map(|x| x.to_string()).unwrap_or(ex);
-        let currency_ = currency.map(|x| x.to_string()).unwrap_or(cur);
-        let known = sf::sedar_profile(c, &sym).map_err(|e| e.to_string())?;
-        let result = fetch_filings(&sym, &iname, &exchange_, &currency_, &known);
-        let mut total = 0i64;
-        let mut any_reached = false;
-        let mut profile_no = String::new();
-        let mut by_source: HashMap<Regulator, Vec<FiledDocument>> = HashMap::new();
-        for it in result.items {
-            if it.source == Regulator::Sedar && !it.profile_no.is_empty() {
-                profile_no = it.profile_no.clone();
-            }
-            by_source.entry(it.source).or_default().push(it);
-        }
-        let held: HashSet<Regulator> = sf::filings_for(c, &sym).map_err(|e| e.to_string())?.iter().map(|r| r.doc.source).collect();
-        let now = now_iso();
-        let sources = result.sources;
-        for (src, status) in &sources {
-            if status.available {
-                any_reached = true;
-            }
-            let rows = by_source.get(src).cloned().unwrap_or_default();
-            if rows.is_empty() && held.contains(src) {
-                log(&format!("bagholder disclosures: {}: {} answered empty; the stored rows stand", sym, src.as_str()));
-                continue;
-            }
-            if status.matched || status.available {
-                total += sf::replace_filings(c, &sym, *src, &rows, &now).map_err(|e| format!("{sym}'s {} filings could not be stored: {e}", src.as_str()))? as i64;
-            }
-        }
-        sf::mark_filings_fetched(c, &sym, &profile_no, &now).map_err(|e| e.to_string())?;
-        FILINGS_STORED.fetch_add(1, Ordering::SeqCst);
-        app.events.signal(); // the reading loop has something to look at
-        let outcomes = serde_json::to_string(&sources).expect("each regulator's outcome, keyed by its name, always serializes");
-        set_meta(c, &format!("filings_sources:{}", sym), &outcomes).map_err(|e| e.to_string())?;
-        Ok(if any_reached { total } else { -1 })
-    }
-}
-
-/// A source's outcome the last time a listing's disclosures were refreshed.
-#[derive(Clone, Debug, Default, Serialize, TS, Diff)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceStatus {
-    pub available: bool,
-    pub matched: bool,
-    pub filer: bool,
-    pub error: String,
-}
-
-/// `#[derive(Diff)]` compares a map field as the model's own `BTreeMap<String,
-/// V>`, so a source's status lives under its regulator's own JSON key
-/// (`"SEDAR+"`, `"SEC"`) rather than under `Regulator` itself.
-fn source_status(c: &Connection, sym: &str) -> Result<BTreeMap<String, SourceStatus>, String> {
-    // none stored before a first refresh; stored text that does not parse is an error
-    let raw = get_meta(c, &format!("filings_sources:{}", sym), "").map_err(|e| e.to_string())?;
-    let stored: BTreeMap<Regulator, SourceOutcome> = if raw.is_empty() {
-        BTreeMap::new()
-    } else {
-        serde_json::from_str(&raw).map_err(|e| format!("what {sym}'s sources last answered could not be read: {e}"))?
-    };
-    let have: HashSet<Regulator> = sf::filings_for(c, sym).map_err(|e| e.to_string())?.iter().map(|r| r.doc.source).collect();
-    let mut out = BTreeMap::new();
-    for (source, dep) in [(Regulator::Sedar, sedar::available()), (Regulator::Sec, edgar::available())] {
-        let st = stored.get(&source);
-        // "available" is whether the last read actually reached the source, not merely
-        // whether its dependency is installed: a stored outcome that recorded the source
-        // unavailable (an outage, a maintenance page) means it could not be reached even
-        // with the dependency present. The error it left travels with it, so the card can
-        // say the source is unavailable rather than assert the listing has no filer.
-        let reached = st.map(|s| s.available).unwrap_or(dep);
-        let error = st.map(|s| s.error.clone()).unwrap_or_default();
-        out.insert(source.as_str().to_string(), SourceStatus {
-            available: dep && reached,
-            matched: have.contains(&source),
-            filer: st.map(|s| s.filer).unwrap_or(false) || have.contains(&source),
-            error,
-        });
-    }
-    Ok(out)
-}
-
-/// The stored disclosures, refreshed first when
-/// forced or stale.
-/// `GET /api/filings`.
-#[derive(Serialize, TS)]
-#[serde(untagged)]
-pub enum FilingsAnswer {
-    Ok(FilingsPayload),
-    Refused(OkOr),
-}
-
-pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> FilingsAnswer {
-    let sym = symbol.trim().to_uppercase();
-    if sym.is_empty() {
-        return FilingsAnswer::Refused(OkOr::err("symbol required"));
-    }
-    let c = match conn(app) {
-        Ok(c) => c,
-        Err(e) => return FilingsAnswer::Refused(OkOr::err(e)),
-    };
-    match filings_payload_in(app, &c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency)) {
-        Ok(p) => FilingsAnswer::Ok(p),
-        Err(e) => FilingsAnswer::Refused(OkOr::err(e)),
-    }
-}
-
-// --- a listing's disclosures while a page shows them ------------------------------
-//
-// The page used to drive the reading itself: ask for one document's title, wait, ask
-// for the next, and re-kick the whole pass on timers of a second and a half to
-// fifteen while the local model was coming up. The reading is the server's work. A
-// page says it is showing a listing's disclosures (`docs`); the server brings the
-// list up to date, then reads each document that has no title yet, newest first, for
-// as long as some page is still showing them. Each title and sentence is committed
-// as it is read and reaches its row as a change to that row.
-
-fn set_reading(app: &Arc<App>, sym: &str, ids: Vec<String>) {
-    {
-        let mut r = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner());
-        if ids.is_empty() { r.remove(sym); } else { r.insert(sym.to_string(), ids); }
-    }
-    app.events.signal(); // the rows still to be read wear the shimmer
-}
-
-/// What `filings_stored` sends a page showing a listing's disclosures.
-#[derive(Clone, Debug, Serialize, TS, Diff)]
-#[serde(rename_all = "camelCase")]
-pub struct FilingsDoc {
-    #[ts(type = "true")]
-    pub ok: bool,
-    pub symbol: String,
-    pub available: bool,
-    pub sources: BTreeMap<String, SourceStatus>,
-    pub categories: Vec<String>,
-    pub fetched_at: String,
-    pub ever_read: bool,
-    pub summary_status: String,
-    pub reading: Vec<String>,
-    pub filings: Vec<Filing>,
-}
-
-/// The disclosures as stored, never waiting on a source: what a page showing them
-/// is sent. `reading` names the documents the pass has still to read, the first of
-/// them the one being read now.
-pub fn filings_stored(app: &Arc<App>, symbol: &str) -> Result<FilingsDoc, String> {
-    let sym = symbol.trim().to_uppercase();
-    let c = conn(app)?;
-    let reading = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
-    let fetched_at = sf::filings_fetched_for(&c, &sym).map_err(|e| e.to_string())?;
-    Ok(FilingsDoc {
-        ok: true,
-        symbol: sym.clone(),
-        available: disclosures::available(),
-        sources: source_status(&c, &sym)?,
-        categories: disclosures::CATEGORIES.iter().map(|s| s.to_string()).collect(),
-        ever_read: !fetched_at.is_empty(),
-        fetched_at,
-        summary_status: enrich::summary_status().to_string(),
-        reading,
-        filings: fresh_filings(&c, &sym)?,
-    })
-}
-
-/// A page has started showing `symbol`'s disclosures (`doc` is the document's key):
-/// bring the list up to date if it is stale, then read what has no title, until no
-/// page shows them any more. One pass per listing at a time.
-pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, exchange: String, currency: String) {
-    let sym = symbol.trim().to_uppercase();
-    if sym.is_empty() {
-        return;
-    }
-    spawn("bagholder-filings-shown", move || {
-        app.single_flight(&format!("filings-shown:{}", sym), (), || {
-            *app.feeds.looking_at.lock().unwrap() = sym.clone();
-            fn opt(s: &str) -> Option<&str> { if s.is_empty() { None } else { Some(s) } }
-            // the list brought up to date: a store that fails is said in the header until it answers
-            let refreshed = conn(&app).and_then(|c| filings_stale(&c, &sym, None)).and_then(|stale| {
-                if stale { refresh_filings(&app, &sym, opt(&name), opt(&exchange), opt(&currency)).map(|_| ()) } else { Ok(()) }
-            });
-            went(&app, DISCLOSURES, refreshed.map_err(|e| format!("{sym}'s disclosures could not be brought up to date: {e}")));
-            let mut tried: HashSet<String> = HashSet::new();
-            while app.events.watched(&doc) && !app.stopping() {
-                let left = conn(&app).and_then(|c| sf::filings_for(&c, &sym).map_err(|e| e.to_string()));
-                let Some(left) = went(&app, DISCLOSURES_STORED, left.map_err(|e| format!("The disclosures held could not be read: {e}"))) else { break };
-                let mut left: Vec<Filing> = left.into_iter()
-                    .filter(|r| wants_reading(r) && !tried.contains(&r.doc.id))
-                    .collect();
-                left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
-                let Some(next) = left.first().map(|r| r.doc.id.clone()) else { break };
-                set_reading(&app, &sym, left.iter().map(|r| r.doc.id.clone()).collect());
-                // waits for the local model itself when one is coming up; a document that
-                // could not be read is said in the header until one is
-                went(&app, DISCLOSURES_READING, filings_enrich_result(&app, &sym, &next).map_err(|e| format!("{sym}'s document {next} could not be read: {e}")));
-                tried.insert(next);
-                if app.wait(Duration::from_millis(150)) { // a person's pace at the source
-                    break;
-                }
-            }
-            set_reading(&app, &sym, vec![]);
-        });
-    });
-}
-
-/// What `filings_payload` returns: the `GET /api/filings?…&refresh=1` answer.
-#[derive(Clone, Debug, Serialize, TS, Diff)]
-#[serde(rename_all = "camelCase")]
-pub struct FilingsPayload {
-    #[ts(type = "true")]
-    pub ok: bool,
-    pub symbol: String,
-    pub available: bool,
-    pub sources: BTreeMap<String, SourceStatus>,
-    pub categories: Vec<String>,
-    pub profile_no: String,
-    pub fetched_at: String,
-    pub refreshed: bool,
-    pub source_unavailable: bool,
-    pub filings: Vec<Filing>,
-}
-
-/// `filings_payload` on one connection with the refresh given.
-pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> Result<i64, String>) -> Result<FilingsPayload, String> {
-    let sym = sym.trim().to_uppercase();
-    if sym.is_empty() {
-        return Err("symbol required".to_string());
-    }
-    *app.feeds.looking_at.lock().unwrap() = sym.clone();
-    let c = c;
-    let mut wrote: Option<i64> = None;
-    if refresh || filings_stale(c, &sym, None)? {
-        wrote = Some(refresh_filings()?);
-    }
-    Ok(FilingsPayload {
-        ok: true,
-        available: disclosures::available(),
-        sources: source_status(c, &sym)?,
-        categories: disclosures::CATEGORIES.iter().map(|s| s.to_string()).collect(),
-        profile_no: sf::sedar_profile(c, &sym).map_err(|e| e.to_string())?,
-        fetched_at: sf::filings_fetched_for(c, &sym).map_err(|e| e.to_string())?,
-        refreshed: wrote.map(|w| w > 0).unwrap_or(false),
-        source_unavailable: wrote == Some(-1),
-        filings: fresh_filings(c, &sym)?,
-        symbol: sym,
-    })
-}
-
-/// Rows read by an older logic blanked, categories
-/// re-derived.
-fn fresh_filings(c: &Connection, sym: &str) -> Result<Vec<Filing>, String> {
-    let mut rows = sf::filings_for(c, sym).map_err(|e| e.to_string())?;
-    for r in rows.iter_mut() {
-        if r.enrich_version.unwrap_or(0) < ENRICH_VERSION {
-            r.subject = String::new();
-            r.summary = String::new();
-        }
-        r.doc.category = disclosures::categorize(&r.doc);
-        // the list arrives named: a form and a named document say what they are
-        // without being fetched, so only the rest wait on a reading
-        if r.subject.is_empty() {
-            if let Some(t) = disclosures::quick_title(&r.doc) {
-                sf::set_filing_enrichment(c, sym, &r.doc.id, Some(&t), None, None, None, &now_iso()).map_err(|e| e.to_string())?;
-                r.subject = t;
-            }
-        }
-    }
-    Ok(rows)
-}
-
-/// (bytes, content type), or the error.
-pub fn filings_document(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String), String> {
-    let sym = symbol.trim().to_uppercase();
-    let c = conn(app)?;
-    let mut row = sf::filing(&c, &sym, doc_id).map_err(|e| e.to_string())?;
-    if row.is_none() {
-        refresh_filings(app, &sym, None, None, None)?;
-        row = sf::filing(&c, &sym, doc_id).map_err(|e| e.to_string())?;
-    }
-    let row = row.ok_or_else(|| format!("no such document for {}", sym))?;
-    let (data, ct) = disclosures::document(&row.doc).map_err(|e| e.to_string())?;
-    if data.is_empty() {
-        return Err("empty document".into());
-    }
-    Ok((data, if ct.is_empty() { "application/octet-stream".into() } else { ct }))
-}
-
-/// `filings_enrich` on the app's own connection, typed.
-fn filings_enrich_result(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<Enriched, String> {
-    let c = conn(app)?;
-    filings_enrich_in(&c, symbol, doc_id, &LiveReaders)
-}
-
-/// One document read for its subject and, with a
-/// local model, a one-sentence summary; both cached on the row.
-/// `GET /api/filings/enrich`.
-#[derive(Serialize, TS)]
-#[serde(untagged)]
-pub enum EnrichAnswer {
-    Ok(Enriched),
-    Refused(OkOr),
-}
-
-pub fn filings_enrich(app: &Arc<App>, symbol: &str, doc_id: &str) -> EnrichAnswer {
-    match filings_enrich_result(app, symbol, doc_id) {
-        Ok(e) => EnrichAnswer::Ok(e),
-        Err(e) => EnrichAnswer::Refused(OkOr::err(e)),
-    }
-}
-
-/// What `filings_enrich_in` reads a document with: the local model and the
-/// disclosure sources.
-pub trait Readers {
-    fn summary_available(&self) -> bool { enrich::summary_available() }
-    fn summary_status(&self) -> &'static str { enrich::summary_status() }
-    fn wait_for_summary(&self, seconds: f64) -> bool { enrich::wait_for_summary(seconds) }
-    fn disclosures_available(&self) -> bool { disclosures::available() }
-    fn enrichment(&self, row: &FiledDocument) -> Option<disclosures::Enrichment> { disclosures::enrichment(row) }
-    fn content(&self, row: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> { disclosures::content(row) }
-    fn enrich_document_of(&self, code: &str, source: &str, data: &[u8], ct: &str) -> disclosures::Enrichment { enrich::enrich_document_of(code, source, data, ct) }
-}
-
-struct LiveReaders;
-impl Readers for LiveReaders {}
-
-/// One document's title and summary, as `filings_enrich` answers.
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Enriched {
-    #[ts(type = "true")]
-    pub ok: bool,
-    pub id: String,
-    pub subject: String,
-    pub summary: String,
-    pub summary_available: bool,
-    pub summary_status: String,
-}
-
-/// `filings_enrich` on one connection with the readers given.
-///
-/// A row is read until it holds both a title and a sentence, or until two reads
-/// that could have answered have been made: a read counts when it reached the
-/// document with a model up to write the sentence. A read with no model up only
-/// failed to ask; it keeps the title it found and the row waits, fetched again
-/// only once a model is up (SPEC §4 Disclosures).
-pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Readers) -> Result<Enriched, String> {
-    let sym = symbol.trim().to_uppercase();
-    let row = sf::filing(c, &sym, doc_id).map_err(|e| e.to_string())?.ok_or_else(|| "no such document".to_string())?;
-    let mut subject = row.subject.clone();
-    let mut summary = row.summary.clone();
-    let mut model = r.summary_available();
-    let fresh = row.enrich_version.unwrap_or(0) >= ENRICH_VERSION;
-    let attempted = !row.enriched_at.is_empty() && fresh;
-    // reads under an older logic say nothing about what this one can find
-    let reads = if fresh { row.enrich_reads } else { 0 };
-    let answer = |subject: &str, summary: &str, avail: bool| Enriched {
-        ok: true, id: doc_id.to_string(), subject: subject.to_string(), summary: summary.to_string(),
-        summary_available: avail, summary_status: r.summary_status().to_string(),
-    };
-    if attempted && (row.enrich_final || (!subject.is_empty() && !summary.is_empty()) || !model || reads >= ENRICH_READS) {
-        return Ok(answer(&subject, &summary, model));
-    }
-    if !r.disclosures_available() {
-        return Ok(answer(&subject, &summary, model));
-    }
-    let now = now_iso();
-    // No model to write the sentence: what was found is kept under the current
-    // logic's stamp, so the row waits for a model rather than being fetched again,
-    // and the read is not counted against the document.
-    let waits = |subject: &str, summary: &str| -> Result<(), String> {
-        sf::set_filing_enrichment(c, &sym, doc_id, Some(subject), Some(summary), Some(ENRICH_VERSION), Some(false), &now).map_err(|e| e.to_string())?;
-        sf::set_filing_reads(c, &sym, doc_id, reads).map_err(|e| e.to_string())?;
-        Ok(())
-    };
-    if !fresh {
-        // only the first read under the current logic replaces both halves
-        subject = String::new();
-        summary = String::new();
-    }
-    if let Some(exact) = r.enrichment(&row.doc) {
-        // What the source can say exactly: the form's own name, and for the
-        // forms it can read in full, the sentence too. A name on its own is
-        // kept and the document still read, so the sentence follows it.
-        let (sj, sm) = (exact.subject.clone(), exact.summary.clone());
-        if !sj.is_empty() && subject.is_empty() {
-            subject = sj.clone();
-            sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), None, None, None, &now).map_err(|e| e.to_string())?;
-        }
-        if !sm.is_empty() {
-            sf::set_filing_enrichment(c, &sym, doc_id, Some(&sj), Some(&sm), Some(ENRICH_VERSION), None, &now).map_err(|e| e.to_string())?;
-            return Ok(answer(&sj, &sm, model));
-        }
-        if exact.final_ {
-            // a named document: nothing a reading would add
-            sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(""), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
-            return Ok(answer(&subject, "", model));
-        }
-        if !model {
-            waits(&subject, &summary)?;
-            return Ok(answer(&subject, &summary, model));
-        }
-    }
-    let (data, ct) = match r.content(&row.doc) {
-        Ok(x) => x,
-        Err(e) => return Err(e.to_string()),
-    };
-    if data.is_empty() {
-        return Err("the document could not be read".to_string());
-    }
-    if !model {
-        model = r.wait_for_summary(enrich::SUMMARY_WAIT_SEC);
-    }
-    let info = r.enrich_document_of(&row.doc.form, row.doc.source.as_str(), &data, &ct);
-    let new_subject = info.subject.clone();
-    let got_summary = info.summary.clone();
-    if info.final_ {
-        sf::set_filing_enrichment(c, &sym, doc_id, Some(&new_subject), Some(&got_summary), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
-        return Ok(answer(&new_subject, &got_summary, model));
-    }
-    if model && new_subject.is_empty() && got_summary.is_empty() && subject.is_empty() && summary.is_empty() {
-        // a document with no text in it -- a release filed as a picture -- has
-        // nothing for a reading to find, now or later: it is named by what it
-        // is and never read again
-        let named = disclosures::quick_title(&row.doc).unwrap_or_else(|| row.doc.form.clone());
-        let named: String = named.chars().take(90).collect();
-        sf::set_filing_enrichment(c, &sym, doc_id, Some(&named), Some(""), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
-        return Ok(answer(&named, "", model));
-    }
-    // reading again fills what is missing and never empties what is there
-    if !new_subject.is_empty() {
-        subject = new_subject;
-    }
-    if model {
-        if !got_summary.is_empty() {
-            summary = got_summary;
-        }
-        // a read that could have answered: two of them settle the row
-        let reads = reads + 1;
-        let settled = (subject.is_empty() || summary.is_empty()) && reads >= ENRICH_READS;
-        sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(&summary), Some(ENRICH_VERSION), Some(settled), &now).map_err(|e| e.to_string())?;
-        sf::set_filing_reads(c, &sym, doc_id, reads).map_err(|e| e.to_string())?;
-    } else {
-        waits(&subject, &summary)?;
-    }
-    Ok(answer(&subject, &summary, r.summary_available()))
 }
 
 // ---------------------------------------------------------------------------
@@ -2289,9 +804,10 @@ fn shorts_stale(rec: &StoredShorts) -> bool {
 /// kept. `None` for a market where no one publishes it; the store failing is
 /// the error. A source failing is said in the header until the listing's next
 /// read goes through, and the record kept stands.
-pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Result<Option<StoredShorts>, String> {
+pub fn read_shorts(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, trend: bool, name: &str) -> Result<Option<StoredShorts>, String> {
     let c = conn(app)?;
-    let feed = format!("{SHORTS_OF}{}", symbol.trim().to_uppercase());
+    let symbol = key.symbol();
+    let feed = format!("{SHORTS_OF}{key}");
     let mut rec = match shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name) {
         Ok(Some(rec)) => {
             feed_answered(app, &feed);
@@ -2311,14 +827,14 @@ pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str,
         rec.exchange = exchange.to_string();
     }
     let stored = StoredShorts { shorts: rec, fetched_at: now_iso(), read_version: SHORTS_VERSION };
-    sf::save_shorts(&c, &stored.shorts, &stored.fetched_at, SHORTS_VERSION).map_err(|e| format!("{symbol}'s short selling could not be kept: {e}"))?;
+    sf::save_shorts(&c, key, &stored.shorts, &stored.fetched_at, SHORTS_VERSION).map_err(|e| format!("{symbol}'s short selling could not be kept: {e}"))?;
     Ok(Some(stored))
 }
 
 /// `read_shorts` from work that answers nobody: a failure is said in the header,
 /// under the listing's own entry, until its next read succeeds.
-fn read_shorts_said(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Option<StoredShorts> {
-    went(app, &format!("shorts-store:{}|{}", symbol, exchange), read_shorts(app, symbol, exchange, currency, trend, name)).flatten()
+fn read_shorts_said(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, trend: bool, name: &str) -> Option<StoredShorts> {
+    went(app, &format!("shorts-store:{key}"), read_shorts(app, key, exchange, currency, trend, name)).flatten()
 }
 
 /// One report of the position sold short.
@@ -2452,53 +968,30 @@ impl From<Result<ShortsPayload, String>> for ShortsAnswer {
     }
 }
 
-/// One listing's short selling, from the store at
-/// once where it was read before.
-pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, currency: Option<&str>, trend: bool) -> Result<ShortsPayload, String> {
-    let sym = symbol.trim().to_uppercase();
-    if sym.is_empty() {
-        return Err("symbol required".to_string());
-    }
+/// One listing's short selling, from the store at once where it was read before.
+pub fn shorts_payload(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, trend: bool) -> Result<ShortsPayload, String> {
+    let sym = key.symbol().to_string();
     let c = conn(app)?;
-    let meta = instrument_meta(app, &sym);
-    let listed_as = if meta.0 == sym { String::new() } else { meta.0.clone() };
-    let mut ex = exchange.unwrap_or("").trim().to_string();
-    let mut ccy = currency.unwrap_or("").trim().to_string();
-    if ex.is_empty() {
-        ex = meta.1.clone();
-        if ccy.is_empty() {
-            ccy = meta.2.clone();
-        }
-        if ex.is_empty() {
-            let form = bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today()).map_err(|e| format!("{sym} could not be placed: {e}"))?;
-            if !form.is_empty() && !form.ends_with(":US") {
-                let tail = if form.contains(':') { form.rsplit(':').next().unwrap_or("") } else { "" };
-                ex = match tail { "CNX" => "CSE", "AQL" => "Cboe Canada", _ => "" }.to_string();
-                if ccy.is_empty() {
-                    ccy = "CAD".into();
-                }
-            } else {
-                ex = "NASDAQ".into();
-                ccy = "USD".into();
-            }
-        }
-    }
+    let (listed_as, known_ex, known_ccy) = instrument_meta(app, key);
+    // the venue in words the regulators' readers take: the request's, else the book's
+    let ex = if exchange.trim().is_empty() { known_ex } else { exchange.trim().to_string() };
+    let ccy = if currency.trim().is_empty() { known_ccy } else { currency.trim().to_string() };
     if shorts::market_of(&sym, &ex, &ccy).is_none() {
         return Ok(ShortsPayload { ok: true, covered: false, shorts: None });
     }
-    if let Some(held) = sf::shorts_for(&c, &sym, &ex).map_err(|e| format!("{sym}'s short selling held could not be read: {e}"))? {
+    if let Some(held) = sf::shorts_for(&c, key).map_err(|e| format!("{sym}'s short selling held could not be read: {e}"))? {
         if !trend || held.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
             if shorts_stale(&held) {
-                let (s2, e2, c2, n2) = (sym.clone(), ex.clone(), ccy.clone(), listed_as.clone());
+                let (k2, e2, c2, n2) = (key.clone(), ex.clone(), ccy.clone(), listed_as.clone());
                 let a = app.clone();
-                app.kick(&format!("shorts:{}|{}", sym, ex), move || {
-                    read_shorts_said(&a, &s2, &e2, &c2, true, &n2);
+                app.kick(&format!("shorts:{key}"), move || {
+                    read_shorts_said(&a, &k2, &e2, &c2, true, &n2);
                 });
             }
             return Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&held)?) });
         }
     }
-    match read_shorts(app, &sym, &ex, &ccy, trend, &listed_as)? {
+    match read_shorts(app, key, &ex, &ccy, trend, &listed_as)? {
         Some(rec) => Ok(ShortsPayload { ok: true, covered: true, shorts: Some(ShortsView::of(&rec)?) }),
         None => Ok(ShortsPayload { ok: true, covered: false, shorts: None }),
     }
@@ -2623,11 +1116,8 @@ impl ListingAnswer {
 
 /// What the page for one listing needs, held or
 /// not.
-pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, name: &str) -> ListingAnswer {
-    let sym = tmx_symbol(symbol).trim().to_uppercase();
-    if sym.is_empty() {
-        return ListingAnswer::err("symbol required");
-    }
+pub fn listing_payload(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &str, currency: &str, name: &str) -> ListingAnswer {
+    let sym = key.symbol().to_string();
     let b = match base(app) {
         Ok(Some(b)) => b,
         Ok(None) => return ListingAnswer::err("no page has stated its zone yet"),
@@ -2638,15 +1128,16 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
         Ok(n) => n,
         Err(e) => return ListingAnswer::err(e),
     };
+    // the book's rows of that ticker, by the figures' own ids; which of them are this
+    // listing's is decided by key below
     let named = |symbol: &str| tmx_symbol(symbol).trim().to_uppercase() == sym;
-    // the book's holdings and trades of that ticker, by the figures' own ids
     let Some((positions, trades)) = f.read(|e| crate::wire::build::listed(e, &names, &named)) else { return ListingAnswer::err("no page has stated its zone yet") };
     let watchlist: Vec<ListedRow> = b.watchlist.iter().filter(|w| named(&w.symbol)).map(|w| ListedRow { symbol: w.symbol.clone(), exchange: w.exchange.clone(), currency: w.currency.clone(), name: w.name.clone(), ..ListedRow::default() }).collect();
     let securities = crate::market_context::securities(app).unwrap_or_else(|e| {
         log(&format!("bagholder: the book's securities could not be read for {sym}: {e}"));
         vec![]
     });
-    listing_payload_in(&securities, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|s, ex, ccy| crate::following::glance(app, s, ex, ccy))
+    listing_payload_in(&securities, &positions, &trades, &watchlist, key, exchange, currency, name, &|s, ex, ccy| crate::following::glance(app, s, ex, ccy))
 }
 
 /// A row of the book as the listing page reads it: a holding, a trade or a watched listing.
@@ -2669,25 +1160,17 @@ pub fn listing_payload_in(
     positions: &[ListedRow],
     trades: &[ListedRow],
     watchlist: &[ListedRow],
-    symbol: &str,
+    key: &bagholder_core::ListingKey,
     exchange: &str,
     currency: &str,
     name: &str,
     glance: &dyn Fn(&str, &str, &str) -> Result<crate::following::Glanced, String>,
 ) -> ListingAnswer {
-    let sym = tmx_symbol(symbol).trim().to_uppercase();
-    if sym.is_empty() {
-        return ListingAnswer::err("symbol required");
-    }
+    let sym = key.symbol().to_string();
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
-    let exu = ex.to_uppercase();
-    let same = |r: &ListedRow| {
-        if r.kind == "Options" || tmx_symbol(&r.symbol).trim().to_uppercase() != sym {
-            return false;
-        }
-        let there = r.exchange.trim().to_uppercase();
-        exu.is_empty() || there.is_empty() || there == exu
-    };
+    // a row is this listing's when its own symbol and venue make this key: another
+    // venue's holding, or a row that names no venue, is never taken for it (brief 34, U17)
+    let same = |r: &ListedRow| r.kind != "Options" && bagholder_core::ListingKey::on(&r.symbol, &r.exchange).is_ok_and(|k| k == *key);
     if let Some(h) = positions.iter().find(|p| same(p)) {
         return ListingAnswer::Held { ok: true, symbol: sym, position_id: h.id.clone() };
     }
@@ -2695,7 +1178,7 @@ pub fn listing_payload_in(
     let watched = watchlist.iter().find(|w| same(w));
     let empty = ListedRow::default();
     let known: &ListedRow = trades.first().copied().or(watched).unwrap_or(&empty);
-    let meta = meta_of(securities, &sym);
+    let meta = meta_of(securities, key);
     if ex.is_empty() {
         ex = known.exchange.clone();
         if ex.is_empty() {
@@ -2731,9 +1214,9 @@ pub fn listing_payload_in(
     ListingAnswer::Full { ok: true, symbol: sym, exchange: ex, currency: ccy, kind, name: nm, security_id: known.security_id.clone(), fills, price, percent_change, price_failed }
 }
 
-/// The shares held and the listings watched whose
-/// short selling is published.
-pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, String, String)> {
+/// The shares held and the listings watched whose short selling is published,
+/// once each by their key: (key, venue in words, currency, name).
+pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(bagholder_core::ListingKey, String, String, String)> {
     let Ok(Some(b)) = base(app) else { return vec![] }; // a failure is said in the header by `base`
     let mut rows: Vec<(&str, &str, &str, &str)> = Vec::new();
     if scope == "holdings" || scope == "all" {
@@ -2742,16 +1225,15 @@ pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, Stri
     if scope == "watchlist" || scope == "all" {
         rows.extend(b.watchlist.iter().map(|w| (w.symbol.as_str(), w.exchange.as_str(), w.currency.as_str(), w.name.as_str())));
     }
-    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut seen: HashSet<bagholder_core::ListingKey> = HashSet::new();
     let mut out = Vec::new();
     for (symbol, ex, ccy, name) in rows {
-        let sym = tmx_symbol(symbol);
-        let key = (sym.to_uppercase(), ex.to_uppercase());
-        if sym.is_empty() || seen.contains(&key) || shorts::market_of(&sym, ex, ccy).is_none() {
+        // a listing that names no venue is read under none
+        let Ok(key) = bagholder_core::ListingKey::on(symbol, ex) else { continue };
+        if shorts::market_of(key.symbol(), ex, ccy).is_none() || !seen.insert(key.clone()) {
             continue;
         }
-        seen.insert(key);
-        out.push((sym, ex.to_string(), ccy.to_string(), name.to_string()));
+        out.push((key, ex.to_string(), ccy.to_string(), name.to_string()));
     }
     out
 }
@@ -2761,12 +1243,12 @@ pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, Stri
 pub fn sweep_shorts(app: &Arc<App>) -> usize {
     let Ok(c) = conn(app) else { return 0 }; // said in the header by `conn`
     let mut due = Vec::new();
-    for (sym, ex, ccy, name) in shorts_listings(app, "all") {
+    for (key, ex, ccy, name) in shorts_listings(app, "all") {
         // a row held that cannot be read is read again from its source, and the store's failure said until it answers
-        let held = went(app, &format!("shorts-store:{}|{}", sym, ex), sf::shorts_for(&c, &sym, &ex).map_err(|e| format!("{sym}'s short selling held could not be read: {e}"))).flatten();
+        let held = went(app, &format!("shorts-store:{key}"), sf::shorts_for(&c, &key).map_err(|e| format!("{}'s short selling held could not be read: {e}", key.symbol()))).flatten();
         let fresh = held.as_ref().map(|h| h.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) && !shorts_stale(h)).unwrap_or(false);
         if !fresh {
-            due.push((sym, ex, ccy, name));
+            due.push((key, ex, ccy, name));
         }
     }
     let mut done = 0;
@@ -2780,8 +1262,8 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
         }
     }
     let _reset = Reset(app);
-    for (sym, ex, ccy, name) in due {
-        if read_shorts_said(app, &sym, &ex, &ccy, true, &name).is_some() {
+    for (key, ex, ccy, name) in due {
+        if read_shorts_said(app, &key, &ex, &ccy, true, &name).is_some() {
             done += 1;
         }
         app.feeds.shorts_left.fetch_sub(1, Ordering::SeqCst);
@@ -3139,7 +1621,8 @@ pub fn qs_one(query: &str, name: &str) -> String {
 /// chart watches (`docs`) in place of asking for its history again every few seconds.
 pub fn history_pending(app: &Arc<App>, q: &HistoryQuery) -> bool {
     let (rec, start, _, tf) = q.read();
-    let inst = history::chart_instrument(&rec);
+    // a listing that names no venue is read under none, so nothing is pending
+    let Ok(inst) = history::chart_instrument(&rec).keyed() else { return false };
     if !history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
         return history::daily_pending(&inst);
     }
@@ -3221,12 +1704,34 @@ fn bars_read(app: &Arc<App>, read: Result<(), String>) {
     }
 }
 
+/// What a listing whose records name no venue shows where its market data would
+/// be: it is read under no guessed venue (plan `market-data-keyed-by-listing`,
+/// Approach, 5).
+pub const NO_VENUE: &str = "Its market data waits for its venue: no record names the exchange it is listed on.";
+
 pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let (rec, start, end, tf) = q.read();
     if rec.symbol.is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
         return HistoryAnswer::Refused(OkOr::err("symbol, from, to and a known tf are required"));
     }
-    let inst = history::chart_instrument(&rec);
+    // a listing that names no venue gets no market data under a guessed one: its
+    // chart says what it waits for
+    let inst = match history::chart_instrument(&rec).keyed() {
+        Ok(inst) => inst,
+        Err(_) => {
+            return HistoryAnswer::Ok(ChartHistory {
+                ok: true,
+                chart_symbol: rec.symbol.clone(),
+                symbol: rec.symbol,
+                source: String::new(),
+                tf,
+                available: vec![],
+                bars: ChartBars::default(),
+                pending: false,
+                reason: NO_VENUE.into(),
+            })
+        }
+    };
     let src = history::history_source(&inst);
     let (today_s, now, stamp) = bagholder_market::clock_now();
     let (c, p) = match (conn(app), pool(app)) {
@@ -3286,7 +1791,7 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let payload = ChartHistory {
         ok: true,
         symbol: rec.symbol,
-        chart_symbol: inst.symbol,
+        chart_symbol: inst.symbol.clone(),
         source: src.map(|x| x.0).unwrap_or_default(),
         tf,
         available: available.into_iter().map(|s| s.to_string()).collect(),

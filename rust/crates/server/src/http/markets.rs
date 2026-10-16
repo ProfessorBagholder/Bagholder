@@ -35,9 +35,11 @@ pub fn routes() -> Routed {
     routed
 }
 
-/// One listing, as the page names it. Only the symbol is ever required.
+/// One listing as the page writes it: its symbol and its venue, the venue in
+/// words (`TSX`, `NYSE`) or as a code (`XTSE`, `US`), with its currency and name
+/// where known.
 #[derive(Deserialize, TS)]
-pub struct Listing {
+pub struct ListingText {
     #[serde(default, deserialize_with = "text")]
     symbol: String,
     #[serde(default, deserialize_with = "text")]
@@ -48,8 +50,34 @@ pub struct Listing {
     name: String,
 }
 
-fn some(s: &str) -> Option<&str> {
-    if s.is_empty() { None } else { Some(s) }
+/// One listing, as a route takes it: its key, made from its symbol and its venue.
+/// A request that names no venue, or a venue no listing is keyed by, does not
+/// parse: no route finds a listing by a bare ticker (plan
+/// `market-data-keyed-by-listing`, Approach, 5; rule test 3).
+#[derive(Deserialize, TS)]
+#[serde(try_from = "ListingText")]
+#[ts(as = "ListingText")]
+pub struct Listing {
+    key: bagholder_core::ListingKey,
+    symbol: String,
+    exchange: String,
+    currency: String,
+    name: String,
+}
+
+impl TryFrom<ListingText> for Listing {
+    type Error = String;
+    fn try_from(t: ListingText) -> Result<Listing, String> {
+        if t.symbol.is_empty() {
+            return Err("symbol required".into());
+        }
+        let key = if t.exchange.is_empty() {
+            return Err(format!("{} names no exchange: a ticker can be two companies on two exchanges", t.symbol));
+        } else {
+            bagholder_core::ListingKey::on(&t.symbol, &t.exchange).map_err(|e| e.to_string())?
+        };
+        Ok(Listing { key, symbol: t.symbol, exchange: t.exchange, currency: t.currency, name: t.name })
+    }
 }
 
 #[derive(Deserialize, TS)]
@@ -78,7 +106,6 @@ pub enum SymbolSearchAnswer {
 }
 
 async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
-    let pool = state.app.cache_pool()?;
     let app = state.app.clone();
     answer(move || match bagholder_market::search::symbol_search(&s.q) {
         Ok(matches) => SymbolSearchAnswer::Ok { ok: true, matches: not_held(&app, matches) },
@@ -146,7 +173,7 @@ async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>)
 
 /// `GET /api/listing`: one listing's own page, held or not.
 async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::ListingAnswer> {
-    answer(move || feeds::listing_payload(&state.app, &l.symbol, &l.exchange, &l.currency, &l.name)).await
+    answer(move || feeds::listing_payload(&state.app, &l.key, &l.exchange, &l.currency, &l.name)).await
 }
 
 #[derive(Deserialize, TS)]
@@ -161,10 +188,7 @@ pub struct Filings {
 
 async fn filings(State(state): State<AppState>, Params(q): Params<Filings>) -> Api<feeds::FilingsAnswer> {
     let l = q.listing;
-    if l.symbol.is_empty() {
-        return Err(ApiError::BadRequest("symbol required".into()));
-    }
-    answer(move || feeds::filings_payload(&state.app, &l.symbol, q.refresh, some(&l.name), some(&l.exchange), some(&l.currency))).await
+    answer(move || feeds::filings_payload(&state.app, &l.key, q.refresh)).await
 }
 
 #[derive(Deserialize, TS)]
@@ -177,32 +201,32 @@ async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -
     answer(move || feeds::filings_feed(&state.app, &s.scope, 200)).await
 }
 
-/// One stored filing of one listing.
+/// One stored filing, by its regulator and that regulator's own id for it.
 #[derive(Deserialize, TS)]
 pub struct Document {
     #[serde(default, deserialize_with = "trimmed")]
-    symbol: Option<String>,
+    source: Option<String>,
     #[serde(default, deserialize_with = "trimmed")]
     id: Option<String>,
 }
 
 impl Document {
-    fn named(self) -> Result<(String, String), ApiError> {
-        match (self.symbol, self.id) {
-            (Some(symbol), Some(id)) => Ok((symbol, id)),
-            _ => Err(ApiError::BadRequest("symbol and id required".into())),
+    fn named(self) -> Result<(bagholder_store::feeds::Regulator, String), ApiError> {
+        match (self.source.as_deref().and_then(bagholder_store::feeds::Regulator::parse), self.id) {
+            (Some(source), Some(id)) => Ok((source, id)),
+            _ => Err(ApiError::BadRequest("source (SEDAR+ or SEC) and id required".into())),
         }
     }
 }
 
 /// `GET /api/filings/doc`: the document itself, opened in a tab of its own.
 async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>, headers: HeaderMap) -> Result<Response, ApiError> {
-    let (symbol, id) = d.named()?;
+    let (source, id) = d.named()?;
     let wants_page = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("text/html"));
     let read = blocking({
-        let (symbol, id) = (symbol.clone(), id.clone());
+        let id = id.clone();
         let app = state.app.clone();
-        move || feeds::filings_document(&app, &symbol, &id)
+        move || feeds::filings_document(&app, source, &id)
     })
     .await?;
     match read {
@@ -213,7 +237,7 @@ async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>,
         // a browser asking for a page is answered with one: a raw JSON error in a
         // tab of its own is the app failing in front of the person
         Err(why) if wants_page => {
-            let page = feeds::document_error_page(&state.app, &symbol, &id, &why);
+            let page = feeds::document_error_page(&state.app, source, &id, &why);
             Ok((StatusCode::BAD_GATEWAY, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response())
         }
         Err(why) => Err(ApiError::Upstream(why)),
@@ -221,8 +245,8 @@ async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>,
 }
 
 async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api<feeds::EnrichAnswer> {
-    let (symbol, id) = d.named()?;
-    answer(move || feeds::filings_enrich(&state.app, &symbol, &id)).await
+    let (source, id) = d.named()?;
+    answer(move || feeds::filings_enrich(&state.app, source, &id)).await
 }
 
 #[derive(Deserialize, TS)]
@@ -247,7 +271,7 @@ pub struct ShortsQuery {
 
 async fn shorts(State(state): State<AppState>, Params(q): Params<ShortsQuery>) -> Api<feeds::ShortsAnswer> {
     let l = q.listing;
-    answer(move || feeds::shorts_payload(&state.app, &l.symbol, some(&l.exchange), some(&l.currency), q.trend).into()).await
+    answer(move || feeds::shorts_payload(&state.app, &l.key, &l.exchange, &l.currency, q.trend).into()).await
 }
 
 async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsFeed> {
@@ -255,7 +279,7 @@ async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsF
 }
 
 async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::NewsSymbolAnswer> {
-    answer(move || feeds::news_symbol_payload(&state.app, &l.symbol, &l.exchange, &l.currency)).await
+    answer(move || feeds::news_symbol_payload(&state.app, &l.key, &l.exchange, &l.currency)).await
 }
 
 /// `GET /api/history`: a chart's bars. Its parameters are read by the history
