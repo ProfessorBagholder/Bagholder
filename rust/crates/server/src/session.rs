@@ -212,6 +212,7 @@ pub fn scrape_client_id(app: &Arc<App>) -> String {
     };
     let hdrs: Vec<(&str, &str)> = if ua.is_empty() { vec![] } else { vec![("User-Agent", ua.as_str())] };
     let get = |url: &str| bagholder_net::client::request("GET", url, &hdrs, None, Duration::from_secs(20)).ok().map(|r| r.text());
+    bagholder_wealthsimple::hosts::named_call("web app/login");
     let html = match get(&bagholder_wealthsimple::hosts::login_url()) { Some(h) => h, None => return String::new() };
     let script = regex::Regex::new(r#"(?i)<script[^>]+src="([^"]*app-[a-f0-9]+\.js[^"]*)""#).unwrap();
     let mut js_url = match script.captures(&html) { Some(c) => c[1].to_string(), None => return String::new() };
@@ -220,6 +221,7 @@ pub fn scrape_client_id(app: &Arc<App>) -> String {
     } else if js_url.starts_with('/') {
         js_url = format!("{}{}", bagholder_wealthsimple::hosts::web(), js_url);
     }
+    bagholder_wealthsimple::hosts::named_call("web app script");
     let js = match get(&js_url) { Some(j) => j, None => return String::new() };
     match regex::Regex::new(r#"(?s)production:.*?clientId:"([a-f0-9]+)""#).unwrap().captures(&js) {
         Some(c) => {

@@ -1,12 +1,12 @@
 // Builds the server and the made-up book, then runs the server on it until told
 // to stop. Started by Playwright (`webServer` in playwright.config.ts).
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { standIn } from './wealthsimple.mjs'
+import { onAnswered, standIn } from './wealthsimple.mjs'
 
 const web = join(dirname(fileURLToPath(import.meta.url)), '..')
 const rust = join(web, '..', 'rust')
@@ -44,6 +44,11 @@ execFileSync(join(rust, 'target', 'debug', 'bagholder' + exe), ['demo-facts', ho
 // which offline the app cannot reach. Every other call is answered as an error.
 let wsBase = ''
 if (signedIn) {
+  // each call the stand-in answers, beside the server's own log of what it asked
+  if (requestLog) {
+    writeFileSync(`${requestLog}.answered`, '')
+    onAnswered((call) => appendFileSync(`${requestLog}.answered`, call + '\n'))
+  }
   const ws = createServer(standIn)
   await new Promise((ok) => ws.listen(0, '127.0.0.1', ok))
   wsBase = `http://127.0.0.1:${ws.address().port}`
@@ -70,4 +75,11 @@ const server = spawn(join(rust, 'target', 'debug', 'bagholder' + exe), [], {
 const stop = () => server.kill('SIGTERM')
 process.on('SIGTERM', stop)
 process.on('SIGINT', stop)
-server.on('exit', (code) => { rmSync(home, { recursive: true, force: true }); process.exit(code ?? 0) })
+server.on('exit', (code) => {
+  rmSync(home, { recursive: true, force: true })
+  if (requestLog) {
+    rmSync(requestLog, { force: true })
+    rmSync(`${requestLog}.answered`, { force: true })
+  }
+  process.exit(code ?? 0)
+})

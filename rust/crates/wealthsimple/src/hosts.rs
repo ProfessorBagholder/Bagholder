@@ -6,8 +6,8 @@
 /// The variable that points every Wealthsimple address at a stand-in.
 pub const BASE_VAR: &str = "BAGHOLDER_WS_BASE";
 
-const WEB: &str = "https://my.wealthsimple.com";
-const TOKEN: &str = "https://api.production.wealthsimple.com/v1/oauth/v2/token";
+// Each real address is named only inside the one function that honours the
+// variable, so no other code can reach the real host past a stand-in (brief 39, 1).
 
 fn base() -> Option<String> {
     std::env::var(BASE_VAR).ok().map(|b| b.trim_end_matches('/').to_string()).filter(|b| !b.is_empty())
@@ -15,7 +15,8 @@ fn base() -> Option<String> {
 
 /// Wealthsimple's web app, whose origin its API calls carry.
 pub fn web() -> String {
-    base().unwrap_or_else(|| WEB.to_string())
+    const REAL: &str = "https://my.wealthsimple.com";
+    base().unwrap_or_else(|| REAL.to_string())
 }
 
 /// The GraphQL endpoint every read and order goes to.
@@ -25,9 +26,19 @@ pub fn graphql_url() -> String {
 
 /// The token endpoint a saved sign-in is refreshed at.
 pub fn token_url() -> String {
+    const REAL: &str = "https://api.production.wealthsimple.com/v1/oauth/v2/token";
     match base() {
         Some(b) => format!("{b}/oauth/v2/token"),
-        None => TOKEN.to_string(),
+        None => REAL.to_string(),
+    }
+}
+
+/// Names a call this client makes to Wealthsimple, as it is made, when every
+/// request is named (`BAGHOLDER_LOG_REQUESTS=1`): what a test checks the stand-in
+/// answered, so a call sent anywhere else is seen (brief 39, 2).
+pub fn named_call(what: &str) {
+    if bagholder_net::client::logging_requests() {
+        eprintln!("wealthsimple {what}");
     }
 }
 

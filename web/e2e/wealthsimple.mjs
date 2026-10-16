@@ -13,6 +13,20 @@ function result(l) {
   return { id: l.id, buyable: true, status: 'TRADING', currency: l.currency, securityType: l.securityType, wsTradeEligible: true, stock: { symbol: l.symbol, name: l.name, primaryExchange: l.primaryExchange, primaryMic: l.primaryMic } }
 }
 
+// told each call answered, in the words the app's clients name their calls with
+// (`named_call`): `graphql <operation>`, `oauth token`, `oauth token/info`, `web <path>`
+let answered = () => {}
+export function onAnswered(f) {
+  answered = f
+}
+
+function named(req, asked) {
+  const path = req.url.split('?')[0]
+  if (path.startsWith('/oauth')) return 'oauth ' + path.replace(/^\/oauth(\/v2)?\//, '')
+  if (path === '/graphql') return `graphql ${asked.operationName || ''}`
+  return 'web ' + path.replace(/^\//, '')
+}
+
 export function standIn(req, res) {
   let body = ''
   req.on('data', (c) => { body += c })
@@ -21,9 +35,10 @@ export function standIn(req, res) {
       res.writeHead(status, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify(json))
     }
-    if (req.url.startsWith('/oauth')) return send(200, { access_token: 'e2e-access', refresh_token: 'e2e-refresh', expires_in: 86400, identity_canonical_id: 'identity-e2e' })
     let asked = {}
     try { asked = JSON.parse(body || '{}') } catch { asked = {} }
+    answered(named(req, asked))
+    if (req.url.startsWith('/oauth')) return send(200, { access_token: 'e2e-access', refresh_token: 'e2e-refresh', expires_in: 86400, identity_canonical_id: 'identity-e2e' })
     if (asked.operationName === 'FetchSecuritySearchResult') {
       const q = String(asked.variables?.query || '').toUpperCase()
       return send(200, { data: { securitySearch: { results: LISTINGS.filter((l) => l.symbol === q).map(result) } } })

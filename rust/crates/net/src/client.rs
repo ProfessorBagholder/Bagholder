@@ -593,7 +593,9 @@ fn leaving(method: &str, u: &Url) -> Result<(), Error> {
     }
     let refused = refused_offline(&u.host);
     if logging_requests() {
-        eprintln!("outbound {} {}{}{}", method, u.host, u.path.split('?').next().unwrap_or(""), if refused { " (refused: offline)" } else { "" });
+        // the port where it is not the scheme's own, so two servers on one host are told apart
+        let port = if u.port == if u.tls { 443 } else { 80 } { String::new() } else { format!(":{}", u.port) };
+        eprintln!("outbound {} {}{}{}{}", method, u.host, port, u.path.split('?').next().unwrap_or(""), if refused { " (refused: offline)" } else { "" });
     }
     if refused {
         return Err(Error::Transport(OFFLINE.into()));
