@@ -495,7 +495,6 @@ pub fn trim_news(conn: &Connection, keep: i64) -> Result<()> {
 // filings
 // --------------------------------------------------------------------------
 
-pub fn filing_key(symbol: &str) -> String { up(symbol) }
 
 /// The regulator a document was filed with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
@@ -518,6 +517,46 @@ impl Regulator {
         match s {
             "SEDAR+" => Some(Regulator::Sedar),
             "SEC" => Some(Regulator::Sec),
+            _ => None,
+        }
+    }
+}
+
+/// A filer: the issuer a regulator lists documents under, by that regulator's own
+/// number for it (an SEC CIK, a SEDAR+ profile). Filings are kept per filer, so
+/// two companies that share a ticker never share them and two listings of one
+/// company read the same ones (plan `market-data-keyed-by-listing`, Approach, 2).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub struct Filer {
+    pub source: Regulator,
+    pub id: String,
+}
+
+/// How a listing's filer was settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum SettledBy {
+    /// The SEC's ticker-and-exchange list names the listing's CIK.
+    SecTicker,
+    /// SEDAR+ lists exactly one issuer by the name the listing's exchange gives.
+    SedarName,
+    /// The TSX's interlisted list pairs the listing with one whose filer this is.
+    Interlisted,
+}
+
+impl SettledBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SettledBy::SecTicker => "sec-ticker",
+            SettledBy::SedarName => "sedar-name",
+            SettledBy::Interlisted => "interlisted",
+        }
+    }
+
+    fn parse(s: &str) -> Option<SettledBy> {
+        match s {
+            "sec-ticker" => Some(SettledBy::SecTicker),
+            "sedar-name" => Some(SettledBy::SedarName),
+            "interlisted" => Some(SettledBy::Interlisted),
             _ => None,
         }
     }
@@ -604,7 +643,8 @@ fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
         id: maybe(r, "id")?,
         source,
         category: maybe(r, "category")?,
-        profile_no: maybe(r, "profile_no")?,
+        // a SEDAR+ document's profile is its filer, which its documents are fetched under
+        profile_no: if source == Regulator::Sedar { maybe(r, "filer")? } else { String::new() },
         issuer: maybe(r, "issuer")?,
         form: or("type", "file")?,
         title: maybe(r, "title")?,
@@ -632,34 +672,42 @@ fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
     }))
 }
 
-pub fn filings_for(conn: &Connection, symbol: &str) -> Result<Vec<Filing>> {
-    let mut stmt = conn.prepare("SELECT * FROM filings WHERE symbol = ? ORDER BY date DESC, id")?;
-    let mut rows = stmt.query([filing_key(symbol)])?;
+/// The documents of the given filers, newest first: a listing's filings are its
+/// filers' (`listing_filers`).
+pub fn filings_of(conn: &Connection, filers: &[Filer]) -> Result<Vec<Filing>> {
     let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        if let Some(fl) = filing_from_row(r)? {
-            out.push(fl);
+    let mut stmt = conn.prepare("SELECT * FROM filings WHERE source = ? AND filer = ?")?;
+    for f in filers {
+        let mut rows = stmt.query(rusqlite::params![f.source.as_str(), f.id])?;
+        while let Some(r) = rows.next()? {
+            if let Some(fl) = filing_from_row(r)? {
+                out.push(fl);
+            }
         }
     }
+    out.sort_by(|a, b| b.doc.date.cmp(&a.doc.date).then_with(|| a.doc.id.cmp(&b.doc.id)));
+    out.dedup_by(|a, b| a.doc.source == b.doc.source && a.doc.id == b.doc.id);
     Ok(out)
 }
 
-pub fn filings_all(conn: &Connection) -> Result<std::collections::BTreeMap<String, Vec<Filing>>> {
-    let mut stmt = conn.prepare("SELECT * FROM filings ORDER BY symbol, date DESC, id")?;
+/// Every stored document, by its filer.
+pub fn filings_all(conn: &Connection) -> Result<std::collections::BTreeMap<Filer, Vec<Filing>>> {
+    let mut stmt = conn.prepare("SELECT * FROM filings ORDER BY source, filer, date DESC, id")?;
     let mut rows = stmt.query([])?;
-    let mut out: std::collections::BTreeMap<String, Vec<Filing>> = std::collections::BTreeMap::new();
+    let mut out: std::collections::BTreeMap<Filer, Vec<Filing>> = std::collections::BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let sym: String = r.get("symbol")?;
+        let filer: String = r.get("filer")?;
         if let Some(fl) = filing_from_row(r)? {
-            out.entry(sym).or_default().push(fl);
+            out.entry(Filer { source: fl.doc.source, id: filer }).or_default().push(fl);
         }
     }
     Ok(out)
 }
 
-pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Filing>> {
-    let mut stmt = conn.prepare("SELECT * FROM filings WHERE symbol = ? AND id = ?")?;
-    let mut rows = stmt.query(rusqlite::params![filing_key(symbol), doc_id])?;
+/// One document, by its source and its source's own id.
+pub fn filing(conn: &Connection, source: Regulator, doc_id: &str) -> Result<Option<Filing>> {
+    let mut stmt = conn.prepare("SELECT * FROM filings WHERE source = ? AND id = ?")?;
+    let mut rows = stmt.query(rusqlite::params![source.as_str(), doc_id])?;
     match rows.next()? { Some(r) => filing_from_row(r), None => Ok(None) }
 }
 
@@ -668,7 +716,7 @@ pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Fi
 /// once. A value not given is left as it was.
 pub fn set_filing_enrichment(
     conn: &Connection,
-    symbol: &str,
+    source: Regulator,
     doc_id: &str,
     subject: Option<&str>,
     summary: Option<&str>,
@@ -696,9 +744,9 @@ pub fn set_filing_enrichment(
         sets.push("enrich_version = ?");
         args.push(Box::new(v));
     }
-    args.push(Box::new(filing_key(symbol)));
+    args.push(Box::new(source.as_str()));
     args.push(Box::new(doc_id.to_string()));
-    let sql = format!("UPDATE filings SET {} WHERE symbol = ? AND id = ?", sets.join(", "));
+    let sql = format!("UPDATE filings SET {} WHERE source = ? AND id = ?", sets.join(", "));
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     conn.execute(&sql, refs.as_slice())?;
     Ok(())
@@ -706,32 +754,29 @@ pub fn set_filing_enrichment(
 
 /// How many reads that could have answered a document has had under the current
 /// logic (`Filing::enrich_reads`).
-pub fn set_filing_reads(conn: &Connection, symbol: &str, doc_id: &str, reads: i64) -> Result<()> {
+pub fn set_filing_reads(conn: &Connection, source: Regulator, doc_id: &str, reads: i64) -> Result<()> {
     conn.execute(
-        "UPDATE filings SET enrich_reads = ? WHERE symbol = ? AND id = ?",
-        rusqlite::params![reads, filing_key(symbol), doc_id],
+        "UPDATE filings SET enrich_reads = ? WHERE source = ? AND id = ?",
+        rusqlite::params![reads, source.as_str(), doc_id],
     )?;
     Ok(())
 }
 
-/// `replace_filings`: one source's disclosures for a symbol, in place of
-/// what that source had.
+/// `replace_filings`: one filer's documents, in place of what was stored for it.
 ///
-/// Other sources' rows are untouched, and so is what has been read from the
-/// documents: a row the source still lists keeps its subject and summary. The
-/// list is refreshed far more often than a filed document changes, and
-/// throwing the reading away with it meant every document was read again from
-/// nothing on each refresh.
-pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items: &[FiledDocument], now: &str) -> Result<usize> {
+/// What has been read from the documents is kept: a document the filer still
+/// lists keeps its subject and summary. The list is refreshed far more often than
+/// a filed document changes, and throwing the reading away with it meant every
+/// document was read again from nothing on each refresh.
+pub fn replace_filings(conn: &Connection, filer: &Filer, items: &[FiledDocument], now: &str) -> Result<usize> {
     crate::atomically(conn, || {
-        let sym = filing_key(symbol);
         struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64>, reads: Option<i64> }
         let mut kept: Vec<(String, Kept)> = Vec::new();
         {
             let mut stmt = conn.prepare(
-                "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads FROM filings WHERE symbol = ? AND source = ?",
+                "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads FROM filings WHERE source = ? AND filer = ?",
             )?;
-            let mut rows = stmt.query(rusqlite::params![sym, source.as_str()])?;
+            let mut rows = stmt.query(rusqlite::params![filer.source.as_str(), filer.id])?;
             while let Some(r) = rows.next()? {
                 kept.push((
                     r.get::<_, String>(0)?,
@@ -739,19 +784,19 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items
                 ));
             }
         }
-        conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source.as_str()])?;
+        conn.execute("DELETE FROM filings WHERE source = ? AND filer = ?", rusqlite::params![filer.source.as_str(), filer.id])?;
 
         let mut n = 0usize;
         for it in items {
-            if it.id.is_empty() {
+            if it.id.is_empty() || it.source != filer.source {
                 continue;
             }
             let read = kept.iter().find(|(k, _)| *k == it.id).map(|(_, v)| v);
             conn.execute(
-                "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
-                 subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO filings (source, id, filer, category, issuer, type, title, date, date_text, size, url, fetched_at, \
+                 subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    sym, it.id, source.as_str(), it.category, it.profile_no, it.issuer,
+                    filer.source.as_str(), it.id, filer.id, it.category, it.issuer,
                     it.form, it.title, it.date, it.date_text,
                     it.size, it.url, now,
                     read.map(|k| k.subject.clone().unwrap_or_default()).unwrap_or_default(),
@@ -764,8 +809,135 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items
             )?;
             n += 1;
         }
+        conn.execute(
+            "INSERT OR REPLACE INTO filer_fetches (source, filer, fetched_at) VALUES (?, ?, ?)",
+            rusqlite::params![filer.source.as_str(), filer.id, now],
+        )?;
         Ok(n)
     })
+}
+
+/// When a filer's documents were last read; empty when never.
+pub fn filer_fetched_at(conn: &Connection, filer: &Filer) -> Result<String> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row("SELECT fetched_at FROM filer_fetches WHERE source = ? AND filer = ?", rusqlite::params![filer.source.as_str(), filer.id], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default())
+}
+
+/// The filers a listing's filings come from, each with how it was settled.
+pub fn listing_filers(conn: &Connection, listing: &ListingKey) -> Result<Vec<(Filer, SettledBy)>> {
+    let mut stmt = conn.prepare("SELECT source, filer, settled_by FROM listing_filers WHERE listing = ? ORDER BY source, filer")?;
+    let mut rows = stmt.query(rusqlite::params![listing.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        let (source, filer, by): (String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let bad = |what: &str, v: &str| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, format!("listing_filers.{what} holds {v:?}").into());
+        let source = Regulator::parse(&source).ok_or_else(|| bad("source", &source))?;
+        let by = SettledBy::parse(&by).ok_or_else(|| bad("settled_by", &by))?;
+        out.push((Filer { source, id: filer }, by));
+    }
+    Ok(out)
+}
+
+/// What a listing's filer under `source` was settled as, in place of what it was:
+/// the filers found (none where none could be), or why none could be settled.
+pub fn settle_listing_filers(conn: &Connection, listing: &ListingKey, source: Regulator, found: Result<&[(String, SettledBy)], &str>, now: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        let key = listing.to_string();
+        conn.execute("DELETE FROM listing_filers WHERE listing = ? AND source = ?", rusqlite::params![key, source.as_str()])?;
+        conn.execute("DELETE FROM listing_filer_misses WHERE listing = ? AND source = ?", rusqlite::params![key, source.as_str()])?;
+        match found {
+            Ok(filers) => {
+                for (filer, by) in filers {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO listing_filers (listing, source, filer, settled_by, checked_at) VALUES (?, ?, ?, ?, ?)",
+                        rusqlite::params![key, source.as_str(), filer, by.as_str(), now],
+                    )?;
+                }
+            }
+            Err(why) => {
+                conn.execute(
+                    "INSERT INTO listing_filer_misses (listing, source, why, checked_at) VALUES (?, ?, ?, ?)",
+                    rusqlite::params![key, source.as_str(), why, now],
+                )?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Why a listing's filer under `source` could not be settled, when it was last
+/// asked and could not; with when that was.
+pub fn listing_filer_miss(conn: &Connection, listing: &ListingKey, source: Regulator) -> Result<Option<(String, String)>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT why, checked_at FROM listing_filer_misses WHERE listing = ? AND source = ?",
+        rusqlite::params![listing.to_string(), source.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+}
+
+/// When a listing's filer under `source` was last settled or missed; empty when never.
+pub fn listing_filers_checked_at(conn: &Connection, listing: &ListingKey, source: Regulator) -> Result<String> {
+    use rusqlite::OptionalExtension;
+    let key = listing.to_string();
+    let found: Option<String> = conn
+        .query_row("SELECT MAX(checked_at) FROM listing_filers WHERE listing = ? AND source = ?", rusqlite::params![key, source.as_str()], |r| r.get(0))
+        .optional()?
+        .flatten();
+    let missed: Option<String> = conn
+        .query_row("SELECT checked_at FROM listing_filer_misses WHERE listing = ? AND source = ?", rusqlite::params![key, source.as_str()], |r| r.get(0))
+        .optional()?;
+    Ok(found.into_iter().chain(missed).max().unwrap_or_default())
+}
+
+/// One row of the TSX's interlisted list: a Canadian listing and the US listing
+/// it is paired with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Interlisted {
+    pub listing: ListingKey,
+    pub us_listing: ListingKey,
+    pub name: String,
+}
+
+/// The TSX's interlisted list as read, in place of the last list, with the day
+/// it states it is as of.
+pub fn replace_interlisted(conn: &Connection, rows: &[Interlisted], as_of: &str, now: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM interlisted", [])?;
+        for r in rows {
+            conn.execute(
+                "INSERT OR REPLACE INTO interlisted (listing, us_listing, name, as_of, read_at) VALUES (?, ?, ?, ?, ?)",
+                rusqlite::params![r.listing.to_string(), r.us_listing.to_string(), r.name, as_of, now],
+            )?;
+        }
+        crate::tables::set_meta(conn, "interlisted:read_at", now)?;
+        Ok(())
+    })
+}
+
+/// When the interlisted list was last read; empty when never.
+pub fn interlisted_read_at(conn: &Connection) -> Result<String> {
+    crate::tables::get_meta(conn, "interlisted:read_at", "")
+}
+
+/// The listing the TSX's interlisted list pairs a listing with, either way round.
+pub fn interlisted_partner(conn: &Connection, listing: &ListingKey) -> Result<Option<ListingKey>> {
+    use rusqlite::OptionalExtension;
+    let key = listing.to_string();
+    let other: Option<String> = conn
+        .query_row(
+            "SELECT us_listing FROM interlisted WHERE listing = ?1 UNION ALL SELECT listing FROM interlisted WHERE us_listing = ?1 LIMIT 1",
+            rusqlite::params![key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    other
+        .map(|o| o.parse().map_err(|e: bagholder_core::listing::NotAListing| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))))
+        .transpose()
 }
 
 // --------------------------------------------------------------------------
@@ -906,7 +1078,10 @@ fn short_row(r: &Row) -> Result<Option<StoredShorts>> {
     };
     Ok(Some(StoredShorts {
         shorts: Shorts {
-            symbol: text(r, "symbol")?,
+            symbol: {
+                let listing: ListingKey = text(r, "listing")?.parse().map_err(|e: bagholder_core::listing::NotAListing| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+                listing.symbol().to_string()
+            },
             exchange: text(r, "exchange")?,
             market,
             name: text(r, "name")?,
@@ -936,9 +1111,9 @@ fn short_row(r: &Row) -> Result<Option<StoredShorts>> {
 ///
 /// A run of reports already stored is not dropped by a later read that did not
 /// ask for one.
-pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> Result<()> {
+pub fn save_shorts(conn: &Connection, listing: &ListingKey, rec: &Shorts, now: &str, version: i64) -> Result<()> {
     crate::atomically(conn, || {
-        let sym = up(&rec.symbol);
+        let key = listing.to_string();
         let ex = up(&rec.exchange);
         let series: Vec<ShortPoint> = match &rec.series {
             Some(s) => s.clone(),
@@ -946,8 +1121,8 @@ pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> 
                 use rusqlite::OptionalExtension;
                 let held: Option<String> = conn
                     .query_row(
-                        "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
-                        rusqlite::params![sym, ex],
+                        "SELECT series FROM shorts WHERE listing = ?",
+                        rusqlite::params![key],
                         |r| r.get(0),
                     )
                     .optional()?
@@ -959,12 +1134,12 @@ pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> 
             }
         };
         conn.execute(
-            "INSERT OR REPLACE INTO shorts (symbol, exchange, market, as_of, shares, previous, previous_of, change, \
+            "INSERT OR REPLACE INTO shorts (listing, exchange, market, as_of, shares, previous, previous_of, change, \
              float_shares, of_float, average_volume, days_to_cover, volume_of, volume_span, short_volume, \
              total_volume, volume_pct, name, series, read_version, fetched_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
-                sym,
+                key,
                 ex,
                 rec.market.as_str(),
                 rec.as_of,
@@ -993,9 +1168,9 @@ pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> 
 
 /// One listing's stored short selling; `None` where none is stored, or where
 /// the row stored is from before the market was typed.
-pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Option<StoredShorts>> {
-    let mut stmt = conn.prepare("SELECT * FROM shorts WHERE symbol = ? AND exchange = ?")?;
-    let mut rows = stmt.query(rusqlite::params![up(symbol), up(exchange)])?;
+pub fn shorts_for(conn: &Connection, listing: &ListingKey) -> Result<Option<StoredShorts>> {
+    let mut stmt = conn.prepare("SELECT * FROM shorts WHERE listing = ?")?;
+    let mut rows = stmt.query(rusqlite::params![listing.to_string()])?;
     match rows.next()? { Some(r) => short_row(r), None => Ok(None) }
 }
 
@@ -1355,46 +1530,6 @@ pub fn all_shorts(conn: &Connection) -> Result<Vec<StoredShorts>> {
         }
     }
     Ok(out)
-}
-
-/// `mark_filings_fetched`: when a symbol's disclosures were last
-/// refreshed, and its SEDAR+ profile number when one was found.
-pub fn mark_filings_fetched(conn: &Connection, symbol: &str, profile_no: &str, now: &str) -> Result<()> {
-    crate::atomically(conn, || {
-        let sym = filing_key(symbol);
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            rusqlite::params![format!("filings_fetched:{}", sym), now],
-        )?;
-        if !profile_no.is_empty() {
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-                rusqlite::params![format!("sedar_profile:{}", sym), profile_no],
-            )?;
-        }
-        Ok(())
-    })
-}
-
-pub fn filings_fetched_for(conn: &Connection, symbol: &str) -> Result<String> {
-    Ok(crate::tables::get_meta(conn, &format!("filings_fetched:{}", filing_key(symbol)), "")?)
-}
-
-/// `sedar_profile`.
-pub fn sedar_profile(conn: &Connection, symbol: &str) -> Result<String> {
-    crate::tables::get_meta(conn, &format!("sedar_profile:{}", filing_key(symbol)), "")
-}
-
-pub fn forget_filings(conn: &Connection, symbol: &str) -> Result<()> {
-    crate::atomically(conn, || {
-        let sym = filing_key(symbol);
-        conn.execute("DELETE FROM filings WHERE symbol = ?", [&sym])?;
-        conn.execute(
-            "DELETE FROM meta WHERE key IN (?, ?)",
-            rusqlite::params![format!("filings_fetched:{}", sym), format!("sedar_profile:{}", sym)],
-        )?;
-        Ok(())
-    })
 }
 
 /// `sold_since`: the shares sold in an account since a moment, from the

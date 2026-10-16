@@ -38,13 +38,13 @@ fn tools() -> Value {
     json!([
         {
             "name": "disclosures_list",
-            "description": "List a company's regulatory filings from every source that covers it (SEDAR+ Canada, SEC EDGAR US), merged newest-first and tagged by source and category (Financials, Material events, Governance, Offerings, Insider & ownership, News release). Give a ticker; add name/exchange/currency when known for accuracy.",
-            "inputSchema": {"type": "object", "properties": meta_props(list_props.as_object().unwrap().clone()), "required": ["symbol"]},
+            "description": "List a listing's regulatory filings: its own regulator's (SEDAR+ for a Canadian listing, SEC EDGAR for a US one) and, where the TSX's interlisted list pairs it with a listing in the other country, that listing's regulator's too, merged newest-first and tagged by source and category (Financials, Material events, Governance, Offerings, Insider & ownership, News release). Give the ticker and its exchange (TSX, TSX-V, CSE, NYSE, NASDAQ, ...): a ticker can be two companies on two exchanges.",
+            "inputSchema": {"type": "object", "properties": meta_props(list_props.as_object().unwrap().clone()), "required": ["symbol", "exchange"]},
         },
         {
             "name": "disclosures_document",
             "description": "Download one filing to a local file, given the ticker and the item's id from disclosures_list. Returns the saved path.",
-            "inputSchema": {"type": "object", "properties": meta_props(doc_props.as_object().unwrap().clone()), "required": ["symbol", "id"]},
+            "inputSchema": {"type": "object", "properties": meta_props(doc_props.as_object().unwrap().clone()), "required": ["symbol", "exchange", "id"]},
         },
         {
             "name": "sedar_resolve_profile",
@@ -144,6 +144,18 @@ fn file_name(id: &str, content_type: &str) -> String {
     base + ext
 }
 
+/// The listing a call names, with the listing the TSX's interlisted list pairs it
+/// with, read now.
+fn listing(symbol: &str, exchange: &str) -> Result<(bagholder_core::ListingKey, Option<bagholder_core::ListingKey>), Fail> {
+    if exchange.trim().is_empty() {
+        return Err(Fail::Other("KeyError: 'exchange'".into()));
+    }
+    let key = bagholder_core::ListingKey::on(symbol, exchange).map_err(|e| Fail::Other(format!("ValueError: {e}")))?;
+    let (_, pairs) = bagholder_market::interlisted::fetch().map_err(|e| Fail::Source(format!("the TSX's interlisted list: {e}")))?;
+    let partner = pairs.into_iter().find_map(|p| if p.listing == key { Some(p.us_listing) } else if p.us_listing == key { Some(p.listing) } else { None });
+    Ok((key, partner))
+}
+
 fn required(v: Option<String>, k: &str) -> Result<String, Fail> {
     v.ok_or_else(|| Fail::Other(format!("KeyError: '{}'", k)))
 }
@@ -162,13 +174,17 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
                 None => 100,
                 Some(v) => v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(|| Fail::Other(format!("ValueError: invalid literal for int(): {}", v)))?,
             };
-            Ok(serde_json::to_value(disclosures::fetch(&symbol, &a.meta.name, &a.meta.exchange, &a.meta.currency, limit.max(1) as usize, "")).unwrap())
+            let (key, partner) = listing(&symbol, &a.meta.exchange)?;
+            let today = bagholder_model::clock::today_local();
+            Ok(serde_json::to_value(disclosures::gather(&disclosures::Live, &key, partner.as_ref(), &today, limit.max(1) as usize)).unwrap())
         }
         "disclosures_document" => {
             let a: DocArgs = serde_json::from_value(args.clone()).map_err(bad_args)?;
             let symbol = required(a.symbol, "symbol")?;
             let id = required(a.id, "id")?;
-            let result = disclosures::fetch(&symbol, &a.meta.name, &a.meta.exchange, &a.meta.currency, 200, "");
+            let (key, partner) = listing(&symbol, &a.meta.exchange)?;
+            let today = bagholder_model::clock::today_local();
+            let result = disclosures::gather(&disclosures::Live, &key, partner.as_ref(), &today, 200);
             let row = result.items.into_iter().find(|i| i.id == id);
             let row = match row {
                 Some(r) => r,

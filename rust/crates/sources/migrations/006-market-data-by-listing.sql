@@ -51,6 +51,8 @@ CREATE TABLE bar_fetches (
 DROP TABLE shorts;
 CREATE TABLE shorts (
     listing TEXT PRIMARY KEY,
+    -- the venue in the words the listing was read under, for display alone
+    exchange TEXT NOT NULL DEFAULT '',
     market TEXT,
     as_of TEXT,
     shares REAL,

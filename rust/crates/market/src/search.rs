@@ -76,6 +76,38 @@ pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<SymbolMatch> {
     out
 }
 
+/// The name of the company the TSX's directory holds a TSX or TSX Venture
+/// listing under: the one company record among the directory's answer whose
+/// instruments include the listing's symbol. None where no record, or more than
+/// one, holds it; a request that fails is the failure.
+pub fn tsx_issuer_name(listing: &bagholder_core::ListingKey) -> Result<Option<String>, crate::http::FetchError> {
+    let dir = match listing.venue() {
+        "XTSE" => "tsx",
+        "XTSX" => "tsxv",
+        _ => return Ok(None),
+    };
+    let url = TSX_SEARCH_URL.replacen("{}", dir, 1).replacen("{}", &crate::quotes::percent_encode(listing.symbol()), 1);
+    let data: Value = serde_json::from_str(&crate::http::get_text(&url, &headers())?)
+        .map_err(|e| crate::http::FetchError::Transport(format!("the TSX's directory does not read: {e}")))?;
+    Ok(tsx_holder(&data, listing.symbol()))
+}
+
+/// The name of the one company record in a TSX directory answer that holds
+/// `symbol` among its instruments; none where none, or more than one, does.
+pub fn tsx_holder(data: &Value, symbol: &str) -> Option<String> {
+    let rows = data.get("results").and_then(|d| d.as_array())?;
+    let holders: Vec<String> = rows
+        .iter()
+        .filter(|r| r.get("instruments").and_then(|i| i.as_array()).is_some_and(|i| i.iter().any(|x| s(x.get("symbol")).eq_ignore_ascii_case(symbol))))
+        .map(|r| s(r.get("name")))
+        .filter(|n| !n.trim().is_empty())
+        .collect();
+    match holders.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// Exact symbols first, then symbols starting with the
 /// text, then the rest, each group in the order the sources gave; duplicates
 /// dropped; at most twelve.

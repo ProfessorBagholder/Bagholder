@@ -543,6 +543,101 @@ pub fn rank(rows: &mut [ReportingIssuer], q: &str) -> Vec<ReportingIssuer> {
     rows.to_vec()
 }
 
+// --- which profile a listing's issuer is --------------------------------------
+
+/// What SEDAR+'s reporting-issuer search is asked for an issuer's name: the name
+/// up to its first comma, period or parenthesis, with "The" taken off either end.
+/// Its search matches names by their leading words, and punctuation in the query
+/// breaks it ("Waste Connections, Inc" finds nothing, "Waste Connections" finds
+/// the one profile; checked against SEDAR+ for the S&P/TSX 60, 2026-10-16,
+/// `tests/replies/sedar-tsx60`).
+pub fn query_of(name: &str) -> String {
+    let n = strip_the(name.trim());
+    let cut = n.find([',', '.', '(']).map_or(n.as_str(), |i| &n[..i]);
+    trim_space(cut).to_string()
+}
+
+/// A name with "The" taken off either end: a leading "The", a trailing ", The"
+/// or "(The)" (the TSX directory's form, `Toronto-Dominion Bank (The)`).
+fn strip_the(name: &str) -> String {
+    let mut n = name.trim().to_string();
+    for tail in ["(the)", ", the"] {
+        if n.to_lowercase().ends_with(tail) {
+            n.truncate(n.len() - tail.len());
+        }
+    }
+    let n = n.trim();
+    match n.get(..4) {
+        Some(head) if head.eq_ignore_ascii_case("the ") => n[4..].trim().to_string(),
+        _ => n.to_string(),
+    }
+}
+
+/// An issuer's legal name as names are compared: without letter case, spacing,
+/// periods or commas, the placement of "The", or a "formerly" note SEDAR+ adds
+/// ("Waste Connections, Inc. (formerly Progressive Waste Solutions Ltd.)").
+pub fn comparable(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let cut = match lower.find("formerly") {
+        Some(i) => lower[..i].trim_end().trim_end_matches('(').to_string(),
+        None => lower,
+    };
+    let n = strip_the(&cut).replace(['.', ','], " ");
+    n.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A reporting issuer's legal names as SEDAR+ lists them: its English name and
+/// its French one (`English / French`), before any operating name.
+pub fn legal_names(cell: &str) -> Vec<String> {
+    let head = cell.split(" Operating name:").next().unwrap_or(cell);
+    head.split(" / ").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()
+}
+
+/// How long a listed issuer can go without filing: a reporting issuer files its
+/// annual financial statements every year, within 120 days of its year-end at the
+/// latest (National Instrument 51-102, s. 4.2: 90 days, or 120 for a venture
+/// issuer). A profile with nothing filed in twelve months and those 120 days is
+/// not a listed issuer's (plan `market-data-keyed-by-listing`, Open questions, 1).
+pub const LISTED_FILING_WINDOW_DAYS: i64 = 365 + 120;
+
+/// The one profile an issuer's name settles to: among SEDAR+'s answer, the profiles
+/// whose English or French legal name is the name; of two or more, those that have
+/// filed within `LISTED_FILING_WINDOW_DAYS` of `today` (`newest` gives a profile's
+/// newest filing day). The profile, or why none settles: never one picked from
+/// several.
+pub fn pick_profile(name: &str, answer: &[ReportingIssuer], today: &str, newest: &dyn Fn(&str) -> Fetched<Option<String>>) -> Fetched<Result<String, String>> {
+    let want = comparable(name);
+    let mut named: Vec<&ReportingIssuer> = answer.iter().filter(|r| legal_names(&r.name).iter().any(|l| comparable(l) == want)).collect();
+    named.dedup_by(|a, b| a.profile_no == b.profile_no);
+    if named.len() > 1 {
+        let since = bagholder_model::dates::shift_date(today, -LISTED_FILING_WINDOW_DAYS);
+        let mut filing = Vec::new();
+        for r in named {
+            if newest(&r.profile_no)?.is_some_and(|d| d.as_str() >= since.as_str()) {
+                filing.push(r);
+            }
+        }
+        named = filing;
+    }
+    Ok(match named.as_slice() {
+        [one] => Ok(one.profile_no.clone()),
+        [] => Err(format!("SEDAR+ lists no single issuer named {name}.")),
+        _ => Err(format!("SEDAR+ lists more than one issuer named {name}.")),
+    })
+}
+
+/// The profile an issuer's name settles to, asked of SEDAR+ (`pick_profile`).
+pub fn profile_of(name: &str, today: &str) -> Fetched<Result<String, String>> {
+    let answer = match resolve_profile(&query_of(name))? {
+        Lookup::Found(rows) => rows,
+        Lookup::NotFound => vec![],
+    };
+    let newest = |profile: &str| -> Fetched<Option<String>> {
+        Ok(list_filings(None, Some(profile), 1)?.and_then(|l| l.filings.first().map(|f| iso(&f.submitted))).filter(|d| !d.is_empty()))
+    };
+    pick_profile(name, &answer, today, &newest)
+}
+
 /// What `list_filings` found for one issuer: its profile (when one is
 /// known), whether the issuer's own document page was walked directly, and
 /// the filings themselves.
@@ -712,14 +807,6 @@ pub fn enrichment(row: &FiledDocument) -> Option<Enrichment> {
     Some(Enrichment { subject: title, summary: String::new(), final_: true })
 }
 
-pub fn covers(_symbol: &str, exchange: &str, currency: &str) -> bool {
-    let ex = exchange.to_uppercase();
-    let cur = currency.to_uppercase();
-    if cur == "USD" || ["NASDAQ", "NYSE", "AMEX", "ARCA", "US"].contains(&ex.as_str()) {
-        return false;
-    }
-    cur == "CAD" || CA_EXCHANGES.contains(&ex.as_str()) || (ex.is_empty() && cur.is_empty())
-}
 
 /// A document name in the shared vocabulary.
 pub fn category(file: &str) -> &'static str {
@@ -793,15 +880,13 @@ pub fn to_item(raw: &SedarRow, profile_no: &str) -> FiledDocument {
     }
 }
 
-/// One Canadian issuer's filings as disclosure items.
-pub fn fetch(symbol: &str, name: &str, _exchange: &str, _currency: &str, limit: usize, profile_no: &str) -> Fetched<Vec<FiledDocument>> {
-    let query = if name.is_empty() { symbol } else { name };
-    let result = match list_filings(Some(query), Some(profile_no), limit)? {
+/// A filer's documents, newest first, by its SEDAR+ profile.
+pub fn fetch_profile(profile_no: &str, limit: usize) -> Fetched<Vec<FiledDocument>> {
+    let result = match list_filings(None, Some(profile_no), limit)? {
         Some(r) => r,
         None => return Ok(vec![]),
     };
-    let pno = result.profile.as_ref().map(|p| p.profile_no.clone()).unwrap_or_default();
-    Ok(result.filings.iter().map(|r| to_item(r, &pno)).collect())
+    Ok(result.filings.iter().map(|r| to_item(r, profile_no)).collect())
 }
 
 /// One stored row's document. (bytes, content type).

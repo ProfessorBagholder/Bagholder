@@ -1,9 +1,12 @@
-//! SEC EDGAR: US regulatory filings, one issuer at a time.
+//! SEC EDGAR: US regulatory filings, one filer at a time.
 //!
 //! EDGAR publishes a documented JSON interface with no bot gate and no key; it
-//! asks only for a descriptive User-Agent. A ticker is resolved to its SEC
-//! CIK, the issuer's recent filings read from the submissions API, and each
-//! normalized into the shared disclosure shape. Documents are static URLs, so
+//! asks only for a descriptive User-Agent. A US listing is resolved to its
+//! filer's CIK through the SEC's own list of tickers with their exchanges, the
+//! filer's recent filings are read from the submissions API, and each is
+//! normalized into the shared disclosure shape. A listing on another market
+//! reaches the SEC only where its exchange pairs it with a US listing (the TSX's
+//! interlisted list), never by its ticker. Documents are static URLs, so
 //! downloading needs no session.
 
 use regex::Regex;
@@ -16,21 +19,20 @@ use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
 use bagholder_store::feeds::{FiledDocument, Regulator};
 
 pub const SOURCE: &str = "SEC";
-pub const TICKERS_URL: &str = "https://www.sec.gov/files/company_tickers.json";
+pub const TICKERS_URL: &str = "https://www.sec.gov/files/company_tickers_exchange.json";
 pub const SUBMISSIONS_URL: &str = "https://data.sec.gov/submissions/CIK{}.json";
 pub const TIMEOUT: u64 = 30;
 /// SEC allows up to ten requests a second; this stays well under.
 pub const PACE: Duration = Duration::from_millis(300);
-pub const US_EXCHANGES: [&str; 11] = ["NASDAQ", "NYSE", "NYSEARCA", "NYSEAMERICAN", "AMEX", "ARCA", "BATS", "US", "OTC", "OTCMKTS", "CBOE"];
+/// The exchanges the SEC's list names a US national exchange listing by: the
+/// listings a `ListingKey` keys as the US market. An over-the-counter row is no
+/// listing on a US exchange.
+pub const US_EXCHANGES: [&str; 3] = ["NASDAQ", "NYSE", "CBOE"];
 
 /// SEC's fair-access policy asks for a User-Agent that names the caller with a
 /// contact address; `BAGHOLDER_SEC_UA` sets your own.
 pub fn ua() -> String {
     std::env::var("BAGHOLDER_SEC_UA").unwrap_or_else(|_| "Bagholder/1.0 (filings admin@bagholder.app)".into())
-}
-
-fn us_exchange(ex: &str) -> bool {
-    US_EXCHANGES.contains(&ex.to_uppercase().as_str())
 }
 
 /// EDGAR needs nothing more.
@@ -79,6 +81,8 @@ fn get_json(url: &str) -> Fetched<Value> {
     serde_json::from_str(&resp.text()).map_err(|e| SourceError::Unavailable(format!("EDGAR returned unreadable data: {}", e)))
 }
 
+/// {TICKER: (cik, title)} of every listing on a US exchange, from the SEC's list
+/// of tickers with their exchanges, the ticker as the SEC writes it.
 pub type Tickers = HashMap<String, (i64, String)>;
 
 fn tickers() -> &'static Mutex<Option<Tickers>> {
@@ -86,33 +90,41 @@ fn tickers() -> &'static Mutex<Option<Tickers>> {
     T.get_or_init(|| Mutex::new(None))
 }
 
-/// {TICKER: (cik, title)} from SEC's published list,
-/// loaded once.
+/// The SEC's `{"fields": [...], "data": [[...], ...]}` list read: each row on a
+/// US exchange, by its ticker. A list whose fields are not the ones read is a
+/// reply that does not read, never an empty list.
+pub fn parse_tickers(data: &Value) -> Fetched<Tickers> {
+    let shape = |why: &str| SourceError::Other(format!("the SEC's ticker list does not read: {why}"));
+    let fields: Vec<&str> = data.get("fields").and_then(|f| f.as_array()).ok_or_else(|| shape("no fields"))?.iter().filter_map(|f| f.as_str()).collect();
+    let at = |name: &str| fields.iter().position(|f| *f == name).ok_or_else(|| shape(&format!("no {name} field")));
+    let (cik, name, ticker, exchange) = (at("cik")?, at("name")?, at("ticker")?, at("exchange")?);
+    let rows = data.get("data").and_then(|d| d.as_array()).ok_or_else(|| shape("no data"))?;
+    let mut out = Tickers::new();
+    for row in rows {
+        let cell = |i: usize| row.get(i).cloned().unwrap_or(Value::Null);
+        let ex = cell(exchange).as_str().unwrap_or("").to_uppercase();
+        if !US_EXCHANGES.contains(&ex.as_str()) {
+            continue;
+        }
+        let t = cell(ticker).as_str().unwrap_or("").trim().to_uppercase();
+        let c = match cell(cik) {
+            Value::Number(n) => n.as_i64(),
+            Value::String(s) => s.trim().parse().ok(),
+            _ => None,
+        };
+        let (Some(c), false) = (c, t.is_empty()) else { continue };
+        out.insert(t, (c, cell(name).as_str().unwrap_or("").to_string()));
+    }
+    Ok(out)
+}
+
+/// The SEC's ticker list, loaded once per process.
 pub fn ticker_map() -> Fetched<Tickers> {
     let mut slot = tickers().lock().unwrap();
     if let Some(t) = slot.as_ref() {
         return Ok(t.clone());
     }
-    let data = get_json(TICKERS_URL)?;
-    let rows: Vec<Value> = match &data {
-        Value::Object(m) => m.values().cloned().collect(),
-        Value::Array(a) => a.clone(),
-        _ => vec![],
-    };
-    let mut out = Tickers::new();
-    for row in rows {
-        let t = bagholder_model::value::s(row.get("ticker").filter(|v| !v.is_null())).to_uppercase();
-        if t.is_empty() {
-            continue;
-        }
-        let cik = match row.get("cik_str") {
-            Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
-            Some(Value::String(s)) => bagholder_model::textrules::parse_int(s).unwrap_or(0),
-            _ => 0,
-        };
-        let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        out.insert(t, (cik, title));
-    }
+    let out = parse_tickers(&get_json(TICKERS_URL)?)?;
     *slot = Some(out.clone());
     Ok(out)
 }
@@ -122,26 +134,18 @@ pub fn set_ticker_map(t: Tickers) {
     *tickers().lock().unwrap() = Some(t);
 }
 
-/// A ticker as SEC writes it -- no venue suffix, dots to dashes.
-pub fn bare(symbol: &str) -> String {
-    let mut s = bagholder_model::textrules::trim_space(symbol).to_uppercase();
-    for suf in [".TO", ".V", ".CN", ".NE", ".U"] {
-        if s.ends_with(suf) {
-            s.truncate(s.len() - suf.len());
-        }
-    }
-    s.replace('.', "-")
+/// A listing's symbol as the SEC writes it: a class with a dash (`BRK-B`).
+pub fn sec_ticker(listing: &bagholder_core::ListingKey) -> String {
+    listing.symbol().replace('.', "-")
 }
 
-/// A US listing, or any ticker SEC knows.
-pub fn covers(symbol: &str, exchange: &str, currency: &str) -> bool {
-    if us_exchange(exchange) || currency.to_uppercase() == "USD" {
-        return true;
+/// A US listing's filer: its CIK and the SEC's name for it, from the SEC's list;
+/// none for a listing the list does not name, and for a listing on another market.
+pub fn filer_of(listing: &bagholder_core::ListingKey) -> Fetched<Option<(i64, String)>> {
+    if !listing.us() {
+        return Ok(None);
     }
-    match ticker_map() {
-        Ok(m) => m.contains_key(&bare(symbol)),
-        Err(_) => false,
-    }
+    Ok(ticker_map()?.get(&sec_ticker(listing)).cloned())
 }
 
 const TITLES: [(&str, &str); 20] = [
@@ -286,21 +290,13 @@ pub fn parse_submissions(sub: &Submissions, cik: i64, limit: usize) -> Fetched<V
     Ok(items)
 }
 
-/// The issuer's recent filings, newest first, or nothing when
-/// SEC does not know the ticker or the name guard rejects a collision.
-pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize) -> Fetched<Vec<FiledDocument>> {
-    fetch_with(symbol, name, exchange, currency, limit, &get_json)
+/// A filer's recent filings, newest first.
+pub fn fetch(cik: i64, limit: usize) -> Fetched<Vec<FiledDocument>> {
+    fetch_with(cik, limit, &get_json)
 }
 
 /// `fetch` with the submissions request given.
-pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, get_json: &dyn Fn(&str) -> Fetched<Value>) -> Fetched<Vec<FiledDocument>> {
-    let map = ticker_map()?;
-    let (cik, sec_title) = match map.get(&bare(symbol)) { Some(t) => t.clone(), None => return Ok(vec![]) };
-    let us_listed = us_exchange(exchange) || currency.to_uppercase() == "USD";
-    if !us_listed && !name.is_empty() && !d::names_match(name, &sec_title) {
-        // a Canadian ticker colliding with a US filer
-        return Ok(vec![]);
-    }
+pub fn fetch_with(cik: i64, limit: usize, get_json: &dyn Fn(&str) -> Fetched<Value>) -> Fetched<Vec<FiledDocument>> {
     let raw = get_json(&SUBMISSIONS_URL.replace("{}", &format!("{:010}", cik)))?;
     let sub: Submissions = match &raw {
         Value::Object(_) => serde_json::from_value(raw).map_err(|e| SourceError::Other(format!("EDGAR's submissions answer does not read: {e}")))?,
@@ -312,15 +308,6 @@ pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limi
         }
     };
     parse_submissions(&sub, cik, limit)
-}
-
-/// Whether SEC knows a filer for this instrument, from the
-/// ticker map alone.
-pub fn has_filer(symbol: &str, name: &str, exchange: &str, currency: &str) -> bool {
-    let map = match ticker_map() { Ok(m) => m, Err(_) => return false };
-    let (_, title) = match map.get(&bare(symbol)) { Some(t) => t, None => return false };
-    let us_listed = us_exchange(exchange) || currency.to_uppercase() == "USD";
-    !(!us_listed && !name.is_empty() && !d::names_match(name, title))
 }
 
 /// A Schedule 13G/13D's title and summary read

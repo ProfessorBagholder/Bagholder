@@ -1534,16 +1534,26 @@ pub fn news_text(headline: &str) -> String {
     words(headline).join(" ")
 }
 
-fn stamp_key(source: Feed, symbol: &str, exchange: &str) -> String {
-    format!("news_source_fetched:{}:{}", source.as_str(), sf::news_key(symbol, exchange))
+/// The key a listing's news is kept under: the market's own feed's, or the
+/// listing's on the venue it names; none for a listing that names no venue a key
+/// is made from, which is read under none.
+pub fn news_listing(symbol: &str, exchange: &str) -> Option<bagholder_core::ListingKey> {
+    if symbol == MARKET.0 && exchange.eq_ignore_ascii_case(MARKET.1) {
+        return Some(bagholder_core::ListingKey::market_feed());
+    }
+    bagholder_core::ListingKey::on(symbol, exchange).ok()
+}
+
+fn stamp_key(source: Feed, listing: &bagholder_core::ListingKey) -> String {
+    format!("news_source_fetched:{}:{listing}", source.as_str())
 }
 
 fn meta(conn: &Connection, key: &str) -> rusqlite::Result<String> {
     bagholder_store::tables::get_meta(conn, key, "")
 }
 
-fn due(conn: &Connection, source: Feed, symbol: &str, exchange: &str, now: i64) -> rusqlite::Result<bool> {
-    let last = meta(conn, &stamp_key(source, symbol, exchange))?;
+fn due(conn: &Connection, source: Feed, listing: &bagholder_core::ListingKey, now: i64) -> rusqlite::Result<bool> {
+    let last = meta(conn, &stamp_key(source, listing))?;
     Ok(match if last.is_empty() { None } else { instant(&last) } {
         None => true,
         Some(then) => now - then > source_minutes(source) * 60,
@@ -1571,14 +1581,18 @@ pub fn fetch_listing(
     force: bool,
     clock: &Clock,
 ) -> rusqlite::Result<(Feed, Option<Vec<NewsItem>>, HashSet<Feed>)> {
-    if symbol == MARKET.0 {
+    // a listing that names no venue is read under none
+    let Some(key) = news_listing(symbol, exchange) else {
+        return Ok((source_for(symbol, exchange, currency).unwrap_or(Feed::Nasdaq), None, HashSet::new()));
+    };
+    if key.is_market_feed() {
         let (src, rows) = (readers.wire)(symbol, exchange, currency, clock);
         let answered: HashSet<Feed> = if rows.is_some() { [src].into() } else { HashSet::new() };
         return Ok((src, rows.map(|w| w.rows), answered));
     }
     let mut extras: Vec<Feed> = Vec::new();
     for k in sources_for(symbol, exchange, currency, name)? {
-        if force || due(conn, k, symbol, exchange, clock.now)? {
+        if force || due(conn, k, &key, clock.now)? {
             extras.push(k);
         }
     }
@@ -1588,9 +1602,9 @@ pub fn fetch_listing(
         currency: currency.to_string(),
         name: name.to_string(),
         yahoo: if extras.contains(&Feed::Yahoo) { yahoo_form(symbol, exchange, currency) } else { String::new() },
-        articles: read_articles(conn, symbol, exchange)?,
-        held: sf::news_for(conn, symbol, exchange)?.into_iter().filter(|r| Feed::of_id(&r.id) == Some(Feed::Gnews)).map(|r| r.id).collect(),
-        first_read: meta(conn, &stamp_key(Feed::Gnews, symbol, exchange))?.is_empty(),
+        articles: read_articles(conn, &key)?,
+        held: sf::news_for(conn, &key)?.into_iter().filter(|r| Feed::of_id(&r.id) == Some(Feed::Gnews)).map(|r| r.id).collect(),
+        first_read: meta(conn, &stamp_key(Feed::Gnews, &key))?.is_empty(),
     };
     let mut results: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let (src, primary) = std::thread::scope(|scope| {
@@ -1625,7 +1639,7 @@ pub fn fetch_listing(
     answered.extend(extras.iter().cloned());
     let mut stored: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let mut stored_feed: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
-    for r in sf::news_for(conn, symbol, exchange)? {
+    for r in sf::news_for(conn, &key)? {
         let origin = sf::Feed::of_id(&r.id);
         let item = match r.item() { Some(i) => i, None => continue };
         if let Some(o) = origin {
@@ -1682,9 +1696,9 @@ pub fn fetch_listing(
 
 /// The Google items of a listing whose article was read: kept with the
 /// publisher's URL in place of Google's link.
-fn read_articles(conn: &Connection, symbol: &str, exchange: &str) -> rusqlite::Result<HashMap<String, Article>> {
+fn read_articles(conn: &Connection, listing: &bagholder_core::ListingKey) -> rusqlite::Result<HashMap<String, Article>> {
     let mut out = HashMap::new();
-    for r in sf::news_for(conn, symbol, exchange)? {
+    for r in sf::news_for(conn, listing)? {
         let Some(item) = r.item() else { continue };
         if item.via == Feed::Gnews && google_article_id(&item.url).is_none() {
             out.insert(item.id.clone(), Article { url: item.url, headline: item.headline, summary: item.summary });
@@ -1711,6 +1725,8 @@ pub fn read_listing(
 ) -> rusqlite::Result<(Feed, Option<Vec<NewsItem>>)> {
     let (src, rows, answered) = fetch_listing(conn, readers, symbol, exchange, currency, name, force, clock)?;
     let rows = match rows { Some(r) => r, None => return Ok((src, None)) };
+    // rows were answered, so the listing has a key (`fetch_listing` reads none without)
+    let Some(key) = news_listing(symbol, exchange) else { return Ok((src, None)) };
     let extra_answered: Vec<Feed> = answered.iter().filter(|k| EXTRA_SOURCES.contains(k)).cloned().collect();
     let (mut before, mut before_text, mut first_read) = (HashSet::new(), HashMap::<String, Vec<String>>::new(), HashSet::new());
     if on_new.is_some() {
@@ -1718,7 +1734,7 @@ pub fn read_listing(
         // had, not a story it had under another source's id, and nothing from
         // a source read for the listing the first time, whose back catalogue
         // is history, as every stream's is when it is first met
-        for r in sf::news_for(conn, symbol, exchange)? {
+        for r in sf::news_for(conn, &key)? {
             before.insert(r.id.clone());
             let t = news_text(&r.headline);
             if !t.is_empty() {
@@ -1726,15 +1742,15 @@ pub fn read_listing(
             }
         }
         for k in &extra_answered {
-            if meta(conn, &stamp_key(*k, symbol, exchange))?.is_empty() {
+            if meta(conn, &stamp_key(*k, &key))?.is_empty() {
                 first_read.insert(*k);
             }
         }
     }
     let stamp = clock.stamp();
-    sf::replace_news(conn, symbol, exchange, &rows, &stamp)?;
+    sf::replace_news(conn, &key, exchange, &rows, &stamp)?;
     for k in &extra_answered {
-        bagholder_store::tables::set_meta(conn, &stamp_key(*k, symbol, exchange), &stamp)?;
+        bagholder_store::tables::set_meta(conn, &stamp_key(*k, &key), &stamp)?;
     }
     if let Some(f) = on_new {
         let mut new_ids: Vec<String> = rows
@@ -1906,7 +1922,9 @@ pub fn stale(conn: &Connection, listings: &[Listing], now: i64, minutes: i64) ->
     let mut out = Vec::new();
     for l in listings {
         let (symbol, exchange, currency, name) = (&l.symbol, &l.exchange, &l.currency, &l.name);
-        let last = fetched.get(&sf::news_key(symbol, exchange)).cloned().unwrap_or_default();
+        // a listing that names no venue is read under none
+        let Some(key) = news_listing(symbol, exchange) else { continue };
+        let last = fetched.get(&key.to_string()).cloned().unwrap_or_default();
         let old = match if last.is_empty() { None } else { instant(&last) } {
             None => true,
             Some(then) => now - then > minutes * 60,
@@ -1914,7 +1932,7 @@ pub fn stale(conn: &Connection, listings: &[Listing], now: i64, minutes: i64) ->
         let mut any_due = old;
         if !any_due {
             for k in sources_for(symbol, exchange, currency, name)? {
-                if due(conn, k, symbol, exchange, now)? {
+                if due(conn, k, &key, now)? {
                     any_due = true;
                     break;
                 }
