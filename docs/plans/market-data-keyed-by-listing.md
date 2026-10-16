@@ -1,155 +1,214 @@
-# Plan: market data is kept per listing and filings per company, never per ticker
+# Plan: market data is kept per listing and filings per filer, never per ticker
 
-Brief 34, sections 2 and 3. Section 1 (orders) shipped in #520.
+Brief 34, sections 2 and 3, rebuilt to brief 40's design. Section 1 (orders) shipped in #520.
 
 ## For the owner to decide
 
-Nothing open.
-
-How two listings are found to be one company needed no decision. No source the app reads states a shared identifier (checked 2026-10-16):
-- Wealthsimple's web app requests 94 fields on a security, and none is an ISIN, a CUSIP or a company.
-- The SEC's ticker list covers US listings only.
-- SEDAR+ names Canadian issuers only.
-
-Each regulator does name its filer by its legal name. A listing in Canada and one in the US under the same ticker root are one company when the two regulators' own names for their filers agree (Approach, 4). No new source is read.
+Nothing open. Every rule below uses sources the app already reads: the TSX's interlisted list comes from the same host as its symbol search, and the SEC's ticker-and-exchange file replaces the ticker file it reads now. No new outside service is added.
 
 ## Scope
 
-The market cache, the market readers, the disclosure and release notices, and the page's listing lookups are changed so that:
-- everything about one listing (its chart, bars, source choice, TMX form, short interest, breakdowns, news marks and failure lines) is stored and found under that listing's Bagholder id;
-- everything about one company (its filings, its SEDAR+ profile, its SEC filer number, what was already told about them) is stored and found under that company's id.
+Today the market cache, the market readers, the disclosure and release notices, and the page's listing lookups find a listing's data by its bare ticker. After this change they never do:
+- **A listing's market data** (chart, bars, chosen source, TMX form, short interest, breakdowns, news marks, failure lines) is stored and found under a `ListingKey`: a symbol on a listing venue, which cannot be made without its venue.
+- **A filing** is stored once, under its own source and id, and belongs to a filer: an SEC CIK or a SEDAR+ profile.
+- **Which filers a listing shows** is settled from each regulator's own key. Canada and the US are paired only where the TSX's interlisted list pairs them.
 
-These are the 23 unsafe server places and 14 unsafe page places in brief 34's inventories ([server](https://github.com/ProfessorBagholder/Bagholder/blob/architecture-briefs/briefs/34/server.json), [page](https://github.com/ProfessorBagholder/Bagholder/blob/architecture-briefs/briefs/34/page.json)). The two unsettled places are settled below.
+This covers the 23 unsafe server places and 14 unsafe page places in brief 34's inventories ([server](https://github.com/ProfessorBagholder/Bagholder/blob/architecture-briefs/briefs/34/server.json), [page](https://github.com/ProfessorBagholder/Bagholder/blob/architecture-briefs/briefs/34/page.json)), and both unsettled ones.
 
-`SPEC.md` changes in one place: the Disclosures row (market-data-17) says what makes two listings one company (Approach, 4).
+What changes on screen:
+- **A listing's chart, short interest, breakdowns and news marks are its own.**
+- **Filings.** A listing shows its own regulator's filings, plus its partner's where the TSX list pairs them. TELUS (`T` on the TSX, paired with `TU`) no longer shows AT&T's filings, and Bombardier no longer shows Bradesco's.
+- **A ticker typed or linked without a venue** opens directly only when one listing answers. Otherwise each listing is shown as its own row with its venue.
+- **A book instrument whose records name no venue** shows its trades and figures, and says its market data waits for its venue. It no longer gets another listing's data guessed from its currency.
 
-Nothing else on screen changes, except that wrong data stops appearing:
-- a listing's chart is its own;
-- TELUS's page no longer lists AT&T's filings;
-- a notice names the listing it is about.
+Every `SPEC.md` row that changes is listed under Approach, 7.
 
 Out of scope: orders (#520), and the phone apps.
 
 ## The old app here
 
-The old app named every instrument by its ticker, and its caches followed (`docs/old-app-mistakes.md`, "Things identified by Wealthsimple's ids and bare symbols", the mistake `docs/architecture.md` §5's *why* records). Stage 6 moved these tables into the market cache without re-keying them. The record, the engine and the sources crate already follow §5: quotes, daily closes, the source chosen and the reads are kept per instrument id (`sources/schema/v5.sql`: `quotes`, `daily_closes`, `chains`, `reads`), and the TMX form a quote answered under is written to the book as a reference (`sources/src/quotes.rs:226–230`).
+The old app named every instrument by its ticker, and its caches followed (`docs/old-app-mistakes.md`, "Things identified by Wealthsimple's ids and bare symbols"). Stage 6 moved those tables into the market cache without re-keying them.
 
-This plan carries nothing over from the old readers' keys. It does carry over two things, each checked:
-- **The readers' source chains and parsing.** They are not about identity, and their fixtures stay.
-- **The SEC reader's name match** (`market/src/edgar.rs:296–302`). It compares Wealthsimple's name for the listing with the SEC's. It is replaced by a comparison of the two regulators' own names for their filers (Approach, 4), and it is never used to pick a listing.
+The sources crate already follows `docs/architecture.md` §5 for what feeds the figures: quotes, daily closes, the source chosen and the reads are kept per book instrument (`sources/schema/v5.sql`: `quotes`, `daily_closes`, `chains`, `reads`). Those stay as they are.
 
-A new entry in `docs/old-app-mistakes.md` records what was wrong: the market cache, filings and notices kept per ticker, and what holds the fix (the three rule tests).
+This plan carries over none of the old readers' keys, and removes three guesses the old app made:
+- **The SEC match by bare ticker for a Canadian listing**, guarded by a word-overlap name check (`edgar.rs:296–303`, `has_filer` :319). "Energy Fuels" passes it against "Energy Transfer".
+- **SEDAR+'s first ranked match**, kept for the ticker for good (`sedar.rs:566–567`, `sedar_profile:<SYM>`).
+- **A venue guessed from currency** (`venue.rs:12–17`, `market_of_listing` :39, `Listing::market`, `contract.rs:135`), and **TMX's retry under another venue's form** (`tmx_resolve`, `tmx.rs:174`). Both read another listing's data as this one's.
+
+What is carried over, each checked: the readers' source chains and parsing, which are not about identity, along with their fixtures.
+
+A new entry in `docs/old-app-mistakes.md` records the market cache, filings and notices kept per ticker, and the three tests that hold the fix.
 
 ## How the leading products do it
 
-- **Interactive Brokers** gives every listing its own contract id. The same product in another market or currency is another contract, and IBKR tells API users to name a contract by its id and exchange, never by its symbol ([Contract IDs](https://www.interactivebrokers.com/docs/web-api/trading/instrument-discovery/contract-i-ds), [best practices](https://www.interactivebrokers.com/docs/general/contracts/contract-management/best-practices.md), read 2026-10-16). Their ids never change.
-- **FIGI** (the open identifier standard) has three levels ([openfigi.com/api/documentation](https://www.openfigi.com/api/documentation), read 2026-10-16):
-  - a listing on one venue;
-  - a composite for one country;
-  - a share class across countries.
-
-  That is the split this plan makes: price data per listing, and company facts above the listings.
-- **The SEC** identifies a filer by its CIK, and its published ticker list ties tickers to CIKs ([company_tickers.json](https://www.sec.gov/files/company_tickers.json), as `market/src/edgar.rs:19` reads it). One CIK can have several tickers.
-- **SEDAR+** identifies a reporting issuer by its nine-digit profile number (`SPEC.md` market-data-17).
-- **Trading journals.** TradeZella, Tradervue, TraderSync and Edgewonk publish nothing on keying per listing. They import a broker's executions with the broker's symbol and do not keep company filings. Bagholder follows the brokers' and data vendors' practice above.
+Each was read 2026-10-16.
+- **Interactive Brokers** gives every listing its own contract id, and asks API users to name a contract by id and exchange, never by symbol ([Contract IDs](https://www.interactivebrokers.com/docs/web-api/trading/instrument-discovery/contract-i-ds)).
+- **FIGI** identifies a listing per venue, and a composite "within the same country or market" ([OpenFIGI](https://www.openfigi.com/api/documentation)). That is the split `listing_venue` makes: the MIC in Canada, `US` for the US market (`sources/src/venue.rs:81`).
+- **TradingView** addresses a symbol as `{EXCHANGE}:{NAME}`, and its search lists each listing as its own row ([widget docs](https://in.tradingview.com/widget-docs/tutorials/build-page/dynamic-symbols/)).
+- **Sharesight's trade import** takes a market code per trade ([fields](https://help.sharesight.com/import_bulk_trades)).
+- **Canadian exchanges must publish their inter-listed securities** under National Instrument 23-101, s. 6.6.1(3)–(4). The TSX publishes its list at [`tsx.com/files/trading/interlisted-companies.txt`](https://www.tsx.com/files/trading/interlisted-companies.txt):
+  - the columns are `Symbol | Name | US Symbol | Sector | International Market`;
+  - 266 rows, 195 of them with a US symbol, as of October 1, 2026.
+- **The SEC publishes each ticker with its exchange and CIK** ([`company_tickers_exchange.json`](https://www.sec.gov/files/company_tickers_exchange.json), with the fields `cik, name, ticker, exchange`).
+- **SEDAR+** identifies a reporting issuer by its profile number. Its reporting-issuer search answers by name.
+- **Trading journals.** TradeZella, Tradervue, TraderSync and Edgewonk import executions under the broker's symbol and keep no filings, so there is no journal practice to follow here. The brokers' and data vendors' practice above is followed instead.
 
 ## Open questions
 
-1. **A listing nobody holds or watches (a directory row, a news chip, a heatmap tile): which id is it under?**
-   - *Objective:* one id per listing for everything the cache keeps.
-   - *Known:*
-     - §5 says every instrument has a Bagholder id, and §6 puts instruments and their references in the book.
-     - The book already makes an instrument for a watched listing nobody holds: `Book::listing` in `book/src/watched.rs:58`, found by its identifying references, else made new, with a `Listing` reference `<symbol>@<MIC>`.
-     - The sources crate already writes learned references to the book.
-   - *Settled:* the same function, widened from "watched" to "read". The first time the app reads market data for a listing, that listing becomes a book instrument with no holding and no watch row, found next time by the same references. Nothing is added to what any screen lists.
-   - *Cost:* one row per listing ever opened.
-   - The `Listing` reference's comment ("identifies only among watched listings") becomes "among listings no record names". It still never merges a record's instrument, because a record's instrument is found by the broker's id first.
-2. **U20, Vanguard's and iShares' Canadian fund lists.** They are lists of Canadian listings. They are asked only for a listing on a Canadian venue, and the venue is checked against the row. A US fund with the same ticker is not looked up there.
-3. **U23, CIRO's short-position and short-volume files.** Their rows are kept by (symbol, venue), not by symbol, so two Canadian venues' rows for one ticker both stand.
+1. **Does SEDAR+'s reporting-issuer search settle every large Canadian issuer to exactly one profile by exact legal name?**
+   - *Objective:* rule 2 under Approach, 2 picks a profile only on an exact name.
+   - *Known:* nothing yet. SEDAR+'s bot gate refuses plain clients, and the reviewer could not check it. The app reaches SEDAR+ through its browser-handshake helper (`market/src/sedar.rs`).
+   - *How it is settled:* the first step of the build records SEDAR+'s answers, as fixtures, for every member of the S&P/TSX 60 (the TMX constituents list the heatmap already reads). It reports which members settle to one profile and which do not, with SEDAR+'s answer for each. That is the direct way to the one missing fact, so it comes before anything else is built.
 
 ## Approach
 
-### 1. One id per listing, from the page to the cache
-- **The id comes from one function.** `Book::listing` (renamed `Book::listing_of`, made public) is the only place a listing gets its id: by its broker id, then its directory reference, then `<symbol>@<MIC>`, else new. It refuses when its references name two instruments, as now.
-- **A route given a symbol and venue resolves it once.** The id goes back in the answer, and the page uses that id afterwards. Where the venue is missing, or the book holds two listings for it, the route refuses with the listing's words. It never picks one (rule test 3).
-- **The page keys by id.** Its listing state, watch matches, news chip, held marks and shorts lookup match the listing by that id (`web/src/lib/listing.svelte.ts`, `markets/Watchlist.svelte`, `markets/News.svelte`, `markets/newsChip.ts`, `markets/Shorts.svelte`, `trade/discStore.svelte.ts`).
-  - The address stays `#markets/listing:SYMBOL@VENUE`, which names one listing and stays shareable.
-  - An address with no venue keeps today's rule from #520: no Buy, and no holding opened.
+### 1. One key per listing: `ListingKey` (`sources/src/venue.rs`)
+- **What it is:** a symbol on a listing venue. The venue is:
+  - the MIC in Canada;
+  - `US` for any US venue (`listing_venue`, as #520's orders compare listings);
+  - `CRYPTO` for a coin and `INDEX` for a directory instrument, as their references already do (`following.rs:121`, :129);
+  - an option's own OCC symbol.
+- **It cannot be built without the venue**, as #520's `SecurityId` cannot be empty.
+- **One function writes the symbol in one form.** `BRK.B` and `BRK-B` are one key, and `BRK` is another.
+- **A book instrument reaches its market-cache rows through its current symbol and venue**, using the function #520's orders use.
+  - A ticker change gives a new key. The old key's rows can be fetched again, and they age out of the cache.
+  - Filings are not affected, because they are kept by filer.
+- **Reading data never makes a book instrument.** `Book::listing` stays limited to watched listings (`watched.rs:58`), so a listing read before it is bought can never become a second instrument.
 
-### 2. The market cache keyed by listing (market cache migration v6)
-§6 says deleting the market cache "loses only time". So the ticker-keyed tables are dropped and remade keyed by `instrument_id`:
-- `price_history`, `history_fetches`, `price_bars`, `bar_fetches`;
-- `shorts`, `news` (listing rows);
-- `exposures` (`share:` and `fund:` records become one row per instrument);
-- `universes` is not per listing and stays.
+### 2. Which filings a listing shows
+1. **A US listing → its SEC CIK.** Read from `company_tickers_exchange.json`: the row with the listing's symbol (class written with a dash, as the SEC writes it) on a US exchange. This file replaces `company_tickers.json` (`edgar.rs:19`). It is read once per process, as now, and is 275 KB smaller.
+   - The bare-ticker match for a non-US listing and its `names_match` guard go.
+2. **A Canadian listing → its SEDAR+ profile.**
+   - *The issuer name comes from the listing's exchange:* for the TSX and TSX-V, the TSX directory's company record that holds the symbol (`market/src/search.rs`); for the CSE and Cboe Canada, the name TMX's quote gives.
+   - *The profile is settled only on an exact match:* SEDAR+'s reporting-issuer search is asked with that name, and the profile is settled only when exactly one profile's English or French legal name equals it. Letter case and spacing are ignored, and a trailing "(The)" reads as a leading "The".
+   - *With none or two,* nothing is picked, and the page says `SEDAR+ lists no single issuer named …`.
+3. **Cross-listing comes only from the TSX's interlisted list.** A row pairs `<symbol>@XTSE` or `@XTSX` with `<US symbol>@US`. Each listing in a pair shows both filers' documents.
+   - A listing not on the list shows its own regulator's filings only. That includes one inter-listed from the CSE or Cboe Canada, which the list does not cover.
+   - The list is read at most once a day, and kept in the market cache with its "As of" date.
+   - A failed read keeps the last list, and is shown as that source's failure (`docs/architecture.md` §15).
+4. **Where the answers live:** `listing_filers(listing, source, filer, settled_by, checked_at)`, in the market cache. Every input can be fetched again, which is §6's rule for the market cache. The book gains nothing.
 
-The meta keys that stood for per-listing facts are removed, each replaced by the per-instrument store the sources crate already has, so no second copy is written:
+### 3. Filings and their read text (market cache)
+- **The table.** `filings(source, id, filer, …, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads, fetched_at)`, with primary key `(source, id)` and an index on `(source, filer)`.
+  - `id` is the SEC accession number or SEDAR+'s document key, as today.
+  - A listing's filings are the documents of the filers its `listing_filers` rows name.
+- **Migration v6 carries every row it can attribute, with its read text unchanged:**
+  - A row's filer is read from the row itself: a SEDAR+ row's `profile_no`, or an SEC row's CIK from its URL (`edgar.rs:265–267`).
+  - A row with neither falls back to its ticker's `sedar_profile:` value, else it is dropped and counted.
+  - A document stored under two tickers becomes one row, keeping the most complete read: `enrich_final`, then `enrich_version`, then `enriched_at`.
+- **Stamps.** `filings_fetched:<SYM>`, `filings_sources:<SYM>` and `sedar_profile:<SYM>` go. Fetch stamps are kept per `(source, filer)`, and outcomes per listing.
+- **Documents are opened by `(source, id)`.** `/api/filings/doc` and `/enrich` take the document, not a symbol.
+- **Notices (in the book):**
+  - The told scope `filings:<SYM>:<source>` (`server/feeds.rs:878`) becomes `filings:<source>:<filer>`.
+  - Each watermark is carried to the filer or filers its ticker's stored rows came from. Where the cache is gone, the new scope's first sweep sets its mark without telling, as any new scope does now (`notify.rs:564–566`).
+  - Release keys (`release:<SYM>:…`, :1312), the wire check (U13), the release scope (U12) and the news scope `news:<SYM>@<EX>` are keyed by `ListingKey`.
 
-| Today (meta key) | Becomes |
+### 4. The market cache keyed by `ListingKey` (migration v6)
+§6 says deleting the market cache "loses only time", so these tables are remade keyed by `ListingKey`, and their rows are read again:
+- `price_history`, `history_fetches`, `price_bars` and `bar_fetches`;
+- `shorts` and `news`;
+- `exposures` (`share:` and `fund:` records).
+
+The meta keys and in-memory maps that stood for one listing take a `ListingKey`:
+
+| Today | Becomes |
 |---|---|
-| `bars_source:<SYM>` | `chains(instrument_id, kind)`, through `cache.won` / `cache.winner` |
-| `bars_miss:<SYM>\|<tf>` | `reads(subject = instrument id, kind, …)` with outcome not-carried |
-| `tmx_form:<SYM>` | the book's `TmxForm` route reference on the instrument, as `sources/src/quotes.rs` already writes it, read through `Listing::route` |
+| `bars_source:<SYM>` | `bars_source:<ListingKey>` |
+| `bars_miss:<SYM>\|<tf>` | `bars_miss:<ListingKey>\|<tf>` |
+| `tmx_form:<SYM>` | `tmx_form:<ListingKey>`, the form of this listing only. A form that answers nothing is this listing's miss. |
+| `news_fetched:<SYM>@<EX>` and `news_source_fetched:` | the same, by `ListingKey` |
+| pending reads (U4), chart notes (U5), the archive set (U22), "Reading…" (U24), failure lines (U25) | keyed by `ListingKey` |
+| single-flight `filings:<SYM>` and `filings-shown:<SYM>` | `filings:<ListingKey>` |
 
-The in-memory maps (pending reads U4, chart notes U5, the archive set U22, the news "Reading…" set U24, the short-interest failure lines U25) are keyed by `InstrumentId`.
+Kept as they are, in rule test 2's allow-list, each with its reason:
+- `yahoo_miss:<form>` and `coinbase_product:`, `coinbase_prev:`: each is the source's own name for exactly one listing;
+- the TSX list and the SEC file: each is a whole-source copy;
+- `carry.rs:97–100`: a one-time carry mark, not a listing.
 
-Every reader in `market/src/history.rs`, `tmx.rs`, `exposure.rs` and `shorts.rs` takes the sources crate's `Listing`, which carries its id, in place of a bare symbol.
+The sources crate's `cache.won` and `cache.winner` (`DataKind`) and its per-instrument tables are not used for bars: they follow a book instrument across a ticker change, and these rows deliberately do not.
 
-### 3. Filings and their notices keyed by company (book migration v30)
-- **`issuer_refs(scheme, value, issuer_id)`.** A new book table, mirroring `instrument_refs`. It holds the SEC CIK and the SEDAR+ profile number. `book/src/identity.rs` already has `issuers`, `add_issuer`, `attach_issuer` and `listings(issuer)`. Nothing in production calls them yet; this plan is their first user.
-- **Filings move into the book's company scope.** `filings` and its stamps (`store/src/feeds.rs`) are keyed by `issuer_id`.
-  - The SEDAR+ profile is an issuer reference, so `sedar_profile:<SYM>` goes.
-  - A filing's document is opened by (issuer, id).
-- **Notices.** The told marks and watermarks (`filings:<SYM>:<source>`, `release:<SYM>:<digest>`) are re-keyed to the issuer, and to the listing for a release. The migration carries each old mark:
-  - where the book holds exactly one listing with that ticker, to that listing's issuer;
-  - where it holds several, to every candidate, so nothing is told twice.
-- **The rest of the release and payer paths match by id**, never by ticker: release scope (U12), the "a wire already carried it" check (U13), and the payer read (U15).
+### 5. A ticker with no venue
+- **Routes take a `ListingKey` or an instrument id, never a bare symbol.** A request that names a symbol without a venue does not parse, so rule test 3 is held by the types, as #520's are.
+- **Each source supplies the venue it states:**
+  - *Heatmap:* the US and international tiles come from Nasdaq's screener, which lists only US listings, so they are `@US`. The S&P/TSX 60 tiles take the exchange TMX's constituents give (`universes.rs:20`).
+  - *Notifications* store the `ListingKey` they are about.
+  - *ETF look-through rows* take the holdings file's own exchange column. Where there is none, the file's own sector and country columns are used, and nothing is looked up by ticker (U18, U19).
+- **One resolver for a symbol given with no venue** (⌘K free text, an old link, a news tag). It answers with every listing of that symbol that the exchanges' directories the app reads (Nasdaq's, TSX's) list, each with its venue.
+  - Exactly one answer opens directly.
+  - Two or more are shown as rows, and the resolver never reduces them to one.
+- **A book instrument whose records state no venue** gets no market data. Its venue comes from a record that states one: the broker's row when the pull links it (SPEC trade-43), or an `exchange` column added to the plain import layout. Until then its page shows its trades and figures, and says its market data waits for its venue.
+- **A hand-entered trade** names its instrument by id, or by a `ListingKey` from the resolver (page U14).
 
-### 4. Which listings are one company
-- **Within one market, the regulator's own number decides.** Two listings are one company when they map to the same SEC CIK (the SEC's ticker list, for US listings) or the same SEDAR+ profile.
-- **Across the two markets, the regulators' own names decide.** A Canadian listing and a US listing with the same ticker root are one company when the SEDAR+ issuer name and the SEC filer name match under `names_match`, the rule the SEC reader uses today (`market/src/edgar.rs`). Wealthsimple's name for the listing is never one of the two. So TELUS Corporation and AT&T Inc., both T, stay two companies, and Royal Bank of Canada on both markets is one.
-- **A join is read, never merged**, as §5 already does for successions. It is decided again whenever either name is read.
+### 6. Brief 34's remaining places
+- **Server:**
+  - U10: `known_filing_symbols` and `held_symbols` are keyed by `ListingKey`.
+  - U11: the name for SEDAR+ comes from the exchange (Approach, 2), never the first book security with the ticker.
+  - U17: `listing_payload` matches rows by `ListingKey`.
+  - U21: an option's underlying breakdown takes the underlying's `ListingKey` from the contract.
+  - U7's other callers go through the per-listing form: `news.rs:684`, :1852, the search fallback, and `feeds.rs:637` and :2473.
+  - U8's `looking_at` and `reading_now` are keyed by `ListingKey`.
+- **The page:** U2, U6, U8 and U12 match by `ListingKey`, which its address already carries (`#markets/listing:SYM@VENUE`), and a book row by its instrument id.
+- **The demo book** (`write_bars`, `demo_facts.rs:128–170`) and `carry.rs` write through `ListingKey`.
 
-`SPEC.md` market-data-17 gains one sentence saying so.
+### 7. `SPEC.md` and `docs/architecture.md`, in the same PR
+- **market-data-17:**
+  - A US listing's CIK comes from the SEC's ticker-and-exchange list.
+  - The SEDAR+ profile is the one whose legal name is the issuer name the listing's exchange gives; none or two is said, never picked.
+  - "A cross-listed issuer draws from both" becomes "a listing the TSX's interlisted list pairs with a US listing draws from both regulators".
+- **market-data-4:** the form that answers nothing is that listing's miss. The other-forms retry, and the sentence that starts from the currency's usual form when the venue is missing, go.
+- **trades-13:** the "follows its currency" clause goes.
+- **trades-37:** the "stored under the bare ticker" sentence goes.
+- **markets-60:** rewritten to Approach, 5 (the resolver).
+- **`docs/architecture.md` §5, under Issuer:** two listings in Canada and the US are one issuer where the listing exchange's interlisted list pairs them. That is the exchange's own statement, kept beside the strong identifiers, and it never merges instruments.
 
 ### What stays the same
-- The sources crate's quote and closes paths, and every source chain's order.
-- The engine.
-- The wire types, except that the listing and filings answers carry the listing id and the issuer id (`model/src/wire.rs`, regenerated into `web/src/lib/generated/wire.ts`).
+- The sources crate's quotes and closes, and the engine.
+- The wire, except that the listing and filings answers carry a `ListingKey` and documents carry `(source, id)` (`model/src/wire.rs`, regenerated into `web/src/lib/generated/wire.ts`).
 
 ## Acceptance criteria
 
 - [ ] `RUSTFLAGS="-D warnings" cargo test --workspace` green in `rust/`, and `cargo clippy --workspace --lib --bins` clean.
-- [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/`. The screenshot baselines are unchanged.
-- [ ] **Rule test 1** (a property test, `server/src/tests_listings.rs`):
-  - *Inputs:* generated pairs of listings that share a ticker, of four kinds: two venues; a stripped suffix; a coin and a share; an option and its underlying. Symbols, venues and currencies are drawn from the venue table and the currency list, not named.
-  - *Readers:* every reader with a per-listing store (daily and intraday bars, fetch stamps, misses, pending reads, notes, chosen source, TMX form, short interest, breakdowns, archive, wait marks, failure lines).
-  - *Assertion:* in either order of reads, the data stored, cached or shown for one listing is never the other's.
+- [ ] `npm run check`, `npm test` and `npm run e2e` green in `web/`.
+- [ ] **SEDAR+ fixtures first.** SEDAR+'s answers for every S&P/TSX 60 member are recorded, with which settle to one profile and which do not, and reported in the PR before the rest is built.
+- [ ] **Rule test 1 (property).**
+  - *Inputs:* generated pairs of listings that share a ticker: two venues; a stripped suffix; a coin and a share; an option and its underlying. Symbols, venues and currencies are drawn from the venue table and the currency list, never named.
+  - *Readers:* every reader with a per-listing store.
+  - *Assertion:* in either order of reads, what is stored, cached or shown for one is never the other's.
 
-  It is shown failing on master in the PR.
-- [ ] **Rule test 2** (a schema test): every table in the market cache with a per-listing or per-company row has `instrument_id` or `issuer_id` in its key, and no meta key is written whose name holds a ticker. It reads the schema and every `meta` write in the workspace's source, and is shown failing on master.
-- [ ] **Rule test 3** (a boundary test): every route the page calls that takes a symbol refuses when the book holds two listings with it and the request names no venue, and resolves to the one id when it names one. It drives the routes through the router's own list, and is shown failing on master.
-- [ ] **A company test.** Two listings sharing a CIK or a SEDAR+ profile, or a Canadian and a US listing whose regulators name their filers alike, show one set of filings. Two companies sharing a ticker never do, generated across names and tickers. One notice is told once across the old marks the migration carried.
-- [ ] **The browser test** on the signed-in server's made-up book, which holds TD on the TSX and the NYSE: each listing's page draws its own chart and its own short interest. The demo book gains a second company with a shared ticker (made up, `demo_book.rs`): each listing's page lists only its own company's filings.
-- [ ] **Migrations:**
-  - market cache v6 on a copy of the owner's cache: it opens, and charts read again;
-  - book v30 against every stored past schema (the existing migration test), with the told marks carried as stated.
-- [ ] Rendered on the scratch server on a copy of the owner's data (`SPEC.md` §7): the listing page, the News card's three tabs, Portfolio sectors and the heatmap at 1200, 1340, 1440 and 1680 px, a states table, and a screenshot per state.
-- [ ] **Cost** against `docs/architecture.md`'s budget: requests and bytes on a first and a second open, CPU and memory over an hour idle, and the capacity test on the owner-size book. The cache re-read after migration is measured: the first open of each chart reads it again once.
+  Shown failing on master.
+- [ ] **Rule test 2 (schema).** Every market-cache table with per-listing or per-filer rows has a `ListingKey` or `(source, filer)` in its key, and every meta key that names a listing is built through `ListingKey`, apart from the allow-list with its reasons. Shown failing on master.
+- [ ] **Rule test 3 (boundary).** No route the page calls parses a bare symbol into a listing. Held by the types, and a test drives each route in the router's own list. Shown failing on master.
+- [ ] **Filings routing.** The inputs are generated listings, regulator answers and interlisted rows, including names that share words ("Energy Fuels", "Energy Transfer").
+  - A listing's filings are exactly its own filer's documents, plus its partner's where the TSX list pairs them.
+  - A SEDAR+ answer with zero or two exact names settles nothing, and the page says so.
+- [ ] **The resolver.** For a symbol with k listings, it answers k rows, each with its venue. Exactly one opens directly, and it never picks one of several.
+- [ ] **No venue, no data.** For generated instruments with no venue, no market reader is called and no market-cache key is written.
+- [ ] **Migration v6.**
+  - Every attributable filings row is carried with its read text, byte for byte.
+  - The dropped count equals the rows with no readable filer.
+  - Duplicates keep the most complete read.
+  - Run on a copy of the owner's cache, the counts are in the PR.
+- [ ] **Told marks.** Across the migration, nothing is told twice, and a filing that arrives during the switch is told.
+- [ ] **Browser tests.** On the signed-in server's made-up book, which holds TD on the TSX and on the NYSE, each listing draws its own chart and short interest. The demo book gains an interlisted pair and a same-ticker pair of different companies, and each listing lists exactly its own filings, plus its partner's.
+- [ ] **Rendered on the scratch server** on a copy of the owner's data (`SPEC.md` §7): the listing page, the News card's tabs, Portfolio sectors and the heatmap, at 1200, 1340, 1440 and 1680 px, with a states table and a screenshot per state.
+- [ ] **Cost**, against `docs/architecture.md`'s budget:
+  - requests and bytes on a first and a second open;
+  - CPU and memory over an hour idle;
+  - the capacity test at the owner's size;
+  - the TSX list (15 KB a day), the SEC file (275 KB smaller), and one SEDAR+ search per Canadian listing not yet settled;
+  - the chart re-read after the migration, measured.
 
 ## Surfaces to check beyond the diff
 
-- `rust/crates/sources/schema/` (v6 snapshot) and `rust/crates/book/schema/` (v30 snapshot);
-- `web/src/lib/generated/wire.ts`;
-- `docs/old-app-mistakes.md` (the new entry);
-- the told-mark migration's handling of an ambiguous ticker;
-- `TIMED_WAITS`, if any read changes how it waits (none is planned);
-- `SPEC.md` market-data-17;
-- the `Listing` reference's doc comment in `core/src/instrument.rs`.
+- `rust/crates/sources/schema/` (the v6 snapshot), `web/src/lib/generated/wire.ts` and `docs/old-app-mistakes.md`;
+- `server/src/carry.rs` and the demo book (`store/src/bin/demo_book.rs`, `server/src/demo_facts.rs`);
+- the told-mark carry for a ticker that named two filers;
+- `SPEC.md` (the rows in Approach, 7) and `docs/architecture.md` §5.
 
 ## Right to refuse
 
-Nothing found conflicts with `SPEC.md` or `docs/decisions.md`.
+Nothing found conflicts with `SPEC.md` or `docs/decisions.md`. If the SEDAR+ fixtures show that large issuers do not settle to one profile by exact name, building stops there and the PR reports it.
 
 ## Anti-stub self-check
 
@@ -161,6 +220,6 @@ To be filled at the PR.
 
 ## Handoff
 
-Not started. Built in one PR after the gate's verdict.
+Not started. The first step is the SEDAR+ fixtures.
 
 **Nothing left running.**
