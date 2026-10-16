@@ -237,11 +237,9 @@ pub type ToCad = Option<Result<Dec, Vec<String>>>;
 pub fn preview_for(app: &std::sync::Arc<crate::app::App>, r: &PreviewRequest) -> Result<Preview, crate::http::ApiError> {
     use crate::http::ApiError;
     // the listing's currency as the book or Wealthsimple states it, never the page's
-    let listing = super::ticket::listing_by_id(app, &r.security_id).map_err(ApiError::Failed)?;
+    let listing = super::ticket::listing_by_id(app, &r.security_id, "the listing").map_err(ApiError::Failed)?;
     let mut r = r.clone();
-    if !listing.currency.trim().is_empty() {
-        r.quote.currency = listing.currency.clone();
-    }
+    r.quote.currency = listing.currency.clone();
     let r = &r;
     let named = r.quote.currency.trim();
     let to_cad: ToCad = if named.is_empty() {

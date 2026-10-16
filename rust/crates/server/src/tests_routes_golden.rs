@@ -254,7 +254,7 @@ fn test_refresh_route_reaches_a_connected_answer() {
     impl bagholder_net::Transport for Shared {
         fn answer(&self, ask: &bagholder_net::Ask) -> Result<bagholder_net::Answer, bagholder_net::NetError> {
             self.0 .0.lock().unwrap().push(ask.url.to_string());
-            assert_eq!(ask.url, bagholder_wealthsimple::session::TOKEN_URL, "only the token endpoint is asked");
+            assert_eq!(ask.url, bagholder_wealthsimple::hosts::token_url(), "only the token endpoint is asked");
             Ok((200, ask.url.to_string(), vec![], br#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#.to_vec()))
         }
     }

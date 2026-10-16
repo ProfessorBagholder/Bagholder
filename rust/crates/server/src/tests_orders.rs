@@ -109,7 +109,7 @@ fn ticket_app() -> (tempfile::TempDir, Arc<App>, Arc<FakeBroker>) {
 fn ticket_json(over: Value) -> Value {
     // each ticket its own review, so its own order id
     let mut body = json!({"id": crate::app::uuid4(), "listing": {"securityId": "sec-s-us", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}, "accountId": "acct-margin", "side": "BUY", "type": "LIMIT", "tif": "DAY",
-        "quantity": 25, "limitPrice": 165.4, "stopPrice": null, "currency": "USD",
+        "quantity": 25, "limitPrice": 165.4, "stopPrice": null,
         "stopLoss": {"kind": "stop", "price": 157.13}, "takeProfit": {"price": 181.94}});
     for (k, v) in over.as_object().unwrap() {
         body[k] = v.clone();
@@ -273,7 +273,7 @@ fn found_row(id: &str, symbol: &str, kind: &str, mic: &str, words: &str, currenc
 
 /// The quote and the order, for the listing a ticket opened on, name that listing.
 fn ordered_as(app: &Arc<App>, listing: &o::OrderListing) -> String {
-    let t = ticket(json!({"listing": jv(listing), "currency": listing.currency.clone(), "stopLoss": null, "takeProfit": null}));
+    let t = ticket(json!({"listing": jv(listing), "stopLoss": null, "takeProfit": null}));
     let asked = o::ticket_order(app, &t).expect("a ticket on a listing");
     let q = jv(&o::ticket_quote(app, &listing.security_id, "acct-margin"));
     assert_eq!(q["quote"]["securityId"], json!(listing.security_id), "{q}");
@@ -484,11 +484,103 @@ fn an_order_is_recorded_in_wealthsimples_words_for_its_listing_never_the_pages()
         "FetchSecuritiesSummary" => Ok(json!({"securities": []})),
         _ => panic!("{op}"),
     });
-    let page = json!({"listing": {"securityId": "sec-s-ry-us", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "currency": "CAD", "stopLoss": null, "takeProfit": null});
+    let page = json!({"listing": {"securityId": "sec-s-ry-us", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
     let asked = o::ticket_order(&app, &ticket(page)).expect("an order on the listing");
     assert_eq!((asked.order.broker_security.as_str(), asked.order.symbol.as_str(), asked.order.currency), ("sec-s-ry-us", "RY", bagholder_core::Currency::USD));
     let unknown = json!({"listing": {"securityId": "sec-s-nowhere", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
-    assert_eq!(o::ticket_order(&app, &ticket(unknown)).unwrap_err(), "Wealthsimple does not know the listing sec-s-nowhere.");
+    assert_eq!(o::ticket_order(&app, &ticket(unknown)).unwrap_err(), "Wealthsimple does not know TD on TSX.");
+    // a listing whose summary states no currency, or no symbol, is never ordered in the
+    // page's words
+    set_gql(&app, |op, vars| match op {
+        "FetchSecuritiesSummary" => {
+            let id = vars["ids"][0].as_str().unwrap().to_string();
+            let (symbol, currency) = if id == "sec-s-nocur" { ("RY", "") } else { ("", "USD") };
+            Ok(json!({"securities": [found_row(&id, symbol, "EQUITY", "XNYS", "NYSE", currency)]}))
+        }
+        _ => panic!("{op}"),
+    });
+    for id in ["sec-s-nocur", "sec-s-nosym"] {
+        let page = json!({"listing": {"securityId": id, "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
+        assert_eq!(o::ticket_order(&app, &ticket(page)).unwrap_err(), "Wealthsimple states no symbol or no currency for TD on TSX.", "{id}");
+    }
+}
+
+/// The preview's figures in CAD are at the listing's own currency, as the book or
+/// Wealthsimple states it, whatever currency the page's quote names (brief 37, 3).
+#[test]
+fn the_preview_is_in_the_listings_currency_never_the_pages() {
+    use crate::orders::preview::{preview_for, PreviewRequest, QuoteInput};
+    let _g = crate::tests_common::guard();
+    let a = crate::tests_common::app();
+    let f = a.figures.get().unwrap();
+    // a currency the figures hold a rate for, other than CAD
+    let usd = f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, bagholder_core::Currency::USD, e.inputs().clock.today)).unwrap();
+    a.orders.found.lock().unwrap().insert("sec-s-usd-listing".into(), bagholder_model::securities::Security { id: "sec-s-usd-listing".into(), symbol: "QNC".into(), currency: "USD".into(), ..Default::default() });
+    let r = PreviewRequest {
+        security_id: sid("sec-s-usd-listing"),
+        side: "BUY".into(),
+        kind: "LIMIT".into(),
+        quantity: Some("10".into()),
+        limit: Some("100".into()),
+        // the page says CAD
+        quote: QuoteInput { last: Some("100".into()), currency: "CAD".into(), ..Default::default() },
+        nav: Some("10000".into()),
+        ..Default::default()
+    };
+    let p = preview_for(&a, &r).unwrap();
+    // at the listing's USD rate, or waiting on it: never the page's CAD, 1:1
+    let want = match usd {
+        Ok(rate) => Fig::Stated(crate::wire::Dec(d("1000").checked_mul(rate).unwrap())),
+        Err(g) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
+    };
+    assert_eq!(p.cad, Some(want));
+    assert_ne!(p.cad, Some(Fig::Stated(crate::wire::Dec(d("1000")))));
+}
+
+/// An id the search finds is recorded against the book's instrument only where the
+/// listing found is a share or fund in the instrument's own currency: a listing in
+/// another currency, or an instrument that is not a share, opens the ticket on what
+/// was found and records nothing (brief 37, 3).
+#[test]
+fn an_id_is_recorded_only_for_a_share_in_the_instruments_own_currency() {
+    let _g = crate::tests_common::guard();
+    for case in ["another currency", "not a share"] {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = Timestamp::now();
+        app.set_figures(crate::figures::Figures::open(home.path(), now).unwrap());
+        crate::tests_common::order_accounts_in(&app);
+        set_session(&app, Some(tok()));
+        let f = app.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let (id, symbol, mic, words, currency) = f
+            .read(|e| {
+                e.inputs().ledger.instruments.iter().find_map(|(id, i)| {
+                    let n = i.current_name()?;
+                    let mic = bagholder_sources::venue::known_mic(n.venue_mic.as_deref(), n.venue_name.as_deref())?;
+                    (i.instrument.kind == bagholder_core::instrument::InstrumentKind::Security).then(|| (*id, n.symbol.clone(), mic.to_string(), n.venue_name.clone().unwrap_or_default(), i.instrument.currency))
+                })
+            })
+            .unwrap()
+            .expect("a share of the book on a known venue");
+        book.conn_for_tests().execute("DELETE FROM instrument_refs WHERE instrument_id = ?1 AND scheme LIKE 'broker-security:%'", [id.to_string()]).unwrap();
+        let found_in = if case == "another currency" {
+            if currency == bagholder_core::Currency::USD { "CAD" } else { "USD" }
+        } else {
+            book.conn_for_tests().execute("UPDATE instruments SET kind = 'crypto' WHERE id = ?1", [id.to_string()]).unwrap();
+            currency.as_str()
+        }
+        .to_string();
+        f.rebuild(now).unwrap();
+        set_gql(&app, move |op, _| match op {
+            "FetchSecuritySearchResult" => Ok(json!({"securitySearch": {"results": [found_row("sec-s-found", &symbol, "EQUITY", &mic, &words, &found_in)]}})),
+            _ => panic!("{op}"),
+        });
+        let got = jv(&o::resolve_listing(&app, &o::ListingRef::Instrument { id: id.to_string() }, now));
+        assert_eq!(got["listing"]["securityId"], json!("sec-s-found"), "{case}: {got}");
+        assert!(f.names().unwrap().security.get(&id).is_none(), "{case}: nothing recorded");
+    }
 }
 
 /// Every request that names a listing refuses one without Wealthsimple's id.
@@ -795,12 +887,12 @@ fn a_bad_ticket_is_refused_in_words_and_nothing_is_recorded() {
     assert_eq!(bad(json!({"takeProfit": {"price": "lots"}})), "The take profit price \"lots\" is not a number.");
     // an id neither the book nor a quote has seen is asked of Wealthsimple, never
     // taken in the page's words: with no session, it is refused
-    assert_eq!(bad(json!({"listing": {"securityId": "sec-s-elsewhere", "symbol": "QNC", "exchange": "", "currency": "ZZZZ"}, "currency": "ZZZZ"})), "Not connected.");
+    assert_eq!(bad(json!({"listing": {"securityId": "sec-s-elsewhere", "symbol": "QNC", "exchange": "", "currency": "ZZZZ"}})), "Not connected.");
     // a listing Wealthsimple states in a currency the app does not know
     app.orders.found.lock().unwrap().insert("sec-s-odd".into(), bagholder_model::securities::Security { id: "sec-s-odd".into(), symbol: "QNC".into(), currency: "ZZZZ".into(), ..Default::default() });
     assert_eq!(bad(json!({"listing": {"securityId": "sec-s-odd", "symbol": "QNC", "exchange": "", "currency": "USD"}})), "The currency of QNC is not known.");
     // numbers typed as text are numbers, whatever the case of the words
-    let t: Ticket = serde_json::from_value(json!({"id": crate::app::uuid4().to_uppercase(), "side": "buy", "type": "limit", "quantity": "25", "limitPrice": "165.40", "listing": {"securityId": "sec-s-us", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}, "accountId": "acct-margin", "currency": "USD", "stopLoss": null, "takeProfit": null})).unwrap();
+    let t: Ticket = serde_json::from_value(json!({"id": crate::app::uuid4().to_uppercase(), "side": "buy", "type": "limit", "quantity": "25", "limitPrice": "165.40", "listing": {"securityId": "sec-s-us", "symbol": "QNC", "exchange": "NYSE", "currency": "USD"}, "accountId": "acct-margin", "stopLoss": null, "takeProfit": null})).unwrap();
     let asked = o::ticket_order(&app, &t).expect("numbers typed as text are numbers");
     assert_eq!((asked.order.quantity, asked.order.limit_price, asked.stop, asked.target), (d("25"), Some(d("165.40")), None, None));
     assert_eq!(asked.order.request["orderType"], json!("BUY_QUANTITY"));

@@ -113,15 +113,23 @@ test("a directory row and its page open on the listing Wealthsimple's search fin
   await placed(page, { security: 'sec-enb-nyse', account: margin, qty: '1' }, seen)
 })
 
-test('a listing page whose address names no venue offers no Buy, for a ticker the book has traded', async ({ page }) => {
+test('a listing page whose address names no venue offers no Buy and opens no holding, for tickers the book has traded and holds', async ({ page }) => {
+  const asked: string[] = []
+  page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/order/listing') asked.push(r.url()) })
   await page.goto('/')
   await ready(page)
-  // a heatmap tile or a notification opens a listing by its ticker alone
-  await page.evaluate(() => { location.hash = 'markets/listing:UBER@' })
-  await expect(page.locator('.tk-rowbtns').first()).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Buy UBER', exact: true })).toHaveCount(0)
-  // and the page stays the listing's: no holding is opened by the ticker
-  await expect(page).toHaveURL(/#markets\/listing:UBER@$/)
+  // a heatmap tile or a notification opens a listing by its ticker alone: UBER the book
+  // traded and closed, TD it holds on two venues
+  for (const symbol of ['UBER', 'TD']) {
+    const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/listing' && new URL(r.url()).searchParams.get('symbol') === symbol)
+    await page.evaluate((s) => { location.hash = `markets/listing:${s}@` }, symbol)
+    await answered
+    await expect(page.locator('.tk-rowbtns').first()).toBeVisible()
+    await expect(page.getByRole('button', { name: `Buy ${symbol}`, exact: true })).toHaveCount(0)
+    // the page stays the listing's: no holding is opened by the ticker
+    await expect(page).toHaveURL(new RegExp(`#markets/listing:${symbol}@$`))
+  }
+  expect(asked, 'no listing is asked for an order').toEqual([])
 })
 
 test("a draft closed on one listing is resumed on it, and never fills the other listing's ticket", async ({ page, request }) => {

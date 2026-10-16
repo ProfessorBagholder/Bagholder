@@ -177,7 +177,7 @@ type: string,
 /**
  * `DAY` or `UNTIL_CANCEL`; a day order when absent.
  */
-tif: string | null, quantity: PageDec, limitPrice: PageDec, stopPrice: PageDec, currency: string | null, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
+tif: string | null, quantity: PageDec, limitPrice: PageDec, stopPrice: PageDec, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
 
 export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string, 
 /**

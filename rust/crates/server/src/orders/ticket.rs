@@ -121,7 +121,7 @@ impl SecurityId {
     pub fn parse(s: &str) -> Result<SecurityId, String> {
         let s = s.trim();
         if s.is_empty() {
-            Err("no listing named".into())
+            Err("No listing named.".into())
         } else {
             Ok(SecurityId(s.to_string()))
         }
@@ -177,6 +177,15 @@ pub enum OrderListingAnswer {
     },
 }
 
+/// A listing as the ticket shows it, for what is said of it.
+pub fn shown(l: &OrderListing) -> String {
+    match (l.symbol.trim(), l.exchange.trim()) {
+        ("", _) => "the listing".to_string(),
+        (s, "") => s.to_string(),
+        (s, e) => format!("{s} on {e}"),
+    }
+}
+
 fn listing_of(s: &bagholder_model::securities::Security) -> Result<OrderListing, String> {
     Ok(OrderListing { security_id: SecurityId::parse(&s.id)?, symbol: s.symbol.clone(), exchange: s.primary_exchange.clone(), currency: s.currency.clone() })
 }
@@ -186,20 +195,33 @@ fn listing_of(s: &bagholder_model::securities::Security) -> Result<OrderListing,
 /// the symbol, the venue and the currency an order is recorded with are
 /// Wealthsimple's, never what a page sent (brief 36, 4). An id Wealthsimple does
 /// not know is refused.
-pub fn listing_by_id(app: &Arc<App>, security_id: &SecurityId) -> Result<bagholder_model::securities::Security, String> {
-    if let Some(sec) = known_listing(app, security_id.as_str())? {
-        return Ok(sec);
+/// `shown` is the listing as the ticket shows it (`TD on NYSE`), for what is said.
+/// A listing that states no symbol or no currency is refused: an order is recorded
+/// with both, and neither is ever taken from the page (brief 37, 2).
+pub fn listing_by_id(app: &Arc<App>, security_id: &SecurityId, shown: &str) -> Result<bagholder_model::securities::Security, String> {
+    let sec = match known_listing(app, security_id.as_str())? {
+        Some(sec) => sec,
+        None => {
+            let sess = ticket_session(app)?;
+            let q = fetch_quotes(app, &sess, &[security_id.to_string()])
+                .map_err(|e| format!("Wealthsimple could not be asked for {shown}: {}", err_text(&e)))?
+                .remove(security_id.as_str())
+                .ok_or_else(|| format!("Wealthsimple does not know {shown}."))?;
+            remember_summary(app, &q).ok_or_else(|| format!("Wealthsimple states no symbol or no currency for {shown}."))?
+        }
+    };
+    if sec.symbol.trim().is_empty() || sec.currency.trim().is_empty() {
+        return Err(format!("Wealthsimple states no symbol or no currency for {shown}."));
     }
-    let sess = ticket_session(app)?;
-    let q = fetch_quotes(app, &sess, &[security_id.to_string()])
-        .map_err(|e| format!("Wealthsimple could not be asked for the listing: {}", err_text(&e)))?
-        .remove(security_id.as_str())
-        .ok_or_else(|| format!("Wealthsimple does not know the listing {security_id}."))?;
-    Ok(remember_summary(app, &q))
+    Ok(sec)
 }
 
-/// A listing as Wealthsimple's summary states it, kept by its id for the run.
-fn remember_summary(app: &Arc<App>, q: &TicketQuoteDetail) -> bagholder_model::securities::Security {
+/// A listing as Wealthsimple's summary states it, kept by its id for the run; none
+/// where the summary states no symbol or no currency, which an order needs.
+fn remember_summary(app: &Arc<App>, q: &TicketQuoteDetail) -> Option<bagholder_model::securities::Security> {
+    if q.symbol.trim().is_empty() || q.currency.trim().is_empty() {
+        return None;
+    }
     let sec = bagholder_model::securities::Security {
         id: q.security_id.clone(),
         symbol: q.symbol.clone(),
@@ -209,7 +231,7 @@ fn remember_summary(app: &Arc<App>, q: &TicketQuoteDetail) -> bagholder_model::s
         ..Default::default()
     };
     app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).insert(sec.id.clone(), sec.clone());
-    sec
+    Some(sec)
 }
 
 /// The listing Wealthsimple's id names, as the book records it, else as Wealthsimple's
@@ -662,11 +684,12 @@ pub fn ticket_quote(app: &Arc<App>, security_id: &SecurityId, account_id: &str) 
     if quote.currency.is_empty() {
         quote.currency = sec.currency.to_uppercase();
     }
-    if known.is_none() {
-        // the listing as Wealthsimple states it, for the preview and the order
-        remember_summary(app, &quote);
-    }
     let mut unread = Vec::new();
+    // the listing as Wealthsimple states it, for the preview and the order; one that
+    // states no symbol or currency cannot be ordered, and the ticket says so
+    if known.is_none() && remember_summary(app, &quote).is_none() {
+        unread.push("Wealthsimple states no symbol or no currency for this listing, so it cannot be ordered.".to_string());
+    }
     let mut md = MarketData::default();
     match gql_as(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
         Ok(d) => md = parse_market_data(&d),
@@ -792,8 +815,6 @@ pub struct Ticket {
     #[serde(default)]
     pub stop_price: PageDec,
     #[serde(default)]
-    pub currency: Option<String>,
-    #[serde(default)]
     pub stop_loss: Option<TicketStop>,
     #[serde(default)]
     pub take_profit: Option<TicketTarget>,
@@ -845,7 +866,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
     let acct = order_accounts(app)?.into_iter().find(|a| a.id == t.account_id).ok_or("Choose an account.")?;
     // the listing as the book or Wealthsimple states it, by its id: the symbol and the
     // currency the order is recorded with are never the page's (brief 36, 4)
-    let sec = listing_by_id(app, &t.listing.security_id)?;
+    let sec = listing_by_id(app, &t.listing.security_id, &shown(&t.listing))?;
     // exits are an entry's: a sale has none
     let (mut stop, mut target) = (None, None);
     if side == Side::Buy {
@@ -878,8 +899,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
             target = Some(on_tick("The take profit price", positive(tp.price.read("The take profit price")?).ok_or("A take profit price is required.")?)?);
         }
     }
-    let named = if sec.currency.trim().is_empty() { t.currency.clone().unwrap_or_default() } else { sec.currency.clone() };
-    let currency = Currency::parse(&named.trim().to_uppercase()).map_err(|_| format!("The currency of {} is not known.", sec.symbol))?;
+    let currency = Currency::parse(&sec.currency.trim().to_uppercase()).map_err(|_| format!("The currency of {} is not known.", sec.symbol))?;
     let id = order_id(&t.id)?;
     let mut order = OrderRequest {
         id,

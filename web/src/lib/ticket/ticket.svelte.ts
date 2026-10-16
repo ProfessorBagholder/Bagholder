@@ -122,15 +122,19 @@ export function maxQty(): number | null {
   const t = ticketStore.t
   if (!t) return null
   if (t.side !== 'BUY') {
-    const held = heldIn(t.listing.securityId, t.accountId)
+    const held = heldIn(t, t.accountId)
     return held != null && held > 0 ? held : null
   }
   return ticketNumber(ticketStore.preview?.maxQuantity)
 }
 
-// the units of the listing the book holds in the broker account `accountId`
-function heldIn(securityId: string, accountId: string): number | null {
-  const pos = (positions.data?.positions ?? []).find((p) => p.security === securityId && brokerAccount(p.accountId) === accountId)
+// the units of the ticket's listing the book holds in the broker account `accountId`:
+// the holding it was opened from, by its id alone, where it is in that account (its
+// broker id may not have reached the page yet), else the listing's holding there
+function heldIn(t: { listing: OrderListing; holding?: string }, accountId: string): number | null {
+  const held = positions.data?.positions ?? []
+  const own = t.holding ? held.find((p) => p.id === t.holding && brokerAccount(p.accountId) === accountId) : undefined
+  const pos = own ?? held.find((p) => p.security === t.listing.securityId && brokerAccount(p.accountId) === accountId)
   return pos ? ticketNumber(pos.qty) : null
 }
 
@@ -226,14 +230,16 @@ export function openTicket(listing: OrderListing, side: 'BUY' | 'SELL', holding 
 // The ticket on an exact listing whose Wealthsimple id the page does not hold: the
 // book's instrument, or a symbol on the venue a directory named. The server finds the
 // id (never by the ticker alone); its refusal is said in the header and opens nothing.
-// Each ticket opened or closed counts here: an answer to a ticketOn asked before
-// the last of them is not acted on, so a late answer never replaces a ticket
-// opened since (brief 36, 6).
+// Only the last listing asked for is acted on, and only while no ticket has opened or
+// closed since it was asked: a late answer never replaces a ticket opened since, nor
+// a later click's listing (brief 36, 6; brief 37, 4).
 let ticketsSeen = 0
+let listingAsked = 0
 export async function ticketOn(of: ListingRef, side: 'BUY' | 'SELL', holding = '') {
-  const asked = ticketsSeen
+  const n = ++listingAsked
+  const seen = ticketsSeen
   const r = await call('POST /api/order/listing', { body: { of } })
-  if (asked !== ticketsSeen) return
+  if (n !== listingAsked || seen !== ticketsSeen) return
   if (!r.ok) {
     tell(r.error, 'err')
     return
@@ -313,7 +319,6 @@ export async function submit() {
     quantity: v.qty,
     limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? v.limit : null,
     stopPrice: t.type === 'STOP' || t.type === 'STOP_LIMIT' ? v.stop : null,
-    currency: q.currency || '',
     stopLoss: v.slOn ? { kind: t.sl.kind, price: v.slPrice, trail: v.trail, trailUnit: t.sl.unit } : null,
     takeProfit: v.tpOn ? { price: v.tpPrice } : null,
   }

@@ -364,7 +364,7 @@ test('submitting sends Wealthsimple\'s own request shape and flashes the order p
     // the listing, by Wealthsimple's id; its symbol and exchange are words to show
     listing: { securityId: 'sec-nvda', symbol: 'NVDA', exchange: 'NASDAQ', currency: 'USD' }, accountId: nvdaAccount, side: 'BUY', type: 'LIMIT', tif: 'DAY',
     // the exact decimal text of the server's preview, never a float
-    quantity: '25', limitPrice: '165.4', stopPrice: null, currency: 'USD',
+    quantity: '25', limitPrice: '165.4', stopPrice: null,
     stopLoss: { kind: 'stop', price: '157.13', trail: '5', trailUnit: 'pct' },
     takeProfit: { price: '181.94' },
   })

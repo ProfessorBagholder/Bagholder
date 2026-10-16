@@ -71,4 +71,28 @@ describe('the ticket draft belongs to its listing', () => {
     subs.book.data = null
     subs.positions.data = null
   })
+
+  it("of two listings asked for, only the later click's opens, whichever answer comes first", async () => {
+    const tk = await import('./ticket.svelte')
+    const first = tk.ticketOn({ kind: 'venue', symbol: 'RY', venue: 'NYSE' }, 'BUY')
+    const second = tk.ticketOn({ kind: 'venue', symbol: 'RY', venue: 'TSX' }, 'BUY')
+    const [answerFirst, answerSecond] = [answers.shift()!, answers.shift()!]
+    answerFirst({ ok: true, listing: nyse })
+    await first
+    expect(tk.ticketStore.t).toBeNull()
+    answerSecond({ ok: true, listing: tsx })
+    await second
+    expect(tk.ticketStore.t!.listing).toEqual(tsx)
+  })
+
+  it("a Sell's Max is the shares of the holding it was opened from, matched by its id alone", async () => {
+    const subs = await import('../subs.svelte')
+    subs.book.data = { accounts: [{ id: 'acct-1', brokerAccount: 'A1', name: 'TFSA', margin: false, tradable: true, status: 'open' }], options: { instruments: [] } } as never
+    subs.positions.data = { positions: [{ id: 'h-tsx', security: '', symbol: 'RY', accountId: 'acct-1', qty: '150' }] } as never
+    const tk = await import('./ticket.svelte')
+    tk.openTicket(tsx, 'SELL', 'h-tsx')
+    expect(tk.maxQty()).toBe(150)
+    subs.book.data = null
+    subs.positions.data = null
+  })
 })

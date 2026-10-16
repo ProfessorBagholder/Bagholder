@@ -18,8 +18,6 @@ use bagholder_core::json::{self, Value};
 use bagholder_net::{Ask, Net};
 use bagholder_sources::reply::{Node, Read};
 
-pub const TOKEN_URL: &str = "https://api.production.wealthsimple.com/v1/oauth/v2/token";
-
 /// What the person is told when Wealthsimple refused the saved sign-in
 /// (`SPEC.md`: the status reads it).
 pub const REFUSED_SIGN_IN: &str = "Saved login refused. Connect Wealthsimple again.";
@@ -162,7 +160,7 @@ fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
     body.insert("client_id".to_string(), Value::String(held.client_id.clone()));
     let body = Value::Object(body).canonical();
     let headers = [("Content-Type", "application/json"), ("Accept", "application/json")];
-    let reply = match net.send(&Ask::post(TOKEN_URL, &headers, body.as_bytes())) {
+    let reply = match net.send(&Ask::post(&crate::hosts::token_url(), &headers, body.as_bytes())) {
         Ok(r) => r,
         Err(e) => {
             // sent with no answer back, it may have reached Wealthsimple and been taken: a
