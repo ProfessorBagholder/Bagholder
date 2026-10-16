@@ -1,0 +1,1154 @@
+[
+ {
+  "symbol": "RY",
+  "name": "Royal Bank of Canada",
+  "query": "Royal Bank of Canada",
+  "profiles": [
+   {
+    "name": "Royal Bank of Canada / Banque Royale du Canada Operating name: RBC",
+    "profileNo": "000001161",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "SHOP",
+  "name": "Shopify Inc.",
+  "query": "Shopify Inc",
+  "profiles": [
+   {
+    "name": "Shopify Inc. / Shopify Inc.",
+    "profileNo": "000037100",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Harvest Shopify Enhanced High Income Shares ETF",
+    "profileNo": "000109266",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Investment fund"
+   },
+   {
+    "name": "Ninepoint Shopify HighShares ETF / FNB Ninepoint HighShares Shopify",
+    "profileNo": "000109012",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Investment fund"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "TD",
+  "name": "Toronto-Dominion Bank (The)",
+  "query": "Toronto-Dominion Bank",
+  "profiles": [
+   {
+    "name": "The Toronto-Dominion Bank / La Banque Toronto-Dominion",
+    "profileNo": "000001369",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "BMO",
+  "name": "Bank of Montreal",
+  "query": "Bank of Montreal",
+  "profiles": [
+   {
+    "name": "Bank of Montreal / Banque de Montr\u00e9al",
+    "profileNo": "000002530",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "BNS",
+  "name": "Bank of Nova Scotia (The)",
+  "query": "Bank of Nova Scotia",
+  "profiles": [
+   {
+    "name": "Bank of Nova Scotia, The / La Banque de Nouvelle - Ecosse",
+    "profileNo": "000001289",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CNQ",
+  "name": "Canadian Natural Resources Limited",
+  "query": "Canadian Natural Resources Limited",
+  "profiles": [
+   {
+    "name": "Canadian Natural Resources Limited / Canadian Natural Resources Limited",
+    "profileNo": "000002451",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "ENB",
+  "name": "Enbridge Inc.",
+  "query": "Enbridge Inc",
+  "profiles": [
+   {
+    "name": "Enbridge Inc. / Enbridge Inc.",
+    "profileNo": "000001736",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "AB",
+    "type": "Company"
+   },
+   {
+    "name": "Enbridge Pipelines Inc. / Pipelines Enbridge Inc.",
+    "profileNo": "000001717",
+    "provinces": "MB, NL",
+    "jurisdiction": "",
+    "type": "Company"
+   },
+   {
+    "name": "Enbridge Gas Inc. / Enbridge Gas Inc.",
+    "profileNo": "000046754",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Harvest Enbridge Enhanced High Income Shares ETF",
+    "profileNo": "000109265",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Investment fund"
+   },
+   {
+    "name": "Ninepoint Enbridge HighShares ETF / FNB Ninepoint HighShares Enbridge",
+    "profileNo": "000109040",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Investment fund"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CM",
+  "name": "Canadian Imperial Bank Of Commerce",
+  "query": "Canadian Imperial Bank Of Commerce",
+  "profiles": [
+   {
+    "name": "Canadian Imperial Bank of Commerce / Banque Canadienne Imperiale de Commerce",
+    "profileNo": "000002543",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "AEM",
+  "name": "Agnico Eagle Mines Limited",
+  "query": "Agnico Eagle Mines Limited",
+  "profiles": [
+   {
+    "name": "Agnico Eagle Mines Limited / Mines Agnico Eagle Limit\u00e9e",
+    "profileNo": "000000834",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "SU",
+  "name": "Suncor Energy Inc.",
+  "query": "Suncor Energy Inc",
+  "profiles": [
+   {
+    "name": "Suncor Energy Inc. / Suncor Energie Inc.",
+    "profileNo": "000001048",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "BN",
+  "name": "Brookfield Corporation",
+  "query": "Brookfield Corporation",
+  "profiles": [
+   {
+    "name": "Brookfield Corporation / Brookfield Corporation",
+    "profileNo": "000007472",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Business Corporation",
+    "profileNo": "000111269",
+    "provinces": "AB, BC, MB, NB, NS, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Business Holdings Corporation / Brookfield Business Holdings Corporation",
+    "profileNo": "000052927",
+    "provinces": "NL, NT, NU",
+    "jurisdiction": "",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Infrastructure Corporation",
+    "profileNo": "000107143",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Infrastructure Corporation Exchange Limited Partnership / Brookfield Infrastructure Corporation Exchange Limited Partnership",
+    "profileNo": "000053108",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Infrastructure Holdings Corporation (formerly, Brookfield Infrastructure Corporation)",
+    "profileNo": "000048656",
+    "provinces": "MB, NL, NT",
+    "jurisdiction": "",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Investments Corporation / Brookfield Investments Corporation",
+    "profileNo": "000002403",
+    "provinces": "AB, BC, MB, NB, NL, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Office Properties Inc. / Brookfield Office Properties Inc.",
+    "profileNo": "000002406",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Renewable Corporation (formerly, 1505127 B.C. Ltd.)",
+    "profileNo": "000107142",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Renewable Holdings Corporation (formerly, Brookfield Renewable Corporation)",
+    "profileNo": "000048668",
+    "provinces": "NL, NT",
+    "jurisdiction": "",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CP",
+  "name": "Canadian Pacific Kansas City Limited",
+  "query": "Canadian Pacific Kansas City Limited",
+  "profiles": [
+   {
+    "name": "Canadian Pacific Kansas City Limited / Canadien Pacifique Kansas City Limit\u00e9e",
+    "profileNo": "000016641",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "BAM",
+  "name": "Brookfield Asset Management Ltd.",
+  "query": "Brookfield Asset Management Ltd",
+  "profiles": [
+   {
+    "name": "Brookfield Asset Management Ltd. / Brookfield Asset Management Ltd.",
+    "profileNo": "000055767",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Wealth Solutions Ltd. / Brookfield Wealth Solutions Ltd.",
+    "profileNo": "000052024",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CNR",
+  "name": "Canadian National Railway Company",
+  "query": "Canadian National Railway Company",
+  "profiles": [
+   {
+    "name": "Canadian National Railway Company / Compagnie des Chemins de Fer Nationaux du Canada",
+    "profileNo": "000000972",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "MFC",
+  "name": "Manulife Financial Corporation",
+  "query": "Manulife Financial Corporation",
+  "profiles": [
+   {
+    "name": "Manulife Financial Corporation / Soci\u00e9t\u00e9 Financi\u00e8re Manuvie Operating name: Manulife",
+    "profileNo": "000012214",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "ABX",
+  "name": "Barrick Mining Corporation",
+  "query": "Barrick Mining Corporation",
+  "profiles": [
+   {
+    "name": "Barrick Mining Corporation / Societe Miniere Barrick",
+    "profileNo": "000000923",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "IMO",
+  "name": "Imperial Oil Limited",
+  "query": "Imperial Oil Limited",
+  "profiles": [
+   {
+    "name": "Imperial Oil Limited / Compagnie P\u00e9troli\u00e8re Imp\u00e9riale Lt\u00e9e",
+    "profileNo": "000000131",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "TRP",
+  "name": "TC Energy Corporation",
+  "query": "TC Energy Corporation",
+  "profiles": [
+   {
+    "name": "TC Energy Corporation / Corporation TC \u00c9nergie",
+    "profileNo": "000019418",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "AB",
+    "type": "Company"
+   },
+   {
+    "name": "Orca Energy Group Inc. formerly Orca Exploration Group Inc. / Orca Energy Group Inc. formerly Orca Exploration Group Inc.",
+    "profileNo": "000021084",
+    "provinces": "AB, BC, NB",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "WPM",
+  "name": "Wheaton Precious Metals Corp.",
+  "query": "Wheaton Precious Metals Corp",
+  "profiles": [
+   {
+    "name": "Wheaton Precious Metals Corp. formerly Silver Wheaton Corp. / Wheaton Precious Metals Corp. formerly Silver Wheaton Corp.",
+    "profileNo": "000009161",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "BC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CVE",
+  "name": "Cenovus Energy Inc.",
+  "query": "Cenovus Energy Inc",
+  "profiles": [
+   {
+    "name": "Cenovus Energy Inc. / Cenovus Energy Inc.",
+    "profileNo": "000029116",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "L",
+  "name": "Loblaw Companies Limited",
+  "query": "Loblaw Companies Limited",
+  "profiles": [
+   {
+    "name": "Loblaw Companies Limited / Les Compagnies Loblaw Limitee",
+    "profileNo": "000001956",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "NA",
+  "name": "National Bank of Canada",
+  "query": "National Bank of Canada",
+  "profiles": [
+   {
+    "name": "National Bank of Canada / Banque Nationale du Canada",
+    "profileNo": "000002236",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "ATD",
+  "name": "Alimentation Couche-Tard Inc.",
+  "query": "Alimentation Couche-Tard Inc",
+  "profiles": [
+   {
+    "name": "Alimentation Couche-Tard Inc. / Alimentation Couche-Tard Inc.",
+    "profileNo": "000007730",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CSU",
+  "name": "Constellation Software Inc.",
+  "query": "Constellation Software Inc",
+  "profiles": [
+   {
+    "name": "Constellation Software Inc. / Constellation Software Inc.",
+    "profileNo": "000023511",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "TRI",
+  "name": "Thomson Reuters Corporation",
+  "query": "Thomson Reuters Corporation",
+  "profiles": [
+   {
+    "name": "Thomson Reuters Corporation / Thomson Reuters Corporation",
+    "profileNo": "000001065",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "FNV",
+  "name": "Franco-Nevada Corporation",
+  "query": "Franco-Nevada Corporation",
+  "profiles": [
+   {
+    "name": "Franco-Nevada Corporation",
+    "profileNo": "000026091",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "SLF",
+  "name": "Sun Life Financial Inc.",
+  "query": "Sun Life Financial Inc",
+  "profiles": [
+   {
+    "name": "Sun Life Financial Inc. / Financi\u00e8re Sun Life inc. Operating name: Sun Life",
+    "profileNo": "000013157",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "WCN",
+  "name": "Waste Connections, Inc.",
+  "query": "Waste Connections",
+  "profiles": [
+   {
+    "name": "Waste Connections, Inc. (formerly Progressive Waste Solutions Ltd.) / Waste Connections, Inc. (formerly Progressive Waste Solutions Ltd.)",
+    "profileNo": "000027601",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CLS",
+  "name": "Celestica Inc.",
+  "query": "Celestica Inc",
+  "profiles": [
+   {
+    "name": "Celestica Inc. / Celestica Inc.",
+    "profileNo": "000010284",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "DOL",
+  "name": "Dollarama Inc.",
+  "query": "Dollarama Inc",
+  "profiles": [
+   {
+    "name": "Dollarama Inc. / Dollarama Inc. Operating name: Dollarama",
+    "profileNo": "000028876",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "POW",
+  "name": "Power Corporation of Canada",
+  "query": "Power Corporation of Canada",
+  "profiles": [
+   {
+    "name": "Power Corporation of Canada / Power Corporation du Canada",
+    "profileNo": "000001575",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CCO",
+  "name": "Cameco Corporation",
+  "query": "Cameco Corporation",
+  "profiles": [
+   {
+    "name": "Cameco Corporation / Corporation Cameco",
+    "profileNo": "000001296",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "SK",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "NTR",
+  "name": "Nutrien Ltd.",
+  "query": "Nutrien Ltd",
+  "profiles": [
+   {
+    "name": "Nutrien Ltd. / Nutrien Ltd.",
+    "profileNo": "000044140",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK, YT",
+    "jurisdiction": "SK",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "FFH",
+  "name": "Fairfax Financial Holdings Limited",
+  "query": "Fairfax Financial Holdings Limited",
+  "profiles": [
+   {
+    "name": "Fairfax Financial Holdings Limited / Fairfax Financial Holdings Limited",
+    "profileNo": "000002458",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "TECK.B",
+  "name": "Teck Resources Limited",
+  "query": "Teck Resources Limited",
+  "profiles": [
+   {
+    "name": "Teck Resources Limited / Ressources Teck Limit\u00e9e",
+    "profileNo": "000001787",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "BC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "IFC",
+  "name": "Intact Financial Corporation",
+  "query": "Intact Financial Corporation",
+  "profiles": [
+   {
+    "name": "Intact Financial Corporation / Intact Corporation financi\u00e8re",
+    "profileNo": "000021370",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "WN",
+  "name": "George Weston Limited",
+  "query": "George Weston Limited",
+  "profiles": [
+   {
+    "name": "George Weston Limited / George Weston Limitee",
+    "profileNo": "000001955",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "K",
+  "name": "Kinross Gold Corporation",
+  "query": "Kinross Gold Corporation",
+  "profiles": [
+   {
+    "name": "Kinross Gold Corporation / Kinross Gold Corporation",
+    "profileNo": "000002968",
+    "provinces": "AB, BC, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "PPL",
+  "name": "Pembina Pipeline Corporation",
+  "query": "Pembina Pipeline Corporation",
+  "profiles": [
+   {
+    "name": "Pembina Pipeline Corporation / Pembina Pipeline Corporation",
+    "profileNo": "000030521",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "FTS",
+  "name": "Fortis Inc.",
+  "query": "Fortis Inc",
+  "profiles": [
+   {
+    "name": "Fortis Inc. / Fortis Inc.",
+    "profileNo": "000001917",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "FortisAlberta Inc. / FortisAlberta Inc.",
+    "profileNo": "000021201",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "AB",
+    "type": "Company"
+   },
+   {
+    "name": "FortisBC Energy Inc. / FortisBC Energy Inc.",
+    "profileNo": "000003005",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "BC",
+    "type": "Company"
+   },
+   {
+    "name": "FortisBC Inc. / FortisBC Inc.",
+    "profileNo": "000004134",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "BC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "QSR",
+  "name": "Restaurant Brands International Inc.",
+  "query": "Restaurant Brands International Inc",
+  "profiles": [
+   {
+    "name": "Restaurant Brands International Inc. / Restaurant Brands International Inc.",
+    "profileNo": "000036645",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "H",
+  "name": "Hydro One Limited",
+  "query": "Hydro One Limited",
+  "profiles": [
+   {
+    "name": "Hydro One Limited / Hydro One Limited",
+    "profileNo": "000037686",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Hydro One Holdings Limited / Hydro One Holdings Limited",
+    "profileNo": "000045370",
+    "provinces": "ON, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "FM",
+  "name": "First Quantum Minerals Ltd.",
+  "query": "First Quantum Minerals Ltd",
+  "profiles": [
+   {
+    "name": "First Quantum Minerals Ltd / First Quantum Minerals Ltd",
+    "profileNo": "000006237",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "BCE",
+  "name": "BCE Inc.",
+  "query": "BCE Inc",
+  "profiles": [
+   {
+    "name": "BCE Inc. / BCE Inc.",
+    "profileNo": "000000326",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   },
+   {
+    "name": "Harvest BCE Enhanced High Income Shares ETF",
+    "profileNo": "000109253",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Investment fund"
+   },
+   {
+    "name": "Ninepoint BCE HighShares ETF / FNB Ninepoint HighShares BCE",
+    "profileNo": "000109038",
+    "provinces": "AB, BC, MB, NB, NS, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Investment fund"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "TOU",
+  "name": "Tourmaline Oil Corp.",
+  "query": "Tourmaline Oil Corp",
+  "profiles": [
+   {
+    "name": "Tourmaline Oil Corp. / Tourmaline Oil Corp.",
+    "profileNo": "000030563",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "AB",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "MG",
+  "name": "Magna International Inc.",
+  "query": "Magna International Inc",
+  "profiles": [
+   {
+    "name": "Magna International Inc. Operating name: Magna, Magna International",
+    "profileNo": "000001814",
+    "provinces": "AB, BC, MB, NB, NS, ON, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "BIP.UN",
+  "name": "Brookfield Infrastructure Partners L.P.",
+  "query": "Brookfield Infrastructure Partners L",
+  "profiles": [
+   {
+    "name": "Brookfield Infrastructure Partners L.P. / Brookfield Infrastructure Partners L.P.",
+    "profileNo": "000025683",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Financial Infrastructure Partners L.P.",
+    "profileNo": "000106133",
+    "provinces": "NL",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Infrastructure Corporation Exchange Limited Partnership / Brookfield Infrastructure Corporation Exchange Limited Partnership",
+    "profileNo": "000053108",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "Brookfield Infrastructure Partners Exchange LP / Brookfield Infrastructure Partners Exchange LP",
+    "profileNo": "000046045",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "WSP",
+  "name": "WSP Global Inc.",
+  "query": "WSP Global Inc",
+  "profiles": [
+   {
+    "name": "WSP Global Inc. / Groupe WSP Global Inc.",
+    "profileNo": "000035376",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "EMA",
+  "name": "Emera Incorporated",
+  "query": "Emera Incorporated",
+  "profiles": [
+   {
+    "name": "Emera Incorporated / Emera Incorporated",
+    "profileNo": "000011625",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "NS",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "MRU",
+  "name": "Metro Inc.",
+  "query": "Metro Inc",
+  "profiles": [
+   {
+    "name": "Metro inc. / Metro inc.",
+    "profileNo": "000001783",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   },
+   {
+    "name": "INDVR Brands Inc. (formerly, Cannabis One Holdings Inc.) / INDVR Brands Inc. (formerly, Cannabis One Holdings Inc.)",
+    "profileNo": "000026842",
+    "provinces": "AB, BC, ON",
+    "jurisdiction": "BC",
+    "type": "Company"
+   },
+   {
+    "name": "MANHATTAN URANIUM DISCOVERY CORP. / MANHATTAN URANIUM DISCOVERY CORP.",
+    "profileNo": "000021434",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "BC",
+    "type": "Company"
+   },
+   {
+    "name": "Metro Vancouver Properties Corp. / Metro Vancouver Properties Corp.",
+    "profileNo": "000004432",
+    "provinces": "AB",
+    "jurisdiction": "",
+    "type": "Company"
+   },
+   {
+    "name": "Metrowerks Inc. / Metrowerks Inc.",
+    "profileNo": "000002607",
+    "provinces": "NL",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "TVA Group Inc. / Groupe TVA inc.",
+    "profileNo": "000002199",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   },
+   {
+    "name": "\u00c9nergir Inc. / \u00c9nergir Inc.",
+    "profileNo": "000002025",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "GIB.A",
+  "name": "CGI Inc.",
+  "query": "CGI Inc",
+  "profiles": [
+   {
+    "name": "CGI Inc. / CGI inc. Operating name: CGI",
+    "profileNo": "000002790",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "RCI.B",
+  "name": "Rogers Communications Inc.",
+  "query": "Rogers Communications Inc",
+  "profiles": [
+   {
+    "name": "Rogers Communications Inc. / Rogers Communications Inc. Operating name: RCI, Rogers, Rogers Communications",
+    "profileNo": "000003765",
+    "provinces": "AB, BC, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "T",
+  "name": "TELUS Corporation",
+  "query": "TELUS Corporation",
+  "profiles": [
+   {
+    "name": "TELUS Corporation / TELUS Corporation",
+    "profileNo": "000001114",
+    "provinces": "NS",
+    "jurisdiction": "AB",
+    "type": "Company"
+   },
+   {
+    "name": "TELUS Corporation / TELUS Corporation",
+    "profileNo": "000011998",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "BC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "SAP",
+  "name": "Saputo Inc.",
+  "query": "Saputo Inc",
+  "profiles": [
+   {
+    "name": "Saputo Inc. / Saputo Inc.",
+    "profileNo": "000008691",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CCL.B",
+  "name": "CCL Industries Inc.",
+  "query": "CCL Industries Inc",
+  "profiles": [
+   {
+    "name": "CCL Industries Inc. / CCL Industries Inc.",
+    "profileNo": "000003638",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "GIL",
+  "name": "Gildan Activewear Inc.",
+  "query": "Gildan Activewear Inc",
+  "profiles": [
+   {
+    "name": "Gildan Activewear Inc. / Les V\u00eatements de Sport Gildan Inc.",
+    "profileNo": "000010422",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CAE",
+  "name": "CAE Inc.",
+  "query": "CAE Inc",
+  "profiles": [
+   {
+    "name": "CAE Inc. / CAE Inc.",
+    "profileNo": "000001596",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "QC",
+    "type": "Company"
+   },
+   {
+    "name": "CDN Maverick Capital Corp. / CDN Maverick Capital Corp.",
+    "profileNo": "000008365",
+    "provinces": "AB, BC, ON",
+    "jurisdiction": "BC",
+    "type": "Company"
+   },
+   {
+    "name": "Eon Lithium Corp. / Eon Lithium Corp.",
+    "profileNo": "000005991",
+    "provinces": "AB, BC",
+    "jurisdiction": "BC",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "CTC.A",
+  "name": "Canadian Tire Corporation, Limited",
+  "query": "Canadian Tire Corporation",
+  "profiles": [
+   {
+    "name": "Canadian Tire Corporation, Limited / La Societe Canadian Tire Limitee",
+    "profileNo": "000000534",
+    "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "OTEX",
+  "name": "Open Text Corporation",
+  "query": "Open Text Corporation",
+  "profiles": [
+   {
+    "name": "Open Text Corporation / Open Text Corporation",
+    "profileNo": "000010345",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ },
+ {
+  "symbol": "FSV",
+  "name": "FirstService Corporation",
+  "query": "FirstService Corporation",
+  "profiles": [
+   {
+    "name": "FIRSTSERVICE CORPORATION / FIRSTSERVICE CORPORATION",
+    "profileNo": "000037245",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK",
+    "jurisdiction": "ON",
+    "type": "Company"
+   },
+   {
+    "name": "COLLIERS INTERNATIONAL GROUP INC. / COLLIERS INTERNATIONAL GROUP INC.",
+    "profileNo": "000003935",
+    "provinces": "AB, BC, MB, NB, NL, NS, ON, PE, QC, SK, YT",
+    "jurisdiction": "ON",
+    "type": "Company"
+   }
+  ],
+  "error": null
+ }
+]
