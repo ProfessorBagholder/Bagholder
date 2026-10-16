@@ -35,6 +35,11 @@ pub struct State {
     pub portfolio_error: String,
     /// Why the last pass of the figures failed; cleared by the next pass that succeeds.
     pub figures_error: String,
+    /// What a step at start that reads the stored data could not do (the book or
+    /// the market cache not opened, the earlier store not carried), one sentence
+    /// each: the server stays up with its page and its update button, and this is
+    /// said until the next start (#516).
+    pub start_error: String,
     /// Each month whose broker statement the book does not reconcile with, as
     /// the last pull found it; cleared by a pull that finds none.
     pub statement_error: String,

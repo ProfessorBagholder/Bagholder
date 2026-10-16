@@ -162,7 +162,7 @@ pub fn status(app: &Arc<App>) -> Status {
 /// failure is said in the header until that source succeeds). Empty when
 /// nothing is failing; one failure met by two readers is said once.
 pub fn failures(st: &app::State, sources: &[String]) -> String {
-    let own = [st.error.as_str(), st.statement_error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str()];
+    let own = [st.error.as_str(), st.statement_error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str(), st.start_error.as_str()];
     let mut said: Vec<String> = vec![];
     for s in own.into_iter().chain(sources.iter().map(String::as_str)).map(str::trim).filter(|e| !e.is_empty()).map(sentence) {
         if !said.contains(&s) {
@@ -498,7 +498,7 @@ fn grouped(plain: String) -> String {
 }
 
 /// `s` ending as a sentence does.
-fn sentence(s: &str) -> String {
+pub(crate) fn sentence(s: &str) -> String {
     if s.ends_with(['.', '!', '?', '…']) {
         s.to_string()
     } else {
