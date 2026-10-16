@@ -299,3 +299,66 @@ fn a_failing_source_rests_twice_as_long_each_time_up_to_six_hours() {
     assert_eq!(*rests.last().unwrap(), 6 * 3600, "six hours at most");
     assert_eq!(grown_rest(Duration::from_secs(10 * 3600), 1).as_secs(), 6 * 3600, "a long own rest is capped too");
 }
+
+/// Migration 6 carries filings to one row per document under its own source and
+/// id, with its filer read from the row, its read text byte for byte, the most
+/// complete read of a document stored under two tickers, and a count of the rows
+/// that named no filer; the ticker each filer was stored under is kept for the
+/// book's told marks (plan `market-data-keyed-by-listing`, Approach, 3).
+#[test]
+fn migration_6_carries_every_filing_it_can_attribute_with_its_read_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("market.db");
+    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
+    {
+        let (conn, _) = migrate::open(five, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+        let row = |symbol: &str, id: &str, source: &str, profile: &str, url: &str, summary: Option<&str>, version: Option<i64>, last: bool| {
+            conn.execute(
+                "INSERT INTO filings (symbol, id, source, profile_no, url, title, date, summary, enrich_version, enrich_final, enriched_at) VALUES (?, ?, ?, ?, ?, 't', '2026-09-01', ?, ?, ?, ?)",
+                rusqlite::params![symbol, id, source, profile, url, summary, version, last as i64, summary.map(|_| "2026-09-02T00:00:00Z")],
+            )
+            .unwrap();
+        };
+        // a SEDAR+ row with its profile; one without, whose ticker's profile is stored
+        row("ABC", "sedar:1", "SEDAR+", "000001234", "", Some("read text, \u{e9}\u{2014} kept"), Some(3), true);
+        row("ABC", "sedar:2", "SEDAR+", "", "", None, None, false);
+        conn.execute("INSERT INTO meta (key, value) VALUES ('sedar_profile:ABC', '000001234')", []).unwrap();
+        // SEC rows by their address, both forms; one document under two tickers,
+        // read further under the second
+        row("XY", "sec:0001-26-1", "SEC", "", "https://www.sec.gov/Archives/edgar/data/0000320193/000126/doc.htm", Some("partial"), Some(1), false);
+        row("XY.B", "sec:0001-26-1", "SEC", "", "https://www.sec.gov/Archives/edgar/data/320193/000126/doc.htm", Some("final"), Some(2), true);
+        row("XY", "sec:0001-26-2", "SEC", "", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193", None, None, false);
+        // a row naming no filer: SEDAR+ with no profile anywhere, SEC with no address
+        row("NOPE", "sedar:9", "SEDAR+", "", "", None, None, false);
+        row("NOPE", "sec:9", "SEC", "", "", None, None, false);
+    }
+    let (conn, _) = migrate::open(&SCHEMA, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+    let rows: Vec<(String, String, String, Option<String>)> = conn
+        .prepare("SELECT source, id, filer, summary FROM filings ORDER BY source, id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("SEC".into(), "sec:0001-26-1".into(), "320193".into(), Some("final".into())),
+            ("SEC".into(), "sec:0001-26-2".into(), "320193".into(), None),
+            ("SEDAR+".into(), "sedar:1".into(), "000001234".into(), Some("read text, \u{e9}\u{2014} kept".into())),
+            ("SEDAR+".into(), "sedar:2".into(), "000001234".into(), None),
+        ]
+    );
+    let dropped: String = conn.query_row("SELECT value FROM meta WHERE key = 'carry:filings_without_a_filer'", [], |r| r.get(0)).unwrap();
+    assert_eq!(dropped, "2");
+    let carried: Vec<(String, String, String)> = conn
+        .prepare("SELECT symbol, source, filer FROM filings_carried ORDER BY symbol, source")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(carried, vec![("ABC".into(), "SEDAR+".into(), "000001234".into()), ("XY".into(), "SEC".into(), "320193".into()), ("XY.B".into(), "SEC".into(), "320193".into())]);
+    let left: i64 = conn.query_row("SELECT COUNT(*) FROM meta WHERE key LIKE 'sedar_profile:%'", [], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0, "no meta key names a ticker");
+}

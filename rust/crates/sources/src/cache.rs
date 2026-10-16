@@ -22,12 +22,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 5] = [
+pub static MIGRATIONS: [Migration; 6] = [
     Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
     Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
     Migration { number: 3, name: "benchmark trackers and option chains", sql: include_str!("../migrations/003-benchmark-trackers-and-option-chains.sql") },
     Migration { number: 4, name: "the earlier readers", sql: include_str!("../migrations/004-the-earlier-readers.sql") },
     Migration { number: 5, name: "quoted ex-dividend dates", sql: include_str!("../migrations/005-quoted-ex-dividend-dates.sql") },
+    Migration { number: 6, name: "market data by listing", sql: include_str!("../migrations/006-market-data-by-listing.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {
