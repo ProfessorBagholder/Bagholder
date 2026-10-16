@@ -1,4 +1,6 @@
 import { defineConfig } from '@playwright/test'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // The browser tests (docs/architecture.md, rule 8): the real server, on a made-up
 // book, driven in a real browser. `e2e/serve.mjs` makes the book and starts the
@@ -6,6 +8,10 @@ import { defineConfig } from '@playwright/test'
 // placed (BAGHOLDER_DRY_ORDERS).
 // (E2E_PORT: a second run beside the first, each with its own server and book)
 export const PORT = Number(process.env.E2E_PORT) || 8791
+// where the signed-in server names every request it makes, for the test that nothing
+// it sends goes to a host but the stand-in
+export const REQUEST_LOG = join(tmpdir(), `bagholder-e2e-requests-${PORT + 1}.log`)
+process.env.E2E_REQUEST_LOG = REQUEST_LOG
 // (E2E_URL: a server already running, the image in CI; only the order test, which
 // stands nothing in, is run against it, and nothing is started here)
 const URL = process.env.E2E_URL
@@ -40,14 +46,20 @@ export default defineConfig({
       timeout: 600_000, // a cold `cargo build` on a fresh machine
       stdout: 'ignore',
       stderr: 'ignore',
+      // stopped as a person stops it, so it removes its home (a saved sign-in in the
+      // signed-in one) once its server has exited, never left for the next run
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
     },
     {
-      command: `node e2e/serve.mjs --signed-in --port=${PORT + 1}`,
+      command: `node e2e/serve.mjs --signed-in --port=${PORT + 1} --requests=${REQUEST_LOG}`,
       url: `http://127.0.0.1:${PORT + 1}/api/status`,
       reuseExistingServer: false,
       timeout: 600_000,
       stdout: 'ignore',
       stderr: 'ignore',
+      // stopped as a person stops it, so it removes its home (a saved sign-in in the
+      // signed-in one) once its server has exited, never left for the next run
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
     },
   ],
 })

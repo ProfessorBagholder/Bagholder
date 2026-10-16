@@ -568,6 +568,39 @@ pub fn offline() -> bool {
     *OFF.get_or_init(|| crate::switch::switch_on("BAGHOLDER_OFFLINE"))
 }
 
+fn is_loopback(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Whether a request to `host` is one `BAGHOLDER_OFFLINE` refuses.
+pub fn refused_offline(host: &str) -> bool {
+    offline() && !is_loopback(host)
+}
+
+/// The one door every request goes through as it is made, whichever way it is sent
+/// (this client, or the browser helper through `Net`): it is counted when it is for
+/// another machine, named when `BAGHOLDER_LOG_REQUESTS=1`, and refused when the
+/// process is offline, named first. How "nothing is asked for while nobody is
+/// looking", and "nothing goes to a host but the stand-in", are checked on a running
+/// app. The query is left out, so nothing a URL carries reaches a log.
+pub fn leave(method: &str, url: &str) -> Result<(), Error> {
+    leaving(method, &parse_url(url)?)
+}
+
+fn leaving(method: &str, u: &Url) -> Result<(), Error> {
+    if !is_loopback(&u.host) {
+        OUTBOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    let refused = refused_offline(&u.host);
+    if logging_requests() {
+        eprintln!("outbound {} {}{}{}", method, u.host, u.path.split('?').next().unwrap_or(""), if refused { " (refused: offline)" } else { "" });
+    }
+    if refused {
+        return Err(Error::Transport(OFFLINE.into()));
+    }
+    Ok(())
+}
+
 /// One request, following redirects, with the connection given back when the
 /// host is willing to keep it open.
 pub fn request(
@@ -674,19 +707,7 @@ fn send_into(
                 return Err(Error::Transport(format!("{} is not a host this file is fetched from", u.host)));
             }
         }
-        let loopback = matches!(u.host.as_str(), "127.0.0.1" | "localhost" | "::1");
-        if !loopback {
-            OUTBOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        if offline() && !loopback {
-            return Err(Error::Transport(OFFLINE.into()));
-        }
-        // BAGHOLDER_LOG_REQUESTS=1 names every request as it leaves: how "nothing is
-        // asked for while nobody is looking" is checked on a running app. The query
-        // is left out, so nothing a URL carries reaches a log.
-        if logging_requests() {
-            eprintln!("outbound {} {}{}", method, u.host, u.path.split('?').next().unwrap_or(""));
-        }
+        leaving(method, &u)?;
 
         // the port is part of the Host whenever it is not the scheme's own: a
         // server that builds URLs from it (DevTools does) needs it

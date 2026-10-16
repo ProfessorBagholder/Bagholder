@@ -282,7 +282,9 @@ fn wealthsimple_hosts(text: &str) -> Vec<String> {
 #[test]
 fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    const ALLOWED: [&str; 2] = ["wealthsimple/src/hosts.rs", "ws/src/session.rs"];
+    // the one place each client names its hosts: private constants, read only by the
+    // functions that honour the stand-in's variable (each file's own test holds that)
+    const ALLOWED: [(&str, &[&str]); 2] = [("wealthsimple/src/hosts.rs", &["const WEB: &str", "const TOKEN: &str"]), ("ws/src/session.rs", &["const GRAPHQL: &str", "const OAUTH: &str", "const WEB: &str"])];
     fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
@@ -306,11 +308,14 @@ fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
         let rel = f.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/");
         // a module that is only a test's (`tests_*.rs`) holds no code the app runs
         let test_only = f.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tests_"));
-        if ALLOWED.contains(&rel.as_str()) || test_only {
+        if test_only {
             continue;
         }
+        let allowed: &[&str] = ALLOWED.iter().find(|(file, _)| *file == rel).map_or(&[], |(_, lines)| *lines);
         for l in wealthsimple_hosts(&std::fs::read_to_string(&f).unwrap()) {
-            found.push(format!("{rel}: {l}"));
+            if !allowed.iter().any(|a| l.starts_with(a)) {
+                found.push(format!("{rel}: {l}"));
+            }
         }
     }
     assert!(found.is_empty(), "Wealthsimple named outside its hosts module:\n{}", found.join("\n"));

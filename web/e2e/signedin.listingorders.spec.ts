@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { figures, ready } from './helpers'
 
@@ -157,4 +158,17 @@ test("a draft closed on one listing is resumed on it, and never fills the other 
   await expect(page.locator('#tk-account')).toHaveValue(td.NYSE.account)
   await expect(page.locator('#tk-qty')).toHaveValue('7')
   await expect.poll(() => seen.previews.at(-1)).toBe(td.NYSE.security)
+})
+
+// Every request the signed-in server made, the offline switch's refusals among them
+// (`BAGHOLDER_LOG_REQUESTS`, written to `E2E_REQUEST_LOG` by `serve.mjs`): it signed
+// in, read and searched, all at the stand-in, and asked nothing of any of
+// Wealthsimple's own hosts (brief 37, 6; brief 38). It asks for a listing first, so
+// it reads a log that has a search in it whichever tests ran before it.
+test('nothing the signed-in server sends goes to a Wealthsimple host, only to the stand-in', async ({ request }) => {
+  const asked = await request.post('/api/order/listing', { headers: { 'X-Bagholder': '1' }, data: { of: { kind: 'venue', symbol: 'ENB', venue: 'NYSE' } } })
+  expect(await asked.json()).toMatchObject({ ok: true, listing: { securityId: 'sec-enb-nyse' } })
+  const lines = readFileSync(process.env.E2E_REQUEST_LOG!, 'utf8').split('\n').filter((l) => l.startsWith('outbound '))
+  expect(lines.some((l) => l.includes(' 127.0.0.1/graphql')), 'the stand-in was asked: the log names what is made').toBe(true)
+  expect(lines.filter((l) => /wealthsimple/i.test(l))).toEqual([])
 })

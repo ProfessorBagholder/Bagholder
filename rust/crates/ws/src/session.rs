@@ -16,10 +16,10 @@ use std::time::Duration;
 use bagholder_model::lenient;
 use bagholder_model::value::{field_s, get};
 
-pub const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
+const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
 pub const GRAPHQL_VERSION: &str = "12";
 pub const WS_CLIENT: &str = "@wealthsimple/wealthsimple";
-pub const OAUTH: &str = "https://api.production.wealthsimple.com/v1/oauth/v2";
+const OAUTH: &str = "https://api.production.wealthsimple.com/v1/oauth/v2";
 const WEB: &str = "https://my.wealthsimple.com";
 
 /// Where GraphQL and OAuth calls go. `BAGHOLDER_WS_BASE` points both at a
