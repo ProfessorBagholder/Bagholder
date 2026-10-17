@@ -27,7 +27,7 @@ enum Keyed {
 /// Every table the market cache holds, and what it is keyed by. A table not
 /// here fails the test until it is placed in one of these, so a new table keyed
 /// by a ticker cannot be added without saying so.
-const TABLES: [(&str, Keyed); 27] = [
+const TABLES: [(&str, Keyed); 28] = [
     ("price_history", Keyed::Listing),
     ("history_fetches", Keyed::Listing),
     ("price_bars", Keyed::Listing),
@@ -44,6 +44,7 @@ const TABLES: [(&str, Keyed); 27] = [
     ("chains", Keyed::Instrument),
     ("quoted_ex_dividends", Keyed::Instrument),
     ("reads", Keyed::Instrument),
+    ("read_failures", Keyed::Allowed("a read that failed, by what it was of: a listing by its key (`ListingKey`), or the TSX's interlisted list as a whole")),
     ("exposures", Keyed::Allowed("a broker's security id, or a share's or fund's listing built by `venues::share_key` and `fund_key`")),
     ("filings_carried", Keyed::Allowed("the earlier store's ticker to filer, read once to carry the told marks; nothing reads market data by it")),
     ("option_chains", Keyed::Allowed("a US option root: the US market lists one underlying per symbol, which is its `US` listing")),

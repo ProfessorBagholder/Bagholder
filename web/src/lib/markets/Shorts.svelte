@@ -65,7 +65,7 @@
       const listings = r.ok ? r.listings : []
       if (!listings.length) {
         // no exchange lists the ticker: no listing is by that name; one that could not be asked says why
-        found[key] = !r.ok ? { error: r.error } : r.unread ? { error: r.unread } : { none: true }
+        found[key] = !r.ok ? { error: r.error } : r.unread.length ? { error: r.unread.join(' ') } : { none: true }
         return
       }
       const fed = new Set((feed.rows || []).map(rowKey))
@@ -73,8 +73,11 @@
         read('GET /api/shorts', { query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name, trend: false } })
       const answers = await Promise.all(listings.filter((l) => !fed.has(l.listing)).map(read1))
       const rows = answers.flatMap((d) => (d.ok && 'covered' in d && d.covered ? [d.shorts as unknown as ShortsFeedRow] : []))
-      const failed = answers.find((d) => !d.ok)
-      found[key] = rows.length || listings.some((l) => fed.has(l.listing)) ? { rows } : failed && !failed.ok ? { error: failed.error } : { missing: true }
+      // a directory that did not answer, or a venue whose read failed, is said beside the rows the others gave
+      const errors = r.ok ? [...r.unread] : []
+      for (const d of answers) if (!d.ok) errors.push(d.error)
+      const error = errors.length ? errors.join(' ') : undefined
+      found[key] = rows.length || listings.some((l) => fed.has(l.listing)) ? { rows, error } : error ? { error } : { missing: true }
     }, 450)
   }
   $effect(() => {
@@ -118,6 +121,13 @@
     return 'Nothing reported yet.'
   })
 
+  // the rows found for a ticker typed stand beside what could not be read for it
+  const lookupError = $derived.by(() => {
+    const q = query.trim().toUpperCase()
+    const f = q ? found[q] : null
+    return f?.rows && f.error ? 'Could not read short interest for ' + q + ': ' + f.error : ''
+  })
+
   function pickScope(v: string) {
     scope = v
     try { localStorage.setItem('bh2.shorts', v) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
@@ -151,6 +161,7 @@
         </div>
       {/each}
     </div>
+    {#if lookupError}<div class="status-err" style="font-size:12px;margin-top:6px">{lookupError}</div>{/if}
   {:else}
     <div class="muted" style="font-size:12px">{emptyText}</div>
   {/if}

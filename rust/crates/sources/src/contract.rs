@@ -53,6 +53,9 @@ pub enum Market {
     /// Cboe Canada: quoted by its own feed, not TMX's.
     CboeCanada,
     UnitedStates,
+    /// The US over-the-counter market: OTC Markets Group's tiers, quoted under the
+    /// bare symbol as a US exchange's listing, on the US sessions.
+    Otc,
     Crypto,
     /// US-listed option contracts.
     UsOptions,

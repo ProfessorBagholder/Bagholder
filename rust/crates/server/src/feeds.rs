@@ -1715,6 +1715,15 @@ fn bars_read(app: &Arc<App>, read: Result<(), String>) {
 /// Approach, 5).
 pub const NO_VENUE: &str = "Its market data waits for its venue: no record names the exchange it is listed on.";
 
+/// What a listing whose venue gives no key shows: that no record names its venue,
+/// or the venue its records do name, which no source here covers.
+pub fn no_venue(exchange: &str) -> String {
+    match exchange.trim() {
+        "" => NO_VENUE.to_string(),
+        named => format!("Its market data waits for its venue: its records name {named}, an exchange no source here covers."),
+    }
+}
+
 pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let (rec, start, end, tf) = q.read();
     if rec.symbol.is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
@@ -1725,6 +1734,7 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
     let inst = match history::chart_instrument(&rec).keyed() {
         Ok(inst) => inst,
         Err(_) => {
+            let reason = no_venue(&rec.exchange);
             return HistoryAnswer::Ok(ChartHistory {
                 ok: true,
                 chart_symbol: rec.symbol.clone(),
@@ -1734,7 +1744,7 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
                 available: vec![],
                 bars: ChartBars::default(),
                 pending: false,
-                reason: NO_VENUE.into(),
+                reason,
             })
         }
     };
@@ -1831,6 +1841,23 @@ mod tests {
         f.state_zone("America/Toronto", at).unwrap();
         app.set_figures(f);
         (home, app)
+    }
+
+    /// A chart that cannot be keyed says why: no record names its venue, or the
+    /// venue its records name is none a source covers. An OTC listing is keyed, and
+    /// is charted as any other.
+    #[test]
+    fn a_chart_with_no_key_names_the_real_reason_and_an_otc_listing_is_charted() {
+        let (_home, app) = built_app();
+        let reason = |exchange: &str| match history_payload(&app, &HistoryQuery::parse(&format!("symbol=ABC&exchange={exchange}&currency=USD&kind=Shares&from=2025-10-01&to=2025-11-19&tf=1d"))) {
+            HistoryAnswer::Ok(h) => h.reason,
+            HistoryAnswer::Refused(_) => panic!("refused"),
+        };
+        assert_eq!(reason(""), NO_VENUE);
+        assert!(reason("LSE").contains("its records name LSE"), "{}", reason("LSE"));
+        for otc in ["OTC", "OTCM", "PINX", "OTCQX"] {
+            assert!(!reason(otc).contains("waits for its venue"), "{otc}: {}", reason(otc));
+        }
     }
 
     /// The exposure pass waits on what the book reports of its own changes: a

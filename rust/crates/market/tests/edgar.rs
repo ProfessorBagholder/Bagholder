@@ -33,8 +33,16 @@ fn ticker_list() -> Value {
     })
 }
 
-fn set_up() {
+/// The SEC's list is one per process: the tests that set it take turns.
+fn the_list() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn set_up() -> std::sync::MutexGuard<'static, ()> {
+    let turn = the_list();
     edgar::set_ticker_map(edgar::parse_tickers(&ticker_list()).unwrap());
+    turn
 }
 
 fn subs(_: &str) -> Fetched<Value> {
@@ -78,16 +86,73 @@ fn test_forms_map_to_the_shared_categories() {
     assert_eq!(edgar::category("NT 10-K"), d::OTHER);
 }
 
-/// A US listing's filer is the SEC's own for its ticker on a US exchange; a
-/// listing on another market is never matched to a US filer by its ticker.
+/// A US listing's filer is the SEC's own for its ticker, on an exchange or over
+/// the counter, whatever exchange the row names; a listing on another market is
+/// never matched to a US filer by its ticker.
 #[test]
 fn test_a_us_listing_is_its_secs_filer_and_no_other_market_is_matched_by_ticker() {
-    set_up();
-    assert_eq!(edgar::filer_of(&on("NVDA", "NASDAQ")).unwrap().map(|f| f.0), Some(1045810));
-    assert_eq!(edgar::filer_of(&on("BRK.B", "NYSE")).unwrap().map(|f| f.0), Some(1067983));
-    assert_eq!(edgar::filer_of(&on("SHOP", "TSX")).unwrap(), None, "the TSX listing reaches the SEC only through the interlisted list");
-    assert_eq!(edgar::filer_of(&on("ZZZZ", "NASDAQ")).unwrap(), None);
-    assert_eq!(edgar::filer_of(&on("OTCX", "NYSE")).unwrap(), None, "an over-the-counter row is no listing on a US exchange");
+    let _turn = set_up();
+    let cik = |k: ListingKey| edgar::filer_of(&k).unwrap().map(|f| f.0);
+    assert_eq!(cik(on("NVDA", "NASDAQ")), Ok(1045810));
+    assert_eq!(cik(on("BRK.B", "NYSE")), Ok(1067983));
+    assert!(cik(on("SHOP", "TSX")).is_err(), "the TSX listing reaches the SEC only through the interlisted list");
+    assert!(cik(on("ZZZZ", "NASDAQ")).is_err());
+    assert_eq!(cik(on("OTCX", "OTC")), Ok(9999), "an OTC listing is the SEC's OTC row");
+    assert_eq!(cik(on("OTCX", "NYSE")), Ok(9999), "one ticker is one issue across the US market, whatever the row names");
+}
+
+/// The SEC's list as published on 2026-10-16, recorded: every row is read, those
+/// naming a newer exchange (Texas) or none among them, and each ticker it holds
+/// is its one filer.
+#[test]
+fn every_row_of_the_secs_recorded_list_is_its_tickers_filer() {
+    use std::io::Read;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/sec/company_tickers_exchange-2026-10-16.json.gz");
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap()).read_to_string(&mut text).unwrap();
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let rows = data["data"].as_array().unwrap();
+    let t = edgar::parse_tickers(&data).unwrap();
+    for row in rows {
+        let ticker = row[2].as_str().unwrap().trim().to_uppercase();
+        assert_eq!(t[&ticker].iter().map(|f| f.0).collect::<Vec<_>>(), [row[0].as_i64().unwrap()], "{row}");
+    }
+    assert_eq!(t.len(), rows.len(), "each ticker once");
+    let _turn = the_list();
+    // the rows a filter by exchange dropped: the Texas exchange's, and those naming none
+    for (ticker, cik) in [("ET", 1276187), ("DDS", 28917), ("SUN", 1552275), ("PHD", 1305767)] {
+        assert_eq!(t[ticker].iter().map(|f| f.0).collect::<Vec<_>>(), [cik], "{ticker}");
+    }
+    edgar::set_ticker_map(t);
+    assert_eq!(edgar::filer_of(&on("ET", "TXSE")).unwrap().map(|f| f.0), Ok(1276187));
+    assert_eq!(edgar::filer_of(&on("PHD", "NYSE")).unwrap().map(|f| f.0), Ok(1305767));
+}
+
+/// The list is read again once it is as old as a listing's filers stand, so the
+/// daily re-check of a filer reads that day's list; a read that fails is the failure.
+#[test]
+fn the_secs_list_is_read_again_each_day() {
+    let _turn = the_list();
+    let list = |cik: i64| json!({"fields": ["cik", "name", "ticker", "exchange"], "data": [[cik, "X CO", "X", "NYSE"]]});
+    let day = std::time::Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0);
+    // past any list another test set
+    let start = std::time::Instant::now() + day * 2;
+    let x = |t: &edgar::Tickers| t["X"][0].0;
+    assert_eq!(x(&edgar::ticker_map_at(start, || Ok(list(1))).unwrap()), 1);
+    assert_eq!(x(&edgar::ticker_map_at(start + day / 2, || panic!("read again within the day")).unwrap()), 1);
+    assert_eq!(x(&edgar::ticker_map_at(start + day, || Ok(list(2))).unwrap()), 2, "a day on: today's list");
+    assert!(edgar::ticker_map_at(start + day * 2, || Err(SourceError::Unavailable("down".into()))).is_err(), "a failed read is said, not yesterday's list");
+}
+
+/// A ticker the list names two filers for is neither's.
+#[test]
+fn a_ticker_the_list_names_twice_is_no_ones() {
+    let _turn = the_list();
+    let t = edgar::parse_tickers(&json!({"fields": ["cik", "name", "ticker", "exchange"], "data": [[1, "A", "DUP", "NYSE"], [2, "B", "DUP", "OTC"], [3, "C", "ONE", null], [3, "C", "ONE", "NYSE"]]})).unwrap();
+    assert_eq!(t["DUP"].len(), 2);
+    assert_eq!(t["ONE"].len(), 1, "the same filer twice is one");
+    edgar::set_ticker_map(t);
+    assert!(edgar::filer_of(&on("DUP", "NYSE")).unwrap().unwrap_err().contains("more than one"));
 }
 
 #[test]

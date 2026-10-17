@@ -200,10 +200,11 @@
       // the items it read reach the card as rows of its list
     })
   })
-  // a ticker typed is every listing of it (`/api/listings`): exactly one takes the chip,
-  // two or more are offered by venue and none is chosen for the person; a word no
-  // exchange lists stays a text search
-  let choices = $state<{ key: string; listings: ResolvedListing[] } | null>(null)
+  // a ticker typed is every listing of it (`/api/listings`): exactly one takes the chip
+  // where every directory answered; two or more, or one beside a directory that did
+  // not answer, are offered by venue and none is chosen for the person, the failure
+  // said beside them; a word no exchange lists stays a text search
+  let choices = $state<{ key: string; listings: ResolvedListing[]; error: string } | null>(null)
   function takeChip(only: Chip) {
     choices = null
     newsChip(only)
@@ -222,15 +223,20 @@
       read('GET /api/listings', { query: { symbol: key } }).then((r) => {
         if (sym || query.trim().toUpperCase() !== key) return
         const listings = r.ok ? r.listings : []
-        if (listings.length === 1) return takeChip(chipOf(listings[0]))
-        choices = listings.length > 1 ? { key, listings } : null
+        const error = r.ok ? r.unread.join(' ') : r.error
+        if (listings.length === 1 && !error) return takeChip(chipOf(listings[0]))
+        choices = listings.length > 1 || error ? { key, listings, error } : null
       })
     }, 500)
   })
 
   // --- actions ---
+  // a row's listing takes the chip; a tag that names no venue is its ticker typed,
+  // which the resolver reads as every listing of it (`/api/listings`)
   function newsSym(t: { symbol: string; exchange: unknown }) {
-    newsChip({ symbol: bareSymbol(t.symbol), exchange: String(t.exchange || '').toUpperCase() })
+    const chip = { symbol: bareSymbol(t.symbol), exchange: String(t.exchange || '').toUpperCase() }
+    if (chipKey(chip)) return newsChip(chip)
+    query = chip.symbol
   }
   function openStory(n: Headline) {
     if (n.filed) return openDisc({ id: n.filed.id, sym: n.filed.symbol, source: n.filed.source, url: n.filed.url })
@@ -278,8 +284,10 @@
     </div>
   </div>
 
-  {#if choices}
+  {#if choices && !choices.listings.length}<div class="status-err" style="font-size:12px;margin-bottom:6px">{choices.error}</div>{/if}
+  {#if choices && choices.listings.length}
     <ListingChoice listings={choices.listings} onpick={(l) => takeChip(chipOf(l))} />
+    {#if choices.error}<div class="status-err" style="font-size:12px;margin-top:6px">{choices.error}</div>{/if}
   {:else if kind === 'disc'}
     {#if discView.state === 'reading'}
       <div class="muted" style="font-size:12px">Reading…</div>

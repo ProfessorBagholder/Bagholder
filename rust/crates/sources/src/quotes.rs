@@ -138,7 +138,7 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                     _ => {}
                 }
             }
-            Some(Market::UnitedStates) => {
+            Some(Market::UnitedStates | Market::Otc) => {
                 let forms = yahoo_forms(l);
                 if forms.is_empty() {
                     not_carried(ctx, &yahoo::source(), yahoo::HOST, id, format!("{} names no venue Yahoo carries", l.symbol))?;
@@ -410,7 +410,7 @@ pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BT
             Outcome::Answered(cboe_ca::CboeAnswer::NoTradeYet { prev_close }) => Outcome::Answered(Glance { price: Money::new(prev_close, g.currency), change: None, change_pct: None }),
             other => other.failed().unwrap_or(Outcome::Unreachable("no reply".into())),
         },
-        Some(Market::UnitedStates) => yahoo_first(venue::yahoo_forms_of(&g.symbol, g.venue_mic.as_deref())),
+        Some(Market::UnitedStates | Market::Otc) => yahoo_first(venue::yahoo_forms_of(&g.symbol, g.venue_mic.as_deref())),
         _ => not_carried(format!("{} names no venue a source quotes", g.symbol)),
     }
 }

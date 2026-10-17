@@ -101,10 +101,13 @@ describe('the one way to the server', () => {
   it('asks for a listing once, and does not remember a lookup that failed', async () => {
     const fetched = vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'busy' }), { status: 500 }))
     vi.stubGlobal('fetch', fetched)
-    expect(await searchSymbols('plt')).toEqual([])
-    fetched.mockImplementation(async () => new Response(JSON.stringify({ ok: true, matches: [{ symbol: 'PLTR', exchange: 'NASDAQ', name: 'Palantir', currency: 'USD' }] })))
-    expect((await searchSymbols('plt')).map((m) => m.symbol)).toEqual(['PLTR'])
-    expect((await searchSymbols(' PLT ')).map((m) => m.symbol)).toEqual(['PLTR'])
-    expect(fetched).toHaveBeenCalledTimes(2)
+    expect((await searchSymbols('plt')).matches).toEqual([])
+    // an answer naming a directory it could not read is said, and not remembered either
+    fetched.mockImplementation(async () => new Response(JSON.stringify({ ok: true, matches: [], unread: ["Nasdaq's directory could not be read: refused"] })))
+    expect(await searchSymbols('plt')).toEqual({ matches: [], error: "Nasdaq's directory could not be read: refused" })
+    fetched.mockImplementation(async () => new Response(JSON.stringify({ ok: true, matches: [{ symbol: 'PLTR', exchange: 'NASDAQ', name: 'Palantir', currency: 'USD' }], unread: [] })))
+    expect((await searchSymbols('plt')).matches.map((m) => m.symbol)).toEqual(['PLTR'])
+    expect((await searchSymbols(' PLT ')).matches.map((m) => m.symbol)).toEqual(['PLTR'])
+    expect(fetched).toHaveBeenCalledTimes(3)
   })
 })

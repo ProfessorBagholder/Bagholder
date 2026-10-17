@@ -207,7 +207,7 @@ The sources crate's `cache.won` and `cache.winner` (`DataKind`) and its per-inst
   - requests and bytes on a first and a second open;
   - CPU and memory over an hour idle;
   - the capacity test at the owner's size;
-  - the TSX list (15 KB a day), the SEC file (275 KB smaller), and one SEDAR+ search per Canadian listing not yet settled;
+  - the TSX list (15 KB, read once a day, a failed read resting on the app's growing rest), the SEC's ticker list (520 KB, read once a day: every row is read, so it is the whole file), and the filer re-check of every Canadian listing once a day: one TSX directory or TMX request for its name, and two paced SEDAR+ requests (plus one page of filings for each profile of a tie);
   - the chart re-read after the migration, measured.
 
 ## Surfaces to check beyond the diff

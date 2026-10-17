@@ -142,7 +142,7 @@ percentChange: number | null, } | { ok: false, error: string, };
 
 export type Search = { q: string, };
 
-export type SymbolSearchAnswer = { ok: true, matches: Array<SymbolMatch>, } | { ok: false, error: string, matches: Array<SymbolMatch>, };
+export type SymbolSearchAnswer = { ok: true, matches: Array<SymbolMatch>, unread: Array<string>, };
 
 export type Resolve = { symbol: string, };
 
@@ -152,7 +152,7 @@ export type ResolvedListing = {
  */
 listing: string, symbol: string, name: string, exchange: string, currency: string, held: boolean, };
 
-export type ResolveAnswer = { ok: true, listings: Array<ResolvedListing>, unread: string, } | { ok: false, error: string, };
+export type ResolveAnswer = { ok: true, listings: Array<ResolvedListing>, unread: Array<string>, } | { ok: false, error: string, };
 
 export type WatchlistBody = { id?: string, symbol: string, exchange: string, name?: string, currency?: string, securityId?: string, };
 

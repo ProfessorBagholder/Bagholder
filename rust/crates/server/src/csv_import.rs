@@ -299,7 +299,7 @@ pub fn import_from(
 /// data until one does (plan `market-data-keyed-by-listing`, Approach, 5).
 /// `None` for a kind neither is (a coin the book does not hold, an option whose
 /// name states no terms): the row names nothing.
-fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
+pub(crate) fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
     let symbol = symbol.trim().to_uppercase();
     let listing = match exchange.map(str::trim).filter(|ex| !ex.is_empty() && kind == InstrumentKind::Security) {
         Some(ex) => {

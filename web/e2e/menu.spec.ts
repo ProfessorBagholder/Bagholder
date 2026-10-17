@@ -125,7 +125,7 @@ test('Add trade requires a date, symbol, quantity and price, and sends the entry
   await page.route('**/api/listings?*', (route) => {
     const s = new URL(route.request().url()).searchParams.get('symbol')
     const listings = s === 'ZZZQ' ? [listing('ZZZQ', 'TSX', 'XTSE')] : s === 'ZZZW' ? [listing('ZZZW', 'TSX', 'XTSE'), listing('ZZZW', 'NASDAQ', 'US')] : []
-    return route.fulfill({ json: { ok: true, unread: '', listings } })
+    return route.fulfill({ json: { ok: true, unread: [], listings } })
   })
   const symbol = page.getByPlaceholder('e.g. LUNR or LUNR 15JAN27 12.00 CALL')
   await symbol.fill('zzzw')

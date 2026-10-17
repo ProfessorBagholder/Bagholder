@@ -69,3 +69,27 @@ test("an older link that wrote the venue in words is the same listing's page", a
   await expect(page).toHaveURL(/#markets\/listing:ZQX@XTSX$/)
   await expect(disclosures(page).locator('.dc-row')).toHaveCount(2)
 })
+
+// brief 42, 4: a single listing is that listing's page only where every directory answered
+test('an address naming only a symbol opens its one listing only where every directory answered', async ({ page }) => {
+  const one = [{ listing: 'ZQOA@XTSE', symbol: 'ZQOA', name: 'Zqoa Corp', exchange: 'TSX', currency: 'CAD', held: false }]
+  let unread: string[] = ["Nasdaq's directory could not be read: refused"]
+  await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread, listings: one } }))
+  await page.goto('/#markets/' + encodeURIComponent('listing:ZQOA'))
+  // a directory unread: the one found is offered beside the failure, and not opened
+  await expect(page.locator('#page .lc-row')).toHaveCount(1)
+  await expect(page.locator('#page .status-err')).toHaveText("Nasdaq's directory could not be read: refused")
+  await expect(page).toHaveURL(/listing:ZQOA$/)
+  // nothing found and a directory unread: the failure, never that no exchange lists it
+  await page.unroute('**/api/listings?*')
+  await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread, listings: [] } }))
+  await page.goto('/#markets/' + encodeURIComponent('listing:ZQOB'))
+  await expect(page.locator('#page .status-err')).toHaveText("Nasdaq's directory could not be read: refused")
+  await expect(page.locator('#page')).not.toContainText('No exchange lists this symbol.')
+  // every directory answered: the one listing is opened
+  unread = []
+  await page.unroute('**/api/listings?*')
+  await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread, listings: one } }))
+  await page.goto('/#markets/' + encodeURIComponent('listing:ZQOA'))
+  await expect(page).toHaveURL(/#markets\/listing:ZQOA@XTSE$/)
+})

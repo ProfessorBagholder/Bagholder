@@ -1070,8 +1070,12 @@ pub fn resolve_name(name: &str) -> Result<Option<Listed>, String> {
         return Ok(v);
     }
     for q in name_queries(name) {
-        let rows = crate::search::symbol_search(&q)?;
-        if let Some(m) = rows.first() {
+        // the first match is taken only where every directory answered
+        let found = crate::search::symbol_search(&q);
+        if !found.unread.is_empty() {
+            return Err(found.unread.join(" "));
+        }
+        if let Some(m) = found.rows.first() {
             return Ok(Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() }));
         }
     }

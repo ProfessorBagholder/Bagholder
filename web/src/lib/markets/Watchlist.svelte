@@ -75,6 +75,8 @@
 
   // typed matches come from /api/symbols/search, debounced
   let matches = $state<SymbolMatch[]>([])
+  // what the directories could not read for the text typed: "no listing" only where nothing is
+  let searchError = $state<{ q: string; error: string }>({ q: '', error: '' })
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     const q = query.trim()
@@ -85,8 +87,10 @@
     clearTimeout(searchTimer)
     const key = q
     searchTimer = setTimeout(() => {
-      searchSymbols(key).then((found) => {
+      searchSymbols(key).then((answer) => {
         if (query.trim() !== key) return
+        const found = answer.matches
+        searchError = { q: key, error: answer.error }
         watchedFound = ''
         const out: SymbolMatch[] = []
         found.forEach((m) => {
@@ -105,6 +109,7 @@
 
   // the rows as the search gave them, and as shown with a remembered quote on them
   const sugBase = $derived(query.trim() ? matches : fromHoldings)
+  const unreadNow = $derived(query.trim() && searchError.q === query.trim() ? searchError.error : '')
   const suggestions = $derived(
     sugBase.map((w) => {
       const c = w.last == null ? sugQuotes[sugKey(w)] : null
@@ -174,6 +179,9 @@
           </div>
         {/each}
       </div>
+      {#if unreadNow}<div class="status-err" style="font-size:12px;padding:4px 0 6px">{unreadNow}</div>{/if}
+    {:else if unreadNow}
+      <div class="status-err" style="font-size:12px;padding:2px 0 6px">{unreadNow}</div>
     {:else}
       <div class="muted" style="font-size:12px;padding:2px 0 6px">{query.trim() ? (watchAlready(query) ? 'Already on the watchlist.' : 'No listing by that name.') : 'Every holding is followed.'}</div>
     {/if}

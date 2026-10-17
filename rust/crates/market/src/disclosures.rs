@@ -21,6 +21,11 @@ use std::sync::OnceLock;
 use bagholder_core::ListingKey;
 use bagholder_store::feeds::{FiledDocument, Filer, Regulator};
 
+/// How long a listing's filers stand before they are settled again, and the SEC's
+/// list is read again: the SEC's list and SEDAR+'s answer change when an issuer
+/// lists, renames or delists.
+pub const FILERS_RECHECK_HOURS: f64 = 24.0;
+
 pub const FINANCIALS: &str = "Financials";
 pub const EVENTS: &str = "Material events";
 pub const GOVERNANCE: &str = "Governance";
@@ -118,11 +123,8 @@ pub struct Live;
 
 impl Regulators for Live {
     fn filer(&self, listing: &ListingKey, today: &str) -> Option<(Regulator, Fetched<Result<String, String>>)> {
-        if listing.us() {
-            let found = crate::edgar::filer_of(listing).map(|f| match f {
-                Some((cik, _)) => Ok(cik.to_string()),
-                None => Err(format!("The SEC lists no filer for {} on a US exchange.", listing.symbol())),
-            });
+        if listing.us() || listing.otc() {
+            let found = crate::edgar::filer_of(listing).map(|f| f.map(|(cik, _)| cik.to_string()));
             return Some((Regulator::Sec, found));
         }
         if listing.canadian() {

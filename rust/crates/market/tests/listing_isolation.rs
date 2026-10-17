@@ -68,6 +68,8 @@ fn pairs(r: &mut Rng, n: usize) -> Vec<(Side, Side)> {
         let other = if b == "XTSE" { a } else { b };
         out.push((side(&format!("{sym}.TO"), "XTSE"), side(&sym, other)));
         out.push((side(&sym, "CRYPTO"), side(&sym, us)));
+        // the OTC market beside a US exchange: one ticker, two venues
+        out.push((side(&sym, bagholder_core::listing::OTC_MICS[r.below(bagholder_core::listing::OTC_MICS.len())]), side(&sym, us)));
         out.push((side(&format!("{sym} 261218C00010000"), "OCC"), side(&sym, us)));
     }
     out
@@ -104,6 +106,46 @@ fn a_listings_bars_are_its_own() {
             for (s, close) in [(&first, 1.0), (&second, 2.0)] {
                 let got = bagholder_store::market::price_history(&c, &s.key(), "2026-09-01", "2026-09-30").unwrap();
                 assert_eq!(got.iter().map(|b| b.px.close).collect::<Vec<_>>(), vec![close], "{s:?} beside {first:?} / {second:?}");
+            }
+        }
+    }
+}
+
+/// A listing's intraday bars, the source its bars last came from, and a timeframe
+/// no source had for it, are its own: never another listing's of its ticker.
+#[test]
+fn a_listings_intraday_bars_bar_source_and_misses_are_its_own() {
+    use bagholder_market::history;
+    use bagholder_store::bars::TimeBar;
+    let mut r = Rng(11);
+    for (a, b) in pairs(&mut r, 20) {
+        for (first, second) in both(&a, &b) {
+            let c = store();
+            let bars = |close: f64| vec![TimeBar { time: 1_789_000_000, px: Ohlcv { open: None, high: None, low: None, close, volume: None } }];
+            bagholder_store::market::upsert_price_bars(&c, &first.key(), "1h", &bars(1.0), "test").unwrap();
+            bagholder_store::market::upsert_price_bars(&c, &second.key(), "1h", &bars(2.0), "test").unwrap();
+            for (s, close) in [(&first, 1.0), (&second, 2.0)] {
+                let got = bagholder_store::market::price_bars(&c, &s.key(), "1h", 0, i64::MAX).unwrap();
+                assert_eq!(got.iter().map(|b| b.px.close).collect::<Vec<_>>(), vec![close], "{s:?} beside {first:?} / {second:?}");
+            }
+            // a timeframe no source had for the first is no miss of the second's
+            history::record_intraday_miss(&c, &first.key(), "1h", "2026-09-16T12:00:00Z").unwrap();
+            let now = 1_789_560_300.0;
+            assert!(history::intraday_missed_recently(&c, &first.key(), "1h", now).unwrap(), "{first:?}'s own miss");
+            assert!(!history::intraday_missed_recently(&c, &second.key(), "1h", now).unwrap(), "{second:?} took {first:?}'s miss");
+            // the source the first's bars came from is not the second's
+            let keyed = |s: &Side| {
+                let kind = match s.venue.as_str() {
+                    "CRYPTO" => "Crypto",
+                    "OCC" => "Options",
+                    _ => "Shares",
+                };
+                bagholder_model::input::Listing::new(s.symbol.as_str(), s.venue.as_str(), "USD", kind).keyed()
+            };
+            if let (Ok(f), Ok(s)) = (keyed(&first), keyed(&second)) {
+                history::remember_winner(&c, &f, "yahoo", "FIRST").unwrap();
+                assert_eq!(history::bars_winner(&c, &f).unwrap(), Some(("yahoo".into(), "FIRST".into())));
+                assert_eq!(history::bars_winner(&c, &s).unwrap(), None, "{second:?} took {first:?}'s bar source");
             }
         }
     }
@@ -200,7 +242,7 @@ fn a_listing_with_no_venue_known_is_read_of_no_source() {
     let ctx = Ctx { conn: &c, pool, today: "2026-09-16".into() };
     for _ in 0..50 {
         let sym = r.symbol();
-        for venue in ["", "OTC", "XLON", "Pink Sheets"] {
+        for venue in ["", "LSE", "XLON", "London Stock Exchange"] {
             assert_eq!(exposure::share_exposure(&ctx, &sym, venue, "CAD").unwrap(), bagholder_store::feeds::ExposureRecord::default());
             assert_eq!(exposure::fund_exposure(&ctx, &sym, "Some ETF", venue, 0, &mut Vec::new()).unwrap(), None);
             assert_eq!(shorts::market_of(&sym, venue), None);

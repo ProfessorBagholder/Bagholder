@@ -112,11 +112,16 @@ fn a_coins_day_settles_at_the_end_of_the_utc_day_every_day() {
 #[test]
 fn a_listing_is_asked_under_its_own_venue_alone_and_one_with_none_known_is_asked_of_none() {
     for currency in [Currency::CAD, Currency::USD, Currency::parse("EUR").unwrap()] {
-        for mic in [None, Some("OTCM"), Some("XLON")] {
+        for mic in [None, Some("XLON"), Some("ZZZZ")] {
             let l = listing(1, InstrumentKind::Security, currency, "ENB", mic);
             assert_eq!(l.market(), None, "{currency:?} {mic:?}");
             assert!(market::yahoo_forms(&l).is_empty(), "{currency:?} {mic:?}");
         }
+    }
+    // an OTC listing: its bare symbol, in any currency its record states
+    for mic in bagholder_core::listing::OTC_MICS {
+        let l = listing(5, InstrumentKind::Security, Currency::USD, "TCEHY", Some(mic));
+        assert_eq!((l.market(), market::yahoo_forms(&l)), (Some(Market::Otc), vec!["TCEHY".to_string()]), "{mic}");
     }
     // a venue named: its own forms, never its market's others
     assert_eq!(market::yahoo_forms(&listing(3, InstrumentKind::Security, Currency::CAD, "QNC", Some("XTSX"))), ["QNC.V"]);

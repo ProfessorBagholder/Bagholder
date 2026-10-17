@@ -142,18 +142,35 @@ fn cache() -> &'static Mutex<HashMap<String, Vec<SymbolMatch>>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The listings the directories find for the text,
-/// remembered for the process. A source that fails leaves the others' answer;
-/// nothing is remembered when one failed. `Err` is every source's own failure,
-/// joined into one message.
-pub fn symbol_search(text: &str) -> Result<Vec<SymbolMatch>, String> {
+/// What the directories found for a text: the listings, and a sentence for each
+/// directory that did not answer (none when every one did). A row is the only
+/// listing of a text only where `unread` is empty: a directory that did not answer
+/// may list another.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Searched {
+    pub rows: Vec<SymbolMatch>,
+    pub unread: Vec<String>,
+}
+
+/// Each directory by the name its failure is said under.
+const DIRECTORY_NAMES: [(&str, &str); 3] = [("nasdaq", "Nasdaq's directory"), ("tsx", "The TSX's directory"), ("tsxv", "The TSX Venture's directory")];
+
+/// The listings the directories find for the text, remembered for the process
+/// where every directory answered. A directory that fails leaves the others'
+/// answer, and is named in `unread`.
+pub fn symbol_search(text: &str) -> Searched {
+    symbol_search_with(text, &|url| crate::http::get_text(url, &headers()).map_err(|e| e.to_string()), &|t| crate::tmx::tmx_listings(t).map_err(|e| e.to_string()))
+}
+
+/// `symbol_search` with the directories' requests and TMX's handed in.
+pub fn symbol_search_with(text: &str, get: &(dyn Fn(&str) -> Result<String, String> + Sync), tmx: &dyn Fn(&str) -> Result<Vec<SymbolMatch>, String>) -> Searched {
     let text = bagholder_model::textrules::trim_space(text).to_string();
     if text.is_empty() {
-        return Ok(vec![]);
+        return Searched::default();
     }
     let key = text.to_uppercase();
-    if let Some(hit) = cache().lock().unwrap().get(&key) {
-        return Ok(hit.clone());
+    if let Some(hit) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Searched { rows: hit.clone(), unread: vec![] };
     }
     let (text, venues) = crate::parse::yahoo_split(&text);
     let q = crate::quotes::percent_encode(&text);
@@ -169,9 +186,8 @@ pub fn symbol_search(text: &str) -> Result<Vec<SymbolMatch>, String> {
                 let name = name.to_string();
                 let url = url.clone();
                 sc.spawn(move || {
-                    let got = crate::http::get_text(&url, &headers())
-                        .map_err(|e| e.to_string())
-                        .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()))
+                    let got = get(&url)
+                        .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| format!("its answer does not read: {e}")))
                         .map(|d| match name.as_str() {
                             "nasdaq" => parse_nasdaq_search(&d),
                             dir => parse_tsx_search(&d, TSX_DIRECTORIES.iter().find(|(n, _, _)| *n == dir).map_or("", |(_, w, _)| *w)),
@@ -180,7 +196,7 @@ pub fn symbol_search(text: &str) -> Result<Vec<SymbolMatch>, String> {
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (String::new(), Err("failed".into())))).collect()
+        jobs.iter().zip(handles).map(|((name, _), h)| h.join().unwrap_or_else(|_| (name.to_string(), Err("its reader stopped".into())))).collect()
     });
     let mut answers: HashMap<String, Vec<SymbolMatch>> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -189,21 +205,21 @@ pub fn symbol_search(text: &str) -> Result<Vec<SymbolMatch>, String> {
             Ok(rows) => {
                 answers.insert(name, rows);
             }
-            Err(e) => errors.push(e),
+            Err(e) => {
+                let named = DIRECTORY_NAMES.iter().find(|(n, _)| *n == name).map_or("A directory", |(_, w)| *w);
+                errors.push(format!("{named} could not be read: {e}"));
+            }
         }
-    }
-    if answers.is_empty() {
-        return Err(format!("Search failed: {}", errors.join("; ")));
     }
     let mut found: Vec<SymbolMatch> = jobs.iter().flat_map(|(n, _)| answers.get(*n).cloned().unwrap_or_default()).collect();
     if found.is_empty() && text.chars().count() <= 6 && !text.contains(' ') {
         // the directories carry the TSX and Nasdaq registries alone, so a CSE
         // or Cboe Canada listing is in none of them: TMX is asked every listing
-        // it knows the ticker as, each its own row with its venue
-        // TMX not answering is one more search that failed, said as the directories' are
-        match crate::tmx::tmx_listings(&text) {
+        // it knows the ticker as, each its own row with its venue; TMX not
+        // answering is one more directory unread
+        match tmx(&text) {
             Ok(hits) => found = hits,
-            Err(e) => errors.push(e.to_string()),
+            Err(e) => errors.push(format!("TMX could not be read: {e}")),
         }
     }
     let mut all = bagholder_model::instruments::search(&text);
@@ -216,9 +232,9 @@ pub fn symbol_search(text: &str) -> Result<Vec<SymbolMatch>, String> {
         }
     }
     if errors.is_empty() {
-        cache().lock().unwrap().insert(key, rows.clone());
+        cache().lock().unwrap_or_else(|e| e.into_inner()).insert(key, rows.clone());
     }
-    Ok(rows)
+    Searched { rows, unread: errors }
 }
 
 #[cfg(test)]
@@ -241,6 +257,42 @@ mod tests {
         ]});
         let out = parse_nasdaq_search(&data);
         assert_eq!(out, vec![m("AAPL", "Apple Inc.", "NASDAQ", "USD"), m("SPY", "SPDR S&P 500 ETF Trust", "NASDAQ", "USD")]);
+    }
+
+    /// Every directory that does not answer is named, whichever it is and however
+    /// many; one that answers with nothing is no failure; nothing is remembered
+    /// while one is unread.
+    #[test]
+    fn every_directory_that_does_not_answer_is_named_in_unread() {
+        let none = json!({"data": [], "results": []}).to_string();
+        let nasdaq = json!({"data": [{"symbol": "ZQX", "name": "Zq Corp", "exchange": "NYSE", "asset": "STOCKS"}]}).to_string();
+        let tsx = json!({"results": [{"symbol": "ZQX", "name": "Zq Canada"}]}).to_string();
+        let names = ["Nasdaq's directory", "The TSX's directory", "The TSX Venture's directory"];
+        for failing in 0u8..8 {
+            let text = format!("ZQX{failing}");
+            let get = |url: &str| -> Result<String, String> {
+                let which = if url.contains("nasdaq") { 0 } else if url.contains("/tsxv/") { 2 } else { 1 };
+                if failing & (1 << which) != 0 {
+                    return Err("refused".into());
+                }
+                Ok(match which {
+                    0 => nasdaq.replace("ZQX", &text),
+                    1 => tsx.replace("ZQX", &text),
+                    _ => none.clone(),
+                })
+            };
+            let found = symbol_search_with(&text, &get, &|_| Ok(vec![]));
+            let want: Vec<&str> = (0..3).filter(|i| failing & (1 << i) != 0).map(|i| names[i]).collect();
+            assert_eq!(found.unread.iter().map(|u| u.split(" could not").next().unwrap()).collect::<Vec<_>>(), want, "{failing:03b}");
+            let venues: Vec<&str> = found.rows.iter().map(|r| r.exchange.as_str()).collect();
+            assert_eq!(venues.contains(&"NYSE"), failing & 1 == 0, "{failing:03b}");
+            assert_eq!(venues.contains(&"TSX"), failing & 2 == 0, "{failing:03b}");
+            assert_eq!(cache().lock().unwrap().contains_key(&text), failing == 0, "remembered only where every one answered");
+        }
+        // the directories found nothing and TMX does not answer: TMX is unread
+        let found = symbol_search_with("ZQY9", &|_| Ok(none.clone()), &|_| Err("down".into()));
+        assert_eq!(found.unread, ["TMX could not be read: down"]);
+        assert!(symbol_search_with("ZQY8", &|_| Ok(none.clone()), &|_| Ok(vec![])).unread.is_empty(), "every one answered, with none: no listing, nothing unread");
     }
 
     #[test]

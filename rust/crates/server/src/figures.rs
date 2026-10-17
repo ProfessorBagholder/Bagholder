@@ -292,6 +292,29 @@ pub struct Figures {
     movements: std::sync::Mutex<crate::csv_import::Movements>,
 }
 
+/// What the cache holds of the prices of every share or fund whose records name no
+/// venue a listing is keyed by, forgotten at start: no source asks for it, so a
+/// quote kept from before (read under a venue guessed from its currency by an
+/// earlier build, perhaps another company's) would stand as its price at any age.
+/// The cache asks again once a record names its venue; that costs only time.
+fn forget_unkeyed_prices(book: &Book, cache: &MarketCache) -> Result<(), String> {
+    let mut unkeyed = Vec::new();
+    for i in book.instruments().map_err(err)? {
+        if i.kind != bagholder_core::instrument::InstrumentKind::Security {
+            continue;
+        }
+        let keyed = book.current_name(i.id).map_err(err)?.is_some_and(|n| bagholder_core::ListingKey::share(&n.symbol, n.venue_mic.as_deref(), n.venue_name.as_deref()).is_ok());
+        if !keyed {
+            unkeyed.push(i.id);
+        }
+    }
+    let had = cache.forget_prices(&unkeyed).map_err(|e| format!("the market cache could not be written: {e}"))?;
+    if had > 0 {
+        crate::app::log(&format!("bagholder: the prices kept of {had} instruments whose records name no venue were forgotten; each is read again once a record names its venue"));
+    }
+    Ok(())
+}
+
 impl Figures {
     /// Open the figure path in `home` at `at`: the old store imported into a new
     /// book the first time (its journal, groups and notes carried; the first pull
@@ -308,6 +331,7 @@ impl Figures {
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         rederive_all(&book, at)?;
+        forget_unkeyed_prices(&book, &cache)?;
         // a record the figures cannot be built from is said on the page and tried
         // again at the next pass; it never stops the server, which a service
         // manager would only start again into the same failure
@@ -819,6 +843,37 @@ mod tests {
         let held = f.names().unwrap();
         let whole = f.read(|e| crate::wire::build::Names::load(&book, e.inputs())).unwrap().unwrap();
         assert!(held == whole, "the names kept by key are not those read whole");
+    }
+
+    /// At start, what the cache kept of the prices of a share whose records name no
+    /// venue is forgotten, and a keyed one's is kept: a quote read under a guessed
+    /// venue never stands as a price at any age.
+    #[test]
+    fn the_prices_kept_of_a_share_with_no_venue_are_forgotten_at_start() {
+        use bagholder_book::person::{Entry, Side, Traded};
+        use bagholder_core::{Currency, Dec, Money};
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+        let account = book.accounts().unwrap()[0].id;
+        let trade = |venue: Option<&str>, symbol: &str| {
+            let r = book.enter(&Entry::Trade { account, instrument: Traded::Named { symbol: symbol.into(), currency: Currency::USD, contract: None, venue: venue.map(str::to_string) }, day: "2025-11-03".parse().unwrap(), side: Side::Buy, quantity: Dec::ONE, price: Money::new(Dec::ONE, Currency::USD), fee: None }, now).unwrap();
+            book.transactions_of(r.record).unwrap()[0].instrument.unwrap()
+        };
+        let (unkeyed, keyed) = (trade(None, "ZQNV"), trade(Some("XNYS"), "ZQKV"));
+        let (cache, _) = MarketCache::open(&home.path().join(CACHE_FILE), crate::app::APP_VERSION, now).unwrap();
+        for id in [unkeyed, keyed] {
+            let q = bagholder_sources::cache::StoredQuote { instrument: id, source: bagholder_core::SourceName::named("yahoo"), price: Money::new(Dec::parse("9.5").unwrap(), Currency::USD), change: None, change_pct: None, quoted_at: at("2025-10-01T20:00:00Z"), allowance: std::time::Duration::ZERO, received_at: at("2025-10-01T20:00:00Z") };
+            cache.store_quote(&q).unwrap();
+            cache.store_closes(id, &[("2025-10-01".parse().unwrap(), Dec::parse("9.5").unwrap())], Currency::USD, &bagholder_core::SourceName::named("yahoo"), now).unwrap();
+        }
+        drop((book, cache));
+        let _f = Figures::open(home.path(), now).unwrap();
+        let (cache, _) = MarketCache::open(&home.path().join(CACHE_FILE), crate::app::APP_VERSION, now).unwrap();
+        assert!(cache.quotes_of(unkeyed).unwrap().is_empty() && cache.closes_of(unkeyed).unwrap().is_empty(), "the share with no venue keeps no price");
+        assert_eq!(cache.quotes_of(keyed).unwrap().len(), 1, "the keyed share keeps its quote");
+        assert_eq!(cache.closes_of(keyed).unwrap().len(), 1, "and its closes");
     }
 
     /// A balances read states no day (brief 22, 9; brief 25): what the broker states

@@ -247,6 +247,7 @@ dependencies = [
  "bagholder-net",
  "bagholder-sources",
  "bagholder-store",
+ "flate2",
  "openssl",
  "pdf-extract",
  "regex",

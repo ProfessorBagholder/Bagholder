@@ -35,9 +35,7 @@ pub const FILINGS_HOLD_MAX_MIN: f64 = 120.0;
 pub const FILINGS_HOLD_KEY: &str = "filings:held-since";
 pub const FILINGS_SWEEP_AGE_MIN: f64 = 30.0;
 
-/// How long a listing's filers stand before they are settled again: the SEC's
-/// list and SEDAR+'s answer change when an issuer lists, renames or delists.
-pub const FILERS_RECHECK_HOURS: f64 = 24.0;
+pub use bagholder_market::disclosures::FILERS_RECHECK_HOURS;
 
 /// The name, the venue in words and the currency the book's securities give the
 /// listing `key` names; empty where the book holds none on that listing.
@@ -71,10 +69,10 @@ fn age_hours(when: &str) -> Option<f64> {
     parse_instant(when).map(|then| (now_unix() - then) / 3600.0)
 }
 
-/// The regulator a listing files with: the SEC for a US listing, SEDAR+ for a
-/// Canadian one; none for any other (a coin, an index).
+/// The regulator a listing files with: the SEC for a US listing, on an exchange or
+/// over the counter, SEDAR+ for a Canadian one; none for any other (a coin, an index).
 pub fn own_regulator(key: &ListingKey) -> Option<Regulator> {
-    if key.us() {
+    if key.us() || key.otc() {
         Some(Regulator::Sec)
     } else if key.canadian() {
         Some(Regulator::Sedar)
@@ -355,14 +353,14 @@ pub fn known_filing_listings(app: &Arc<App>, scopes: &[String]) -> Result<Vec<Fi
 pub fn sweep_filings(app: &Arc<App>) -> usize {
     // said in the header by `conn` and `notices`
     let (Ok(c), Ok(book)) = (conn(app), notices(app)) else { return 0 };
-    went(app, DISCLOSURES, sweep_filings_in(app, &c, &book).map_err(|e| format!("The disclosures could not be swept: {e}"))).unwrap_or(0)
+    went(app, DISCLOSURES, sweep_filings_in(app, &c, &book, &|key| refresh_filings(app, key)).map_err(|e| format!("The disclosures could not be swept: {e}"))).unwrap_or(0)
 }
 
 /// The sweep, the disclosures read and kept in the market cache (`c`), what is
 /// told of them and the marks of what was met kept in the book. Each filer's
 /// documents are one stream (`filings:<source>:<filer>`), so a filing two listings
-/// of one company share is told once.
-fn sweep_filings_in(app: &Arc<App>, c: &Connection, book: &bagholder_book::Book) -> Result<usize, String> {
+/// of one company share is told once. `refresh` reads a listing's filings again.
+fn sweep_filings_in(app: &Arc<App>, c: &Connection, book: &bagholder_book::Book, refresh: &dyn Fn(&ListingKey) -> Result<i64, String>) -> Result<usize, String> {
     let scopes = notify::disclosure_scopes(book).map_err(|e| e.to_string())?;
     let rel_scopes = notify::release_scopes(book).map_err(|e| e.to_string())?;
     if scopes.is_empty() && rel_scopes.is_empty() {
@@ -387,7 +385,7 @@ fn sweep_filings_in(app: &Arc<App>, c: &Connection, book: &bagholder_book::Book)
             continue;
         }
         let before: HashSet<[String; 5]> = sf::filings_of(c, &filers_kept(c, &key)?).map_err(|e| e.to_string())?.iter().map(filing_mark).collect();
-        let wrote = refresh_filings(app, &key)?;
+        let wrote = refresh(&key)?;
         if wrote < 0 {
             continue;
         }
@@ -1200,9 +1198,24 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, key: &ListingKey, regu
     };
     let mut total = 0i64;
     let now = now_iso();
+    // the profiles SEDAR+ settled by the listing's own exact name
+    let by_name: Vec<sf::Filer> = sf::listing_filers(c, key).map_err(|e| e.to_string())?.into_iter().filter(|(_, by)| *by == sf::SettledBy::SedarName).map(|(f, _)| f).collect();
+    let since = bagholder_model::dates::shift_date(&today(), -bagholder_market::sedar::LISTED_FILING_WINDOW_DAYS);
     for filer in &filers {
         let held = sf::filings_of(c, std::slice::from_ref(filer)).map_err(|e| e.to_string())?.len();
-        let outcome = match regulators.documents(filer, 200) {
+        let read = regulators.documents(filer, 200);
+        // one exact match that has filed nothing within the window a listed issuer
+        // files in is a dormant profile, never a listed issuer's: a miss, as a tie
+        // narrowed to none is (`sedar::pick_profile`), read from the documents just read
+        if let Ok(rows) = &read {
+            if by_name.contains(filer) && rows.iter().map(|r| r.date.as_str()).max().is_none_or(|d| d < since.as_str()) {
+                let why = format!("The one SEDAR+ issuer under {}'s name has filed nothing in the last {} days: it is no listed issuer's profile.", key.named(), bagholder_market::sedar::LISTED_FILING_WINDOW_DAYS);
+                sf::settle_listing_filers(c, key, filer.source, Err(&why), &now).map_err(|e| e.to_string())?;
+                outcomes.insert(filer.source, SourceOutcome { available: true, matched: false, filer: false, count: 0, error: why });
+                continue;
+            }
+        }
+        let outcome = match read {
             Ok(rows) if rows.is_empty() && held > 0 => {
                 log(&format!("bagholder disclosures: {key}: {} answered empty for {}; the stored rows stand", filer.source.as_str(), filer.id));
                 SourceOutcome { available: true, matched: true, filer: true, count: held, error: String::new() }
@@ -1906,6 +1919,91 @@ mod tests {
         assert_eq!(left, 0);
     }
 
+    /// What was told of a filer's documents is never told again: a document met
+    /// before stands as told even where the market cache no longer holds it and
+    /// the stream's mark is older than it (an earlier store's mark carried in).
+    #[test]
+    fn a_document_told_once_is_never_told_again() {
+        let (_home, app) = built_app();
+        let c = store();
+        let book = notices(&app).unwrap();
+        notify::set_settings(&book, &serde_json::from_value(json!({"disclosuresHeld": true})).unwrap()).unwrap();
+        let inst = known_filing_listings(&app, &["held".into()]).unwrap().into_iter().find(|l| own_regulator(&l.key).is_some()).expect("a held listing a regulator covers");
+        let source = own_regulator(&inst.key).unwrap();
+        let mut r = Regs::new();
+        r.filers = vec![(inst.key.clone(), Ok("000000001".into()))];
+        let docs = |n: i64| (1..=n).map(|i| item(source, i, "000000001")).collect::<Vec<_>>();
+        let stale = || c.execute("UPDATE filer_fetches SET fetched_at = ?", [crate::app::stamp_of(now_unix() as i64 - 3600)]).unwrap();
+        r.documents = vec![(filer("000000001", source), Ok(docs(1)))];
+        let sweep = |r: &Regs| sweep_filings_in(&app, &c, &book, &|k| refresh_filings_in(&app, &c, k, r)).unwrap();
+        assert_eq!(sweep(&r), 0, "the first read is where the stream starts: nothing is new yet");
+        r.documents = vec![(filer("000000001", source), Ok(docs(2)))];
+        stale();
+        assert_eq!(sweep(&r), 1, "the document filed since is told");
+        // the cache forgets the filer's documents and the stream's mark is an older one
+        c.execute_batch("DELETE FROM filings; DELETE FROM filer_fetches;").unwrap();
+        let scope = format!("filings:{}:000000001", source.as_str());
+        book.set_setting(&format!("{}{scope}", notify::WATERMARK), Some("2026-08-01|"), bagholder_core::jiff::Timestamp::now()).unwrap();
+        assert_eq!(sweep(&r), 0, "what was told is not told again");
+    }
+
+    /// A listing's filers stand for a day: within it no regulator is asked again,
+    /// and past it the regulator is asked and its answer replaces the one before
+    /// (a tie settled one day is asked again the next); the interlisted list is
+    /// read once a day too.
+    #[test]
+    fn a_listings_filers_are_asked_again_each_day_and_the_interlisted_list_read_once_a_day() {
+        let (_home, app) = built_app();
+        let c = store();
+        let key = on("XYZ", "TSX");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Err("SEDAR+ lists two issuers named Xyz Corp, each with filings in the last 485 days.".into()))];
+        for _ in 0..4 {
+            refresh_filings_in(&app, &c, &key, &r).unwrap();
+        }
+        assert_eq!((r.asked.get(), r.lists_read.get()), (1, 1), "within the day: neither asked again");
+        let old = crate::app::stamp_of(now_unix() as i64 - (FILERS_RECHECK_HOURS * 3600.0) as i64 - 1);
+        c.execute("UPDATE listing_filer_misses SET checked_at = ?", [&old]).unwrap();
+        set_meta(&c, "interlisted:read_at", &old).unwrap();
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        r.documents = vec![(filer("000000001", Regulator::Sedar), Ok(vec![item(Regulator::Sedar, 1, "000000001")]))];
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert_eq!((r.asked.get(), r.lists_read.get()), (2, 2), "a day on: both asked again");
+        assert_eq!(filers_kept(&c, &key).unwrap(), [filer("000000001", Regulator::Sedar)], "the new answer replaces the tie");
+    }
+
+    /// One exact SEDAR+ match is the listing's filer only where it has filed within
+    /// the window a listed issuer files in, read from its documents with no request
+    /// of its own; a dormant one is a miss, said, and none of its documents shown.
+    #[test]
+    fn one_exact_sedar_match_that_has_not_filed_within_the_window_is_a_miss() {
+        let (_home, app) = built_app();
+        let window = bagholder_market::sedar::LISTED_FILING_WINDOW_DAYS;
+        for (days_ago, kept) in [(0, true), (window, true), (window + 1, false), (4000, false)] {
+            let c = store();
+            let key = on("XYZ", "TSX");
+            let mut r = Regs::new();
+            r.filers = vec![(key.clone(), Ok("000000001".into()))];
+            let mut doc = item(Regulator::Sedar, 1, "000000001");
+            doc.date = bagholder_model::dates::shift_date(&today(), -days_ago);
+            r.documents = vec![(filer("000000001", Regulator::Sedar), Ok(vec![doc]))];
+            refresh_filings_in(&app, &c, &key, &r).unwrap();
+            assert_eq!(!filers_kept(&c, &key).unwrap().is_empty(), kept, "{days_ago} days ago");
+            assert_eq!(shown(&c, &key).len(), usize::from(kept), "{days_ago} days ago");
+            if !kept {
+                let why = sf::listing_filer_miss(&c, &key, Regulator::Sedar).unwrap().expect("a miss").0;
+                assert!(why.contains(&format!("{window} days")), "{why}");
+            }
+        }
+        // a filer with no documents at all has filed nothing in the window either
+        let c = store();
+        let key = on("XYZ", "TSX");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert!(filers_kept(&c, &key).unwrap().is_empty());
+    }
+
     /// A filer that could not be settled is said, and nothing is guessed in its place.
     #[test]
     fn a_listing_whose_filer_is_not_settled_shows_why_and_nothing_else() {
@@ -1929,6 +2027,7 @@ mod tests {
         assert!(filings_stale(&c, &key, None).unwrap(), "never settled");
         let mut r = Regs::new();
         r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        r.documents = vec![(filer("000000001", Regulator::Sedar), Ok(vec![item(Regulator::Sedar, 1, "000000001")]))];
         refresh_filings_in(&app, &c, &key, &r).unwrap();
         assert!(!filings_stale(&c, &key, None).unwrap());
         let old = crate::app::stamp_of(now_unix() as i64 - 25 * 3600);

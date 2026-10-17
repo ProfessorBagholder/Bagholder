@@ -184,14 +184,17 @@ export const listingChoices = $state<Record<string, { listings: ResolvedListing[
 
 /**
  * Resolve an address that names only a symbol: every listing of it, each with its
- * venue. Exactly one is that listing's page (`opened` with its address); two or
- * more are offered as rows (`listingChoices`), and none is chosen for the person.
+ * venue. Exactly one, where every directory answered, is that listing's page
+ * (`opened` with its address); two or more, or one beside a directory that did not
+ * answer, are offered as rows (`listingChoices`) with the failure, and none is
+ * chosen for the person.
  */
 export async function resolveListing(id: string, opened: (listingPage: string) => void): Promise<void> {
   if (!isListingId(id) || namesListing(id)) return
   const symbol = parsed(id).symbol
   const r = await read('GET /api/listings', { query: { symbol } })
   const listings: ResolvedListing[] = r.ok ? r.listings : []
-  if (listings.length === 1) return opened(rememberListing(listings[0]))
-  listingChoices[id] = { listings, error: r.ok ? r.unread : r.error }
+  const error = r.ok ? r.unread.join(' ') : r.error
+  if (listings.length === 1 && !error) return opened(rememberListing(listings[0]))
+  listingChoices[id] = { listings, error }
 }

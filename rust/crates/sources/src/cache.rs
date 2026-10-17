@@ -257,6 +257,27 @@ impl MarketCache {
         bagholder_sqlite::on_commit(&self.conn, heard)
     }
 
+    /// Forget what is kept of an instrument's prices: its quotes, closes, the
+    /// ex-dividend date its quote stated, the form its chain answered under, and
+    /// the reads that stand for them, so the cache asks again from nothing. The
+    /// number of instruments that had any.
+    pub fn forget_prices(&self, ids: &[InstrumentId]) -> Result<usize> {
+        let mut had = 0;
+        bagholder_sqlite::atomically(&self.conn, || {
+            for id in ids {
+                let id = id.to_string();
+                let mut n = 0;
+                for table in ["quotes", "daily_closes", "quoted_ex_dividends", "chains"] {
+                    n += self.conn.prepare_cached(&format!("DELETE FROM {table} WHERE instrument_id = ?1"))?.execute([&id])?;
+                }
+                n += self.conn.prepare_cached("DELETE FROM reads WHERE subject = ?1")?.execute([&id])?;
+                had += usize::from(n > 0);
+            }
+            Ok::<_, rusqlite::Error>(())
+        })?;
+        Ok(had)
+    }
+
     // -- quotes ----------------------------------------------------------------
 
     /// Keep a quote as the latest from its source for its instrument.

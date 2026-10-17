@@ -363,6 +363,88 @@ fn migration_6_carries_every_filing_it_can_attribute_with_its_read_text() {
     assert_eq!(left, 0, "no meta key names a ticker");
 }
 
+/// A document stored under several tickers whose reads disagree, as the store
+/// before migration 6 held it: (ticker, document, version, final, read at, the
+/// read's own words). Of each, the most complete read is the one kept: a final
+/// read over any partial one whatever its version, then the newer version, then a
+/// read made over none, then the newer read.
+type Read = (&'static str, &'static str, Option<i64>, Option<i64>, Option<&'static str>, &'static str);
+const DISAGREEING: [Read; 9] = [
+    // final at a lower version over partial at a higher
+    ("A", "sec:1", Some(5), Some(0), Some("2026-09-05T00:00:00Z"), "partial-newer-version"),
+    ("B", "sec:1", Some(2), Some(1), Some("2026-09-01T00:00:00Z"), "final"),
+    // both partial: the newer version
+    ("A", "sec:2", Some(1), Some(0), Some("2026-09-09T00:00:00Z"), "older-version"),
+    ("B", "sec:2", Some(3), Some(0), Some("2026-09-01T00:00:00Z"), "newer-version"),
+    // one version, one read and one not: the read
+    ("A", "sec:3", Some(2), Some(0), None, "unread"),
+    ("B", "sec:3", Some(2), Some(0), Some("2026-09-01T00:00:00Z"), "read"),
+    // all alike but when: the newer read
+    ("A", "sec:4", Some(2), Some(1), Some("2026-09-01T00:00:00Z"), "older-read"),
+    ("B", "sec:4", Some(2), Some(1), Some("2026-09-03T00:00:00Z"), "newer-read"),
+    ("C", "sec:4", Some(2), Some(1), Some("2026-09-02T00:00:00Z"), "middle-read"),
+];
+
+fn store_disagreeing(conn: &rusqlite::Connection, schema: &str) {
+    for (i, (sym, id, version, last, at, words)) in DISAGREEING.iter().enumerate() {
+        conn.execute(
+            &format!(
+                "INSERT INTO {schema}.filings (symbol, id, source, profile_no, url, title, date, subject, summary, enrich_version, enrich_final, enrich_reads, enriched_at, fetched_at)
+                 VALUES (?, ?, 'SEC', '', 'https://www.sec.gov/Archives/edgar/data/320193/000126/doc.htm', 't', '2026-09-01', ?, ?, ?, ?, ?, ?, '2026-09-10T00:00:00Z')"
+            ),
+            rusqlite::params![sym, id, format!("subject {words}"), format!("summary {words}"), version, last, i as i64 + 1, at],
+        )
+        .unwrap();
+    }
+}
+
+/// The rows kept of `DISAGREEING`: each document's most complete read, whole (its
+/// subject, its text, how many reads it took).
+fn the_most_complete_kept(conn: &rusqlite::Connection) {
+    let rows: Vec<(String, String, String, i64)> = conn
+        .prepare("SELECT id, subject, summary, enrich_reads FROM main.filings ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let want = |id: &str, words: &str| {
+        let i = DISAGREEING.iter().position(|r| r.1 == id && r.5 == words).unwrap();
+        (id.to_string(), format!("subject {words}"), format!("summary {words}"), i as i64 + 1)
+    };
+    assert_eq!(rows, vec![want("sec:1", "final"), want("sec:2", "newer-version"), want("sec:3", "read"), want("sec:4", "newer-read")]);
+}
+
+/// Migration 6 keeps the most complete of disagreeing reads of a document, whole.
+#[test]
+fn migration_6_keeps_the_most_complete_read_of_a_document_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("market.db");
+    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
+    {
+        let (conn, _) = migrate::open(five, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+        store_disagreeing(&conn, "main");
+    }
+    let (conn, _) = migrate::open(&SCHEMA, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+    the_most_complete_kept(&conn);
+}
+
+/// An earlier store's filings are carried by the same order: the most complete of
+/// disagreeing reads of a document, whole.
+#[test]
+fn an_earlier_stores_filings_carry_the_most_complete_read_of_a_document_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old.db");
+    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
+    drop(migrate::open(five, &old, "test", t("2026-09-24T00:00:00Z")).unwrap());
+    let (conn, _) = migrate::open(&SCHEMA, &dir.path().join("market.db"), "test", t("2026-09-24T00:00:00Z")).unwrap();
+    conn.execute("ATTACH DATABASE ? AS old", [old.to_string_lossy()]).unwrap();
+    store_disagreeing(&conn, "old");
+    let (carried, dropped) = bagholder_sources::cache::carry_filings(&conn, "old").unwrap();
+    assert_eq!((carried, dropped), (4, 0));
+    the_most_complete_kept(&conn);
+}
+
 /// Migration 6 attributes filers by the one rule `carry_filings` uses for an
 /// earlier store, so a filing carries to the same filer whichever way it came.
 #[test]

@@ -127,10 +127,12 @@ pub fn market_of(symbol: &str, exchange: &str) -> Option<ShortMarket> {
     {
         return None;
     }
-    match bagholder_model::venues::tmx_form(&ex) {
-        None => None,
-        Some(":US") => Some(ShortMarket::Us),
-        Some(_) => Some(ShortMarket::Ca),
+    // FINRA publishes the short interest of every US listing, on an exchange or
+    // over the counter; CIRO the Canadian venues'
+    match bagholder_core::listing::key_venue(&ex)? {
+        bagholder_core::listing::US | bagholder_core::listing::OTC => Some(ShortMarket::Us),
+        v if bagholder_core::listing::CANADA_MICS.contains(&v) => Some(ShortMarket::Ca),
+        _ => None,
     }
 }
 

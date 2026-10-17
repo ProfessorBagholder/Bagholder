@@ -175,7 +175,8 @@
     "status": 200,
     "body": {
       "ok": true,
-      "matches": []
+      "matches": [],
+      "unread": []
     }
   },
   "symbols_quote_empty": {

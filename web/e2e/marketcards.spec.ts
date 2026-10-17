@@ -507,7 +507,7 @@ test.describe('Short interest', () => {
     let asked: string | null = null
     await page.route('**/api/listings?*', (route) => {
       asked = new URL(route.request().url()).searchParams.get('symbol')
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: '', listings: [] }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], listings: [] }) })
     })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Short interest' }) })
     const box = page.getByLabel('Search short interest')
@@ -538,7 +538,7 @@ test.describe('Short interest', () => {
     // the ticker typed is one listing, on the NYSE, read on its own venue
     await page.route('**/api/listings?*', (route) => {
       const symbol = new URL(route.request().url()).searchParams.get('symbol')!
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: '', listings: [{ listing: symbol + '@US', symbol, name: symbol + ' Inc.', exchange: 'NYSE', currency: 'USD', held: false }] }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], listings: [{ listing: symbol + '@US', symbol, name: symbol + ' Inc.', exchange: 'NYSE', currency: 'USD', held: false }] }) })
     })
     await page.route('**/api/shorts?symbol=*', (route) => {
       const q = new URL(route.request().url()).searchParams
@@ -588,7 +588,7 @@ test.describe('News', () => {
     await page.route('**/api/listings?*', (route) => {
       const q = new URL(route.request().url()).searchParams.get('symbol')!.toUpperCase()
       const listings = q === 'ZQXW' ? [listing('ZQXW', 'NYSE', 'US')] : q === 'ZQYY' ? [listing('ZQYY', 'TSX', 'XTSE'), listing('ZQYY', 'NASDAQ', 'US')] : []
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: '', listings }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], listings }) })
     })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
@@ -611,6 +611,53 @@ test.describe('News', () => {
     await card.locator('.lc-row', { hasText: 'NASDAQ' }).click()
     await expect(card.locator('.chip')).toContainText('ZQYY')
     await expect.poll(() => [last().symbol, last().exchange]).toEqual(['ZQYY', 'NASDAQ'])
+  })
+
+  // brief 42, 4: one listing beside a directory that did not answer is offered, never taken
+  test('a ticker found on one venue while a directory did not answer is offered with the failure, not taken', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: ["The TSX's directory could not be read: refused"], listings: [{ listing: 'ZQNA@US', symbol: 'ZQNA', name: 'Zqna Inc.', exchange: 'NYSE', currency: 'USD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await page.getByLabel('Search the news').fill('zqna')
+    await expect(card.locator('.lc-row')).toHaveCount(1)
+    await expect(card.locator('.status-err')).toHaveText("The TSX's directory could not be read: refused")
+    await expect(card.locator('.chip')).toHaveCount(0)
+    await card.locator('.lc-row').click()
+    await expect(card.locator('.chip')).toContainText('ZQNA')
+  })
+
+  // brief 42: a row tagged with no venue opens no chip with an empty key: its ticker goes to the resolver
+  test('a row tagged with no venue asks the resolver for its ticker, and its one listing takes the chip', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([item('v', 'A story of no venue', { tag: { symbol: 'ZQNV', exchange: '', held: false, watched: false, percentChange: null } })]))
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQNV@XTSE', symbol: 'ZQNV', name: 'Zqnv Corp', exchange: 'TSX', currency: 'CAD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    const looked = page.waitForRequest((r) => r.url().includes('/api/listings?') && new URL(r.url()).searchParams.get('symbol') === 'ZQNV')
+    await card.locator('.nw-sym', { hasText: 'ZQNV' }).click()
+    await looked
+    await expect(card.locator('.chip')).toContainText('ZQNV')
+    await expect.poll(() => [last().symbol, last().exchange]).toEqual(['ZQNV', 'TSX'])
+  })
+
+  // brief 42, 9: a chip is held or watched by its listing, never its ticker
+  test('a chip on a listing of a held ticker\'s other venue is not the holding: its own quote is asked', async ({ page, request }) => {
+    const model = await figures(request)
+    const held = (model.positions as { symbol: string; exchange: string; kind: string }[]).find((p) => p.kind === 'Shares' && ['TSX', 'TSX-V', 'NYSE', 'NASDAQ'].includes(p.exchange))!
+    const other = held.exchange === 'TSX' ? { exchange: 'TSX-V', venue: 'XTSX' } : { exchange: 'TSX', venue: 'XTSE' }
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: held.symbol + '@' + other.venue, symbol: held.symbol, name: held.symbol + ' elsewhere', exchange: other.exchange, currency: 'CAD', held: false }] } }),
+    )
+    const quoted = page.waitForRequest((r) => r.url().includes('/api/symbols/quote?') && new URL(r.url()).searchParams.get('exchange') === other.exchange)
+    await page.getByLabel('Search the news').fill(held.symbol.toLowerCase())
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await expect(card.locator('.chip')).toContainText(held.symbol)
+    await quoted
   })
 
   test('clicking a row\'s symbol opens the Symbol chip, asking for that listing\'s items until it is cleared', async ({ page, request }) => {
@@ -686,6 +733,28 @@ test.describe('Disclosures', () => {
     const box = (await open.boundingBox())!
     expect(await open.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     expect(box.x + box.width).toBeLessThanOrEqual((await rows.first().boundingBox())!.x + (await rows.first().boundingBox())!.width + 1)
+    await popup.close()
+  })
+
+  // brief 42, 9: a document is opened by its source and its id, never by a symbol
+  test('a SEDAR+ document opens through the server by its source and id, and a page answers it', async ({ page, request }) => {
+    const model = await figures(request)
+    const aapl = (model.positions as { symbol: string; id: string; name: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
+    const docKey = 'filings:symbol=AAPL&exchange=US&name=' + encodeURIComponent(aapl.name) + '&currency=' + encodeURIComponent(aapl.currency)
+    const payload = {
+      ok: true, everRead: true, reading: [], fetchedAt: '2026-09-19T00:00:00Z', summaryStatus: 'ready',
+      sources: { 'SEDAR+': { available: true, filer: true, matched: true } },
+      filings: [{ id: 'sedar:zq9', source: 'SEDAR+', category: 'Financials', type: 'Interim MD&A', title: '', subject: 'A filed document', summary: '', date: '2026-09-01', dateText: '2026-09-01', size: '', url: '' }],
+    }
+    await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(aapl.id), () => {}, { [docKey]: payload })
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
+    const [popup] = await Promise.all([page.waitForEvent('popup'), card.locator('.dc-row').first().locator('.dc-open').click({ force: true })])
+    await popup.waitForLoadState()
+    const url = new URL(popup.url())
+    expect(url.pathname).toBe('/api/filings/doc')
+    expect(Object.fromEntries(url.searchParams)).toEqual({ source: 'SEDAR+', id: 'sedar:zq9' })
+    // the server answers the tab with a page of its own, never raw JSON
+    expect(await popup.evaluate(() => document.contentType)).toBe('text/html')
     await popup.close()
   })
 

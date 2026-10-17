@@ -84,8 +84,9 @@ pub fn benchmark_of(cache: &MarketCache, key: &str) -> Result<Option<BenchmarkSe
 /// An instrument as the sources ask for it: its kind and currency, its symbol and
 /// venue now (its records', else what the person picked it as), and the ways to
 /// ask for it the book holds. The venue is its code where the sources know it,
-/// else the code its name spells (`TSX Venture Exchange`); where neither is known
-/// the sources follow its currency.
+/// else the code its words spell (`TSX Venture Exchange`), by the one venue rule
+/// (`listing::venue_of`); where neither is known no source asks for it, and its
+/// currency never stands in for its venue.
 pub fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String> {
     let i = book.instrument(id).map_err(err)?;
     let Some(now) = book.current_name(id).map_err(err)? else { return Ok(None) };

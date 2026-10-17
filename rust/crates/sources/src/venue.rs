@@ -10,7 +10,7 @@
 //! form, never that suffix.
 //!
 //! A listing is asked under its own venue's forms only. One whose record names no
-//! venue, or names one by a code or words no table here knows (an OTC venue, a
+//! venue, or names one by a code or words no table here knows (a foreign venue, a
 //! file-imported row), is asked of no source: its venue is never guessed from its
 //! currency, and another venue's form is never asked for it, since either reads
 //! another listing's data as this one's (plan `market-data-keyed-by-listing`, The
@@ -28,6 +28,8 @@ pub fn market_of(mic: Option<&str>) -> Option<Market> {
         m if bagholder_core::listing::CANADA_MICS.contains(&m) => Some(Market::Canada),
         // Nasdaq, the NYSE, NYSE Arca, NYSE American, Cboe's US equities (BZX), IEX
         m if bagholder_core::listing::US_MICS.contains(&m) => Some(Market::UnitedStates),
+        // the US over-the-counter market
+        m if bagholder_core::listing::OTC_MICS.contains(&m) => Some(Market::Otc),
         _ => None,
     }
 }
@@ -59,7 +61,7 @@ pub fn listing_venue(mic: &str) -> Option<String> {
 pub fn currency_of(mic: &str) -> Option<bagholder_core::Currency> {
     match market_of(Some(mic))? {
         Market::Canada | Market::CboeCanada => Some(bagholder_core::Currency::CAD),
-        Market::UnitedStates => Some(bagholder_core::Currency::USD),
+        Market::UnitedStates | Market::Otc => Some(bagholder_core::Currency::USD),
         _ => None,
     }
 }
@@ -82,7 +84,7 @@ pub fn tmx_suffix(mic: &str) -> Option<&'static str> {
         "XTSE" | "XTSX" | "XATS" => Some(""),
         "XCNQ" => Some(":CNX"),
         "NEOE" => Some(":AQL"),
-        "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" | "IEXG" => Some(":US"),
+        m if bagholder_core::listing::US_MICS.contains(&m) => Some(":US"),
         _ => None,
     }
 }
@@ -134,7 +136,9 @@ pub fn yahoo_suffixes(mic: &str) -> &'static [&'static str] {
         "XTSX" => &[".V"],
         "XCNQ" => &[".CN"],
         "NEOE" => &[".NE"],
-        "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" | "IEXG" => &[""],
+        m if bagholder_core::listing::US_MICS.contains(&m) => &[""],
+        // Yahoo quotes an OTC issue under its bare symbol, as a US exchange's
+        m if bagholder_core::listing::OTC_MICS.contains(&m) => &[""],
         _ => &[],
     }
 }
@@ -212,9 +216,49 @@ mod tests {
         assert_eq!(market_of(Some("IEXG")), Some(Market::UnitedStates));
         // a code no table knows gives way to the venue's words, then to nothing
         assert_eq!(known_mic(Some("XTSV"), None), Some("XTSX"));
-        assert_eq!(known_mic(Some("OTCM"), Some("NYSE")), Some("XNYS"));
+        assert_eq!(known_mic(Some("XLON"), Some("NYSE")), Some("XNYS"));
         assert_eq!(known_mic(Some(""), Some("TSX Venture Exchange")), Some("XTSX"));
-        assert_eq!(known_mic(Some("OTCM"), Some("OTC Markets")), None);
+        assert_eq!(known_mic(Some("XLON"), Some("London")), None);
+        // a code the table knows is the venue, whatever the words beside it
+        assert_eq!(known_mic(Some("OTCM"), Some("NYSE")), Some("OTCM"));
+    }
+
+    /// The one venue rule, read by the listing's key and by every source alike: for
+    /// generated pairs of a code and words (every code and word the tables know,
+    /// codes and words none knows, none, empty, spaced and lower-cased), a listing
+    /// gets a key exactly when a source covers its venue, on the venue its key names,
+    /// and the code decides where it is known, the words only where it is not.
+    #[test]
+    fn a_listing_is_keyed_exactly_where_a_source_covers_its_venue() {
+        use bagholder_core::listing::{self as l, ListingKey};
+        let mut codes: Vec<Option<String>> = vec![None, Some(String::new()), Some("XLON".into()), Some("ZZZZ".into()), Some("  ".into())];
+        let mut words: Vec<Option<String>> = vec![None, Some(String::new()), Some("London Stock Exchange".into()), Some("Börse".into())];
+        for (mic, ws) in l::VENUE_WORDS {
+            codes.push(Some(mic.to_string()));
+            codes.push(Some(format!(" {} ", mic.to_ascii_lowercase())));
+            for w in ws {
+                words.push(Some(w.to_string()));
+                words.push(Some(w.to_ascii_lowercase()));
+            }
+        }
+        for mic in l::CANADA_MICS.iter().chain(l::US_MICS.iter()).chain(l::OTC_MICS.iter()) {
+            codes.push(Some(mic.to_string()));
+        }
+        let day = bagholder_core::jiff::civil::date(2026, 10, 16);
+        for c in &codes {
+            for w in &words {
+                let name = bagholder_core::instrument::Name { symbol: "ABC".into(), venue_mic: c.clone(), venue_name: w.clone(), name: None, first_seen: day, last_seen: day, source: bagholder_core::SourceName::person() };
+                let key = ListingKey::of(bagholder_core::instrument::InstrumentKind::Security, &name).ok();
+                let mic = known_mic(c.as_deref(), w.as_deref());
+                let market = market_of(mic);
+                assert_eq!(key.is_some(), market.is_some(), "{c:?} {w:?}: the key and the sources disagree");
+                if let (Some(k), Some(m)) = (&key, mic) {
+                    assert_eq!(Some(k.venue()), l::listing_venue(m), "{c:?} {w:?}");
+                }
+                let by_code = c.as_deref().and_then(mic_of);
+                assert_eq!(mic, by_code.or_else(|| w.as_deref().and_then(mic_of)), "{c:?} {w:?}: the code first");
+            }
+        }
     }
 
     /// A listing is asked under its own venue's forms alone, on every venue the
@@ -227,8 +271,15 @@ mod tests {
             assert_eq!(tmx, if canadian { vec![tmx_form("ENB", mic).unwrap()] } else { vec![] }, "{mic}");
             assert_eq!(yahoo_forms_of("ENB", Some(mic)), yahoo_forms("ENB", mic), "{mic}");
         }
-        for unknown in [None, Some("OTCM"), Some("XLON"), Some("")] {
+        for unknown in [None, Some("XLON"), Some("")] {
             assert!(tmx_forms("ENB", unknown).is_empty() && yahoo_forms_of("ENB", unknown).is_empty(), "{unknown:?}");
+        }
+        // an OTC issue: Yahoo's bare symbol, never TMX's
+        for mic in bagholder_core::listing::OTC_MICS {
+            assert_eq!(market_of(Some(mic)), Some(Market::Otc), "{mic}");
+            assert!(tmx_forms("TCEHY", Some(mic)).is_empty());
+            assert_eq!(yahoo_forms_of("TCEHY", Some(mic)), ["TCEHY"], "{mic}");
+            assert_eq!(currency_of(mic), Some(bagholder_core::Currency::USD));
         }
     }
 

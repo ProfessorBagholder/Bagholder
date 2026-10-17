@@ -71,13 +71,17 @@ fn test_each_market_goes_to_the_regulator_that_publishes_for_it() {
     assert_eq!(shorts::market_of("QNC", "TSX-V"), Some(ShortMarket::Ca));
     assert_eq!(shorts::market_of("TGIF", "CSE"), Some(ShortMarket::Ca));
     assert_eq!(shorts::market_of("HBIX", "Cboe Canada"), Some(ShortMarket::Ca));
+    // FINRA publishes the OTC market's short interest too, on every OTC code
+    for venue in bagholder_core::listing::OTC_MICS.iter().chain(["OTC", "OTCQX", "Pink"].iter()) {
+        assert_eq!(shorts::market_of("TCEHY", venue), Some(ShortMarket::Us), "{venue}");
+    }
 }
 
 /// A listing whose venue is none known goes to no regulator: neither its
 /// currency nor its ticker stands in for its venue.
 #[test]
 fn test_a_listing_that_names_no_venue_goes_to_no_regulator() {
-    for (sym, ex) in [("SHOP", ""), ("F", ""), ("SHOP", "OTC"), ("F", "XLON")] {
+    for (sym, ex) in [("SHOP", ""), ("F", ""), ("SHOP", "LSE"), ("F", "XLON")] {
         assert_eq!(shorts::market_of(sym, ex), None, "{sym} on {ex:?}");
     }
 }

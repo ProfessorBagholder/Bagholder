@@ -400,6 +400,30 @@ mod tests {
         }
     }
 
+    /// A row or an entry that names no venue is matched to a holding by its symbol
+    /// only where the book holds exactly one of that symbol: of two listings of one
+    /// ticker, it is neither (an import's row, a contract's underlying).
+    #[test]
+    fn a_symbol_with_no_venue_is_neither_of_two_holdings_of_that_ticker() {
+        let (_h, f) = figures();
+        let account = f.read(|e| e.figures().positions[0].account.to_string()).unwrap();
+        for (i, venue) in ["TSX", "TSX-V"].iter().enumerate() {
+            enter(&f, &trade(&account, "ZQRA", venue, "CAD", "buy", &(i + 1).to_string(), "1", ""), now()).unwrap();
+        }
+        let held: Vec<InstrumentId> = person_trades(&f).iter().filter_map(|t| t.instrument).collect();
+        assert_eq!(held.len(), 2);
+        assert_ne!(held[0], held[1], "two listings, two instruments");
+        match crate::csv_import::traded(&f, "zqra", None, InstrumentKind::Security, Currency::CAD).unwrap() {
+            Some(Traded::Named { venue: None, .. }) => {}
+            other => panic!("a venue-less row was taken as {other:?}"),
+        }
+        let contract = f.read(|e| contract_by_terms(e, "ZQRA 15JAN27 12.00 CALL", Currency::CAD)).unwrap();
+        match contract {
+            Some(Traded::Named { contract: Some(c), .. }) => assert!(matches!(c.underlying, Underlying::Named(_)), "its underlying is neither holding: {:?}", c.underlying),
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn a_trade_without_an_account_goes_to_the_manual_account_and_a_new_symbol_to_a_new_instrument() {
         let (_h, f) = figures();

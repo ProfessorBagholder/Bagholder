@@ -8,7 +8,9 @@
 //! code in Canada, where each exchange lists its own issues, and `US` for any US
 //! exchange, where one symbol names one listing across every exchange under one
 //! national plan and the sources state the NYSE group differently (FIGI's
-//! composite: one listing "within the same country or market"). A coin is
+//! composite: one listing "within the same country or market"). The OTC market
+//! (OTC Markets Group's tiers, the OTC Bulletin Board, FINRA's other OTC) is `OTC`:
+//! no national exchange lists it, and one symbol names one issue there. A coin is
 //! `<asset>@CRYPTO`, a directory instrument `<symbol>@INDEX`, an option contract
 //! its OCC symbol `@OCC`.
 
@@ -17,9 +19,23 @@ use std::fmt;
 /// The market identifier codes (ISO 10383) of the Canadian venues: the TSX, the
 /// TSX Venture, the CSE, Alpha, and Cboe Canada.
 pub const CANADA_MICS: [&str; 5] = ["XTSE", "XTSX", "XCNQ", "XATS", "NEOE"];
-/// The market identifier codes of the US venues: Nasdaq, the NYSE, NYSE Arca, NYSE
-/// American, Cboe's US equities (BZX), IEX.
-pub const US_MICS: [&str; 6] = ["XNAS", "XNYS", "ARCX", "XASE", "BATS", "IEXG"];
+/// The market identifier codes of the US exchanges that list shares: Nasdaq, the
+/// NYSE, NYSE Arca, NYSE American, NYSE Texas, Cboe's US equities (BZX), IEX, and
+/// the Texas Stock Exchange (in the SEC's list of tickers of 2026-10-16; codes as
+/// ISO 10383's registry of that day states them).
+pub const US_MICS: [&str; 8] = ["XNAS", "XNYS", "ARCX", "XASE", "XCHI", "BATS", "IEXG", "TXSE"];
+
+/// The market identifier codes (ISO 10383) of the US over-the-counter equity
+/// market, from the registry's file of 2026-10-16
+/// (<https://www.iso20022.org/market-identifier-codes>): OTC Markets Group's
+/// operating code `OTCM` and every segment under it (OTCQX, OTCQB, the Pink and
+/// Grey markets, the Expert Market, Caveat Emptor, OTCID), OTC Link ECN and NQB,
+/// the OTC Bulletin Board (expired, still stated by older records), and FINRA's
+/// "other OTC". Expired codes stay: a record may state one.
+pub const OTC_MICS: [&str; 16] = ["OTCM", "OTCQ", "OTCB", "PINX", "PINC", "PINI", "PINL", "PSGM", "EXPM", "CAVE", "OTCD", "OTCN", "OTCI", "OTCO", "XOTC", "OOTC"];
+
+/// The venue every listing of the US over-the-counter market is keyed under.
+pub const OTC: &str = "OTC";
 
 /// The venue a listing of a coin is on.
 pub const CRYPTO: &str = "CRYPTO";
@@ -44,7 +60,7 @@ pub fn mic_of(words: &str) -> Option<&'static str> {
 /// Each venue's code and the words it is written in (upper case), the code
 /// itself among them: the one table `mic_of` reads, and the one the page's key
 /// is made from (generated into `web/src/lib/generated/venues.ts`).
-pub const VENUE_WORDS: [(&str, &[&str]); 11] = [
+pub const VENUE_WORDS: [(&str, &[&str]); 14] = [
     ("XTSE", &["TSX", "TORONTO", "TORONTO STOCK EXCHANGE", "XTSE"]),
     // `XTSV` is how some records write the TSX Venture's code
     ("XTSX", &["TSX-V", "TSXV", "TSX VENTURE", "TSX VENTURE EXCHANGE", "VENTURE", "CDNX", "XTSX", "XTSV"]),
@@ -58,13 +74,28 @@ pub const VENUE_WORDS: [(&str, &[&str]); 11] = [
     // `CBOE` alone is Cboe's US equities venue; Cboe Canada is named as such
     ("BATS", &["BATS", "CBOE BZX", "CBOE"]),
     ("IEXG", &["IEX", "IEXG"]),
+    // NYSE Chicago became NYSE Texas in 2025, under the same code
+    ("XCHI", &["NYSE TEXAS", "NYSE CHICAGO", "XCHI"]),
+    ("TXSE", &["TXSE", "TEXAS STOCK EXCHANGE"]),
+    // every OTC code is the one OTC market, written by OTC Markets Group's names for
+    // its tiers, the SEC's list (`OTC`) and the older names of the Pink Sheets and the OTCBB
+    (
+        "OTCM",
+        &[
+            "OTCM", "OTCQ", "OTCB", "PINX", "PINC", "PINI", "PINL", "PSGM", "EXPM", "CAVE", "OTCD", "OTCN", "OTCI", "OTCO", "XOTC", "OOTC", "OTC", "OTC MARKETS",
+            "OTC MARKETS GROUP", "OTC LINK", "OTCQX", "OTCQB", "PINK", "OTC PINK", "PINK SHEETS", "OTCBB", "OTC BB", "OTC BULLETIN BOARD", "GREY MARKET", "OTC GREY",
+            "EXPERT MARKET", "OTCID",
+        ],
+    ),
 ];
 
-/// The venue a listing on `mic` is keyed under: the code in Canada, `US` in the
-/// US; none for a code no venue here is.
+/// The venue a listing on `mic` is keyed under: the code in Canada, `US` on a US
+/// exchange, `OTC` over the counter; none for a code no venue here is.
 pub fn listing_venue(mic: &str) -> Option<&str> {
     if US_MICS.contains(&mic) {
         Some(US)
+    } else if OTC_MICS.contains(&mic) {
+        Some(OTC)
     } else if CANADA_MICS.contains(&mic) {
         Some(mic)
     } else {
@@ -74,13 +105,14 @@ pub fn listing_venue(mic: &str) -> Option<&str> {
 
 /// Each venue a key holds, by the name a person reads it under (`TD · TSX`):
 /// the one table the server's sentences and the page's labels name venues from.
-pub const VENUE_NAMES: [(&str, &str); 9] = [
+pub const VENUE_NAMES: [(&str, &str); 10] = [
     ("XTSE", "TSX"),
     ("XTSX", "TSX-V"),
     ("XCNQ", "CSE"),
     ("NEOE", "Cboe Canada"),
     ("XATS", "Alpha"),
     (US, "US"),
+    (OTC, "OTC"),
     (CRYPTO, "crypto"),
     (INDEX, "index"),
     (OCC, "option"),
@@ -105,7 +137,7 @@ pub mod meta {
 }
 
 /// The venue a record names, as a code: its code where the table knows it, else
-/// its words (`OTCM` with `NYSE` is `XNYS`); none where neither is known. The one
+/// its words (`XLON` with `NYSE` is `XNYS`); none where neither is known. The one
 /// rule every reader of a record's venue goes by (`ListingKey::of`, the sources'
 /// `venue::known_mic`).
 pub fn venue_of(mic: Option<&str>, words: Option<&str>) -> Option<&'static str> {
@@ -113,7 +145,8 @@ pub fn venue_of(mic: Option<&str>, words: Option<&str>) -> Option<&'static str> 
 }
 
 /// The venue a share or fund on the venue `venue` names is keyed under: the code
-/// in Canada, `US` in the US, from words, a code or the key's own `US`; none for
+/// in Canada, `US` in the US, `OTC` over the counter, from words, a code or the
+/// key's own `US` (`OTC` is itself among the OTC market's words); none for
 /// a venue no share is keyed by.
 pub fn key_venue(venue: &str) -> Option<&'static str> {
     if venue.trim().eq_ignore_ascii_case(US) {
@@ -122,6 +155,8 @@ pub fn key_venue(venue: &str) -> Option<&'static str> {
     let mic = mic_of(venue)?;
     if US_MICS.contains(&mic) {
         Some(US)
+    } else if OTC_MICS.contains(&mic) {
+        Some(OTC)
     } else {
         CANADA_MICS.iter().find(|m| **m == mic).copied()
     }
@@ -161,7 +196,7 @@ impl std::error::Error for NotAListing {}
 
 impl ListingKey {
     /// A listing on the venue `venue` names, in words or as a code, or as a key
-    /// writes it (`US`, `CRYPTO` for a coin, `INDEX`, `OCC`).
+    /// writes it (`US`, `OTC`, `CRYPTO` for a coin, `INDEX`, `OCC`).
     pub fn on(symbol: &str, venue: &str) -> Result<ListingKey, NotAListing> {
         match venue.trim().to_ascii_uppercase().as_str() {
             // the US market itself, as a key names it
@@ -219,12 +254,16 @@ impl ListingKey {
         match kind {
             K::Crypto => ListingKey::coin(&name.symbol),
             K::Index | K::Future | K::Rate | K::CurrencyPair => ListingKey::index(&name.symbol),
-            K::Security => {
-                let venue = venue_of(name.venue_mic.as_deref(), name.venue_name.as_deref()).ok_or_else(|| NotAListing(format!("{} names no venue a listing is keyed by", name.symbol)))?;
-                ListingKey::on(&name.symbol, venue)
-            }
+            K::Security => ListingKey::share(&name.symbol, name.venue_mic.as_deref(), name.venue_name.as_deref()),
             K::OptionContract | K::EventContract => Err(NotAListing(format!("{} is not a listing market data is kept for", name.symbol))),
         }
+    }
+
+    /// A share or fund's key, from its symbol and the venue its record states as a
+    /// code and in words (`venue_of`): the one rule `of` reads a share by.
+    pub fn share(symbol: &str, mic: Option<&str>, words: Option<&str>) -> Result<ListingKey, NotAListing> {
+        let venue = venue_of(mic, words).ok_or_else(|| NotAListing(format!("{symbol} names no venue a listing is keyed by")))?;
+        ListingKey::on(symbol, venue)
     }
 
     /// The key the market's own news is kept under (`*@MARKET`).
@@ -242,7 +281,7 @@ impl ListingKey {
         &self.symbol
     }
 
-    /// The venue: a Canadian venue's code, `US`, `CRYPTO`, `INDEX` or `OCC`.
+    /// The venue: a Canadian venue's code, `US`, `OTC`, `CRYPTO`, `INDEX` or `OCC`.
     pub fn venue(&self) -> &str {
         &self.venue
     }
@@ -277,6 +316,11 @@ impl ListingKey {
     pub fn us(&self) -> bool {
         self.venue == US
     }
+
+    /// Whether the listing is on the US over-the-counter market.
+    pub fn otc(&self) -> bool {
+        self.venue == OTC
+    }
 }
 
 /// `SYMBOL@VENUE`, the form a key is stored and sent in.
@@ -297,6 +341,7 @@ impl std::str::FromStr for ListingKey {
             OCC => ListingKey::option(symbol),
             MARKET if symbol == "*" => Ok(ListingKey::market_feed()),
             US => ListingKey::new(symbol, US),
+            OTC => ListingKey::new(symbol, OTC),
             mic if CANADA_MICS.contains(&mic) => ListingKey::new(symbol, mic),
             other => Err(NotAListing(format!("{other:?} is no venue a listing is keyed by"))),
         }
@@ -327,11 +372,16 @@ mod tests {
     fn every_venue_keys_its_listings_apart_and_round_trips() {
         let symbols = ["A", "RY", "BRK.B", "BEP.UN", "X1", "ZZZZZ"];
         for s in symbols {
-            for mic in CANADA_MICS.iter().chain(US_MICS.iter()) {
+            for mic in CANADA_MICS.iter().chain(US_MICS.iter()).chain(OTC_MICS.iter()) {
                 let k = ListingKey::on(s, mic).unwrap();
                 assert_eq!(k.to_string().parse::<ListingKey>().unwrap(), k);
-                assert_eq!(k.venue(), if US_MICS.contains(mic) { US } else { mic });
+                assert_eq!(k.venue(), if US_MICS.contains(mic) { US } else if OTC_MICS.contains(mic) { OTC } else { mic });
             }
+            // the OTC market is one venue, apart from the exchanges'
+            let otc: Vec<ListingKey> = OTC_MICS.iter().map(|m| ListingKey::on(s, m).unwrap()).collect();
+            assert!(otc.windows(2).all(|w| w[0] == w[1]));
+            assert_ne!(otc[0], ListingKey::on(s, US).unwrap());
+            assert_eq!(otc[0], ListingKey::on(s, "OTC").unwrap());
             for a in CANADA_MICS {
                 for b in CANADA_MICS.iter().chain([US].iter()) {
                     if a != *b {
@@ -360,7 +410,7 @@ mod tests {
 
     #[test]
     fn no_key_without_a_venue_or_a_symbol() {
-        for venue in ["", "OTC", "PINK", "LSE", "unknown"] {
+        for venue in ["", "XLON", "LSE", "unknown"] {
             assert!(ListingKey::on("RY", venue).is_err(), "{venue}");
         }
         assert!(ListingKey::on("", "TSX").is_err());

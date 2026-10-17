@@ -77,6 +77,8 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("listing_filer_misses", Place::Of(Kind::Market)),
     ("filer_fetches", Place::Of(Kind::Market)),
     ("interlisted", Place::Of(Kind::Market)),
+    // the reads that failed and rest before they are asked again (migration 7)
+    ("read_failures", Place::Of(Kind::Market)),
     // the tickers the filings were kept under before migration 6, for carrying the
     // book's told marks once
     ("filings_carried", Place::Of(Kind::Market)),

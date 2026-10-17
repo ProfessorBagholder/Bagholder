@@ -4,7 +4,10 @@
 //! asks only for a descriptive User-Agent. A US listing is resolved to its
 //! filer's CIK through the SEC's own list of tickers with their exchanges, the
 //! filer's recent filings are read from the submissions API, and each is
-//! normalized into the shared disclosure shape. A listing on another market
+//! normalized into the shared disclosure shape. A listing on a US exchange or the
+//! US over-the-counter market is the SEC's row for its ticker, whatever exchange
+//! the row names (the list holds each ticker once, and names some listings' no
+//! exchange, or a newer one's). A listing on another market
 //! reaches the SEC only where its exchange pairs it with a US listing (the TSX's
 //! interlisted list), never by its ticker. Documents are static URLs, so
 //! downloading needs no session.
@@ -24,10 +27,6 @@ pub const SUBMISSIONS_URL: &str = "https://data.sec.gov/submissions/CIK{}.json";
 pub const TIMEOUT: u64 = 30;
 /// SEC allows up to ten requests a second; this stays well under.
 pub const PACE: Duration = Duration::from_millis(300);
-/// The exchanges the SEC's list names a US national exchange listing by: the
-/// listings a `ListingKey` keys as the US market. An over-the-counter row is no
-/// listing on a US exchange.
-pub const US_EXCHANGES: [&str; 3] = ["NASDAQ", "NYSE", "CBOE"];
 
 /// SEC's fair-access policy asks for a User-Agent that names the caller with a
 /// contact address; `BAGHOLDER_SEC_UA` sets your own.
@@ -81,31 +80,29 @@ fn get_json(url: &str) -> Fetched<Value> {
     serde_json::from_str(&resp.text()).map_err(|e| SourceError::Unavailable(format!("EDGAR returned unreadable data: {}", e)))
 }
 
-/// {TICKER: (cik, title)} of every listing on a US exchange, from the SEC's list
-/// of tickers with their exchanges, the ticker as the SEC writes it.
-pub type Tickers = HashMap<String, (i64, String)>;
+/// {TICKER: [(cik, title)]} of every row of the SEC's list of tickers with their
+/// exchanges, the ticker as the SEC writes it: each filer the list names for it
+/// (one, where the list holds the ticker once).
+pub type Tickers = HashMap<String, Vec<(i64, String)>>;
 
-fn tickers() -> &'static Mutex<Option<Tickers>> {
-    static T: OnceLock<Mutex<Option<Tickers>>> = OnceLock::new();
+/// The list as last read, and when.
+fn tickers() -> &'static Mutex<Option<(std::time::Instant, std::sync::Arc<Tickers>)>> {
+    static T: OnceLock<Mutex<Option<(std::time::Instant, std::sync::Arc<Tickers>)>>> = OnceLock::new();
     T.get_or_init(|| Mutex::new(None))
 }
 
-/// The SEC's `{"fields": [...], "data": [[...], ...]}` list read: each row on a
-/// US exchange, by its ticker. A list whose fields are not the ones read is a
-/// reply that does not read, never an empty list.
+/// The SEC's `{"fields": [...], "data": [[...], ...]}` list read: every row, by its
+/// ticker, whatever exchange it names. A list whose fields are not the ones read
+/// is a reply that does not read, never an empty list.
 pub fn parse_tickers(data: &Value) -> Fetched<Tickers> {
     let shape = |why: &str| SourceError::Other(format!("the SEC's ticker list does not read: {why}"));
     let fields: Vec<&str> = data.get("fields").and_then(|f| f.as_array()).ok_or_else(|| shape("no fields"))?.iter().filter_map(|f| f.as_str()).collect();
     let at = |name: &str| fields.iter().position(|f| *f == name).ok_or_else(|| shape(&format!("no {name} field")));
-    let (cik, name, ticker, exchange) = (at("cik")?, at("name")?, at("ticker")?, at("exchange")?);
+    let (cik, name, ticker) = (at("cik")?, at("name")?, at("ticker")?);
     let rows = data.get("data").and_then(|d| d.as_array()).ok_or_else(|| shape("no data"))?;
     let mut out = Tickers::new();
     for row in rows {
         let cell = |i: usize| row.get(i).cloned().unwrap_or(Value::Null);
-        let ex = cell(exchange).as_str().unwrap_or("").to_uppercase();
-        if !US_EXCHANGES.contains(&ex.as_str()) {
-            continue;
-        }
         let t = cell(ticker).as_str().unwrap_or("").trim().to_uppercase();
         let c = match cell(cik) {
             Value::Number(n) => n.as_i64(),
@@ -113,25 +110,36 @@ pub fn parse_tickers(data: &Value) -> Fetched<Tickers> {
             _ => None,
         };
         let (Some(c), false) = (c, t.is_empty()) else { continue };
-        out.insert(t, (c, cell(name).as_str().unwrap_or("").to_string()));
+        let filers = out.entry(t).or_default();
+        if !filers.iter().any(|(k, _)| *k == c) {
+            filers.push((c, cell(name).as_str().unwrap_or("").to_string()));
+        }
     }
     Ok(out)
 }
 
-/// The SEC's ticker list, loaded once per process.
-pub fn ticker_map() -> Fetched<Tickers> {
-    let mut slot = tickers().lock().unwrap();
-    if let Some(t) = slot.as_ref() {
+/// The SEC's ticker list, read again once the copy kept is as old as a listing's
+/// filers stand (`disclosures::FILERS_RECHECK_HOURS`): the daily re-check reads
+/// today's list, never the one read at start. A read that fails is the failure.
+pub fn ticker_map() -> Fetched<std::sync::Arc<Tickers>> {
+    ticker_map_at(std::time::Instant::now(), || get_json(TICKERS_URL))
+}
+
+/// `ticker_map` at `now`, the list read by `read` where it is due.
+pub fn ticker_map_at(now: std::time::Instant, read: impl FnOnce() -> Fetched<Value>) -> Fetched<std::sync::Arc<Tickers>> {
+    let mut slot = tickers().lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0);
+    if let Some((_, t)) = slot.as_ref().filter(|(at, _)| now.saturating_duration_since(*at) < fresh) {
         return Ok(t.clone());
     }
-    let out = parse_tickers(&get_json(TICKERS_URL)?)?;
-    *slot = Some(out.clone());
+    let out = std::sync::Arc::new(parse_tickers(&read()?)?);
+    *slot = Some((now, out.clone()));
     Ok(out)
 }
 
 /// Prime the ticker map, as the tests stand in for SEC's published list.
 pub fn set_ticker_map(t: Tickers) {
-    *tickers().lock().unwrap() = Some(t);
+    *tickers().lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), std::sync::Arc::new(t)));
 }
 
 /// A listing's symbol as the SEC writes it: a class with a dash (`BRK-B`).
@@ -139,13 +147,19 @@ pub fn sec_ticker(listing: &bagholder_core::ListingKey) -> String {
     listing.symbol().replace('.', "-")
 }
 
-/// A US listing's filer: its CIK and the SEC's name for it, from the SEC's list;
-/// none for a listing the list does not name, and for a listing on another market.
-pub fn filer_of(listing: &bagholder_core::ListingKey) -> Fetched<Option<(i64, String)>> {
-    if !listing.us() {
-        return Ok(None);
+/// A US listing's filer, on an exchange or over the counter: its CIK and the SEC's
+/// name for it, from the SEC's list; why none, for a ticker the list names no
+/// filer for or more than one, and for a listing on another market.
+pub fn filer_of(listing: &bagholder_core::ListingKey) -> Fetched<Result<(i64, String), String>> {
+    if !(listing.us() || listing.otc()) {
+        return Ok(Err(format!("{} reaches the SEC only through the TSX's interlisted list.", listing.named())));
     }
-    Ok(ticker_map()?.get(&sec_ticker(listing)).cloned())
+    let t = sec_ticker(listing);
+    Ok(match ticker_map()?.get(&t).map(Vec::as_slice) {
+        Some([one]) => Ok(one.clone()),
+        Some([_, _, ..]) => Err(format!("The SEC's list names more than one filer for {t}.")),
+        _ => Err(format!("The SEC's list names no filer for {t}.")),
+    })
 }
 
 const TITLES: [(&str, &str); 20] = [

@@ -124,27 +124,21 @@ pub struct Search {
 /// `GET /api/symbols/search`: the exchanges' own directories -- a match
 /// carries only what its source gave (`kind` and `rank` from the built-in
 /// instrument list, neither from Nasdaq or TSX's own search).
+/// `unread` says each directory that did not answer, so a search that found
+/// nothing reads as "not listed" only where every one did.
 #[derive(Clone, Debug, Serialize, TS)]
-#[serde(untagged)]
-pub enum SymbolSearchAnswer {
-    Ok {
-        #[ts(type = "true")]
-        ok: bool,
-        matches: Vec<bagholder_model::wire::SymbolMatch>,
-    },
-    Err {
-        #[ts(type = "false")]
-        ok: bool,
-        error: String,
-        matches: Vec<bagholder_model::wire::SymbolMatch>,
-    },
+pub struct SymbolSearchAnswer {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub matches: Vec<bagholder_model::wire::SymbolMatch>,
+    pub unread: Vec<String>,
 }
 
 async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
     let app = state.app.clone();
-    answer(move || match bagholder_market::search::symbol_search(&s.q) {
-        Ok(matches) => SymbolSearchAnswer::Ok { ok: true, matches: not_held(&app, matches) },
-        Err(error) => SymbolSearchAnswer::Err { ok: false, error, matches: vec![] },
+    answer(move || {
+        let found = bagholder_market::search::symbol_search(&s.q);
+        SymbolSearchAnswer { ok: true, matches: not_held(&app, found.rows), unread: found.unread }
     })
     .await
 }
@@ -208,14 +202,14 @@ pub struct ResolvedListing {
 /// shows two or more as rows; nothing here reduces them to one.
 #[derive(Clone, Debug, Serialize, TS)]
 pub enum ResolveAnswer {
-    /// The listings found; where the directories could not be asked, the book's own
-    /// alone, with why the rest could not be read (`unread`, empty when they all answered).
+    /// The listings found, and a sentence for each directory that did not answer
+    /// (`unread`, empty when every one did): one listing is the only one only then.
     #[serde(untagged)]
     Ok {
         #[ts(type = "true")]
         ok: bool,
         listings: Vec<ResolvedListing>,
-        unread: String,
+        unread: Vec<String>,
     },
     /// A request that names no symbol.
     #[serde(untagged)]
@@ -247,10 +241,8 @@ async fn listings(State(state): State<AppState>, Params(r): Params<Resolve>) -> 
             return ResolveAnswer::Err { ok: false, error: "symbol required".into() };
         }
         let held = held_listings(&app).unwrap_or_default();
-        match bagholder_market::search::symbol_search(&r.symbol) {
-            Ok(found) => ResolveAnswer::Ok { ok: true, listings: resolve(held, found, &r.symbol), unread: String::new() },
-            Err(unread) => ResolveAnswer::Ok { ok: true, listings: resolve(held, vec![], &r.symbol), unread },
-        }
+        let found = bagholder_market::search::symbol_search(&r.symbol);
+        ResolveAnswer::Ok { ok: true, listings: resolve(held, found.rows, &r.symbol), unread: found.unread }
     })
     .await
 }

@@ -121,7 +121,14 @@ pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Keyed) -> rusqlite:
     Ok(cands)
 }
 
-fn remember_winner(conn: &rusqlite::Connection, rec: &Keyed, source: &str, key: &str) -> rusqlite::Result<()> {
+/// The source and form that last answered for a listing's bars, where one has.
+pub fn bars_winner(conn: &rusqlite::Connection, rec: &Keyed) -> rusqlite::Result<Option<(String, String)>> {
+    let v = bagholder_store::tables::get_meta(conn, &bars_meta_key(rec), "")?;
+    Ok(v.split_once('|').map(|(s, k)| (s.to_string(), k.to_string())))
+}
+
+/// Remember the source and form that answered for a listing's bars, asked first next time.
+pub fn remember_winner(conn: &rusqlite::Connection, rec: &Keyed, source: &str, key: &str) -> rusqlite::Result<()> {
     bagholder_store::tables::set_meta(conn, &bars_meta_key(rec), &format!("{}|{}", source, key))
 }
 

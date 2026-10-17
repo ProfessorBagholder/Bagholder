@@ -312,7 +312,7 @@ export async function saveTrade(): Promise<void> {
     // a contract is written by its terms, which name no exchange; a share is its listing
     const listed = isContract(symbol) ? null : f.listings.find((l) => l.listing === f.listing)
     if (!isContract(symbol) && !listed) {
-      f.error = f.listings.length ? 'Choose the exchange it trades on.' : f.listingsError || 'No listing of ' + symbol + ' is found on an exchange.'
+      f.error = f.listings.length ? CHOOSE_EXCHANGE : f.listingsError || 'No listing of ' + symbol + ' is found on an exchange.'
       return
     }
     body = { entry: 'trade', account: f.account, instrument: null, symbol, exchange: listed?.exchange ?? '', currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
@@ -520,13 +520,25 @@ export async function exportCsv(): Promise<void> {
 /** A symbol written as a contract's terms (`LUNR 15JAN27 12.00 CALL`): its words after a space. */
 export const isContract = (symbol: string): boolean => /\s/.test(symbol.trim())
 
+/** What Add trade asks while its listing is not chosen. */
+export const CHOOSE_EXCHANGE = 'Choose the exchange it trades on.'
+
+/** The Add trade form's listing chosen: its prompt to choose one has been answered. */
+export function tradeListingChosen(): void {
+  const f = ui.tradeForm
+  if (f.listing && f.error === CHOOSE_EXCHANGE) f.error = ''
+}
+
 /**
  * Resolve what the Add trade form's symbol is: every listing of it, each with its
- * venue. One is taken; two or more wait for the person's choice.
+ * venue. One is taken where every directory answered; two or more, or one beside
+ * a directory that did not answer, wait for the person's choice.
  */
 export async function resolveTradeSymbol(symbol: string): Promise<void> {
   const f = ui.tradeForm
   const sym = symbol.trim().toUpperCase()
+  // a symbol typed again asks again: the prompt about the last one no longer stands
+  if (f.error === CHOOSE_EXCHANGE) f.error = ''
   if (!sym || isContract(sym)) {
     f.listings = []
     f.listing = ''
@@ -540,6 +552,6 @@ export async function resolveTradeSymbol(symbol: string): Promise<void> {
   const listings: ResolvedListing[] = r.ok ? r.listings : []
   f.listingsOf = sym
   f.listings = listings
-  f.listingsError = r.ok ? r.unread : r.error
-  if (!listings.some((l) => l.listing === f.listing)) f.listing = listings.length === 1 ? listings[0].listing : ''
+  f.listingsError = r.ok ? r.unread.join(' ') : r.error
+  if (!listings.some((l) => l.listing === f.listing)) f.listing = listings.length === 1 && !f.listingsError ? listings[0].listing : ''
 }
