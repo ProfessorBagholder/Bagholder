@@ -721,9 +721,11 @@ test.describe('Disclosures', () => {
     await expect(rows).toHaveCount(2)
     await expect(rows.first()).toContainText('f2'.replace('f2', 'A filing about f2')) // newest first
     await page.context().route('https://filer.example/*', (route) => route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' }))
+    // the arrow shows on its row's hover, as a person reaches it
+    await rows.first().hover()
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
-      rows.first().locator('.dc-open').click({ force: true }),
+      rows.first().locator('.dc-open').click(),
     ])
     await popup.waitForLoadState()
     expect(popup.url()).toBe('https://filer.example/f2')
@@ -749,14 +751,23 @@ test.describe('Disclosures', () => {
     }
     await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(aapl.id), () => {}, { [docKey]: payload })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
-    const [popup] = await Promise.all([page.waitForEvent('popup'), card.locator('.dc-row').first().locator('.dc-open').click({ force: true })])
-    await popup.waitForLoadState()
-    const url = new URL(popup.url())
+    // the address the page opens, as it asks the browser for the tab
+    await page.evaluate(() => {
+      const w = window as unknown as { opened: string[]; open: (u: string) => null }
+      w.opened = []
+      w.open = (u: string) => (w.opened.push(u), null)
+    })
+    const row = card.locator('.dc-row', { hasText: 'A filed document' })
+    // the arrow shows on its row's hover, as a person reaches it
+    await row.hover()
+    await row.locator('.dc-open').click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { opened: string[] }).opened)).toHaveLength(1)
+    const url = new URL(await page.evaluate(() => (window as unknown as { opened: string[] }).opened[0]), page.url())
     expect(url.pathname).toBe('/api/filings/doc')
     expect(Object.fromEntries(url.searchParams)).toEqual({ source: 'SEDAR+', id: 'sedar:zq9' })
-    // the server answers the tab with a page of its own, never raw JSON
-    expect(await popup.evaluate(() => document.contentType)).toBe('text/html')
-    await popup.close()
+    // the server answers a tab asking for that address with a page of its own, never raw JSON
+    const answered = await request.get(url.pathname + url.search, { headers: { Accept: 'text/html' } })
+    expect(answered.headers()['content-type']).toContain('text/html')
   })
 
   test('a listing with no regulatory filer reads "No regulatory filer for this listing."', async ({ page, request }) => {
