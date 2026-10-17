@@ -25,6 +25,8 @@ fn book() -> (tempfile::TempDir, Book) {
 
 fn request(id: &str, bracket: Option<(&str, OrderRole)>) -> OrderRequest {
     OrderRequest {
+        venue_mic: None,
+        venue_name: None,
         id: id.into(),
         broker: "wealthsimple".into(),
         broker_account: "acct-1".into(),
@@ -137,7 +139,7 @@ fn an_event_the_book_cannot_read_is_an_error_never_skipped() {
 }
 
 fn place() -> BracketPlace {
-    BracketPlace { id: "bracket-1".into(), broker: "wealthsimple".into(), broker_account: "acct-1".into(), broker_security: "sec-1".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() }
+    BracketPlace { venue_mic: None, venue_name: None, id: "bracket-1".into(), broker: "wealthsimple".into(), broker_account: "acct-1".into(), broker_security: "sec-1".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() }
 }
 
 fn every_bracket_event() -> Vec<BracketEvent> {

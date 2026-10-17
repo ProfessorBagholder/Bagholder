@@ -1037,6 +1037,8 @@ mod tests {
             f.state_zone("America/Toronto", now).unwrap();
             let book = f.book().unwrap();
             let order = bagholder_book::orders::OrderRequest {
+                venue_mic: None,
+                venue_name: None,
                 id: "order-race".into(),
                 broker: "wealthsimple".into(),
                 broker_account: "acct-race".into(),

@@ -1266,7 +1266,7 @@ fn an_order_a_stopped_run_left_sending_is_read_back_and_wealthsimple_decides_it(
     set_session(&w.app, Some(ident()));
     feed_gql(&w.app, Arc::default(), Arc::default());
     // written, and the app stopped before any answer: a bracket waits on one of them
-    let place = bagholder_book::orders::BracketPlace { id: "b-held".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: bagholder_core::Currency::parse("USD").unwrap() };
+    let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "b-held".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: bagholder_core::Currency::parse("USD").unwrap() };
     w.book.write_bracket(&place, &bagholder_core::bracket::BracketEvent::Created { quantity: d("10"), stop: World::stop("95"), target: None }, &Asker::Person, w.now).unwrap();
     let mut held = order("o-held", Some(("b-held", OrderRole::Entry)));
     held.request = json!({"externalId": "o-held"});

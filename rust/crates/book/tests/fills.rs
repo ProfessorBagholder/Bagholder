@@ -34,6 +34,8 @@ fn book() -> (tempfile::TempDir, Book) {
 
 fn order() -> OrderRequest {
     OrderRequest {
+        venue_mic: None,
+        venue_name: None,
         id: "order-1".into(),
         broker: "wealthsimple".into(),
         broker_account: "acct-1".into(),

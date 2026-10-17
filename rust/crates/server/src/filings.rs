@@ -83,25 +83,59 @@ pub fn own_regulator(key: &ListingKey) -> Option<Regulator> {
     }
 }
 
+/// A read that failed is asked again after one sweep, then twice as long after
+/// each failure in a row after it, as every source is (`market::grown_rest`, the
+/// app's one backoff); never on every pass.
+pub const FAILED_READ_REST: Duration = Duration::from_secs(FILINGS_SWEEP_EVERY_SEC);
+
+/// Whether a failed read is still within its rest.
+fn resting(f: Option<&sf::ReadFailure>) -> bool {
+    f.is_some_and(|f| age_hours(&f.failed_at).is_some_and(|h| h * 3600.0 < bagholder_sources::market::grown_rest(FAILED_READ_REST, f.failures).as_secs_f64()))
+}
+
+/// A read of `subject` from `source` that failed, kept so it rests; an offline
+/// refusal is no read, and is not kept.
+fn failed_read(c: &Connection, subject: &str, source: &str, why: &str) -> Result<Option<sf::ReadFailure>, String> {
+    if bagholder_net::client::is_offline_refusal(why) {
+        return Ok(None);
+    }
+    sf::read_failed(c, subject, source, why, &now_iso()).map(Some).map_err(|e| e.to_string())
+}
+
 /// The TSX's interlisted list, read again when the copy kept is a day old; a read
-/// that fails keeps the last list and is said in the header until one goes through.
+/// that fails keeps the last list, rests (`FAILED_READ_REST`), and is said in the
+/// header until one goes through.
 fn interlisted_current(app: &Arc<App>, c: &Connection, regulators: &dyn disclosures::Regulators) -> Result<(), String> {
     let read = sf::interlisted_read_at(c).map_err(|e| e.to_string())?;
     if age_hours(&read).is_some_and(|h| h < bagholder_market::interlisted::READ_EVERY_HOURS) {
         return Ok(());
     }
+    let failure = sf::read_failure(c, INTERLISTED, INTERLISTED_SOURCE).map_err(|e| e.to_string())?;
+    if resting(failure.as_ref()) {
+        // said until a read goes through, after a restart too
+        if let Some(f) = failure.filter(|f| f.failures >= bagholder_sources::health::SAID_AFTER) {
+            crate::feeds::feed_down(app, INTERLISTED, f.why);
+        }
+        return Ok(());
+    }
     match regulators.interlisted() {
         Ok((as_of, rows)) => {
             sf::replace_interlisted(c, &rows, &as_of, &now_iso()).map_err(|e| e.to_string())?;
+            sf::read_answered(c, INTERLISTED, INTERLISTED_SOURCE).map_err(|e| e.to_string())?;
             crate::feeds::feed_answered(app, INTERLISTED);
         }
-        Err(e) => feed_failed(app, INTERLISTED, format!("The TSX's list of interlisted companies could not be read: {e}")),
+        Err(e) => {
+            let why = format!("The TSX's list of interlisted companies could not be read: {e}");
+            failed_read(c, INTERLISTED, INTERLISTED_SOURCE, &why)?;
+            feed_failed(app, INTERLISTED, why);
+        }
     }
     Ok(())
 }
 
-/// The header's name for the interlisted list's failure.
+/// The header's name for the interlisted list's failure, and the list's source.
 const INTERLISTED: &str = "interlisted";
+const INTERLISTED_SOURCE: &str = "tsx";
 
 /// A listing's own filer settled again where it is a day old: the one its own
 /// regulator lists it under, or why none settles.
@@ -111,13 +145,23 @@ fn settle_own(c: &Connection, key: &ListingKey, regulators: &dyn disclosures::Re
     if age_hours(&checked).is_some_and(|h| h < FILERS_RECHECK_HOURS) {
         return Ok(());
     }
+    // a regulator that could not be asked rests before it is asked again, its failure said meanwhile
+    let subject = key.to_string();
+    if let Some(f) = sf::read_failure(c, &subject, source.as_str()).map_err(|e| e.to_string())?.filter(|f| resting(Some(f))) {
+        return Err(f.why);
+    }
     let Some((_, found)) = regulators.filer(key, &today()) else { return Ok(()) };
     let now = now_iso();
     // a regulator that could not be asked leaves what was settled before standing
     let found = match found {
         Ok(found) => found,
-        Err(e) => return Err(format!("{} could not be asked who files {}: {e}", source.as_str(), key.named())),
+        Err(e) => {
+            let why = format!("{} could not be asked who files {}: {e}", source.as_str(), key.named());
+            failed_read(c, &subject, source.as_str(), &why)?;
+            return Err(why);
+        }
     };
+    sf::read_answered(c, &subject, source.as_str()).map_err(|e| e.to_string())?;
     let by = if source == Regulator::Sec { sf::SettledBy::SecTicker } else { sf::SettledBy::SedarName };
     match found {
         Ok(id) => sf::settle_listing_filers(c, key, source, Ok(&[(id, by)]), &now),
@@ -126,21 +170,30 @@ fn settle_own(c: &Connection, key: &ListingKey, regulators: &dyn disclosures::Re
     .map_err(|e| e.to_string())
 }
 
+/// The regulator of the other country, whose filer a listing's comes through the
+/// interlisted list: none for a listing no regulator follows.
+fn other_regulator(key: &ListingKey) -> Option<Regulator> {
+    match own_regulator(key)? {
+        Regulator::Sec => Some(Regulator::Sedar),
+        Regulator::Sedar => Some(Regulator::Sec),
+    }
+}
+
 /// The filers a listing's filings come from: its own regulator's, and where the
 /// TSX's interlisted list pairs it with a listing in the other country, that
 /// listing's own regulator's. Each settled again where it is a day old; a
-/// regulator that cannot be asked leaves what was settled before.
+/// regulator that cannot be asked leaves what was settled before. The other
+/// country's filer is what the list pairs it with at each settle, or none.
 pub fn settled_filers(app: &Arc<App>, c: &Connection, key: &ListingKey, regulators: &dyn disclosures::Regulators) -> Result<Vec<sf::Filer>, String> {
     let mut failed: Vec<String> = Vec::new();
     if let Err(e) = settle_own(c, key, regulators) {
         failed.push(e);
     }
     interlisted_current(app, c, regulators)?;
-    if let Some(partner) = sf::interlisted_partner(c, key).map_err(|e| e.to_string())? {
-        if let Err(e) = settle_own(c, &partner, regulators) {
-            failed.push(e);
-        }
-        if let Some(source) = own_regulator(&partner) {
+    let partner = sf::interlisted_partner(c, key).map_err(|e| e.to_string())?.filter(|p| own_regulator(p).is_some() && own_regulator(p) == other_regulator(key));
+    match (partner, other_regulator(key)) {
+        (Some(partner), Some(source)) => {
+            let partner_failed = settle_own(c, &partner, regulators).err();
             // the partner's own filer is this listing's under the partner's regulator
             let theirs: Vec<(String, sf::SettledBy)> = sf::listing_filers(c, &partner)
                 .map_err(|e| e.to_string())?
@@ -149,15 +202,19 @@ pub fn settled_filers(app: &Arc<App>, c: &Connection, key: &ListingKey, regulato
                 .map(|(f, _)| (f.id, sf::SettledBy::Interlisted))
                 .collect();
             let now = now_iso();
-            if theirs.is_empty() {
-                let why = sf::listing_filer_miss(c, &partner, source).map_err(|e| e.to_string())?.map(|(w, _)| w).unwrap_or_default();
-                if !why.is_empty() {
-                    sf::settle_listing_filers(c, key, source, Err(&why), &now).map_err(|e| e.to_string())?;
-                }
-            } else {
+            let why = sf::listing_filer_miss(c, &partner, source).map_err(|e| e.to_string())?.map(|(w, _)| w).unwrap_or_default();
+            if !theirs.is_empty() {
                 sf::settle_listing_filers(c, key, source, Ok(&theirs), &now).map_err(|e| e.to_string())?;
+            } else if !why.is_empty() {
+                sf::settle_listing_filers(c, key, source, Err(&why), &now).map_err(|e| e.to_string())?;
+            } else if partner_failed.is_none() {
+                sf::settle_listing_filers(c, key, source, Ok(&[]), &now).map_err(|e| e.to_string())?;
             }
+            failed.extend(partner_failed);
         }
+        // the list pairs it with none: no filer of the other country's is its
+        (None, Some(source)) => sf::settle_listing_filers(c, key, source, Ok(&[]), &now_iso()).map_err(|e| e.to_string())?,
+        (_, None) => {}
     }
     let filers: Vec<sf::Filer> = sf::listing_filers(c, key).map_err(|e| e.to_string())?.into_iter().map(|(f, _)| f).collect();
     if filers.is_empty() && !failed.is_empty() {
@@ -1688,11 +1745,15 @@ mod tests {
         documents: Vec<(sf::Filer, disclosures::Fetched<Vec<FiledDocument>>)>,
         pairs: Vec<(ListingKey, ListingKey)>,
         asked: Cell<usize>,
+        /// The interlisted list's reads, and whether it, or who files, cannot be reached.
+        lists_read: Cell<usize>,
+        list_down: bool,
+        filers_down: bool,
     }
 
     impl Regs {
         fn new() -> Regs {
-            Regs { filers: vec![], documents: vec![], pairs: vec![], asked: Cell::new(0) }
+            Regs { filers: vec![], documents: vec![], pairs: vec![], asked: Cell::new(0), lists_read: Cell::new(0), list_down: false, filers_down: false }
         }
     }
 
@@ -1700,6 +1761,9 @@ mod tests {
         fn filer(&self, listing: &ListingKey, _: &str) -> Option<(Regulator, disclosures::Fetched<Result<String, String>>)> {
             self.asked.set(self.asked.get() + 1);
             let source = own_regulator(listing)?;
+            if self.filers_down {
+                return Some((source, Err(disclosures::SourceError::Unavailable("SEDAR+ could not be reached".into()))));
+            }
             let found = self.filers.iter().find(|(k, _)| k == listing).map(|(_, f)| f.clone()).unwrap_or_else(|| Err(format!("no filer for {listing}")));
             Some((source, Ok(found)))
         }
@@ -1707,6 +1771,10 @@ mod tests {
             self.documents.iter().find(|(f, _)| f == filer).map(|(_, d)| d.clone()).unwrap_or(Ok(vec![]))
         }
         fn interlisted(&self) -> disclosures::Fetched<(String, Vec<sf::Interlisted>)> {
+            self.lists_read.set(self.lists_read.get() + 1);
+            if self.list_down {
+                return Err(disclosures::SourceError::Unavailable("the TSX could not be reached".into()));
+            }
             Ok(("2026-10-01".into(), self.pairs.iter().map(|(ca, us)| sf::Interlisted { listing: ca.clone(), us_listing: us.clone(), name: String::new() }).collect()))
         }
     }
@@ -1759,6 +1827,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The other country's filer is what the interlisted list pairs a listing with at
+    /// each settle: once the list stops pairing two listings, neither shows the
+    /// other's, and a company that lists under the ticker later is its own.
+    #[test]
+    fn a_pair_the_interlisted_list_drops_leaves_neither_listing_the_others_filer() {
+        let (_home, app) = built_app();
+        let c = store();
+        let (ca, us) = (on("X", "TSX"), on("X", "NYSE"));
+        let mut r = Regs::new();
+        r.filers = vec![(ca.clone(), Ok("000000001".into())), (us.clone(), Ok("1001".into()))];
+        r.documents = vec![
+            (filer("000000001", Regulator::Sedar), Ok(vec![item(Regulator::Sedar, 1, "000000001")])),
+            (filer("1001", Regulator::Sec), Ok(vec![item(Regulator::Sec, 2, "")])),
+            (filer("2002", Regulator::Sec), Ok(vec![item(Regulator::Sec, 3, "")])),
+        ];
+        r.pairs = vec![(ca.clone(), us.clone())];
+        for k in [&ca, &us] {
+            refresh_filings_in(&app, &c, k, &r).unwrap();
+        }
+        assert_eq!((shown(&c, &ca), shown(&c, &us)), (vec!["sec:2".to_string(), "sedar:1".into()], vec!["sec:2".to_string(), "sedar:1".into()]));
+        // a day on, the list no longer pairs them, and another company lists as X in the US
+        r.pairs = vec![];
+        r.filers = vec![(ca.clone(), Ok("000000001".into())), (us.clone(), Ok("2002".into()))];
+        let old = crate::app::stamp_of(now_unix() as i64 - 25 * 3600);
+        c.execute("UPDATE listing_filers SET checked_at = ?", [&old]).unwrap();
+        set_meta(&c, "interlisted:read_at", &old).unwrap();
+        for k in [&ca, &us] {
+            refresh_filings_in(&app, &c, k, &r).unwrap();
+        }
+        assert_eq!(shown(&c, &ca), ["sedar:1"], "the TSX listing shows its own filer's alone");
+        assert_eq!(shown(&c, &us), ["sec:3"], "the US listing shows the new company's alone");
+    }
+
+    /// A read that fails rests before it is asked again, on a rest that grows with
+    /// each failure in a row, and is said until a read goes through: the TSX's
+    /// interlisted list, and a regulator asked who files a listing never settled.
+    #[test]
+    fn a_failed_read_rests_and_is_said_until_one_goes_through() {
+        let (_home, app) = built_app();
+        let c = store();
+        let key = on("XYZ", "TSX");
+        let mut r = Regs::new();
+        r.list_down = true;
+        r.filers_down = true;
+        let age = |table: &str, column: &str, secs: u64| {
+            let then = crate::app::stamp_of(now_unix() as i64 - secs as i64 - 1);
+            c.execute(&format!("UPDATE {table} SET {column} = ?"), [&then]).unwrap();
+        };
+        let said = || crate::feeds::feed_failures(&app).iter().any(|f| f.contains("interlisted"));
+        for _ in 0..6 {
+            let _ = refresh_filings_in(&app, &c, &key, &r);
+        }
+        assert_eq!((r.lists_read.get(), r.asked.get()), (1, 1), "each failure asked once over six passes");
+        let out = v(filings_payload_in(&app, &c, &key, false, &|| refresh_filings_in(&app, &c, &key, &r)));
+        assert!(f(&out["sources"]["SEDAR+"], "error").contains("could not be asked"), "the failure said while it rests: {out}");
+        // past the first rest: asked again, and failing twice in a row, said in the header
+        age("read_failures", "failed_at", FAILED_READ_REST.as_secs());
+        let _ = refresh_filings_in(&app, &c, &key, &r);
+        assert_eq!((r.lists_read.get(), r.asked.get()), (2, 2));
+        assert!(said(), "{:?}", crate::feeds::feed_failures(&app));
+        // the rest grows: past the first rest again, still resting
+        age("read_failures", "failed_at", FAILED_READ_REST.as_secs());
+        let _ = refresh_filings_in(&app, &c, &key, &r);
+        assert_eq!((r.lists_read.get(), r.asked.get()), (2, 2), "twice the rest after a second failure");
+        assert!(said(), "still said while it rests");
+        // past the grown rest, the sources answer: nothing stands, nothing said
+        age("read_failures", "failed_at", bagholder_sources::market::grown_rest(FAILED_READ_REST, 2).as_secs());
+        r.list_down = false;
+        r.filers_down = false;
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert_eq!((r.lists_read.get(), r.asked.get()), (3, 3));
+        assert!(!said());
+        let left: i64 = c.query_row("SELECT COUNT(*) FROM read_failures", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
     }
 
     /// A filer that could not be settled is said, and nothing is guessed in its place.

@@ -3,7 +3,11 @@
 //!
 //! A name is each unbroken run of live records' sightings under one symbol and
 //! venue, in the order of (day, symbol, sighting), across every instrument read
-//! as one with it: the fold `Book::names` was. The book keeps the runs in
+//! as one with it: the fold `Book::names` was. A sighting that states no venue
+//! (a record that names the instrument by its reference: a hand entry, a fill,
+//! a row imported with no exchange) says nothing about the venue: it reads as on
+//! the venue the last sighting stating one named, so no record erases a venue
+//! (brief 43). The book keeps the runs in
 //! `instrument_names`; triggers leave a row in `names_due` for every sighting a
 //! write changed, and `settle_names`, run before the outermost commit, re-forms
 //! only the runs around those sightings, by index reads at their ends. A read
@@ -55,7 +59,8 @@ impl Run {
 enum Piece {
     /// Part of a kept run with a live sighting left in it: its label, and its bounds.
     Kept { symbol: String, venue_mic: Option<String>, from: Bound<Key>, to: Bound<Key> },
-    /// A changed sighting, live now, with its own label.
+    /// A changed sighting, live now, with its own label (one that states no venue
+    /// folds the group whole, `reform`).
     Seen { symbol: String, venue_mic: Option<String>, at: Key },
 }
 
@@ -78,6 +83,19 @@ fn bound_sql(b: &Bound<Key>, lower: bool, n: usize) -> String {
     };
     format!("(s.day, s.symbol, s.rowid) {op} (?{}, ?{}, ?{})", n, n + 1, n + 2)
 }
+
+/// Whether a sighting states a venue, by code or in words.
+fn states_venue(mic: &Option<String>, words: &Option<String>) -> bool {
+    mic.is_some() || words.is_some()
+}
+
+/// The venue a sighting stating none reads as on: the run's before it.
+fn carried(before: Option<&Run>) -> (Option<String>, Option<String>) {
+    before.map(|r| (r.venue_mic.clone(), r.venue_name.clone())).unwrap_or_default()
+}
+
+/// The SQL a live sighting that states no venue is filtered by.
+const STATES_NO_VENUE: &str = "(s.venue_mic IS NULL AND s.venue_name IS NULL)";
 
 fn bound_key(b: &Bound<Key>) -> Option<&Key> {
     match b {
@@ -115,6 +133,8 @@ impl Book {
         for row in rows {
             let (symbol, venue_mic, venue_name, name, day, rowid, source) = row?;
             let key = (day, symbol.clone(), rowid);
+            // one stating no venue reads as on the run before it, code and words
+            let (venue_mic, venue_name) = if states_venue(&venue_mic, &venue_name) { (venue_mic, venue_name) } else { carried(out.last()) };
             match out.last_mut() {
                 Some(last) if last.symbol == symbol && last.venue_mic == venue_mic => {
                     // the latest sighting's words stand for the run
@@ -222,25 +242,6 @@ impl Book {
             }
         }
         Ok(self.names(id)?.pop().map(|n| n.symbol))
-    }
-
-    /// The venue the instrument is listed on now, as a market identifier code: the
-    /// newest live sighting of its group that names a venue, read through the
-    /// sightings' index (the work of one lookup, however deep its history).
-    pub fn current_venue(&self, id: InstrumentId) -> Result<Option<String>> {
-        let head = self.canonical(id)?;
-        let mut st = self.conn().prepare_cached(
-            "SELECT s.day, s.venue_mic, s.venue_name FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
-             WHERE s.instrument_id = ?1 AND (s.venue_mic IS NOT NULL OR s.venue_name IS NOT NULL) ORDER BY s.day DESC, s.rowid DESC LIMIT 1",
-        )?;
-        let mut newest: Option<(String, Option<String>, Option<String>)> = None;
-        for m in self.group_of(head)? {
-            let row: Option<(String, Option<String>, Option<String>)> = st.query_row([m], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
-            if row.as_ref().map(|r| &r.0) > newest.as_ref().map(|r| &r.0) {
-                newest = row;
-            }
-        }
-        Ok(newest.and_then(|(_, mic, words)| mic.as_deref().and_then(bagholder_core::listing::mic_of).or_else(|| words.as_deref().and_then(bagholder_core::listing::mic_of)).map(str::to_string)))
     }
 
     /// Every due row settled: the runs around each changed sighting re-formed,
@@ -396,6 +397,43 @@ impl Book {
         Ok(best)
     }
 
+    /// The first (or last) live sighting of the group between two bounds that
+    /// `filter` keeps: its place, its code and its words.
+    fn seek(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, filter: &str) -> Result<Option<(Key, Option<String>, Option<String>)>> {
+        let order = if last { "DESC" } else { "ASC" };
+        let sql = format!(
+            "SELECT s.day, s.symbol, s.rowid, s.venue_mic, s.venue_name FROM instrument_sightings s
+             JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+             WHERE s.instrument_id = ?1 AND {} AND {} AND {filter}
+             ORDER BY s.day {order}, s.symbol {order}, s.rowid {order} LIMIT 1",
+            bound_sql(from, true, 2),
+            bound_sql(to, false, 5),
+        );
+        let mut st = self.conn().prepare_cached(&sql)?;
+        let mut best: Option<(Key, Option<String>, Option<String>)> = None;
+        for m in members {
+            let mut values: Vec<rusqlite::types::Value> = vec![m.clone().into()];
+            for b in [from, to] {
+                if let Some(k) = bound_key(b) {
+                    values.extend([k.0.clone().into(), k.1.clone().into(), k.2.into()]);
+                } else {
+                    values.extend([rusqlite::types::Value::Null, rusqlite::types::Value::Null, rusqlite::types::Value::Null]);
+                }
+            }
+            // as many values as the statement numbers: an open upper end numbers none past the lower's
+            if matches!(to, Bound::Unbounded) {
+                values.truncate(if matches!(from, Bound::Unbounded) { 1 } else { 4 });
+            }
+            let row = st.query_row(rusqlite::params_from_iter(values), |r| Ok(((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?), r.get(3)?, r.get(4)?))).optional()?;
+            if let Some(row) = row {
+                if best.as_ref().is_none_or(|b| (row.0 > b.0) == last) {
+                    best = Some(row);
+                }
+            }
+        }
+        Ok(best)
+    }
+
     /// The runs around each of `keys` re-formed: the kept runs that hold or
     /// border one, cut at each into pieces (each kept where a live sighting is
     /// left in it), the changed sightings that are live now put between them,
@@ -413,6 +451,14 @@ impl Book {
         if runs.last().is_none_or(|r| keys.iter().next().is_some_and(|k| *k > r.last)) {
             return self.append_runs(head, &members, runs.last().cloned(), keys);
         }
+        // a sighting stating no venue reads as on the run before it, so a change at
+        // or before one may change runs beyond those around it: the group is folded whole
+        let from_first = keys.iter().next().map(|k| Bound::Included(k.clone())).unwrap_or(Bound::Unbounded);
+        if self.seek(&members, &from_first, &Bound::Unbounded, false, STATES_NO_VENUE)?.is_some() {
+            let folded = self.names_folded(head)?;
+            self.conn().prepare_cached("DELETE FROM instrument_names WHERE instrument_id = ?1")?.execute([head.to_string()])?;
+            return self.keep_runs(head, &folded);
+        }
         // the runs each key reaches: the one holding it, and one either side
         let mut reached: Vec<(usize, usize)> = Vec::new();
         for k in keys {
@@ -422,7 +468,7 @@ impl Book {
         }
         if runs.is_empty() {
             let pieces = self.pieces(&members, &[], keys)?;
-            return self.replace_runs(head, &members, &[], pieces);
+            return self.replace_runs(head, &members, None, &[], pieces);
         }
         reached.sort();
         let mut spans: Vec<(usize, usize)> = Vec::new();
@@ -442,8 +488,9 @@ impl Book {
                 continue;
             }
             let kept = &runs[*a..=*b];
+            let before = a.checked_sub(1).map(|i| &runs[i]);
             let pieces = self.pieces(&members, kept, &span_keys)?;
-            self.replace_runs(head, &members, kept, pieces)?;
+            self.replace_runs(head, &members, before, kept, pieces)?;
         }
         Ok(())
     }
@@ -464,6 +511,7 @@ impl Book {
             if !members.contains(&inst) || day != k.0 || symbol != k.1 {
                 continue;
             }
+            let (venue_mic, venue_name) = if states_venue(&venue_mic, &venue_name) { (venue_mic, venue_name) } else { carried(runs.last()) };
             match runs.last_mut() {
                 Some(r) if r.symbol == symbol && r.venue_mic == venue_mic => {
                     r.last = k.clone();
@@ -531,7 +579,7 @@ impl Book {
     }
 
     /// `kept` replaced by the runs `pieces` make.
-    fn replace_runs(&self, head: InstrumentId, members: &[String], kept: &[Run], pieces: Vec<Piece>) -> Result<()> {
+    fn replace_runs(&self, head: InstrumentId, members: &[String], before: Option<&Run>, kept: &[Run], pieces: Vec<Piece>) -> Result<()> {
         let mut groups: Vec<Vec<Piece>> = Vec::new();
         for p in pieces {
             match groups.last_mut() {
@@ -539,7 +587,7 @@ impl Book {
                 _ => groups.push(vec![p]),
             }
         }
-        let mut runs = Vec::new();
+        let mut runs: Vec<Run> = Vec::new();
         for g in groups {
             let end = |p: &Piece, last: bool| -> Result<Key> {
                 match p {
@@ -551,9 +599,16 @@ impl Book {
             let last = end(&g[g.len() - 1], true)?;
             let (from, to) = (Bound::Included(first.clone()), Bound::Included(last.clone()));
             let source = self.live_end(members, &from, &to, true, None)?.map(|x| x.1).unwrap_or_default();
-            let venue_name = self.live_end(members, &from, &to, true, Some("venue_name"))?.and_then(|x| x.2);
-            let name = self.live_end(members, &from, &to, true, Some("name"))?.and_then(|x| x.3);
             let (symbol, venue_mic) = g[0].label();
+            // a run whose sightings state no words and whose first states no venue reads
+            // as on the run before it, in its words too
+            let prior = runs.last().or(before);
+            let venue_name = match self.live_end(members, &from, &to, true, Some("venue_name"))?.and_then(|x| x.2) {
+                Some(w) => Some(w),
+                None if self.seek(members, &from, &Bound::Included(first.clone()), false, STATES_NO_VENUE)?.is_some() => prior.and_then(|r| r.venue_name.clone()),
+                None => None,
+            };
+            let name = self.live_end(members, &from, &to, true, Some("name"))?.and_then(|x| x.3);
             runs.push(Run { first, last, symbol: symbol.to_string(), venue_mic: venue_mic.map(str::to_string), venue_name, name, source });
         }
         let mut del = self.conn().prepare_cached("DELETE FROM instrument_names WHERE instrument_id = ?1 AND first_day = ?2 AND first_symbol = ?3 AND first_sighting = ?4")?;

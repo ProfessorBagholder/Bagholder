@@ -291,10 +291,9 @@ impl Book {
                     // one a connection names by its symbol: the same reference again
                     self.instrument_refs(*i)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {i} has no reference")))
                 })?;
-                // the record names the instrument on the venue it is listed on now: a
-                // name with no venue would leave it no listing and no market data
-                let venue = self.current_venue(*i)?;
-                (vec![strong], held.kind, held.currency, symbol, None, venue)
+                // named by its reference: the record states no venue, and the fold keeps
+                // the one its records last stated (`names`)
+                (vec![strong], held.kind, held.currency, symbol, None, None)
             }
             Traded::Named { symbol, currency, contract, venue } => {
                 let symbol = symbol.trim().to_uppercase();

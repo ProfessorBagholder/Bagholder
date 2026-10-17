@@ -340,9 +340,11 @@ mod tests {
             .unwrap();
         // an order and a bracket with their logs
         use bagholder_core::order::{Asker, OrderKind, OrderRole, Side, TimeInForce};
-        let place = bagholder_book::orders::BracketPlace { id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
         book.write_bracket(&place, &bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(px_of("3")) }, &Asker::Person, t).unwrap();
         let order = bagholder_book::orders::OrderRequest {
+            venue_mic: None,
+            venue_name: None,
             id: "order-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd,
             side: Side::Buy, kind: OrderKind::Market, quantity: bagholder_core::Dec::ONE, limit_price: None, stop_price: None, time_in_force: TimeInForce::Day,
             bracket: Some(("bracket-x".into(), OrderRole::Entry)), request: serde_json::json!({}),
@@ -587,7 +589,7 @@ mod tests {
         let (_h, app) = app();
         let f = app.figures.get().unwrap();
         let usd = bagholder_core::Currency::parse("USD").unwrap();
-        let place = bagholder_book::orders::BracketPlace { id: "b1".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "b1".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
         let created = bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(bagholder_core::Dec::ONE) };
         f.book().unwrap().write_bracket(&place, &created, &bagholder_core::order::Asker::Person, now()).unwrap();
         for kinds in [vec![Kind::Orders], vec![Kind::Login], ALL.to_vec()] {

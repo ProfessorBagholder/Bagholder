@@ -205,6 +205,8 @@ pub fn fresh() -> (tempfile::TempDir, Arc<App>, Arc<FakeBroker>) {
 
 pub fn order(id: &str, bracket: Option<(&str, OrderRole)>) -> OrderRequest {
     OrderRequest {
+        venue_mic: None,
+        venue_name: None,
         id: id.into(),
         broker: "wealthsimple".into(),
         broker_account: "acct".into(),
@@ -282,7 +284,7 @@ fn with_orders_off_nothing_reaches_the_broker_and_the_order_is_written_dry() {
 
 fn bracket(book: &bagholder_book::Book, id: &str) {
     use bagholder_core::bracket::BracketEvent;
-    let place = bagholder_book::orders::BracketPlace { id: id.into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
+    let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: id.into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
     book.write_bracket(&place, &BracketEvent::Created { quantity: d("10"), stop: None, target: Some(d("110")) }, &Asker::Person, t0()).unwrap();
 }
 
@@ -407,7 +409,7 @@ impl World {
 
     /// A bracket as `bracket`, in the broker's account `account`.
     pub fn bracket_in(&mut self, account: &str, id: &str, qty: &str, stop: Option<StopLeg>, target: Option<&str>) -> String {
-        let place = bagholder_book::orders::BracketPlace { id: id.into(), broker: "wealthsimple".into(), broker_account: account.into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
+        let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: id.into(), broker: "wealthsimple".into(), broker_account: account.into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
         self.book.write_bracket(&place, &BracketEvent::Created { quantity: d(qty), stop, target: target.map(d) }, &Asker::Person, self.now).unwrap();
         let entry = format!("{id}-entry");
         let mut o = order(&entry, Some((id, OrderRole::Entry)));
@@ -915,7 +917,7 @@ fn an_exit_resting_with_no_live_bracket_holding_it_is_cancelled() {
 fn a_bracket_carried_over_from_the_earlier_app_has_its_card() {
     let _g = crate::tests_common::guard();
     let w = World::new();
-    let place = bagholder_book::orders::BracketPlace { id: "b-old".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
+    let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "b-old".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
     let first = BracketEvent::Imported { phase: Phase::Ended, quantity: d("10"), stop: World::stop("95"), target: Some(d("110")), exit: None, attempts: 0, why: None, outcome: Some("target".into()), seen_held: true, row: "{}".into() };
     let entry = bagholder_core::order::OrderEvent::Imported { state: OrderState::Filled, broker_id: Some("ws-1".into()), filled: d("10"), average: Some(d("100")), why: None, row: "{}".into() };
     w.book.import_orders(&[(place, first, t0(), t0() + SignedDuration::from_hours(1))], &[(order("e-old", Some(("b-old", OrderRole::Entry))), entry, t0(), t0())]).unwrap();

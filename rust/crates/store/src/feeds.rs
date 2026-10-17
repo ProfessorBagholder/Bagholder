@@ -895,6 +895,40 @@ pub fn listing_filers_checked_at(conn: &Connection, listing: &ListingKey, source
     Ok(found.into_iter().chain(missed).max().unwrap_or_default())
 }
 
+/// A read of `subject` from `source` that failed: when it last did, how many times
+/// in a row, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadFailure {
+    pub failed_at: String,
+    pub failures: u32,
+    pub why: String,
+}
+
+/// A read of `subject` from `source` failed at `now`: one more failure in a row.
+pub fn read_failed(conn: &Connection, subject: &str, source: &str, why: &str, now: &str) -> Result<ReadFailure> {
+    conn.execute(
+        "INSERT INTO read_failures (subject, source, failed_at, failures, why) VALUES (?1, ?2, ?3, 1, ?4)
+         ON CONFLICT (subject, source) DO UPDATE SET failed_at = ?3, failures = failures + 1, why = ?4",
+        rusqlite::params![subject, source, now, why],
+    )?;
+    Ok(read_failure(conn, subject, source)?.expect("the failure just written"))
+}
+
+/// A read of `subject` from `source` went through: no failure stands.
+pub fn read_answered(conn: &Connection, subject: &str, source: &str) -> Result<()> {
+    conn.execute("DELETE FROM read_failures WHERE subject = ? AND source = ?", rusqlite::params![subject, source])?;
+    Ok(())
+}
+
+/// The failure standing for a read of `subject` from `source`, if its last read failed.
+pub fn read_failure(conn: &Connection, subject: &str, source: &str) -> Result<Option<ReadFailure>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT failed_at, failures, why FROM read_failures WHERE subject = ? AND source = ?", rusqlite::params![subject, source], |r| {
+        Ok(ReadFailure { failed_at: r.get(0)?, failures: r.get(1)?, why: r.get(2)? })
+    })
+    .optional()
+}
+
 /// One row of the TSX's interlisted list: a Canadian listing and the US listing
 /// it is paired with.
 #[derive(Clone, Debug, PartialEq, Eq)]

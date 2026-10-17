@@ -561,6 +561,8 @@ mod tests {
         let events = [OrderEvent::Written { dry: false }, OrderEvent::Accepted { broker_id: "ws-1".into() }];
         StoredOrder {
             request: OrderRequest {
+                venue_mic: None,
+                venue_name: None,
                 id: id.into(),
                 broker: "wealthsimple".into(),
                 broker_account: "acct-1".into(),

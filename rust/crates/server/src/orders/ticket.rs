@@ -903,7 +903,12 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
     }
     let currency = Currency::parse(&sec.currency.trim().to_uppercase()).map_err(|_| format!("The currency of {} is not known.", sec.symbol))?;
     let id = order_id(&t.id)?;
+    // the venue of the listing traded, by the one venue rule: its fill states it
+    let venue_mic = bagholder_core::listing::venue_of(Some(&sec.primary_mic), Some(&sec.primary_exchange)).map(str::to_string);
+    let venue_name = Some(sec.primary_exchange.trim().to_string()).filter(|w| !w.is_empty());
     let mut order = OrderRequest {
+        venue_mic,
+        venue_name,
         id,
         broker: "wealthsimple".into(),
         broker_account: acct.id,
@@ -1043,7 +1048,7 @@ pub(crate) fn entry(app: &Arc<App>, book: &Book, asked: TicketOrder) -> Result<P
     let wants_bracket = (asked.stop.is_some() || asked.target.is_some()) && orders_live(app) && ticket_session(app).is_ok();
     let bracket = if wants_bracket {
         let id = format!("bracket-{}", uuid4());
-        let place = BracketPlace { id: id.clone(), broker: o.broker.clone(), broker_account: o.broker_account.clone(), broker_security: o.broker_security.clone(), symbol: o.symbol.clone(), currency: o.currency };
+        let place = BracketPlace { venue_mic: o.venue_mic.clone(), venue_name: o.venue_name.clone(), id: id.clone(), broker: o.broker.clone(), broker_account: o.broker_account.clone(), broker_security: o.broker_security.clone(), symbol: o.symbol.clone(), currency: o.currency };
         book.write_bracket(&place, &BracketEvent::Created { quantity: o.quantity, stop: asked.stop, target: asked.target }, &Asker::Person, now).map_err(|e| e.to_string())?;
         o.bracket = Some((id.clone(), OrderRole::Entry));
         Some(id)

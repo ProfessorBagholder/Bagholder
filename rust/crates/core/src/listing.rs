@@ -104,6 +104,14 @@ pub mod meta {
     pub const ALL: [&str; 5] = [BARS_SOURCE, BARS_MISS, NEWS_FETCHED, NEWS_SOURCE_FETCHED, FILINGS_SOURCES];
 }
 
+/// The venue a record names, as a code: its code where the table knows it, else
+/// its words (`OTCM` with `NYSE` is `XNYS`); none where neither is known. The one
+/// rule every reader of a record's venue goes by (`ListingKey::of`, the sources'
+/// `venue::known_mic`).
+pub fn venue_of(mic: Option<&str>, words: Option<&str>) -> Option<&'static str> {
+    mic.and_then(mic_of).or_else(|| words.and_then(mic_of))
+}
+
 /// The venue a share or fund on the venue `venue` names is keyed under: the code
 /// in Canada, `US` in the US, from words, a code or the key's own `US`; none for
 /// a venue no share is keyed by.
@@ -212,7 +220,7 @@ impl ListingKey {
             K::Crypto => ListingKey::coin(&name.symbol),
             K::Index | K::Future | K::Rate | K::CurrencyPair => ListingKey::index(&name.symbol),
             K::Security => {
-                let venue = name.venue_mic.as_deref().or(name.venue_name.as_deref()).ok_or_else(|| NotAListing(format!("{} names no venue", name.symbol)))?;
+                let venue = venue_of(name.venue_mic.as_deref(), name.venue_name.as_deref()).ok_or_else(|| NotAListing(format!("{} names no venue a listing is keyed by", name.symbol)))?;
                 ListingKey::on(&name.symbol, venue)
             }
             K::OptionContract | K::EventContract => Err(NotAListing(format!("{} is not a listing market data is kept for", name.symbol))),

@@ -35,7 +35,7 @@ pub fn market_of(mic: Option<&str>) -> Option<Market> {
 /// The venue a record names, as a code this module knows: its code, else its
 /// words (`TSX Venture Exchange`, `CBOE`); none where neither is known.
 pub fn known_mic(mic: Option<&str>, words: Option<&str>) -> Option<&'static str> {
-    mic.and_then(mic_of).or_else(|| words.and_then(mic_of))
+    bagholder_core::listing::venue_of(mic, words)
 }
 
 /// The market identifier code of a venue as a broker, a directory or a person
