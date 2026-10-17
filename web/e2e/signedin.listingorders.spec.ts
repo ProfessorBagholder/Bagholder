@@ -95,7 +95,7 @@ test("a directory row and its page open on the listing Wealthsimple's search fin
   const enb = await holdings(request, 'ENB')
   const margin = ((await figures(request)).accounts as { brokerAccount: string; margin: boolean; tradable: boolean; status: string }[]).find((a) => a.margin && a.tradable && a.status !== 'closed')!.brokerAccount
   // the exchanges' directories are out of reach offline: their row is stood in
-  await page.route('**/api/symbols/search?*', (route) => route.fulfill({ json: { ok: true, matches: [{ symbol: 'ENB', name: 'Enbridge Inc.', exchange: 'NYSE', currency: 'USD' }] } }))
+  await page.route('**/api/symbols/search?*', (route) => route.fulfill({ json: { ok: true, unread: [], matches: [{ symbol: 'ENB', name: 'Enbridge Inc.', exchange: 'NYSE', currency: 'USD' }] } }))
   const asked: unknown[] = []
   page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/order/listing') asked.push(r.postDataJSON()) })
   await page.goto('/')
@@ -116,6 +116,9 @@ test("a directory row and its page open on the listing Wealthsimple's search fin
 test('a listing page whose address names no venue is resolved: one listing opens, two are offered, and nothing is ordered by the ticker', async ({ page }) => {
   const asked: string[] = []
   page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/order/listing') asked.push(r.url()) })
+  // the server is offline, so its directories go unread and no single listing would be
+  // taken alone: they are stood in as answering, with nothing beyond the book's own
+  await page.route('**/api/listings?*', async (route) => route.fulfill({ json: { ...(await (await route.fetch()).json()), unread: [] } }))
   await page.goto('/')
   await ready(page)
   // UBER, the book traded and closed on one venue: its one listing's page

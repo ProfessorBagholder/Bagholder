@@ -239,7 +239,7 @@ test('filters do not survive a reload', async ({ page }) => {
 })
 
 test('typing lists the book\'s own symbols first, then matches on other fields, then listings found outside the book', async ({ page, request }) => {
-  await page.route('**/api/symbols/search*', (route) => route.fulfill({ json: { ok: true, matches: [{ symbol: 'ZZZQF', name: 'Zzz Quantum Fund', exchange: 'OTC' }] } }))
+  await page.route('**/api/symbols/search*', (route) => route.fulfill({ json: { ok: true, unread: [], matches: [{ symbol: 'ZZZQF', name: 'Zzz Quantum Fund', exchange: 'OTC' }] } }))
 
   await openWithStatus(page, request, {}, '', (model) => {
     model.options.instruments.push({ id: 'i-zzzq', symbol: 'ZZZQ', name: 'Zzz Quantum Corp', exchange: 'NASDAQ', kind: 'Shares', currency: 'USD' })

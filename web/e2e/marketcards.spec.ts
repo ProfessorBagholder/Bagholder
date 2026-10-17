@@ -366,7 +366,7 @@ test.describe('Watchlist', () => {
   test("a match's quote has a minute's memory: asked again when wanted after the minute, not before", async ({ page }) => {
     await page.clock.install()
     await page.route('**/api/symbols/search?*', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] }) }),
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] }) }),
     )
     let asked = 0
     await page.route('**/api/symbols/quote?*', (route) => {
@@ -399,7 +399,7 @@ test.describe('Watchlist', () => {
     await page.route('**/api/symbols/search*', (route) => {
       const url = new URL(route.request().url())
       expect(url.searchParams.get('q')).toBe('SHOP.TO')
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches: [{ symbol: 'SHOP', exchange: 'TSX', name: 'Shopify Inc.', currency: 'CAD' }] }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], matches: [{ symbol: 'SHOP', exchange: 'TSX', name: 'Shopify Inc.', currency: 'CAD' }] }) })
     })
     let addBody: unknown = null
     await page.route('**/api/watchlist/add', (route) => {
@@ -637,6 +637,7 @@ test.describe('News', () => {
       route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQNV@XTSE', symbol: 'ZQNV', name: 'Zqnv Corp', exchange: 'TSX', currency: 'CAD', held: false }] } }),
     )
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
     const looked = page.waitForRequest((r) => r.url().includes('/api/listings?') && new URL(r.url()).searchParams.get('symbol') === 'ZQNV')
     await card.locator('.nw-sym', { hasText: 'ZQNV' }).click()
     await looked

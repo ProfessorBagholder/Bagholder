@@ -11,7 +11,7 @@ test.describe('a change the server refuses', () => {
   test('a watchlist add refused is said in the header, and the row it showed goes', async ({ page, request }) => {
     const before = (await figures(request)).markets.watchlist as { symbol: string }[]
     await page.route('**/api/symbols/search*', (route) =>
-      route.fulfill({ json: { ok: true, matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] } }),
+      route.fulfill({ json: { ok: true, unread: [], matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] } }),
     )
     let asked = 0
     await page.route('**/api/watchlist/add', (route) => {

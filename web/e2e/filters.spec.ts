@@ -108,7 +108,7 @@ test('a listing found outside the book carries the three icons in their places, 
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, matches: [
+      body: JSON.stringify({ ok: true, unread: [], matches: [
         { symbol: 'ZQVX', exchange: 'CBOE', name: 'Zqv Volatility Index', currency: 'USD', kind: 'Indices', rank: 0 },
         { symbol: 'ZQVS', exchange: 'NYSE', name: 'Zqv Shares Inc', currency: 'USD' },
       ] }),

@@ -79,7 +79,7 @@ test('an address naming only a symbol opens its one listing only where every dir
   // a directory unread: the one found is offered beside the failure, and not opened
   await expect(page.locator('#page .lc-row')).toHaveCount(1)
   await expect(page.locator('#page .status-err')).toHaveText("Nasdaq's directory could not be read: refused")
-  await expect(page).toHaveURL(/listing:ZQOA$/)
+  await expect(page).toHaveURL(/listing(:|%3A)ZQOA$/)
   // nothing found and a directory unread: the failure, never that no exchange lists it
   await page.unroute('**/api/listings?*')
   await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread, listings: [] } }))
@@ -91,5 +91,5 @@ test('an address naming only a symbol opens its one listing only where every dir
   await page.unroute('**/api/listings?*')
   await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread, listings: one } }))
   await page.goto('/#markets/' + encodeURIComponent('listing:ZQOA'))
-  await expect(page).toHaveURL(/#markets\/listing:ZQOA@XTSE$/)
+  await expect(page).toHaveURL(/#markets\/listing(:|%3A)ZQOA@XTSE$/)
 })
