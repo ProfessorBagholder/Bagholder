@@ -38,6 +38,12 @@ struct Payload {
     kind: String,
     currency: String,
     symbol: String,
+    /// The venue of the order's listing, as the broker states it (fills booked before
+    /// it state none, and read as on the venue last stated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    venue_mic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    venue_name: Option<String>,
     at: String,
     day: String,
     side: String,
@@ -84,7 +90,7 @@ impl Mapping for FillMapping {
                     refs: vec![Reference::new(RefScheme::BrokerSecurity(broker), p.security.clone())],
                     kind: InstrumentKind::parse(&p.kind).map_err(|e| e.to_string())?,
                     currency,
-                    name: Some(NameDraft { symbol: p.symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
+                    name: Some(NameDraft { symbol: p.symbol.clone(), venue_mic: p.venue_mic.clone(), venue_name: p.venue_name.clone(), name: None, seen: day }),
                     option: None,
                     standing: None,
                 }),
@@ -175,6 +181,8 @@ impl Book {
             kind: kind.as_str().to_string(),
             currency: o.currency.as_str().to_string(),
             symbol: o.symbol.clone(),
+            venue_mic: o.venue_mic.clone(),
+            venue_name: o.venue_name.clone(),
             at: crate::text::at(at),
             day: day.to_string(),
             side: o.side.as_str().to_string(),

@@ -1420,7 +1420,7 @@ mod tests {
             book.instruments().unwrap().into_iter().find(|i| book.names(i.id).unwrap().last().is_some_and(|n| n.symbol == symbol)).map(|i| i.id)
         };
         if find().is_none() {
-            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: symbol.into(), currency: "CAD".into(), day: "2026-01-05".into(), side: "buy".into(), quantity: "10".into(), price: "5".into(), fee: String::new() };
+            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: symbol.into(), exchange: "TSX".into(), currency: "CAD".into(), day: "2026-01-05".into(), side: "buy".into(), quantity: "10".into(), price: "5".into(), fee: String::new() };
             crate::entries::enter(f, &req, now).unwrap();
         }
         let id = find().unwrap();
@@ -1482,11 +1482,11 @@ mod tests {
         let (_g, app, _c) = setup();
         declared_in_book(&app, "QNC", &[("2026-08-31", "2026-09-04", "0.15")], None);
         assert_eq!(
-            crate::feeds::release_notice(&app, "QNC", &[news_item("tmx:1", "Quantum eMotion Wins Certification", "", "", "2026-09-15T13:00:00Z")]),
+            crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[news_item("tmx:1", "Quantum eMotion Wins Certification", "", "", "2026-09-15T13:00:00Z")]),
             ("Press release · QNC".to_string(), "Quantum eMotion Wins Certification".to_string())
         );
         assert_eq!(
-            crate::feeds::release_notice(&app, "NOSUCH", &[news_item("tmx:2", "Announces Monthly Distribution", "", "", "2026-09-15T13:00:00Z")]).1,
+            crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("NOSUCH", "TSX").unwrap(), &[news_item("tmx:2", "Announces Monthly Distribution", "", "", "2026-09-15T13:00:00Z")]).1,
             "Announces Monthly Distribution",
             "no record for the listing: the headline stands alone"
         );
@@ -1495,7 +1495,7 @@ mod tests {
     #[test]
     fn test_a_release_with_no_figures_carries_what_the_source_said() {
         let (_g, app, _c) = setup();
-        let notice = crate::feeds::release_notice(&app, "QNC", &[news_item("tmx:1", "Quantum eMotion Wins Certification",
+        let notice = crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[news_item("tmx:1", "Quantum eMotion Wins Certification",
             "The certification covers its entropy module, which NIST listed this week.", "", "2026-09-15T13:00:00Z")]);
         assert_eq!(notice.1, "Quantum eMotion Wins Certification\nThe certification covers its entropy module, which NIST listed this week.");
     }
@@ -1559,11 +1559,11 @@ mod tests {
     fn test_a_document_a_regulator_refuses_is_a_page_not_a_json_error() {
         // The document route opens in a tab of its own: a refusal has to read as words.
         let (_g, app, _c) = setup();
-        let page = crate::feeds::document_error_page(&app, "QNC", "sedar:drm:x", "could not open the profile's documents to download from");
+        let page = crate::feeds::document_error_page(&app, bagholder_store::feeds::Regulator::Sedar, "sedar:drm:x", "could not open the profile's documents to download from");
         assert!(page.contains("<!doctype html>"));
         assert!(page.contains("would not serve this document just now"));
         assert!(page.contains("could not open the profile&#x27;s documents to download from"));
-        assert!(page.contains("/api/filings/doc?symbol=QNC&amp;id=sedar%3Adrm%3Ax"), "the retry goes back through the app");
+        assert!(page.contains("/api/filings/doc?source=SEDAR%2B&amp;id=sedar%3Adrm%3Ax"), "the retry goes back through the app");
     }
 
     // ---------------------------------------------------------------------------

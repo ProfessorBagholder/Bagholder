@@ -13,6 +13,7 @@ import type { ImportReport as ImportedFileReport, WatchStatus } from './generate
 import type { Imported } from './generated/status'
 import type { LoginInput } from './generated/session'
 import type { EntryRequest, Kind as DataKind } from './generated/model_api'
+import type { ResolvedListing } from './generated/markets'
 
 export interface TradeForm {
   /** A trade, or an opening balance: what units that arrived without a cost cost. */
@@ -20,6 +21,16 @@ export interface TradeForm {
   date: string
   account: string
   symbol: string
+  /**
+   * The listing a share typed in is (`SYMBOL@VENUE`), chosen from the listings the
+   * symbol resolves to: one is taken, two or more wait for the choice, and a ticker
+   * alone is never sent (plan `market-data-keyed-by-listing`, Approach, 5).
+   */
+  listing: string
+  /** The listings `listingsOf` resolved to, and why none could be read. */
+  listings: ResolvedListing[]
+  listingsOf: string
+  listingsError: string
   side: 'BUY' | 'SELL'
   qty: string
   price: string
@@ -30,6 +41,8 @@ export interface TradeForm {
   cost: string
   acquired: string
   error: string
+  /** Why the symbol typed cannot be added as it stands; gone once the symbol changes. */
+  symbolError: string
 }
 /** One file's import: what it did, or why it was refused. */
 export type ImportFileReport = { file: string; report: ImportedFileReport } | { file: string; error: string }
@@ -41,7 +54,7 @@ function today(): string {
   return localDay()
 }
 function freshTradeForm(): TradeForm {
-  return { mode: 'trade', date: today(), account: '', symbol: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '' }
+  return { mode: 'trade', date: today(), account: '', symbol: '', listing: '', listings: [], listingsOf: '', listingsError: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '', symbolError: '' }
 }
 
 export const ui = $state<{
@@ -295,7 +308,18 @@ export async function saveTrade(): Promise<void> {
       f.error = 'Date, symbol, a quantity and a price are required.'
       return
     }
-    body = { entry: 'trade', account: f.account, instrument: null, symbol: f.symbol.trim().toUpperCase(), currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
+    const symbol = f.symbol.trim().toUpperCase()
+    // the symbol typed and saved at once (Enter in its box) is resolved first
+    if (f.listingsOf !== symbol) await resolveTradeSymbol(symbol)
+    // a contract is written by its terms, which name no exchange; a share is its listing
+    const listed = isContract(symbol) ? null : f.listings.find((l) => l.listing === f.listing)
+    if (!isContract(symbol) && !listed) {
+      // a directory that did not answer is said once, under the Exchange box, already
+      f.error = ''
+      f.symbolError = f.listings.length ? CHOOSE_EXCHANGE : f.listingsError ? '' : 'No listing of ' + symbol + ' is found on an exchange.'
+      return
+    }
+    body = { entry: 'trade', account: f.account, instrument: null, symbol, exchange: listed?.exchange ?? '', currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
   }
   ui.busy = 'trade'
   f.error = ''
@@ -495,4 +519,43 @@ export async function exportCsv(): Promise<void> {
   a.download = 'bagholder-trades.csv'
   a.click()
   URL.revokeObjectURL(a.href)
+}
+
+/** A symbol written as a contract's terms (`LUNR 15JAN27 12.00 CALL`): its words after a space. */
+export const isContract = (symbol: string): boolean => /\s/.test(symbol.trim())
+
+/** What Add trade asks while its listing is not chosen. */
+export const CHOOSE_EXCHANGE = 'Choose the exchange it trades on.'
+
+/** The Add trade form's listing chosen: its prompt to choose one has been answered. */
+export function tradeListingChosen(): void {
+  const f = ui.tradeForm
+  if (f.listing && f.symbolError === CHOOSE_EXCHANGE) f.symbolError = ''
+}
+
+/**
+ * Resolve what the Add trade form's symbol is: every listing of it, each with its
+ * venue. One is taken where every directory answered; two or more, or one beside
+ * a directory that did not answer, wait for the person's choice.
+ */
+export async function resolveTradeSymbol(symbol: string): Promise<void> {
+  const f = ui.tradeForm
+  const sym = symbol.trim().toUpperCase()
+  // a symbol typed again asks again: what was said of the last one no longer stands
+  f.symbolError = ''
+  if (!sym || isContract(sym)) {
+    f.listings = []
+    f.listing = ''
+    f.listingsOf = sym
+    f.listingsError = ''
+    return
+  }
+  const r = await read('GET /api/listings', { query: { symbol: sym } })
+  if (ui.tradeForm !== f || f.symbol.trim().toUpperCase() !== sym) return
+  // the book's own listings come back even when the directories could not be asked
+  const listings: ResolvedListing[] = r.ok ? r.listings : []
+  f.listingsOf = sym
+  f.listings = listings
+  f.listingsError = r.ok ? r.unread.join(' ') : r.error
+  if (!listings.some((l) => l.listing === f.listing)) f.listing = listings.length === 1 && !f.listingsError ? listings[0].listing : ''
 }

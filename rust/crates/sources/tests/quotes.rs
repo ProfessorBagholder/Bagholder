@@ -82,13 +82,12 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     // the spot price states no time: its reply's date less the origin's sixty seconds
     assert_eq!(q(4), ("coinbase".into(), Money::new(dec("118318.2"), Currency::CAD), t("2026-09-24T04:32:41Z"), 60));
     assert_eq!(q(5), ("coinbase-exchange".into(), Money::new(dec("83895.98"), Currency::USD), t("2026-09-24T04:33:45.647605322Z"), 0));
-    // ENB on the CSE: TMX named another venue for the CSE form, so the other
-    // Canadian forms are asked, and the bare form's answer on the TSX is kept and
-    // remembered, but not written to the book, whose venue it is not
-    assert_eq!(q(6).1, Money::new(dec("66.13"), Currency::CAD));
+    // ENB on the CSE: TMX named another venue for the CSE form, which is another
+    // listing; no other venue's form is asked for it, so it has no quote
+    assert!(!got.contains_key(&id(6)));
     let tmx_rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
     assert!(tmx_rows.iter().any(|o| o.instrument == Some(id(6)) && o.outcome == OutcomeKind::NotCarried && o.kind == DataKind::Quote && o.detail.starts_with("ENB:CNX")));
-    assert_eq!(cache.winner(id(6), DataKind::Quote).unwrap().map(|w| w.1), Some("ENB".to_string()));
+    assert_eq!(cache.winner(id(6), DataKind::Quote).unwrap(), None);
     assert!(!got.contains_key(&id(7)));
     let yahoo_rows = cache.outcomes(&bagholder_core::SourceName::named("yahoo")).unwrap();
     assert!(yahoo_rows.iter().any(|o| o.instrument == Some(id(7)) && o.outcome == OutcomeKind::Meaning && o.detail.contains("USD")));
@@ -215,13 +214,12 @@ fn tmx_world(at: &str) -> (tempfile::TempDir, Book, MarketCache) {
     (dir, book, cache)
 }
 
-/// A listing whose venue TMX's form does not carry is asked under the other
-/// Canadian forms in turn, each answer checked against the venue its form names;
-/// the form that answers is asked first from then on. A listing no form answers
-/// for is asked again under its first form only, until the next day. A listing
-/// whose record names no venue known here is quoted as its currency's market's.
+/// A listing is asked of TMX under its own venue's form alone: one TMX answers
+/// with another venue's listing has no quote, and is asked again under that form
+/// only, once a day; one whose record names no venue known here, or none, is asked
+/// under none, whatever its currency (plan `market-data-keyed-by-listing`).
 #[test]
-fn tmx_is_asked_the_other_canadian_forms_and_remembers_what_answered() {
+fn tmx_is_asked_the_listings_own_form_alone() {
     let at = "2026-09-24T04:40:00Z";
     let (_dir, book, cache) = tmx_world(at);
     let recorded = Arc::new(
@@ -234,7 +232,7 @@ fn tmx_is_asked_the_other_canadian_forms_and_remembers_what_answered() {
     let listings = [
         // the book says the CSE, where TMX knows no ENB
         listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XCNQ")),
-        // no venue known here: a CAD listing is Canadian, asked bare first
+        // no venue known here, and none at all: asked of no one
         listing(2, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSV-OTC")),
         listing(3, InstrumentKind::Security, Currency::CAD, "ZZZQX", None),
     ];
@@ -245,19 +243,11 @@ fn tmx_is_asked_the_other_canadian_forms_and_remembers_what_answered() {
         quotes::read_quotes(&ctx, &listings).unwrap();
         recorded.asked.lock().unwrap().len() - before
     };
-    // ENB: ENB:CNX, then ENB; the second: ENB; ZZZQX: its three forms
-    assert_eq!(run(at), 2 + 1 + 3);
-    let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
-    assert_eq!(got[&id(1)].price, Money::new(dec("66.13"), Currency::CAD));
-    assert_eq!(got[&id(2)].price, Money::new(dec("66.13"), Currency::CAD));
-    assert!(!got.contains_key(&id(3)));
-    assert_eq!(cache.winner(id(1), DataKind::Quote).unwrap().map(|w| w.1), Some("ENB".to_string()));
-    // not the book's venue's form: the book learns no route from it
+    assert_eq!(run(at), 1);
+    assert!(cache.quotes().unwrap().is_empty(), "no listing is quoted as another venue's");
     assert!(book.instrument_refs(id(1)).unwrap().iter().all(|r| r.scheme != RefScheme::TmxForm));
-    // later that day: the winners first, and ZZZQX under its first form alone
-    assert_eq!(run("2026-09-24T15:00:00Z"), 1 + 1 + 1);
-    // the next day ZZZQX's forms are all asked again
-    assert_eq!(run("2026-09-25T15:00:00Z"), 1 + 1 + 3);
+    assert_eq!(run("2026-09-24T15:00:00Z"), 1);
+    assert_eq!(run("2026-09-25T15:00:00Z"), 1);
 }
 
 /// A halted listing is answered with no price: the price read last stands, and

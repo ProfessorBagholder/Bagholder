@@ -26,6 +26,9 @@ pub struct OrderRequest {
     pub broker_account: String,
     pub broker_security: String,
     pub symbol: String,
+    /// The venue of the listing traded, as the broker states it: its code and words.
+    pub venue_mic: Option<String>,
+    pub venue_name: Option<String>,
     pub currency: Currency,
     pub side: Side,
     pub kind: OrderKind,
@@ -73,6 +76,9 @@ pub struct BracketPlace {
     pub broker_account: String,
     pub broker_security: String,
     pub symbol: String,
+    /// The venue of the listing traded, as the broker states it: its code and words.
+    pub venue_mic: Option<String>,
+    pub venue_name: Option<String>,
     pub currency: Currency,
 }
 
@@ -85,8 +91,8 @@ pub struct StoredBracket {
     pub updated_at: jiff::Timestamp,
 }
 
-const ORDER_COLUMNS: &str = "id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, limit_price, stop_price, time_in_force, bracket_id, role, request, created_at, stated_price, stated_quantity, expires_at, updated_at";
-const BRACKET_COLUMNS: &str = "id, broker, broker_account, broker_security, symbol, currency, created_at, updated_at";
+const ORDER_COLUMNS: &str = "id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, limit_price, stop_price, time_in_force, bracket_id, role, request, created_at, stated_price, stated_quantity, expires_at, updated_at, venue_mic, venue_name";
+const BRACKET_COLUMNS: &str = "id, broker, broker_account, broker_security, symbol, currency, created_at, updated_at, venue_mic, venue_name";
 
 impl Book {
     /// Write an order before anything is sent: `dry` when orders are off.
@@ -132,14 +138,14 @@ impl Book {
                 }
             }
             self.conn().execute(
-                "INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, limit_price, stop_price, time_in_force, bracket_id, role, request, created_at, state, filled, updated_at, broker_id, average, why)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                "INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, limit_price, stop_price, time_in_force, bracket_id, role, request, created_at, state, filled, updated_at, broker_id, average, why, venue_mic, venue_name)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
                 params![
                     o.id, o.broker, o.broker_account, o.broker_security, o.symbol, o.currency.as_str(), o.side.as_str(), o.kind.as_str(), o.quantity.to_text(),
                     o.limit_price.map(Dec::to_text), o.stop_price.map(Dec::to_text), o.time_in_force.as_str(),
                     o.bracket.as_ref().map(|(b, _)| b.clone()), o.bracket.as_ref().map(|(_, r)| r.as_str()),
                     o.request.to_string(), at_text(created_at), fold.state.as_str(), fold.filled.to_text(), at_text(at),
-                    fold.broker_id, fold.average.map(Dec::to_text), fold.why,
+                    fold.broker_id, fold.average.map(Dec::to_text), fold.why, o.venue_mic, o.venue_name,
                 ],
             )?;
             self.append("order_events", "order_id", &o.id, 0, at, asker, first.kind(), &order_body(first), None)?;
@@ -248,6 +254,8 @@ impl Book {
                 broker_account: r.broker_account,
                 broker_security: r.broker_security,
                 symbol: r.symbol,
+                venue_mic: r.venue_mic,
+                venue_name: r.venue_name,
                 currency: text::currency(T, "currency", &r.currency)?,
                 side: text::parsed(T, "side", &r.side, Side::parse)?,
                 kind: text::parsed(T, "order_type", &r.order_type, OrderKind::parse)?,
@@ -320,8 +328,8 @@ impl Book {
         let phase = Bracket::of(&[(at, created.clone())]).ok_or_else(|| BookError::Refused("a bracket starts by being created".into()))?.phase;
         self.atomically(|| {
             self.conn().execute(
-                "INSERT INTO brackets (id, broker, broker_account, broker_security, symbol, currency, created_at, phase, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![place.id, place.broker, place.broker_account, place.broker_security, place.symbol, place.currency.as_str(), at_text(created_at), phase.as_str(), at_text(at)],
+                "INSERT INTO brackets (id, broker, broker_account, broker_security, symbol, currency, created_at, phase, updated_at, venue_mic, venue_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![place.id, place.broker, place.broker_account, place.broker_security, place.symbol, place.currency.as_str(), at_text(created_at), phase.as_str(), at_text(at), place.venue_mic, place.venue_name],
             )?;
             self.append("bracket_events", "bracket_id", &place.id, 0, at, asker, created.kind(), &bracket_body(created), None)?;
             Ok(())
@@ -388,7 +396,7 @@ impl Book {
         let log = self.bracket_log(&r.id)?;
         let bracket = fold_bracket(&r.id, &log)?;
         Ok(StoredBracket {
-            place: BracketPlace { currency: text::currency(T, "currency", &r.currency)?, id: r.id, broker: r.broker, broker_account: r.broker_account, broker_security: r.broker_security, symbol: r.symbol },
+            place: BracketPlace { currency: text::currency(T, "currency", &r.currency)?, id: r.id, broker: r.broker, broker_account: r.broker_account, broker_security: r.broker_security, symbol: r.symbol, venue_mic: r.venue_mic, venue_name: r.venue_name },
             created_at: text::instant(T, "created_at", &r.created_at)?,
             bracket,
             updated_at: text::instant(T, "updated_at", &r.updated_at)?,
@@ -451,6 +459,8 @@ struct OrderColumns {
     stated_quantity: Option<String>,
     expires_at: Option<String>,
     updated_at: String,
+    venue_mic: Option<String>,
+    venue_name: Option<String>,
 }
 
 fn order_columns(r: &Row) -> rusqlite::Result<OrderColumns> {
@@ -475,6 +485,8 @@ fn order_columns(r: &Row) -> rusqlite::Result<OrderColumns> {
         stated_quantity: r.get(17)?,
         expires_at: r.get(18)?,
         updated_at: r.get(19)?,
+        venue_mic: r.get(20)?,
+        venue_name: r.get(21)?,
     })
 }
 
@@ -487,10 +499,12 @@ struct BracketColumns {
     currency: String,
     created_at: String,
     updated_at: String,
+    venue_mic: Option<String>,
+    venue_name: Option<String>,
 }
 
 fn bracket_columns(r: &Row) -> rusqlite::Result<BracketColumns> {
-    Ok(BracketColumns { id: r.get(0)?, broker: r.get(1)?, broker_account: r.get(2)?, broker_security: r.get(3)?, symbol: r.get(4)?, currency: r.get(5)?, created_at: r.get(6)?, updated_at: r.get(7)? })
+    Ok(BracketColumns { id: r.get(0)?, broker: r.get(1)?, broker_account: r.get(2)?, broker_security: r.get(3)?, symbol: r.get(4)?, currency: r.get(5)?, created_at: r.get(6)?, updated_at: r.get(7)?, venue_mic: r.get(8)?, venue_name: r.get(9)? })
 }
 
 // ---------------------------------------------------------------------------

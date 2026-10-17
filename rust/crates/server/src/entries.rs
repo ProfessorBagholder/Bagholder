@@ -22,8 +22,22 @@ use crate::figures::Figures;
 #[serde(tag = "entry", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum EntryRequest {
     /// Add trade. `account` empty is the Manual account; `instrument` names one the
-    /// book holds, else the book is asked for `symbol` in `currency`.
-    Trade { account: String, instrument: Option<String>, symbol: String, currency: String, day: String, side: String, quantity: String, price: String, fee: String },
+    /// book holds, else the listing is `symbol` on `exchange` in `currency` (a
+    /// contract is written by its terms, and names no exchange): a share is never
+    /// found by its ticker alone (plan `market-data-keyed-by-listing`, Approach, 5).
+    Trade {
+        account: String,
+        instrument: Option<String>,
+        symbol: String,
+        #[serde(default)]
+        exchange: String,
+        currency: String,
+        day: String,
+        side: String,
+        quantity: String,
+        price: String,
+        fee: String,
+    },
     /// An opening balance: what the units `arrival` brought in cost, in total.
     CostOfArrival { arrival: String, cost: String, acquired: String },
     /// Each new holding's share of the parent's cost, as the issuer published it:
@@ -110,6 +124,15 @@ pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency, of_ki
     found.next().is_none().then_some(first)
 }
 
+/// The share or fund the book holds on the listing `key` names, in `currency`, if
+/// exactly one: matched by what each instrument is called now and the venue its
+/// records name (the engine's index), never by the ticker alone.
+pub(crate) fn held_on_listing(e: &Engine, key: &bagholder_core::ListingKey, currency: Currency) -> Option<InstrumentId> {
+    let mut found = e.listed(key, currency);
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
 /// What a contract written by its terms (`contract_of`) names: the contract the
 /// book holds on that underlying with those terms, if exactly one, else a new
 /// one on the underlying the book holds by its symbol (or one named by it).
@@ -130,6 +153,7 @@ pub(crate) fn contract_by_terms(e: &Engine, symbol: &str, currency: Currency) ->
             symbol: symbol.to_string(),
             currency,
             contract: Some(Contract { underlying: held_under.map(Underlying::Held).unwrap_or(Underlying::Named(under)), expiry, strike, right }),
+            venue: None,
         },
     })
 }
@@ -168,17 +192,29 @@ pub fn enter(f: &Figures, req: &EntryRequest, now: bagholder_core::jiff::Timesta
             let waits = |id: &TransactionId, what: bagholder_engine::ledger::Wanted| e.figures().matched.waiting.get(id).is_some_and(|w| w.what == what);
             let currency_of = |id: InstrumentId| i.ledger.instruments.get(&id).map(|x| x.instrument.currency).ok_or_else(|| bad(format!("no instrument {id} in the book")));
             Ok(Prepared::Ready(match req {
-                EntryRequest::Trade { account, instrument, symbol, currency, day: d, side, quantity, price, fee } => {
+                EntryRequest::Trade { account, instrument, symbol, exchange, currency, day: d, side, quantity, price, fee } => {
                     let currency = Currency::parse(currency.trim()).map_err(|_| bad(format!("{currency:?} is not a currency")))?;
                     let symbol = symbol.trim().to_uppercase();
                     let traded = match instrument.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                         Some(id) => Traded::Held(instrument_id(id)?),
                         None if symbol.is_empty() => return Err(bad("a symbol is required")),
-                        // a contract is written by its terms (`contract_of`); any other symbol names no contract
-                        None => match held_by_symbol(e, &symbol, currency, |k| (k == InstrumentKind::OptionContract) == contract_of(&symbol).is_some()) {
+                        // a contract is written by its terms (`contract_of`), which name no exchange
+                        None if contract_of(&symbol).is_some() => match held_by_symbol(e, &symbol, currency, |k| k == InstrumentKind::OptionContract) {
                             Some(id) => Traded::Held(id),
-                            None => contract_by_terms(e, &symbol, currency).unwrap_or(Traded::Named { symbol: symbol.clone(), currency, contract: None }),
+                            None => contract_by_terms(e, &symbol, currency).expect("a contract's terms"),
                         },
+                        // a share is its listing: the symbol on the exchange named, never the ticker alone
+                        None => {
+                            if exchange.trim().is_empty() {
+                                return Err(bad(format!("{symbol} names no exchange: a ticker can be two companies on two exchanges")));
+                            }
+                            let mic = bagholder_core::listing::mic_of(exchange).ok_or_else(|| bad(format!("{:?} is not an exchange", exchange.trim())))?;
+                            let key = bagholder_core::ListingKey::on(&symbol, mic).map_err(|e| bad(e.to_string()))?;
+                            match held_on_listing(e, &key, currency) {
+                                Some(id) => Traded::Held(id),
+                                None => Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: Some(mic.to_string()) },
+                            }
+                        }
                     };
                     if let Traded::Held(id) = &traded {
                         let priced = currency_of(*id)?;
@@ -273,16 +309,19 @@ mod tests {
         "2025-11-19T21:30:00Z".parse().unwrap()
     }
 
-    fn trade(account: &str, symbol: &str, currency: &str, side: &str, quantity: &str, price: &str, fee: &str) -> EntryRequest {
-        EntryRequest::Trade { account: account.into(), instrument: None, symbol: symbol.into(), currency: currency.into(), day: "2025-11-19".into(), side: side.into(), quantity: quantity.into(), price: price.into(), fee: fee.into() }
+    fn trade(account: &str, symbol: &str, exchange: &str, currency: &str, side: &str, quantity: &str, price: &str, fee: &str) -> EntryRequest {
+        EntryRequest::Trade { account: account.into(), instrument: None, symbol: symbol.into(), exchange: exchange.into(), currency: currency.into(), day: "2025-11-19".into(), side: side.into(), quantity: quantity.into(), price: price.into(), fee: fee.into() }
     }
 
     /// A share the recorded month holds: its symbol, currency and account.
-    fn held(f: &Figures) -> (String, String, String, InstrumentId) {
+    /// A share the book holds: its symbol, currency, account, id and the venue its records name.
+    fn held(f: &Figures) -> (String, String, String, InstrumentId, String) {
         f.read(|e| {
             let p = e.figures().positions.iter().find(|p| p.kind == InstrumentKind::Security).unwrap();
             let info = &e.inputs().ledger.instruments[&p.instrument];
-            (info.current_name().unwrap().symbol.clone(), info.instrument.currency.as_str().to_string(), p.account.to_string(), p.instrument)
+            let name = info.current_name().unwrap();
+            let venue = name.venue_mic.clone().or(name.venue_name.clone()).expect("the fixture's share names its venue");
+            (name.symbol.clone(), info.instrument.currency.as_str().to_string(), p.account.to_string(), p.instrument, venue)
         })
         .unwrap()
     }
@@ -300,9 +339,9 @@ mod tests {
     #[test]
     fn a_trade_by_hand_is_of_the_instrument_the_book_holds_by_that_symbol_and_reaches_the_figures() {
         let (_h, f) = figures();
-        let (symbol, currency, account, instrument) = held(&f);
+        let (symbol, currency, account, instrument, venue) = held(&f);
         let before = f.version();
-        enter(&f, &trade(&account, &symbol.to_lowercase(), &currency, "sell", "1", "2.50", "0"), now()).unwrap();
+        enter(&f, &trade(&account, &symbol.to_lowercase(), &venue, &currency, "sell", "1", "2.50", "0"), now()).unwrap();
         assert!(f.version() > before, "the figures moved");
         let t = person_trades(&f);
         assert_eq!(t.len(), 1);
@@ -310,11 +349,86 @@ mod tests {
         assert_eq!(t[0].fee.map(|f| f.amount), Some(Dec::ZERO), "a fee of 0 as entered");
     }
 
+    /// A share typed in is its listing: the held one only on the venue it is held
+    /// on; on every other venue, the same ticker is another instrument; with none,
+    /// it is refused (plan `market-data-keyed-by-listing`, Approach, 5). Over every
+    /// share the book holds, each on every venue the table knows.
+    #[test]
+    fn a_trade_by_hand_on_another_venue_is_never_the_holding_of_that_ticker() {
+        use bagholder_core::listing::{listing_venue, CANADA_MICS, US_MICS};
+        let (_h, f) = figures();
+        let shares: Vec<(String, String, String, InstrumentId, String)> = f
+            .read(|e| {
+                e.figures()
+                    .positions
+                    .iter()
+                    .filter(|p| p.kind == InstrumentKind::Security)
+                    .filter_map(|p| {
+                        let info = &e.inputs().ledger.instruments[&p.instrument];
+                        let name = info.current_name()?;
+                        let venue = name.venue_mic.clone().or(name.venue_name.clone())?;
+                        Some((name.symbol.clone(), info.instrument.currency.as_str().to_string(), p.account.to_string(), p.instrument, venue))
+                    })
+                    .collect()
+            })
+            .unwrap();
+        assert!(shares.iter().any(|s| bagholder_core::ListingKey::on(&s.0, &s.4).unwrap().us()) && shares.iter().any(|s| bagholder_core::ListingKey::on(&s.0, &s.4).unwrap().canadian()), "the fixture holds a share in each market");
+        let mut units = 0u32;
+        for (symbol, currency, account, instrument, venue) in shares {
+            let held_key = bagholder_core::ListingKey::on(&symbol, &venue).unwrap();
+            match enter(&f, &trade(&account, &symbol, "", &currency, "buy", "1", "1", ""), now()) {
+                Err(Refused::Entry(why)) => assert!(why.contains("names no exchange"), "{why}"),
+                other => panic!("{other:?}"),
+            }
+            for mic in CANADA_MICS.iter().chain(US_MICS.iter()) {
+                // each entry its own quantity, so it is found whatever else the book renumbers
+                units += 1;
+                let q = units.to_string();
+                enter(&f, &trade(&account, &symbol, mic, &currency, "buy", &q, "1", ""), now()).unwrap();
+                let new = person_trades(&f).into_iter().find(|t| t.quantity == Some(Dec::parse(&q).unwrap())).expect("the trade entered");
+                let same = listing_venue(mic) == Some(held_key.venue());
+                if (new.instrument == Some(instrument)) != same {
+                    // what the engine and the book hold of the ticker, to say why
+                    let seen = f.read(|e| {
+                        let listed: Vec<_> = e.listed(&held_key, Currency::parse(&currency).unwrap()).collect();
+                        let all: Vec<String> = e.inputs().ledger.instruments.iter().filter(|(_, i)| i.current_name().is_some_and(|n| n.symbol == symbol)).map(|(id, i)| format!("{id} {:?} {:?}", i.instrument.currency, i.names)).collect();
+                        format!("listed {listed:?}; instruments {all:#?}")
+                    });
+                    panic!("{symbol} on {mic}, held on {venue} as {instrument}: booked on {:?}; {seen:?}", new.instrument);
+                }
+            }
+        }
+    }
+
+    /// A row or an entry that names no venue is matched to a holding by its symbol
+    /// only where the book holds exactly one of that symbol: of two listings of one
+    /// ticker, it is neither (an import's row, a contract's underlying).
+    #[test]
+    fn a_symbol_with_no_venue_is_neither_of_two_holdings_of_that_ticker() {
+        let (_h, f) = figures();
+        let account = f.read(|e| e.figures().positions[0].account.to_string()).unwrap();
+        for (i, venue) in ["TSX", "TSX-V"].iter().enumerate() {
+            enter(&f, &trade(&account, "ZQRA", venue, "CAD", "buy", &(i + 1).to_string(), "1", ""), now()).unwrap();
+        }
+        let held: Vec<InstrumentId> = person_trades(&f).iter().filter_map(|t| t.instrument).collect();
+        assert_eq!(held.len(), 2);
+        assert_ne!(held[0], held[1], "two listings, two instruments");
+        match crate::csv_import::traded(&f, "zqra", None, InstrumentKind::Security, Currency::CAD).unwrap() {
+            Some(Traded::Named { venue: None, .. }) => {}
+            other => panic!("a venue-less row was taken as {other:?}"),
+        }
+        let contract = f.read(|e| contract_by_terms(e, "ZQRA 15JAN27 12.00 CALL", Currency::CAD)).unwrap();
+        match contract {
+            Some(Traded::Named { contract: Some(c), .. }) => assert!(matches!(c.underlying, Underlying::Named(_)), "its underlying is neither holding: {:?}", c.underlying),
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn a_trade_without_an_account_goes_to_the_manual_account_and_a_new_symbol_to_a_new_instrument() {
         let (_h, f) = figures();
-        enter(&f, &trade("", "zzqq", "USD", "BUY", "10", "1.75", ""), now()).unwrap();
-        enter(&f, &trade("", "ZZQQ 15JAN27 12.00 CALL", "USD", "BUY", "2", "0.40", ""), now()).unwrap();
+        enter(&f, &trade("", "zzqq", "NASDAQ", "USD", "BUY", "10", "1.75", ""), now()).unwrap();
+        enter(&f, &trade("", "ZZQQ 15JAN27 12.00 CALL", "", "USD", "BUY", "2", "0.40", ""), now()).unwrap();
         let book = f.book().unwrap();
         let manual = book.account_by_ref(&AccountRef::new(Broker::named("manual"), "manual")).unwrap().expect("the Manual account");
         let t = person_trades(&f);
@@ -337,19 +451,19 @@ mod tests {
     #[test]
     fn an_entry_that_does_not_read_or_that_the_book_refuses_is_said() {
         let (_h, f) = figures();
-        let (symbol, currency, account, instrument) = held(&f);
+        let (symbol, currency, account, instrument, venue) = held(&f);
         let other = if currency == "CAD" { "USD" } else { "CAD" };
         let said = |r: &EntryRequest| match enter(&f, r, now()) {
             Err(Refused::Entry(why)) => why,
             other => panic!("{other:?}"),
         };
-        assert!(said(&trade(&account, &symbol, &currency, "buy", "ten", "1", "")).contains("\"ten\""));
+        assert!(said(&trade(&account, &symbol, &venue, &currency, "buy", "ten", "1", "")).contains("\"ten\""));
         // a holding named by its id, in another currency than it is priced in
-        let by_id = EntryRequest::Trade { account: account.clone(), instrument: Some(instrument.to_string()), symbol: symbol.clone(), currency: other.into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "1".into(), fee: "".into() };
+        let by_id = EntryRequest::Trade { account: account.clone(), instrument: Some(instrument.to_string()), symbol: symbol.clone(), exchange: String::new(), currency: other.into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "1".into(), fee: "".into() };
         assert!(said(&by_id).contains(&format!("priced in {currency}")));
-        assert!(said(&trade(&account, &symbol, &currency, "hold", "1", "1", "")).contains("HOLD"));
-        assert!(said(&trade(&account, "", &currency, "buy", "1", "1", "")).contains("symbol"));
-        assert!(said(&trade(&account, &symbol, &currency, "buy", "0", "1", "")).contains("quantity"), "the book's refusal, named");
+        assert!(said(&trade(&account, &symbol, &venue, &currency, "hold", "1", "1", "")).contains("HOLD"));
+        assert!(said(&trade(&account, "", &venue, &currency, "buy", "1", "1", "")).contains("symbol"));
+        assert!(said(&trade(&account, &symbol, &venue, &currency, "buy", "0", "1", "")).contains("quantity"), "the book's refusal, named");
         assert!(said(&EntryRequest::default()).contains("distribution"));
         assert!(person_trades(&f).is_empty(), "nothing kept");
     }

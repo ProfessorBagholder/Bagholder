@@ -2,6 +2,7 @@
 //! top-ups that keep the stored series current.
 
 pub mod http;
+pub mod interlisted;
 pub mod parse;
 pub mod refresh;
 pub mod search;

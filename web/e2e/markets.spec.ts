@@ -51,3 +51,23 @@ test('the news is asked for while the News card shows, and not by a page on anot
   await page.getByRole('button', { name: 'Trades' }).click()
   await expect.poll(() => shown().includes('news')).toBe(false)
 })
+
+// brief 42, 9: the watchlist is by listing: one ticker on two venues is two rows
+test('one ticker watched on two venues is two rows of the watchlist', async ({ page, request }) => {
+  const headers = { 'X-Bagholder': '1' }
+  const ids: string[] = []
+  for (const [exchange, currency] of [['TSX', 'CAD'], ['NYSE', 'USD']]) {
+    const added = await (await request.post('/api/watchlist/add', { headers, data: { symbol: 'ZQWV', exchange, name: 'Zqwv on ' + exchange, currency } })).json()
+    expect(added.ok, JSON.stringify(added)).toBe(true)
+    ids.push(added.id)
+  }
+  try {
+    await page.goto('/#markets')
+    const rows = page.locator('.wl-row.go', { hasText: 'ZQWV' })
+    await expect(rows).toHaveCount(2)
+    await expect(rows.filter({ hasText: 'TSX' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'NYSE' })).toHaveCount(1)
+  } finally {
+    for (const id of ids) await request.post('/api/watchlist/remove', { headers, data: { id } })
+  }
+})

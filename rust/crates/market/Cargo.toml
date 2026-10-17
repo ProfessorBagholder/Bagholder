@@ -27,6 +27,9 @@ pdf-extract = "0.12"
 # tests read the time zone rules built into jiff, never the machine's
 bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"
+# the SEC's recorded ticker list is kept gzipped (180 KB, not 520): already in the
+# workspace through bagholder-net
+flate2 = "1"
 
 [lints]
 workspace = true

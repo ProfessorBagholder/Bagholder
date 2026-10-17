@@ -64,7 +64,7 @@ fn a_chart_s_daily_read_the_store_refuses_is_said_in_the_header_until_one_goes_t
         // until a second read has run and failed (one in flight is not asked twice)
         until("the refused read said in the header", || {
             crate::feeds::history_payload(&app, &q);
-            error(&app).contains("daily bars of QMET could not be stored")
+            error(&app).contains("daily bars of QMET · TSX-V could not be stored")
         });
     }
     // the refused read left no miss behind, so the chart is due its read again
@@ -94,6 +94,8 @@ fn an_archive_pass_the_store_refuses_is_logged_and_never_said() {
 fn exposures_whose_store_cannot_be_read_are_said_in_the_header_until_a_pass_reads_it() {
     let _g = guard();
     let app = app();
+    // the book's listings read first, so what fails below is the exposures pass alone
+    crate::feeds::refresh_exposures(&app);
     {
         let _broken = Broken::new(&app, "ALTER TABLE exposures RENAME TO exposures_away;", "ALTER TABLE exposures_away RENAME TO exposures;");
         // said once the next pass fails too (`feeds::feed_failed`)
@@ -114,22 +116,22 @@ fn short_interest_that_could_not_be_read_is_said_in_the_header_until_the_listing
     let today = bagholder_market::clock_now().0;
     // the regulator's files as already read, so the read asks no one
     let mut position = HashMap::new();
-    position.insert("QNC".to_string(), CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
+    position.insert("QNC@XTSX".to_string(), CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
     shorts::clear_files();
     shorts::ca_position_with("QNC", "TSX-V", &today, || Ok(Some(("2026-09-15".to_string(), position)))).unwrap();
     let mut volume = HashMap::new();
-    volume.insert("QNC".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1_000_000.0, volume_pct: Some(20.0), total_volume: Some(5_000_000.0) });
+    volume.insert("QNC@XTSX".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1_000_000.0, volume_pct: Some(20.0), total_volume: Some(5_000_000.0) });
     shorts::warm_ca_volume("ca_volume", "2026-09-01/2026-09-15", volume);
     {
         // the market's trading days, which days to cover is counted over, cannot be read
         let _broken = Broken::new(&app, "ALTER TABLE benchmark_closes RENAME TO benchmark_closes_away;", "ALTER TABLE benchmark_closes_away RENAME TO benchmark_closes;");
         // one failed read is not said; the next failing too is (`feeds::feed_failed`)
-        assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());
+        assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_none());
         assert!(!error(&app).contains("short interest of QNC"), "{}", error(&app));
-        assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_none());
-        assert!(error(&app).contains("short interest of QNC could not be read"), "{}", error(&app));
+        assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_none());
+        assert!(error(&app).contains("short interest of QNC · TSX-V could not be read"), "{}", error(&app));
     }
-    assert!(crate::feeds::read_shorts(&app, "QNC", "TSX-V", "CAD", false, "").unwrap().is_some());
+    assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_some());
     assert!(!error(&app).contains("short interest"), "{}", error(&app));
     shorts::clear_files();
 }

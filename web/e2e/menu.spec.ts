@@ -120,13 +120,35 @@ test('Add trade requires a date, symbol, quantity and price, and sends the entry
 
   let sent: Record<string, unknown> | null = null
   await page.route('**/api/entries', (route) => { sent = route.request().postDataJSON(); return route.fulfill({ json: { ok: true } }) })
-  await page.getByPlaceholder('e.g. LUNR or LUNR 15JAN27 12.00 CALL').fill('zzzq')
+  // the symbol is one listing, on the TSX; another is two, on the TSX and on Nasdaq
+  const listing = (symbol: string, exchange: string, venue: string) => ({ listing: symbol + '@' + venue, symbol, name: symbol + ' on ' + exchange, exchange, currency: 'CAD', held: false })
+  await page.route('**/api/listings?*', (route) => {
+    const s = new URL(route.request().url()).searchParams.get('symbol')
+    const listings = s === 'ZZZQ' ? [listing('ZZZQ', 'TSX', 'XTSE')] : s === 'ZZZW' ? [listing('ZZZW', 'TSX', 'XTSE'), listing('ZZZW', 'NASDAQ', 'US')] : []
+    return route.fulfill({ json: { ok: true, unread: [], listings } })
+  })
+  const symbol = page.getByPlaceholder('e.g. LUNR or LUNR 15JAN27 12.00 CALL')
+  await symbol.fill('zzzw')
   const boxes = page.locator('.input[inputmode="decimal"]')
   await boxes.nth(0).fill('10')
   await boxes.nth(1).fill('2.5')
   await page.getByRole('button', { name: 'Add trade' }).click()
-  // the person's entry, its quantity and price the text typed, for the server to read exactly
-  await expect.poll(() => sent).toMatchObject({ entry: 'trade', account: '', symbol: 'ZZZQ', side: 'BUY', quantity: '10', price: '2.5', currency: 'CAD', fee: '' })
+  // two listings of the ticker: none is chosen for the person, and nothing is sent until one is
+  await expect(page.locator('#modalDlg .status-err')).toHaveText('Choose the exchange it trades on.')
+  expect(sent).toBeNull()
+  await expect(page.getByLabel('Exchange').locator('option')).toHaveText(['', 'TSX · ZZZW on TSX', 'NASDAQ · ZZZW on NASDAQ'])
+  await page.getByLabel('Exchange').selectOption({ label: 'NASDAQ · ZZZW on NASDAQ' })
+  await page.getByRole('button', { name: 'Add trade' }).click()
+  await expect.poll(() => sent).toMatchObject({ entry: 'trade', symbol: 'ZZZW', exchange: 'NASDAQ' })
+  await expect(page.getByText('Trade added')).toBeVisible()
+  await openMenu(page)
+  await page.getByText('Add trade').click()
+  await symbol.fill('zzzq')
+  await boxes.nth(0).fill('10')
+  await boxes.nth(1).fill('2.5')
+  await page.getByRole('button', { name: 'Add trade' }).click()
+  // the person's entry, its quantity and price the text typed, for the server to read exactly; its one listing taken
+  await expect.poll(() => sent).toMatchObject({ entry: 'trade', account: '', symbol: 'ZZZQ', exchange: 'TSX', side: 'BUY', quantity: '10', price: '2.5', currency: 'CAD', fee: '' })
   await expect(page.getByText('Trade added')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Add trade' })).toHaveCount(0)
 })

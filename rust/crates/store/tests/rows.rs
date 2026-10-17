@@ -9,6 +9,8 @@ use common::*;
 #[test]
 fn test_every_input_reads_cleanly_from_rows_of_every_shape() {
     let d = db();
+    // the market cache's tables as they are now: news is kept by listing
+    d.conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     d.conn
         .execute_batch(
             r#"
@@ -19,7 +21,7 @@ fn test_every_input_reads_cleanly_from_rows_of_every_shape() {
         INSERT INTO nav_history(account_id,date,equity,currency,net_deposits) VALUES ('','2026-01-02',100,'CAD',90), ('','2026-01-03',NULL,NULL,NULL), ('acct-1','2026-01-02',50,'',NULL), ('acct-2','2026-01-02',7,'CAD',7);
         INSERT INTO exposures(key,sectors,countries,coverage,source,as_of,industry,error,fetched_at) VALUES ('sec-1','{"Tech":0.6,"Energy":"0.4"}','{"Canada":1}',1,'src','2026','ind','',NULL), ('sec-2','','',NULL,NULL,NULL,NULL,NULL,NULL), ('fund:X',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
         INSERT INTO watchlist(symbol,exchange,name,currency,security_id,added_at) VALUES ('ENB','TSX','Enbridge','CAD','sec-9','2026-01-01'), ('AAPL','',NULL,NULL,NULL,NULL);
-        INSERT INTO news(id,symbol,exchange,source,headline,wire,url,published_at,fetched_at,kind,summary) VALUES ('n1','QNC','TSXV','src','Up','Newsfile','http://x','2026-01-02','t','release','sum'), ('n2','*','MARKET',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+        INSERT INTO news(id,listing,exchange,source,headline,wire,url,published_at,fetched_at,kind,summary) VALUES ('n1','QNC@XTSX','TSXV','src','Up','Newsfile','http://x','2026-01-02','t','release','sum'), ('n2','*@MARKET','MARKET',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
         INSERT INTO universes(key,symbol,name,value,percent_change,sector,country,fetched_at) VALUES ('tsx','RY','Royal',150,1.2,'Financials','Canada','t'), ('tsx','TD',NULL,NULL,NULL,NULL,NULL,NULL), ('sp','AAPL','Apple',3000,-0.5,'Tech','US','t');
         INSERT INTO distributions(symbol,ex_date,pay_date,amount,currency,source) VALUES ('ZWC','2026-01-28','2026-02-05',0.1,'CAD','tmx'), ('ZWC','2025-12-29',NULL,0.1,NULL,'tmx'), ('HMAX','2026-01-30','',0.2,'CAD','issuer');
         INSERT INTO quotes(symbol, price, price_change, percent_change, source, ex_dividend_date) VALUES ('QNC',1.75,0.05,2.9,'tmx','2026-01-28'), ('BTC',NULL,NULL,NULL,NULL,NULL), ('ENB@TSX',60,NULL,NULL,'coinbase','');

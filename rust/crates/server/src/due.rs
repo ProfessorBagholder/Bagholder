@@ -196,7 +196,7 @@ fn failing_quotes(ctx: &Ctx) -> Result<Vec<InstrumentId>, String> {
 
 /// Read the payers held under `symbol` now, each change applied: the ones read.
 #[cfg_attr(test, allow(dead_code))]
-pub fn read_payer_now(app: &App, f: &Figures, symbol: &str, now: Timestamp) -> Result<Vec<InstrumentId>, String> {
+pub fn read_payer_now(app: &App, f: &Figures, key: &bagholder_core::ListingKey, now: Timestamp) -> Result<Vec<InstrumentId>, String> {
     let book = f.book()?;
     let Some(zone) = book.zone().map_err(|e| e.to_string())?.map(|z| z.zone) else { return Ok(vec![]) };
     let bank = bank_zone()?;
@@ -205,7 +205,9 @@ pub fn read_payer_now(app: &App, f: &Figures, symbol: &str, now: Timestamp) -> R
     let n = f.read(|e| e.needs()).ok_or("the engine is not built")?;
     let needs = crate::read_sources::needs_of(&book, &n, now.to_zoned(zone).date())?;
     let mut read = vec![];
-    for p in needs.payers.iter().filter(|p| p.listing.symbol.eq_ignore_ascii_case(symbol.trim())) {
+    // the payers on that listing alone, never another listing's with the same ticker (brief 34, U15)
+    let on = |p: &&bagholder_sources::needs::PayerNeed| p.listing.venue_mic.as_deref().and_then(|mic| bagholder_core::ListingKey::on(&p.listing.symbol, mic).ok()).is_some_and(|k| k == *key);
+    for p in needs.payers.iter().filter(on) {
         payers::run::read_at_once(&ctx, p).map_err(|e| e.to_string())?;
         f.payer_changed(p.listing.id)?;
         read.push(p.listing.id);
@@ -434,7 +436,7 @@ mod tests {
         app.set_figures(f);
         let f = app.figures.get().unwrap();
         // a contract entered by hand, held today
-        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ 15JAN27 12.00 CALL".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "BUY".into(), quantity: "2".into(), price: "0.40".into(), fee: String::new() };
+        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ 15JAN27 12.00 CALL".into(), exchange: "".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "BUY".into(), quantity: "2".into(), price: "0.40".into(), fee: String::new() };
         crate::entries::enter(f, &req, now).unwrap();
         let book = f.book().unwrap();
         let n = f.read(|e| e.needs()).unwrap();

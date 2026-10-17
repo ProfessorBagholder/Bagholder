@@ -49,6 +49,42 @@ fn wave(base: f64, swing: f64, d: Date, period: f64, places: u32) -> Dec {
     Dec::parse(&format!("{v:.p$}", p = places as usize)).expect("a made-up value is a decimal")
 }
 
+/// A listing's made-up daily bars: closes that pass through the prices it was
+/// traded at on the days it was traded, with a small fixed ripple between them,
+/// from a month before its first fill through `today`, weekdays only.
+fn demo_bars(fills: &[(Date, f64)], today: Date) -> Vec<bagholder_store::bars::DayBar> {
+    let mut anchors: Vec<(Date, f64)> = fills.to_vec();
+    anchors.sort_by(|x, y| x.0.cmp(&y.0));
+    anchors.dedup_by_key(|x| x.0);
+    let Some(&(first, _)) = anchors.first() else { return vec![] };
+    let Ok(start) = first.checked_sub(bagholder_core::jiff::Span::new().days(30)) else { return vec![] };
+    let n = |d: Date| (d - Date::constant(1970, 1, 1)).get_days() as f64;
+    let at = |day: Date| -> f64 {
+        match anchors.iter().position(|x| x.0 >= day) {
+            Some(0) => anchors[0].1,
+            None => anchors[anchors.len() - 1].1,
+            Some(k) => {
+                let ((d0, p0), (d1, p1)) = (anchors[k - 1], anchors[k]);
+                p0 + (p1 - p0) * (n(day) - n(d0)) / (n(d1) - n(d0))
+            }
+        }
+    };
+    let round = |v: f64| (v * 100.0).round_ties_even() / 100.0;
+    let mut out = Vec::new();
+    let mut prev = at(start);
+    for day in days(start, today).filter(|d| weekday(*d)) {
+        let traded = anchors.iter().any(|x| x.0 == day);
+        let ripple = if traded { 0.0 } else { 0.012 * (n(day) * 0.9).sin() + 0.007 * (n(day) * 0.23).cos() };
+        let close = round(at(day) * (1.0 + ripple));
+        out.push(bagholder_store::bars::DayBar {
+            date: day.to_string(),
+            px: bagholder_store::bars::Ohlcv { open: Some(prev), high: Some(round(prev.max(close) * 1.004)), low: Some(round(prev.min(close) * 0.996)), close, volume: Some(100000.0 + (n(day) % 17.0) * 5000.0) },
+        });
+        prev = close;
+    }
+    out
+}
+
 pub fn write(home: &Path) -> Result<String, String> {
     let at: Timestamp = SYNCED.parse().map_err(err)?;
     let today: Date = TODAY.parse().map_err(err)?;
@@ -125,48 +161,114 @@ pub fn write(home: &Path) -> Result<String, String> {
         }
     }
 
-    // a quote for each listing the book holds a record of, from its demo bars: the
-    // earlier store keeps one history per ticker, so a listing whose ticker another
-    // listing of the book shares is quoted from its own last fill instead, never
-    // from bars that may be the other listing's
+    // each listing's daily bars, under its own key, from its own fills, and its
+    // quote from the last two of them: two listings that share a ticker each draw
+    // and are quoted from their own
+    let market = bagholder_sqlite::open_db(&home.join(crate::figures::CACHE_FILE)).map_err(err)?;
+    let fills = book.transactions().map_err(err)?;
     let mut quoted = 0;
-    let instruments = book.instruments().map_err(err)?;
-    let mut tickers: std::collections::BTreeMap<String, usize> = Default::default();
-    let mut named = Vec::new();
-    for i in &instruments {
-        let symbol = book.names(i.id).map_err(err)?.last().map(|n| n.symbol.clone());
-        if let Some(s) = &symbol {
-            *tickers.entry(s.clone()).or_default() += 1;
+    let mut bars_written = 0;
+    for i in book.instruments().map_err(err)? {
+        let Some(name) = book.names(i.id).map_err(err)?.last().cloned() else { continue };
+        let Ok(key) = bagholder_core::ListingKey::of(i.kind, &name) else { continue };
+        let anchors: Vec<(Date, f64)> = fills
+            .iter()
+            .filter(|t| t.instrument == Some(i.id) && t.trade_date <= today)
+            // the price a fill states, else its cash over its units, as the made-up rows state neither apart
+            .filter_map(|t| {
+                let price = t.price.map(|p| p.amount.to_f64()).or_else(|| match (t.cash, t.quantity) {
+                    (Some(c), Some(q)) if !q.is_zero() => Some((c.amount.to_f64() / q.to_f64()).abs()),
+                    _ => None,
+                })?;
+                Some((t.trade_date, price))
+            })
+            .collect();
+        let bars = demo_bars(&anchors, today);
+        if bars.is_empty() {
+            continue;
         }
-        named.push((i, symbol));
-    }
-    for (i, symbol) in named {
-        let Some(symbol) = symbol else { continue };
-        let closes: Vec<f64> = if tickers[&symbol] > 1 {
-            book.transactions()
-                .map_err(err)?
-                .iter()
-                .filter(|t| t.instrument == Some(i.id) && t.trade_date.to_string().as_str() <= TODAY)
-                .filter_map(|t| t.price.map(|p| (t.trade_date, p.amount.to_f64())))
-                .max_by_key(|(d, _)| *d)
-                .map(|(_, p)| vec![p])
-                .unwrap_or_default()
-        } else {
-            old.prepare("SELECT close FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 2")
-                .map_err(err)?
-                .query_map(rusqlite::params![symbol, TODAY], |r| r.get::<_, f64>(0))
-                .map_err(err)?
-                .collect::<Result<_, _>>()
-                .map_err(err)?
-        };
-        let (Some(last), prev) = (closes.first(), closes.get(1)) else { continue };
+        bars_written += bagholder_store::market::upsert_price_history(&market, &key, &bars, "demo").map_err(err)?;
+        bagholder_store::market::mark_history_fetched(&market, &key, &bars[0].date, SYNCED).map_err(err)?;
+        let last = bars[bars.len() - 1].px.close;
+        let prev = bars.len().checked_sub(2).map(|k| bars[k].px.close);
         let price = Dec::parse(&format!("{last:.2}")).map_err(err)?;
         let change = prev.map(|p| Dec::parse(&format!("{:.2}", last - p))).transpose().map_err(err)?;
-        let change_pct = prev.filter(|p| **p != 0.0).map(|p| Dec::parse(&format!("{:.2}", (last / p - 1.0) * 100.0))).transpose().map_err(err)?;
+        let change_pct = prev.filter(|p| *p != 0.0).map(|p| Dec::parse(&format!("{:.2}", (last / p - 1.0) * 100.0))).transpose().map_err(err)?;
         cache
             .store_quote(&StoredQuote { instrument: i.id, source: demo.clone(), price: Money::new(price, i.currency), change, change_pct, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: at })
             .map_err(err)?;
         quoted += 1;
+    }
+
+    // each share's short interest, under its own listing: two listings of one ticker
+    // (TD on the TSX and on the NYSE) each read as its own, a position of its own size
+    use bagholder_store::feeds::{self as sf, FiledDocument, Filer, Regulator, SettledBy, ShortMarket, Shorts, VolumeSpan};
+    let mut shorted = 0;
+    for (n, i) in book.instruments().map_err(err)?.iter().enumerate() {
+        if i.kind != bagholder_core::instrument::InstrumentKind::Security {
+            continue;
+        }
+        let Some(name) = book.names(i.id).map_err(err)?.last().cloned() else { continue };
+        let Ok(key) = bagholder_core::ListingKey::of(i.kind, &name) else { continue };
+        let shares = 1_000_000.0 + 250_000.0 * n as f64;
+        let rec = Shorts {
+            symbol: key.symbol().to_string(),
+            exchange: name.venue_name.clone().unwrap_or_default(),
+            market: if key.us() { ShortMarket::Us } else { ShortMarket::Ca },
+            name: name.name.clone().unwrap_or_default(),
+            as_of: "2026-08-29".into(),
+            shares: Some(shares),
+            previous: Some(shares * 0.95),
+            previous_of: "2026-08-14".into(),
+            change: Some(shares * 0.05),
+            days_to_cover: Some(1.5 + n as f64 / 10.0),
+            volume_of: "2026-09-08".into(),
+            volume_span: Some(VolumeSpan::Day),
+            short_volume: Some(shares / 20.0),
+            total_volume: Some(shares / 5.0),
+            volume_pct: Some(25.0),
+            series: Some(vec![]),
+            ..Shorts::default()
+        };
+        sf::save_shorts(&market, &key, &rec, SYNCED, crate::feeds::SHORTS_VERSION).map_err(err)?;
+        shorted += 1;
+    }
+
+    // filings, per filer: TD on the TSX and the NYSE, which the TSX's interlisted list
+    // pairs, each draws from both regulators; one made-up ticker on the TSX Venture and
+    // on Nasdaq, two companies, each lists only its own
+    let listing = |s: &str, v: &str| bagholder_core::ListingKey::on(s, v).map_err(err);
+    let (td_ca, td_us, zq_ca, zq_us) = (listing("TD", "TSX")?, listing("TD", "NYSE")?, listing("ZQX", "TSX-V")?, listing("ZQX", "NASDAQ")?);
+    sf::replace_interlisted(&market, &[sf::Interlisted { listing: td_ca.clone(), us_listing: td_us.clone(), name: "Toronto-Dominion Bank (The)".into() }], TODAY, SYNCED).map_err(err)?;
+    let filers = [
+        (&td_ca, Regulator::Sedar, "000001001", SettledBy::SedarName, "Toronto-Dominion Bank"),
+        (&td_us, Regulator::Sec, "9001", SettledBy::SecTicker, "Toronto-Dominion Bank"),
+        (&zq_ca, Regulator::Sedar, "000002002", SettledBy::SedarName, "Zeta Quarry Exploration Ltd."),
+        (&zq_us, Regulator::Sec, "9002", SettledBy::SecTicker, "Zenquix Software Inc."),
+    ];
+    let mut filed = 0;
+    for (n, (key, source, id, by, issuer)) in filers.iter().enumerate() {
+        sf::settle_listing_filers(&market, key, *source, Ok(&[(id.to_string(), *by)]), SYNCED).map_err(err)?;
+        let (tag, form, url) = match source {
+            Regulator::Sedar => ("sedar", "Interim financial statements", format!("https://www.sedarplus.ca/demo?drmKey={id}")),
+            Regulator::Sec => ("sec", "6-K", format!("https://www.sec.gov/Archives/edgar/data/{id}/demo.htm")),
+        };
+        let docs: Vec<FiledDocument> = (0..2)
+            .map(|k| FiledDocument {
+                id: format!("{tag}:demo-{id}-{k}"),
+                source: *source,
+                category: "Financials".into(),
+                profile_no: if *source == Regulator::Sedar { id.to_string() } else { String::new() },
+                issuer: issuer.to_string(),
+                form: form.into(),
+                title: format!("{issuer} {form} {}", 2 - k),
+                date: format!("2026-0{}-1{n}", 8 - k),
+                date_text: String::new(),
+                size: String::new(),
+                url: url.clone(),
+            })
+            .collect();
+        filed += sf::replace_filings(&market, &Filer { source: *source, id: id.to_string() }, &docs, SYNCED).map_err(err)?;
     }
 
     // each payer's record: every dividend it paid, declared a week before it was paid,
@@ -216,7 +318,7 @@ pub fn write(home: &Path) -> Result<String, String> {
         cache.store_benchmark_closes(b, &closes, &demo, at).map_err(err)?;
     }
 
-    Ok(format!("demo facts: {} currencies, {} quotes, {} payers\n", currencies.len(), quoted, paid.len()))
+    Ok(format!("demo facts: {} currencies, {} daily bars, {} quotes, {} short readings, {} filings, {} payers\n", currencies.len(), bars_written, quoted, shorted, filed, paid.len()))
 }
 
 pub fn cli(args: &[String]) -> i32 {

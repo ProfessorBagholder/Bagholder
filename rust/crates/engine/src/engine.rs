@@ -268,6 +268,9 @@ pub struct Engine {
     /// Each instrument by what it is called now (its symbol in ASCII capitals)
     /// and its currency: what a trade typed in by symbol is found by.
     symbols: BTreeMap<(String, bagholder_core::Currency), BTreeSet<InstrumentId>>,
+    /// Each listed instrument by the listing it is now (`ListingKey`) and its
+    /// currency: what a trade typed in by symbol and exchange is found by.
+    listings: BTreeMap<(bagholder_core::ListingKey, bagholder_core::Currency), BTreeSet<InstrumentId>>,
     /// Each family's match as it stood after its last walk: what a change that
     /// only adds rows after it continues from (`ledger::continue_family`).
     kept: BTreeMap<Node, MatchState>,
@@ -303,6 +306,11 @@ fn path(log: &mut Vec<(Node, bool)>, f: Node, continued: bool) {
 /// capitals, and its currency.
 fn symbol_key(i: &crate::input::InstrumentInfo) -> Option<(String, bagholder_core::Currency)> {
     i.current_name().map(|n| (n.symbol.to_ascii_uppercase(), i.instrument.currency))
+}
+
+/// The listing an instrument is now, where its records name one, and its currency.
+fn listing_key(i: &crate::input::InstrumentInfo) -> Option<(bagholder_core::ListingKey, bagholder_core::Currency)> {
+    i.current_name().and_then(|n| bagholder_core::ListingKey::of(i.instrument.kind, n).ok()).map(|k| (k, i.instrument.currency))
 }
 
 /// Each account's cash a family's match gives, by family.
@@ -378,6 +386,7 @@ impl Engine {
             families,
             shares: BTreeMap::new(),
             symbols: BTreeMap::new(),
+            listings: BTreeMap::new(),
             kept: BTreeMap::new(),
             group_held: BTreeSet::new(),
             #[cfg(feature = "oracles")]
@@ -386,6 +395,9 @@ impl Engine {
         for (id, info) in &e.inputs.ledger.instruments {
             if let Some(k) = symbol_key(info) {
                 e.symbols.entry(k).or_default().insert(*id);
+            }
+            if let Some(k) = listing_key(info) {
+                e.listings.entry(k).or_default().insert(*id);
             }
         }
         e.match_all();
@@ -550,6 +562,11 @@ impl Engine {
         self.symbols.get(&(symbol.to_ascii_uppercase(), currency)).into_iter().flatten().copied()
     }
 
+    /// The instruments that are the listing `key` now, in `currency`.
+    pub fn listed(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.listings.get(&(key.clone(), currency)).into_iter().flatten().copied()
+    }
+
     /// The contracts written on `underlying`.
     pub fn contracts_on(&self, underlying: InstrumentId) -> impl Iterator<Item = InstrumentId> + '_ {
         self.families.contracts_on(underlying)
@@ -684,6 +701,14 @@ impl Engine {
                             }
                         }
                     }
+                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(listing_key) {
+                        if let Some(s) = self.listings.get_mut(&k) {
+                            s.remove(i);
+                            if s.is_empty() {
+                                self.listings.remove(&k);
+                            }
+                        }
+                    }
                 }
                 let book_was = BookParts { accounts: accounts.iter().map(|a| (*a, self.inputs.ledger.accounts.get(a).cloned())).collect(), instruments: instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).cloned())).collect(), activity: self.inputs.ledger.transactions.len() };
                 reach.transactions.extend(gone.iter().map(|t| t.id.clone()));
@@ -701,6 +726,9 @@ impl Engine {
                 for i in &instruments {
                     if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
                         self.symbols.entry(k).or_default().insert(*i);
+                    }
+                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(listing_key) {
+                        self.listings.entry(k).or_default().insert(*i);
                     }
                 }
                 let come: Vec<bagholder_core::transaction::Transaction> = records.iter().flat_map(|r| self.inputs.ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect();
@@ -1453,6 +1481,9 @@ impl Engine {
         }
         if self.symbols != other.symbols {
             return Some("the instruments by symbol differ".into());
+        }
+        if self.listings != other.listings {
+            return Some("the instruments by listing differ".into());
         }
         if self.shares != other.shares {
             return Some("the cash shares by family differ".into());

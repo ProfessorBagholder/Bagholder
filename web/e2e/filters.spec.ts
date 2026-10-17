@@ -108,13 +108,14 @@ test('a listing found outside the book carries the three icons in their places, 
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, matches: [
+      body: JSON.stringify({ ok: true, unread: [], matches: [
         { symbol: 'ZQVX', exchange: 'CBOE', name: 'Zqv Volatility Index', currency: 'USD', kind: 'Indices', rank: 0 },
         { symbol: 'ZQVS', exchange: 'NYSE', name: 'Zqv Shares Inc', currency: 'USD' },
       ] }),
     }),
   )
-  const found: [string, string][] = [['ZQVX', 'CBOE'], ['ZQVS', 'NYSE']]
+  // each row and the listing its page opens on, by its key: the US market's own for both venues
+  const found: [string, string][] = [['ZQVX', 'US'], ['ZQVS', 'US']]
   await open(page)
   await page.keyboard.type('ZQV')
   // funnel, Buy, Sell: three in every row, in the same places

@@ -286,7 +286,7 @@ test.describe('Heatmap card', () => {
     await ready(page)
     await page.locator('#heatBox .heat-tile[data-sym="ZZZQ"]').click()
     // the address reads markets/listing:SYMBOL@VENUE, as SPEC names it
-    await expect(page).toHaveURL(/#markets\/listing:ZZZQ@TSX$/)
+    await expect(page).toHaveURL(/#markets\/listing:ZZZQ@XTSE$/)
     await expect(page.locator('#page')).toContainText('Zzzq Corp')
   })
 })
@@ -363,10 +363,25 @@ test.describe('Heatmap changes', () => {
 })
 
 test.describe('Watchlist', () => {
+  // brief 44, 8: a search a directory did not answer says so, never that no listing is by that name
+  test('the add row says a directory that did not answer, never that no listing is by that name', async ({ page }) => {
+    let unread = ["The TSX's directory could not be read: refused."]
+    await page.route('**/api/symbols/search?*', (route) => route.fulfill({ json: { ok: true, unread, matches: [] } }))
+    await page.goto('/#markets')
+    await ready(page)
+    await page.getByRole('button', { name: 'Add to the watchlist' }).click()
+    await page.getByLabel('Search symbol', { exact: true }).fill('ZQWX')
+    await expect(page.locator('.status-err', { hasText: "The TSX's directory could not be read" })).toBeVisible()
+    await expect(page.getByText('No listing by that name.')).toHaveCount(0)
+    unread = []
+    await page.getByLabel('Search symbol', { exact: true }).fill('ZQWY')
+    await expect(page.getByText('No listing by that name.')).toBeVisible()
+  })
+
   test("a match's quote has a minute's memory: asked again when wanted after the minute, not before", async ({ page }) => {
     await page.clock.install()
     await page.route('**/api/symbols/search?*', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] }) }),
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], matches: [{ symbol: 'ZQWM', exchange: 'NYSE', name: 'Zqwm Inc', currency: 'USD' }] }) }),
     )
     let asked = 0
     await page.route('**/api/symbols/quote?*', (route) => {
@@ -399,7 +414,7 @@ test.describe('Watchlist', () => {
     await page.route('**/api/symbols/search*', (route) => {
       const url = new URL(route.request().url())
       expect(url.searchParams.get('q')).toBe('SHOP.TO')
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches: [{ symbol: 'SHOP', exchange: 'TSX', name: 'Shopify Inc.', currency: 'CAD' }] }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], matches: [{ symbol: 'SHOP', exchange: 'TSX', name: 'Shopify Inc.', currency: 'CAD' }] }) })
     })
     let addBody: unknown = null
     await page.route('**/api/watchlist/add', (route) => {
@@ -505,9 +520,9 @@ test.describe('Short interest', () => {
     const feed = { ok: true, reading: false, rows: [row('HHH', 40, { held: true, name: 'Aitch Corp' })] }
     await openWithStatus(page, request, {}, '#markets', () => {}, { shorts: feed })
     let asked: string | null = null
-    await page.route('**/api/shorts?symbol=*', (route) => {
+    await page.route('**/api/listings?*', (route) => {
       asked = new URL(route.request().url()).searchParams.get('symbol')
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, covered: false }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], listings: [] }) })
     })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Short interest' }) })
     const box = page.getByLabel('Search short interest')
@@ -535,9 +550,14 @@ test.describe('Short interest', () => {
   test('a ticker among prefix matches is added as a row of its own beside them', async ({ page, request }) => {
     const feed = { ok: true, reading: false, rows: [row('TD', 40, { held: true }), row('TRP', 20, { held: true })] }
     await openWithStatus(page, request, {}, '#markets', () => {}, { shorts: feed })
-    await page.route('**/api/shorts?symbol=*', (route) => {
+    // the ticker typed is one listing, on the NYSE, read on its own venue
+    await page.route('**/api/listings?*', (route) => {
       const symbol = new URL(route.request().url()).searchParams.get('symbol')!
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, covered: true, shorts: row(symbol, 5, { exchange: 'NYSE' }) }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], listings: [{ listing: symbol + '@US', symbol, name: symbol + ' Inc.', exchange: 'NYSE', currency: 'USD', held: false }] }) })
+    })
+    await page.route('**/api/shorts?symbol=*', (route) => {
+      const q = new URL(route.request().url()).searchParams
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, covered: true, shorts: row(q.get('symbol')!, 5, { exchange: q.get('exchange')! }) }) })
     })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Short interest' }) })
     await page.getByLabel('Search short interest').fill('T')
@@ -578,17 +598,17 @@ test.describe('News', () => {
     const said = saidShown(page)
     const last = asked(said)
     await openWithStatus(page, request, {}, '#markets', () => {}, two)
-    // the directory answers every word with a listing whose name holds it, and names a ticker only for ZQXW
-    await page.route('**/api/symbols/search?*', (route) => {
-      const q = new URL(route.request().url()).searchParams.get('q')!.toUpperCase()
-      const matches = [{ symbol: q + 'X', exchange: 'NASDAQ', name: q + ' Holdings', currency: 'USD' }]
-      if (q === 'ZQXW') matches.push({ symbol: 'ZQXW', exchange: 'NYSE', name: 'Zqxw Inc', currency: 'USD' })
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, matches }) })
+    // the resolver lists ZQXW on one venue and ZQYY on two, and no other word as a ticker
+    const listing = (symbol: string, exchange: string, venue: string) => ({ listing: symbol + '@' + venue, symbol, name: symbol + ' on ' + exchange, exchange, currency: 'USD', held: false })
+    await page.route('**/api/listings?*', (route) => {
+      const q = new URL(route.request().url()).searchParams.get('symbol')!.toUpperCase()
+      const listings = q === 'ZQXW' ? [listing('ZQXW', 'NYSE', 'US')] : q === 'ZQYY' ? [listing('ZQYY', 'TSX', 'XTSE'), listing('ZQYY', 'NASDAQ', 'US')] : []
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, unread: [], listings }) })
     })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
     const box = page.getByLabel('Search the news')
-    const looked = page.waitForRequest((r) => r.url().includes('/api/symbols/search?'))
+    const looked = page.waitForRequest((r) => r.url().includes('/api/listings?'))
     await box.fill('beat')
     await looked
     await page.waitForTimeout(300)
@@ -598,6 +618,95 @@ test.describe('News', () => {
     await box.fill('zqxw')
     await expect(card.locator('.chip')).toContainText('ZQXW')
     await expect.poll(() => [last().symbol, last().exchange, last().query]).toEqual(['ZQXW', 'NYSE', ''])
+    // a ticker of two listings is offered by venue, and none is taken until one is picked
+    await card.locator('.chip .cx').click()
+    await box.fill('zqyy')
+    await expect(card.locator('.lc-row')).toHaveCount(2)
+    await expect(card.locator('.chip')).toHaveCount(0)
+    await card.locator('.lc-row', { hasText: 'NASDAQ' }).click()
+    await expect(card.locator('.chip')).toContainText('ZQYY')
+    await expect.poll(() => [last().symbol, last().exchange]).toEqual(['ZQYY', 'NASDAQ'])
+  })
+
+  // brief 42, 4: one listing beside a directory that did not answer is offered, never taken
+  test('a ticker found on one venue while a directory did not answer is offered with the failure, not taken', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: ["The TSX's directory could not be read: refused"], listings: [{ listing: 'ZQNA@US', symbol: 'ZQNA', name: 'Zqna Inc.', exchange: 'NYSE', currency: 'USD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await page.getByLabel('Search the news').fill('zqna')
+    await expect(card.locator('.lc-row')).toHaveCount(1)
+    await expect(card.locator('.status-err')).toHaveText("The TSX's directory could not be read: refused")
+    await expect(card.locator('.chip')).toHaveCount(0)
+    await card.locator('.lc-row').click()
+    await expect(card.locator('.chip')).toContainText('ZQNA')
+  })
+
+  // brief 42: a row tagged with no venue opens no chip with an empty key: its ticker goes to the resolver
+  test('a row tagged with no venue asks the resolver for its ticker, and its one listing takes the chip', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([item('v', 'A story of no venue', { tag: { symbol: 'ZQNV', exchange: '', held: false, watched: false, percentChange: null } })]))
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQNV@XTSE', symbol: 'ZQNV', name: 'Zqnv Corp', exchange: 'TSX', currency: 'CAD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    const looked = page.waitForRequest((r) => r.url().includes('/api/listings?') && new URL(r.url()).searchParams.get('symbol') === 'ZQNV')
+    await card.locator('.nw-sym', { hasText: 'ZQNV' }).click()
+    await looked
+    await expect(card.locator('.chip')).toContainText('ZQNV')
+    await expect.poll(() => [last().symbol, last().exchange]).toEqual(['ZQNV', 'TSX'])
+  })
+
+  // brief 44, 7: with a chip on, a row tagged with no venue still asks the resolver
+  test('with a chip on, a row tagged with no venue asks the resolver, and its one listing takes the chip', async ({ page, request }) => {
+    const rows = headlines([
+      item('w', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 0.01 } }),
+      item('v', 'A story of no venue', { tag: { symbol: 'ZQNW', exchange: '', held: false, watched: false, percentChange: null } }),
+    ])
+    await openWithStatus(page, request, {}, '#markets', () => {}, rows)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQNW@XTSE', symbol: 'ZQNW', name: 'Zqnw Corp', exchange: 'TSX', currency: 'CAD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    await card.locator('.nw-sym', { hasText: 'WID' }).click()
+    await expect(card.locator('.chip')).toContainText('WID')
+    const looked = page.waitForRequest((r) => r.url().includes('/api/listings?') && new URL(r.url()).searchParams.get('symbol') === 'ZQNW')
+    await card.locator('.nw-sym', { hasText: 'ZQNW' }).click()
+    await looked
+    await expect(card.locator('.chip')).toContainText('ZQNW')
+  })
+
+  // brief 44, 8: a ticker found on no venue while a directory did not answer says the failure
+  test('a ticker found on no venue while a directory did not answer says the failure, and stays a text search', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread: ["The TSX's directory could not be read: refused."], listings: [] } }))
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await page.getByLabel('Search the news').fill('zqnx')
+    await expect(card.locator('.status-err')).toHaveText("The TSX's directory could not be read: refused.")
+    await expect(card.locator('.chip')).toHaveCount(0)
+    await expect.poll(() => last().query).toBe('zqnx')
+  })
+
+  // brief 42, 9: a chip is held or watched by its listing, never its ticker
+  test('a chip on a listing of a held ticker\'s other venue is not the holding: its own quote is asked', async ({ page, request }) => {
+    const model = await figures(request)
+    const held = (model.positions as { symbol: string; exchange: string; kind: string }[]).find((p) => p.kind === 'Shares' && ['TSX', 'TSX-V', 'NYSE', 'NASDAQ'].includes(p.exchange))!
+    const other = held.exchange === 'TSX' ? { exchange: 'TSX-V', venue: 'XTSX' } : { exchange: 'TSX', venue: 'XTSE' }
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: held.symbol + '@' + other.venue, symbol: held.symbol, name: held.symbol + ' elsewhere', exchange: other.exchange, currency: 'CAD', held: false }] } }),
+    )
+    const quoted = page.waitForRequest((r) => r.url().includes('/api/symbols/quote?') && new URL(r.url()).searchParams.get('exchange') === other.exchange)
+    await page.getByLabel('Search the news').fill(held.symbol.toLowerCase())
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await expect(card.locator('.chip')).toContainText(held.symbol)
+    await quoted
   })
 
   test('clicking a row\'s symbol opens the Symbol chip, asking for that listing\'s items until it is cleared', async ({ page, request }) => {
@@ -642,7 +751,7 @@ test.describe('Disclosures', () => {
   test('the card reads a held listing\'s filed record, sorts newest first by default, and opens a document on click', async ({ page, request }) => {
     const model = await figures(request)
     const aapl = (model.positions as { symbol: string; name: string; exchange: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
-    const docKey = 'filings:symbol=AAPL&name=' + encodeURIComponent(aapl.name) + '&exchange=' + encodeURIComponent(aapl.exchange) + '&currency=' + encodeURIComponent(aapl.currency)
+    const docKey = 'filings:symbol=AAPL&exchange=US&name=' + encodeURIComponent(aapl.name) + '&currency=' + encodeURIComponent(aapl.currency)
     const filing = (id: string, date: string, category: string, source: string, extra: Partial<{ size: string }> = {}) => ({
       id, source, category, type: '10-Q', title: '', subject: 'A filing about ' + id, summary: 'One sentence about ' + id + '.', date, dateText: date, size: extra.size ?? '', url: 'https://filer.example/' + id,
     })
@@ -660,9 +769,11 @@ test.describe('Disclosures', () => {
     await expect(rows).toHaveCount(2)
     await expect(rows.first()).toContainText('f2'.replace('f2', 'A filing about f2')) // newest first
     await page.context().route('https://filer.example/*', (route) => route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' }))
+    // the arrow shows on its row's hover, as a person reaches it
+    await rows.first().hover()
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
-      rows.first().locator('.dc-open').click({ force: true }),
+      rows.first().locator('.dc-open').click(),
     ])
     await popup.waitForLoadState()
     expect(popup.url()).toBe('https://filer.example/f2')
@@ -676,11 +787,42 @@ test.describe('Disclosures', () => {
     await popup.close()
   })
 
+  // brief 42, 9: a document is opened by its source and its id, never by a symbol
+  test('a SEDAR+ document opens through the server by its source and id, and a page answers it', async ({ page, request }) => {
+    const model = await figures(request)
+    const aapl = (model.positions as { symbol: string; id: string; name: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
+    const docKey = 'filings:symbol=AAPL&exchange=US&name=' + encodeURIComponent(aapl.name) + '&currency=' + encodeURIComponent(aapl.currency)
+    const payload = {
+      ok: true, everRead: true, reading: [], fetchedAt: '2026-09-19T00:00:00Z', summaryStatus: 'ready',
+      sources: { 'SEDAR+': { available: true, filer: true, matched: true } },
+      filings: [{ id: 'sedar:zq9', source: 'SEDAR+', category: 'Financials', type: 'Interim MD&A', title: '', subject: 'A filed document', summary: '', date: '2026-09-01', dateText: '2026-09-01', size: '', url: '' }],
+    }
+    await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(aapl.id), () => {}, { [docKey]: payload })
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
+    // the address the page opens, as it asks the browser for the tab
+    await page.evaluate(() => {
+      const w = window as unknown as { opened: string[]; open: (u: string) => null }
+      w.opened = []
+      w.open = (u: string) => (w.opened.push(u), null)
+    })
+    const row = card.locator('.dc-row', { hasText: 'A filed document' })
+    // the arrow shows on its row's hover, as a person reaches it
+    await row.hover()
+    await row.locator('.dc-open').click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { opened: string[] }).opened)).toHaveLength(1)
+    const url = new URL(await page.evaluate(() => (window as unknown as { opened: string[] }).opened[0]), page.url())
+    expect(url.pathname).toBe('/api/filings/doc')
+    expect(Object.fromEntries(url.searchParams)).toEqual({ source: 'SEDAR+', id: 'sedar:zq9' })
+    // the server answers a tab asking for that address with a page of its own, never raw JSON
+    const answered = await request.get(url.pathname + url.search, { headers: { Accept: 'text/html' } })
+    expect(answered.headers()['content-type']).toContain('text/html')
+  })
+
   test('a listing with no regulatory filer reads "No regulatory filer for this listing."', async ({ page, request }) => {
     const model = await figures(request)
     const positionId = (model.positions as { symbol: string; id: string }[]).find((p) => p.symbol === 'AAPL')!.id
     const aapl = (model.positions as { symbol: string; name: string; exchange: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
-    const docKey = 'filings:symbol=AAPL&name=' + encodeURIComponent(aapl.name) + '&exchange=' + encodeURIComponent(aapl.exchange) + '&currency=' + encodeURIComponent(aapl.currency)
+    const docKey = 'filings:symbol=AAPL&exchange=US&name=' + encodeURIComponent(aapl.name) + '&currency=' + encodeURIComponent(aapl.currency)
     const payload = { ok: true, everRead: true, reading: [], sources: { SEC: { available: true, filer: false, matched: false } }, filings: [] }
     await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(positionId), () => {}, { [docKey]: payload })
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
@@ -691,7 +833,7 @@ test.describe('Disclosures', () => {
   const openAaplDisclosures = async (page: Page, request: APIRequestContext, rows: Record<string, unknown>[]) => {
     const model = await figures(request)
     const aapl = (model.positions as { symbol: string; id: string; name: string; exchange: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
-    const docKey = 'filings:symbol=AAPL&name=' + encodeURIComponent(aapl.name) + '&exchange=' + encodeURIComponent(aapl.exchange) + '&currency=' + encodeURIComponent(aapl.currency)
+    const docKey = 'filings:symbol=AAPL&exchange=US&name=' + encodeURIComponent(aapl.name) + '&currency=' + encodeURIComponent(aapl.currency)
     const payload = {
       ok: true, everRead: true, reading: [], fetchedAt: '2026-09-19T00:00:00Z', summaryStatus: 'ready',
       sources: { SEC: { available: true, filer: true, matched: true } }, filings: rows,

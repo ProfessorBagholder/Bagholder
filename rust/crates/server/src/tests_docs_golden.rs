@@ -212,6 +212,7 @@ fn filings_doc(filings: Vec<Filing>) -> crate::feeds::FilingsDoc {
     crate::feeds::FilingsDoc {
         ok: true,
         symbol: "NBIS".into(),
+        listing: "NBIS@US".into(),
         available: true,
         sources: Default::default(),
         categories: vec!["insider".into()],

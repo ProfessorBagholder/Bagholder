@@ -289,7 +289,7 @@ pub fn parse_crypto(data: &Value) -> Option<Gauge> {
 
 /// One index as its publisher gives it now, or why it could not be had, said as
 /// the header says a source's failure (`CNN could not be reached.`).
-pub fn read(index: &str) -> Result<Gauge, String> {
+pub fn read(index: &str) -> Result<Gauge, bagholder_net::Failure> {
     let which = index.trim().to_lowercase();
     let stock_headers = [
         ("User-Agent", UA),
@@ -301,15 +301,15 @@ pub fn read(index: &str) -> Result<Gauge, String> {
     let text = match which.as_str() {
         "stocks" => get_text(STOCK_URL, &stock_headers),
         "crypto" => get_text(&CRYPTO_URL.replace("{}", &DAYS.to_string()), &crypto_headers),
-        _ => return Err(format!("There is no {which:?} Fear & Greed index.")),
+        _ => return Err(format!("There is no {which:?} Fear & Greed index.").into()),
     };
     let publisher = SOURCES.iter().find(|(k, _)| *k == which).map_or("The publisher", |(_, name)| name);
     let text = text.map_err(|e| match e {
-        // nothing was asked of the publisher: the refusal's own words, which no header says
-        crate::http::FetchError::Transport(m) if bagholder_net::client::is_offline_refusal(&m) => m,
-        e => format!("{publisher} {}.", crate::http::describe_failure(&e)),
+        // nothing was asked of the publisher: no failure, which no header says
+        crate::http::FetchError::Offline => bagholder_net::Failure::Offline,
+        e => format!("{publisher} {}.", crate::http::describe_failure(&e)).into(),
     })?;
-    let unreadable = || format!("{publisher} answered in a form Bagholder cannot read.");
+    let unreadable = || bagholder_net::Failure::Said(format!("{publisher} answered in a form Bagholder cannot read."));
     let data: Value = serde_json::from_str(&text).map_err(|_| unreadable())?;
     let gauge = if which == "stocks" { parse_stocks(&data) } else { parse_crypto(&data) };
     gauge.ok_or_else(unreadable)

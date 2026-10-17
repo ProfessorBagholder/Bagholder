@@ -247,6 +247,7 @@ dependencies = [
  "bagholder-net",
  "bagholder-sources",
  "bagholder-store",
+ "flate2",
  "openssl",
  "pdf-extract",
  "regex",
@@ -308,6 +309,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "tempfile",
  "tokio",
  "tower",
@@ -340,9 +342,11 @@ dependencies = [
 name = "bagholder-store"
 version = "2.5.7"
 dependencies = [
+ "bagholder-core",
  "bagholder-diff",
  "bagholder-diff-derive",
  "bagholder-model",
+ "bagholder-sources",
  "bagholder-sqlite",
  "indexmap",
  "regex",

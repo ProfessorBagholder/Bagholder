@@ -215,69 +215,30 @@ pub fn fetch_yahoo_quote(code: &str) -> Option<SourceQuote> {
     parse_yahoo_quote(&yahoo_get(&url)?)
 }
 
-/// The market identifier code of a venue as this reader's records name it
-/// (`TSX`, `TSX-V`, `NASDAQ`), for the venue rules moved to
-/// `bagholder_sources::venue`, which read venues by their code. A venue named
-/// here by no code is one those rules do not cover.
+/// The market identifier code of a venue as this reader's records name it, in
+/// words or as a code (`bagholder_core::listing::mic_of`, the one table), for the
+/// venue rules in `bagholder_sources::venue`; a key's `US` names the US market,
+/// whose every listing Yahoo writes bare, as it writes Nasdaq's.
 pub fn venue_mic(exchange: &str) -> Option<&'static str> {
-    match exchange.trim().to_uppercase().as_str() {
-        "TSX" => Some("XTSE"),
-        "TSX-V" | "TSXV" => Some("XTSX"),
-        "CSE" => Some("XCNQ"),
-        "CBOE CANADA" | "NEO" => Some("NEOE"),
-        "NASDAQ" => Some("XNAS"),
-        "NYSE" => Some("XNYS"),
-        "NYSE ARCA" | "ARCA" => Some("ARCX"),
-        "NYSE AMERICAN" | "AMEX" => Some("XASE"),
-        "BATS" | "CBOE" => Some("BATS"),
-        _ => None,
-    }
+    bagholder_core::listing::mic_of(exchange).or_else(|| (bagholder_core::listing::key_venue(exchange) == Some(bagholder_core::listing::US)).then_some("XNAS"))
 }
 
-/// The venues of each market, the likelier first: the forms a lookup tries,
-/// after the listing's own venue's, when its venue is wrong or missing.
-pub const CANADIAN_VENUES: [&str; 4] = ["XTSE", "XTSX", "XCNQ", "NEOE"];
-pub const US_VENUES: [&str; 1] = ["XNAS"];
-
-/// The venue's own forms first, then the other venues of its market, so a
-/// wrong or missing venue still finds it. The venue names the market before
-/// the currency does: a watched listing keeps no currency, and read by
-/// currency alone a Nasdaq listing was asked for as a Toronto one, which is
-/// another security (`PLTR.TO` is Palantir's Canadian depositary receipt, not
-/// the stock) or nothing at all; a TSX listing that trades in US dollars is
-/// still a Toronto one. Only a venue the app does not name leaves the currency
-/// to decide. Each venue's forms are `bagholder_sources::venue::yahoo_forms`.
+/// The Yahoo forms of a listing: its own venue's alone (`bagholder_sources::venue::yahoo_forms`).
+/// A listing whose venue is none known here has none: a currency never stands in
+/// for a venue, and another venue's form is another listing (`PLTR.TO` is
+/// Palantir's Canadian depositary receipt, not the stock).
 pub fn yahoo_forms(rec: &Listing) -> Vec<String> {
-    let us = match bagholder_model::venues::tmx_form(&rec.exchange, "") {
-        Some(form) => form == ":US",
-        None => match rec.currency.trim().to_uppercase().as_str() {
-            "" | "CAD" => false,
-            "USD" => true,
-            _ => return vec![],
-        },
-    };
-    let market: &[&str] = if us { &US_VENUES } else { &CANADIAN_VENUES };
-    // every venue `venue_mic` names is one `tmx_form` places in a market, so
-    // the listing's own venue is always of the market chosen
-    let mut out: Vec<String> = Vec::new();
-    for mic in venue_mic(&rec.exchange).into_iter().chain(market.iter().copied()) {
-        for form in bagholder_sources::venue::yahoo_forms(&rec.symbol, mic) {
-            if !out.contains(&form) {
-                out.push(form);
-            }
-        }
-    }
-    out
+    venue_mic(&rec.exchange).map(|mic| bagholder_sources::venue::yahoo_forms(&rec.symbol, mic)).unwrap_or_default()
 }
 
 /// The form a listing's quote is filed under, or
 /// nothing when TMX does not carry it -- crypto, options, unknown venues.
-pub fn tmx_quote_symbol(symbol: &str, exchange: &str, currency: &str) -> Option<String> {
+pub fn tmx_quote_symbol(symbol: &str, exchange: &str) -> Option<String> {
     let s = bagholder_model::venues::tmx_symbol(symbol);
     if s.is_empty() || s.contains(' ') {
         return None;
     }
-    bagholder_model::venues::tmx_form(exchange, currency).map(|f| format!("{}{}", s, f))
+    bagholder_model::venues::tmx_form(exchange).map(|f| format!("{}{}", s, f))
 }
 
 /// Which public source covers this instrument, and the
@@ -308,11 +269,11 @@ pub fn quote_source(rec: &Listing) -> Option<(String, String)> {
         return Some(("cboe_ca".into(), sym));
     }
     // a US listing is Yahoo's: TMX stamps one fifteen minutes behind
-    if bagholder_model::venues::tmx_form(&rec.exchange, &rec.currency) == Some(":US") {
+    if bagholder_model::venues::tmx_form(&rec.exchange) == Some(":US") {
         let forms = yahoo_forms(rec);
         return forms.first().map(|f| ("yahoo_quote".to_string(), f.clone()));
     }
-    tmx_quote_symbol(&rec.symbol, &rec.exchange, &rec.currency)
+    tmx_quote_symbol(&rec.symbol, &rec.exchange)
         .map(|q| ("tmx".to_string(), q))
 }
 
@@ -531,7 +492,7 @@ pub fn fetch_for(
     chains: &mut std::collections::HashMap<String, OptionChain>,
 ) -> Result<Option<SourceQuote>, String> {
     Ok(match source {
-        "tmx" => tmx::fetch_tmx_quote(conn, key, today).map_err(|e| e.to_string())?,
+        "tmx" => tmx::fetch_tmx_quote(key).map_err(|e| e.to_string())?,
         "cboe_ca" => fetch_cboe_ca_quote(key),
         "coinbase" => {
             let (_, now_unix, _) = crate::clock_now();

@@ -17,6 +17,7 @@
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
   import { escapable } from '../escape'
+  import { listingKey } from '../listingKey'
 
   let { watchlist }: { watchlist: WatchItem[] } = $props()
 
@@ -34,7 +35,9 @@
   let newTimer: ReturnType<typeof setTimeout> | undefined
   let input = $state<HTMLInputElement | null>(null)
 
-  const watchedKeys = $derived(new Set((watchlist || []).map((w) => bareSymbol(w.symbol) + '@' + String(w.exchange || '').toUpperCase())))
+  // a listing is its key: the same ticker on another venue is another listing, one venue written two ways is one
+  const wKey = (w: { symbol: string; exchange?: string | null }) => listingKey(w.symbol, w.exchange) ?? bareSymbol(w.symbol) + '@'
+  const watchedKeys = $derived(new Set((watchlist || []).map(wKey)))
 
   // rows: cached quote fills in a just-added row's price until the server's lands
   const rows = $derived.by(() => {
@@ -52,18 +55,17 @@
   })
 
   // --- add row suggestions ---
-  function watchAlready(q: string): boolean {
-    const key = q.trim().toUpperCase()
-    if (!key) return false
-    return (watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === key)
-  }
+  // the search found a listing for the words typed that is already watched: what the
+  // empty list says then (a ticker typed is never matched to a watched row by itself)
+  let watchedFound = $state('')
+  const watchAlready = (q: string): boolean => !!q.trim() && watchedFound === q.trim()
   // with nothing typed, the holdings not yet followed
   const fromHoldings = $derived.by<SymbolMatch[]>(() => {
     const out: SymbolMatch[] = []
     const seen = new Set<string>()
     ;(positions.data?.positions || []).forEach((p) => {
       if (p.kind === 'Options' || OPTION_RE.test(p.symbol)) return
-      const k = bareSymbol(p.symbol) + '@' + String(p.exchange || '').toUpperCase()
+      const k = wKey(p)
       if (watchedKeys.has(k) || seen.has(k)) return
       seen.add(k)
       out.push({ symbol: bareSymbol(p.symbol), exchange: p.exchange || '', name: p.name || '', currency: p.currency || '', last: p.last, percentChange: p.percentChange })
@@ -73,6 +75,8 @@
 
   // typed matches come from /api/symbols/search, debounced
   let matches = $state<SymbolMatch[]>([])
+  // what the directories could not read for the text typed: "no listing" only where nothing is
+  let searchError = $state<{ q: string; error: string }>({ q: '', error: '' })
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     const q = query.trim()
@@ -83,14 +87,19 @@
     clearTimeout(searchTimer)
     const key = q
     searchTimer = setTimeout(() => {
-      searchSymbols(key).then((found) => {
+      searchSymbols(key).then((answer) => {
         if (query.trim() !== key) return
+        const found = answer.matches
+        searchError = { q: key, error: answer.error }
+        watchedFound = ''
         const out: SymbolMatch[] = []
         found.forEach((m) => {
           if (OPTION_RE.test(m.symbol) || m.kind) return
-          const k = bareSymbol(m.symbol) + '@' + String(m.exchange || '').toUpperCase()
-          if (watchedKeys.has(k) || out.some((x) => bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase() === k)) return
-          const p = (positions.data?.positions || []).find((x) => x.symbol === m.symbol)
+          const k = wKey(m)
+          if (watchedKeys.has(k)) watchedFound = key
+          if (watchedKeys.has(k) || out.some((x) => wKey(x) === k)) return
+          // the book's own holding of this very listing, never another venue's of its ticker
+          const p = (positions.data?.positions || []).find((x) => wKey(x) === k)
           out.push({ symbol: bareSymbol(m.symbol), exchange: m.exchange || '', name: m.name || '', currency: m.currency || (p ? p.currency : ''), last: p ? p.last : null, percentChange: p ? p.percentChange : null })
         })
         matches = out.slice(0, 4)
@@ -100,6 +109,7 @@
 
   // the rows as the search gave them, and as shown with a remembered quote on them
   const sugBase = $derived(query.trim() ? matches : fromHoldings)
+  const unreadNow = $derived(query.trim() && searchError.q === query.trim() ? searchError.error : '')
   const suggestions = $derived(
     sugBase.map((w) => {
       const c = w.last == null ? sugQuotes[sugKey(w)] : null
@@ -128,7 +138,7 @@
     query = ''
   }
   function pick(w: SymbolMatch) {
-    const key = bareSymbol(w.symbol) + '@' + String(w.exchange || '').toUpperCase()
+    const key = wKey(w)
     query = ''
     watchNew = key
     addWatch({ symbol: w.symbol, exchange: w.exchange, name: w.name, currency: w.currency }).then(() => {
@@ -169,6 +179,9 @@
           </div>
         {/each}
       </div>
+      {#if unreadNow}<div class="status-err" style="font-size:12px;padding:4px 0 6px">{unreadNow}</div>{/if}
+    {:else if unreadNow}
+      <div class="status-err" style="font-size:12px;padding:2px 0 6px">{unreadNow}</div>
     {:else}
       <div class="muted" style="font-size:12px;padding:2px 0 6px">{query.trim() ? (watchAlready(query) ? 'Already on the watchlist.' : 'No listing by that name.') : 'Every holding is followed.'}</div>
     {/if}
@@ -178,8 +191,8 @@
   {#if rows.length}
     <div class="wl-head"><GridHead table="watchlist" cols={WATCH_COLS} /><div></div></div>
     <div class="scroll wl-list" style="flex:1;min-height:0;max-height:436px">
-      {#each rows as w (bareSymbol(w.symbol) + '@' + String(w.exchange || '').toUpperCase())}
-        <div class="wl-row go" class:wl-new={watchNew === bareSymbol(w.symbol) + '@' + String(w.exchange || '').toUpperCase()} role="button" tabindex="-1" onclick={() => openRow(w)} onkeydown={(e) => { if (e.key === 'Enter') openRow(w) }}>
+      {#each rows as w (wKey(w))}
+        <div class="wl-row go" class:wl-new={watchNew === wKey(w)} role="button" tabindex="-1" onclick={() => openRow(w)} onkeydown={(e) => { if (e.key === 'Enter') openRow(w) }}>
           <div><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">{bareSymbol(w.symbol)}</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">{w.name || ''}</div></div>
           <div style="font-size:12px;color:var(--ink55);text-align:right">{w.exchange || ''}</div>
           <div class="tab" style="text-align:right;font-size:13px">{w.last == null ? '—' : px(w.last)}</div>

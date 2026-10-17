@@ -8,9 +8,10 @@
 //! After an intended change: `BAGHOLDER_BLESS=1 cargo test -p bagholder-market --test filings_items`,
 //! and read the diff.
 
-use bagholder_market::disclosures::{self as d, Fetched, Provider, SourceError};
+use bagholder_core::ListingKey;
+use bagholder_market::disclosures::{self as d, Fetched, Regulators, SourceError};
 use bagholder_market::{edgar, sedar};
-use bagholder_store::feeds::{self as sf, FiledDocument, Regulator};
+use bagholder_store::feeds::{self as sf, FiledDocument, Filer, Regulator};
 use serde_json::{json, Map, Value};
 
 fn norm(v: Value) -> Value {
@@ -44,25 +45,38 @@ fn submissions() -> Value {
     })
 }
 
-struct Prov {
-    source: Regulator,
-    items: Vec<FiledDocument>,
-    avail: bool,
-    covers: bool,
-    raises: Option<SourceError>,
-    filer: bool,
+/// What one regulator answers in a case: who files the listing (or why no one is
+/// named, or that it could not be asked), and the filer's documents (or a failure).
+#[derive(Clone)]
+struct Answers {
+    filer: Fetched<Result<String, String>>,
+    documents: Fetched<Vec<FiledDocument>>,
 }
 
-impl Provider for Prov {
-    fn source(&self) -> Regulator { self.source }
-    fn available(&self) -> bool { self.avail }
-    fn covers(&self, _: &str, _: &str, _: &str) -> bool { self.covers }
-    fn fetch(&self, _: &str, _: &str, _: &str, _: &str, _: &str) -> Fetched<Vec<FiledDocument>> {
-        match &self.raises { Some(e) => Err(e.clone()), None => Ok(self.items.clone()) }
+/// The two regulators standing in: the SEC for a US listing, SEDAR+ for a Canadian one.
+struct Regs {
+    sedar: Answers,
+    sec: Answers,
+}
+
+impl Regulators for Regs {
+    fn filer(&self, listing: &ListingKey, _today: &str) -> Option<(Regulator, Fetched<Result<String, String>>)> {
+        if listing.us() {
+            Some((Regulator::Sec, self.sec.filer.clone()))
+        } else if listing.canadian() {
+            Some((Regulator::Sedar, self.sedar.filer.clone()))
+        } else {
+            None
+        }
     }
-    fn has_filer(&self, _: &str, _: &str, _: &str, _: &str) -> bool { self.filer }
-    fn document(&self, _: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
-        Ok((b"%PDF-".to_vec(), "application/pdf".into()))
+    fn documents(&self, filer: &Filer, _limit: usize) -> Fetched<Vec<FiledDocument>> {
+        match filer.source {
+            Regulator::Sec => self.sec.documents.clone(),
+            Regulator::Sedar => self.sedar.documents.clone(),
+        }
+    }
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+        Ok(("2026-10-01".into(), vec![]))
     }
 }
 
@@ -77,11 +91,8 @@ fn answers() -> Value {
     out.insert("sedar_issuers".into(), cell(&sedar::parse_reporting_issuers(&fixture("reporting_issuers.html"))));
 
     // EDGAR: the submissions as documents
-    let mut m = edgar::Tickers::new();
-    m.insert("NVDA".into(), (1045810, "NVIDIA CORP".into()));
-    edgar::set_ticker_map(m);
     let subs = |_: &str| -> Fetched<Value> { Ok(submissions()) };
-    let sec_items = edgar::fetch_with("NVDA", "NVIDIA Corporation", "NASDAQ", "USD", 200, &subs).unwrap();
+    let sec_items = edgar::fetch_with(1045810, 200, &subs).unwrap();
     out.insert("sec_items".into(), cell(&sec_items));
 
     // what a row says of itself without a reading
@@ -103,41 +114,46 @@ fn answers() -> Value {
     let g13 = sec_items.iter().find(|r| r.form == "SCHEDULE 13D/A").unwrap();
     out.insert("sec_ownership_enrichment".into(), cell(&edgar::enrichment_with(g13, &doc)));
 
-    // every source merged, each with its outcome
-    let sedar_p = Prov { source: Regulator::Sedar, items: sedar_items.clone(), avail: true, covers: true, raises: None, filer: false };
-    let sec_p = Prov { source: Regulator::Sec, items: sec_items.clone(), avail: true, covers: true, raises: None, filer: false };
-    let sec_empty = Prov { source: Regulator::Sec, items: vec![], avail: true, covers: true, raises: None, filer: true };
-    let sedar_down = Prov { source: Regulator::Sedar, items: vec![], avail: true, covers: true, raises: Some(SourceError::Unavailable("SEDAR+ is unavailable.".into())), filer: false };
-    let sedar_err = Prov { source: Regulator::Sedar, items: vec![], avail: true, covers: true, raises: Some(SourceError::Other("ProfileNotFound".into())), filer: false };
-    let sec_off = Prov { source: Regulator::Sec, items: sec_items.clone(), avail: false, covers: true, raises: None, filer: false };
-    let sec_uncovered = Prov { source: Regulator::Sec, items: sec_items.clone(), avail: true, covers: false, raises: None, filer: false };
-    out.insert("merge_both".into(), cell(&d::fetch_from(&[&sedar_p, &sec_p], "NVDA", "NVIDIA", "NASDAQ", "USD", 12, "")));
-    out.insert("merge_down".into(), cell(&d::fetch_from(&[&sedar_down, &sec_empty], "NVDA", "NVIDIA", "NASDAQ", "USD", 50, "")));
-    out.insert("merge_error".into(), cell(&d::fetch_from(&[&sedar_err, &sec_off], "NVDA", "NVIDIA", "NASDAQ", "USD", 50, "")));
-    out.insert("merge_uncovered".into(), cell(&d::fetch_from(&[&sedar_p, &sec_uncovered], "QNC", "Quantum", "TSX-V", "CAD", 3, "")));
+    // a listing's own regulator, and its interlisted partner's, merged, each with its outcome
+    let ok = |id: &str, docs: &[FiledDocument]| Answers { filer: Ok(Ok(id.into())), documents: Ok(docs.to_vec()) };
+    let us = ListingKey::on("NVDA", "NASDAQ").unwrap();
+    let ca = ListingKey::on("NVDA", "TSX").unwrap();
+    let both = Regs { sedar: ok("000012345", &sedar_items), sec: ok("1045810", &sec_items) };
+    let down = Regs { sedar: Answers { filer: Ok(Ok("000012345".into())), documents: Err(SourceError::Unavailable("SEDAR+ is unavailable.".into())) }, sec: ok("1045810", &[]) };
+    let named_no_one = Regs { sedar: Answers { filer: Ok(Err("SEDAR+ lists no single issuer named NVIDIA.".into())), documents: Ok(vec![]) }, sec: Answers { filer: Err(SourceError::Unavailable("sec.gov is resting".into())), documents: Ok(vec![]) } };
+    out.insert("merge_both".into(), cell(&d::gather(&both, &us, Some(&ca), "2026-09-22", 12)));
+    out.insert("merge_down".into(), cell(&d::gather(&down, &us, Some(&ca), "2026-09-22", 50)));
+    out.insert("merge_error".into(), cell(&d::gather(&named_no_one, &us, Some(&ca), "2026-09-22", 50)));
+    // a listing the interlisted list pairs with none shows its own regulator's alone
+    out.insert("merge_unpaired".into(), cell(&d::gather(&both, &ListingKey::on("QNC", "TSX-V").unwrap(), None, "2026-09-22", 3)));
 
     // the store: both sources, a reading, a refresh that keeps it, a source dropping a row
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     const NOW: &str = "2026-09-22T15:00:00Z";
     const LATER: &str = "2026-09-23T15:00:00Z";
-    sf::replace_filings(&conn, "nvda", Regulator::Sedar, &sedar_items, NOW).unwrap();
-    sf::replace_filings(&conn, "NVDA", Regulator::Sec, &sec_items, NOW).unwrap();
-    let first = cell(&sf::filings_for(&conn, "NVDA").unwrap());
+    let sedar_filer = Filer { source: Regulator::Sedar, id: "000012345".into() };
+    let sec_filer = Filer { source: Regulator::Sec, id: "1045810".into() };
+    let filers = [sedar_filer.clone(), sec_filer.clone()];
+    sf::replace_filings(&conn, &sedar_filer, &sedar_items, NOW).unwrap();
+    sf::replace_filings(&conn, &sec_filer, &sec_items, NOW).unwrap();
+    let first = cell(&sf::filings_of(&conn, &filers).unwrap());
     let sec0 = sec_items[0].id.clone();
     let sec1 = sec_items[1].id.clone();
     let sedar0 = sedar_items[0].id.clone();
-    sf::set_filing_enrichment(&conn, "NVDA", &sec0, Some("Quarterly report"), Some("Revenue rose."), Some(7), None, NOW).unwrap();
-    sf::set_filing_enrichment(&conn, "NVDA", &sec1, Some("Current report"), None, None, Some(true), NOW).unwrap();
-    sf::set_filing_enrichment(&conn, "NVDA", &sedar0, None, Some("An interim report."), Some(3), Some(false), NOW).unwrap();
-    let read = cell(&sf::filings_for(&conn, "NVDA").unwrap());
-    sf::replace_filings(&conn, "NVDA", Regulator::Sec, &sec_items[..sec_items.len() - 1], LATER).unwrap();
+    sf::set_filing_enrichment(&conn, Regulator::Sec, &sec0, Some("Quarterly report"), Some("Revenue rose."), Some(7), None, NOW).unwrap();
+    sf::set_filing_enrichment(&conn, Regulator::Sec, &sec1, Some("Current report"), None, None, Some(true), NOW).unwrap();
+    sf::set_filing_enrichment(&conn, Regulator::Sedar, &sedar0, None, Some("An interim report."), Some(3), Some(false), NOW).unwrap();
+    let read = cell(&sf::filings_of(&conn, &filers).unwrap());
+    sf::replace_filings(&conn, &sec_filer, &sec_items[..sec_items.len() - 1], LATER).unwrap();
     out.insert("store_first".into(), first);
     out.insert("store_read".into(), read);
-    out.insert("store_refreshed".into(), cell(&sf::filings_for(&conn, "NVDA").unwrap()));
-    out.insert("store_all".into(), cell(&sf::filings_all(&conn).unwrap()));
-    out.insert("store_one".into(), cell(&sf::filing(&conn, "NVDA", &sec0).unwrap()));
-    out.insert("store_none".into(), cell(&sf::filing(&conn, "NVDA", "sec:nope").unwrap()));
+    out.insert("store_refreshed".into(), cell(&sf::filings_of(&conn, &filers).unwrap()));
+    let all: Vec<(String, Vec<sf::Filing>)> = sf::filings_all(&conn).unwrap().into_iter().map(|(f, rows)| (format!("{}:{}", f.source.as_str(), f.id), rows)).collect();
+    out.insert("store_all".into(), cell(&all));
+    out.insert("store_one".into(), cell(&sf::filing(&conn, Regulator::Sec, &sec0).unwrap()));
+    out.insert("store_none".into(), cell(&sf::filing(&conn, Regulator::Sec, "sec:nope").unwrap()));
     Value::Object(out)
 }
 

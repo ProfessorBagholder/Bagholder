@@ -101,18 +101,15 @@ impl Exposure {
     }
 }
 
-/// Exposure records by key: a security's id, `share:<TICKER>:<venue form>` for a
-/// listing looked up by ticker, `fund:…` for a fund's own record.
+/// Exposure records by key: a security's id, `share:<ListingKey>` for a listing
+/// classified as a share, `fund:<ListingKey>` for a fund's own record.
 pub type Exposures = HashMap<String, Exposure>;
 
 /// The record an option's exposure is read from: its underlying's share record,
-/// on the venue its currency suggests first.
-pub fn underlying_exposure<'a>(exposures: &'a Exposures, underlying: &str, currency: &str) -> Option<&'a Exposure> {
-    let under = underlying.to_uppercase();
-    let us = format!("{}{}::US", crate::venues::SHARE_KEY, under);
-    let ca = format!("{}{}:", crate::venues::SHARE_KEY, under);
-    let (first, second) = if currency.to_uppercase() == "USD" { (us, ca) } else { (ca, us) };
-    exposures.get(&first).or_else(|| exposures.get(&second))
+/// on the underlying's own venue, which the contract's record names; none where
+/// it names none (a currency never stands in for a venue).
+pub fn underlying_exposure<'a>(exposures: &'a Exposures, underlying: &str, exchange: &str) -> Option<&'a Exposure> {
+    exposures.get(&crate::venues::share_key_of(underlying, exchange)?)
 }
 
 /// The open long positions in scope spread by sector and by country, largest
@@ -156,7 +153,7 @@ pub fn exposure_slices(positions: &[&Position], exposures: &Exposures, cad: &dyn
         let record = match p.kind {
             Kind::Crypto => &coin,
             // a contract is its underlying's exposure, under the share's record
-            Kind::Options => underlying_exposure(exposures, &p.underlying, &p.currency).unwrap_or(&nothing),
+            Kind::Options => underlying_exposure(exposures, &p.underlying, &p.exchange).unwrap_or(&nothing),
             _ => exposures.get(&p.security_id).unwrap_or(&nothing),
         };
         for (name, w) in &record.sectors {

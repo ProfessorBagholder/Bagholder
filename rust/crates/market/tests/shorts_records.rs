@@ -122,12 +122,14 @@ fn answers() -> Value {
     out.insert("ca_position_from_missing".into(), cell(&shorts::ca_position_from("2026-08-31", &ca_pos_rows, "NOPE", "TSX-V", TODAY)));
 
     let ca_vol_rows = shorts::parse_ca_volume(CA_CSV).unwrap();
-    let qnc_row = ca_vol_rows.get("QNC").cloned();
-    let tgif_row = ca_vol_rows.get("TGIF").cloned();
-    out.insert("ca_volume_from_present".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", qnc_row.as_ref(), "TSX-V", || panic!("traded asked while the report carries the listing")).unwrap()));
-    out.insert("ca_volume_from_absent_with_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, "TSX-V", || Ok(Some(1519546.0))).unwrap()));
-    out.insert("ca_volume_from_absent_without_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, "TSX-V", || Ok(None)).unwrap()));
-    out.insert("ca_volume_from_venue_mismatch".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", tgif_row.as_ref(), "TSX-V", || panic!("traded asked though a row was found")).unwrap()));
+    // each row is its listing's: another venue's row of the ticker is none of this one's
+    let row_of = |sym: &str, ex: &str| ca_vol_rows.get(&shorts::ca_row_key(sym, ex).unwrap()).cloned();
+    let qnc_row = row_of("QNC", "TSX-V");
+    let tgif_row = row_of("TGIF", "TSX-V");
+    out.insert("ca_volume_from_present".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", qnc_row.as_ref(), || panic!("traded asked while the report carries the listing")).unwrap()));
+    out.insert("ca_volume_from_absent_with_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, || Ok(Some(1519546.0))).unwrap()));
+    out.insert("ca_volume_from_absent_without_traded".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", None, || Ok(None)).unwrap()));
+    out.insert("ca_volume_from_venue_mismatch".into(), cell(&shorts::ca_volume_from("2026-09-01/2026-09-15", tgif_row.as_ref(), || Ok(None)).unwrap()));
 
     // --- the run of Canadian reports --------------------------------------
     let series = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |d| Ok(rows_on(grids(d)))).unwrap();
@@ -136,12 +138,12 @@ fn answers() -> Value {
     out.insert("ca_series_with_other_venue".into(), cell(&series_other_venue));
 
     // --- fund unit counts --------------------------------------------------
-    out.insert("fund_units_hbix".into(), cell(&shorts::fund_units_with("HBIX", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
-    out.insert("fund_units_bcbn_company".into(), cell(&shorts::fund_units_with("BCBN", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
-    out.insert("fund_units_nopr_no_price".into(), cell(&shorts::fund_units_with("NOPR", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
-    out.insert("fund_units_odds_not_whole".into(), cell(&shorts::fund_units_with("ODDS", "CBOE CANADA", "CAD", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
-    out.insert("fund_units_other_venue".into(), cell(&shorts::fund_units_with("HBIX", "TSX", "CAD", |_| Ok(Some(0.0)), |_| panic!("asked the venue for another one's listing")).unwrap()));
-    out.insert("fund_units_tmx_has_it".into(), cell(&shorts::fund_units_with("XYZ", "CBOE CANADA", "CAD", |_| Ok(Some(4200.0)), |_| panic!("asked the venue when TMX already had a count")).unwrap()));
+    out.insert("fund_units_hbix".into(), cell(&shorts::fund_units_with("HBIX", "CBOE CANADA", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_bcbn_company".into(), cell(&shorts::fund_units_with("BCBN", "CBOE CANADA", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_nopr_no_price".into(), cell(&shorts::fund_units_with("NOPR", "CBOE CANADA", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_odds_not_whole".into(), cell(&shorts::fund_units_with("ODDS", "CBOE CANADA", |_| Ok(None), |s| shorts::cboe_units_with(s, || Ok(directory()))).unwrap()));
+    out.insert("fund_units_other_venue".into(), cell(&shorts::fund_units_with("HBIX", "TSX", |_| Ok(Some(0.0)), |_| panic!("asked the venue for another one's listing")).unwrap()));
+    out.insert("fund_units_tmx_has_it".into(), cell(&shorts::fund_units_with("XYZ", "CBOE CANADA", |_| Ok(Some(4200.0)), |_| panic!("asked the venue when TMX already had a count")).unwrap()));
 
     // --- finish: a US record and a Canadian one, with and without trend ---
     let c = conn();
@@ -170,17 +172,17 @@ fn answers() -> Value {
 
     // --- store round trip ---------------------------------------------------
     let store_conn = conn();
-    bagholder_store::feeds::save_shorts(&store_conn, &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
-    let read_back = bagholder_store::feeds::shorts_for(&store_conn, "GME", "NYSE").unwrap().unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap(), &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
+    let read_back = bagholder_store::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap()).unwrap().unwrap();
     out.insert("store_shorts_for_after_save".into(), cell(&read_back));
 
-    bagholder_store::feeds::save_shorts(&store_conn, &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
     // a second save whose record carries no "series" keeps the series
     // already stored, rather than clearing it
     let mut ca_rec_no_series = out_ca_trend.clone();
     ca_rec_no_series.series = None;
-    bagholder_store::feeds::save_shorts(&store_conn, &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
-    let qnc_after_reserve = bagholder_store::feeds::shorts_for(&store_conn, "QNC", "TSX-V").unwrap().unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
+    let qnc_after_reserve = bagholder_store::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap()).unwrap().unwrap();
     out.insert("store_series_kept_when_a_later_save_omits_it".into(), cell(&qnc_after_reserve));
 
     let mut all = bagholder_store::feeds::all_shorts(&store_conn).unwrap();

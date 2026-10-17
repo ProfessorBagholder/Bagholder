@@ -170,8 +170,9 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
                 unread: bagholder_store::feeds::unread_notifications(book.notices()).ok()?,
             }))
         }
-        // `filings:<symbol=…&name=…&exchange=…&currency=…>`: one listing's disclosures
-        k if k.starts_with("filings:") => Some(Doc::Filings(match crate::feeds::filings_stored(app, &one(&k["filings:".len()..], "symbol")) {
+        // `filings:<symbol=…&exchange=…>`: one listing's disclosures; a key that
+        // names no venue is refused, never read under a guessed one
+        k if k.starts_with("filings:") => Some(Doc::Filings(match filings_listing(&k["filings:".len()..]).and_then(|key| crate::feeds::filings_stored(app, &key)) {
             Ok(d) => FilingsAnswer::Ok(d),
             Err(e) => FilingsAnswer::Err { ok: false, error: e },
         })),
@@ -186,6 +187,15 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         "news" => Some(Doc::News(crate::feeds::news_stored(app))),
         _ => None,
     }
+}
+
+/// The listing a `filings:` key names, by its symbol and its venue.
+fn filings_listing(q: &str) -> Result<bagholder_core::ListingKey, String> {
+    let (symbol, exchange) = (one(q, "symbol"), one(q, "exchange"));
+    if exchange.is_empty() {
+        return Err(format!("{symbol} names no exchange: a ticker can be two companies on two exchanges"));
+    }
+    bagholder_core::ListingKey::on(&symbol, &exchange).map_err(|e| e.to_string())
 }
 
 /// A page has just started showing `key`.
@@ -204,8 +214,9 @@ pub fn opened(app: &Arc<App>, key: &str) {
         k if k.starts_with("quote:") => quote_shown(app.clone(), k.to_string()),
         k if k.starts_with("universe:") => crate::feeds::universe_shown(app.clone(), k.to_string(), k["universe:".len()..].to_string()),
         k if k.starts_with("filings:") => {
-            let q = &k["filings:".len()..];
-            crate::feeds::filings_shown(app.clone(), k.to_string(), one(q, "symbol"), one(q, "name"), one(q, "exchange"), one(q, "currency"));
+            if let Ok(key) = filings_listing(&k["filings:".len()..]) {
+                crate::feeds::filings_shown(app.clone(), k.to_string(), key);
+            }
         }
         _ => {}
     }

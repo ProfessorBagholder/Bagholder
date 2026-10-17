@@ -129,7 +129,7 @@ fn markets_declarations() -> String {
         ShortMarket, VolumeSpan, crate::feeds::ShortReport, crate::feeds::ShortsView, ShortsPayload, ShortsFeedRow, ShortsFeed,
         crate::feeds::FearAnswer, crate::feeds::ShortsAnswer, crate::feeds::ListingAnswer, crate::feeds::NewsSymbolAnswer, crate::following::WatchlistAnswer, crate::following::TilesAnswer,
         crate::http::markets::Listing, crate::http::markets::Fear, crate::http::markets::ShortsQuery, crate::http::markets::GlanceAnswer,
-        crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::WatchlistBody, crate::http::markets::WatchlistRemove, crate::http::markets::TilesSet,
+        crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::Resolve, crate::http::markets::ResolvedListing, crate::http::markets::ResolveAnswer, crate::http::markets::WatchlistBody, crate::http::markets::WatchlistRemove, crate::http::markets::TilesSet,
         crate::http::markets::TileRef,
     ];
     let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { Dec } from '../dec'\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { SymbolMatch } from './wire'\n\n");
@@ -364,7 +364,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
-        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
+        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
@@ -561,4 +561,91 @@ fn test_the_pages_gap_words_are_the_engines() {
         return;
     }
     assert!(std::fs::read_to_string(&path).unwrap_or_default() == want, "web/src/lib/generated/gaps.ts is not the engine's gap words: run with BAGHOLDER_BLESS=1");
+}
+
+/// The page makes a listing's key as the server does (`bagholder_core::listing`):
+/// the venue table is generated into `web/src/lib/generated/venues.ts`, and the
+/// keys the server makes of generated symbols and venues are written beside it
+/// (`listing_vectors.json`) for the page's own test to hold its function to
+/// (`web/src/lib/listingKey.test.ts`), so the two can never read one listing as two.
+#[test]
+fn test_the_pages_venue_table_and_listing_keys_are_the_servers() {
+    use bagholder_core::listing::{CANADA_MICS, CRYPTO, INDEX, MARKET, OCC, OTC, OTC_MICS, US, US_MICS, VENUE_NAMES, VENUE_SUFFIXES, VENUE_WORDS};
+    let q = |s: &str| serde_json::to_string(s).unwrap();
+    let list = |v: &[&str]| format!("[{}]", v.iter().map(|s| q(s)).collect::<Vec<_>>().join(", "));
+    let mut ts = String::from("// Generated from rust/crates/core/src/listing.rs. Do not edit: change the table there, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_venue_table`.\n\n");
+    ts.push_str("/** Each venue's code and the words it is written in (upper case), the code itself among them. */\n");
+    ts.push_str("export const VENUE_WORDS: ReadonlyArray<readonly [string, readonly string[]]> = [\n");
+    for (mic, words) in VENUE_WORDS {
+        ts.push_str(&format!("  [{}, {}],\n", q(mic), list(words)));
+    }
+    ts.push_str("]\n\n");
+    ts.push_str("/** Each venue a key holds, by the name a person reads it under. */\n");
+    ts.push_str("export const VENUE_NAMES: ReadonlyArray<readonly [string, string]> = [\n");
+    for (venue, name) in VENUE_NAMES {
+        ts.push_str(&format!("  [{}, {}],\n", q(venue), q(name)));
+    }
+    ts.push_str("]\n\n");
+    ts.push_str(&format!("export const CANADA_MICS: readonly string[] = {}\n\n", list(&CANADA_MICS)));
+    ts.push_str(&format!("export const US_MICS: readonly string[] = {}\n\n", list(&US_MICS)));
+    ts.push_str(&format!("export const OTC_MICS: readonly string[] = {}\n\n", list(&OTC_MICS)));
+    // the characters the server's spelling reads as space (Unicode's White_Space, as
+    // Rust's `char::is_whitespace`), so the page trims and drops exactly those
+    let spaces: Vec<char> = (0u32..=0x10FFFF).filter_map(char::from_u32).filter(|c| c.is_whitespace()).collect();
+    ts.push_str("/** The characters a symbol or a venue's words are trimmed of and a symbol drops, as the server reads space. */\n");
+    ts.push_str(&format!("export const SPACES: readonly string[] = [{}]\n\n", spaces.iter().map(|c| format!("\"\\u{{{:x}}}\"", *c as u32)).collect::<Vec<_>>().join(", ")));
+    ts.push_str(&format!("export const VENUE_SUFFIXES: readonly string[] = {}\n\n", list(&VENUE_SUFFIXES)));
+    ts.push_str(&format!("export const US = {}\nexport const OTC = {}\nexport const CRYPTO = {}\nexport const INDEX = {}\nexport const OCC = {}\nexport const MARKET = {}\n", q(US), q(OTC), q(CRYPTO), q(INDEX), q(OCC), q(MARKET)));
+    // generated inputs: symbols of every shape a source writes (a class by a dot, a
+    // dash or a slash, a unit, a Yahoo suffix of each venue, an OCC symbol, digits,
+    // empty), each bare and with every character either side reads as space or not
+    // (every Unicode space, and the near-spaces U+FEFF, U+200B, U+180E, U+0085)
+    // before it, after it and inside it, cased both ways
+    let mut shapes: Vec<String> = ["A", "RY", "BRK.B", "BRK-B", "BRK/B", "BEP.UN", "X1", "Q.Q", "TO", "A-B-C", "ZZ/ZZ", "SPXW 241220C05000000", ""].iter().map(|s| s.to_string()).collect();
+    shapes.extend(VENUE_SUFFIXES.iter().flat_map(|x| [format!("ENB{x}"), x.to_string()]));
+    let mut marks: Vec<char> = spaces.clone();
+    marks.extend(['\u{feff}', '\u{200b}', '\u{180e}', '\u{85}', '_']);
+    let mut marked: Vec<String> = Vec::new();
+    for (i, m) in marks.iter().enumerate() {
+        let s = &shapes[i % shapes.len()];
+        let mid = s.len() / 2;
+        marked.push(format!("{m}{s}{m}"));
+        marked.push(format!("{}{m}{}", &s[..mid], &s[mid..]).to_lowercase());
+    }
+    let key_venues: Vec<String> = [US, OTC, CRYPTO, INDEX, OCC, "us", " crypto ", "", "LSE", "MARKET", "TSX"].iter().map(|s| s.to_string()).collect();
+    let mut venues: Vec<String> = VENUE_WORDS.iter().flat_map(|(_, w)| w.iter().map(|s| s.to_string())).collect();
+    venues.extend(VENUE_WORDS.iter().flat_map(|(_, w)| w.iter().map(|s| format!("  {}  ", s.to_lowercase()))));
+    venues.extend(key_venues.iter().cloned());
+    let marked_venues: Vec<String> = marks.iter().flat_map(|m| [format!("{m}TSX{m}"), format!("{m}otc{m}")]).collect();
+    // every shape, both cases, on every venue's every word; every marked symbol on
+    // the key venues; every marked venue under a few shapes
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for s in &shapes {
+        for v in &venues {
+            pairs.push((s.clone(), v.clone()));
+            pairs.push((s.to_lowercase(), v.clone()));
+        }
+    }
+    for s in &marked {
+        pairs.extend(key_venues.iter().map(|v| (s.clone(), v.clone())));
+    }
+    for v in &marked_venues {
+        pairs.extend(["A", "brk-b", "SPXW 241220C05000000"].iter().map(|s| (s.to_string(), v.clone())));
+    }
+    let mut vectors = Vec::new();
+    for (s, v) in &pairs {
+        let key = bagholder_core::ListingKey::on(s, v).ok().map(|k| k.to_string());
+        vectors.push(serde_json::json!([s, v, key]));
+    }
+    let json = serde_json::to_string(&vectors).unwrap() + "\n";
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated");
+    for (file, want) in [("venues.ts", ts), ("listing_vectors.json", json)] {
+        let path = dir.join(file);
+        if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+            std::fs::write(&path, &want).unwrap();
+            continue;
+        }
+        let have = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(have == want, "web/src/lib/generated/{file} is not what the server generates: run with BAGHOLDER_BLESS=1 and check the page");
+    }
 }

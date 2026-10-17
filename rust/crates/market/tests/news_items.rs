@@ -152,6 +152,8 @@ fn answers() -> Value {
     let d = tempfile::tempdir().unwrap();
     let conn = bagholder_store::connect(d.path()).unwrap();
     bagholder_store::relabel::ensure(&conn).unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     let clock = Clock::at(now);
     let both = tmx_post(false);
     let one = tmx_post(true);
@@ -159,24 +161,24 @@ fn answers() -> Value {
     let tmx_half = Net { get: &no_get, post: &one, article: &news::no_article, pace: false };
     let us_net = Net { get: &nasdaq_get, post: &no_post, article: &news::no_article, pace: false };
     let dead = Net { get: &no_get, post: &no_post, article: &news::no_article, pace: false };
-    out.insert("wire_tmx".into(), wire(&news::fetch_symbol(&conn, &tmx_net, "PNG", "TSX-V", "CAD", &clock).1));
-    out.insert("wire_tmx_media_down".into(), wire(&news::fetch_symbol(&conn, &tmx_half, "PNG", "TSX-V", "CAD", &clock).1));
-    out.insert("wire_us".into(), wire(&news::fetch_symbol(&conn, &us_net, "SHOP", "NASDAQ", "USD", &clock).1));
-    out.insert("wire_us_down".into(), wire(&news::fetch_symbol(&conn, &dead, "SHOP", "NASDAQ", "USD", &clock).1));
+    out.insert("wire_tmx".into(), wire(&news::fetch_symbol(&tmx_net, "PNG", "TSX-V", &clock).1));
+    out.insert("wire_tmx_media_down".into(), wire(&news::fetch_symbol(&tmx_half, "PNG", "TSX-V", &clock).1));
+    out.insert("wire_us".into(), wire(&news::fetch_symbol(&us_net, "SHOP", "NASDAQ", &clock).1));
+    out.insert("wire_us_down".into(), wire(&news::fetch_symbol(&dead, "SHOP", "NASDAQ", &clock).1));
 
     // the merge, over three passes of one listing
     let told = Mutex::new(Vec::<Value>::new());
     let on_new = |_: &rusqlite::Connection, sym: &str, ex: &str, rows: &[_], ids: &[String]| {
         told.lock().unwrap().push(json!({"symbol": sym, "exchange": ex, "rows": cell(rows), "new": ids}));
     };
-    let stored = |conn: &rusqlite::Connection| cell(&bagholder_store::feeds::news_for(conn, "PNG", "TSX-V").unwrap());
+    let stored = |conn: &rusqlite::Connection| cell(&bagholder_store::feeds::news_for(conn, &bagholder_core::ListingKey::on("PNG", "TSX-V").unwrap()).unwrap());
     let pass = |conn: &rusqlite::Connection, readers: &Readers, clock: &Clock| {
         let (src, rows) = news::read_listing(conn, readers, "PNG", "TSX-V", "CAD", "Kraken Robotics Inc.", false, clock, Some(&on_new)).unwrap();
         json!({"source": src, "rows": rows.as_ref().map(|r| cell(r)), "stored": stored(conn)})
     };
 
     // first: every source answers
-    let full_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &tmx_net, s, e, cc, cl);
+    let full_wire = |s: &str, e: &str, cl: &Clock| news::fetch_symbol(&tmx_net, s, e, cl);
     let all_extra = |key: Feed, _: &news::Ask| {
         Ok(Some(match key {
             Feed::Yahoo => news::parse_yahoo_news(&yahoo_news(), "PNG.V", "PNG", "Kraken Robotics Inc."),
@@ -187,12 +189,12 @@ fn answers() -> Value {
     out.insert("merge_first".into(), pass(&conn, &Readers { wire: &full_wire, extra: &all_extra }, &clock));
 
     // sixteen minutes on: the stories tab fails, Yahoo fails, the rest are not due
-    let half_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &tmx_half, s, e, cc, cl);
+    let half_wire = |s: &str, e: &str, cl: &Clock| news::fetch_symbol(&tmx_half, s, e, cl);
     let failing = |_: Feed, _: &news::Ask| Err(down());
     out.insert("merge_stand_in".into(), pass(&conn, &Readers { wire: &half_wire, extra: &failing }, &Clock::at(now + 16 * 60)));
 
     // an hour on: nothing answers at all, and the stored list stands
-    let dead_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &dead, s, e, cc, cl);
+    let dead_wire = |s: &str, e: &str, cl: &Clock| news::fetch_symbol(&dead, s, e, cl);
     out.insert("merge_none".into(), pass(&conn, &Readers { wire: &dead_wire, extra: &failing }, &Clock::at(now + 60 * 60)));
 
     out.insert("told".into(), Value::Array(told.into_inner().unwrap()));

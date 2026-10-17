@@ -40,7 +40,7 @@ fn db() -> Db {
 /// A listing's news, as a read stores it.
 fn news(conn: &Connection, symbol: &str, headline: &str) {
     let item = NewsItem { id: format!("tmx:{headline}"), headline: headline.into(), source: "Business Wire".into(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: Feed::Tmx };
-    bagholder_store::feeds::replace_news(conn, symbol, "TSX", &[item], &app::now_iso()).unwrap();
+    bagholder_store::feeds::replace_news(conn, &bagholder_core::ListingKey::on(symbol, "TSX").unwrap(), "TSX", &[item], &app::now_iso()).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
     news(&conn, "VERSQ", &format!("A release at {}", app::now_unix()));
     let v1 = crate::status::answer(&app()).unwrap().data_version;
     assert_ne!(v0, v1, "a news row stored moves the version");
-    conn.execute("DELETE FROM news WHERE symbol = 'VERSQ'", []).unwrap();
+    conn.execute("DELETE FROM news WHERE listing = 'VERSQ@XTSE'", []).unwrap();
     assert_ne!(v1, crate::status::answer(&app()).unwrap().data_version, "and one removed");
 }
 
@@ -192,11 +192,12 @@ fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_backgro
     let from = bagholder_model::dates::shift_date(&today, -40);
     let day = bagholder_model::dates::shift_date(&today, -30);
     let px = bagholder_store::bars::Ohlcv { open: Some(10.0), high: Some(10.5), low: Some(9.5), close: 10.2, volume: Some(1000.0) };
-    bagholder_store::market::upsert_price_history(&conn, "DLYQ", &[bagholder_store::bars::DayBar { date: day.clone(), px }], "test").unwrap();
+    let dlyq = bagholder_core::ListingKey::on("DLYQ", "TSX").unwrap();
+    bagholder_store::market::upsert_price_history(&conn, &dlyq, &[bagholder_store::bars::DayBar { date: day.clone(), px }], "test").unwrap();
     // read from the span's start, but long ago: the copy is stale and the span reaches today
-    bagholder_store::market::mark_history_fetched(&conn, "DLYQ", &from, "2020-01-02T00:00:00Z").unwrap();
+    bagholder_store::market::mark_history_fetched(&conn, &dlyq, &from, "2020-01-02T00:00:00Z").unwrap();
     let q = crate::feeds::HistoryQuery::parse(&format!("symbol=DLYQ&exchange=TSX&currency=CAD&kind=Shares&from={from}&to={today}&tf=1d"));
-    let inst = bagholder_market::history::chart_instrument(&q.read().0);
+    let inst = bagholder_market::history::chart_instrument(&q.read().0).keyed().unwrap();
     assert!(bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now).unwrap(), "the stored copy is due a read");
 
     let crate::feeds::HistoryAnswer::Ok(h) = crate::feeds::history_payload(&app, &q) else { panic!("a known timeframe is answered") };
@@ -384,13 +385,10 @@ use bagholder_market::news::{self, Ask, Clock, Net, NetError, Readers, WireAnswe
 use bagholder_store::feeds::{Feed, NewsItem};
 
 #[test]
-fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
-    // No directory carries every venue, so the venue comes from the app's own knowledge: the
-    // security records the sync brought, then TMX's resolver, which names the venue it verified
-    // by the quote. A ticker TMX cannot place is a US one.
+fn test_a_listing_is_read_under_its_own_venues_form_and_never_placed_by_its_ticker() {
+    // The chip names the listing by its venue: a CSE listing is read under TMX's CSE form, a US
+    // one from Nasdaq, whose items name the symbols they belong to. Nothing places a ticker.
     let _g = guard();
-    let c = app_ref().cache().unwrap();
-    let today = bagholder_market::clock_now().0;
     let seen = std::sync::Mutex::new((Vec::<String>::new(), None::<String>));
     let get = |url: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
         seen.lock().unwrap().0.push(url.to_string());
@@ -401,18 +399,17 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
         Ok(json!({"data": {"news": [{"newsid": "3", "headline": "QIMC Engages", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}))
     };
     let net = Net { get: &get, post: &post, article: &news::no_article, pace: false };
-    let wire = |c: &Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, s, e, cc, cl);
+    let wire = |s: &str, e: &str, cl: &Clock| news::fetch_symbol(&net, s, e, cl);
     let extra = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };
     let readers = Readers { wire: &wire, extra: &extra };
-    // a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
-    bagholder_store::tables::set_meta(&c, "tmx_form:QIMC", "@:CNX").unwrap();
-    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "QIMC", "", "", &readers, &|_, _, _| Ok(None))).unwrap();
+    let none = |_: &str| Ok(vec![]);
+    let qimc = bagholder_core::ListingKey::on("QIMC", "CSE").unwrap();
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), &qimc, "CSE", "CAD", &readers, &none)).unwrap();
     assert_eq!((out["source"].as_str().unwrap(), seen.lock().unwrap().1.clone()), ("tmx", Some("QIMC:CNX".to_string())));
     *seen.lock().unwrap() = (vec![], None);
-    // TMX cannot place it: Nasdaq, whose items name the symbols they belong to
-    bagholder_store::tables::set_meta(&c, "tmx_form:KO", &format!("none@{}", today)).unwrap();
-    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "KO", "", "", &readers, &|_, _, _| Ok(None))).unwrap();
-    assert_eq!((out["source"].as_str().unwrap(), out["exchange"].as_str().unwrap(), seen.lock().unwrap().1.is_some()), ("nasdaq", "NASDAQ", false));
+    let ko = bagholder_core::ListingKey::on("KO", "NYSE").unwrap();
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), &ko, "NYSE", "USD", &readers, &none)).unwrap();
+    assert_eq!((out["source"].as_str().unwrap(), out["exchange"].as_str().unwrap(), seen.lock().unwrap().1.is_some()), ("nasdaq", "NYSE", false));
 }
 
 #[test]
@@ -422,24 +419,29 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
     let now = bagholder_market::clock_now().1 as i64;
     // every source read a moment ago: only a forced read asks them again
     for k in news::EXTRA_SOURCES {
-        bagholder_store::tables::set_meta(&c, &format!("news_source_fetched:{}:SXHI@TSX", k.as_str()), &Clock::at(now).stamp()).unwrap();
+        bagholder_store::tables::set_meta(&c, &format!("news_source_fetched:{}:SXHI@XTSE", k.as_str()), &Clock::at(now).stamp()).unwrap();
     }
-    let read = std::sync::Mutex::new((None::<(String, String, String)>, Vec::<String>::new()));
-    let wire = |_: &Connection, s: &str, e: &str, cc: &str, _: &Clock| {
-        read.lock().unwrap().0 = Some((s.to_string(), e.to_string(), cc.to_string()));
+    let read = std::sync::Mutex::new((None::<(String, String)>, Vec::<String>::new()));
+    let wire = |s: &str, e: &str, _: &Clock| {
+        read.lock().unwrap().0 = Some((s.to_string(), e.to_string()));
         (Feed::Tmx, Some(WireAnswer::default()))
     };
     let extra = |_: Feed, ask: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
         read.lock().unwrap().1.push(ask.name.clone());
         Ok(Some(vec![]))
     };
-    let listing = |_: &Connection, _: &str, _: &str| {
-        Ok(Some(bagholder_model::wire::SymbolMatch { symbol: "SXHI".into(), name: "Ninepoint SpaceX HighShares ETF".into(), exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() }))
+    // TMX's answers for the symbol: the TSX listing's name is this listing's; another venue's is never taken
+    let listing = |_: &str| {
+        Ok(vec![
+            bagholder_model::wire::SymbolMatch { symbol: "SXHI".into(), name: "Some CSE Listing".into(), exchange: "CSE".into(), currency: "CAD".into(), ..Default::default() },
+            bagholder_model::wire::SymbolMatch { symbol: "SXHI".into(), name: "Ninepoint SpaceX HighShares ETF".into(), exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() },
+        ])
     };
-    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing)).unwrap();
+    let sxhi = bagholder_core::ListingKey::on("SXHI", "TSX").unwrap();
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), &sxhi, "TSX", "", &Readers { wire: &wire, extra: &extra }, &listing)).unwrap();
     assert_eq!(out["exchange"], "TSX");
     let got = read.lock().unwrap().clone();
-    assert_eq!(got.0, Some(("SXHI".to_string(), "TSX".to_string(), "CAD".to_string())));
+    assert_eq!(got.0, Some(("SXHI".to_string(), "TSX".to_string())));
     assert!(!got.1.is_empty() && got.1.iter().all(|n| n == "Ninepoint SpaceX HighShares ETF"), "every source asked, forced, under the name TMX gives");
 }
 
@@ -456,7 +458,7 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 18] = [
+const TIMED_WAITS: [(&str, usize, &str); 19] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
     ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
@@ -465,7 +467,8 @@ const TIMED_WAITS: [(&str, usize, &str); 18] = [
     ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
     ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather; four in its tests (the day turning is the scheduler's, `due.rs`; signals that never stop, bounded so the old gathering fails rather than hangs)"),
-    ("server/src/feeds.rs", 13, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/feeds.rs", 10, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/filings.rs", 3, "the regulators offer no push: the daily sweep of the filers held, the gap between two reads at one regulator, and a person's pace at SEDAR+"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/http/stream.rs", 1, "the event stream's keep-alive comment, every fifteen seconds while it is idle, so a connection that died is noticed: the transport's, not a poll"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),

@@ -2,15 +2,16 @@
   "first": {
     "ok": true,
     "symbol": "SHOP",
+    "listing": "SHOP@XTSE",
     "available": "*",
     "sources": {
-      "SEDAR+": {
+      "SEC": {
         "available": "*",
         "matched": true,
         "filer": true,
         "error": ""
       },
-      "SEC": {
+      "SEDAR+": {
         "available": "*",
         "matched": true,
         "filer": true,
@@ -131,15 +132,16 @@
   "again": {
     "ok": true,
     "symbol": "SHOP",
+    "listing": "SHOP@XTSE",
     "available": "*",
     "sources": {
-      "SEDAR+": {
+      "SEC": {
         "available": "*",
         "matched": true,
         "filer": true,
         "error": ""
       },
-      "SEC": {
+      "SEDAR+": {
         "available": "*",
         "matched": true,
         "filer": true,

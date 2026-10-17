@@ -111,8 +111,11 @@ impl Pair {
     /// instrument's history costs.
     fn ops(self) -> &'static [Op] {
         match self {
-            Pair::Breadth => &Op::ALL,
-            Pair::Depth => &[Op::AddTrade, Op::Import],
+            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep],
+            // a change dated today, and one dated in the middle of the history: a
+            // record that states no venue reads as on the one before it, so a
+            // back-dated one re-forms the names after it (brief 44, 2)
+            Pair::Depth => &[Op::AddTrade, Op::Import, Op::BackdatedTrade, Op::BackdatedRecord],
         }
     }
     /// What a probe is told of the pair it measures.
@@ -159,10 +162,15 @@ pub enum Op {
     Brokers,
     PriceChanged,
     FeedStep,
+    /// A trade entered by hand on the holding, dated in the middle of its history.
+    BackdatedTrade,
+    /// One of the broker's records of the holding, from the middle of its history,
+    /// stored again under a new id, as a pull stores a row the broker adds late.
+    BackdatedRecord,
 }
 
 impl Op {
-    pub const ALL: [Op; 6] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep];
+    pub const ALL: [Op; 8] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedRecord];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -171,6 +179,8 @@ impl Op {
             Op::Brokers => "brokers",
             Op::PriceChanged => "price-changed",
             Op::FeedStep => "feed-step",
+            Op::BackdatedTrade => "backdated-trade",
+            Op::BackdatedRecord => "backdated-record",
         }
     }
     fn parse(s: &str) -> Option<Op> {
@@ -178,7 +188,11 @@ impl Op {
     }
     /// A person waits on it: its wall time fails the run.
     fn waited_on(self) -> bool {
-        matches!(self, Op::Startup | Op::AddTrade | Op::Import)
+        matches!(self, Op::Startup | Op::AddTrade | Op::Import | Op::BackdatedTrade)
+    }
+    /// A change dated before today.
+    fn backdated(self) -> bool {
+        matches!(self, Op::BackdatedTrade | Op::BackdatedRecord)
     }
     /// It answers one change: the growth rule holds it.
     fn per_change(self) -> bool {
@@ -715,9 +729,8 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             f.names()?;
             #[cfg(test)]
             let window = paths_mark(f, instrument);
-            #[cfg(not(test))]
-            let _ = instrument; // what the test's record of the window keys on
-            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol, currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
+            // the holding by its id, as the page names one it holds
+            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
             crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
             // a test's planted fold of the names, which the growth rule must catch
@@ -730,6 +743,45 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             #[cfg(test)]
             paths_taken(f, window);
             Ok(out)
+        }
+        Op::BackdatedTrade | Op::BackdatedRecord => {
+            let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
+            f.names()?;
+            let book = f.book()?;
+            // the broker's record of the holding in the middle of its history, by day
+            let (record, day): (String, String) = {
+                let c = book.conn_for_tests();
+                let n: i64 = c
+                    .query_row(
+                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1",
+                        [instrument.to_string()],
+                        |r| r.get(0),
+                    )
+                    .map_err(err)?;
+                c.query_row(
+                    "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL
+                     WHERE t.instrument_id = ?1 ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
+                    rusqlite::params![instrument.to_string(), n / 2],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(err)?
+            };
+            let m;
+            if op == Op::BackdatedTrade {
+                let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day, side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
+                m = mark();
+                crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
+            } else {
+                let id = bagholder_core::RecordId::parse(&record).map_err(err)?;
+                let rec = book.record(id).map_err(err)?;
+                let payload = book.revisions(id).map_err(err)?.pop().map(|(_, _, p)| p).ok_or("the record has no revision")?;
+                let key = format!("{}-late", rec.source_key);
+                m = mark();
+                book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &key, payload: &payload, refs: vec![] }, Timestamp::now()).map_err(err)?;
+                f.record_changed(Timestamp::now())?;
+            }
+            let _ = currency;
+            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
         }
         Op::Import => {
             let mut text = String::from("Date,Action,Symbol,Quantity,Price,Amount,Currency\n");
@@ -794,6 +846,9 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         Op::Startup => (STARTUP_MS as f64, "RAIL load"),
         Op::AddTrade => (ANSWER_MS as f64, "RAIL response (answered with its figures)"),
         Op::Import => (TO_FIGURES_MS as f64, "RAIL flow"),
+        Op::BackdatedTrade => (ANSWER_MS as f64, "RAIL response (answered with its figures)"),
+        // a row the pull brings: its figures by the next balances read
+        Op::BackdatedRecord => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::Brokers => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::PriceChanged => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         Op::FeedStep => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / signals a pass sends"),
@@ -875,7 +930,11 @@ pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
     }
     if op.per_change() {
         let ratio = |a: u64, b: u64| if a == 0 { if b == 0 { 1.0 } else { f64::INFINITY } } else { b as f64 / a as f64 };
-        for (what, a, b) in [("steps", Some(one.steps), Some(four.steps)), ("allocations", Some(one.allocs), Some(four.allocs)), ("bytes read", one.read, four.read)] {
+        // a back-dated change re-derives every later trade of its instrument (a
+        // sale after it may match other lots), so the engine's allocations follow the
+        // trades after its day; the book's work for it, its names among it, does not
+        let engine = if op.backdated() { None } else { Some((one.allocs, four.allocs)) };
+        for (what, a, b) in [("steps", Some(one.steps), Some(four.steps)), ("allocations", engine.map(|e| e.0), engine.map(|e| e.1)), ("bytes read", one.read, four.read)] {
             if let (Some(a), Some(b)) = (a, b) {
                 let r = ratio(a, b);
                 if r >= GROWTH_LIMIT {
