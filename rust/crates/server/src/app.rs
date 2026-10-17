@@ -132,6 +132,10 @@ pub struct Wall {
     /// comes after the one the test made.
     #[cfg(test)]
     seen: Mutex<Vec<(std::time::SystemTime, std::time::SystemTime)>>,
+    /// Tests only: the threads that have begun a slice of a wait, so a test knows
+    /// its waiter has read the clock it measures every later moment from.
+    #[cfg(test)]
+    slicing: Mutex<std::collections::HashSet<std::thread::ThreadId>>,
 }
 
 /// How often a long wait looks at the wall clock: a minute, as cron looks for the
@@ -150,6 +154,8 @@ impl Default for Wall {
             pinned: Mutex::new(None),
             #[cfg(test)]
             seen: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            slicing: Mutex::new(Default::default()),
         }
     }
 }
@@ -173,9 +179,13 @@ impl Wall {
 
     /// What is left at `now` of a wait until `until`, and how long to sleep in the
     /// kernel for before looking at the clock again; none once it has come. `now` is
-    /// the reading the wait then stamps as its start (`waited`), one reading for
-    /// both, so a sleep that begins at any moment after it falls inside the wait.
+    /// the reading the wait then stamps as its start (`waited`), and the reading that
+    /// ended the slice before (or set the deadline, for the first): one reading
+    /// for each moment, so a sleep that begins at any moment of the wait falls
+    /// inside one of its slices.
     pub fn slice(&self, until: std::time::SystemTime, now: std::time::SystemTime) -> Option<Duration> {
+        #[cfg(test)]
+        self.slicing.lock().unwrap_or_else(|e| e.into_inner()).insert(std::thread::current().id());
         let left = until.duration_since(now).ok().filter(|l| !l.is_zero())?;
         Some(left.min(self.check()))
     }
@@ -199,6 +209,12 @@ impl Wall {
             };
             log(&format!("bagholder: this machine was asleep from about {} to {}: what came due meanwhile is read now", at(before + slice), at(after)));
         }
+    }
+
+    /// Whether `thread` has begun a slice of a wait. Tests only.
+    #[cfg(test)]
+    pub fn slicing(&self, thread: std::thread::ThreadId) -> bool {
+        self.slicing.lock().unwrap_or_else(|e| e.into_inner()).contains(&thread)
     }
 
     /// Every sleep seen since the last call, emptied. Tests only.
@@ -389,17 +405,19 @@ impl App {
     /// loops waiting that was about seventy wake-ups a second from an app doing
     /// nothing; a minute is one wake-up each for a loop waiting longer than that.)
     pub fn wait(&self, d: Duration) -> bool {
-        let until = self.wall.now() + d;
+        let mut before = self.wall.now();
+        let until = before + d;
         let (m, c) = &self.stop_bell;
         let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if self.stopping() {
                 return true;
             }
-            let before = self.wall.now();
             let Some(slice) = self.wall.slice(until, before) else { return false };
             g = c.wait_timeout_while(g, slice, |_| !self.stopping()).unwrap_or_else(|e| e.into_inner()).0;
-            self.wall.waited(before, slice, self.wall.now());
+            let after = self.wall.now();
+            self.wall.waited(before, slice, after);
+            before = after;
         }
     }
 
@@ -629,12 +647,16 @@ mod wall_tests {
         for which in ["wait", "park_until_or"] {
             let (tx, rx) = std::sync::mpsc::channel();
             let a = app.clone();
-            std::thread::spawn(move || {
+            let waiter = std::thread::spawn(move || {
                 let hour = Duration::from_secs(3600);
                 let stopped = if which == "wait" { a.wait(hour) } else { a.events.park_until_or(&a, hour, || false) };
                 tx.send(stopped).unwrap();
             });
-            assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "{which}: still waiting, its hour not come");
+            // the machine sleeps once the waiter has read its clock, which every later moment of its wait is measured from
+            while !app.wall.slicing(waiter.thread().id()) {
+                std::thread::yield_now();
+            }
+            assert!(rx.try_recv().is_err(), "{which}: still waiting, its hour not come");
             app.wall.sleep_through(Duration::from_secs(3600));
             let stopped = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("{which}: its deadline passed while the machine slept, and it did not end on waking"));
             assert!(!stopped, "{which}: the time came; nothing stopped");
