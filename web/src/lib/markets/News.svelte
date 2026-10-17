@@ -1,6 +1,7 @@
 <script lang="ts">
   import { positions, markets, headlines, use, filtered, limits, more, FIRST_ROWS } from '../subs.svelte'
   import { keyed } from '../keys'
+  import { untrack } from 'svelte'
   // The News card (newsCardHtml): the tabbed card — Stories / Releases /
   // Disclosures — with a scope segment, a symbol chip, a search box, and one line
   // per item. Stories and releases are the server's `headlines`: the items of the
@@ -212,21 +213,34 @@
     if (kind !== 'disc') lookedUp = { chip: only, v: headlines.v }
   }
   const chipOf = (l: ResolvedListing): Chip => ({ symbol: bareSymbol(l.symbol).toUpperCase(), exchange: String(l.exchange || '').toUpperCase(), name: l.name, currency: l.currency })
+  // every listing of `key`, as the resolver gives them: taken, offered, or said
+  // failed; `still` says whether the answer is still wanted when it lands
+  function resolveTicker(key: string, still: () => boolean) {
+    read('GET /api/listings', { query: { symbol: key } }).then((r) => {
+      if (!still()) return
+      const listings = r.ok ? r.listings : []
+      const error = r.ok ? r.unread.join(' ') : r.error
+      if (listings.length === 1 && !error) return takeChip(chipOf(listings[0]))
+      choices = listings.length > 1 || error ? { key, listings, error } : null
+    })
+  }
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
+  let typed = ''
   $effect(() => {
-    const key = tickerKey(query)
+    const q = query
+    const key = tickerKey(q)
     clearTimeout(lookupTimer)
-    if (choices && choices.key !== key) choices = null
+    // what was offered for other words goes once the words change, never otherwise
+    if (q !== typed) {
+      typed = q
+      untrack(() => {
+        if (choices && choices.key !== key) choices = null
+      })
+    }
     if (sym || !key) return
     lookupTimer = setTimeout(() => {
       if (sym || query.trim().toUpperCase() !== key) return
-      read('GET /api/listings', { query: { symbol: key } }).then((r) => {
-        if (sym || query.trim().toUpperCase() !== key) return
-        const listings = r.ok ? r.listings : []
-        const error = r.ok ? r.unread.join(' ') : r.error
-        if (listings.length === 1 && !error) return takeChip(chipOf(listings[0]))
-        choices = listings.length > 1 || error ? { key, listings, error } : null
-      })
+      resolveTicker(key, () => !sym && query.trim().toUpperCase() === key)
     }, 500)
   })
 
@@ -236,7 +250,9 @@
   function newsSym(t: { symbol: string; exchange: unknown }) {
     const chip = { symbol: bareSymbol(t.symbol), exchange: String(t.exchange || '').toUpperCase() }
     if (chipKey(chip)) return newsChip(chip)
-    query = chip.symbol
+    // asked whatever chip is on: its one listing takes the chip in its place
+    const key = chip.symbol.trim().toUpperCase()
+    if (key) resolveTicker(key, () => true)
   }
   function openStory(n: Headline) {
     if (n.filed) return openDisc({ id: n.filed.id, sym: n.filed.symbol, source: n.filed.source, url: n.filed.url })

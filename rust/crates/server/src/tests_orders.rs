@@ -488,6 +488,9 @@ fn an_order_is_recorded_in_wealthsimples_words_for_its_listing_never_the_pages()
     let page = json!({"listing": {"securityId": "sec-s-ry-us", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
     let asked = o::ticket_order(&app, &ticket(page)).expect("an order on the listing");
     assert_eq!((asked.order.broker_security.as_str(), asked.order.symbol.as_str(), asked.order.currency), ("sec-s-ry-us", "RY", bagholder_core::Currency::USD));
+    // the order states its listing's venue as Wealthsimple does, code and words, so its
+    // fill names the instrument as the broker's own rows do (brief 44)
+    assert_eq!((asked.order.venue_mic.as_deref(), asked.order.venue_name.as_deref()), (Some("XNYS"), Some("NYSE")));
     let unknown = json!({"listing": {"securityId": "sec-s-nowhere", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
     assert_eq!(o::ticket_order(&app, &ticket(unknown)).unwrap_err(), "Wealthsimple does not know TD on TSX.");
     // a listing whose summary states no currency, or no symbol, is never ordered in the
@@ -2203,4 +2206,25 @@ fn a_repeat_while_the_first_is_being_placed_is_in_flight_and_never_sent() {
     let r = o::place_ticket(&app, &t);
     assert_eq!((r.ok, r.id.as_deref(), r.status.as_deref()), (true, Some(id.as_str()), Some("sending")));
     assert!(fake.0.lock().unwrap().creates.is_empty(), "nothing sent for the repeat");
+}
+
+/// An order states its listing's venue as Wealthsimple states it, for every code it
+/// may give, an older spelling included: never left out, never respelled (brief 44).
+#[test]
+fn an_order_states_its_listings_venue_as_wealthsimple_does() {
+    let _g = crate::tests_common::guard();
+    let (_h, app, _fake) = ticket_app();
+    set_session(&app, Some(tok()));
+    for (mic, words, ccy) in [("XTSV", "TSX-V", "CAD"), ("XTSX", "TSX-V", "CAD"), ("XTSE", "TSX", "CAD"), ("XNAS", "NASDAQ", "USD"), ("OTCM", "OTC", "USD")] {
+        let (m, w, c) = (mic.to_string(), words.to_string(), ccy.to_string());
+        let id = format!("sec-s-venue-{}", mic.to_lowercase());
+        let sid = id.clone();
+        set_gql(&app, move |op, _| match op {
+            "FetchSecuritiesSummary" => Ok(json!({"securities": [found_row(&sid, "ZQVN", "EQUITY", &m, &w, &c)]})),
+            _ => panic!("{op}"),
+        });
+        let page = json!({"listing": {"securityId": id, "symbol": "ZQVN", "exchange": words, "currency": ccy}, "stopLoss": null, "takeProfit": null});
+        let asked = o::ticket_order(&app, &ticket(page)).expect("an order on the listing");
+        assert_eq!((asked.order.venue_mic.as_deref(), asked.order.venue_name.as_deref()), (Some(mic), Some(words)), "{mic}");
+    }
 }

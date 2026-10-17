@@ -121,11 +121,12 @@
     return 'Nothing reported yet.'
   })
 
-  // the rows found for a ticker typed stand beside what could not be read for it
+  // what could not be read for a ticker typed is said beside whatever rows show for
+  // it, its own or the feed's that its words match
   const lookupError = $derived.by(() => {
     const q = query.trim().toUpperCase()
     const f = q ? found[q] : null
-    return f?.rows && f.error ? 'Could not read short interest for ' + q + ': ' + f.error : ''
+    return f?.error ? 'Could not read short interest for ' + q + ': ' + f.error : ''
   })
 
   function pickScope(v: string) {

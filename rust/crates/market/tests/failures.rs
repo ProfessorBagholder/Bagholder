@@ -104,8 +104,9 @@ fn a_market_series_top_up_returns_what_failed() {
 #[test]
 fn short_interest_from_a_regulator_that_did_not_answer_is_the_failure() {
     let conn = db();
+    // the test process is offline, so FINRA is never asked: the read fails as refused, never as no position
     let err = shorts::for_listing(&conn, "GME", "NYSE", "2026-09-16", false, "").unwrap_err();
-    assert!(err.contains("FINRA"), "{err}");
+    assert!(err.is_offline(), "{err}");
 }
 
 /// The market's trading days are read from the store: a store that cannot be
@@ -123,7 +124,7 @@ fn short_interest_whose_store_cannot_be_read_is_the_failure() {
     assert!(shorts::for_listing(&conn, "QNC", "TSX-V", "2026-09-16", false, "").unwrap().is_some());
     conn.execute_batch("DROP TABLE benchmark_closes;").unwrap();
     let err = shorts::for_listing(&conn, "QNC", "TSX-V", "2026-09-16", false, "").unwrap_err();
-    assert!(err.contains("could not be read"), "{err}");
+    assert!(err.to_string().contains("could not be read"), "{err}");
 }
 
 /// A Coinbase market lookup that failed is not remembered as a miss.

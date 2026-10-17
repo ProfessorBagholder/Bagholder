@@ -41,6 +41,8 @@ export interface TradeForm {
   cost: string
   acquired: string
   error: string
+  /** Why the symbol typed cannot be added as it stands; gone once the symbol changes. */
+  symbolError: string
 }
 /** One file's import: what it did, or why it was refused. */
 export type ImportFileReport = { file: string; report: ImportedFileReport } | { file: string; error: string }
@@ -52,7 +54,7 @@ function today(): string {
   return localDay()
 }
 function freshTradeForm(): TradeForm {
-  return { mode: 'trade', date: today(), account: '', symbol: '', listing: '', listings: [], listingsOf: '', listingsError: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '' }
+  return { mode: 'trade', date: today(), account: '', symbol: '', listing: '', listings: [], listingsOf: '', listingsError: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', arrival: '', cost: '', acquired: '', error: '', symbolError: '' }
 }
 
 export const ui = $state<{
@@ -312,7 +314,9 @@ export async function saveTrade(): Promise<void> {
     // a contract is written by its terms, which name no exchange; a share is its listing
     const listed = isContract(symbol) ? null : f.listings.find((l) => l.listing === f.listing)
     if (!isContract(symbol) && !listed) {
-      f.error = f.listings.length ? CHOOSE_EXCHANGE : f.listingsError || 'No listing of ' + symbol + ' is found on an exchange.'
+      // a directory that did not answer is said once, under the Exchange box, already
+      f.error = ''
+      f.symbolError = f.listings.length ? CHOOSE_EXCHANGE : f.listingsError ? '' : 'No listing of ' + symbol + ' is found on an exchange.'
       return
     }
     body = { entry: 'trade', account: f.account, instrument: null, symbol, exchange: listed?.exchange ?? '', currency: f.currency, day: f.date, side: f.side, quantity: text(f.qty), price: text(f.price), fee: text(f.fees) }
@@ -526,7 +530,7 @@ export const CHOOSE_EXCHANGE = 'Choose the exchange it trades on.'
 /** The Add trade form's listing chosen: its prompt to choose one has been answered. */
 export function tradeListingChosen(): void {
   const f = ui.tradeForm
-  if (f.listing && f.error === CHOOSE_EXCHANGE) f.error = ''
+  if (f.listing && f.symbolError === CHOOSE_EXCHANGE) f.symbolError = ''
 }
 
 /**
@@ -537,8 +541,8 @@ export function tradeListingChosen(): void {
 export async function resolveTradeSymbol(symbol: string): Promise<void> {
   const f = ui.tradeForm
   const sym = symbol.trim().toUpperCase()
-  // a symbol typed again asks again: the prompt about the last one no longer stands
-  if (f.error === CHOOSE_EXCHANGE) f.error = ''
+  // a symbol typed again asks again: what was said of the last one no longer stands
+  f.symbolError = ''
   if (!sym || isContract(sym)) {
     f.listings = []
     f.listing = ''

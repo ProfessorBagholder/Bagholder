@@ -37,8 +37,8 @@ fn stated(rng: &mut Rng) -> (Option<String>, Option<String>) {
     }
 }
 
-fn share(seen: &str, venue: &(Option<String>, Option<String>)) -> serde_json::Value {
-    let mut v = json!({"refs": [["isin", "CA0000000009"], ["broker-security:wealthsimple", "sec-9"]], "kind": "security", "currency": "CAD", "symbol": "ZQV", "seen": seen});
+fn share(symbol: &str, seen: &str, venue: &(Option<String>, Option<String>)) -> serde_json::Value {
+    let mut v = json!({"refs": [["isin", "CA0000000009"], ["broker-security:wealthsimple", "sec-9"]], "kind": "security", "currency": "CAD", "symbol": symbol, "seen": seen});
     if let Some(m) = &venue.0 {
         v["mic"] = json!(m);
     }
@@ -46,6 +46,37 @@ fn share(seen: &str, venue: &(Option<String>, Option<String>)) -> serde_json::Va
         v["venue"] = json!(w);
     }
     v
+}
+
+/// What a record stated of the instrument: its day, the order it was written in,
+/// its symbol, and its venue as a code and in words (none, for a record stating none).
+type Said = (String, usize, String, Option<(Option<String>, Option<String>)>);
+
+/// The names the rule gives, written from the rule itself (brief 43), not from the
+/// book's fold: the records in order of day, symbol and writing; one that states no
+/// venue reads as on the venue the run before it is on, code and words; an unbroken
+/// run of one symbol on one code is one name, its words the latest a record in it
+/// stated, else those it was carried on. (symbol, code, words, first day, last day)
+fn reference(said: &[Said]) -> Vec<(String, Option<String>, Option<String>, String, String)> {
+    let mut order: Vec<&Said> = said.iter().collect();
+    order.sort_by(|a, b| (&a.0, &a.2, a.1).cmp(&(&b.0, &b.2, b.1)));
+    let mut runs: Vec<(String, Option<String>, Option<String>, String, String)> = Vec::new();
+    for (day, _, symbol, venue) in order {
+        let (mic, words) = match venue {
+            Some(v) => v.clone(),
+            None => runs.last().map(|r| (r.1.clone(), r.2.clone())).unwrap_or_default(),
+        };
+        match runs.last_mut() {
+            Some(r) if r.0 == *symbol && r.1 == mic => {
+                r.4 = day.clone();
+                if words.is_some() {
+                    r.2 = words;
+                }
+            }
+            _ => runs.push((symbol.clone(), mic, words, day.clone(), day.clone())),
+        }
+    }
+    runs
 }
 
 #[test]
@@ -57,23 +88,25 @@ fn the_venue_is_the_last_one_stated_and_a_record_stating_none_never_changes_it()
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         // the instrument, first named by the broker on a venue
         let first = stated(&mut rng);
-        let r = f.store(&Spelled::v(1), "first", &legs(vec![buy("a1", share("2026-03-01", &first), "100", "-100", "2026-03-01T15:00:00Z")]));
+        let r = f.store(&Spelled::v(1), "first", &legs(vec![buy("a1", share("ZQV", "2026-03-01", &first), "100", "-100", "2026-03-01T15:00:00Z")]));
         let id = f.book.transactions_of(r.record).unwrap()[0].instrument.unwrap();
         // what each record stated, by its day and the order it was written in
-        let mut said: Vec<(String, usize, Option<(Option<String>, Option<String>)>)> = vec![("2026-03-01".into(), 0, Some(first))];
+        let mut said: Vec<Said> = vec![("2026-03-01".into(), 0, "ZQV".into(), Some(first))];
         for n in 1..40usize {
             // any day of a span around the first: a record may be dated before what came earlier
             let day = format!("2026-0{}-{:02}", 2 + rng.below(3), 1 + rng.below(28));
             let at: jiff::Timestamp = format!("{day}T16:00:00Z").parse().unwrap();
             let venue = if rng.below(2) == 0 { Some(stated(&mut rng)) } else { None };
             let none = (None, None);
+            // the ticker changes now and then, and back
+            let symbol = if rng.below(4) == 0 { "ZQW" } else { "ZQV" };
             let writer = rng.below(4);
             let step = format!("seed {seed}, step {n}, writer {writer}, {day}, {venue:?}");
             match writer {
                 // the broker's pull, and an import of the person's own records
                 0 | 1 => {
                     let source = if writer == 0 { Spelled::v(1) } else { Spelled { source: "csv", version: 1 } };
-                    f.store(&source, &format!("r{n}"), &legs(vec![buy("a1", share(&day, venue.as_ref().unwrap_or(&none)), "1", "-1", &format!("{day}T15:00:00Z"))]));
+                    f.store(&source, &format!("r{n}"), &legs(vec![buy("a1", share(symbol, &day, venue.as_ref().unwrap_or(&none)), "1", "-1", &format!("{day}T15:00:00Z"))]));
                 }
                 // a fill of the app's own order, on its listing's venue where the order states one
                 2 => {
@@ -84,7 +117,7 @@ fn the_venue_is_the_last_one_stated_and_a_record_stating_none_never_changes_it()
                         broker: "wealthsimple".into(),
                         broker_account: "a1".into(),
                         broker_security: "sec-9".into(),
-                        symbol: "ZQV".into(),
+                        symbol: symbol.into(),
                         venue_mic,
                         venue_name,
                         currency: Currency::CAD,
@@ -107,18 +140,19 @@ fn the_venue_is_the_last_one_stated_and_a_record_stating_none_never_changes_it()
                     f.book.enter(&Entry::Trade { account, instrument: Traded::Held(id), day, side: EntrySide::Buy, quantity: d("1"), price: Money::new(d("1"), Currency::CAD), fee: None }, at).unwrap();
                 }
             }
-            // a fill is dated its own day in the book's zone; the hand entry and the
-            // others as stated: all here are stated on `day`
-            let venue = if writer == 3 { None } else { venue };
-            said.push((day, n, venue));
-            let mut stating: Vec<&(String, usize, Option<(Option<String>, Option<String>)>)> = said.iter().filter(|s| s.2.is_some()).collect();
-            stating.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
-            let last = stating.last().unwrap().2.as_ref().unwrap();
-            let want = venue_of(last.0.as_deref(), last.1.as_deref());
-            let names = f.book.names(id).unwrap();
+            // a fill is dated its own day in the book's zone, the others as stated:
+            // all here are on `day`; a trade entered by hand on the instrument held
+            // names it by its reference and states no name at all
+            if writer != 3 {
+                said.push((day, n, symbol.to_string(), venue));
+            }
+            // every name, against the rule's own
+            let names: Vec<(String, Option<String>, Option<String>, String, String)> =
+                f.book.names(id).unwrap().into_iter().map(|n| (n.symbol, n.venue_mic, n.venue_name, n.first_seen.to_string(), n.last_seen.to_string())).collect();
+            assert_eq!(names, reference(&said), "{step}");
+            // and the venue now is one the table knows: every venue stated here is
             let now = names.last().unwrap();
-            assert_eq!(venue_of(now.venue_mic.as_deref(), now.venue_name.as_deref()), want, "{step}: {names:?}");
-            assert!(want.is_some(), "{step}: every venue here is one the table knows");
+            assert!(venue_of(now.1.as_deref(), now.2.as_deref()).is_some(), "{step}: {names:?}");
         }
     }
 }

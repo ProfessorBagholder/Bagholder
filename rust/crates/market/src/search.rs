@@ -47,7 +47,10 @@ pub fn parse_nasdaq_search(data: &Value) -> Vec<SymbolMatch> {
         if !q.is_object() || !NASDAQ_ASSETS.contains(&s(q.get("asset")).to_uppercase().as_str()) {
             continue;
         }
-        let ex = NASDAQ_EXCHANGES.iter().find(|(k, _, _)| *k == s(q.get("exchange")).to_uppercase()).map(|(_, v, _)| *v);
+        // the venue by Nasdaq's own code, else by the one venue table (an OTC row's
+        // `OTC` is the OTC market): a row on a venue the table knows is listed on it
+        let raw = s(q.get("exchange")).trim().to_uppercase();
+        let ex: Option<String> = NASDAQ_EXCHANGES.iter().find(|(k, _, _)| *k == raw).map(|(_, v, _)| v.to_string()).or_else(|| bagholder_core::listing::mic_of(&raw).map(|_| raw.clone()));
         let sym = s(q.get("symbol")).to_uppercase();
         let tail = sym.rsplit('.').next().unwrap_or("").to_string();
         let ex = match ex { Some(e) if !sym.is_empty() && !NASDAQ_DERIVATIVE_SUFFIXES.contains(&tail.as_str()) => e, _ => continue };
@@ -152,6 +155,17 @@ pub struct Searched {
     pub unread: Vec<String>,
 }
 
+/// A failure as a sentence of its own: ended with a full stop where its words end
+/// with none, so sentences said one after another read apart.
+fn sentence(mut s: String) -> String {
+    let end = s.trim_end().len();
+    s.truncate(end);
+    if !s.ends_with(['.', '!', '?']) {
+        s.push('.');
+    }
+    s
+}
+
 /// Each directory by the name its failure is said under.
 const DIRECTORY_NAMES: [(&str, &str); 3] = [("nasdaq", "Nasdaq's directory"), ("tsx", "The TSX's directory"), ("tsxv", "The TSX Venture's directory")];
 
@@ -207,7 +221,7 @@ pub fn symbol_search_with(text: &str, get: &(dyn Fn(&str) -> Result<String, Stri
             }
             Err(e) => {
                 let named = DIRECTORY_NAMES.iter().find(|(n, _)| *n == name).map_or("A directory", |(_, w)| *w);
-                errors.push(format!("{named} could not be read: {e}"));
+                errors.push(sentence(format!("{named} could not be read: {e}")));
             }
         }
     }
@@ -219,7 +233,7 @@ pub fn symbol_search_with(text: &str, get: &(dyn Fn(&str) -> Result<String, Stri
         // answering is one more directory unread
         match tmx(&text) {
             Ok(hits) => found = hits,
-            Err(e) => errors.push(format!("TMX could not be read: {e}")),
+            Err(e) => errors.push(sentence(format!("TMX could not be read: {e}"))),
         }
     }
     let mut all = bagholder_model::instruments::search(&text);
@@ -253,10 +267,13 @@ mod tests {
             {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "exchange": "NASDAQ", "asset": "ETF"},
             {"symbol": "AAPL.WS", "name": "Apple Warrants", "exchange": "NASDAQ-GS", "asset": "STOCKS"},
             {"symbol": "XYZ", "name": "Some Bond", "exchange": "NASDAQ-GS", "asset": "BOND"},
-            {"symbol": "NOEX", "name": "No Exchange Match", "exchange": "OTC", "asset": "STOCKS"},
+            {"symbol": "ZQOT", "name": "Zqot OTC Co", "exchange": "OTC", "asset": "STOCKS"},
+            {"symbol": "NOEX", "name": "No Exchange Match", "exchange": "LSE", "asset": "STOCKS"},
         ]});
         let out = parse_nasdaq_search(&data);
-        assert_eq!(out, vec![m("AAPL", "Apple Inc.", "NASDAQ", "USD"), m("SPY", "SPDR S&P 500 ETF Trust", "NASDAQ", "USD")]);
+        // an OTC row is listed on the OTC market; one on a venue no table knows is not listed
+        assert_eq!(out, vec![m("AAPL", "Apple Inc.", "NASDAQ", "USD"), m("SPY", "SPDR S&P 500 ETF Trust", "NASDAQ", "USD"), m("ZQOT", "Zqot OTC Co", "OTC", "USD")]);
+        assert_eq!(bagholder_core::ListingKey::on("ZQOT", "OTC").unwrap().to_string(), "ZQOT@OTC");
     }
 
     /// Every directory that does not answer is named, whichever it is and however
@@ -291,7 +308,7 @@ mod tests {
         }
         // the directories found nothing and TMX does not answer: TMX is unread
         let found = symbol_search_with("ZQY9", &|_| Ok(none.clone()), &|_| Err("down".into()));
-        assert_eq!(found.unread, ["TMX could not be read: down"]);
+        assert_eq!(found.unread, ["TMX could not be read: down."], "a sentence of its own");
         assert!(symbol_search_with("ZQY8", &|_| Ok(none.clone()), &|_| Ok(vec![])).unread.is_empty(), "every one answered, with none: no listing, nothing unread");
     }
 

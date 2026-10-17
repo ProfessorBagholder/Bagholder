@@ -93,10 +93,34 @@ test.describe('Add trade, the exchange', () => {
   test('"Not listed" only where every directory answered with none', async ({ page }) => {
     await open(page, { ZQEB: { listings: [], unread: ["Nasdaq's directory could not be read: refused"] }, ZQEC: { listings: [], unread: [] } })
     await typeSymbol(page, 'ZQEB')
-    await expect(exchange(page).locator('option')).toHaveText([''])
+    // the answer has landed (its failure is said), and only then is the box read
     await expect(page.locator('#modalDlg .status-err')).toHaveText("Nasdaq's directory could not be read: refused")
+    await expect(exchange(page).locator('option')).toHaveText([''])
     await typeSymbol(page, 'ZQEC')
+    await expect(page.locator('#modalDlg .status-err')).toHaveCount(0)
     await expect(exchange(page).locator('option')).toHaveText(['Not listed'])
+  })
+
+  test('a directory that did not answer is said once, also when the trade is added', async ({ page }) => {
+    await open(page, { ZQEG: { listings: [], unread: ["Nasdaq's directory could not be read: refused."] } })
+    await typeSymbol(page, 'ZQEG')
+    const boxes = page.locator('.input[inputmode="decimal"]')
+    await boxes.nth(0).fill('1')
+    await boxes.nth(1).fill('1')
+    await page.getByRole('button', { name: 'Add trade' }).click()
+    await expect(page.locator('#modalDlg .status-err')).toHaveText(["Nasdaq's directory could not be read: refused."])
+  })
+
+  test('what was said of a symbol goes once the symbol changes', async ({ page }) => {
+    await open(page, { ZQZA: { listings: [], unread: [] }, ZQZB: { listings: [], unread: [] } })
+    await typeSymbol(page, 'ZQZA')
+    const boxes = page.locator('.input[inputmode="decimal"]')
+    await boxes.nth(0).fill('1')
+    await boxes.nth(1).fill('1')
+    await page.getByRole('button', { name: 'Add trade' }).click()
+    await expect(page.locator('#modalDlg .status-err')).toHaveText('No listing of ZQZA is found on an exchange.')
+    await typeSymbol(page, 'ZQZB')
+    await expect(page.locator('#modalDlg .status-err')).toHaveCount(0)
   })
 
   test('a contract written by its terms leaves the box empty', async ({ page }) => {

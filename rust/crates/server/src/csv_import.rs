@@ -223,7 +223,7 @@ pub fn import_from(
                 let instrument = match &stated {
                     Ok(s) => match (&s.instrument, s.currency) {
                         (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency)? {
-                            Some(t) => Some(book.name(placed, &t).map_err(|e| match e {
+                            Some(t) => Some(book.name_stated(placed, &t, Some(symbol)).map_err(|e| match e {
                                 bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
                                 other => Refused::Failed(other.to_string()),
                             })?),

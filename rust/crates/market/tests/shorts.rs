@@ -1,6 +1,7 @@
 //! Short selling, which regulator answers for a
 //! listing, what each report says, and the figure the app derives from them.
 
+use bagholder_net::Failure;
 use bagholder_market::shorts::{self, CaPositionRow, CaVolumeRow, Position, UsVolumeRow};
 use bagholder_store::feeds::{ShortMarket, VolumeSpan};
 use serde_json::{json, Value};
@@ -199,7 +200,7 @@ fn test_a_symbol_finra_does_not_carry_answers_nothing_rather_than_guessing() {
 fn test_a_whole_market_file_is_read_once_and_used_for_every_listing() {
     let _g = serial();
     let calls = Cell::new(0);
-    let get = |_: &str| -> Result<String, String> {
+    let get = |_: &str| -> Result<String, Failure> {
         calls.set(calls.get() + 1);
         Ok(US_FILE.to_string())
     };
@@ -218,8 +219,8 @@ fn test_a_file_that_will_not_answer_keeps_what_was_already_read() {
     let _g = serial();
     shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Ok(US_FILE.to_string()))).unwrap();
     shorts::age_file("us_volume", shorts::FILE_HOURS * 3600 + 1);
-    let failed = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Err("FINRA: HTTP 503".to_string())));
-    assert_eq!(failed, Err("FINRA: HTTP 503".to_string()));
+    let failed = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Err("FINRA: HTTP 503".into())));
+    assert_eq!(failed, Err("FINRA: HTTP 503".into()));
     let kept = shorts::us_volume_with("GME", || panic!("read again")).unwrap().unwrap();
     assert_eq!(kept.short_volume, Some(2250985.897562));
 }
@@ -232,7 +233,7 @@ fn test_a_date_not_yet_published_is_passed_over_and_none_answering_is_the_failur
     let newest = std::cell::Cell::new(true);
     let got = shorts::us_volume_file_with(TODAY, |_| if newest.replace(false) { Err("FINRA: HTTP 404".into()) } else { Ok(US_FILE.to_string()) });
     assert!(got.unwrap().is_some());
-    assert_eq!(shorts::us_volume_file_with(TODAY, |_| Err("FINRA: HTTP 503".into())), Err("FINRA: HTTP 503".to_string()));
+    assert_eq!(shorts::us_volume_file_with(TODAY, |_| Err("FINRA: HTTP 503".into())), Err("FINRA: HTTP 503".into()));
     assert_eq!(shorts::us_volume_file_with(TODAY, |_| Ok(String::new())), Ok(None), "files that answer with no rows are no failure");
 }
 
@@ -321,13 +322,13 @@ fn test_every_settlement_finra_answered_with_is_kept_oldest_first() {
     assert_eq!(shares, vec![1.0, 2.0, 3.0]);
 }
 
-fn rows_on(grid: Result<Vec<Vec<Value>>, String>) -> HashMap<String, CaPositionRow> {
+fn rows_on(grid: Result<Vec<Vec<Value>>, Failure>) -> HashMap<String, CaPositionRow> {
     grid.map(|g| shorts::parse_ca_positions(&g)).unwrap_or_default()
 }
 
 #[test]
 fn test_the_canadian_run_reads_one_file_per_reporting_date() {
-    let grids = |day: &str| -> Result<Vec<Vec<Value>>, String> {
+    let grids = |day: &str| -> Result<Vec<Vec<Value>>, Failure> {
         let shares = match day {
             "2026-08-31" => 300.0,
             "2026-08-15" => 200.0,
@@ -381,7 +382,7 @@ impl Yahoo {
     fn new(answers: Vec<(&'static str, String, u16)>) -> Self {
         Yahoo { answers, asked: RefCell::new(vec![]) }
     }
-    fn get(&self, form: &str) -> Result<(u16, String), String> {
+    fn get(&self, form: &str) -> Result<(u16, String), Failure> {
         let url = shorts::YAHOO_STATS_URL.replacen("{}", form, 1).replacen("{}", "abc", 1);
         self.asked.borrow_mut().push(url.clone());
         for (mark, payload, status) in &self.answers {

@@ -258,3 +258,20 @@ test('typing lists the book\'s own symbols first, then matches on other fields, 
   expect(iAccount).toBeGreaterThan(iBook)
   expect(iExternal).toBeGreaterThan(iAccount)
 })
+
+// brief 44, 8: a search a directory did not answer says so, beside what it found, and
+// says "No match." only where every directory answered
+test('the symbol picker says a directory that did not answer, never "No match." for it', async ({ page, request }) => {
+  let unread = ["Nasdaq's directory could not be read: refused."]
+  await page.route('**/api/symbols/search*', (route) => route.fulfill({ json: { ok: true, unread, matches: [] } }))
+  await openWithStatus(page, request, {}, '')
+  await ready(page)
+  await page.keyboard.press('ControlOrMeta+k')
+  await page.getByLabel('Search', { exact: true }).fill('ZQPKX')
+  await expect(page.locator('.pop .status-err')).toHaveText("Nasdaq's directory could not be read: refused.")
+  await expect(page.locator('.pop')).not.toContainText('No match.')
+  unread = []
+  await page.getByLabel('Search', { exact: true }).fill('ZQPKY')
+  await expect(page.locator('.pop')).toContainText('No match.')
+  await expect(page.locator('.pop .status-err')).toHaveCount(0)
+})

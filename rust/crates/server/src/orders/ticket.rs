@@ -227,6 +227,7 @@ fn remember_summary(app: &Arc<App>, q: &TicketQuoteDetail) -> Option<bagholder_m
         symbol: q.symbol.clone(),
         name: q.name.clone(),
         primary_exchange: q.exchange.clone(),
+        primary_mic: q.mic.clone(),
         currency: q.currency.to_uppercase(),
         ..Default::default()
     };
@@ -350,6 +351,8 @@ pub struct TicketQuoteDetail {
     pub symbol: String,
     pub name: String,
     pub exchange: String,
+    /// The venue's code as Wealthsimple states it (`XTSE`); empty where it states none.
+    pub mic: String,
     pub currency: String,
     pub security_type: String,
     pub buyable: bool,
@@ -396,6 +399,7 @@ pub fn parse_quote(node: &wire::SummarySecurity) -> Option<TicketQuoteDetail> {
         symbol: stock.symbol,
         name: stock.name,
         exchange: stock.primary_exchange,
+        mic: stock.primary_mic,
         currency: if q.currency.is_empty() { &node.currency } else { &q.currency }.to_uppercase(),
         security_type: node.security_type.clone(),
         buyable: node.buyable,
@@ -903,8 +907,10 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
     }
     let currency = Currency::parse(&sec.currency.trim().to_uppercase()).map_err(|_| format!("The currency of {} is not known.", sec.symbol))?;
     let id = order_id(&t.id)?;
-    // the venue of the listing traded, by the one venue rule: its fill states it
-    let venue_mic = bagholder_core::listing::venue_of(Some(&sec.primary_mic), Some(&sec.primary_exchange)).map(str::to_string);
+    // the venue of the listing traded as Wealthsimple states it, code and words, as its
+    // own rows state it: its fill states it the same, so its names never split on a
+    // spelling (`XTSV` stays `XTSV`; the venue rule reads either as the same venue)
+    let venue_mic = Some(sec.primary_mic.trim().to_string()).filter(|m| !m.is_empty());
     let venue_name = Some(sec.primary_exchange.trim().to_string()).filter(|w| !w.is_empty());
     let mut order = OrderRequest {
         venue_mic,

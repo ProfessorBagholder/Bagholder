@@ -877,7 +877,7 @@ mod tests {
     fn a_row_maps_to_its_transaction_in_the_file_s_currency() {
         let (zones, record) = ctx();
         let c = MapContext { connection: None, record, zones: &zones };
-        let named = Named { refs: vec![("isin".into(), "US0000000001".into())], kind: "security".into(), currency: "USD".into(), symbol: "ZZZ".into(), contract: None, venue: None };
+        let named = Named { refs: vec![("isin".into(), "US0000000001".into())], kind: "security".into(), currency: "USD".into(), symbol: "ZZZ".into(), contract: None, venue: None, by_reference: false };
         let m = CsvMapping.map(&c, &payload(Layout::Simple, cells(&[("date", "2024-03-01"), ("action", "buy"), ("symbol", "ZZZ"), ("quantity", "5"), ("price", "20"), ("amount", "100"), ("currency", "USD")]), Some(named)));
         assert!(m.problems.is_empty(), "{:?}", m.problems);
         let d = &m.legs[0];

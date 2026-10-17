@@ -223,7 +223,8 @@ fn each_subjects_newest_counted_outcome_is_the_one_that_says_how_it_is() {
     let (_d, c) = open();
     let at = |n: u64| t("2026-09-24T12:00:00Z") + Duration::from_secs(n);
     // every outcome that says how a source is, followed by one that does not
-    for (n, kind) in OutcomeKind::ALL.into_iter().filter(|k| *k != OutcomeKind::NotCarried).enumerate() {
+    // (an offline refusal is no outcome at all, `a_request_the_process_was_told_not_to_make_…`)
+    for (n, kind) in OutcomeKind::ALL.into_iter().filter(|k| !matches!(k, OutcomeKind::NotCarried | OutcomeKind::Offline)).enumerate() {
         let n = n as u64 * 10;
         c.record(&outcome("a", OutcomeKind::Answered, at(n))).unwrap();
         c.record(&outcome("a", kind, at(n + 1))).unwrap();
@@ -243,15 +244,17 @@ fn each_subjects_newest_counted_outcome_is_the_one_that_says_how_it_is() {
 fn a_request_the_process_was_told_not_to_make_is_no_outcome_of_the_source() {
     let (_d, c) = open();
     let at = t("2026-09-24T12:00:00Z");
-    // refused by BAGHOLDER_OFFLINE: nothing was asked, nothing is recorded
-    let offline = OutcomeRow { detail: bagholder_net::client::OFFLINE.into(), ..outcome("a", OutcomeKind::Unreachable, at) };
-    c.record(&offline).unwrap();
-    // as it reads, or with the reader's own subject before it
-    c.record(&OutcomeRow { detail: format!("SPY: {}", bagholder_net::client::OFFLINE), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
+    // refused by BAGHOLDER_OFFLINE: nothing was asked, nothing is recorded; known by
+    // its kind, whatever its words
+    c.record(&outcome("a", OutcomeKind::Offline, at)).unwrap();
+    c.record(&OutcomeRow { detail: "anything at all".into(), ..outcome("a", OutcomeKind::Offline, at) }).unwrap();
     assert!(c.outcomes(&SourceName::named("a")).unwrap().is_empty());
+    // the transport's refusal is that kind, from the reader's error on
+    let refused: bagholder_sources::outcome::Outcome<()> = bagholder_net::NetError::Offline.into();
+    assert_eq!(refused.kind(), OutcomeKind::Offline);
     assert!(c.newest_counted_by_subject().unwrap().is_empty(), "a source nobody asked is not failing");
-    // a source that could not be reached is still one, whatever else its words say
-    c.record(&OutcomeRow { detail: "offline: the host said so".into(), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
+    // a source that could not be reached is still one, whatever its words say
+    c.record(&OutcomeRow { detail: bagholder_net::client::OFFLINE.into(), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
     assert_eq!(c.newest_counted_by_subject().unwrap().len(), 1);
 }
 

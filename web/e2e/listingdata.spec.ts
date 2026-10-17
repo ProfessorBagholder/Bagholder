@@ -18,6 +18,8 @@ test("one ticker on two venues: each holding shows its own listing's short inter
   for (const p of tds) {
     const read = await request.get('/api/shorts?' + new URLSearchParams({ symbol: 'TD', exchange: p.exchange, currency: p.currency, name: '', trend: 'false' }))
     const shorts = (await read.json()).shorts
+    // each holding's page loaded fresh: a page already open may draw the chart it read ahead, asking nothing
+    await page.goto('about:blank')
     const history = page.waitForResponse((r) => r.url().includes('/api/history') && new URL(r.url()).searchParams.get('exchange') === p.exchange)
     await page.goto('/#portfolio/' + encodeURIComponent(p.id))
     const bars = (await (await history).json()).bars as { close: number }[]

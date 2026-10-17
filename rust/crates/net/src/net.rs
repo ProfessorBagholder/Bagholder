@@ -68,6 +68,8 @@ pub enum NetError {
     Resting { host: String, until: Timestamp },
     /// The host could not be reached, or the transport failed.
     Unreachable(String),
+    /// Refused by `BAGHOLDER_OFFLINE`: nothing was sent.
+    Offline,
 }
 
 impl std::fmt::Display for NetError {
@@ -75,6 +77,7 @@ impl std::fmt::Display for NetError {
         match self {
             NetError::Resting { host, until } => write!(f, "{host} refused a request and is not asked again before {until}"),
             NetError::Unreachable(why) => write!(f, "{why}"),
+            NetError::Offline => f.write_str(client::OFFLINE),
         }
     }
 }
@@ -162,16 +165,18 @@ impl Net {
     /// with a `Retry-After`) also rests the host, for as long as it says.
     pub fn send(&self, ask: &Ask) -> Result<Reply, NetError> {
         let host = host_of(ask.url);
-        // told to stay off the network: nothing leaves, and the refusal says so in
-        // the one wording a record of it can tell apart (`client::OFFLINE`)
+        // told to stay off the network: nothing leaves, and the refusal is its own kind
         if self.replaced.is_none() && client::offline() && !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
-            return Err(NetError::Unreachable(client::OFFLINE.into()));
+            return Err(NetError::Offline);
         }
         self.limiter.turn(&host, &*self.clock).map_err(|Resting { until }| NetError::Resting { host: host.clone(), until })?;
         let (status, url, headers, body) = match (&self.replaced, ask.via) {
             (Some(t), _) => t.answer(ask)?,
             (None, Via::Direct) => {
-                let r = client::request_any(ask.method, ask.url, ask.headers, ask.body, ask.timeout).map_err(|e| NetError::Unreachable(e.to_string()))?;
+                let r = client::request_any(ask.method, ask.url, ask.headers, ask.body, ask.timeout).map_err(|e| match e {
+                    client::Error::Offline => NetError::Offline,
+                    e => NetError::Unreachable(e.to_string()),
+                })?;
                 (r.status, ask.url.to_string(), r.headers, r.body)
             }
             (None, Via::Browser) => {

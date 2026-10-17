@@ -26,6 +26,15 @@ use bagholder_store::feeds::{FiledDocument, Filer, Regulator};
 /// lists, renames or delists.
 pub const FILERS_RECHECK_HOURS: f64 = 24.0;
 
+/// How often the filings are swept: a filer's documents, a listing's filer and the
+/// lists they are read from are looked at again this often.
+pub const FILINGS_SWEEP_EVERY_SEC: u64 = 300;
+
+/// A read that failed is asked again after one sweep, then twice as long after
+/// each failure in a row after it, as every source is (`market::grown_rest`, the
+/// app's one backoff); never on every pass.
+pub const FAILED_READ_REST: std::time::Duration = std::time::Duration::from_secs(FILINGS_SWEEP_EVERY_SEC);
+
 pub const FINANCIALS: &str = "Financials";
 pub const EVENTS: &str = "Material events";
 pub const GOVERNANCE: &str = "Governance";
@@ -41,12 +50,25 @@ pub enum SourceError {
     Unavailable(String),
     /// Anything else that went wrong, as `kind: message`.
     Other(String),
+    /// Not asked: the process is offline (`BAGHOLDER_OFFLINE`); no failure of the source's.
+    Offline,
 }
 
 impl std::fmt::Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SourceError::Unavailable(m) | SourceError::Other(m) => write!(f, "{}", m),
+            SourceError::Offline => f.write_str(bagholder_net::client::OFFLINE),
+        }
+    }
+}
+
+impl SourceError {
+    /// The failure as the header carries it: an offline refusal by its kind.
+    pub fn failure(&self) -> bagholder_net::Failure {
+        match self {
+            SourceError::Offline => bagholder_net::Failure::Offline,
+            e => bagholder_net::Failure::Said(e.to_string()),
         }
     }
 }
@@ -149,8 +171,8 @@ impl Regulators for Live {
 
     fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
         crate::interlisted::fetch().map_err(|e| match e {
-            // a request refused by `BAGHOLDER_OFFLINE` asked nobody: kept in its own words, so the header knows it for none
-            crate::http::FetchError::Transport(m) if bagholder_net::client::is_offline_refusal(&m) => SourceError::Unavailable(m),
+            // a request refused by `BAGHOLDER_OFFLINE` asked nobody
+            crate::http::FetchError::Offline => SourceError::Offline,
             e => SourceError::Unavailable(crate::http::describe_failure(&e)),
         })
     }
@@ -203,6 +225,8 @@ pub fn gather(regulators: &dyn Regulators, listing: &ListingKey, partner: Option
 fn outcome_of(e: &SourceError) -> SourceOutcome {
     match e {
         SourceError::Unavailable(m) => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: m.clone() },
+        // not asked: the card says the source could not be had, in the refusal's words
+        SourceError::Offline => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: bagholder_net::client::OFFLINE.into() },
         SourceError::Other(m) => SourceOutcome { available: true, matched: false, filer: false, count: 0, error: m.clone() },
     }
 }

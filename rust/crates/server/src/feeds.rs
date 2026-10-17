@@ -69,11 +69,12 @@ pub struct FeedsState {
 /// header): a failure the next asking answers is no failure the person needs to
 /// know of, and nothing is shown for a moment and gone. A request refused by
 /// `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the feed's and is not
-/// said (as the market sources' cache does not record one).
-pub(crate) fn feed_failed(app: &Arc<App>, feed: &str, why: String) {
-    if bagholder_net::client::is_offline_refusal(&why) {
-        return;
-    }
+/// said (as the market sources' cache does not record one): known by its kind.
+pub(crate) fn feed_failed(app: &Arc<App>, feed: &str, why: impl Into<bagholder_net::Failure>) {
+    let why = match why.into() {
+        bagholder_net::Failure::Offline => return,
+        bagholder_net::Failure::Said(why) => why,
+    };
     let missed = {
         let mut m = app.feeds.missed.lock().unwrap_or_else(|e| e.into_inner());
         let n = m.entry(feed.to_string()).or_insert(0);
@@ -153,7 +154,7 @@ const EXPOSURE: &str = "exposure";
 const SHORTS: &str = "shorts";
 
 /// `feed`'s outcome said: its failure until it next succeeds.
-pub(crate) fn went<T>(app: &Arc<App>, feed: &str, r: Result<T, String>) -> Option<T> {
+pub(crate) fn went<T, E: Into<bagholder_net::Failure>>(app: &Arc<App>, feed: &str, r: Result<T, E>) -> Option<T> {
     match r {
         Ok(v) => {
             feed_answered(app, feed);
@@ -263,7 +264,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     let (today_s, _, _) = bagholder_market::clock_now();
     let Ok(p) = pool(app) else { return };
     let ctx = exposure::Ctx { conn: &c, pool: p, today: today_s.clone() };
-    let exposure_failed = |e: String| feed_failed(app, "exposure", format!("The exposures could not be refreshed: {e}"));
+    let exposure_failed = |e: bagholder_net::Failure| feed_failed(app, "exposure", e.map(|e| format!("The exposures could not be refreshed: {e}")));
     let stale = |ids: &[String]| exposure::stale(&ctx, ids);
     let mut todo: Vec<String> = match stale(&held) {
         Ok(t) => t.into_iter().filter(|sid| secs.contains_key(sid)).collect(),
@@ -312,7 +313,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     }
     let queue = Arc::new(Mutex::new(jobs.into_iter().collect::<std::collections::VecDeque<_>>()));
     // what each record's read failed on, said together once the pass is over
-    let failures: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let failures: Arc<Mutex<Vec<bagholder_net::Failure>>> = Arc::new(Mutex::new(Vec::new()));
     let mut handles = Vec::new();
     for _ in 0..EXPOSURE_WORKERS {
         let queue = queue.clone();
@@ -348,14 +349,14 @@ pub fn refresh_exposures(app: &Arc<App>) {
                     ExposureJob::Watch(sym, ex, ccy) => match exposure::share_exposure(&ctx, &sym, &ex, &ccy) {
                         Ok(_) => format!("bagholder exposure: {} (watched) classified", sym),
                         Err(e) => {
-                            failures.lock().unwrap_or_else(|p| p.into_inner()).push(format!("{sym}: {e}"));
+                            failures.lock().unwrap_or_else(|p| p.into_inner()).push(e.map(|e| format!("{sym}: {e}")));
                             continue;
                         }
                     },
                     ExposureJob::Under(under, ex) => match exposure::share_exposure(&ctx, &under, &ex, "") {
                         Ok(_) => format!("bagholder exposure: {} (an option's underlying) classified", under),
                         Err(e) => {
-                            failures.lock().unwrap_or_else(|p| p.into_inner()).push(format!("{under}: {e}"));
+                            failures.lock().unwrap_or_else(|p| p.into_inner()).push(e.map(|e| format!("{under}: {e}")));
                             continue;
                         }
                     },
@@ -368,9 +369,11 @@ pub fn refresh_exposures(app: &Arc<App>) {
         handles.push(h.expect("the system could not start a thread"));
     }
     let stopped = handles.into_iter().map(|h| h.join()).filter(Result::is_err).count();
-    let mut failures = std::mem::take(&mut *failures.lock().unwrap_or_else(|p| p.into_inner()));
     // a source not asked because the app is offline answered nothing, and failed nothing
-    failures.retain(|f| !bagholder_net::client::is_offline_refusal(f));
+    let mut failures: Vec<String> = std::mem::take(&mut *failures.lock().unwrap_or_else(|p| p.into_inner())).into_iter().filter_map(|f| match f {
+        bagholder_net::Failure::Said(s) => Some(s),
+        bagholder_net::Failure::Offline => None,
+    }).collect();
     if stopped > 0 {
         failures.push(format!("{stopped} of the readers stopped short"));
     }
@@ -656,7 +659,7 @@ pub fn read_fear(app: &Arc<App>, index: &str) -> Result<StoredGauge, String> {
 /// `read_fear` with the publisher given. While the read is in the air a page showing
 /// the meter is told so (`FearDoc::reading`), so a meter with nothing held yet reads
 /// as being read rather than as a publisher that did not answer.
-fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf::Gauge, String>) -> Result<StoredGauge, String> {
+fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf::Gauge, bagholder_net::Failure>) -> Result<StoredGauge, String> {
     let which = index.trim().to_lowercase();
     app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).insert(which.clone());
     app.events.signal();
@@ -674,7 +677,7 @@ fn read_fear_with(app: &Arc<App>, index: &str, read: impl FnOnce() -> Result<sf:
     }
     app.feeds.fear_reading.lock().unwrap_or_else(|e| e.into_inner()).remove(&which);
     app.events.signal();
-    rec
+    rec.map_err(|e| e.to_string())
 }
 
 fn fear_stale(rec: &StoredGauge) -> bool {
@@ -826,7 +829,7 @@ pub fn read_shorts(app: &Arc<App>, key: &bagholder_core::ListingKey, exchange: &
         }
         Err(e) => {
             // said with every other listing the same failure stopped (`feed_failures`)
-            feed_failed(app, &feed, e.to_string());
+            feed_failed(app, &feed, e);
             return Ok(None);
         }
     };
@@ -1937,7 +1940,7 @@ mod tests {
         for index in fear::INDEXES {
             read_fear_with(&a, index, || Ok(gauge(40.0))).unwrap();
             let why = format!("{index} could not be reached.");
-            assert_eq!(read_fear_with(&a, index, || Err(why.clone())).unwrap_err(), why);
+            assert_eq!(read_fear_with(&a, index, || Err(why.clone().into())).unwrap_err(), why);
             let after = fear_stored(&a, index);
             assert!(!after.reading, "a failed read is not still being read");
             assert_eq!(after.gauge.map(|g| g.gauge.score), Some(40.0));

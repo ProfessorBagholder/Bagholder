@@ -83,6 +83,10 @@ enum Payload {
         /// written before names none
         #[serde(default, skip_serializing_if = "Option::is_none")]
         venue: Option<String>,
+        /// an instrument the book holds, named by its reference alone: the record
+        /// states no name (`Named::by_reference`)
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        by_reference: bool,
         day: String,
         side: String,
         quantity: String,
@@ -106,6 +110,10 @@ pub struct ContractTerms {
     pub underlying: Vec<(String, String)>,
     pub underlying_kind: String,
     pub underlying_symbol: String,
+    /// The underlying is one the book holds, named by its reference alone: the
+    /// record states no name of it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underlying_by_reference: bool,
     pub expiry: String,
     pub strike: String,
     pub right: String,
@@ -125,6 +133,11 @@ pub struct Named {
     /// The listing's venue as a market identifier code, where named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub venue: Option<String>,
+    /// An instrument the book holds, named by its reference: the record states no
+    /// name, so it never writes today's symbol onto its own, maybe earlier, day
+    /// (`symbol` is its label alone). A record written before states one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_reference: bool,
 }
 
 impl Named {
@@ -138,7 +151,7 @@ impl Named {
                     refs: refs(&c.underlying)?,
                     kind: InstrumentKind::parse(&c.underlying_kind).map_err(|e| e.to_string())?,
                     currency,
-                    name: Some(NameDraft { symbol: c.underlying_symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
+                    name: (!c.underlying_by_reference).then(|| NameDraft { symbol: c.underlying_symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
                     option: None,
                     standing: None,
                 }),
@@ -153,7 +166,7 @@ impl Named {
             refs: refs(&self.refs)?,
             kind: InstrumentKind::parse(&self.kind).map_err(|e| e.to_string())?,
             currency,
-            name: Some(NameDraft { symbol: self.symbol.clone(), venue_mic: self.venue.clone(), venue_name: None, name: None, seen: day }),
+            name: (!self.by_reference).then(|| NameDraft { symbol: self.symbol.clone(), venue_mic: self.venue.clone(), venue_name: None, name: None, seen: day }),
             option,
             standing: None,
         })
@@ -196,11 +209,11 @@ impl Mapping for PersonMapping {
             Ok(p) => p,
             Err(e) => return Mapped::unreadable(format!("an entry that does not read: {e}")),
         };
-        if let Payload::Trade { account, instrument, kind, currency, symbol, contract, venue, day, side, quantity, price, fee } = &p {
+        if let Payload::Trade { account, instrument, kind, currency, symbol, contract, venue, by_reference, day, side, quantity, price, fee } = &p {
             let read = || -> std::result::Result<Draft, String> {
                 let day: jiff::civil::Date = day.parse().map_err(|e: jiff::Error| e.to_string())?;
                 let q = Dec::parse(quantity).map_err(|e| e.to_string())?;
-                let named = Named { refs: instrument.clone(), kind: kind.clone(), currency: currency.clone(), symbol: symbol.clone(), contract: contract.clone(), venue: venue.clone() };
+                let named = Named { refs: instrument.clone(), kind: kind.clone(), currency: currency.clone(), symbol: symbol.clone(), contract: contract.clone(), venue: venue.clone(), by_reference: *by_reference };
                 let instrument = named.draft(day)?;
                 let (kind_tx, q) = match side.as_str() {
                     "buy" => (Kind::Buy, q),
@@ -282,18 +295,31 @@ impl Book {
     /// instrument the book holds by its strongest reference, one it has not met by
     /// its symbol and currency within the account's connection.
     pub fn name(&self, account: AccountId, traded: &Traded) -> Result<Named> {
+        self.name_stated(account, traded, None)
+    }
+
+    /// `name`, for a record that states the symbol it was given (a file's row): an
+    /// instrument the book holds is named by its reference and that symbol, a
+    /// sighting on the record's own day of what its source called it, never today's
+    /// symbol written onto that day.
+    pub fn name_stated(&self, account: AccountId, traded: &Traded, stated: Option<&str>) -> Result<Named> {
         let a = self.account(account)?;
-        let (refs, kind, currency, symbol, contract, venue) = match traded {
+        let stated = stated.map(|s| s.trim().to_uppercase()).filter(|s| !s.is_empty());
+        let (refs, kind, currency, symbol, contract, venue, by_reference) = match traded {
             Traded::Held(i) => {
                 let held = self.instrument(*i)?;
-                let symbol = self.current_symbol(*i)?.ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?;
+                let symbol = match &stated {
+                    Some(s) => s.clone(),
+                    None => self.current_symbol(*i)?.ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?,
+                };
                 let strong = self.strong_ref(*i).or_else(|_| {
                     // one a connection names by its symbol: the same reference again
                     self.instrument_refs(*i)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {i} has no reference")))
                 })?;
                 // named by its reference: the record states no venue, and the fold keeps
-                // the one its records last stated (`names`)
-                (vec![strong], held.kind, held.currency, symbol, None, None)
+                // the one its records last stated (`names`); a hand entry states no name
+                // at all, a file's row the symbol its file gives
+                (vec![strong], held.kind, held.currency, symbol, None, None, stated.is_none())
             }
             Traded::Named { symbol, currency, contract, venue } => {
                 let symbol = symbol.trim().to_uppercase();
@@ -316,7 +342,7 @@ impl Book {
                         if !c.strike.is_positive() {
                             return Err(BookError::Refused(format!("a strike of {}", c.strike.to_text())));
                         }
-                        let (underlying, underlying_kind, underlying_symbol) = match &c.underlying {
+                        let (underlying, underlying_kind, underlying_symbol, underlying_by_reference) = match &c.underlying {
                             Underlying::Held(u) => {
                                 let held = self.instrument(*u)?;
                                 if held.currency != *currency {
@@ -324,22 +350,22 @@ impl Book {
                                 }
                                 let name = self.current_symbol(*u)?.ok_or_else(|| BookError::Refused(format!("instrument {u} has no name")))?;
                                 let strong = self.strong_ref(*u).or_else(|_| self.instrument_refs(*u)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {u} has no reference"))))?;
-                                (vec![strong], held.kind, name)
+                                (vec![strong], held.kind, name, true)
                             }
                             Underlying::Named(u) => {
                                 let u = u.trim().to_uppercase();
                                 let r = Reference::connection_symbol(a.connection, &u, *currency);
-                                (vec![(r.scheme.to_text(), r.value)], InstrumentKind::Security, u)
+                                (vec![(r.scheme.to_text(), r.value)], InstrumentKind::Security, u, false)
                             }
                         };
-                        Some(ContractTerms { underlying, underlying_kind: underlying_kind.as_str().to_string(), underlying_symbol, expiry: c.expiry.to_string(), strike: c.strike.to_text(), right: c.right.as_str().to_string() })
+                        Some(ContractTerms { underlying, underlying_kind: underlying_kind.as_str().to_string(), underlying_symbol, underlying_by_reference, expiry: c.expiry.to_string(), strike: c.strike.to_text(), right: c.right.as_str().to_string() })
                     }
                 };
                 let kind = if terms.is_some() { InstrumentKind::OptionContract } else { InstrumentKind::Security };
-                (vec![(r.scheme.to_text(), r.value)], kind, *currency, symbol, terms, venue)
+                (vec![(r.scheme.to_text(), r.value)], kind, *currency, symbol, terms, venue, false)
             }
         };
-        Ok(Named { refs, kind: kind.as_str().to_string(), currency: currency.to_string(), symbol, contract, venue })
+        Ok(Named { refs, kind: kind.as_str().to_string(), currency: currency.to_string(), symbol, contract, venue, by_reference })
     }
 
     /// Keep an entry of the person's, each its own record. An entry the book
@@ -404,6 +430,7 @@ impl Book {
                     symbol: named.symbol,
                     contract: named.contract,
                     venue: named.venue,
+                    by_reference: named.by_reference,
                     day: day.to_string(),
                     side: match side {
                         Side::Buy => "buy",

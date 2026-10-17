@@ -65,6 +65,7 @@ impl From<SourceError> for Fail {
         match e {
             SourceError::Unavailable(m) => Fail::Source(m),
             SourceError::Other(m) => Fail::Other(m),
+            SourceError::Offline => Fail::Source(bagholder_net::client::OFFLINE.into()),
         }
     }
 }

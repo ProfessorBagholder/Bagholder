@@ -131,6 +131,15 @@ describe('a ticker searched for', () => {
     expect(c.querySelector('.status-err')?.textContent).toContain("The TSX's directory could not be read")
   })
 
+  it('with a read that failed, says so even where the feed\'s rows match the words typed', async () => {
+    const c = await show([row('RWZT', 30, { held: true })], 'all')
+    listedOn = { RW: ['TSX'] }
+    failsOn = ['TSX']
+    await type(c, 'RW')
+    expect(symbols(c)).toEqual(['RWZT'])
+    expect(c.querySelector('.status-err')?.textContent).toBe('Could not read short interest for RW: TMX could not be reached.')
+  })
+
   it('found on no venue while a directory did not answer, says the failure, never that no listing is by that name', async () => {
     const c = await show([], 'all')
     listedOn = { RX: [] }

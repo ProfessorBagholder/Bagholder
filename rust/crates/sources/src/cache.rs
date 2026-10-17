@@ -623,7 +623,7 @@ impl MarketCache {
     pub fn record(&self, row: &OutcomeRow) -> Result<()> {
         // a request the process was told not to make asked nothing: it is no
         // outcome of the source's, and saying it failed would be untrue
-        if row.outcome == OutcomeKind::Unreachable && bagholder_net::client::is_offline_refusal(&row.detail) {
+        if row.outcome == OutcomeKind::Offline {
             return Ok(());
         }
         bagholder_sqlite::atomically(&self.conn, || {

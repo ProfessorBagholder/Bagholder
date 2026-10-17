@@ -16,7 +16,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
 use bagholder_store::feeds::{FiledDocument, Regulator};
@@ -60,10 +60,11 @@ fn reason(code: u16) -> &'static str {
     }
 }
 
+/// A failed request in the transport's own words, or its status with the reason.
 fn describe(e: &bagholder_net::client::Error) -> String {
     match e {
         bagholder_net::client::Error::Status(c) => format!("HTTP Error {}: {}", c, reason(*c)),
-        bagholder_net::client::Error::Transport(m) => format!("<urlopen error {}>", m),
+        e => e.to_string(),
     }
 }
 
@@ -72,7 +73,11 @@ fn get(url: &str, what: &str) -> Fetched<bagholder_net::client::Response> {
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate"), ("Accept", "application/json")];
     bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
-        .map_err(|e| SourceError::Unavailable(format!("{}: {}", what, describe(&e))))
+        .map_err(|e| match e {
+            // not asked: no failure of the SEC's
+            bagholder_net::client::Error::Offline => SourceError::Offline,
+            e => SourceError::Unavailable(format!("{}: {}", what, describe(&e))),
+        })
 }
 
 fn get_json(url: &str) -> Fetched<Value> {
@@ -85,10 +90,18 @@ fn get_json(url: &str) -> Fetched<Value> {
 /// (one, where the list holds the ticker once).
 pub type Tickers = HashMap<String, Vec<(i64, String)>>;
 
-/// The list as last read, and when.
-fn tickers() -> &'static Mutex<Option<(std::time::Instant, std::sync::Arc<Tickers>)>> {
-    static T: OnceLock<Mutex<Option<(std::time::Instant, std::sync::Arc<Tickers>)>>> = OnceLock::new();
-    T.get_or_init(|| Mutex::new(None))
+/// The list as last read, and when, on the wall clock (which goes on while the
+/// machine sleeps, so a day is a day); and the read that failed since, if one did:
+/// when, how many times in a row, and why.
+#[derive(Default)]
+struct ListState {
+    read: Option<(SystemTime, std::sync::Arc<Tickers>)>,
+    failed: Option<(SystemTime, u32, SourceError)>,
+}
+
+fn tickers() -> &'static Mutex<ListState> {
+    static T: OnceLock<Mutex<ListState>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(ListState::default()))
 }
 
 /// The SEC's `{"fields": [...], "data": [[...], ...]}` list read: every row, by its
@@ -119,27 +132,47 @@ pub fn parse_tickers(data: &Value) -> Fetched<Tickers> {
 }
 
 /// The SEC's ticker list, read again once the copy kept is as old as a listing's
-/// filers stand (`disclosures::FILERS_RECHECK_HOURS`): the daily re-check reads
-/// today's list, never the one read at start. A read that fails is the failure.
+/// filers stand (`disclosures::FILERS_RECHECK_HOURS`) on the wall clock: the daily
+/// re-check reads today's list, never the one read at start. A read that fails is
+/// the failure, kept for every listing that asks for the list: it is read again only
+/// once its rest is over (`disclosures::FAILED_READ_REST`, growing with each failure
+/// in a row, `market::grown_rest`), never by each listing on its own schedule.
 pub fn ticker_map() -> Fetched<std::sync::Arc<Tickers>> {
-    ticker_map_at(std::time::Instant::now(), || get_json(TICKERS_URL))
+    ticker_map_at(SystemTime::now(), || get_json(TICKERS_URL))
 }
 
 /// `ticker_map` at `now`, the list read by `read` where it is due.
-pub fn ticker_map_at(now: std::time::Instant, read: impl FnOnce() -> Fetched<Value>) -> Fetched<std::sync::Arc<Tickers>> {
-    let mut slot = tickers().lock().unwrap_or_else(|e| e.into_inner());
+pub fn ticker_map_at(now: SystemTime, read: impl FnOnce() -> Fetched<Value>) -> Fetched<std::sync::Arc<Tickers>> {
+    let mut state = tickers().lock().unwrap_or_else(|e| e.into_inner());
+    let since = |at: SystemTime| now.duration_since(at).unwrap_or(Duration::ZERO);
     let fresh = Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0);
-    if let Some((_, t)) = slot.as_ref().filter(|(at, _)| now.saturating_duration_since(*at) < fresh) {
+    if let Some((_, t)) = state.read.as_ref().filter(|(at, _)| since(*at) < fresh) {
         return Ok(t.clone());
     }
-    let out = std::sync::Arc::new(parse_tickers(&read()?)?);
-    *slot = Some((now, out.clone()));
-    Ok(out)
+    if let Some((_, _, why)) = state.failed.as_ref().filter(|(at, n, _)| since(*at) < bagholder_sources::market::grown_rest(d::FAILED_READ_REST, *n)) {
+        return Err(why.clone());
+    }
+    match read().and_then(|v| parse_tickers(&v)) {
+        Ok(t) => {
+            let out = std::sync::Arc::new(t);
+            state.read = Some((now, out.clone()));
+            state.failed = None;
+            Ok(out)
+        }
+        // not asked (offline): no failure of the SEC's, and nothing rests
+        Err(SourceError::Offline) => Err(SourceError::Offline),
+        Err(e) => {
+            let n = state.failed.as_ref().map_or(0, |f| f.1) + 1;
+            state.failed = Some((now, n, e.clone()));
+            Err(e)
+        }
+    }
 }
 
 /// Prime the ticker map, as the tests stand in for SEC's published list.
 pub fn set_ticker_map(t: Tickers) {
-    *tickers().lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), std::sync::Arc::new(t)));
+    let mut state = tickers().lock().unwrap_or_else(|e| e.into_inner());
+    *state = ListState { read: Some((SystemTime::now(), std::sync::Arc::new(t))), failed: None };
 }
 
 /// A listing's symbol as the SEC writes it: a class with a dash (`BRK-B`).

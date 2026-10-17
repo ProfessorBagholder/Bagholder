@@ -106,6 +106,7 @@
         </div>
         <div><div class="lbl" style="margin-bottom:5px">Fees</div><input class="input" inputmode="decimal" bind:value={f.fees} placeholder="0" /></div>
       </div>
+      {#if f.symbolError}<div class="status-err" style="font-size:12px;margin-top:10px">{f.symbolError}</div>{/if}
       {#if f.error}<div class="status-err" style="font-size:12px;margin-top:10px">{f.error}</div>{/if}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn btn-secondary" onclick={closeModal}>Cancel</button>

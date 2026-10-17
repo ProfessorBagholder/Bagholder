@@ -19,6 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::http::FetchError;
+use bagholder_net::Failure;
 pub use bagholder_model::exposure::{is_fund, issuer_of, norm_sector};
 use bagholder_model::lenient;
 use bagholder_model::textrules::trim_space;
@@ -321,16 +322,35 @@ struct NasdaqSummaryValue {
     value: String,
 }
 
-fn nasdaq_summary(symbol: &str) -> Result<(String, String), String> {
-    let raw = get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]).map_err(|e| format!("Nasdaq: {e}"))?;
-    let d: NasdaqSummaryAnswer = serde_json::from_str(&raw).map_err(|e| format!("Nasdaq's summary does not read: {e}"))?;
+/// A source's failed request as the header carries it, its words after `who`: an
+/// offline refusal (`BAGHOLDER_OFFLINE`) by its kind.
+fn failed(who: &'static str) -> impl Fn(FetchError) -> Failure {
+    move |e| match e {
+        FetchError::Offline => Failure::Offline,
+        e => Failure::Said(format!("{who}: {e}")),
+    }
+}
+
+/// The failures of every source asked, as one: none asked at all (each refused
+/// offline) is the offline refusal; else what each said, in turn.
+fn joined(failures: Vec<Failure>) -> Failure {
+    let said: Vec<String> = failures.into_iter().filter_map(|f| match f {
+        Failure::Said(s) => Some(s),
+        Failure::Offline => None,
+    }).collect();
+    if said.is_empty() { Failure::Offline } else { Failure::Said(said.join("; ")) }
+}
+
+fn nasdaq_summary(symbol: &str) -> Result<(String, String), Failure> {
+    let raw = get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]).map_err(failed("Nasdaq"))?;
+    let d: NasdaqSummaryAnswer = serde_json::from_str(&raw).map_err(|e| Failure::Said(format!("Nasdaq's summary does not read: {e}")))?;
     Ok((d.data.summary_data.sector.value, d.data.summary_data.industry.value))
 }
 
 /// {sector, industry, country, source} for one
 /// listing, from TMX's record, Nasdaq's for a US listing TMX has no sector for;
 /// the country is the venue's.
-pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<ShareClass, String> {
+pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<ShareClass, Failure> {
     if let Some(v) = hooks::CLASSIFY.with(|h| h.borrow().as_ref().map(|f| f(symbol, exchange, currency))) {
         return Ok(v);
     }
@@ -346,7 +366,7 @@ pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<Sh
     // never classified under a guessed venue's
     let key = crate::quotes::tmx_quote_symbol(symbol, exchange);
     if let Some(k) = key.filter(|k| !k.is_empty()) {
-        let tmx_failed = |e: FetchError| format!("TMX Money: {e}");
+        let tmx_failed = &failed("TMX Money");
         let mut rec = tmx_record(&k).map_err(tmx_failed)?;
         let mut receipt = false;
         static CDR: OnceLock<Regex> = OnceLock::new();
@@ -1023,7 +1043,10 @@ pub fn parse_yahoo_summary(data: &Value) -> Result<(Weights, Vec<Holding>), serd
 fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchError> {
     let Some(form) = yahoo_symbol(symbol, exchange) else { return Ok(None) };
     // the statistics session the float is read with: Yahoo answers these only to a browser's handshake
-    let Some((status, raw)) = crate::shorts::yahoo_quote_summary(&form, "topHoldings").map_err(FetchError::Transport)? else {
+    let Some((status, raw)) = crate::shorts::yahoo_quote_summary(&form, "topHoldings").map_err(|e| match e {
+        Failure::Offline => FetchError::Offline,
+        Failure::Said(s) => FetchError::Transport(s),
+    })? else {
         return Err(FetchError::Transport("Yahoo Finance: the browser helper that opens its session could not be started".into()));
     };
     if status != 200 {
@@ -1063,20 +1086,29 @@ pub fn name_queries(name: &str) -> Vec<String> {
     out
 }
 
-/// A holding named without a ticker: the directories' first match on its name,
-/// searched as `name_queries` gives it.
-pub fn resolve_name(name: &str) -> Result<Option<Listed>, String> {
+/// A holding named without a ticker: the one listing the directories find for its
+/// name, searched as `name_queries` gives it (`resolve_name_with`).
+pub fn resolve_name(name: &str) -> Result<Option<Listed>, Failure> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
         return Ok(v);
     }
+    resolve_name_with(name, &crate::search::symbol_search)
+}
+
+/// `resolve_name` with the directories' search handed in. A name is a listing
+/// by the resolver's rule: the one listing a query finds, where every directory
+/// answered; one found beside a directory unread is that failure, and two or more
+/// are none, never the first of them.
+pub fn resolve_name_with(name: &str, search: &dyn Fn(&str) -> crate::search::Searched) -> Result<Option<Listed>, Failure> {
     for q in name_queries(name) {
-        // the first match is taken only where every directory answered
-        let found = crate::search::symbol_search(&q);
+        let found = search(&q);
         if !found.unread.is_empty() {
-            return Err(found.unread.join(" "));
+            return Err(Failure::Said(found.unread.join(" ")));
         }
-        if let Some(m) = found.rows.first() {
-            return Ok(Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() }));
+        match found.rows.as_slice() {
+            [m] => return Ok(Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() })),
+            [] => continue,
+            _ => return Ok(None),
         }
     }
     Ok(None)
@@ -1119,7 +1151,7 @@ fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) -> Result<(), Stri
 /// A classified share as an exposure record, cached by its listing
 /// (`share:<ListingKey>`). A listing whose venue is none known here has no
 /// record: nothing is classified by its ticker alone.
-pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Result<ExposureRecord, String> {
+pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Result<ExposureRecord, Failure> {
     let Ok(listing) = bagholder_core::ListingKey::on(symbol, exchange) else { return Ok(ExposureRecord::default()) };
     let key = bagholder_model::venues::share_key(&listing);
     if let Some(hit) = cache_get(ctx, &key)? {
@@ -1143,7 +1175,7 @@ pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
 /// Holdings into {sectors, countries, coverage} --
 /// weights over the positive rows, each row classified as given, by its
 /// ticker, by its name, or by looking a fund through.
-pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec<String>) -> Result<ExposureRecord, String> {
+pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec<String>) -> Result<ExposureRecord, Failure> {
     let rows: Vec<&Holding> = holdings.iter().filter(|h| h.weight > 0.0).collect();
     let total: f64 = rows.iter().map(|h| h.weight).sum();
     if total <= 0.0 {
@@ -1218,7 +1250,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
 /// asOf}, through its issuer's adapter, cached by ticker; None when no source
 /// covers its family or the source answered nothing. A source that failed,
 /// with none after it answering, is the failure.
-pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Result<Option<ExposureRecord>, String> {
+pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Result<Option<ExposureRecord>, Failure> {
     // a fund is its listing: one whose venue is none known here is asked of no
     // source, and two listings of one ticker are two records
     let Ok(listing) = bagholder_core::ListingKey::on(symbol, exchange) else { return Ok(None) };
@@ -1240,31 +1272,34 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         _ => None,
     };
     let mut data: Option<Breakdown> = None;
-    let mut failures: Vec<String> = Vec::new();
+    let mut failures: Vec<Failure> = Vec::new();
     let hooked = hooks::ADAPTER.with(|h| h.borrow().as_ref().map(|f| f(family, symbol, name, exchange)));
     if let Some(d) = hooked {
         data = d;
     } else if let Some(f) = adapter {
         match f(symbol) {
             Ok(d) => data = d,
-            Err(e) => failures.push(format!("{family}: {e}")),
+            Err(e) => failures.push(match e {
+                FetchError::Offline => Failure::Offline,
+                e => Failure::Said(format!("{family}: {e}")),
+            }),
         }
     }
     if data.is_none() {
         // a family with no adapter, or one whose page answered nothing or failed
         match hooks::FALLBACK.with(|h| h.borrow().as_ref().map(|f| f(symbol, name, exchange))) {
             Some(Ok(d)) => data = d,
-            Some(Err(e)) => failures.push(e),
+            Some(Err(e)) => failures.push(Failure::Said(e)),
             None => match yahoo_fund(symbol, exchange) {
                 Ok(d) => data = d,
-                Err(e) => failures.push(format!("Yahoo Finance: {e}")),
+                Err(e) => failures.push(failed("Yahoo Finance")(e)),
             },
         }
     }
     let data = match data {
         Some(d) => d,
         None if failures.is_empty() => return Ok(None),
-        None => return Err(format!("{symbol}: {}", failures.join("; "))),
+        None => return Err(joined(failures).map(|f| format!("{symbol}: {f}"))),
     };
     let scale = |w: Weights| -> Weights { Weights(w.0.into_iter().map(|(n, x)| (n, x / 100.0)).collect()) };
     let mut sectors = scale(data.sectors);
@@ -1299,9 +1334,9 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
 /// securities, stored under its id -- a fund looked through, a share
 /// classified. A read that failed stores nothing: the record kept stands, and
 /// the failure is returned.
-pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) -> Result<ExposureRecord, String> {
-    // the venue the broker's record names: its code where the table knows it, else its words
-    let venue = if bagholder_core::listing::mic_of(&sec.primary_mic).is_some() { sec.primary_mic.as_str() } else { sec.primary_exchange.as_str() };
+pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) -> Result<ExposureRecord, Failure> {
+    // the venue the broker's record names, by the one venue rule (none known: no record)
+    let venue = bagholder_core::listing::venue_of(Some(&sec.primary_mic), Some(&sec.primary_exchange)).unwrap_or("");
     let rec = if is_fund(&sec.name) {
         // a fund no source covers is unclassified: its venue says nothing about what it holds
         let mut seen = Vec::new();
@@ -1314,7 +1349,7 @@ pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) 
 }
 
 /// The ids whose record is missing or older than a week.
-pub fn stale(ctx: &Ctx, ids: &[String]) -> Result<Vec<String>, String> {
+pub fn stale(ctx: &Ctx, ids: &[String]) -> Result<Vec<String>, Failure> {
     let mut out = Vec::new();
     for sid in ids {
         if cache_get(ctx, sid)?.is_none() {

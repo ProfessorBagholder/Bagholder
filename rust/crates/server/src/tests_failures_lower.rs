@@ -94,6 +94,8 @@ fn an_archive_pass_the_store_refuses_is_logged_and_never_said() {
 fn exposures_whose_store_cannot_be_read_are_said_in_the_header_until_a_pass_reads_it() {
     let _g = guard();
     let app = app();
+    // the book's listings read first, so what fails below is the exposures pass alone
+    crate::feeds::refresh_exposures(&app);
     {
         let _broken = Broken::new(&app, "ALTER TABLE exposures RENAME TO exposures_away;", "ALTER TABLE exposures_away RENAME TO exposures;");
         // said once the next pass fails too (`feeds::feed_failed`)

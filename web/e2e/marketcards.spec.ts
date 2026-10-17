@@ -363,6 +363,21 @@ test.describe('Heatmap changes', () => {
 })
 
 test.describe('Watchlist', () => {
+  // brief 44, 8: a search a directory did not answer says so, never that no listing is by that name
+  test('the add row says a directory that did not answer, never that no listing is by that name', async ({ page }) => {
+    let unread = ["The TSX's directory could not be read: refused."]
+    await page.route('**/api/symbols/search?*', (route) => route.fulfill({ json: { ok: true, unread, matches: [] } }))
+    await page.goto('/#markets')
+    await ready(page)
+    await page.getByRole('button', { name: 'Add to the watchlist' }).click()
+    await page.getByLabel('Search symbol', { exact: true }).fill('ZQWX')
+    await expect(page.locator('.status-err', { hasText: "The TSX's directory could not be read" })).toBeVisible()
+    await expect(page.getByText('No listing by that name.')).toHaveCount(0)
+    unread = []
+    await page.getByLabel('Search symbol', { exact: true }).fill('ZQWY')
+    await expect(page.getByText('No listing by that name.')).toBeVisible()
+  })
+
   test("a match's quote has a minute's memory: asked again when wanted after the minute, not before", async ({ page }) => {
     await page.clock.install()
     await page.route('**/api/symbols/search?*', (route) =>
@@ -643,6 +658,39 @@ test.describe('News', () => {
     await looked
     await expect(card.locator('.chip')).toContainText('ZQNV')
     await expect.poll(() => [last().symbol, last().exchange]).toEqual(['ZQNV', 'TSX'])
+  })
+
+  // brief 44, 7: with a chip on, a row tagged with no venue still asks the resolver
+  test('with a chip on, a row tagged with no venue asks the resolver, and its one listing takes the chip', async ({ page, request }) => {
+    const rows = headlines([
+      item('w', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 0.01 } }),
+      item('v', 'A story of no venue', { tag: { symbol: 'ZQNW', exchange: '', held: false, watched: false, percentChange: null } }),
+    ])
+    await openWithStatus(page, request, {}, '#markets', () => {}, rows)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQNW@XTSE', symbol: 'ZQNW', name: 'Zqnw Corp', exchange: 'TSX', currency: 'CAD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    await card.locator('.nw-sym', { hasText: 'WID' }).click()
+    await expect(card.locator('.chip')).toContainText('WID')
+    const looked = page.waitForRequest((r) => r.url().includes('/api/listings?') && new URL(r.url()).searchParams.get('symbol') === 'ZQNW')
+    await card.locator('.nw-sym', { hasText: 'ZQNW' }).click()
+    await looked
+    await expect(card.locator('.chip')).toContainText('ZQNW')
+  })
+
+  // brief 44, 8: a ticker found on no venue while a directory did not answer says the failure
+  test('a ticker found on no venue while a directory did not answer says the failure, and stays a text search', async ({ page, request }) => {
+    const said = saidShown(page)
+    const last = asked(said)
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread: ["The TSX's directory could not be read: refused."], listings: [] } }))
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await page.getByLabel('Search the news').fill('zqnx')
+    await expect(card.locator('.status-err')).toHaveText("The TSX's directory could not be read: refused.")
+    await expect(card.locator('.chip')).toHaveCount(0)
+    await expect.poll(() => last().query).toBe('zqnx')
   })
 
   // brief 42, 9: a chip is held or watched by its listing, never its ticker

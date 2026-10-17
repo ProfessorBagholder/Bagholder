@@ -227,9 +227,9 @@ fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
     // each failed twice in a row, so each is said
     for _ in 0..2 {
         for sym in ["ASTS", "LUNR", "MU"] {
-            crate::feeds::feed_failed(&app, &format!("shorts:{sym}@US"), "FINRA could not be reached".into());
+            crate::feeds::feed_failed(&app, &format!("shorts:{sym}@US"), "FINRA could not be reached");
         }
-        crate::feeds::feed_failed(&app, "shorts:VEQT@XTSE", "CIRO could not be reached".into());
+        crate::feeds::feed_failed(&app, "shorts:VEQT@XTSE", "CIRO could not be reached");
     }
     assert_eq!(
         error(&app),
@@ -246,12 +246,12 @@ fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
 fn test_a_single_failed_request_to_a_source_is_not_said() {
     let (_home, app) = fresh();
     let feed = "shorts:ZZQQ@XTSE";
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403".into());
+    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
     assert_eq!(error(&app), "", "one failure");
     crate::feeds::feed_answered(&app, feed);
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403".into());
+    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
     assert_eq!(error(&app), "", "one failure after an answer");
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403".into());
+    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
     assert_eq!(error(&app), "The short interest of ZZQQ · TSX could not be read: CIRO: HTTP 403.");
     crate::feeds::feed_answered(&app, feed);
     assert_eq!(error(&app), "");

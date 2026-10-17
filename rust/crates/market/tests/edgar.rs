@@ -136,12 +136,26 @@ fn the_secs_list_is_read_again_each_day() {
     let list = |cik: i64| json!({"fields": ["cik", "name", "ticker", "exchange"], "data": [[cik, "X CO", "X", "NYSE"]]});
     let day = std::time::Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0);
     // past any list another test set
-    let start = std::time::Instant::now() + day * 2;
+    let start = std::time::SystemTime::now() + day * 2;
     let x = |t: &edgar::Tickers| t["X"][0].0;
     assert_eq!(x(&edgar::ticker_map_at(start, || Ok(list(1))).unwrap()), 1);
     assert_eq!(x(&edgar::ticker_map_at(start + day / 2, || panic!("read again within the day")).unwrap()), 1);
     assert_eq!(x(&edgar::ticker_map_at(start + day, || Ok(list(2))).unwrap()), 2, "a day on: today's list");
     assert!(edgar::ticker_map_at(start + day * 2, || Err(SourceError::Unavailable("down".into()))).is_err(), "a failed read is said, not yesterday's list");
+    // the failure rests for every listing that asks: said again, not read again, until
+    // its rest is over, and the rest grows with each failure in a row
+    let failed = start + day * 2;
+    let rest = d::FAILED_READ_REST;
+    let again = edgar::ticker_map_at(failed + rest / 2, || panic!("read again within its rest"));
+    assert!(again.unwrap_err().to_string().contains("down"));
+    assert!(edgar::ticker_map_at(failed + rest, || Err(SourceError::Unavailable("still down".into()))).is_err());
+    let second = failed + rest;
+    assert!(edgar::ticker_map_at(second + rest, || panic!("twice the rest after a second failure")).is_err());
+    assert_eq!(x(&edgar::ticker_map_at(second + rest * 2, || Ok(list(3))).unwrap()), 3, "past the grown rest: read, and read");
+    // a read refused offline is no failure: nothing rests
+    let later = second + rest * 2 + day;
+    assert!(matches!(edgar::ticker_map_at(later, || Err(SourceError::Offline)), Err(SourceError::Offline)));
+    assert_eq!(x(&edgar::ticker_map_at(later, || Ok(list(4))).unwrap()), 4, "asked again at once");
 }
 
 /// A ticker the list names two filers for is neither's.

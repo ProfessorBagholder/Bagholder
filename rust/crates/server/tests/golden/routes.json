@@ -246,7 +246,7 @@
           "available": false,
           "matched": false,
           "filer": false,
-          "error": "SEC could not be asked who files GOLDEN · US: EDGAR request failed: <urlopen error offline: BAGHOLDER_OFFLINE is set>"
+          "error": "offline: BAGHOLDER_OFFLINE is set"
         },
         "SEDAR+": {
           "available": false,

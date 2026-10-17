@@ -30,7 +30,7 @@ use crate::notify;
 // ---------------------------------------------------------------------------
 
 pub const FILINGS_STALE_HOURS: f64 = 24.0;
-pub const FILINGS_SWEEP_EVERY_SEC: u64 = 300;
+pub use bagholder_market::disclosures::FILINGS_SWEEP_EVERY_SEC;
 pub const FILINGS_HOLD_MAX_MIN: f64 = 120.0;
 pub const FILINGS_HOLD_KEY: &str = "filings:held-since";
 pub const FILINGS_SWEEP_AGE_MIN: f64 = 30.0;
@@ -81,10 +81,7 @@ pub fn own_regulator(key: &ListingKey) -> Option<Regulator> {
     }
 }
 
-/// A read that failed is asked again after one sweep, then twice as long after
-/// each failure in a row after it, as every source is (`market::grown_rest`, the
-/// app's one backoff); never on every pass.
-pub const FAILED_READ_REST: Duration = Duration::from_secs(FILINGS_SWEEP_EVERY_SEC);
+pub use bagholder_market::disclosures::FAILED_READ_REST;
 
 /// Whether a failed read is still within its rest.
 fn resting(f: Option<&sf::ReadFailure>) -> bool {
@@ -93,11 +90,11 @@ fn resting(f: Option<&sf::ReadFailure>) -> bool {
 
 /// A read of `subject` from `source` that failed, kept so it rests; an offline
 /// refusal is no read, and is not kept.
-fn failed_read(c: &Connection, subject: &str, source: &str, why: &str) -> Result<Option<sf::ReadFailure>, String> {
-    if bagholder_net::client::is_offline_refusal(why) {
-        return Ok(None);
+fn failed_read(c: &Connection, subject: &str, source: &str, why: &bagholder_net::Failure) -> Result<Option<sf::ReadFailure>, String> {
+    match why {
+        bagholder_net::Failure::Offline => Ok(None),
+        bagholder_net::Failure::Said(why) => sf::read_failed(c, subject, source, why, &now_iso()).map(Some).map_err(|e| e.to_string()),
     }
-    sf::read_failed(c, subject, source, why, &now_iso()).map(Some).map_err(|e| e.to_string())
 }
 
 /// The TSX's interlisted list, read again when the copy kept is a day old; a read
@@ -123,7 +120,7 @@ fn interlisted_current(app: &Arc<App>, c: &Connection, regulators: &dyn disclosu
             crate::feeds::feed_answered(app, INTERLISTED);
         }
         Err(e) => {
-            let why = format!("The TSX's list of interlisted companies could not be read: {e}");
+            let why = e.failure().map(|e| format!("The TSX's list of interlisted companies could not be read: {e}"));
             failed_read(c, INTERLISTED, INTERLISTED_SOURCE, &why)?;
             feed_failed(app, INTERLISTED, why);
         }
@@ -154,9 +151,9 @@ fn settle_own(c: &Connection, key: &ListingKey, regulators: &dyn disclosures::Re
     let found = match found {
         Ok(found) => found,
         Err(e) => {
-            let why = format!("{} could not be asked who files {}: {e}", source.as_str(), key.named());
+            let why = e.failure().map(|e| format!("{} could not be asked who files {}: {e}", source.as_str(), key.named()));
             failed_read(c, &subject, source.as_str(), &why)?;
-            return Err(why);
+            return Err(why.to_string());
         }
     };
     sf::read_answered(c, &subject, source.as_str()).map_err(|e| e.to_string())?;
@@ -1104,7 +1101,7 @@ static FILINGS_STORED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 /// The newest stored filing a reading could still add to, read: the listing on
 /// screen first, then everything else. False when there is none left to try.
-fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(Regulator, String)>) -> Result<Option<Result<(), String>>, String> {
+fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(Regulator, String)>) -> Result<Option<Result<(), bagholder_net::Failure>>, String> {
     let open = app.feeds.looking_at.lock().unwrap().clone();
     if let Ok(key) = open.parse::<ListingKey>() {
         if let Some(read) = read_one_of(app, Some(&key), passed)? {
@@ -1119,7 +1116,7 @@ fn read_one_unread(app: &Arc<App>, passed: &mut HashSet<(Regulator, String)>) ->
 /// title without its sentence or the other way round. True when there was one to
 /// try, with how its read went; one the read moved nothing on, or whose read
 /// failed, is added to `passed`. The store failing is the error.
-fn read_one_of(app: &Arc<App>, only: Option<&ListingKey>, passed: &mut HashSet<(Regulator, String)>) -> Result<Option<Result<(), String>>, String> {
+fn read_one_of(app: &Arc<App>, only: Option<&ListingKey>, passed: &mut HashSet<(Regulator, String)>) -> Result<Option<Result<(), bagholder_net::Failure>>, String> {
     let c = conn(app)?;
     let listings: Vec<ListingKey> = match only {
         Some(k) => vec![k.clone()],
@@ -1137,7 +1134,7 @@ fn read_one_of(app: &Arc<App>, only: Option<&ListingKey>, passed: &mut HashSet<(
 }
 
 /// `read_one_of` on one connection, for the filers given, with the readers given.
-fn read_one_in(c: &Connection, filers: &[sf::Filer], passed: &mut HashSet<(Regulator, String)>, readers: &dyn Readers) -> Result<Option<Result<(), String>>, String> {
+fn read_one_in(c: &Connection, filers: &[sf::Filer], passed: &mut HashSet<(Regulator, String)>, readers: &dyn Readers) -> Result<Option<Result<(), bagholder_net::Failure>>, String> {
     let best = sf::filings_of(c, filers)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -1147,7 +1144,7 @@ fn read_one_in(c: &Connection, filers: &[sf::Filer], passed: &mut HashSet<(Regul
     let (source, id) = (before.doc.source, before.doc.id.clone());
     if let Err(e) = filings_enrich_in(c, source, &id, readers) {
         passed.insert((source, id.clone()));
-        return Ok(Some(Err(format!("The {} document {id} could not be read: {e}", source.as_str()))));
+        return Ok(Some(Err(e.map(|e| format!("The {} document {id} could not be read: {e}", source.as_str())))));
     }
     let after = sf::filing(c, source, &id).map_err(|e| e.to_string())?;
     let moved = after.as_ref().map_or(false, |a| {
@@ -1202,13 +1199,17 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, key: &ListingKey, regu
     let by_name: Vec<sf::Filer> = sf::listing_filers(c, key).map_err(|e| e.to_string())?.into_iter().filter(|(_, by)| *by == sf::SettledBy::SedarName).map(|(f, _)| f).collect();
     let since = bagholder_model::dates::shift_date(&today(), -bagholder_market::sedar::LISTED_FILING_WINDOW_DAYS);
     for filer in &filers {
-        let held = sf::filings_of(c, std::slice::from_ref(filer)).map_err(|e| e.to_string())?.len();
+        let stored = sf::filings_of(c, std::slice::from_ref(filer)).map_err(|e| e.to_string())?;
+        let held = stored.len();
         let read = regulators.documents(filer, 200);
         // one exact match that has filed nothing within the window a listed issuer
         // files in is a dormant profile, never a listed issuer's: a miss, as a tie
-        // narrowed to none is (`sedar::pick_profile`), read from the documents just read
+        // narrowed to none is (`sedar::pick_profile`), judged from the newest of the
+        // documents just read and those stored (an answer that came back empty
+        // leaves the stored ones standing, and says nothing of the profile)
         if let Ok(rows) = &read {
-            if by_name.contains(filer) && rows.iter().map(|r| r.date.as_str()).max().is_none_or(|d| d < since.as_str()) {
+            let newest = rows.iter().map(|r| r.date.as_str()).chain(stored.iter().map(|r| r.doc.date.as_str())).max();
+            if by_name.contains(filer) && newest.is_none_or(|d| d < since.as_str()) {
                 let why = format!("The one SEDAR+ issuer under {}'s name has filed nothing in the last {} days: it is no listed issuer's profile.", key.named(), bagholder_market::sedar::LISTED_FILING_WINDOW_DAYS);
                 sf::settle_listing_filers(c, key, filer.source, Err(&why), &now).map_err(|e| e.to_string())?;
                 outcomes.insert(filer.source, SourceOutcome { available: true, matched: false, filer: false, count: 0, error: why });
@@ -1228,6 +1229,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, key: &ListingKey, regu
             Err(e) => match e {
                 disclosures::SourceError::Unavailable(m) => SourceOutcome { available: false, matched: false, filer: true, count: 0, error: m },
                 disclosures::SourceError::Other(m) => SourceOutcome { available: true, matched: false, filer: true, count: 0, error: m },
+                disclosures::SourceError::Offline => SourceOutcome { available: false, matched: false, filer: true, count: 0, error: bagholder_net::client::OFFLINE.into() },
             },
         };
         outcomes.insert(filer.source, outcome);
@@ -1483,7 +1485,7 @@ pub fn filings_document(app: &Arc<App>, source: Regulator, doc_id: &str) -> Resu
 }
 
 /// `filings_enrich` on the app's own connection, typed.
-fn filings_enrich_result(app: &Arc<App>, source: Regulator, doc_id: &str) -> Result<Enriched, String> {
+fn filings_enrich_result(app: &Arc<App>, source: Regulator, doc_id: &str) -> Result<Enriched, bagholder_net::Failure> {
     let c = conn(app)?;
     filings_enrich_in(&c, source, doc_id, &LiveReaders)
 }
@@ -1501,7 +1503,7 @@ pub enum EnrichAnswer {
 pub fn filings_enrich(app: &Arc<App>, source: Regulator, doc_id: &str) -> EnrichAnswer {
     match filings_enrich_result(app, source, doc_id) {
         Ok(e) => EnrichAnswer::Ok(e),
-        Err(e) => EnrichAnswer::Refused(OkOr::err(e)),
+        Err(e) => EnrichAnswer::Refused(OkOr::err(e.to_string())),
     }
 }
 
@@ -1540,7 +1542,7 @@ pub struct Enriched {
 /// document with a model up to write the sentence. A read with no model up only
 /// failed to ask; it keeps the title it found and the row waits, fetched again
 /// only once a model is up (SPEC §4 Disclosures).
-pub fn filings_enrich_in(c: &Connection, source: Regulator, doc_id: &str, r: &dyn Readers) -> Result<Enriched, String> {
+pub fn filings_enrich_in(c: &Connection, source: Regulator, doc_id: &str, r: &dyn Readers) -> Result<Enriched, bagholder_net::Failure> {
     let row = sf::filing(c, source, doc_id).map_err(|e| e.to_string())?.ok_or_else(|| "no such document".to_string())?;
     let mut subject = row.subject.clone();
     let mut summary = row.summary.clone();
@@ -1598,10 +1600,10 @@ pub fn filings_enrich_in(c: &Connection, source: Regulator, doc_id: &str, r: &dy
     }
     let (data, ct) = match r.content(&row.doc) {
         Ok(x) => x,
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(e.failure()),
     };
     if data.is_empty() {
-        return Err("the document could not be read".to_string());
+        return Err("the document could not be read".into());
     }
     if !model {
         model = r.wait_for_summary(enrich::SUMMARY_WAIT_SEC);
@@ -1709,10 +1711,10 @@ mod tests {
 
     /// A typed result as `filings_payload_in`/`filings_enrich_in` serve it: the
     /// success shape, or `{"ok": false, "error": …}`.
-    fn v<T: serde::Serialize>(r: Result<T, String>) -> Value {
+    fn v<T: serde::Serialize, E: std::fmt::Display>(r: Result<T, E>) -> Value {
         match r {
             Ok(x) => serde_json::to_value(x).unwrap(),
-            Err(e) => json!({"ok": false, "error": e}),
+            Err(e) => json!({"ok": false, "error": e.to_string()}),
         }
     }
 
@@ -2002,6 +2004,29 @@ mod tests {
         r.filers = vec![(key.clone(), Ok("000000001".into()))];
         refresh_filings_in(&app, &c, &key, &r).unwrap();
         assert!(filers_kept(&c, &key).unwrap().is_empty());
+    }
+
+    /// An answer that comes back empty for a profile with recent documents stored
+    /// leaves them standing: it is no proof the profile filed nothing (brief 44, 1).
+    #[test]
+    fn an_empty_answer_leaves_a_profiles_stored_documents_standing() {
+        let (_home, app) = built_app();
+        let c = store();
+        let key = on("XYZ", "TSX");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        let mut doc = item(Regulator::Sedar, 1, "000000001");
+        doc.date = today();
+        r.documents = vec![(filer("000000001", Regulator::Sedar), Ok(vec![doc]))];
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert_eq!(shown(&c, &key).len(), 1);
+        // the next read answers with nothing
+        r.documents = vec![(filer("000000001", Regulator::Sedar), Ok(vec![]))];
+        c.execute("UPDATE filer_fetches SET fetched_at = ?", [crate::app::stamp_of(now_unix() as i64 - 25 * 3600)]).unwrap();
+        refresh_filings_in(&app, &c, &key, &r).unwrap();
+        assert_eq!(filers_kept(&c, &key).unwrap(), [filer("000000001", Regulator::Sedar)], "still the listing's filer");
+        assert_eq!(shown(&c, &key).len(), 1, "its document still shown");
+        assert!(sf::listing_filer_miss(&c, &key, Regulator::Sedar).unwrap().is_none());
     }
 
     /// A filer that could not be settled is said, and nothing is guessed in its place.

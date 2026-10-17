@@ -129,3 +129,54 @@ fn a_contract_entered_by_hand_is_an_option_on_its_underlying_with_its_size_unsta
     let terms = f.book.option_terms(i).unwrap().expect("its terms");
     assert_eq!((terms.underlying, terms.strike, terms.multiplier), (held, d("12"), None), "on the instrument the book holds, its size not assumed");
 }
+
+/// A record naming an instrument the book holds names it by its reference alone
+/// and writes no name: a trade entered on an earlier day than a ticker change never
+/// puts today's ticker onto that day (brief 44, 3), as the trade itself or as a
+/// contract's underlying.
+#[test]
+fn a_trade_on_a_held_instrument_writes_no_name_onto_its_day() {
+    use bagholder_book::person::{Contract, Side, Traded, Underlying};
+    use bagholder_core::instrument::OptionRight;
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let account = f.book.accounts().unwrap()[0].id;
+    let share = |symbol: &str, seen: &str| json!({"refs": [["isin", "CA0000000077"]], "kind": "security", "currency": "CAD", "symbol": symbol, "mic": "XTSE", "seen": seen});
+    let r = f.store(&Spelled::v(1), "b1", &legs(vec![buy("a1", share("ZQV", "2026-03-01"), "10", "-10", "2026-03-01T15:00:00Z")]));
+    let id = f.book.transactions_of(r.record).unwrap()[0].instrument.unwrap();
+    f.store(&Spelled::v(1), "b2", &legs(vec![buy("a1", share("ZQV", "2026-03-20"), "1", "-1", "2026-03-20T15:00:00Z")]));
+    // the ticker changes on 04-01
+    f.store(&Spelled::v(1), "b3", &legs(vec![buy("a1", share("ZQW", "2026-04-01"), "1", "-1", "2026-04-01T15:00:00Z")]));
+    let before: Vec<(String, String)> = f.book.names(id).unwrap().iter().map(|n| (n.symbol.clone(), n.first_seen.to_string())).collect();
+    assert_eq!(before, [("ZQV".to_string(), "2026-03-01".to_string()), ("ZQW".to_string(), "2026-04-01".to_string())]);
+    // a trade entered now, dated before the change, by the instrument held
+    let on = |instrument| Entry::Trade { account, instrument, day: "2026-03-05".parse().unwrap(), side: Side::Buy, quantity: d("1"), price: cad("1"), fee: None };
+    f.book.enter(&on(Traded::Held(id)), t0()).unwrap();
+    // and a contract on it, written by its terms with the held share as its underlying
+    let contract = Contract { underlying: Underlying::Held(id), expiry: "2027-01-15".parse().unwrap(), strike: d("12"), right: OptionRight::Call };
+    f.book.enter(&on(Traded::Named { symbol: "ZQW 15JAN27 12.00 CALL".into(), currency: Currency::CAD, contract: Some(contract), venue: None }), t0()).unwrap();
+    let after: Vec<(String, String)> = f.book.names(id).unwrap().iter().map(|n| (n.symbol.clone(), n.first_seen.to_string())).collect();
+    assert_eq!(after, before, "the history is the broker's: no ZQW on 03-05");
+}
+
+/// A file's row naming an instrument the book holds states the symbol its file
+/// gives, on its own day: a sighting of what its source called it, never the
+/// book's symbol of today written onto that day (brief 44, 3).
+#[test]
+fn a_files_row_on_a_held_instrument_states_its_files_symbol() {
+    use bagholder_book::person::Traded;
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let account = f.book.accounts().unwrap()[0].id;
+    let share = |symbol: &str, seen: &str| json!({"refs": [["isin", "CA0000000078"]], "kind": "security", "currency": "CAD", "symbol": symbol, "mic": "XTSE", "seen": seen});
+    let r = f.store(&Spelled::v(1), "b1", &legs(vec![buy("a1", share("ZQV", "2026-03-01"), "10", "-10", "2026-03-01T15:00:00Z")]));
+    let id = f.book.transactions_of(r.record).unwrap()[0].instrument.unwrap();
+    f.store(&Spelled::v(1), "b2", &legs(vec![buy("a1", share("ZQW", "2026-04-01"), "1", "-1", "2026-04-01T15:00:00Z")]));
+    let named = f.book.name_stated(account, &Traded::Held(id), Some(" zqv ")).unwrap();
+    assert_eq!((named.symbol.as_str(), named.by_reference), ("ZQV", false), "the file's own symbol");
+    let by_hand = f.book.name(account, &Traded::Held(id)).unwrap();
+    assert!(by_hand.by_reference, "a hand entry names it by its reference alone");
+    let draft = named.draft("2026-03-05".parse().unwrap()).unwrap();
+    assert_eq!(draft.name.map(|n| n.symbol), Some("ZQV".to_string()));
+    assert!(by_hand.draft("2026-03-05".parse().unwrap()).unwrap().name.is_none());
+}
