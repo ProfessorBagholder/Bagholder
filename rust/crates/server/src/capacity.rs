@@ -164,8 +164,8 @@ pub enum Op {
     FeedStep,
     /// A trade entered by hand on the holding, dated in the middle of its history.
     BackdatedTrade,
-    /// One of the broker's records of the holding, from the middle of its history,
-    /// stored again under a new id, as a pull stores a row the broker adds late.
+    /// One of the broker's distribution records of the holding, from the middle of
+    /// its history, stored again under a new id, as a pull stores a row the broker adds late.
     BackdatedRecord,
 }
 
@@ -748,19 +748,23 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             f.names()?;
             let book = f.book()?;
-            // the broker's record of the holding in the middle of its history, by day
+            // the broker's record of the holding in the middle of its history, by day: a
+            // distribution, which re-forms the instrument's names and moves no position. A
+            // back-dated execution also re-derives every later trade its quantity reaches,
+            // which on this book (never flat again) is all of them: work that grows with
+            // what changed, held by the engine's own cases, not by this row
             let (record, day): (String, String) = {
                 let c = book.conn_for_tests();
                 let n: i64 = c
                     .query_row(
-                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1",
+                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1 AND t.kind = 'dividend'",
                         [instrument.to_string()],
                         |r| r.get(0),
                     )
                     .map_err(err)?;
                 c.query_row(
                     "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL
-                     WHERE t.instrument_id = ?1 ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
+                     WHERE t.instrument_id = ?1 AND t.kind = 'dividend' ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
                     rusqlite::params![instrument.to_string(), n / 2],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )

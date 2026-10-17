@@ -127,6 +127,11 @@ pub struct Wall {
     /// (a time sync stepping a runner's clock) moves what the test measures.
     #[cfg(test)]
     pinned: Mutex<Option<(std::time::SystemTime, std::time::Instant)>>,
+    /// Tests only: every sleep seen, in order. A thread held off the CPU longer than
+    /// a test's short check reads as a sleep too, and is the last seen where it
+    /// comes after the one the test made.
+    #[cfg(test)]
+    seen: Mutex<Vec<(std::time::SystemTime, std::time::SystemTime)>>,
 }
 
 /// How often a long wait looks at the wall clock: a minute, as cron looks for the
@@ -143,6 +148,8 @@ impl Default for Wall {
             slept: Mutex::new(None),
             #[cfg(test)]
             pinned: Mutex::new(None),
+            #[cfg(test)]
+            seen: Mutex::new(Vec::new()),
         }
     }
 }
@@ -184,6 +191,8 @@ impl Wall {
                 return;
             }
             *slept = Some((before + slice, after));
+            #[cfg(test)]
+            self.seen.lock().unwrap_or_else(|e| e.into_inner()).push((before + slice, after));
             let at = |t: std::time::SystemTime| match bagholder_core::jiff::Timestamp::try_from(t) {
                 Ok(t) => t.to_string(),
                 Err(e) => format!("a moment the clock cannot state ({e})"),
@@ -192,10 +201,10 @@ impl Wall {
         }
     }
 
-    /// The last time the machine was seen to have slept. Tests only.
+    /// Every sleep seen since the last call, emptied. Tests only.
     #[cfg(test)]
-    pub fn last_sleep(&self) -> Option<(std::time::SystemTime, std::time::SystemTime)> {
-        *self.slept.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn sleeps_seen(&self) -> Vec<(std::time::SystemTime, std::time::SystemTime)> {
+        std::mem::take(&mut *self.seen.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// A machine that slept for `d`: the wall clock moves on and no timer does. Tests only.
@@ -629,9 +638,10 @@ mod wall_tests {
             app.wall.sleep_through(Duration::from_secs(3600));
             let stopped = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("{which}: its deadline passed while the machine slept, and it did not end on waking"));
             assert!(!stopped, "{which}: the time came; nothing stopped");
-            let (from, to) = app.wall.last_sleep().unwrap_or_else(|| panic!("{which}: the sleep was not seen"));
-            let slept = to.duration_since(from).unwrap();
-            assert!(slept >= Duration::from_secs(3500), "{which}: about the hour slept, not {slept:?} (from {from:?} to {to:?})");
+            // the hour among the sleeps seen: a runner holding a thread off the CPU
+            // longer than the test's check is seen as a short one beside it
+            let seen = app.wall.sleeps_seen();
+            assert!(seen.iter().any(|(from, to)| to.duration_since(*from).is_ok_and(|d| d >= Duration::from_secs(3500))), "{which}: about the hour slept, among {seen:?}");
             *app.wall.slept.lock().unwrap() = None;
         }
         // and a stop still ends a wait at once
