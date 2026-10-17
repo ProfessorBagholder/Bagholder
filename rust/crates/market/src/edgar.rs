@@ -72,12 +72,16 @@ fn get(url: &str, what: &str) -> Fetched<bagholder_net::client::Response> {
     pace()?;
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate"), ("Accept", "application/json")];
-    bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
-        .map_err(|e| match e {
-            // not asked: no failure of the SEC's
-            bagholder_net::client::Error::Offline => SourceError::Offline,
-            e => SourceError::Unavailable(format!("{}: {}", what, describe(&e))),
-        })
+    bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT)).map_err(failed(what))
+}
+
+/// A request to the SEC that did not answer, as `what` failing in the transport's
+/// words; one refused offline asks no one, so it is no failure of the SEC's.
+fn failed(what: &str) -> impl Fn(bagholder_net::client::Error) -> SourceError + '_ {
+    move |e| match e {
+        bagholder_net::client::Error::Offline => SourceError::Offline,
+        e => SourceError::Unavailable(format!("{}: {}", what, describe(&e))),
+    }
 }
 
 fn get_json(url: &str) -> Fetched<Value> {
@@ -485,8 +489,7 @@ fn fetch_url(url: &str) -> Fetched<(Vec<u8>, String)> {
     pace()?;
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate")];
-    let resp = bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
-        .map_err(|e| SourceError::Unavailable(format!("EDGAR document fetch failed: {}", describe(&e))))?;
+    let resp = bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT)).map_err(failed("EDGAR document fetch failed"))?;
     // email.message's get_content_type: the type alone, lower-cased, text/plain
     // where there is none or it is malformed
     let ct = resp

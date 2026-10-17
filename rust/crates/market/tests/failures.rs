@@ -155,3 +155,17 @@ fn a_chart_in_another_currency_converts_at_the_rates_it_is_given() {
     // the same currency is never converted, and asks for no rate
     assert_eq!(history::in_position_currency(&failing, &bars, "CAD", "cad").unwrap().len(), 4);
 }
+
+/// An SEC document read in a process told to stay off the network is refused by
+/// its kind, its index and its document alike, never a failure in words.
+#[test]
+fn an_sec_document_read_offline_is_refused_by_its_kind() {
+    offline();
+    let row = bagholder_store::feeds::FiledDocument {
+        id: "sec:0000000000-26-000001-0".into(), source: bagholder_store::feeds::Regulator::Sec, category: String::new(), profile_no: String::new(), issuer: String::new(),
+        form: "10-K".into(), title: String::new(), date: String::new(), date_text: String::new(), size: String::new(),
+        url: "https://www.sec.gov/Archives/edgar/data/1/000000000026000001/doc.htm".into(),
+    };
+    assert!(matches!(bagholder_market::edgar::content(&row), Err(bagholder_market::disclosures::SourceError::Offline)));
+    assert!(matches!(bagholder_market::edgar::document(&row), Err(bagholder_market::disclosures::SourceError::Offline)));
+}
