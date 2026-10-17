@@ -122,6 +122,11 @@ pub struct Wall {
     check_ms: std::sync::atomic::AtomicU64,
     /// The last time the machine was seen to have slept: from, to.
     slept: Mutex<Option<(std::time::SystemTime, std::time::SystemTime)>>,
+    /// Tests only: the clock read in place of the system's, a moment of the wall
+    /// clock and the monotonic instant it was taken at, so nothing outside the test
+    /// (a time sync stepping a runner's clock) moves what the test measures.
+    #[cfg(test)]
+    pinned: Mutex<Option<(std::time::SystemTime, std::time::Instant)>>,
 }
 
 /// How often a long wait looks at the wall clock: a minute, as cron looks for the
@@ -132,13 +137,25 @@ pub const WALL_CHECK: Duration = Duration::from_secs(60);
 
 impl Default for Wall {
     fn default() -> Wall {
-        Wall { offset_ms: std::sync::atomic::AtomicI64::new(0), check_ms: std::sync::atomic::AtomicU64::new(WALL_CHECK.as_millis() as u64), slept: Mutex::new(None) }
+        Wall {
+            offset_ms: std::sync::atomic::AtomicI64::new(0),
+            check_ms: std::sync::atomic::AtomicU64::new(WALL_CHECK.as_millis() as u64),
+            slept: Mutex::new(None),
+            #[cfg(test)]
+            pinned: Mutex::new(None),
+        }
     }
 }
 
 impl Wall {
     pub fn now(&self) -> std::time::SystemTime {
         let off = self.offset_ms.load(Ordering::SeqCst);
+        #[cfg(test)]
+        let now = match *self.pinned.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some((wall, at)) => wall + at.elapsed(),
+            None => std::time::SystemTime::now(),
+        };
+        #[cfg(not(test))]
         let now = std::time::SystemTime::now();
         if off >= 0 { now + Duration::from_millis(off as u64) } else { now - Duration::from_millis(off.unsigned_abs()) }
     }
@@ -185,6 +202,14 @@ impl Wall {
     #[cfg(test)]
     pub fn sleep_through(&self, d: Duration) {
         self.offset_ms.fetch_add(d.as_millis() as i64, Ordering::SeqCst);
+    }
+
+    /// Read the wall clock from now on as the moment it reads now plus the time the
+    /// monotonic clock has run since: the test's own clock, which only the test's
+    /// `sleep_through` moves. Tests only.
+    #[cfg(test)]
+    pub fn pin(&self) {
+        *self.pinned.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::SystemTime::now(), std::time::Instant::now()));
     }
 
     /// How often waits look at the clock. Tests only.
@@ -590,6 +615,8 @@ mod wall_tests {
         let home = tempfile::tempdir().unwrap();
         let app = App::new(home.path().to_path_buf(), home.path().to_path_buf(), "127.0.0.1".into());
         app.wall.set_check(Duration::from_millis(20));
+        // the test's own clock: a runner whose clock a time sync steps would move what is measured
+        app.wall.pin();
         for which in ["wait", "park_until_or"] {
             let (tx, rx) = std::sync::mpsc::channel();
             let a = app.clone();
@@ -603,7 +630,8 @@ mod wall_tests {
             let stopped = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("{which}: its deadline passed while the machine slept, and it did not end on waking"));
             assert!(!stopped, "{which}: the time came; nothing stopped");
             let (from, to) = app.wall.last_sleep().unwrap_or_else(|| panic!("{which}: the sleep was not seen"));
-            assert!(to.duration_since(from).unwrap() >= Duration::from_secs(3500), "{which}: about the hour slept");
+            let slept = to.duration_since(from).unwrap();
+            assert!(slept >= Duration::from_secs(3500), "{which}: about the hour slept, not {slept:?} (from {from:?} to {to:?})");
             *app.wall.slept.lock().unwrap() = None;
         }
         // and a stop still ends a wait at once
