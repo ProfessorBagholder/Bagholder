@@ -272,3 +272,53 @@ fn opening_the_book_takes_no_lock() {
     assert!(!book.accounts().unwrap().is_empty());
     c.execute_batch("ROLLBACK").unwrap();
 }
+
+/// A back-dated record among sightings that state a venue by code and none in
+/// words costs the same at any depth (brief 45, 1). The words a run reads, and
+/// whether a run reads them from the one before, are found through the index of
+/// the sightings that do state words, named in each lookup: the book holds no
+/// statistics, and a lookup the planner sends through the index of every
+/// venue-stating sighting reads each coded one. Each history is one sighting in
+/// words, then `n` by code alone, with a record that states no venue at its end
+/// or without one.
+#[test]
+fn a_back_dated_record_among_coded_sightings_costs_the_same_at_any_depth() {
+    bagholder_sqlite::work::start_counting();
+    let start: bagholder_core::jiff::civil::Date = "2020-01-01".parse().unwrap();
+    let day = |i: usize| start.checked_add(bagholder_core::jiff::Span::new().days(i as i64)).unwrap().to_string();
+    let cost = |n: usize, silent_end: bool| -> u64 {
+        let f = Fixture::new();
+        f.account(&["a1"]);
+        let m = Spelled::v(1);
+        let share = |i: usize, words: bool, mic: bool| {
+            let mut s = json!({"refs": [["isin", "CA0000000099"]], "kind": "security", "currency": "CAD", "symbol": "AAA", "seen": day(i)});
+            if mic {
+                s["mic"] = json!("XTSE");
+            }
+            if words {
+                s["venue"] = json!("TSX");
+            }
+            s
+        };
+        for i in 0..=n {
+            f.store(&m, &format!("r{i}"), &legs(vec![buy("a1", share(i, i == 0, true), "1", "-1", &format!("{}T15:00:00Z", day(i)))]));
+        }
+        if silent_end {
+            f.store(&m, "end", &legs(vec![buy("a1", share(n + 1, false, false), "1", "-1", &format!("{}T15:00:00Z", day(n + 1)))]));
+        }
+        let id = instrument_of(&f, f.book.record_by_key(Some(f.connection), &bagholder_core::SourceName::named("test-broker"), "r0").unwrap().unwrap());
+        f.book.atomically(|| Ok(())).unwrap();
+        // the window measured: the test build's whole-fold check stays out of it
+        bagholder_sqlite::work::set_measuring(true);
+        let before = bagholder_sqlite::work::steps();
+        f.store(&m, "late", &legs(vec![buy("a1", share(n / 2, false, true), "1", "-1", &format!("{}T16:00:00Z", day(n / 2)))]));
+        f.book.names(id).unwrap();
+        let spent = bagholder_sqlite::work::steps() - before;
+        bagholder_sqlite::work::set_measuring(false);
+        spent
+    };
+    for silent_end in [false, true] {
+        let (a, b) = (cost(200, silent_end), cost(800, silent_end));
+        assert!(b < a * 2, "a record stating no venue at the end: {silent_end}; {a} steps at 200 sightings, {b} at 800");
+    }
+}

@@ -59,6 +59,7 @@
   let box = $state<HTMLInputElement>()
   $effect(() =>
     escapable(() => {
+      if (choices) { dropChoices(); return true }
       if (query && document.activeElement === box) { query = ''; return true }
       if (sym) { newsChip(null); return true }
       return false
@@ -105,11 +106,13 @@
     }
   }
   function pickScope(v: string) {
+    dropChoices()
     newsChip(null)
     scope = v
     try { localStorage.setItem('bh2.news', v) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
   }
   function pickKind(v: string) {
+    dropChoices()
     kindChosen = null
     kind = v === 'disc' || v === 'releases' ? v : 'stories'
     try { localStorage.setItem('bh2.newsKind', kind) } catch { /* the browser keeps nothing: the choice holds for this visit */ }
@@ -206,6 +209,18 @@
   // not answer, are offered by venue and none is chosen for the person, the failure
   // said beside them; a word no exchange lists stays a text search
   let choices = $state<{ key: string; listings: ResolvedListing[]; error: string } | null>(null)
+  // each ask of the resolver, and each change the person makes since, moves this on:
+  // an answer that lands after either is dropped, as the ticket drops a quote asked
+  // before its last change, so a late answer never undoes what the person did
+  let asked = 0
+  function dropChoices() {
+    asked++
+    choices = null
+  }
+  $effect(() => {
+    void symKey
+    asked++
+  })
   function takeChip(only: Chip) {
     choices = null
     newsChip(only)
@@ -214,14 +229,18 @@
   }
   const chipOf = (l: ResolvedListing): Chip => ({ symbol: bareSymbol(l.symbol).toUpperCase(), exchange: String(l.exchange || '').toUpperCase(), name: l.name, currency: l.currency })
   // every listing of `key`, as the resolver gives them: taken, offered, or said
-  // failed; `still` says whether the answer is still wanted when it lands
-  function resolveTicker(key: string, still: () => boolean) {
+  // failed; `still` says whether the answer is still wanted when it lands. `named`: the
+  // person named a listing (a row's tag), so none found is said, as markets-60 says it
+  // where every directory answered; words typed that no exchange lists stay a search
+  function resolveTicker(key: string, still: () => boolean, named = false) {
+    const ask = ++asked
     read('GET /api/listings', { query: { symbol: key } }).then((r) => {
-      if (!still()) return
+      if (ask !== asked || !still()) return
       const listings = r.ok ? r.listings : []
       const error = r.ok ? r.unread.join(' ') : r.error
       if (listings.length === 1 && !error) return takeChip(chipOf(listings[0]))
-      choices = listings.length > 1 || error ? { key, listings, error } : null
+      if (listings.length > 1 || error) choices = { key, listings, error }
+      else choices = named ? { key, listings, error: 'No listing of ' + key + ' is found on an exchange.' } : null
     })
   }
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
@@ -234,6 +253,7 @@
     if (q !== typed) {
       typed = q
       untrack(() => {
+        asked++
         if (choices && choices.key !== key) choices = null
       })
     }
@@ -252,7 +272,7 @@
     if (chipKey(chip)) return newsChip(chip)
     // asked whatever chip is on: its one listing takes the chip in its place
     const key = chip.symbol.trim().toUpperCase()
-    if (key) resolveTicker(key, () => true)
+    if (key) resolveTicker(key, () => true, true)
   }
   function openStory(n: Headline) {
     if (n.filed) return openDisc({ id: n.filed.id, sym: n.filed.symbol, source: n.filed.source, url: n.filed.url })

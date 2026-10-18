@@ -142,7 +142,7 @@ pub fn parse_tickers(data: &Value) -> Fetched<Tickers> {
 /// once its rest is over (`disclosures::FAILED_READ_REST`, growing with each failure
 /// in a row, `market::grown_rest`), never by each listing on its own schedule.
 pub fn ticker_map() -> Fetched<std::sync::Arc<Tickers>> {
-    ticker_map_at(SystemTime::now(), || get_json(TICKERS_URL))
+    ticker_map_at(crate::wall_now(), || get_json(TICKERS_URL))
 }
 
 /// `ticker_map` at `now`, the list read by `read` where it is due.

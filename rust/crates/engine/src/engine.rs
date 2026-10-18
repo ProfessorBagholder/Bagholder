@@ -265,10 +265,10 @@ pub struct Engine {
     /// Each account's cash, by the family whose rows moved it: a family's match
     /// gives its share, and an account's total is its shares added up.
     shares: BTreeMap<AccountId, BTreeMap<Node, BTreeMap<bagholder_core::Currency, Fig<bagholder_core::Dec>>>>,
-    /// Each instrument by what it is called now (its symbol in ASCII capitals)
-    /// and its currency: what a trade typed in by symbol is found by.
+    /// Each instrument by every symbol it has been called (in ASCII capitals) and
+    /// its currency: what a trade typed in by symbol is found by, on its day or now.
     symbols: BTreeMap<(String, bagholder_core::Currency), BTreeSet<InstrumentId>>,
-    /// Each listed instrument by the listing it is now (`ListingKey`) and its
+    /// Each listed instrument by every listing it has been (`ListingKey`) and its
     /// currency: what a trade typed in by symbol and exchange is found by.
     listings: BTreeMap<(bagholder_core::ListingKey, bagholder_core::Currency), BTreeSet<InstrumentId>>,
     /// Each family's match as it stood after its last walk: what a change that
@@ -302,15 +302,25 @@ fn path(log: &mut Vec<(Node, bool)>, f: Node, continued: bool) {
     PATHS.with(|p| p.borrow_mut().push((f, continued)));
 }
 
-/// What an instrument is found by when named: its current symbol in ASCII
+/// What an instrument is found by when named under `n`: the symbol in ASCII
 /// capitals, and its currency.
-fn symbol_key(i: &crate::input::InstrumentInfo) -> Option<(String, bagholder_core::Currency)> {
-    i.current_name().map(|n| (n.symbol.to_ascii_uppercase(), i.instrument.currency))
+fn symbol_key(i: &crate::input::InstrumentInfo, n: &bagholder_core::instrument::Name) -> (String, bagholder_core::Currency) {
+    (n.symbol.to_ascii_uppercase(), i.instrument.currency)
 }
 
-/// The listing an instrument is now, where its records name one, and its currency.
-fn listing_key(i: &crate::input::InstrumentInfo) -> Option<(bagholder_core::ListingKey, bagholder_core::Currency)> {
-    i.current_name().and_then(|n| bagholder_core::ListingKey::of(i.instrument.kind, n).ok()).map(|k| (k, i.instrument.currency))
+/// The listing `n` makes an instrument, where it names one, and its currency.
+fn listing_key(i: &crate::input::InstrumentInfo, n: &bagholder_core::instrument::Name) -> Option<(bagholder_core::ListingKey, bagholder_core::Currency)> {
+    bagholder_core::ListingKey::of(i.instrument.kind, n).ok().map(|k| (k, i.instrument.currency))
+}
+
+/// Every symbol an instrument has been called, each once.
+fn symbol_keys(i: &crate::input::InstrumentInfo) -> BTreeSet<(String, bagholder_core::Currency)> {
+    i.names.iter().map(|n| symbol_key(i, n)).collect()
+}
+
+/// Every listing an instrument has been, each once.
+fn listing_keys(i: &crate::input::InstrumentInfo) -> BTreeSet<(bagholder_core::ListingKey, bagholder_core::Currency)> {
+    i.names.iter().filter_map(|n| listing_key(i, n)).collect()
 }
 
 /// Each account's cash a family's match gives, by family.
@@ -393,10 +403,10 @@ impl Engine {
             paths: Vec::new(),
         };
         for (id, info) in &e.inputs.ledger.instruments {
-            if let Some(k) = symbol_key(info) {
+            for k in symbol_keys(info) {
                 e.symbols.entry(k).or_default().insert(*id);
             }
-            if let Some(k) = listing_key(info) {
+            for k in listing_keys(info) {
                 e.listings.entry(k).or_default().insert(*id);
             }
         }
@@ -559,12 +569,46 @@ impl Engine {
     /// The instruments called `symbol` now (any case of its ASCII letters) in
     /// `currency`.
     pub fn named(&self, symbol: &str, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
-        self.symbols.get(&(symbol.to_ascii_uppercase(), currency)).into_iter().flatten().copied()
+        self.named_when(symbol, currency, None)
+    }
+
+    /// The instruments called `symbol` on `day`, in `currency`: by the name each
+    /// was called then (`InstrumentInfo::name_on`), never by what it is called now.
+    pub fn named_on(&self, symbol: &str, currency: bagholder_core::Currency, day: Date) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.named_when(symbol, currency, Some(day))
+    }
+
+    fn named_when(&self, symbol: &str, currency: bagholder_core::Currency, day: Option<Date>) -> impl Iterator<Item = InstrumentId> + '_ {
+        let key = (symbol.to_ascii_uppercase(), currency);
+        self.symbols.get(&key).into_iter().flatten().copied().filter(move |id| {
+            self.inputs.ledger.instruments.get(id).and_then(|i| match day {
+                Some(d) => i.name_on(d),
+                None => i.current_name(),
+            }).is_some_and(|n| n.symbol.to_ascii_uppercase() == key.0)
+        })
     }
 
     /// The instruments that are the listing `key` now, in `currency`.
     pub fn listed(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
-        self.listings.get(&(key.clone(), currency)).into_iter().flatten().copied()
+        self.listed_when(key, currency, None)
+    }
+
+    /// The instruments that were the listing `key` on `day`, in `currency`.
+    pub fn listed_on(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Date) -> impl Iterator<Item = InstrumentId> + '_ {
+        self.listed_when(key, currency, Some(day))
+    }
+
+    fn listed_when(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Option<Date>) -> impl Iterator<Item = InstrumentId> + '_ {
+        let whole = (key.clone(), currency);
+        self.listings.get(&whole).into_iter().flatten().copied().filter(move |id| {
+            self.inputs.ledger.instruments.get(id).is_some_and(|i| {
+                let n = match day {
+                    Some(d) => i.name_on(d),
+                    None => i.current_name(),
+                };
+                n.and_then(|n| listing_key(i, n)).is_some_and(|k| k == whole)
+            })
+        })
     }
 
     /// The contracts written on `underlying`.
@@ -693,7 +737,7 @@ impl Engine {
                     adjusted_was.insert(tx.clone(), old);
                 }
                 for i in &instruments {
-                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
+                    for k in self.inputs.ledger.instruments.get(i).map(symbol_keys).unwrap_or_default() {
                         if let Some(s) = self.symbols.get_mut(&k) {
                             s.remove(i);
                             if s.is_empty() {
@@ -701,7 +745,7 @@ impl Engine {
                             }
                         }
                     }
-                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(listing_key) {
+                    for k in self.inputs.ledger.instruments.get(i).map(listing_keys).unwrap_or_default() {
                         if let Some(s) = self.listings.get_mut(&k) {
                             s.remove(i);
                             if s.is_empty() {
@@ -724,10 +768,10 @@ impl Engine {
                     instruments.iter().map(|i| (*i, self.inputs.ledger.instruments.get(i).and_then(|x| x.terms.as_ref()).map(|t| t.underlying))).collect();
                 self.seed(&mut seeds, &records, &now, &accounts);
                 for i in &instruments {
-                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(symbol_key) {
+                    for k in self.inputs.ledger.instruments.get(i).map(symbol_keys).unwrap_or_default() {
                         self.symbols.entry(k).or_default().insert(*i);
                     }
-                    if let Some(k) = self.inputs.ledger.instruments.get(i).and_then(listing_key) {
+                    for k in self.inputs.ledger.instruments.get(i).map(listing_keys).unwrap_or_default() {
                         self.listings.entry(k).or_default().insert(*i);
                     }
                 }

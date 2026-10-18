@@ -121,7 +121,8 @@ fn pace(_st: &mut State) -> Fetched<()> {
 
 fn session(st: &mut State) -> Fetched<&mut Session> {
     if st.session.is_none() {
-        st.session = Some(Session::new().ok_or_else(|| unavailable("the browser helper is not installed"))?);
+        // a process told to stay off the network opens no session: nothing is asked
+        st.session = Some(Session::new().ok_or_else(|| if bagholder_net::client::offline() { SourceError::Offline } else { unavailable("the browser helper is not installed") })?);
     }
     Ok(st.session.as_mut().unwrap())
 }

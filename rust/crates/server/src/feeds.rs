@@ -1961,7 +1961,10 @@ mod tests {
         assert_eq!(fear_stored(&a, "stocks").gauge.map(|g| g.gauge.score), Some(40.0), "the older reading stays drawn");
         read_fear_with(&a, "stocks", || Ok(gauge(55.0))).unwrap();
         assert!(feed_failures(&a).is_empty(), "gone once the index answers");
-        let _ = read_fear_with(&a, "crypto", || Err(bagholder_net::client::OFFLINE.into()));
+        // a read refused by BAGHOLDER_OFFLINE asked nobody: by its kind, never said however often
+        for _ in 0..3 {
+            let _ = read_fear_with(&a, "crypto", || Err(bagholder_net::Failure::Offline));
+        }
         assert!(feed_failures(&a).is_empty(), "a read refused by BAGHOLDER_OFFLINE asked nobody and is not said");
     }
 

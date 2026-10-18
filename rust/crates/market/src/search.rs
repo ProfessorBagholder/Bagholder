@@ -301,6 +301,10 @@ mod tests {
             let found = symbol_search_with(&text, &get, &|_| Ok(vec![]));
             let want: Vec<&str> = (0..3).filter(|i| failing & (1 << i) != 0).map(|i| names[i]).collect();
             assert_eq!(found.unread.iter().map(|u| u.split(" could not").next().unwrap()).collect::<Vec<_>>(), want, "{failing:03b}");
+            // each a sentence of its own, ended with its full stop
+            for u in &found.unread {
+                assert!(u.ends_with("could not be read: refused."), "{failing:03b}: {u:?}");
+            }
             let venues: Vec<&str> = found.rows.iter().map(|r| r.exchange.as_str()).collect();
             assert_eq!(venues.contains(&"NYSE"), failing & 1 == 0, "{failing:03b}");
             assert_eq!(venues.contains(&"TSX"), failing & 2 == 0, "{failing:03b}");

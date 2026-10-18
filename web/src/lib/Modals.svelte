@@ -82,7 +82,7 @@
           </select>
         </div>
         <!-- the symbol and its listing each the form's width: a listing is its venue and its name, which a half-width box cuts -->
-        <div style="grid-column:1 / -1"><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} onchange={() => resolveTradeSymbol(f.symbol)} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
+        <div style="grid-column:1 / -1"><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} oninput={() => (f.symbolError = '')} onchange={() => resolveTradeSymbol(f.symbol)} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
         <div style="grid-column:1 / -1"><div class="lbl" style="margin-bottom:5px">Exchange</div>
           <!-- each listing of the symbol, by its venue: one is taken where every directory
                answered; two or more, or one beside a directory unread, wait for the choice -->

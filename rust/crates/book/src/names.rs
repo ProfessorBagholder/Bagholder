@@ -94,12 +94,37 @@ fn carried(before: Option<&Run>) -> (Option<String>, Option<String>) {
     before.map(|r| (r.venue_mic.clone(), r.venue_name.clone())).unwrap_or_default()
 }
 
-/// The SQL a live sighting that states a venue, or states none, is filtered by
-/// (each the condition of a partial index, book migration 31).
-const STATES_VENUE: &str = "(s.venue_mic IS NOT NULL OR s.venue_name IS NOT NULL)";
-/// The SQL a live sighting that states its venue in words is filtered by.
-const STATES_WORDS: &str = "s.venue_name IS NOT NULL";
-const STATES_NO_VENUE: &str = "(s.venue_mic IS NULL AND s.venue_name IS NULL)";
+/// What a seek over an instrument's sightings keeps, each read through its own
+/// index, named in the statement (`INDEXED BY`): the book holds no statistics, so
+/// the planner would guess, and a guess of a wider index makes a seek read every
+/// sighting that index holds (brief 45, 1). Each condition is its partial index's
+/// own, word for word, as `INDEXED BY` a partial index requires.
+#[derive(Clone, Copy, Debug)]
+enum Stating {
+    /// every sighting
+    Any,
+    /// a venue, by code or in words (book migration 31)
+    Venue,
+    /// no venue at all (book migration 31)
+    NoVenue,
+    /// its venue in words
+    Words,
+    /// the instrument's name
+    Name,
+}
+
+impl Stating {
+    /// The index read and the condition it holds.
+    fn index(self) -> (&'static str, &'static str) {
+        match self {
+            Stating::Any => ("instrument_sightings_newest", ""),
+            Stating::Venue => ("instrument_sightings_stating", " AND (s.venue_mic IS NOT NULL OR s.venue_name IS NOT NULL)"),
+            Stating::NoVenue => ("instrument_sightings_silent", " AND (s.venue_mic IS NULL AND s.venue_name IS NULL)"),
+            Stating::Words => ("instrument_sightings_venue_named", " AND s.venue_name IS NOT NULL"),
+            Stating::Name => ("instrument_sightings_named", " AND s.name IS NOT NULL"),
+        }
+    }
+}
 
 fn bound_key(b: &Bound<Key>) -> Option<&Key> {
     match b {
@@ -237,7 +262,7 @@ impl Book {
         let head = self.canonical(id)?;
         if self.names_due_for(head)? {
             let mut st = self.conn().prepare_cached(
-                "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+                "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s INDEXED BY instrument_sightings_newest JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
                  WHERE s.instrument_id = ?1 ORDER BY s.day DESC, s.symbol DESC, s.rowid DESC LIMIT 1",
             )?;
             let mut newest: Option<Key> = None;
@@ -366,14 +391,11 @@ impl Book {
     }
 
     /// The first (or last) live sighting of the group between two bounds.
-    fn live_end(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, only: Option<&str>) -> Result<Option<(Key, String, Option<String>, Option<String>)>> {
+    fn live_end(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, only: Stating) -> Result<Option<(Key, String, Option<String>, Option<String>)>> {
         let order = if last { "DESC" } else { "ASC" };
-        let only_sql = match only {
-            Some(column) => format!(" AND s.{column} IS NOT NULL"),
-            None => String::new(),
-        };
+        let (index, only_sql) = only.index();
         let sql = format!(
-            "SELECT s.day, s.symbol, s.rowid, r.source, s.venue_name, s.name FROM instrument_sightings s
+            "SELECT s.day, s.symbol, s.rowid, r.source, s.venue_name, s.name FROM instrument_sightings s INDEXED BY {index}
              JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
              WHERE s.instrument_id = ?1 AND {} AND {}{only_sql}
              ORDER BY s.day {order}, s.symbol {order}, s.rowid {order} LIMIT 1",
@@ -409,12 +431,13 @@ impl Book {
 
     /// The first (or last) live sighting of the group between two bounds that
     /// `filter` keeps: its place, its code and its words.
-    fn seek(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, filter: &str) -> Result<Option<(Key, Option<String>, Option<String>)>> {
+    fn seek(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, filter: Stating) -> Result<Option<(Key, Option<String>, Option<String>)>> {
         let order = if last { "DESC" } else { "ASC" };
+        let (index, filter) = filter.index();
         let sql = format!(
-            "SELECT s.day, s.symbol, s.rowid, s.venue_mic, s.venue_name FROM instrument_sightings s
+            "SELECT s.day, s.symbol, s.rowid, s.venue_mic, s.venue_name FROM instrument_sightings s INDEXED BY {index}
              JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
-             WHERE s.instrument_id = ?1 AND {} AND {} AND {filter}
+             WHERE s.instrument_id = ?1 AND {} AND {}{filter}
              ORDER BY s.day {order}, s.symbol {order}, s.rowid {order} LIMIT 1",
             bound_sql(from, true, 2),
             bound_sql(to, false, 5),
@@ -467,7 +490,7 @@ impl Book {
         let mut stops: BTreeSet<Key> = BTreeSet::new();
         let mut reach: Vec<Option<Key>> = Vec::new();
         for k in keys {
-            let stop = self.seek(&members, &Bound::Excluded(k.clone()), &Bound::Unbounded, false, STATES_VENUE)?.map(|x| x.0);
+            let stop = self.seek(&members, &Bound::Excluded(k.clone()), &Bound::Unbounded, false, Stating::Venue)?.map(|x| x.0);
             if let Some(s) = stop.clone().filter(|s| !keys.contains(s)) {
                 stops.insert(s);
             }
@@ -586,7 +609,7 @@ impl Book {
                     (Bound::Included(a), Bound::Included(b)) => a > b,
                     _ => false,
                 };
-                if !empty && self.live_end(members, &from, &to, false, None)?.is_some() {
+                if !empty && self.live_end(members, &from, &to, false, Stating::Any)?.is_some() {
                     let at = bound_key(&from).cloned().unwrap_or_default();
                     let rank = if matches!(from, Bound::Excluded(_)) { 2 } else { 0 };
                     out.push((at, rank, Some(Piece::Kept { symbol: r.symbol.clone(), venue_mic: r.venue_mic.clone(), from: from.clone(), to: to.clone() })));
@@ -645,7 +668,7 @@ impl Book {
     /// seeks, on the sightings indexed by what they state.
     fn reads_words_before(&self, members: &[String], run: &Run) -> Result<bool> {
         let (first, last) = (Bound::Included(run.first.clone()), Bound::Included(run.last.clone()));
-        Ok(self.seek(members, &first, &first, false, STATES_NO_VENUE)?.is_some() && self.seek(members, &first, &last, false, STATES_WORDS)?.is_none())
+        Ok(self.seek(members, &first, &first, false, Stating::NoVenue)?.is_some() && self.seek(members, &first, &last, false, Stating::Words)?.is_none())
     }
 
     /// `kept` replaced by the runs `pieces` make.
@@ -662,23 +685,23 @@ impl Book {
             let end = |p: &Piece, last: bool| -> Result<Key> {
                 match p {
                     Piece::Seen { at, .. } => Ok(at.clone()),
-                    Piece::Kept { from, to, .. } => Ok(self.live_end(members, from, to, last, None)?.map(|x| x.0).unwrap_or_default()),
+                    Piece::Kept { from, to, .. } => Ok(self.live_end(members, from, to, last, Stating::Any)?.map(|x| x.0).unwrap_or_default()),
                 }
             };
             let first = end(&g[0], false)?;
             let last = end(&g[g.len() - 1], true)?;
             let (from, to) = (Bound::Included(first.clone()), Bound::Included(last.clone()));
-            let source = self.live_end(members, &from, &to, true, None)?.map(|x| x.1).unwrap_or_default();
+            let source = self.live_end(members, &from, &to, true, Stating::Any)?.map(|x| x.1).unwrap_or_default();
             let (symbol, venue_mic) = g[0].label();
             // a run whose sightings state no words and whose first states no venue reads
             // as on the run before it, in its words too
             let prior = runs.last().or(before);
-            let venue_name = match self.live_end(members, &from, &to, true, Some("venue_name"))?.and_then(|x| x.2) {
+            let venue_name = match self.live_end(members, &from, &to, true, Stating::Words)?.and_then(|x| x.2) {
                 Some(w) => Some(w),
-                None if self.seek(members, &from, &Bound::Included(first.clone()), false, STATES_NO_VENUE)?.is_some() => prior.and_then(|r| r.venue_name.clone()),
+                None if self.seek(members, &from, &Bound::Included(first.clone()), false, Stating::NoVenue)?.is_some() => prior.and_then(|r| r.venue_name.clone()),
                 None => None,
             };
-            let name = self.live_end(members, &from, &to, true, Some("name"))?.and_then(|x| x.3);
+            let name = self.live_end(members, &from, &to, true, Stating::Name)?.and_then(|x| x.3);
             runs.push(Run { first, last, symbol: symbol.to_string(), venue_mic: venue_mic.map(str::to_string), venue_name, name, source });
         }
         let mut del = self.conn().prepare_cached("DELETE FROM instrument_names WHERE instrument_id = ?1 AND first_day = ?2 AND first_symbol = ?3 AND first_sighting = ?4")?;

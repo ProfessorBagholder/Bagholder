@@ -1385,27 +1385,33 @@ pub fn filings_shown(app: Arc<App>, doc: String, key: ListingKey) {
                 if stale { refresh_filings(&app, &key).map(|_| ()) } else { Ok(()) }
             });
             went(&app, DISCLOSURES, refreshed.map_err(|e| format!("{}'s disclosures could not be brought up to date: {e}", key.named())));
-            let mut tried: HashSet<(Regulator, String)> = HashSet::new();
-            while app.events.watched(&doc) && !app.stopping() {
-                let left = conn(&app).and_then(|c| filers_kept(&c, &key).and_then(|f| sf::filings_of(&c, &f).map_err(|e| e.to_string())));
-                let Some(left) = went(&app, DISCLOSURES_STORED, left.map_err(|e| format!("The disclosures held could not be read: {e}"))) else { break };
-                let mut left: Vec<Filing> = left.into_iter()
-                    .filter(|r| wants_reading(r) && !tried.contains(&(r.doc.source, r.doc.id.clone())))
-                    .collect();
-                left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
-                let Some(next) = left.first().map(|r| (r.doc.source, r.doc.id.clone())) else { break };
-                set_reading(&app, &key, left.iter().map(|r| r.doc.id.clone()).collect());
-                // waits for the local model itself when one is coming up; a document that
-                // could not be read is said in the header until one is
-                went(&app, DISCLOSURES_READING, filings_enrich_result(&app, next.0, &next.1).map_err(|e| format!("{}'s document {} could not be read: {e}", key.named(), next.1)));
-                tried.insert(next);
-                if app.wait(Duration::from_millis(150)) { // a person's pace at the source
-                    break;
-                }
-            }
-            set_reading(&app, &key, vec![]);
+            read_while_shown(&app, &doc, &key, &|source, id| filings_enrich_result(&app, source, id));
         });
     });
+}
+
+/// Read each of `key`'s documents that has no title, newest first, each once, while
+/// a page shows `doc`. A document that could not be read is said in the header
+/// until one is, by its kind: one refused offline asked no one and is not said.
+fn read_while_shown(app: &Arc<App>, doc: &str, key: &ListingKey, read: &dyn Fn(Regulator, &str) -> Result<Enriched, bagholder_net::Failure>) {
+    let mut tried: HashSet<(Regulator, String)> = HashSet::new();
+    while app.events.watched(doc) && !app.stopping() {
+        let left = conn(app).and_then(|c| filers_kept(&c, key).and_then(|f| sf::filings_of(&c, &f).map_err(|e| e.to_string())));
+        let Some(left) = went(app, DISCLOSURES_STORED, left.map_err(|e| format!("The disclosures held could not be read: {e}"))) else { break };
+        let mut left: Vec<Filing> = left.into_iter()
+            .filter(|r| wants_reading(r) && !tried.contains(&(r.doc.source, r.doc.id.clone())))
+            .collect();
+        left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
+        let Some(next) = left.first().map(|r| (r.doc.source, r.doc.id.clone())) else { break };
+        set_reading(app, key, left.iter().map(|r| r.doc.id.clone()).collect());
+        // waits for the local model itself when one is coming up
+        went(app, DISCLOSURES_READING, read(next.0, &next.1).map_err(|e| e.map(|e| format!("{}'s document {} could not be read: {e}", key.named(), next.1))));
+        tried.insert(next);
+        if app.wait(Duration::from_millis(150)) { // a person's pace at the source
+            break;
+        }
+    }
+    set_reading(app, key, vec![]);
 }
 
 /// What `filings_payload` returns: the `GET /api/filings?…&refresh=1` answer.
@@ -2027,6 +2033,35 @@ mod tests {
         assert_eq!(filers_kept(&c, &key).unwrap(), [filer("000000001", Regulator::Sedar)], "still the listing's filer");
         assert_eq!(shown(&c, &key).len(), 1, "its document still shown");
         assert!(sf::listing_filer_miss(&c, &key, Regulator::Sedar).unwrap().is_none());
+    }
+
+    /// A document read while a page shows a listing's disclosures is said in the
+    /// header only for a failure of the source's: one refused offline asked no
+    /// one, and stays unsaid however often it comes back (brief 45, 4).
+    #[test]
+    fn a_document_read_refused_offline_is_never_said_and_a_failed_one_is() {
+        let (_home, app) = built_app();
+        let key = on("XYZ", "NYSE");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("0000000001".into()))];
+        let mut unread = item(Regulator::Sec, 1, "0000000001");
+        unread.title = String::new();
+        r.documents = vec![(filer("0000000001", Regulator::Sec), Ok(vec![unread]))];
+        refresh_filings_in(&app, &crate::feeds::conn(&app).unwrap(), &key, &r).unwrap();
+        let feed = crate::events::Feed::open(app.clone());
+        let doc = "disclosures-shown";
+        assert!(app.events.watch(&app, feed.id(), [(doc.to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
+        let said = || crate::status::status(&app).error;
+        // read twice over: a failure said once the next read fails too
+        for _ in 0..2 {
+            read_while_shown(&app, doc, &key, &|_, _| Err(bagholder_net::Failure::Offline));
+        }
+        assert!(!said().contains("could not be read"), "{}", said());
+        for _ in 0..2 {
+            read_while_shown(&app, doc, &key, &|_, _| Err("the SEC could not be reached".into()));
+        }
+        assert!(said().contains("XYZ · US's document sec:1 could not be read: the SEC could not be reached"), "{}", said());
+        drop(feed);
     }
 
     /// A filer that could not be settled is said, and nothing is guessed in its place.

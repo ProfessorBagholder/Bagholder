@@ -170,11 +170,16 @@ impl Regulators for Live {
     }
 
     fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
-        crate::interlisted::fetch().map_err(|e| match e {
-            // a request refused by `BAGHOLDER_OFFLINE` asked nobody
-            crate::http::FetchError::Offline => SourceError::Offline,
-            e => SourceError::Unavailable(crate::http::describe_failure(&e)),
-        })
+        crate::interlisted::fetch().map_err(fetch_failed)
+    }
+}
+
+/// A fetch that did not answer, as a source's failure; one refused by
+/// `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the source's.
+fn fetch_failed(e: crate::http::FetchError) -> SourceError {
+    match e {
+        crate::http::FetchError::Offline => SourceError::Offline,
+        e => SourceError::Unavailable(crate::http::describe_failure(&e)),
     }
 }
 
@@ -182,7 +187,7 @@ impl Regulators for Live {
 /// company record that holds the symbol, for the TSX and the TSX Venture; TMX's
 /// quote's name for the CSE and Cboe Canada. Why none, where none does.
 pub fn issuer_name(listing: &ListingKey) -> Fetched<Result<String, String>> {
-    let failed = |e: crate::http::FetchError| SourceError::Unavailable(format!("{}", crate::http::describe_failure(&e)));
+    let failed = fetch_failed;
     match listing.venue() {
         "XTSE" | "XTSX" => Ok(crate::search::tsx_issuer_name(listing).map_err(failed)?.ok_or_else(|| format!("The TSX's directory names no single company holding {}.", listing.symbol()))),
         _ => {

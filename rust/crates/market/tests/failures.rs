@@ -169,3 +169,35 @@ fn an_sec_document_read_offline_is_refused_by_its_kind() {
     assert!(matches!(bagholder_market::edgar::content(&row), Err(bagholder_market::disclosures::SourceError::Offline)));
     assert!(matches!(bagholder_market::edgar::document(&row), Err(bagholder_market::disclosures::SourceError::Offline)));
 }
+
+/// A Canadian listing's filer asked in a process told to stay off the network:
+/// the exchange's directory and SEDAR+ are refused by their kind, never said as
+/// a failure of either (brief 45, 4).
+#[test]
+fn a_canadian_filer_asked_offline_is_refused_by_its_kind() {
+    use bagholder_market::disclosures::{self as d, Regulators, SourceError};
+    offline();
+    for venue in ["TSX", "TSX-V", "CSE", "NEO"] {
+        let listing = bagholder_core::ListingKey::on("ZQOFF", venue).unwrap();
+        assert!(matches!(d::issuer_name(&listing), Err(SourceError::Offline)), "{venue}");
+        let (_, found) = d::Live.filer(&listing, "2026-09-16").unwrap();
+        assert!(matches!(found, Err(SourceError::Offline)), "{venue}: {found:?}");
+    }
+    assert!(matches!(bagholder_market::sedar::profile_of("Zqoff Corp", "2026-09-16"), Err(SourceError::Offline)));
+    assert!(matches!(bagholder_market::sedar::fetch_profile("000000001", 5), Err(SourceError::Offline)));
+}
+
+/// The SEC's list ages by the wall clock, which goes on through a machine's sleep:
+/// a list read before a day's sleep is read again after it, through `ticker_map`
+/// itself (refused here, the process being offline), never kept as a monotonic
+/// clock that stopped while the machine slept would keep it (brief 45).
+#[test]
+fn the_secs_list_read_before_a_days_sleep_is_read_again_after_it() {
+    use bagholder_market::{disclosures as d, edgar};
+    offline();
+    let list = serde_json::json!({"fields": ["cik", "name", "ticker", "exchange"], "data": [[7, "X CO", "ZQSL", "NYSE"]]});
+    edgar::ticker_map_at(bagholder_market::wall_now(), || Ok(list)).unwrap();
+    assert_eq!(edgar::ticker_map().unwrap()["ZQSL"][0].0, 7, "kept within the day");
+    bagholder_market::sleep_through(std::time::Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0));
+    assert!(matches!(edgar::ticker_map(), Err(d::SourceError::Offline)), "asked again once a day has passed on the wall clock");
+}

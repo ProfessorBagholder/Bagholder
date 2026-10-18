@@ -119,7 +119,9 @@ test.describe('Add trade, the exchange', () => {
     await boxes.nth(1).fill('1')
     await page.getByRole('button', { name: 'Add trade' }).click()
     await expect(page.locator('#modalDlg .status-err')).toHaveText('No listing of ZQZA is found on an exchange.')
-    await typeSymbol(page, 'ZQZB')
+    // gone as the text changes, while the box still has the focus (brief 45, 8)
+    await symbolBox(page).fill('ZQZB')
+    await expect(symbolBox(page)).toBeFocused()
     await expect(page.locator('#modalDlg .status-err')).toHaveCount(0)
   })
 

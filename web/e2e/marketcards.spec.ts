@@ -680,6 +680,83 @@ test.describe('News', () => {
     await expect(card.locator('.chip')).toContainText('ZQNW')
   })
 
+  // brief 45, 5: an answer that lands after the person changed something since is dropped
+  test('a late answer for a row tagged with no venue changes nothing the person did since it was asked', async ({ page, request }) => {
+    const rows = headlines([
+      item('w', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 0.01 } }),
+      item('v', 'A story of no venue', { tag: { symbol: 'ZQNL', exchange: '', held: false, watched: false, percentChange: null } }),
+      item('u', 'Another story of no venue', { tag: { symbol: 'ZQNM', exchange: '', held: false, watched: false, percentChange: null } }),
+    ])
+    await openWithStatus(page, request, {}, '#markets', () => {}, rows)
+    // each answer held until the test lets it go
+    const held: (() => void)[] = []
+    await page.route('**/api/listings?*', async (route) => {
+      const symbol = new URL(route.request().url()).searchParams.get('symbol')!
+      await new Promise<void>((go) => held.push(go))
+      await route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: `${symbol}@XTSE`, symbol, name: 'Zq Corp', exchange: 'TSX', currency: 'CAD', held: false }] } })
+    })
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    const landed = async () => {
+      const answered = page.waitForResponse((r) => r.url().includes('/api/listings?'))
+      held.shift()!()
+      await answered
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+    }
+    // another chip clicked while the answer is out: the chip stays the one clicked
+    let looked = page.waitForRequest((r) => r.url().includes('/api/listings?'))
+    await card.locator('.nw-sym', { hasText: 'ZQNL' }).click()
+    await looked
+    await card.locator('.nw-sym', { hasText: 'WID' }).click()
+    await expect(card.locator('.chip')).toContainText('WID')
+    await landed()
+    await expect(card.locator('.chip')).toContainText('WID')
+    // words typed while the answer is out: they stay, and no chip is taken
+    await card.locator('.chip .cx').click()
+    looked = page.waitForRequest((r) => r.url().includes('/api/listings?'))
+    await card.locator('.nw-sym', { hasText: 'ZQNM' }).click()
+    await looked
+    await page.getByLabel('Search the news').fill('earnings')
+    await landed()
+    await expect(page.getByLabel('Search the news')).toHaveValue('earnings')
+    await expect(card.locator('.chip')).toHaveCount(0)
+  })
+
+  // brief 45, 6: a row tagged with no venue that no directory lists says so
+  test('a row tagged with no venue that no exchange lists says there is no listing of it', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([item('v', 'A story of no venue', { tag: { symbol: 'ZQNO', exchange: '', held: false, watched: false, percentChange: null } })]))
+    await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread: [], listings: [] } }))
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    await card.locator('.nw-sym', { hasText: 'ZQNO' }).click()
+    await expect(card.locator('.status-err')).toHaveText('No listing of ZQNO is found on an exchange.')
+    await expect(card.locator('.chip')).toHaveCount(0)
+  })
+
+  // brief 45, 7: the listings a row tagged with no venue offers go on Escape, a scope or a tab
+  test('the listings offered for a row tagged with no venue go on Escape, on a scope and on a tab', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([item('v', 'A story of no venue', { tag: { symbol: 'ZQNC', exchange: '', held: false, watched: false, percentChange: null } })]))
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQNC@XTSE', symbol: 'ZQNC', name: 'Zqnc Corp', exchange: 'TSX', currency: 'CAD', held: false }, { listing: 'ZQNC@US', symbol: 'ZQNC', name: 'Zqnc Inc', exchange: 'NYSE', currency: 'USD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    const offered = async () => {
+      await card.locator('.nw-sym', { hasText: 'ZQNC' }).click()
+      await expect(card.locator('.lc-row')).toHaveCount(2)
+    }
+    await offered()
+    await page.keyboard.press('Escape')
+    await expect(card.locator('.lc-row')).toHaveCount(0)
+    await offered()
+    await card.locator('.mseg-opt', { hasText: 'All' }).click()
+    await expect(card.locator('.lc-row')).toHaveCount(0)
+    await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    await offered()
+    await card.locator('.mseg-opt', { hasText: 'Releases' }).click()
+    await expect(card.locator('.lc-row')).toHaveCount(0)
+  })
+
   // brief 44, 8: a ticker found on no venue while a directory did not answer says the failure
   test('a ticker found on no venue while a directory did not answer says the failure, and stays a text search', async ({ page, request }) => {
     const said = saidShown(page)

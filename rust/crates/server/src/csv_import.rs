@@ -22,7 +22,7 @@ use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, Currency, RecordId, Rounding, SourceName};
 use bagholder_engine::Engine;
 
-use crate::entries::{contract_by_terms, held_by_symbol, held_on_listing, manual_account, Refused};
+use crate::entries::{contract_by_terms, held_on_day, manual_account, Called, Refused};
 use crate::figures::Figures;
 
 /// A row the report names: its line in the file and what it says.
@@ -222,8 +222,9 @@ pub fn import_from(
                 };
                 let instrument = match &stated {
                     Ok(s) => match (&s.instrument, s.currency) {
-                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency)? {
-                            Some(t) => Some(book.name_stated(placed, &t, Some(symbol)).map_err(|e| match e {
+                        // the file's symbol is stated where it is what the instrument was called on the row's day
+                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency, s.day)? {
+                            Some((t, its_name)) => Some(book.name_stated(placed, &t, its_name.then_some(symbol.as_str())).map_err(|e| match e {
                                 bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
                                 other => Refused::Failed(other.to_string()),
                             })?),
@@ -291,15 +292,17 @@ pub fn import_from(
     Ok(report)
 }
 
-/// What a row's symbol trades, as the book knows it. A row that names its
-/// exchange is the listing it names: the security the book holds there, else a
-/// security the book has not met, on that venue. A row that names none is the
-/// instrument the book holds by that symbol in that currency, else a contract by
-/// its terms or a security whose records state no venue, which gets no market
-/// data until one does (plan `market-data-keyed-by-listing`, Approach, 5).
-/// `None` for a kind neither is (a coin the book does not hold, an option whose
-/// name states no terms): the row names nothing.
-pub(crate) fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
+/// What a row's symbol trades, as the book knows it, and whether the symbol is
+/// what that was called on the row's day. A row that names its exchange is the
+/// listing it names: the security the book holds there, by its name on `day`
+/// first and its name now after (`entries::held_on_day`), else a security the book
+/// has not met, on that venue. A row that names none is the instrument the book
+/// holds by that symbol in that currency, the same way, else a contract by its
+/// terms or a security whose records state no venue, which gets no market data
+/// until one does (plan `market-data-keyed-by-listing`, Approach, 5). `None` for a
+/// kind neither is (a coin the book does not hold, an option whose name states no
+/// terms): the row names nothing.
+pub(crate) fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: InstrumentKind, currency: Currency, day: bagholder_core::jiff::civil::Date) -> Result<Option<(Traded, bool)>, Refused> {
     let symbol = symbol.trim().to_uppercase();
     let listing = match exchange.map(str::trim).filter(|ex| !ex.is_empty() && kind == InstrumentKind::Security) {
         Some(ex) => {
@@ -310,17 +313,17 @@ pub(crate) fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: In
     };
     f.read(|e| {
         if let Some((key, venue)) = &listing {
-            return Some(match held_on_listing(e, key, currency) {
-                Some(id) => Traded::Held(id),
-                None => Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: venue.clone() },
+            return Some(match held_on_day(e, Called::Listing(key), currency, day) {
+                Some((id, its_name)) => (Traded::Held(id), its_name),
+                None => (Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: venue.clone() }, true),
             });
         }
-        if let Some(id) = held_by_symbol(e, &symbol, currency, |k| k == kind) {
-            return Some(Traded::Held(id));
+        if let Some((id, its_name)) = held_on_day(e, Called::Symbol(&symbol, &|k| k == kind), currency, day) {
+            return Some((Traded::Held(id), its_name));
         }
         match kind {
-            InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency),
-            InstrumentKind::Security => Some(Traded::Named { symbol, currency, contract: None, venue: None }),
+            InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency).map(|t| (t, true)),
+            InstrumentKind::Security => Some((Traded::Named { symbol, currency, contract: None, venue: None }, true)),
             _ => None,
         }
     })

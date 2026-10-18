@@ -115,7 +115,7 @@ impl Pair {
             // a change dated today, and one dated in the middle of the history: a
             // record that states no venue reads as on the one before it, so a
             // back-dated one re-forms the names after it (brief 44, 2)
-            Pair::Depth => &[Op::AddTrade, Op::Import, Op::BackdatedTrade, Op::BackdatedRecord],
+            Pair::Depth => &[Op::AddTrade, Op::Import, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow],
         }
     }
     /// What a probe is told of the pair it measures.
@@ -164,13 +164,19 @@ pub enum Op {
     FeedStep,
     /// A trade entered by hand on the holding, dated in the middle of its history.
     BackdatedTrade,
+    /// One of the broker's buys of the holding, from the middle of its history,
+    /// stored again under a new id: every later trade of the holding is derived again.
+    BackdatedFill,
     /// One of the broker's distribution records of the holding, from the middle of
     /// its history, stored again under a new id, as a pull stores a row the broker adds late.
     BackdatedRecord,
+    /// A file's row, dated in the middle of the history of a listing whose rows
+    /// name its exchange by code and state no venue in words (`CODED`).
+    BackdatedFileRow,
 }
 
 impl Op {
-    pub const ALL: [Op; 8] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedRecord];
+    pub const ALL: [Op; 10] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -180,7 +186,9 @@ impl Op {
             Op::PriceChanged => "price-changed",
             Op::FeedStep => "feed-step",
             Op::BackdatedTrade => "backdated-trade",
+            Op::BackdatedFill => "backdated-fill",
             Op::BackdatedRecord => "backdated-record",
+            Op::BackdatedFileRow => "backdated-file-row",
         }
     }
     fn parse(s: &str) -> Option<Op> {
@@ -189,10 +197,6 @@ impl Op {
     /// A person waits on it: its wall time fails the run.
     fn waited_on(self) -> bool {
         matches!(self, Op::Startup | Op::AddTrade | Op::Import | Op::BackdatedTrade)
-    }
-    /// A change dated before today.
-    fn backdated(self) -> bool {
-        matches!(self, Op::BackdatedTrade | Op::BackdatedRecord)
     }
     /// It answers one change: the growth rule holds it.
     fn per_change(self) -> bool {
@@ -248,14 +252,52 @@ static PLANT_NAMES_FOLD: AtomicBool = AtomicBool::new(false);
 /// What is over budget today, each with its issue: the run fails when one off
 /// this list misses, and when one on it meets its budget and the growth rule,
 /// so the list only shrinks (`docs/architecture.md` §16).
-pub const OVER_BUDGET: &[(&str, Pair, &str)] = &[
+/// Each entry names the measure that is over, so an operation listed for one
+/// measure is still held to the others.
+pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // the whole view built and serialised to learn whether it changed
-    ("feed-step", Pair::Breadth, "#426"),
+    ("feed-step", Pair::Breadth, Measure::Allocations, "#426"),
+    // a change dated in the middle of a holding's history: the engine derives the
+    // holding's later trades and its later days again, from that day on
+    ("backdated-trade", Pair::Depth, Measure::Time, ENGINE_FROM_A_DAY),
+    ("backdated-trade", Pair::Depth, Measure::Steps, ENGINE_FROM_A_DAY),
+    ("backdated-trade", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
+    ("backdated-fill", Pair::Depth, Measure::Steps, ENGINE_FROM_A_DAY),
+    ("backdated-fill", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
+    ("backdated-record", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
+    ("backdated-file-row", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
 ];
 
-/// Whether `op` on `pair` is listed over budget.
-fn listed(op: Op, pair: Pair) -> bool {
-    OVER_BUDGET.iter().any(|(name, p, _)| *name == op.name() && *p == pair)
+/// The issue of the engine's work after a back-dated change.
+const ENGINE_FROM_A_DAY: &str = "#527";
+
+/// What a measurement is judged by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Measure {
+    /// The wall time a person waits, on a Pi, against the budget.
+    Time,
+    /// SQLite's steps, against the growth rule.
+    Steps,
+    /// The allocations made, against the growth rule.
+    Allocations,
+    /// The bytes read from storage, against the growth rule.
+    BytesRead,
+}
+
+impl Measure {
+    fn name(self) -> &'static str {
+        match self {
+            Measure::Time => "time",
+            Measure::Steps => "steps",
+            Measure::Allocations => "allocations",
+            Measure::BytesRead => "bytes read",
+        }
+    }
+}
+
+/// Whether `op` on `pair` is listed over budget by `measure`.
+fn listed(op: Op, pair: Pair, measure: Measure) -> bool {
+    OVER_BUDGET.iter().any(|(name, p, m, _)| *name == op.name() && *p == pair && *m == measure)
 }
 
 // ---- work counted ----
@@ -484,8 +526,35 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
     let export = activity_export(adapter.source.rows())?;
     let open = || Ok(Box::new(std::io::Cursor::new(export.clone().into_bytes())) as Box<dyn std::io::BufRead>);
     crate::csv_import::import_from(&f, "activities.csv", &open, Some(first_account), at, &mut |_| crate::csv_import::Go::On).map_err(|e| format!("the activity export was not imported: {e:?}"))?;
+    if size.deep > 0 {
+        let coded = coded_history(size.deep / 2)?;
+        let open = || Ok(Box::new(std::io::Cursor::new(coded.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+        crate::csv_import::import_from(&f, "coded.csv", &open, Some(first_account), at, &mut |_| crate::csv_import::Go::On).map_err(|e| format!("the listing named by code alone was not imported: {e:?}"))?;
+    }
     f.record_changed(at)?;
     Ok(format!("{} rows, {} balances reads ({} a day), {} statement rows\n", report.rows_read, passes, a_day, rows(&f.book()?)?))
+}
+
+/// A second deep listing, by depth, imported from a file whose rows name its
+/// exchange by code and state no venue in words, as a hand entry's rows and other
+/// brokers' files do: the words a run reads are then looked up past sightings that
+/// state none, which only the index of those that do state words skips (brief 45,
+/// 1). Its symbol and the exchange's code.
+const CODED: (&str, &str) = ("ZQCODE", "XTSE");
+const CODED_HEADER: &str = "Date,Action,Symbol,Exchange,Quantity,Price,Amount,Currency\n";
+
+/// `rounds` round trips of the `CODED` listing, one after another up to the
+/// made-up today, each bought one day and sold the next; half the deep listing's
+/// depth, so that one stays the deepest.
+fn coded_history(rounds: usize) -> Result<String, String> {
+    let mut text = String::from(CODED_HEADER);
+    let today = made_up_today();
+    for k in 0..rounds {
+        let bought = today.checked_sub(SignedDuration::from_hours(24 * (3 * (rounds - k) as i64 + 1))).map_err(err)?;
+        let sold = bought.checked_add(SignedDuration::from_hours(24)).map_err(err)?;
+        text.push_str(&format!("{bought},Buy,{},{},10,20.00,-200.00,CAD\n{sold},Sell,{},{},10,21.00,210.00,CAD\n", CODED.0, CODED.1, CODED.0, CODED.1));
+    }
+    Ok(text)
 }
 
 /// The share of the feed's records the owner's book also holds from
@@ -744,38 +813,54 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             paths_taken(f, window);
             Ok(out)
         }
-        Op::BackdatedTrade | Op::BackdatedRecord => {
+        Op::BackdatedTrade | Op::BackdatedFill | Op::BackdatedRecord => {
             let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             f.names()?;
             let book = f.book()?;
-            // the broker's record of the holding in the middle of its history, by day: a
-            // distribution, which re-forms the instrument's names and moves no position. A
-            // back-dated execution also re-derives every later trade its quantity reaches,
-            // which on this book (never flat again) is all of them: work that grows with
-            // what changed, held by the engine's own cases, not by this row
-            let (record, day): (String, String) = {
+            // the broker's distribution of the holding (a buy, for a back-dated fill) in
+            // the middle of its history, by day, in the account whose history is deep:
+            // of the accounts with such a record, the one holding most of its rows, never
+            // another account that holds the listing too
+            let kind = if op == Op::BackdatedFill { "buy" } else { "dividend" };
+            let (record, day, account): (String, String, String) = {
                 let c = book.conn_for_tests();
-                let n: i64 = c
+                let account: String = c
                     .query_row(
-                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1 AND t.kind = 'dividend'",
-                        [instrument.to_string()],
+                        "SELECT t.account_id FROM transactions t WHERE t.instrument_id = ?1
+                           AND t.account_id IN (SELECT d.account_id FROM transactions d JOIN source_records r ON r.id = d.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE d.instrument_id = ?1 AND d.kind = ?2)
+                         GROUP BY t.account_id ORDER BY count(*) DESC, t.account_id LIMIT 1",
+                        [instrument.to_string(), kind.to_string()],
                         |r| r.get(0),
                     )
                     .map_err(err)?;
-                c.query_row(
-                    "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL
-                     WHERE t.instrument_id = ?1 AND t.kind = 'dividend' ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
-                    rusqlite::params![instrument.to_string(), n / 2],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .map_err(err)?
+                let n: i64 = c
+                    .query_row(
+                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1 AND t.kind = ?2 AND t.account_id = ?3",
+                        [instrument.to_string(), kind.to_string(), account.clone()],
+                        |r| r.get(0),
+                    )
+                    .map_err(err)?;
+                let (record, day) = c
+                    .query_row(
+                        "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL
+                         WHERE t.instrument_id = ?1 AND t.kind = ?3 AND t.account_id = ?4 ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
+                        rusqlite::params![instrument.to_string(), n / 2, kind, account],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .map_err(err)?;
+                (record, day, account)
             };
             let m;
             if op == Op::BackdatedTrade {
-                let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day, side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
+                // a buy in the holding's own account on that day, its answer measured:
+                // the later trades are derived again after it (`OVER_BUDGET`)
+                let req = crate::entries::EntryRequest::Trade { account, instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day, side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
                 m = mark();
                 crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
             } else {
+                // the same record stored again under a new id, as a pull stores a row the
+                // broker adds late: a distribution re-forms the names and moves no
+                // position; a buy moves it, and every later trade is derived again
                 let id = bagholder_core::RecordId::parse(&record).map_err(err)?;
                 let rec = book.record(id).map_err(err)?;
                 let payload = book.revisions(id).map_err(err)?.pop().map(|(_, _, p)| p).ok_or("the record has no revision")?;
@@ -784,7 +869,37 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                 book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &key, payload: &payload, refs: vec![] }, Timestamp::now()).map_err(err)?;
                 f.record_changed(Timestamp::now())?;
             }
-            let _ = currency;
+            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
+        }
+        Op::BackdatedFileRow => {
+            f.names()?;
+            let book = f.book()?;
+            // the listing whose history is file rows stating its exchange by code alone
+            let (instrument, rows, day, account): (String, u64, String, String) = {
+                let c = book.conn_for_tests();
+                let instrument: String = c
+                    .query_row("SELECT instrument_id FROM instrument_names WHERE symbol = ?1 AND venue_mic IS NOT NULL LIMIT 1", [CODED.0], |r| r.get(0))
+                    .map_err(|e| format!("the listing named by code alone ({}) is not in the book: {e}", CODED.0))?;
+                let n: i64 = c.query_row("SELECT count(*) FROM transactions WHERE instrument_id = ?1", [&instrument], |r| r.get(0)).map_err(err)?;
+                let (day, account) = c
+                    .query_row(
+                        "SELECT trade_date, account_id FROM transactions WHERE instrument_id = ?1 ORDER BY trade_date, record_id LIMIT 1 OFFSET ?2",
+                        rusqlite::params![instrument, n / 2],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .map_err(err)?;
+                (instrument, n as u64, day, account)
+            };
+            if rows < min_rows / 2 {
+                return Err(format!("the listing named by code alone has {rows} rows, below the {} the book was built with", min_rows / 2));
+            }
+            let _ = instrument;
+            let account = bagholder_core::AccountId::parse(&account).map_err(err)?;
+            // a distribution of it, dated in the middle of that history
+            let text = format!("{CODED_HEADER}{day},Dividend,{},{},,,1.00,CAD\n", CODED.0, CODED.1);
+            let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+            let m = mark();
+            crate::csv_import::import_from(f, "late.csv", &open, Some(account), Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
             Ok(Measured { rows: Some(rows), ..since(&m, 1) })
         }
         Op::Import => {
@@ -852,7 +967,8 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         Op::Import => (TO_FIGURES_MS as f64, "RAIL flow"),
         Op::BackdatedTrade => (ANSWER_MS as f64, "RAIL response (answered with its figures)"),
         // a row the pull brings: its figures by the next balances read
-        Op::BackdatedRecord => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
+        Op::BackdatedFill | Op::BackdatedRecord => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
+        Op::BackdatedFileRow => (TO_FIGURES_MS as f64, "RAIL flow"),
         Op::Brokers => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::PriceChanged => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         Op::FeedStep => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / signals a pass sends"),
@@ -921,7 +1037,17 @@ fn copy_folder(from: &Path, to: &Path) -> Result<(), String> {
 pub struct Verdict {
     pub op: Op,
     pub pair: Pair,
-    pub over: Vec<String>,
+    /// Each measure over, with what it measured.
+    pub over: Vec<(Measure, String)>,
+}
+
+impl Verdict {
+    #[cfg(test)]
+    /// Whether the growth rule is broken by steps or allocations: what the process
+    /// reads from storage is judged at the owner's size only, by the capacity job.
+    fn grew(&self) -> Vec<&(Measure, String)> {
+        self.over.iter().filter(|(m, _)| matches!(m, Measure::Steps | Measure::Allocations)).collect()
+    }
 }
 
 /// What breaks the budget or the growth rule, from the two sizes' measurements.
@@ -930,19 +1056,15 @@ pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
     let pi_ms = four.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
     let (budget, _) = budget_ms(op, four.divisor);
     if op.waited_on() && pi_ms > budget {
-        over.push(format!("{:.0} ms on a Pi at four times the owner's size, over {budget:.0} ms", pi_ms));
+        over.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, over {budget:.0} ms", pi_ms)));
     }
     if op.per_change() {
         let ratio = |a: u64, b: u64| if a == 0 { if b == 0 { 1.0 } else { f64::INFINITY } } else { b as f64 / a as f64 };
-        // a back-dated change re-derives every later trade of its instrument (a
-        // sale after it may match other lots), so the engine's allocations follow the
-        // trades after its day; the book's work for it, its names among it, does not
-        let engine = if op.backdated() { None } else { Some((one.allocs, four.allocs)) };
-        for (what, a, b) in [("steps", Some(one.steps), Some(four.steps)), ("allocations", engine.map(|e| e.0), engine.map(|e| e.1)), ("bytes read", one.read, four.read)] {
+        for (what, a, b) in [(Measure::Steps, Some(one.steps), Some(four.steps)), (Measure::Allocations, Some(one.allocs), Some(four.allocs)), (Measure::BytesRead, one.read, four.read)] {
             if let (Some(a), Some(b)) = (a, b) {
                 let r = ratio(a, b);
                 if r >= GROWTH_LIMIT {
-                    over.push(format!("{what} grew {r:.2} times with the book"));
+                    over.push((what, format!("{} grew {r:.2} times with the book", what.name())));
                 }
             }
         }
@@ -955,10 +1077,13 @@ pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
 pub fn listed_disagree(verdicts: &[Verdict]) -> Vec<String> {
     let mut out = Vec::new();
     for v in verdicts {
-        match (listed(v.op, v.pair), v.over.is_empty()) {
-            (false, false) => out.push(format!("{} ({}) is over budget: {}", v.op.name(), v.pair.name(), v.over.join("; "))),
-            (true, true) => out.push(format!("{} ({}) is within its budget now: take it off OVER_BUDGET and close its issue", v.op.name(), v.pair.name())),
-            _ => {}
+        for m in [Measure::Time, Measure::Steps, Measure::Allocations, Measure::BytesRead] {
+            let said: Vec<&str> = v.over.iter().filter(|(o, _)| *o == m).map(|(_, s)| s.as_str()).collect();
+            match (listed(v.op, v.pair, m), said.is_empty()) {
+                (false, false) => out.push(format!("{} ({}) is over budget: {}", v.op.name(), v.pair.name(), said.join("; "))),
+                (true, true) => out.push(format!("{} ({}) is within its budget by {} now: take it off OVER_BUDGET and close its issue", v.op.name(), v.pair.name(), m.name())),
+                _ => {}
+            }
         }
     }
     out
@@ -993,7 +1118,7 @@ pub fn run(work: &Path) -> Result<String, String> {
                 _ => "".into(),
             };
             let pi = b.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
-            let over = if verdict.over.iter().any(|o| o.contains("on a Pi")) { " (over)" } else { "" };
+            let over = if verdict.over.iter().any(|(m, _)| *m == Measure::Time) { " (over)" } else { "" };
             let (budget, from) = budget_ms(op, b.divisor);
             let read = match (a.read, b.read) {
                 (Some(x), Some(y)) => format!("{x} → {y}"),
@@ -1247,8 +1372,8 @@ mod tests {
                 // steps and allocations: what the process reads from storage at
                 // these small sizes is what this run's page cache holds, judged by
                 // the capacity job at the owner's size instead
-                let growth: Vec<&String> = v.over.iter().filter(|o| o.contains("grew") && !o.contains("bytes read")).collect();
-                assert!(growth.is_empty() || listed(op, pair), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
+                let growth: Vec<_> = v.grew().into_iter().filter(|(m, _)| !listed(op, pair, *m)).collect();
+                assert!(growth.is_empty(), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
                 // an added trade and an import match the listing's family once, by
                 // continuing it, on each book (brief 30, C4)
                 if matches!(op, Op::AddTrade | Op::Import) {
@@ -1280,7 +1405,7 @@ mod tests {
             let (a, b) = (copy(one.path()), copy(four.path()));
             let (x, y) = (probe(Op::Import, Pair::Breadth, 0, a.path()).unwrap(), probe(Op::Import, Pair::Breadth, 0, b.path()).unwrap());
             PLANT_WHOLE_READ.store(false, Ordering::SeqCst);
-            (judge(Op::Import, Pair::Breadth, &x, &y).over.iter().any(|o| o.contains("grew") && !o.contains("bytes read")), ())
+            (!judge(Op::Import, Pair::Breadth, &x, &y).grew().is_empty(), ())
         };
         assert!(!measured(false).0, "the import grows with the book without the plant");
         assert!(measured(true).0, "one read of every file row in the window went unseen");
@@ -1300,7 +1425,7 @@ mod tests {
             let (_, x) = probe_paths(Op::AddTrade, Pair::Depth, 39, one.path());
             let (_, y) = probe_paths(Op::AddTrade, Pair::Depth, 639, deep.path());
             PLANT_NAMES_FOLD.store(false, Ordering::SeqCst);
-            judge(Op::AddTrade, Pair::Depth, &x, &y).over.iter().any(|o| o.contains("grew") && !o.contains("bytes read"))
+            !judge(Op::AddTrade, Pair::Depth, &x, &y).grew().is_empty()
         };
         assert!(!measured(false), "an added trade grows with the listing's depth without the plant");
         assert!(measured(true), "the names folded whole in the window went unseen");
@@ -1313,13 +1438,23 @@ mod tests {
         let small = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 10, rows: None };
         let linear = Measured { wall_ns: 1_000, steps: 400, allocs: 100, read: Some(1_000), divisor: 40, rows: None };
         let v = judge(Op::PriceChanged, Pair::Breadth, &small, &linear);
-        assert!(v.over.iter().any(|o| o.contains("steps grew 4.00 times")), "{v:?}");
+        assert!(v.over.iter().any(|(m, o)| *m == Measure::Steps && o.contains("steps grew 4.00 times")), "{v:?}");
         assert!(judge(Op::PriceChanged, Pair::Breadth, &small, &small).over.is_empty());
         let slow = Measured { wall_ns: 10_000_000_000, ..small };
-        assert!(judge(Op::Startup, Pair::Breadth, &small, &slow).over.iter().any(|o| o.contains("over 5000 ms")));
+        assert!(judge(Op::Startup, Pair::Breadth, &small, &slow).over.iter().any(|(m, o)| *m == Measure::Time && o.contains("over 5000 ms")));
         // a background operation's wall time is reported, never judged
         assert!(judge(Op::Brokers, Pair::Breadth, &small, &Measured { wall_ns: 10_000_000_000, ..small }).over.is_empty());
-        let off_list = listed_disagree(&[Verdict { op: Op::PriceChanged, pair: Pair::Breadth, over: vec!["x".into()] }]);
-        assert_eq!(off_list.len(), usize::from(!listed(Op::PriceChanged, Pair::Breadth)));
+        let off_list = listed_disagree(&[Verdict { op: Op::PriceChanged, pair: Pair::Breadth, over: vec![(Measure::Steps, "x".into())] }]);
+        assert_eq!(off_list.len(), usize::from(!listed(Op::PriceChanged, Pair::Breadth, Measure::Steps)));
+        // a listing names its measure: one listed by allocations is still held to its steps
+        let (op, pair, listed_by, _) = OVER_BUDGET[0];
+        let op = Op::parse(op).unwrap();
+        let other = [Measure::Steps, Measure::Allocations].into_iter().find(|m| *m != listed_by).unwrap();
+        let said = listed_disagree(&[Verdict { op, pair, over: vec![(listed_by, "x".into()), (other, "y".into())] }]);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("y"), "{said:?}");
+        // and one listed but no longer over by its measure fails the run
+        let said = listed_disagree(&[Verdict { op, pair, over: vec![] }]);
+        assert!(said.iter().any(|s| s.contains("within its budget")), "{said:?}");
     }
 }
