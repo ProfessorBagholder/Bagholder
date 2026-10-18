@@ -62,4 +62,5 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 49 | [#525 ready; merge #521 first, then bring it into #525](49-merge-521-then-525.md) | Applied; checked in 52; items 3–4 amended by 51 |
 | 50 | [#523 as built: not yet; a market cache that cannot be opened still leaves no header and no update button](50-start-never-stops-as-built.md) | Current |
 | 51 | [Tests touched run locally; one full CI run per head to be merged; the trial merge a8e3a84f resolves the three files right](51-verifying-on-two-cores.md) | Current; amends 49 items 3 and 4; corrected 2026-10-18 (one full CI run per head) |
-| 52 | [#525 at e98e4176: the merge holds; fix the chart's timeframes (#531) in the same push, then merge](52-525-merge.md) | Current |
+| 52 | [#525 at e98e4176: the merge holds; fix the chart's timeframes (#531) in the same push, then merge](52-525-merge.md) | Applied; checked in 53 |
+| 53 | [#525 at 2d887849: merge (owner OK given); then close plan #522](53-525-merge.md) | Current |
