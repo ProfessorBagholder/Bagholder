@@ -68,3 +68,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 55 | [#523 at 60ef5e04: one change left; a mended store reopens only through the route the page never asks](55-start-never-stops-recheck.md) | Applied at e44c4e6c |
 | 56 | [#523 at e44c4e6c: merge (owner OK given)](56-start-never-stops-merge.md) | Applied (#523 merged, af9a726a) |
 | 57 | [Verdict on plan #536, a back-dated change costs what it changed (#527): Go with changes](57-backdated-change-plan-verdict.md) | Current |
+| 58 | [#527: the backdated-flat refusal accepted; list it, plan matching from a flat point next](58-backdated-flat-refusal.md) | Current |
