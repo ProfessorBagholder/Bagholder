@@ -4,11 +4,7 @@ The owner's decision (2026-10-18): "building a read-only connection for other ag
 
 ## For the owner to decide
 
-1. **Which agents it reaches now: the ones on this machine only, or remote ones too.**
-   - *Why it matters.* An agent on the same machine as Bagholder (Claude Code, Claude Desktop, any MCP client the person runs) starts the connection itself and needs no sign-in: the machine's own account is the boundary, as it is for the page today. An agent elsewhere (another computer, or a hosted assistant such as claude.ai's connectors) has to reach Bagholder over the network. The MCP specification then calls for an OAuth sign-in, and a hosted assistant connects from its provider's cloud, so Bagholder would have to be reachable from the internet (see *How the leading products do it*). That is the remote access with a sign-in that you put off on 2026-10-04 ("not now"), and the "no tokens with access classes" decision of 2026-09-25 rules out a cheaper key.
-   - *Recommendation.* Local agents only now, over the transport every MCP client supports for a program on the same machine (stdio). Remote agents come with remote access, when you take that up, as one more client of the same sign-in. If you want remote agents now, this plan has to take on remote access with its sign-in first, which is a plan of its own.
-
-Nothing else is open: the rest follows from the decision, `docs/architecture.md` §12 to §16 and the MCP specification.
+Nothing open. The owner decided (2026-10-18): **"same machine only for now."** Agents on the machine Bagholder runs on reach it over stdio, which needs no sign-in. Remote agents come with remote access, when the owner takes that up (`docs/decisions.md`).
 
 ## Scope
 
@@ -62,10 +58,9 @@ The journals that open to agents open read access first, and the one that also a
 - The adapter talks to the server through a read client, `ReadOnly`, whose methods are generated from the interface's `GET` routes alone (`web/src/lib/generated/routes.ts` is the page's copy of the same table). It has no method that can send a `POST`, so a tool that writes cannot be written without first changing that type.
 - The adapter's one request function takes a `GET` route only (the route's type, not a string) and writes the method itself, so nothing the adapter holds can build another request.
 - A test lists every tool and the route each one calls, and fails on any route that is not a `GET`. A source scan fails on any other HTTP client, or a method other than `GET`, anywhere in the adapter's module.
-- The server's own write check is no barrier here, and the plan does not lean on it. It tells the app's page from another website (a header a browser cannot send cross-site, §12). Any program on the machine can send that header, and the token it stands for is the same on every install (the issue §12 names). Read-only is held by the adapter's type, and by nothing else.
-- Every tool is declared with the specification's read-only annotation (`readOnlyHint: true`), so a client can say so to the person. Clients treat annotations as hints, so the type and the token rule are what enforce it.
+- Every tool is declared with the specification's read-only annotation (`readOnlyHint: true`), so a client can say so to the person. Clients treat annotations as hints, so the type is what enforces it.
 
-**Which server.** The server takes the first free port of its list (`PORTS`, `main.rs`) unless `BAGHOLDER_PORT` names one, so the adapter cannot know it in advance. The server therefore writes the port it bound, with its own process id, to a file in its data folder once it listens, and removes it on a clean stop. The adapter reads that file from `BAGHOLDER_HOME` (else the default data folder), and checks the process is alive and that `/api/status` answers from that folder before it trusts it. It connects to `127.0.0.1` only. With no server running, each tool answers with that fact in words, and the adapter never starts a server or opens the book itself. Two processes must never both write the book, and the agent's read must never hold a lock the running app needs.
+**Which server.** The data folder's lock already says which server holds the folder and where it answers. `app::hold_home` holds `bagholder.lock` with an exclusive file lock for the server's life and writes `pid <n>` into it, then `pid <n>, http://127.0.0.1:<port>` once the server has bound (`note_home_port`). The adapter reads that file from `BAGHOLDER_HOME` (else the default data folder). It counts a server as running only while the file's lock is held: it tries the lock without waiting, and if it gets the lock, no server holds the folder and it releases the lock at once. That is a stronger test than a live pid, which can be reused. It takes the address from the file and confirms it with `/api/status` before it trusts it. A server still starting (a pid, no address yet) is answered as not ready, never guessed at. No change to `main.rs`, and nothing new written to the data folder. With no server running, each tool answers with that fact in words. The adapter never starts a server or opens the book itself, since two processes must never both write the book, and it never holds the folder's lock beyond that instant.
 
 **What a tool answers.**
 - Typed answers, the interface's own types: the same `Trade`, `Fill` and position rows the page receives, serialized as the wire serializes them, with amounts as exact decimals and never floats.
@@ -74,18 +69,18 @@ The journals that open to agents open read access first, and the one that also a
 
 **SPEC.md.** A new section, *Agents*: what the connection offers, how to register it with Claude Code and Claude Desktop, that it reads only, and that it needs Bagholder running. `docs/architecture.md` §14's "not built" line is changed to say what is built.
 
-**What stays the same.** The page, the server's routes, the book, `disclosures-mcp`, the Host/Origin check and the write token.
+**What stays the same.** The page, the server's routes, the book, `disclosures-mcp`.
 
 ## Acceptance criteria
 
 - [ ] `RUSTFLAGS="-D warnings" cargo test --workspace --locked` green, clippy clean.
 - [ ] **Read-only by type:** `ReadOnly` has no method for a non-`GET` route. A planted tool that calls a `POST` route through any path the adapter has does not compile, or fails the route test.
 - [ ] **One request path:** a source scan finds no other HTTP client and no method but `GET` in the adapter's module, and the request function's argument type admits `GET` routes only.
-- [ ] **The right server:** with two servers running on two data folders, the adapter started with each folder reads that folder's book; a port file left by a server that died is not trusted.
+- [ ] **The right server:** with two servers running on two data folders, the adapter started with each folder reads that folder's book. A lock file whose lock no process holds is not trusted, even with an address in it. A server still starting (a pid, no address yet) is answered as not ready.
 - [ ] **One truth:** for generated books (accounts, currencies, listings, open and closed trades, journal entries), each tool's answer equals the page's answer for the same filters, field for field.
 - [ ] **Listing and venue:** each trade answer carries its listing key and venue, and a ticker on two venues gives two listings (generated).
 - [ ] **Paging:** for generated sizes, paging through `trades` returns every trade exactly once, and the total matches the Trades list.
-- [ ] **No server:** with no server running, each tool answers that Bagholder is not running, and no process, file or lock is created.
+- [ ] **No server:** with no server running, each tool answers that Bagholder is not running, no process or file is created, and the folder's lock is left free.
 - [ ] **A real client:** Claude Code registers the adapter (`claude mcp add bagholder -- bagholder mcp`), lists the tools with their read-only annotation, and answers a question about the made-up book. Recorded in the PR.
 - [ ] **The container:** the adapter runs inside the image (`docker exec … bagholder mcp`) against the running server, driven by the same client.
 - [ ] **Cost**, against §16: see *Cost* below. Numbers pasted in the PR.
@@ -100,7 +95,8 @@ The journals that open to agents open read access first, and the one that also a
 
 ## Surfaces to check beyond the diff
 
-- `rust/crates/server/src/main.rs`: the subcommand dispatch, and the port file written once the server listens and removed on a clean stop.
+- `rust/crates/server/src/main.rs`: the subcommand dispatch only.
+- `app::hold_home` and `note_home_port`: the lock file's contents the adapter reads.
 - The route table the read client is generated from, and the test that holds it to the server's routes.
 - `SPEC.md` (new section), `docs/architecture.md` §12 and §14, and `docs/decisions.md` (the owner's decision).
 - `rust/Dockerfile` and the release workflow: the image and the archives carry the same `bagholder` binary, so nothing is added there; confirm it.
