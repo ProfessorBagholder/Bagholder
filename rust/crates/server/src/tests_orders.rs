@@ -515,10 +515,14 @@ fn an_order_is_recorded_in_wealthsimples_words_for_its_listing_never_the_pages()
 fn the_preview_is_in_the_listings_currency_never_the_pages() {
     use crate::orders::preview::{preview_for, PreviewRequest, QuoteInput};
     let _g = crate::tests_common::guard();
-    let a = crate::tests_common::app();
+    let (_h, a, _) = ticket_app();
     let f = a.figures.get().unwrap();
-    // a currency the figures hold a rate for, other than CAD
-    let usd = f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, bagholder_core::Currency::USD, e.inputs().clock.today)).unwrap();
+    // the Bank's USD rate for today, so the listing's figure is stated, not waited on
+    let today = f.read(|e| e.inputs().clock.today).unwrap();
+    let rate = d("1.3871");
+    f.book().unwrap().store_rates(bagholder_core::Currency::USD, &[(today, rate)], (today, today), &bagholder_core::SourceName::named("bank-of-canada"), Timestamp::now()).unwrap();
+    f.rates_changed().unwrap();
+    assert_eq!(f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, bagholder_core::Currency::USD, today)).unwrap(), Ok(rate));
     a.orders.found.lock().unwrap().insert("sec-s-usd-listing".into(), bagholder_model::securities::Security { id: "sec-s-usd-listing".into(), symbol: "QNC".into(), currency: "USD".into(), ..Default::default() });
     let r = PreviewRequest {
         security_id: sid("sec-s-usd-listing"),
@@ -531,14 +535,8 @@ fn the_preview_is_in_the_listings_currency_never_the_pages() {
         nav: Some("10000".into()),
         ..Default::default()
     };
-    let p = preview_for(&a, &r).unwrap();
-    // at the listing's USD rate, or waiting on it: never the page's CAD, 1:1
-    let want = match usd {
-        Ok(rate) => Fig::Stated(crate::wire::Dec(d("1000").checked_mul(rate).unwrap())),
-        Err(g) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
-    };
-    assert_eq!(p.cad, Some(want));
-    assert_ne!(p.cad, Some(Fig::Stated(crate::wire::Dec(d("1000")))));
+    // at the listing's USD rate, never the page's CAD, 1:1
+    assert_eq!(preview_for(&a, &r).unwrap().cad, Some(Fig::Stated(crate::wire::Dec(d("1387.1")))));
 }
 
 /// An id the search finds is recorded against the book's instrument only where the

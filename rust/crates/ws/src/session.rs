@@ -16,35 +16,35 @@ use std::time::Duration;
 use bagholder_model::lenient;
 use bagholder_model::value::{field_s, get};
 
-pub const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
 pub const GRAPHQL_VERSION: &str = "12";
 pub const WS_CLIENT: &str = "@wealthsimple/wealthsimple";
-pub const OAUTH: &str = "https://api.production.wealthsimple.com/v1/oauth/v2";
-const WEB: &str = "https://my.wealthsimple.com";
 
-/// Where GraphQL and OAuth calls go. `BAGHOLDER_WS_BASE` points both at a
-/// stand-in server, for testing the client against recorded answers.
+// Each of Wealthsimple's addresses is named only inside the one function that
+// honours `BAGHOLDER_WS_BASE`, so no other code can reach the real host past a
+// stand-in (brief 39, 1).
+
+/// The stand-in's base, where `BAGHOLDER_WS_BASE` names one.
+fn stand_in() -> Option<String> {
+    std::env::var("BAGHOLDER_WS_BASE").ok().map(|b| b.trim_end_matches('/').to_string()).filter(|b| !b.is_empty())
+}
+
+/// Where GraphQL calls go: the stand-in's where one is named.
 pub fn graphql_url() -> String {
-    match std::env::var("BAGHOLDER_WS_BASE") {
-        Ok(b) if !b.is_empty() => format!("{}/graphql", b.trim_end_matches('/')),
-        _ => GRAPHQL.to_string(),
-    }
+    const REAL: &str = "https://my.wealthsimple.com/graphql";
+    stand_in().map_or_else(|| REAL.to_string(), |b| format!("{b}/graphql"))
 }
 
 /// The origin Wealthsimple's own web app sends its API calls from, which those
 /// calls carry: the stand-in's where one is named.
 pub fn web_origin() -> String {
-    match std::env::var("BAGHOLDER_WS_BASE") {
-        Ok(b) if !b.is_empty() => b.trim_end_matches('/').to_string(),
-        _ => WEB.to_string(),
-    }
+    const REAL: &str = "https://my.wealthsimple.com";
+    stand_in().unwrap_or_else(|| REAL.to_string())
 }
 
+/// Where OAuth calls go: the stand-in's where one is named.
 pub fn oauth_url() -> String {
-    match std::env::var("BAGHOLDER_WS_BASE") {
-        Ok(b) if !b.is_empty() => format!("{}/oauth", b.trim_end_matches('/')),
-        _ => OAUTH.to_string(),
-    }
+    const REAL: &str = "https://api.production.wealthsimple.com/v1/oauth/v2";
+    stand_in().map_or_else(|| REAL.to_string(), |b| format!("{b}/oauth"))
 }
 
 pub const REFUSED_LOGIN_MESSAGE: &str = "Saved login refused. Connect Wealthsimple again.";
@@ -563,6 +563,7 @@ impl<'a> Client<'a> {
             ],
             &ua,
         );
+        bagholder_net::client::named_call("wealthsimple", "oauth token");
         let data = http_json("POST", &format!("{}/token", oauth_url()), Some(&body), &headers);
         // a grant reply that does not read is the grant failing, never an empty one
         let reply: TokenReply = serde_json::from_value(data).map_err(|e| format!("Wealthsimple's token reply does not read: {e}"))?;
@@ -607,6 +608,7 @@ impl<'a> Client<'a> {
             ],
             &ua,
         );
+        bagholder_net::client::named_call("wealthsimple", "oauth token/info");
         let data = http_json("GET", &format!("{}/token/info", oauth_url()), None, &headers);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
             Some(401) | Some(403) => TokenInfo { empty: true, ..Default::default() },
@@ -655,6 +657,7 @@ impl<'a> Client<'a> {
         let body = json!({"operationName": operation, "query": q, "variables": Value::Object(vars)});
 
         let timeout = if ORDER_READS.contains(&operation) { ORDER_TIMEOUT_SECS } else { 90 };
+        bagholder_net::client::named_call("wealthsimple", &format!("graphql {operation}"));
         let data = http_json_timeout("POST", &graphql_url(), Some(&body), &headers, timeout);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
             Some(401) | Some(403) => return Err(CallError::NotAuthorized),
@@ -737,6 +740,7 @@ impl Client<'_> {
         };
         let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !k.eq_ignore_ascii_case("Content-Type")).collect();
         hdrs.push(("Content-Type", "application/json"));
+        bagholder_net::client::named_call("wealthsimple", &format!("graphql {operation}"));
         let resp = match bagholder_net::client::request_once("POST", &graphql_url(), &hdrs, Some(&payload), Duration::from_secs(ORDER_TIMEOUT_SECS)) {
             Ok(r) => r,
             Err(e) => return Mutation::Unclear(format!("{operation}: {e}")),

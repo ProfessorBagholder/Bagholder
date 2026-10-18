@@ -737,7 +737,7 @@ const TERMINAL: [(&str, usize, &str); 9] = [
 fn test_the_terminal_says_only_what_the_person_needs() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let print = regex::Regex::new(r"\b(e?println!|e?print!)\(").unwrap();
-    let allowed_elsewhere = ["net/src/client.rs", "wealthsimple/src/client.rs", "core/src/log.rs"];
+    let allowed_elsewhere = ["net/src/client.rs", "core/src/log.rs"];
     let mut found: Vec<(String, usize)> = Vec::new();
     let mut dirs = vec![crates.clone()];
     while let Some(d) = dirs.pop() {

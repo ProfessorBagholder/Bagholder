@@ -165,8 +165,14 @@ impl Net {
     /// with a `Retry-After`) also rests the host, for as long as it says.
     pub fn send(&self, ask: &Ask) -> Result<Reply, NetError> {
         let host = host_of(ask.url);
-        // told to stay off the network: nothing leaves, and the refusal is its own kind
-        if self.replaced.is_none() && client::offline() && !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        // told to stay off the network: refused at the client's one door
+        // (`client::leave`), named as every request is, before the host is waited on;
+        // the refusal is its own kind
+        if self.replaced.is_none() && client::refused_offline(&host) {
+            client::leave(ask.method, ask.url).map_err(|e| match e {
+                client::Error::Offline => NetError::Offline,
+                e => NetError::Unreachable(e.to_string()),
+            })?;
             return Err(NetError::Offline);
         }
         self.limiter.turn(&host, &*self.clock).map_err(|Resting { until }| NetError::Resting { host: host.clone(), until })?;

@@ -117,9 +117,6 @@ impl<'n> Client<'n> {
     /// One GraphQL read: its `data`, or what failed.
     pub fn graphql(&mut self, op: &str, variables: Value) -> Answer<Value> {
         let body = obj(vec![("operationName", text(op)), ("query", text(doc(op))), ("variables", variables)]).canonical();
-        if bagholder_net::client::logging_requests() {
-            eprintln!("outbound graphql {op}");
-        }
         let mut refreshed = false;
         loop {
             let t = self.tokens()?;
@@ -143,6 +140,7 @@ impl<'n> Client<'n> {
                 headers.extend([("x-ws-operation-name", op), ("x-ws-operation-hash", p.hash), ("x-ws-device-id", device), ("x-ws-page", p.page), ("x-web-version", WEB_VERSION)]);
             }
             self.sent.fetch_add(1, Ordering::Relaxed);
+            bagholder_net::client::named_call("wealthsimple", &format!("graphql {op}"));
             let reply = self.net.send(&Ask::post(&crate::hosts::graphql_url(), &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
             if reply.status == 401 || reply.status == 403 {
                 if refreshed {
