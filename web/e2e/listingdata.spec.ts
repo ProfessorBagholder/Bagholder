@@ -95,3 +95,25 @@ test('an address naming only a symbol opens its one listing only where every dir
   await page.goto('/#markets/' + encodeURIComponent('listing:ZQOA'))
   await expect(page).toHaveURL(/#markets\/listing(:|%3A)ZQOA@XTSE$/)
 })
+
+// brief 46, 5: an answer for an address the person has left changes nothing
+test('an address naming only a symbol that the person leaves before it is answered stays left, its history kept', async ({ page }) => {
+  const held: (() => void)[] = []
+  await page.route('**/api/listings?*', async (route) => {
+    await new Promise<void>((go) => held.push(go))
+    await route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'ZQLA@XTSE', symbol: 'ZQLA', name: 'Zqla Corp', exchange: 'TSX', currency: 'CAD', held: false }] } })
+  })
+  await page.goto('/#portfolio')
+  const asked = page.waitForRequest((r) => r.url().includes('/api/listings?'))
+  await page.goto('/#markets/' + encodeURIComponent('listing:ZQLA'))
+  await asked
+  await page.goto('/#portfolio')
+  const answered = page.waitForResponse((r) => r.url().includes('/api/listings?'))
+  held.shift()!()
+  await answered
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+  await expect(page).toHaveURL(/#portfolio$/)
+  // Back returns to the address left, as the person went, where its answer now stands
+  await page.goBack()
+  await expect(page).toHaveURL(/#markets\/listing(:|%3A)ZQLA@XTSE$/)
+})

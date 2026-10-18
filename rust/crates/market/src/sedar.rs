@@ -677,7 +677,8 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
         match &profile_no {
             Some(p) => {
                 let name = profile.as_ref().map(|x| x.name.clone()).or_else(|| query.map(|s| s.to_string()));
-                match scoped_documents(&mut st, p, name.as_deref()) {
+                // a walk SEDAR+ did not answer is its failure, never the unscoped list in its place
+                match scoped_documents(&mut st, p, name.as_deref())? {
                     Some(h) => {
                         scoped = Some(true);
                         h
@@ -705,14 +706,15 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
 }
 
 /// The issuer's document page, reused for a short
-/// window so a run of its documents walks the chain once.
-fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Option<String> {
+/// window so a run of its documents walks the chain once. A walk SEDAR+ did not
+/// answer is its failure, in its own kind and words, and is kept for no one.
+fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Fetched<Option<String>> {
     if let Some(h) = st.scope.fresh(profile_no) {
-        return Some(h);
+        return Ok(Some(h));
     }
-    let html = scoped_documents_uncached(st, profile_no, name).ok().flatten();
+    let html = scoped_documents_uncached(st, profile_no, name)?;
     st.scope.keep(profile_no, &html);
-    html
+    Ok(html)
 }
 
 /// Search the reporting-issuer list for
@@ -770,8 +772,7 @@ pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fet
     let key = doc_id.rsplit(':').next().unwrap_or("").to_string();
     let answer = {
         let mut st = state().lock().unwrap();
-        let html = scoped_documents(&mut st, profile_no, name)
-            .ok_or_else(|| unavailable("could not open the profile's documents to download from"))?;
+        let html = scoped_documents(&mut st, profile_no, name)?.ok_or_else(|| unavailable("SEDAR+ did not open the profile's documents to download from"))?;
         let row = parse_filings(&html).into_iter().find(|f| !key.is_empty() && f.url.contains(&key));
         let row = match row { Some(r) => r, None => return Ok(None) };
         let url = unescape(&row.url);

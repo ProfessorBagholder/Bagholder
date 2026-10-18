@@ -207,7 +207,8 @@ test('each interaction keeps within its request budget', async ({ page }) => {
   const asked: string[] = []
   page.on('request', (r) => {
     const u = new URL(r.url())
-    if (u.pathname.startsWith('/api/')) asked.push(r.method() + ' ' + u.pathname)
+    // a watch says which documents the page shows, so one sent says what changed
+    if (u.pathname.startsWith('/api/')) asked.push(r.method() + ' ' + u.pathname + (u.pathname === '/api/events/watch' ? ' ' + Object.keys(JSON.parse(r.postData() || '{}').docs ?? {}).join(' ') : ''))
   })
   await page.goto('/#dashboard')
   await ready(page)

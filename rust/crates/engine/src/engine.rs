@@ -569,46 +569,47 @@ impl Engine {
     /// The instruments called `symbol` now (any case of its ASCII letters) in
     /// `currency`.
     pub fn named(&self, symbol: &str, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
-        self.named_when(symbol, currency, None)
-    }
-
-    /// The instruments called `symbol` on `day`, in `currency`: by the name each
-    /// was called then (`InstrumentInfo::name_on`), never by what it is called now.
-    pub fn named_on(&self, symbol: &str, currency: bagholder_core::Currency, day: Date) -> impl Iterator<Item = InstrumentId> + '_ {
-        self.named_when(symbol, currency, Some(day))
-    }
-
-    fn named_when(&self, symbol: &str, currency: bagholder_core::Currency, day: Option<Date>) -> impl Iterator<Item = InstrumentId> + '_ {
         let key = (symbol.to_ascii_uppercase(), currency);
-        self.symbols.get(&key).into_iter().flatten().copied().filter(move |id| {
-            self.inputs.ledger.instruments.get(id).and_then(|i| match day {
-                Some(d) => i.name_on(d),
-                None => i.current_name(),
-            }).is_some_and(|n| n.symbol.to_ascii_uppercase() == key.0)
-        })
+        self.symbols.get(&key).into_iter().flatten().copied().filter(move |id| self.inputs.ledger.instruments.get(id).and_then(|i| i.current_name()).is_some_and(|n| n.symbol.to_ascii_uppercase() == key.0))
+    }
+
+    /// The instruments of a kind `of_kind` takes called `symbol` on `day`, in
+    /// `currency` (`called_on`): the kind is part of the match, as a broker names a
+    /// contract by its underlying's symbol.
+    pub fn named_on(&self, symbol: &str, currency: bagholder_core::Currency, day: Date, of_kind: impl Fn(bagholder_core::instrument::InstrumentKind) -> bool) -> Vec<InstrumentId> {
+        let symbol = symbol.to_ascii_uppercase();
+        let instruments = &self.inputs.ledger.instruments;
+        let ids = self.symbols.get(&(symbol.clone(), currency)).into_iter().flatten().copied().filter(|id| instruments.get(id).is_some_and(|i| of_kind(i.instrument.kind)));
+        self.called_on(ids, day, |_, n| n.symbol.to_ascii_uppercase() == symbol)
+    }
+
+    /// Of `ids`, those `is` takes by the name each had on `day`: the name in force
+    /// that day where the instrument's history had begun by then. An instrument whose
+    /// history begins after `day` is taken by its first name only where none of
+    /// `ids` had the name on that day: a file older than the broker's history still
+    /// finds it, and a day another instrument held the name is never given to it.
+    fn called_on(&self, ids: impl Iterator<Item = InstrumentId>, day: Date, is: impl Fn(&crate::input::InstrumentInfo, &bagholder_core::instrument::Name) -> bool) -> Vec<InstrumentId> {
+        let infos: Vec<(InstrumentId, &crate::input::InstrumentInfo)> = ids.filter_map(|id| self.inputs.ledger.instruments.get(&id).map(|i| (id, i))).collect();
+        let then: Vec<InstrumentId> = infos.iter().filter(|(_, i)| i.names.iter().rev().find(|n| n.first_seen <= day).is_some_and(|n| is(i, n))).map(|(id, _)| *id).collect();
+        if !then.is_empty() {
+            return then;
+        }
+        infos.iter().filter(|(_, i)| i.names.first().is_some_and(|n| n.first_seen > day && is(i, n))).map(|(id, _)| *id).collect()
     }
 
     /// The instruments that are the listing `key` now, in `currency`.
     pub fn listed(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency) -> impl Iterator<Item = InstrumentId> + '_ {
-        self.listed_when(key, currency, None)
-    }
-
-    /// The instruments that were the listing `key` on `day`, in `currency`.
-    pub fn listed_on(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Date) -> impl Iterator<Item = InstrumentId> + '_ {
-        self.listed_when(key, currency, Some(day))
-    }
-
-    fn listed_when(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Option<Date>) -> impl Iterator<Item = InstrumentId> + '_ {
         let whole = (key.clone(), currency);
         self.listings.get(&whole).into_iter().flatten().copied().filter(move |id| {
-            self.inputs.ledger.instruments.get(id).is_some_and(|i| {
-                let n = match day {
-                    Some(d) => i.name_on(d),
-                    None => i.current_name(),
-                };
-                n.and_then(|n| listing_key(i, n)).is_some_and(|k| k == whole)
-            })
+            self.inputs.ledger.instruments.get(id).is_some_and(|i| i.current_name().and_then(|n| listing_key(i, n)).is_some_and(|k| k == whole))
         })
+    }
+
+    /// The instruments that were the listing `key` on `day`, in `currency` (`called_on`).
+    pub fn listed_on(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Date) -> Vec<InstrumentId> {
+        let whole = (key.clone(), currency);
+        let ids = self.listings.get(&whole).into_iter().flatten().copied();
+        self.called_on(ids, day, |i, n| listing_key(i, n).is_some_and(|k| k == whole))
     }
 
     /// The contracts written on `underlying`.

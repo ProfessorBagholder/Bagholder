@@ -217,9 +217,11 @@
     asked++
     choices = null
   }
+  // a chip taken or cleared answers what was asked or offered: it goes
   $effect(() => {
     void symKey
     asked++
+    choices = null
   })
   function takeChip(only: Chip) {
     choices = null

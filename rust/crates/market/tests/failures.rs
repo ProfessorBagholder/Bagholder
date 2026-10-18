@@ -185,6 +185,15 @@ fn a_canadian_filer_asked_offline_is_refused_by_its_kind() {
     }
     assert!(matches!(bagholder_market::sedar::profile_of("Zqoff Corp", "2026-09-16"), Err(SourceError::Offline)));
     assert!(matches!(bagholder_market::sedar::fetch_profile("000000001", 5), Err(SourceError::Offline)));
+    // a document of the profile, downloaded and read for its content (brief 46, 4)
+    assert!(matches!(bagholder_market::sedar::download_bytes("000000001", "sedar:1", Some("Zqoff Corp")), Err(SourceError::Offline)));
+    let row = bagholder_store::feeds::FiledDocument {
+        id: "sedar:1".into(), source: bagholder_store::feeds::Regulator::Sedar, category: String::new(), profile_no: "000000001".into(), issuer: "Zqoff Corp".into(),
+        form: "Interim MD&A".into(), title: String::new(), date: String::new(), date_text: String::new(), size: String::new(),
+        url: "https://www.sedarplus.ca/x?drmKey=1".into(),
+    };
+    assert!(matches!(d::content(&row), Err(SourceError::Offline)), "{:?}", d::content(&row).err());
+    assert!(matches!(d::document(&row), Err(SourceError::Offline)), "{:?}", d::document(&row).err());
 }
 
 /// The SEC's list ages by the wall clock, which goes on through a machine's sleep:

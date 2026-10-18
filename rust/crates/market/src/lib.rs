@@ -47,8 +47,6 @@ pub fn now_stamp() -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-/// (today in UTC, now as unix seconds, now stamped): the three forms of the
-/// present the market readers are handed.
 /// The wall clock the readers age what they keep by: the system's, which goes on
 /// through a machine's sleep, where a monotonic clock stops.
 pub fn wall_now() -> std::time::SystemTime {
@@ -67,6 +65,8 @@ pub fn sleep_through(d: std::time::Duration) {
     SLEPT_MS.fetch_add(d.as_millis() as u64, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// (today in UTC, now as unix seconds, now stamped): the three forms of the
+/// present the market readers are handed.
 pub fn clock_now() -> (String, f64, String) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

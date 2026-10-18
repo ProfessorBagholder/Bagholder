@@ -187,12 +187,14 @@ export const listingChoices = $state<Record<string, { listings: ResolvedListing[
  * venue. Exactly one, where every directory answered, is that listing's page
  * (`opened` with its address); two or more, or one beside a directory that did not
  * answer, are offered as rows (`listingChoices`) with the failure, and none is
- * chosen for the person.
+ * chosen for the person. `still` says whether the person is still on that address
+ * when the answer lands: an answer for an address left changes nothing (markets-60).
  */
-export async function resolveListing(id: string, opened: (listingPage: string) => void): Promise<void> {
+export async function resolveListing(id: string, opened: (listingPage: string) => void, still: () => boolean): Promise<void> {
   if (!isListingId(id) || namesListing(id)) return
   const symbol = parsed(id).symbol
   const r = await read('GET /api/listings', { query: { symbol } })
+  if (!still()) return
   const listings: ResolvedListing[] = r.ok ? r.listings : []
   const error = r.ok ? r.unread.join(' ') : r.error
   if (listings.length === 1 && !error) return opened(rememberListing(listings[0]))

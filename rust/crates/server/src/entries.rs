@@ -124,38 +124,35 @@ pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency, of_ki
     found.next().is_none().then_some(first)
 }
 
-/// The share or fund the book holds on the listing `key` names, in `currency`, if
-/// exactly one: matched by what each instrument is called now and the venue its
-/// records name (the engine's index), never by the ticker alone.
-pub(crate) fn held_on_listing(e: &Engine, key: &bagholder_core::ListingKey, currency: Currency) -> Option<InstrumentId> {
-    only(e.listed(key, currency))
-}
-
-/// The one instrument of `found`, if exactly one.
-fn only(mut found: impl Iterator<Item = InstrumentId>) -> Option<InstrumentId> {
-    let first = found.next()?;
-    found.next().is_none().then_some(first)
-}
-
 /// How a row names what it traded: by a listing, or by a symbol of a kind.
 pub(crate) enum Called<'a> {
     Listing(&'a bagholder_core::ListingKey),
     Symbol(&'a str, &'a dyn Fn(InstrumentKind) -> bool),
 }
 
-/// What a row dated `day` names: the instrument that was called so on that day,
-/// and true; else the one called so now, and false, the row then naming it by
-/// what it is called today, which is no name it had on its day. A file or an entry
-/// can carry either: a broker's export restates old rows under today's ticker, and
-/// an old statement says the ticker of its day.
-pub(crate) fn held_on_day(e: &Engine, called: Called<'_>, currency: Currency, day: bagholder_core::jiff::civil::Date) -> Option<(InstrumentId, bool)> {
+/// What a row dated `day` names: the instrument that was called so on that day
+/// (`Engine::named_on`, `listed_on`), and true; else the one called so now, and
+/// false, the row then naming it by what it is called today, which is no name it
+/// had on its day. A file or an entry can carry either: a broker's export restates
+/// old rows under today's ticker, and an old statement says the ticker of its day.
+/// Two instruments called so on that day, or now where none was then, is a
+/// refusal saying why, never a pick and never a third instrument.
+pub(crate) fn held_on_day(e: &Engine, called: Called<'_>, currency: Currency, day: bagholder_core::jiff::civil::Date) -> Result<Option<(InstrumentId, bool)>, String> {
     let instruments = &e.inputs().ledger.instruments;
-    let of_kind = |id: &InstrumentId, k: &dyn Fn(InstrumentKind) -> bool| instruments.get(id).is_some_and(|i| k(i.instrument.kind));
-    match called {
-        Called::Listing(key) => only(e.listed_on(key, currency, day)).map(|id| (id, true)).or_else(|| held_on_listing(e, key, currency).map(|id| (id, false))),
-        Called::Symbol(symbol, k) => only(e.named_on(symbol, currency, day).filter(|id| of_kind(id, k)))
-            .map(|id| (id, true))
-            .or_else(|| held_by_symbol(e, symbol, currency, k).map(|id| (id, false))),
+    let (then, now, named): (Vec<InstrumentId>, Vec<InstrumentId>, String) = match called {
+        Called::Listing(key) => (e.listed_on(key, currency, day), e.listed(key, currency).collect(), key.named()),
+        Called::Symbol(symbol, k) => (
+            e.named_on(symbol, currency, day, k),
+            e.named(symbol, currency).filter(|id| instruments.get(id).is_some_and(|i| k(i.instrument.kind))).collect(),
+            symbol.to_string(),
+        ),
+    };
+    match (then.as_slice(), now.as_slice()) {
+        ([one], _) => Ok(Some((*one, true))),
+        ([], []) => Ok(None),
+        ([], [one]) => Ok(Some((*one, false))),
+        ([], _) => Err(format!("{named} is the name of {} instruments: the book cannot tell which this is", now.len())),
+        (_, _) => Err(format!("{named} was the name of {} instruments on {day}: the book cannot tell which this is", then.len())),
     }
 }
 
@@ -225,7 +222,7 @@ pub fn enter(f: &Figures, req: &EntryRequest, now: bagholder_core::jiff::Timesta
                         Some(id) => Traded::Held(instrument_id(id)?),
                         None if symbol.is_empty() => return Err(bad("a symbol is required")),
                         // a contract is written by its terms (`contract_of`), which name no exchange
-                        None if contract_of(&symbol).is_some() => match held_on_day(e, Called::Symbol(&symbol, &|k| k == InstrumentKind::OptionContract), currency, day("the day", d)?) {
+                        None if contract_of(&symbol).is_some() => match held_on_day(e, Called::Symbol(&symbol, &|k| k == InstrumentKind::OptionContract), currency, day("the day", d)?).map_err(bad)? {
                             Some((id, _)) => Traded::Held(id),
                             None => contract_by_terms(e, &symbol, currency).expect("a contract's terms"),
                         },
@@ -237,7 +234,7 @@ pub fn enter(f: &Figures, req: &EntryRequest, now: bagholder_core::jiff::Timesta
                             let mic = bagholder_core::listing::mic_of(exchange).ok_or_else(|| bad(format!("{:?} is not an exchange", exchange.trim())))?;
                             let key = bagholder_core::ListingKey::on(&symbol, mic).map_err(|e| bad(e.to_string()))?;
                             // the listing as it was called on the trade's day, else as it is now
-                            match held_on_day(e, Called::Listing(&key), currency, day("the day", d)?) {
+                            match held_on_day(e, Called::Listing(&key), currency, day("the day", d)?).map_err(bad)? {
                                 Some((id, _)) => Traded::Held(id),
                                 None => Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: Some(mic.to_string()) },
                             }
@@ -500,11 +497,93 @@ mod tests {
         }
     }
 
+    /// A row's day decides between instruments that shared a name (brief 46, 2 and
+    /// 3). For every Canadian listed share held, renamed by the broker after its
+    /// history: a second instrument entered by hand under its symbol on another
+    /// venue on its first day makes a row of that day with no venue a refusal that
+    /// says why, never a pick; and a third, new under its symbol on its own venue
+    /// after the rename, does not take a row of the first day, when the name was
+    /// the first instrument's.
+    #[test]
+    fn a_rows_day_decides_between_instruments_that_shared_its_name() {
+        let (_h, f) = figures();
+        let shares: Vec<(InstrumentId, bagholder_core::instrument::Name, bagholder_core::RecordId, AccountId)> = f
+            .read(|e| {
+                e.inputs()
+                    .ledger
+                    .instruments
+                    .iter()
+                    .filter(|(_, i)| i.instrument.kind == InstrumentKind::Security && i.instrument.currency == Currency::CAD && i.names.len() == 1 && i.names[0].venue_mic.as_deref().is_some_and(|m| ["XTSE", "XTSX", "XCNQ"].contains(&m)))
+                    .filter_map(|(id, i)| {
+                        let t = e.inputs().ledger.transactions.of_instrument(*id).find(|t| e.inputs().ledger.records.get(&t.id.record).is_some_and(|r| r.connection.is_some()))?;
+                        Some((*id, i.names[0].clone(), t.id.record, t.account))
+                    })
+                    .collect()
+            })
+            .unwrap();
+        assert!(!shares.is_empty(), "the book holds Canadian listed shares");
+        let book = f.book().unwrap();
+        let entry = |account: &AccountId, symbol: &str, venue: &str, day: &str| EntryRequest::Trade { account: account.to_string(), instrument: None, symbol: symbol.into(), exchange: venue.into(), currency: "CAD".into(), day: day.into(), side: "buy".into(), quantity: "1".into(), price: "1".into(), fee: "".into() };
+        let import = |account: &AccountId, symbol: &str, venue: &str, day: &str| {
+            let text = format!("Date,Action,Symbol,Exchange,Quantity,Price,Amount,Currency\n{day},Buy,{symbol},{venue},2,1.00,-2.00,CAD\n");
+            let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+            let before: std::collections::BTreeSet<(String, Option<String>)> = file_rows(&book);
+            let done = crate::csv_import::import_from(&f, &format!("{symbol}-{venue}-{day}.csv"), &open, Some(*account), now(), &mut |_| crate::csv_import::Go::On);
+            let report = done.unwrap();
+            let named: Vec<InstrumentId> = file_rows(&book).difference(&before).filter_map(|(_, i)| i.as_deref().map(|i| InstrumentId::parse(i).unwrap())).collect();
+            (named, report.problems.into_iter().map(|p| p.message).collect::<Vec<_>>())
+        };
+        for (n, (a, first, record, account)) in shares.iter().enumerate() {
+            let (symbol, venue, day) = (first.symbol.clone(), first.venue_mic.clone().unwrap(), first.first_seen.to_string());
+            let other = if venue == "XTSE" { "XCNQ" } else { "XTSE" };
+            // another instrument under the symbol on another venue, entered on the first day
+            enter(&f, &entry(account, &symbol, other, &day), now()).unwrap();
+            // the first renamed by the broker after its history
+            let rec = book.record(*record).unwrap();
+            let mut payload: serde_json::Value = serde_json::from_str(&book.revisions(*record).unwrap().pop().unwrap().2).unwrap();
+            payload["activity"]["occurredAt"] = serde_json::json!("2025-11-19T15:00:00.000000Z");
+            for (_, sec) in payload["securities"].as_object_mut().unwrap().iter_mut() {
+                if sec["stock"].is_object() {
+                    sec["stock"]["symbol"] = serde_json::json!(format!("ZQDAY{n}"));
+                }
+            }
+            book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &format!("{}-day", rec.source_key), payload: &payload.to_string(), refs: vec![] }, now()).unwrap();
+            f.record_changed(now()).unwrap();
+            // a row of the first day naming no venue: two instruments had the symbol
+            // then, so the row is kept unplaced, saying why, and the rest of the file goes on
+            let (named, said) = import(account, &symbol, "", &day);
+            assert!(named.is_empty(), "{symbol} with no venue on {day} was taken: {named:?}");
+            assert!(said.iter().any(|w| w.contains(&format!("{symbol} was the name of 2 instruments on {day}"))), "{said:?}");
+            // and an entry by hand on that day, naming the symbol alone, is refused the same way
+            match f.read(|e| held_on_day(e, Called::Symbol(&symbol, &|k| k == InstrumentKind::Security), Currency::CAD, first.first_seen)).unwrap() {
+                Err(why) => assert!(why.contains("was the name of 2 instruments"), "{why}"),
+                other => panic!("{other:?}"),
+            }
+            // a third, new under the symbol on the first's venue after the rename
+            enter(&f, &entry(account, &symbol, &venue, "2025-11-19"), now()).unwrap();
+            let third = f.read(|e| e.listed(&bagholder_core::ListingKey::on(&symbol, &venue).unwrap(), Currency::CAD).collect::<Vec<_>>()).unwrap();
+            assert!(third.len() == 1 && third[0] != *a, "{symbol} on {venue} is a new instrument after the rename: {third:?}");
+            // a row of the first day on that venue is the first's, whose name it was then
+            assert_eq!(import(account, &symbol, &venue, &day).0, vec![*a], "{symbol} on {venue} dated {day}");
+        }
+    }
+
+    fn file_rows(book: &bagholder_book::Book) -> std::collections::BTreeSet<(String, Option<String>)> {
+        book.conn_for_tests()
+            .prepare("SELECT t.record_id, t.instrument_id FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' WHERE r.connection_id IS NULL AND r.source = 'csv'")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
     /// A row or an entry that names no venue is matched to a holding by its symbol
     /// only where the book holds exactly one of that symbol: of two listings of one
-    /// ticker, it is neither (an import's row, a contract's underlying).
+    /// ticker, a row is refused, saying why (brief 46, 2), and a contract's
+    /// underlying is neither.
     #[test]
-    fn a_symbol_with_no_venue_is_neither_of_two_holdings_of_that_ticker() {
+    fn a_symbol_with_no_venue_is_refused_where_two_holdings_have_that_ticker() {
         let (_h, f) = figures();
         let account = f.read(|e| e.figures().positions[0].account.to_string()).unwrap();
         for (i, venue) in ["TSX", "TSX-V"].iter().enumerate() {
@@ -513,9 +592,12 @@ mod tests {
         let held: Vec<InstrumentId> = person_trades(&f).iter().filter_map(|t| t.instrument).collect();
         assert_eq!(held.len(), 2);
         assert_ne!(held[0], held[1], "two listings, two instruments");
-        match crate::csv_import::traded(&f, "zqra", None, InstrumentKind::Security, Currency::CAD, "2025-11-19".parse().unwrap()).unwrap() {
-            Some((Traded::Named { venue: None, .. }, true)) => {}
-            other => panic!("a venue-less row was taken as {other:?}"),
+        // on the day both were named so, and on a day before either, when both are named so now
+        for day in ["2025-11-19", "2020-01-02"] {
+            match crate::csv_import::traded(&f, "zqra", None, InstrumentKind::Security, Currency::CAD, day.parse().unwrap()) {
+                Err(Refused::Entry(why)) => assert!(why.contains("ZQRA") && why.contains("2 instruments"), "{why}"),
+                other => panic!("a venue-less row of {day} was taken as {other:?}"),
+            }
         }
         let contract = f.read(|e| contract_by_terms(e, "ZQRA 15JAN27 12.00 CALL", Currency::CAD)).unwrap();
         match contract {

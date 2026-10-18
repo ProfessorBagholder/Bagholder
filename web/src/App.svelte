@@ -277,7 +277,8 @@
     const canonical = canonicalListingId(route.sub!)
     if (canonical !== route.sub) return goListing(canonical, true)
     if (!namesListing(route.sub!)) {
-      resolveListing(route.sub!, (id) => goListing(id, true))
+      const asked = route.sub!
+      resolveListing(asked, (id) => goListing(id, true), () => route.tab === 'markets' && route.sub === asked)
       return
     }
     loadListing(route.sub!, (positionId) => {

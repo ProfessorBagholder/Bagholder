@@ -196,7 +196,7 @@ impl Op {
     }
     /// A person waits on it: its wall time fails the run.
     fn waited_on(self) -> bool {
-        matches!(self, Op::Startup | Op::AddTrade | Op::Import | Op::BackdatedTrade)
+        matches!(self, Op::Startup | Op::AddTrade | Op::Import | Op::BackdatedTrade | Op::BackdatedFileRow)
     }
     /// It answers one change: the growth rule holds it.
     fn per_change(self) -> bool {

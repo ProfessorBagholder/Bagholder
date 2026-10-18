@@ -723,14 +723,27 @@ test.describe('News', () => {
   })
 
   // brief 45, 6: a row tagged with no venue that no directory lists says so
-  test('a row tagged with no venue that no exchange lists says there is no listing of it', async ({ page, request }) => {
-    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([item('v', 'A story of no venue', { tag: { symbol: 'ZQNO', exchange: '', held: false, watched: false, percentChange: null } })]))
+  test('a row tagged with no venue that no exchange lists says there is no listing of it, until a chip is taken or cleared', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', () => {}, headlines([
+      item('w', 'Widgets soar on earnings beat', { tag: { symbol: 'WID', exchange: 'NASDAQ', held: true, watched: false, percentChange: 0.01 } }),
+      item('v', 'A story of no venue', { tag: { symbol: 'ZQNO', exchange: '', held: false, watched: false, percentChange: null } }),
+    ]))
     await page.route('**/api/listings?*', (route) => route.fulfill({ json: { ok: true, unread: [], listings: [] } }))
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
     await card.locator('.mseg-opt', { hasText: 'Holdings' }).click()
+    const said = card.locator('.status-err', { hasText: 'No listing of ZQNO is found on an exchange.' })
     await card.locator('.nw-sym', { hasText: 'ZQNO' }).click()
-    await expect(card.locator('.status-err')).toHaveText('No listing of ZQNO is found on an exchange.')
+    await expect(said).toHaveCount(1)
     await expect(card.locator('.chip')).toHaveCount(0)
+    // another chip taken answers it: the line goes (brief 46)
+    await card.locator('.nw-sym', { hasText: 'WID' }).click()
+    await expect(card.locator('.chip')).toContainText('WID')
+    await expect(said).toHaveCount(0)
+    // and the chip cleared does too
+    await card.locator('.nw-sym', { hasText: 'ZQNO' }).click()
+    await expect(said).toHaveCount(1)
+    await card.locator('.chip .cx').click()
+    await expect(said).toHaveCount(0)
   })
 
   // brief 45, 7: the listings a row tagged with no venue offers go on Escape, a scope or a tab

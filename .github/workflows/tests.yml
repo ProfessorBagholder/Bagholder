@@ -42,12 +42,18 @@ jobs:
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
+      # the lock committed is the one a release builds with (`release.yml` and the
+      # image build `--locked`): one that cargo would rewrite fails here, before any
+      # step can rewrite it
+      - name: The lock file is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+        working-directory: rust
       # a warning fails the build: the workspace is kept warning-free
       - name: The Rust suite
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
         working-directory: rust
       # no failure discarded outside tests: the workspace's clippy lints (Cargo.toml),
       # the tests' own code left out, where dropping a result is the test's business
@@ -149,7 +155,7 @@ jobs:
       - name: The made-up book
         working-directory: rust
         run: |
-          cargo build --bin bagholder --bin demo-book
+          cargo build --locked --bin bagholder --bin demo-book
           mkdir -p "$RUNNER_TEMP/book"
           target/debug/demo-book --home "$RUNNER_TEMP/book"
           target/debug/bagholder demo-facts "$RUNNER_TEMP/book"
@@ -229,7 +235,7 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: web
       - name: The server and the made-up book
-        run: cargo build --bin bagholder --bin demo-book
+        run: cargo build --locked --bin bagholder --bin demo-book
         working-directory: rust
       - name: The browser tests
         run: npm run e2e

@@ -243,6 +243,7 @@ name = "bagholder-market"
 version = "2.5.7"
 dependencies = [
  "bagholder-core",
+ "bagholder-market",
  "bagholder-model",
  "bagholder-net",
  "bagholder-sources",

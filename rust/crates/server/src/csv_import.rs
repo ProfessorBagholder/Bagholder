@@ -220,10 +220,18 @@ pub fn import_from(
                         }
                     }
                 };
+                // a symbol the book cannot tell the instrument of is kept unplaced, with why
+                let mut unnamed = None;
                 let instrument = match &stated {
                     Ok(s) => match (&s.instrument, s.currency) {
                         // the file's symbol is stated where it is what the instrument was called on the row's day
-                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency, s.day)? {
+                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency, s.day).or_else(|e| match e {
+                            Refused::Entry(why) => {
+                                unnamed = Some(why);
+                                Ok(None)
+                            }
+                            other => Err(other),
+                        })? {
                             Some((t, its_name)) => Some(book.name_stated(placed, &t, its_name.then_some(symbol.as_str())).map_err(|e| match e {
                                 bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
                                 other => Refused::Failed(other.to_string()),
@@ -235,7 +243,7 @@ pub fn import_from(
                     Err(_) => None,
                 };
                 let r = book.account_ref(placed).map_err(fail)?;
-                let payload = Payload { layout, cells: row.cells.clone(), occurrence: row.occurrence, account: (r.broker.to_string(), r.value), unplaced, instrument };
+                let payload = Payload { layout, cells: row.cells.clone(), occurrence: row.occurrence, account: (r.broker.to_string(), r.value), unplaced, instrument, unnamed };
                 let text = serde_json::to_string(&payload).map_err(|e| Refused::Failed(e.to_string()))?;
                 let stored = book.store(&CsvMapping, &Incoming { connection: None, source_key: &payload.key(), payload: &text, refs: vec![] }, now).map_err(fail)?;
                 let problems = book.problems_of(stored.record).map_err(fail)?.into_iter().map(|p| RowNote { line: row.line as u32, message: p.detail }).collect();
@@ -313,21 +321,24 @@ pub(crate) fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: In
     };
     f.read(|e| {
         if let Some((key, venue)) = &listing {
-            return Some(match held_on_day(e, Called::Listing(key), currency, day) {
-                Some((id, its_name)) => (Traded::Held(id), its_name),
-                None => (Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: venue.clone() }, true),
+            return held_on_day(e, Called::Listing(key), currency, day).map(|found| {
+                Some(match found {
+                    Some((id, its_name)) => (Traded::Held(id), its_name),
+                    None => (Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: venue.clone() }, true),
+                })
             });
         }
-        if let Some((id, its_name)) = held_on_day(e, Called::Symbol(&symbol, &|k| k == kind), currency, day) {
-            return Some((Traded::Held(id), its_name));
+        if let Some((id, its_name)) = held_on_day(e, Called::Symbol(&symbol, &|k| k == kind), currency, day)? {
+            return Ok(Some((Traded::Held(id), its_name)));
         }
-        match kind {
+        Ok(match kind {
             InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency).map(|t| (t, true)),
             InstrumentKind::Security => Some((Traded::Named { symbol, currency, contract: None, venue: None }, true)),
             _ => None,
-        }
+        })
     })
-    .ok_or_else(|| Refused::Failed("the figures are not built yet".into()))
+    .ok_or_else(|| Refused::Failed("the figures are not built yet".into()))?
+    .map_err(Refused::Entry)
 }
 
 /// What a linking pass did.

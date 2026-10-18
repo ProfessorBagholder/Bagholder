@@ -2064,6 +2064,31 @@ mod tests {
         drop(feed);
     }
 
+    /// The same through the live readers, for a SEDAR+ document: the process is
+    /// offline, so SEDAR+ is never asked and its document's read is never said
+    /// (brief 46, 4).
+    #[test]
+    fn a_sedar_document_read_offline_through_the_live_readers_is_never_said() {
+        let (_home, app) = built_app();
+        let key = on("ZQRW", "TSX");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("000000001".into()))];
+        // a form the source names nothing of, so the document itself is read
+        let mut release = item(Regulator::Sedar, 1, "000000001");
+        release.form = "News release".into();
+        r.documents = vec![(filer("000000001", Regulator::Sedar), Ok(vec![release]))];
+        refresh_filings_in(&app, &crate::feeds::conn(&app).unwrap(), &key, &r).unwrap();
+        let feed = crate::events::Feed::open(app.clone());
+        let doc = "disclosures-shown";
+        assert!(app.events.watch(&app, feed.id(), [(doc.to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
+        for _ in 0..2 {
+            read_while_shown(&app, doc, &key, &|source, id| filings_enrich_result(&app, source, id));
+        }
+        let said = crate::status::status(&app).error;
+        assert!(!said.contains("could not be read"), "{said}");
+        drop(feed);
+    }
+
     /// A filer that could not be settled is said, and nothing is guessed in its place.
     #[test]
     fn a_listing_whose_filer_is_not_settled_shows_why_and_nothing_else() {
