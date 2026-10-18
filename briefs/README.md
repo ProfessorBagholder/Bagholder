@@ -66,4 +66,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 53 | [#525 at 2d887849: merge (owner OK given); then close plan #522](53-525-merge.md) | Applied (#525 merged, ddb5a3cc) |
 | 54 | [Verdict on plan #535, agents read the trade history: Go with changes; same machine only](54-agents-read-plan-verdict.md) | Applied to #535 at d3329a62 |
 | 55 | [#523 at 60ef5e04: one change left; a mended store reopens only through the route the page never asks](55-start-never-stops-recheck.md) | Applied at e44c4e6c |
-| 56 | [#523 at e44c4e6c: merge (owner OK given)](56-start-never-stops-merge.md) | Current |
+| 56 | [#523 at e44c4e6c: merge (owner OK given)](56-start-never-stops-merge.md) | Applied (#523 merged, af9a726a) |
