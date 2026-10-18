@@ -269,20 +269,49 @@ fn the_whole_read_check_finds_a_call_and_not_a_definition_a_method_a_comment_or_
 }
 
 /// Each line of a file's code, outside its tests and comments, that names one of
-/// Wealthsimple's hosts.
-fn wealthsimple_hosts(text: &str) -> Vec<String> {
+/// Wealthsimple's hosts, with the function it is inside (none at the top level).
+fn wealthsimple_hosts(text: &str) -> Vec<(Option<String>, String)> {
     let code = &production(text);
-    code.lines().filter(|l| !l.trim_start().starts_with("//") && l.contains("wealthsimple.com")).map(|l| l.trim().to_string()).collect()
+    let mut out = Vec::new();
+    // the innermost function open at each line: its name and its indent
+    let mut open: Vec<(String, usize)> = Vec::new();
+    for l in code.lines() {
+        let indent = l.len() - l.trim_start().len();
+        let t = l.trim_start();
+        if !t.is_empty() && !t.starts_with("//") {
+            while open.last().is_some_and(|(_, at)| indent <= *at && !t.starts_with('}')) {
+                open.pop();
+            }
+            if t.starts_with('}') {
+                if open.last().is_some_and(|(_, at)| indent == *at) {
+                    open.pop();
+                }
+                continue;
+            }
+        }
+        if let Some(name) = fn_name(t) {
+            open.push((name, indent));
+        }
+        if !t.starts_with("//") && l.contains("wealthsimple.com") {
+            out.push((open.last().map(|(n, _)| n.clone()), t.to_string()));
+        }
+    }
+    out
 }
 
-/// Every Wealthsimple address the app asks comes from one place that the stand-in's
-/// variable (`BAGHOLDER_WS_BASE`) redirects: the newer client's `hosts` module, and
-/// the older client's own reading of it. Any other crate's code naming a host would
-/// reach Wealthsimple itself from a test's signed-in server (brief 37, 6).
+/// The function a line opens, if it opens one.
+fn fn_name(line: &str) -> Option<String> {
+    let rest = line.split_once("fn ").filter(|(head, _)| head.split_whitespace().all(|w| ["pub", "pub(crate)", "const", "async", "unsafe"].contains(&w)))?.1;
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    (!name.is_empty()).then_some(name)
+}
+
 #[test]
 fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    const ALLOWED: [&str; 2] = ["wealthsimple/src/hosts.rs", "ws/src/session.rs"];
+    // the one function per address that honours the stand-in's variable: each names
+    // its real address as a constant of its own, which nothing else can read
+    const ALLOWED: [(&str, &[&str]); 2] = [("wealthsimple/src/hosts.rs", &["web", "token_url"]), ("ws/src/session.rs", &["graphql_url", "web_origin", "oauth_url"])];
     fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
@@ -306,14 +335,20 @@ fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
         let rel = f.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/");
         // a module that is only a test's (`tests_*.rs`) holds no code the app runs
         let test_only = f.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tests_"));
-        if ALLOWED.contains(&rel.as_str()) || test_only {
+        if test_only {
             continue;
         }
-        for l in wealthsimple_hosts(&std::fs::read_to_string(&f).unwrap()) {
-            found.push(format!("{rel}: {l}"));
+        let allowed: &[&str] = ALLOWED.iter().find(|(file, _)| *file == rel).map_or(&[], |(_, fns)| *fns);
+        for (inside, l) in wealthsimple_hosts(&std::fs::read_to_string(&f).unwrap()) {
+            if !inside.as_deref().is_some_and(|n| allowed.contains(&n)) {
+                found.push(format!("{rel} ({}): {l}", inside.as_deref().unwrap_or("top level")));
+            }
         }
     }
-    assert!(found.is_empty(), "Wealthsimple named outside its hosts module:\n{}", found.join("\n"));
-    assert_eq!(wealthsimple_hosts("const X: &str = \"https://my.wealthsimple.com/x\";"), vec!["const X: &str = \"https://my.wealthsimple.com/x\";"]);
+    assert!(found.is_empty(), "Wealthsimple named outside the functions that honour the stand-in:\n{}", found.join("\n"));
+    // the scan names the function a host is inside, and none at the top level
+    let planted = "const X: &str = \"https://my.wealthsimple.com/x\";\npub fn graphql_url() -> String {\n    const REAL: &str = \"https://my.wealthsimple.com/graphql\";\n    REAL.into()\n}\nfn send() {\n    let u = \"https://my.wealthsimple.com/graphql\";\n}\n";
+    let seen: Vec<Option<String>> = wealthsimple_hosts(planted).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(seen, vec![None, Some("graphql_url".into()), Some("send".into())]);
     assert!(wealthsimple_hosts("/// help.wealthsimple.com\nfn f() {}").is_empty());
 }

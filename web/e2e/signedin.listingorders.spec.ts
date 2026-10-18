@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { figures, ready } from './helpers'
 
@@ -157,4 +158,33 @@ test("a draft closed on one listing is resumed on it, and never fills the other 
   await expect(page.locator('#tk-account')).toHaveValue(td.NYSE.account)
   await expect(page.locator('#tk-qty')).toHaveValue('7')
   await expect.poll(() => seen.previews.at(-1)).toBe(td.NYSE.security)
+})
+
+// Every call the signed-in server made to Wealthsimple, and every request it made,
+// the offline switch's refusals among them (`BAGHOLDER_LOG_REQUESTS`, written to
+// `E2E_REQUEST_LOG` by `serve.mjs`): it signed in, read and searched, all at the
+// stand-in, and asked nothing of any of Wealthsimple's own hosts (briefs 37, 38, 39). It asks for a listing first, so
+// it reads a log that has a search in it whichever tests ran before it.
+test('every Wealthsimple call the signed-in server makes goes to the stand-in, and nothing to a Wealthsimple host', async ({ request }) => {
+  const asked = await request.post('/api/order/listing', { headers: { 'X-Bagholder': '1' }, data: { of: { kind: 'venue', symbol: 'ENB', venue: 'NYSE' } } })
+  expect(await asked.json()).toMatchObject({ ok: true, listing: { securityId: 'sec-enb-nyse' } })
+  const read = () => readFileSync(process.env.E2E_REQUEST_LOG!, 'utf8').split('\n')
+  // every call the app's Wealthsimple clients made, as each names it (`named_call`),
+  // was answered by the stand-in: a call sent anywhere else is named and never
+  // answered. A call still in flight is waited for, not left out.
+  const calls = () => {
+    const called = read().filter((l) => l.startsWith('wealthsimple ')).map((l) => l.slice('wealthsimple '.length)).sort()
+    const answered = readFileSync(process.env.E2E_REQUEST_LOG! + '.answered', 'utf8').split('\n').filter(Boolean).sort()
+    return { called, answered }
+  }
+  expect(calls().called.length, 'the clients called Wealthsimple').toBeGreaterThan(0)
+  // the two lists, the same once nothing is in flight: what a difference names is shown
+  const unmatched = () => {
+    const { called, answered } = calls()
+    return JSON.stringify(called) === JSON.stringify(answered) ? 'none' : `called ${called.join(', ')}; answered ${answered.join(', ')}`
+  }
+  await expect.poll(unmatched, { message: 'every Wealthsimple call reached the stand-in' }).toBe('none')
+  // and no request of any kind went to one of Wealthsimple's hosts
+  const hosts = read().filter((l) => /^outbound [A-Z]+ /.test(l)).map((l) => l.split(' ')[2].split('/')[0])
+  expect(hosts.filter((h) => /wealthsimple/i.test(h))).toEqual([])
 })
