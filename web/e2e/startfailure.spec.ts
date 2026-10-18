@@ -42,9 +42,14 @@ test.afterAll(async () => {
   rmSync(home, { recursive: true, force: true })
 })
 
-test('a market cache that cannot be opened leaves the header whole: the version shows, and the error line says why', async ({ page }) => {
+test('a market cache that cannot be opened leaves the header whole, and mended while the server runs it opens at the next load', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${port}/#dashboard`)
-  await expect(page.locator('header, #page').first()).toBeVisible()
   await expect(page.getByText(/^v\d+\.\d+\.\d+/)).toBeVisible()
   await expect(page.locator('.status-err')).toContainText('The market cache could not be opened')
+  // mended, the server still running: the page loaded again opens on it
+  rmSync(join(home, 'market.db'), { recursive: true, force: true })
+  renameSync(join(home, 'market.db.kept'), join(home, 'market.db'))
+  await page.reload()
+  await expect(page.locator('#page .kpi .v').first()).toHaveText(/\d/)
+  await expect(page.locator('.status-err')).toHaveCount(0)
 })

@@ -77,7 +77,13 @@ pub struct StatusAnswer {
     pub core_version: Option<String>,
 }
 
+/// The header, as the page's stream and `/api/status` both read it. Read with the
+/// figure path not open, it opens it again first: a book or cache mended while the
+/// server runs opens at the next reading of the header (#516).
 pub fn status(app: &Arc<App>) -> Status {
+    if app.figures.get().is_none() && app.state.lock().unwrap().open_tried {
+        crate::open_figures(app);
+    }
     // what the header reads that fails is said in its error line, never read as
     // nothing, once it fails again at the next reading, as every failure is
     // (`feeds::feed_failed`): each of its own reads by name, answered when it reads
@@ -529,11 +535,7 @@ pub(crate) fn sentence(s: &str) -> String {
 /// `GET /api/status`'s own answer: `status` plus the two version strings a
 /// polling page reloads on. The header is answered whatever the market cache
 /// does: a version that cannot be read is absent, and why is in the error line.
-/// A header read with the figure path not open opens it again first.
 pub fn answer(app: &Arc<App>) -> StatusAnswer {
-    if app.state.lock().unwrap().open_tried {
-        crate::open_figures(app);
-    }
     let versions = crate::feeds::conn(app).ok().and_then(|conn| {
         let read = versions::data_version(&conn).and_then(|d| versions::core_version(&conn).map(|c| (d, c)));
         crate::feeds::went(app, "header:versions", read.map_err(|e| format!("The market cache's version could not be read: {e}")))

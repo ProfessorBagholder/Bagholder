@@ -77,6 +77,32 @@ fn get(port: u16, path: &str) -> (String, String) {
     (head.lines().next().unwrap_or("").to_string(), body.to_string())
 }
 
+/// The header as the page has it: the `status` document's first message on a new
+/// stream, as a page opening (or reloaded) receives it.
+fn streamed(server: &Server) -> serde_json::Value {
+    let mut s = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(20))).unwrap();
+    write!(s, "GET /api/events?zone=UTC&docs=%7B%22status%22%3A%7B%7D%7D HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Bagholder: 1\r\nAccept: text/event-stream\r\n\r\n", server.port).unwrap();
+    let mut seen = String::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = s.read(&mut buf).expect("the stream sends the header");
+        assert!(n > 0, "the stream ended before it sent the header: {seen}");
+        seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        // each message is a frame of `event:` and `data:` lines
+        for frame in seen.split("\n\n") {
+            if !frame.lines().any(|l| l.trim() == "event: snapshot") {
+                continue;
+            }
+            let Some(data) = frame.lines().find_map(|l| l.strip_prefix("data: ")) else { continue };
+            let Ok(m) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+            if m["doc"] == "status" {
+                return m["data"].clone();
+            }
+        }
+    }
+}
+
 /// The header as `/api/status` answers it.
 fn header(server: &Server) -> serde_json::Value {
     let (status, body) = get(server.port, "/api/status");
@@ -155,8 +181,10 @@ fn figures_open(server: &Server) -> bool {
     !get(server.port, "/api/view?key=book&params=%7B%7D").1.contains("the figures are not open")
 }
 
-/// A store mended while the server runs opens without a restart: the next header
-/// read no longer says it, and the figures open (brief 50, 2). For the market
+/// A store mended while the server runs opens without a restart: the header the
+/// page next receives on its stream no longer says it, and the figures open
+/// (briefs 50, 2 and 55). Read from the stream, never from `/api/status`, which
+/// the page does not ask. For the market
 /// cache (its file a folder, then put back) and for the book (a file no database
 /// reads, then taken away).
 #[test]
@@ -167,21 +195,21 @@ fn a_store_mended_while_the_server_runs_opens_at_the_next_header_read() {
     std::fs::rename(home.path().join("market.db"), home.path().join("market.db.kept")).unwrap();
     std::fs::create_dir(home.path().join("market.db")).unwrap();
     let server = started(home.path(), user.path());
-    let said = header(&server)["error"].as_str().unwrap().to_string();
+    let said = streamed(&server)["error"].as_str().unwrap().to_string();
     assert!(said.starts_with("The market cache could not be opened"), "{said}");
     assert!(!figures_open(&server), "nothing is built without its cache");
     std::fs::remove_dir(home.path().join("market.db")).unwrap();
     std::fs::rename(home.path().join("market.db.kept"), home.path().join("market.db")).unwrap();
-    assert_eq!(header(&server)["error"], "", "the next header read opens it");
+    assert_eq!(streamed(&server)["error"], "", "the next header read opens it");
     assert!(figures_open(&server));
     drop(server);
     // the book
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     std::fs::write(home.path().join("book.db"), NOT_A_DATABASE).unwrap();
     let server = started(home.path(), user.path());
-    assert_eq!(header(&server)["error"], "The book could not be opened: file is not a database.");
+    assert_eq!(streamed(&server)["error"], "The book could not be opened: file is not a database.");
     assert!(!figures_open(&server));
     std::fs::remove_file(home.path().join("book.db")).unwrap();
-    assert_eq!(header(&server)["error"], "", "the next header read opens it");
+    assert_eq!(streamed(&server)["error"], "", "the next header read opens it");
     assert!(figures_open(&server));
 }
