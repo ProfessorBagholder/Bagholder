@@ -57,7 +57,7 @@ The page reads the header from `status` (`web/src/App.svelte`, line 202). When t
    *Test:* the source scan fails on a planted `return 1` after `App::new`.
 
 7. **The verification `CLAUDE.md` asks of a change to running:**
-   - `RUSTFLAGS="-D warnings" cargo test --workspace --locked`. The PR ran only `-p bagholder-server`.
+   - The full workspace suite. The PR ran only `-p bagholder-server`. Under brief 51's rules this is the one CI run that starts when the fixes are pushed together, quoted by run id. It is not a local run.
    - The container image built and started on the made-up book with a store planted unreadable. The header and the update path are driven in it.
    - A states table for the header, with a screenshot of each start failure at 1340 px.
    - The cost line: no extra read on a good start, and no read on a timer while a failure stands.
