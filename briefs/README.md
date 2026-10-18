@@ -60,3 +60,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 47 | [#525 after brief 46: merge after four small changes](47-market-data-by-listing-merge-after.md) | Applied; checked in 49 |
 | 48 | [After #525, build the page on Node 26 once it is long-term support (2026-10-28)](48-node-26.md) | Open |
 | 49 | [#525 ready; merge #521 first, then bring it into #525](49-merge-521-then-525.md) | Current |
+| 50 | [#523 as built: not yet; a market cache that cannot be opened still leaves no header and no update button](50-start-never-stops-as-built.md) | Current |
