@@ -143,3 +143,35 @@ fn test_no_io_failure_is_dropped_by_an_if_let_or_an_underscore() {
     let want: Vec<(String, usize)> = LISTED.iter().map(|(f, n, _)| (f.to_string(), *n)).collect();
     assert_eq!(found, want, "an I/O failure dropped by `if let Ok` with no `else`, or a `_ = ..;`: handle it, or argue for it in LISTED");
 }
+
+/// From the app being made to the server listening, nothing stops the start (#516,
+/// brief 50, 6): a service manager would only start it again into the same failure,
+/// with no page and no update button. Whatever step is added there, a failure in it
+/// is said and the start goes on, so the code there has no early return, no `?`,
+/// no exit, and nothing that panics on a failure.
+#[test]
+fn test_nothing_between_the_app_made_and_the_server_listening_stops_the_start() {
+    let main = code(&std::fs::read_to_string(crates().join("server/src/main.rs")).unwrap());
+    let serve = &main[main.find("fn serve() -> i32").expect("serve")..];
+    let from = serve.find("app::App::new(").expect("the app made in serve");
+    let to = serve.find("TcpListener::bind(").expect("the server bound in serve");
+    assert!(from < to, "the app is made before the server listens");
+    let between = &serve[from..to];
+    assert_eq!(stops(between), Vec::<&str>::new(), "a step between the app made and the server listening can stop the start");
+    // the scan finds each way a start can stop
+    for planted in ["return 1;", "x?;", "std::process::exit(1);", "f.unwrap();", "f.expect(\"x\");", "panic!(\"x\");", "unreachable!();"] {
+        assert!(!stops(planted).is_empty(), "{planted}");
+    }
+    assert!(stops("let x = a.cache(); if let Err(e) = x { failed(e) }").is_empty());
+}
+
+/// Each way code can stop a start, as found in `text`.
+fn stops(text: &str) -> Vec<&'static str> {
+    let ways: [(&str, &str); 7] = [("return", "return "), ("?", "?;"), ("?", "?)"), ("exit", "process::exit("), ("unwrap", ".unwrap()"), ("expect", ".expect("), ("panic", "panic!(")];
+    let mut found: Vec<&'static str> = ways.iter().filter(|(_, w)| text.contains(w)).map(|(n, _)| *n).collect();
+    if text.contains("unreachable!(") || text.contains("todo!(") || text.contains("unimplemented!(") {
+        found.push("panic");
+    }
+    found.dedup();
+    found
+}

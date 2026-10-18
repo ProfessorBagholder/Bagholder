@@ -53,7 +53,12 @@ imported: Imported | null,
  */
 modelDownload: ModelDownload | null, };
 
-export type StatusAnswer = { dataVersion: string, coreVersion: string, ok: true, connected: boolean, email: string, lastSync: string, activityCount: number, accountCount: number, capturing: boolean, syncing: boolean, listingsFilling: boolean, syncStep: string, error: string, summaryReady: boolean, protocol: string, startedAt: string, version: string, latestVersion: string, updateAvailable: boolean, updateUrl: string, canUpdate: boolean, updateBy: string, 
+export type StatusAnswer = { 
+/**
+ * Absent when the market cache cannot be read, whose failure the error line
+ * says: never made up.
+ */
+dataVersion: string | null, coreVersion: string | null, ok: true, connected: boolean, email: string, lastSync: string, activityCount: number, accountCount: number, capturing: boolean, syncing: boolean, listingsFilling: boolean, syncStep: string, error: string, summaryReady: boolean, protocol: string, startedAt: string, version: string, latestVersion: string, updateAvailable: boolean, updateUrl: string, canUpdate: boolean, updateBy: string, 
 /**
  * `true` while `BAGHOLDER_LOGIN_VIEW` asks for the sign-in window shown
  * as a page rather than streamed frames.

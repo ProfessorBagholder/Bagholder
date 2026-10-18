@@ -106,6 +106,75 @@ fn open_browser(url: &str) {
     }
 }
 
+/// Open the figure path, once at a time: at start, and again when the header is
+/// read while it is not open, so a book or cache mended while the server runs
+/// opens without a restart (#516). A book that will not open is said in the
+/// header as the book's, a cache as the cache's; each is gone once it opens.
+pub(crate) fn open_figures(a: &std::sync::Arc<app::App>) {
+    if a.figures.get().is_some() {
+        return;
+    }
+    a.single_flight("open-figures", (), || {
+        if a.figures.get().is_some() {
+            return;
+        }
+        let said = match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
+            Ok(f) => {
+                figures_opened(a, f);
+                String::new()
+            }
+            // said as every borrow of the cache says it, in the pool's own words
+            Err(figures::OpenFailure::Cache(e)) => {
+                let why = a.cache().err().map_or(e, |e| format!("The market cache could not be opened: {e}"));
+                feeds::feed_down(a, feeds::CACHE, why);
+                String::new()
+            }
+            Err(figures::OpenFailure::Book(e)) => e,
+        };
+        let mut st = a.state.lock().unwrap();
+        st.open_tried = true;
+        if st.open_error != said {
+            // logged as it changes, not at each header read that tries again
+            if !said.is_empty() {
+                log(&format!("bagholder: {said}"));
+            }
+            st.open_error = said;
+            drop(st);
+            a.events.signal();
+        }
+    });
+}
+
+/// What follows the figure path's opening, wherever it opens.
+fn figures_opened(a: &std::sync::Arc<app::App>, f: figures::Figures) {
+    // the earlier store, carried once into the book and the market cache; nothing
+    // opens it after this. Said until the next start, as a step that runs once.
+    if let Err(e) = carry::from_old_store(a, &f, bagholder_core::jiff::Timestamp::now()) {
+        log(&format!("bagholder: {e}"));
+        let mut st = a.state.lock().unwrap();
+        st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
+    }
+    // what the last pull's statements said, until the next pull
+    match f.book().and_then(|b| b.setting(status::STATEMENTS_SAID).map_err(|e| e.to_string())) {
+        Ok(said) => a.state.lock().unwrap().statement_error = said.unwrap_or_default(),
+        Err(e) => log(&format!("bagholder: what the statements last said could not be read: {e}")),
+    }
+    a.set_figures(f);
+    // the default tile row where none was chosen
+    following::open(a);
+    // the book's told marks, carried once to the scopes a listing and a filer are kept
+    // under now that the cache names each ticker's filers; one that fails tells nothing
+    // twice (a scope with no mark sets one without telling) and is tried at the next start
+    if let Ok(cache) = feeds::conn(a) {
+        let carried = a.figures.get().ok_or_else(|| "the book is not open".to_string()).and_then(|f| f.book()).and_then(|b| carry::carry_told_by_listing(&b, &cache, bagholder_core::jiff::Timestamp::now()));
+        match carried {
+            Ok(Some((events, marks))) => log(&format!("bagholder: {events} told events and {marks} marks carried to the scopes each listing and filer is kept under")),
+            Ok(None) => {}
+            Err(e) => feeds::went(a, "told-by-listing", Err::<(), _>(format!("What was told could not be carried to each listing's own scope: {e}"))).unwrap_or_default(),
+        }
+    }
+}
+
 fn serve() -> i32 {
     // what the environment says, and the data folder made the app's alone: each
     // refused stops the server here, saying why
@@ -135,70 +204,15 @@ fn serve() -> i32 {
         }
     };
     // a first start with nothing of its own takes the Python app's database, which the start then imports
-    if let Some(python) = legacy_import::python_home(|k| std::env::var_os(k)) {
-        match legacy_import::adopt_python_database(&home, &python) {
-            Ok(Some(from)) => log(&format!("bagholder: a copy of the Python app's database {} is this app's first", from.display())),
-            Ok(None) => {}
-            Err(e) => {
-                log(&format!("bagholder: {e}"));
-                return 1;
-            }
-        }
-    }
-    let a = app::App::new(home, root, bind_host.clone());
-    // an update the supervisor rolled back is said in the header by the server it started
-    update::recall_failure(&a);
-    // the local model keeps its file in this app's data folder, and is off until told so
-    if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
-        log(&format!("bagholder: the local model is off: {}", e));
-    }
-    // the figure path: a book this build cannot open stops the server, saying why
-    match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
-        Ok(f) => {
-            // the earlier store, carried once into the book and the market cache;
-            // nothing opens it after this
-            if let Err(e) = carry::from_old_store(&a, &f, bagholder_core::jiff::Timestamp::now()) {
-                log(&format!("bagholder: {e}"));
-                return 1;
-            }
-            // what the last pull's statements said, until the next pull
-            match f.book().and_then(|b| b.setting(status::STATEMENTS_SAID).map_err(|e| e.to_string())) {
-                Ok(said) => a.state.lock().unwrap().statement_error = said.unwrap_or_default(),
-                Err(e) => log(&format!("bagholder: what the statements last said could not be read: {e}")),
-            }
-            a.set_figures(f);
-            // the default tile row where none was chosen
-            following::open(&a);
-        }
-        Err(e) => {
-            log(&format!("bagholder: {e}"));
-            return 1;
-        }
-    }
-    // the market cache's first borrow brings it to this build's schema, so one that
-    // cannot be opened stops the server here, saying why
-    match a.cache() {
-        Err(e) => {
-            log(&format!("bagholder: the market cache could not be opened: {}", e));
-            return 1;
-        }
-        // the book's told marks, carried once to the scopes a listing and a filer are kept
-        // under now that the cache names each ticker's filers; one that fails tells nothing
-        // twice (a scope with no mark sets one without telling) and is tried at the next start
-        Ok(cache) => {
-            let carried = a.figures.get().ok_or_else(|| "the book is not open".to_string()).and_then(|f| f.book()).and_then(|b| carry::carry_told_by_listing(&b, &cache, bagholder_core::jiff::Timestamp::now()));
-            match carried {
-                Ok(Some((events, marks))) => log(&format!("bagholder: {events} told events and {marks} marks carried to the scopes each listing and filer is kept under")),
-                Ok(None) => {}
-                Err(e) => feeds::went(&a, "told-by-listing", Err::<(), _>(format!("What was told could not be carried to each listing's own scope: {e}"))).unwrap_or_default(),
-            }
-        }
-    }
-    session::boot_session(&a);
-
+    let adopted = match legacy_import::python_home(|k| std::env::var_os(k)) {
+        Some(python) => legacy_import::adopt_python_database(&home, &python),
+        None => Ok(None),
+    };
     // The runtime the HTTP server and the page streams run on. Everything else --
     // SQLite, the market and Wealthsimple clients, the background loops -- is
     // synchronous and runs on threads of its own or on the runtime's blocking pool.
+    // Made before the app: nothing after the app is made stops the server before it
+    // listens (`tests_lints`, the start has no exit).
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().thread_name("bagholder-http").build() {
         Ok(rt) => rt,
         Err(e) => {
@@ -206,6 +220,42 @@ fn serve() -> i32 {
             return 1;
         }
     };
+    let a = app::App::new(home, root, bind_host.clone());
+    // a step here that reads the stored data never stops the server: a service
+    // manager would only start it again into the same failure, with no page and no
+    // update button. Each failure is said in the header until the next start (#516).
+    let failed = |e: String| {
+        log(&format!("bagholder: {e}"));
+        let Ok(mut st) = a.state.lock();
+        st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
+    };
+    // an update the supervisor rolled back is said in the header by the server it started
+    update::recall_failure(&a);
+    // the local model keeps its file in this app's data folder, and is off until told so
+    if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
+        log(&format!("bagholder: the local model is off: {}", e));
+    }
+    match adopted {
+        Ok(from) => {
+            if let Some(from) = from {
+                log(&format!("bagholder: a copy of the Python app's database {} is this app's first", from.display()));
+            }
+            // the figure path: one this build cannot open is said by what failed,
+            // nothing is opened in its place, and it is opened again when the
+            // header is next read (`open_figures`)
+            open_figures(&a);
+        }
+        // no book is made beside a database not yet carried, so the next start tries again
+        Err(e) => failed(format!("The Python app's database could not be taken: {e}")),
+    }
+    // the market cache's first borrow brings it to this build's schema; one that
+    // cannot be opened is said under the cache's own name, and the next borrow
+    // that succeeds takes it away
+    if let Err(e) = a.cache() {
+        feeds::feed_down(&a, feeds::CACHE, format!("The market cache could not be opened: {e}"));
+    }
+    session::boot_session(&a);
+
     let mut bound = None;
     let mut last_err = String::new();
     for &port in &ports {

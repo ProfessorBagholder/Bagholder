@@ -51,13 +51,13 @@ fn news(conn: &Connection, symbol: &str, headline: &str) {
 fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let _g = guard();
     let conn = app_ref().cache().unwrap();
-    let v0 = crate::status::answer(&app()).unwrap().data_version;
+    let v0 = crate::status::answer(&app()).data_version.unwrap();
     assert!(!v0.is_empty());
     news(&conn, "VERSQ", &format!("A release at {}", app::now_unix()));
-    let v1 = crate::status::answer(&app()).unwrap().data_version;
+    let v1 = crate::status::answer(&app()).data_version.unwrap();
     assert_ne!(v0, v1, "a news row stored moves the version");
     conn.execute("DELETE FROM news WHERE listing = 'VERSQ@XTSE'", []).unwrap();
-    assert_ne!(v1, crate::status::answer(&app()).unwrap().data_version, "and one removed");
+    assert_ne!(v1, crate::status::answer(&app()).data_version.unwrap(), "and one removed");
 }
 
 /// The clock cannot be stood in for here: the version is checked to carry
@@ -65,7 +65,7 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
 #[test]
 fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight() {
     let _g = guard();
-    let v = crate::status::answer(&app()).unwrap().data_version;
+    let v = crate::status::answer(&app()).data_version.unwrap();
     assert!(v.ends_with(&format!("|{}", bagholder_model::clock::today_local())), "{}", v);
 }
 
