@@ -7,6 +7,8 @@ Read from any checkout without switching branches:
     git fetch origin architecture-briefs
     git show origin/architecture-briefs:briefs/<file>
 
+A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
+
 | # | Brief | Status |
 |---|---|---|
 | 01 | [Stage 3, and how we work from here](01-stage-3-and-the-gate.md) | Current; §2.2 replaced by 09 |
@@ -47,4 +49,14 @@ Read from any checkout without switching branches:
 | 36 | [The order-listing build as built (#520): not yet](36-orders-listing-as-built.md) | Superseded by 37 |
 | 37 | [#520 after brief 36's changes: merge after six small changes](37-orders-listing-recheck.md) | Superseded by 38 |
 | 38 | [#520 at 068fb766: merge; close #519 as superseded](38-orders-listing-merge.md) | Current |
-| 39 | [#521: merge after two changes. Plan #522 (market data by listing): not yet](39-hosts-followups-and-market-data-plan.md) | Current |
+| 39 | [#521: merge after two changes. Plan #522 (market data by listing): not yet](39-hosts-followups-and-market-data-plan.md) | Applied to #521; its #522 section superseded by 40 |
+| 40 | [Plan #522: the design to build (market data by listing, filings per filer, the TSX interlisted list)](40-market-data-by-listing-design.md) | Built in #525 |
+| 41 | [#522's SEDAR+ tie rule accepted with conditions; #521's CI red](41-sedar-tie-rule-and-521-ci.md) | Applied |
+| 42 | [#525 as built: not yet](42-market-data-by-listing-as-built.md) | Applied |
+| 43 | [#525's follow-up: a booked fill erases the venue; fix it in the name fold](43-held-venue-follow-up.md) | Applied |
+| 44 | [#525 after briefs 42 and 43: not yet](44-market-data-by-listing-recheck.md) | Applied |
+| 45 | [#525 after brief 44: not yet](45-market-data-by-listing-recheck-2.md) | Applied |
+| 46 | [#525 after brief 45: a stale lock file and four defects](46-market-data-by-listing-recheck-3.md) | Applied |
+| 47 | [#525 after brief 46: merge after four small changes](47-market-data-by-listing-merge-after.md) | Applied; checked in 49 |
+| 48 | [After #525, build the page on Node 26 once it is long-term support (2026-10-28)](48-node-26.md) | Open |
+| 49 | [#525 ready; merge #521 first, then bring it into #525](49-merge-521-then-525.md) | Current |
