@@ -3,7 +3,11 @@
 //!
 //! A name is each unbroken run of live records' sightings under one symbol and
 //! venue, in the order of (day, symbol, sighting), across every instrument read
-//! as one with it: the fold `Book::names` was. The book keeps the runs in
+//! as one with it: the fold `Book::names` was. A sighting that states no venue
+//! (a record that names the instrument by its reference: a hand entry, a fill,
+//! a row imported with no exchange) says nothing about the venue: it reads as on
+//! the venue the last sighting stating one named, so no record erases a venue
+//! (brief 43). The book keeps the runs in
 //! `instrument_names`; triggers leave a row in `names_due` for every sighting a
 //! write changed, and `settle_names`, run before the outermost commit, re-forms
 //! only the runs around those sightings, by index reads at their ends. A read
@@ -55,8 +59,9 @@ impl Run {
 enum Piece {
     /// Part of a kept run with a live sighting left in it: its label, and its bounds.
     Kept { symbol: String, venue_mic: Option<String>, from: Bound<Key>, to: Bound<Key> },
-    /// A changed sighting, live now, with its own label.
-    Seen { symbol: String, venue_mic: Option<String>, at: Key },
+    /// A changed sighting, live now, with its label; `states` where it states a
+    /// venue (one that states none reads as on the piece before it).
+    Seen { symbol: String, venue_mic: Option<String>, at: Key, states: bool },
 }
 
 impl Piece {
@@ -77,6 +82,48 @@ fn bound_sql(b: &Bound<Key>, lower: bool, n: usize) -> String {
         (Bound::Unbounded, _) => return "1".into(),
     };
     format!("(s.day, s.symbol, s.rowid) {op} (?{}, ?{}, ?{})", n, n + 1, n + 2)
+}
+
+/// Whether a sighting states a venue, by code or in words.
+fn states_venue(mic: &Option<String>, words: &Option<String>) -> bool {
+    mic.is_some() || words.is_some()
+}
+
+/// The venue a sighting stating none reads as on: the run's before it.
+fn carried(before: Option<&Run>) -> (Option<String>, Option<String>) {
+    before.map(|r| (r.venue_mic.clone(), r.venue_name.clone())).unwrap_or_default()
+}
+
+/// What a seek over an instrument's sightings keeps, each read through its own
+/// index, named in the statement (`INDEXED BY`): the book holds no statistics, so
+/// the planner would guess, and a guess of a wider index makes a seek read every
+/// sighting that index holds (brief 45, 1). Each condition is its partial index's
+/// own, word for word, as `INDEXED BY` a partial index requires.
+#[derive(Clone, Copy, Debug)]
+enum Stating {
+    /// every sighting
+    Any,
+    /// a venue, by code or in words (book migration 31)
+    Venue,
+    /// no venue at all (book migration 31)
+    NoVenue,
+    /// its venue in words
+    Words,
+    /// the instrument's name
+    Name,
+}
+
+impl Stating {
+    /// The index read and the condition it holds.
+    fn index(self) -> (&'static str, &'static str) {
+        match self {
+            Stating::Any => ("instrument_sightings_newest", ""),
+            Stating::Venue => ("instrument_sightings_stating", " AND (s.venue_mic IS NOT NULL OR s.venue_name IS NOT NULL)"),
+            Stating::NoVenue => ("instrument_sightings_silent", " AND (s.venue_mic IS NULL AND s.venue_name IS NULL)"),
+            Stating::Words => ("instrument_sightings_venue_named", " AND s.venue_name IS NOT NULL"),
+            Stating::Name => ("instrument_sightings_named", " AND s.name IS NOT NULL"),
+        }
+    }
 }
 
 fn bound_key(b: &Bound<Key>) -> Option<&Key> {
@@ -115,6 +162,8 @@ impl Book {
         for row in rows {
             let (symbol, venue_mic, venue_name, name, day, rowid, source) = row?;
             let key = (day, symbol.clone(), rowid);
+            // one stating no venue reads as on the run before it, code and words
+            let (venue_mic, venue_name) = if states_venue(&venue_mic, &venue_name) { (venue_mic, venue_name) } else { carried(out.last()) };
             match out.last_mut() {
                 Some(last) if last.symbol == symbol && last.venue_mic == venue_mic => {
                     // the latest sighting's words stand for the run
@@ -153,9 +202,15 @@ impl Book {
     /// records' sightings under one symbol and venue is one name, from its first
     /// day to its last. A ticker that changes and changes back is three names.
     /// The sightings of every instrument read as one with it count. Read from the
-    /// kept runs, or folded where anything of its group is due.
+    /// kept runs: what is due is settled first, as a write's commit settles it (a
+    /// read inside the write that changed them re-forms the runs around the
+    /// change once, never folding the whole history on every read); folded only
+    /// where its group's due rows cannot be settled.
     pub fn names(&self, id: InstrumentId) -> Result<Vec<Name>> {
         let head = self.canonical(id)?;
+        if self.names_due_for(head)? {
+            self.atomically(|| self.settle_names())?;
+        }
         let runs = if self.names_due_for(head)? { self.names_folded(head)? } else { self.runs_kept(head)? };
         #[cfg(feature = "oracles")]
         if !bagholder_sqlite::work::measuring() {
@@ -207,7 +262,7 @@ impl Book {
         let head = self.canonical(id)?;
         if self.names_due_for(head)? {
             let mut st = self.conn().prepare_cached(
-                "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+                "SELECT s.day, s.symbol, s.rowid FROM instrument_sightings s INDEXED BY instrument_sightings_newest JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
                  WHERE s.instrument_id = ?1 ORDER BY s.day DESC, s.symbol DESC, s.rowid DESC LIMIT 1",
             )?;
             let mut newest: Option<Key> = None;
@@ -336,14 +391,11 @@ impl Book {
     }
 
     /// The first (or last) live sighting of the group between two bounds.
-    fn live_end(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, only: Option<&str>) -> Result<Option<(Key, String, Option<String>, Option<String>)>> {
+    fn live_end(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, only: Stating) -> Result<Option<(Key, String, Option<String>, Option<String>)>> {
         let order = if last { "DESC" } else { "ASC" };
-        let only_sql = match only {
-            Some(column) => format!(" AND s.{column} IS NOT NULL"),
-            None => String::new(),
-        };
+        let (index, only_sql) = only.index();
         let sql = format!(
-            "SELECT s.day, s.symbol, s.rowid, r.source, s.venue_name, s.name FROM instrument_sightings s
+            "SELECT s.day, s.symbol, s.rowid, r.source, s.venue_name, s.name FROM instrument_sightings s INDEXED BY {index}
              JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
              WHERE s.instrument_id = ?1 AND {} AND {}{only_sql}
              ORDER BY s.day {order}, s.symbol {order}, s.rowid {order} LIMIT 1",
@@ -377,6 +429,44 @@ impl Book {
         Ok(best)
     }
 
+    /// The first (or last) live sighting of the group between two bounds that
+    /// `filter` keeps: its place, its code and its words.
+    fn seek(&self, members: &[String], from: &Bound<Key>, to: &Bound<Key>, last: bool, filter: Stating) -> Result<Option<(Key, Option<String>, Option<String>)>> {
+        let order = if last { "DESC" } else { "ASC" };
+        let (index, filter) = filter.index();
+        let sql = format!(
+            "SELECT s.day, s.symbol, s.rowid, s.venue_mic, s.venue_name FROM instrument_sightings s INDEXED BY {index}
+             JOIN source_records r ON r.id = s.record_id AND r.state = 'live'
+             WHERE s.instrument_id = ?1 AND {} AND {}{filter}
+             ORDER BY s.day {order}, s.symbol {order}, s.rowid {order} LIMIT 1",
+            bound_sql(from, true, 2),
+            bound_sql(to, false, 5),
+        );
+        let mut st = self.conn().prepare_cached(&sql)?;
+        let mut best: Option<(Key, Option<String>, Option<String>)> = None;
+        for m in members {
+            let mut values: Vec<rusqlite::types::Value> = vec![m.clone().into()];
+            for b in [from, to] {
+                if let Some(k) = bound_key(b) {
+                    values.extend([k.0.clone().into(), k.1.clone().into(), k.2.into()]);
+                } else {
+                    values.extend([rusqlite::types::Value::Null, rusqlite::types::Value::Null, rusqlite::types::Value::Null]);
+                }
+            }
+            // as many values as the statement numbers: an open upper end numbers none past the lower's
+            if matches!(to, Bound::Unbounded) {
+                values.truncate(if matches!(from, Bound::Unbounded) { 1 } else { 4 });
+            }
+            let row = st.query_row(rusqlite::params_from_iter(values), |r| Ok(((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?), r.get(3)?, r.get(4)?))).optional()?;
+            if let Some(row) = row {
+                if best.as_ref().is_none_or(|b| (row.0 > b.0) == last) {
+                    best = Some(row);
+                }
+            }
+        }
+        Ok(best)
+    }
+
     /// The runs around each of `keys` re-formed: the kept runs that hold or
     /// border one, cut at each into pieces (each kept where a live sighting is
     /// left in it), the changed sightings that are live now put between them,
@@ -394,16 +484,41 @@ impl Book {
         if runs.last().is_none_or(|r| keys.iter().next().is_some_and(|k| *k > r.last)) {
             return self.append_runs(head, &members, runs.last().cloned(), keys);
         }
-        // the runs each key reaches: the one holding it, and one either side
-        let mut reached: Vec<(usize, usize)> = Vec::new();
+        // a sighting stating no venue reads as on what comes before it, so a change
+        // reaches every such sighting after it up to the next one that states a venue
+        // (its stop, where the carried code ends, and the pieces are cut): one seek a change
+        let mut stops: BTreeSet<Key> = BTreeSet::new();
+        let mut reach: Vec<Option<Key>> = Vec::new();
         for k in keys {
+            let stop = self.seek(&members, &Bound::Excluded(k.clone()), &Bound::Unbounded, false, Stating::Venue)?.map(|x| x.0);
+            if let Some(s) = stop.clone().filter(|s| !keys.contains(s)) {
+                stops.insert(s);
+            }
+            reach.push(stop);
+        }
+        // the runs each key reaches: the one holding it and one either side, on to the
+        // one holding its stop (every run to the last where it has none), and on past
+        // it through each run that reads its words from the run before
+        let mut reached: Vec<(usize, usize)> = Vec::new();
+        for (k, stop) in keys.iter().zip(&reach) {
             let p = runs.partition_point(|r| r.last < *k);
-            let (a, b) = if p < runs.len() && runs[p].first <= *k { (p.saturating_sub(1), (p + 1).min(runs.len().saturating_sub(1))) } else { (p.saturating_sub(1), p.min(runs.len().saturating_sub(1))) };
+            let (a, mut b) = if p < runs.len() && runs[p].first <= *k { (p.saturating_sub(1), (p + 1).min(runs.len().saturating_sub(1))) } else { (p.saturating_sub(1), p.min(runs.len().saturating_sub(1))) };
+            if !runs.is_empty() {
+                let to = match stop {
+                    Some(s) => runs.partition_point(|r| r.last < *s).min(runs.len() - 1),
+                    None => runs.len() - 1,
+                };
+                let mut to = b.max(to);
+                while to + 1 < runs.len() && self.reads_words_before(&members, &runs[to + 1])? {
+                    to += 1;
+                }
+                b = to;
+            }
             reached.push((a, b));
         }
         if runs.is_empty() {
-            let pieces = self.pieces(&members, &[], keys)?;
-            return self.replace_runs(head, &members, &[], pieces);
+            let pieces = self.pieces(&members, None, &[], keys, &stops)?;
+            return self.replace_runs(head, &members, None, &[], pieces);
         }
         reached.sort();
         let mut spans: Vec<(usize, usize)> = Vec::new();
@@ -423,8 +538,10 @@ impl Book {
                 continue;
             }
             let kept = &runs[*a..=*b];
-            let pieces = self.pieces(&members, kept, &span_keys)?;
-            self.replace_runs(head, &members, kept, pieces)?;
+            let before = a.checked_sub(1).map(|i| &runs[i]);
+            let span_stops: BTreeSet<Key> = stops.range::<Key, _>((lo.map(|k| k.clone()), hi.map(|k| k.clone()))).cloned().collect();
+            let pieces = self.pieces(&members, before, kept, &span_keys, &span_stops)?;
+            self.replace_runs(head, &members, before, kept, pieces)?;
         }
         Ok(())
     }
@@ -445,6 +562,7 @@ impl Book {
             if !members.contains(&inst) || day != k.0 || symbol != k.1 {
                 continue;
             }
+            let (venue_mic, venue_name) = if states_venue(&venue_mic, &venue_name) { (venue_mic, venue_name) } else { carried(runs.last()) };
             match runs.last_mut() {
                 Some(r) if r.symbol == symbol && r.venue_mic == venue_mic => {
                     r.last = k.clone();
@@ -470,49 +588,91 @@ impl Book {
         self.keep_runs(head, &runs[had..])
     }
 
-    /// The pieces, in order, of `kept` cut at `keys`, with the changed sightings
-    /// live now between them.
-    fn pieces(&self, members: &[String], kept: &[Run], keys: &BTreeSet<Key>) -> Result<Vec<Piece>> {
-        let mut out: Vec<(Key, u8, Piece)> = Vec::new();
+    /// The pieces, in order, of `kept` cut at `keys` and at `stops`, with the
+    /// changed sightings live now between them, each labelled as the fold reads it:
+    /// a changed sighting that states no venue reads as on the piece before it, and
+    /// so does every piece after a change up to a stop (the next sighting that
+    /// states a venue), the run before the span (`before`) first.
+    fn pieces(&self, members: &[String], before: Option<&Run>, kept: &[Run], keys: &BTreeSet<Key>, stops: &BTreeSet<Key>) -> Result<Vec<Piece>> {
+        // (place, rank, piece or none for a change's mark): at a key, its sighting,
+        // then the mark that a change was passed, then what follows it in its run
+        let mut out: Vec<(Key, u8, Option<Piece>)> = Vec::new();
         for r in kept {
-            let cuts: Vec<&Key> = keys.range(r.first.clone()..=r.last.clone()).collect();
+            let mut cuts: Vec<(&Key, bool)> = keys.range(r.first.clone()..=r.last.clone()).map(|k| (k, true)).collect();
+            cuts.extend(stops.range(r.first.clone()..=r.last.clone()).filter(|s| **s != r.first).map(|s| (s, false)));
+            cuts.sort();
             let mut from = Bound::Included(r.first.clone());
-            let ends = cuts.iter().map(|c| Bound::Excluded((*c).clone())).chain(std::iter::once(Bound::Included(r.last.clone())));
-            for to in ends {
+            let ends = cuts.iter().map(|(c, _)| Bound::Excluded((*c).clone())).chain(std::iter::once(Bound::Included(r.last.clone())));
+            for (i, to) in ends.enumerate() {
                 let empty = match (&from, &to) {
                     (Bound::Included(a), Bound::Excluded(b)) | (Bound::Excluded(a), Bound::Excluded(b)) | (Bound::Excluded(a), Bound::Included(b)) => a >= b,
                     (Bound::Included(a), Bound::Included(b)) => a > b,
                     _ => false,
                 };
-                if !empty && self.live_end(members, &from, &to, false, None)?.is_some() {
+                if !empty && self.live_end(members, &from, &to, false, Stating::Any)?.is_some() {
                     let at = bound_key(&from).cloned().unwrap_or_default();
-                    let rank = if matches!(from, Bound::Excluded(_)) { 1 } else { 0 };
-                    out.push((at, rank, Piece::Kept { symbol: r.symbol.clone(), venue_mic: r.venue_mic.clone(), from: from.clone(), to: to.clone() }));
+                    let rank = if matches!(from, Bound::Excluded(_)) { 2 } else { 0 };
+                    out.push((at, rank, Some(Piece::Kept { symbol: r.symbol.clone(), venue_mic: r.venue_mic.clone(), from: from.clone(), to: to.clone() })));
                 }
-                if let Bound::Excluded(c) = to {
-                    from = Bound::Excluded(c);
+                // after a changed key the next piece starts past it; at a stop, on it
+                if let Some((c, is_key)) = cuts.get(i) {
+                    from = if *is_key { Bound::Excluded((*c).clone()) } else { Bound::Included((*c).clone()) };
                 }
             }
         }
         // each changed sighting as it reads now, where it is live and still at its key
         let mut st = self.conn().prepare_cached(
-            "SELECT s.instrument_id, s.day, s.symbol, s.venue_mic FROM instrument_sightings s
+            "SELECT s.instrument_id, s.day, s.symbol, s.venue_mic, s.venue_name FROM instrument_sightings s
              JOIN source_records r ON r.id = s.record_id AND r.state = 'live' WHERE s.rowid = ?1",
         )?;
         for k in keys {
-            let row: Option<(String, String, String, Option<String>)> = st.query_row([k.2], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
-            if let Some((inst, day, symbol, venue_mic)) = row {
+            out.push((k.clone(), 1, None));
+            let row: Option<(String, String, String, Option<String>, Option<String>)> = st.query_row([k.2], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).optional()?;
+            if let Some((inst, day, symbol, venue_mic, venue_name)) = row {
                 if members.contains(&inst) && day == k.0 && symbol == k.1 {
-                    out.push((k.clone(), 0, Piece::Seen { symbol, venue_mic, at: k.clone() }));
+                    let states = states_venue(&venue_mic, &venue_name);
+                    out.push((k.clone(), 0, Some(Piece::Seen { symbol, venue_mic, at: k.clone(), states })));
                 }
             }
         }
         out.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
-        Ok(out.into_iter().map(|(_, _, p)| p).collect())
+        // the venue each piece reads as on, in order
+        let mut prev: Option<String> = before.and_then(|r| r.venue_mic.clone());
+        let mut carrying = false;
+        let mut pieces = Vec::new();
+        for (_, _, p) in out {
+            let Some(mut p) = p else {
+                carrying = true;
+                continue;
+            };
+            match &mut p {
+                Piece::Seen { venue_mic, states: false, .. } => *venue_mic = prev.clone(),
+                Piece::Seen { .. } => {}
+                Piece::Kept { venue_mic, from, .. } => {
+                    if matches!(from, Bound::Included(s) if stops.contains(s)) {
+                        carrying = false;
+                    }
+                    if carrying {
+                        *venue_mic = prev.clone();
+                    }
+                }
+            }
+            prev = p.label().1.map(str::to_string);
+            pieces.push(p);
+        }
+        Ok(pieces)
+    }
+
+    /// Whether a kept run reads its venue in words from the run before it: its
+    /// sightings state no words and its first states no venue (`replace_runs`). Two
+    /// seeks, on the sightings indexed by what they state.
+    fn reads_words_before(&self, members: &[String], run: &Run) -> Result<bool> {
+        let (first, last) = (Bound::Included(run.first.clone()), Bound::Included(run.last.clone()));
+        Ok(self.seek(members, &first, &first, false, Stating::NoVenue)?.is_some() && self.seek(members, &first, &last, false, Stating::Words)?.is_none())
     }
 
     /// `kept` replaced by the runs `pieces` make.
-    fn replace_runs(&self, head: InstrumentId, members: &[String], kept: &[Run], pieces: Vec<Piece>) -> Result<()> {
+    fn replace_runs(&self, head: InstrumentId, members: &[String], before: Option<&Run>, kept: &[Run], pieces: Vec<Piece>) -> Result<()> {
         let mut groups: Vec<Vec<Piece>> = Vec::new();
         for p in pieces {
             match groups.last_mut() {
@@ -520,21 +680,28 @@ impl Book {
                 _ => groups.push(vec![p]),
             }
         }
-        let mut runs = Vec::new();
+        let mut runs: Vec<Run> = Vec::new();
         for g in groups {
             let end = |p: &Piece, last: bool| -> Result<Key> {
                 match p {
                     Piece::Seen { at, .. } => Ok(at.clone()),
-                    Piece::Kept { from, to, .. } => Ok(self.live_end(members, from, to, last, None)?.map(|x| x.0).unwrap_or_default()),
+                    Piece::Kept { from, to, .. } => Ok(self.live_end(members, from, to, last, Stating::Any)?.map(|x| x.0).unwrap_or_default()),
                 }
             };
             let first = end(&g[0], false)?;
             let last = end(&g[g.len() - 1], true)?;
             let (from, to) = (Bound::Included(first.clone()), Bound::Included(last.clone()));
-            let source = self.live_end(members, &from, &to, true, None)?.map(|x| x.1).unwrap_or_default();
-            let venue_name = self.live_end(members, &from, &to, true, Some("venue_name"))?.and_then(|x| x.2);
-            let name = self.live_end(members, &from, &to, true, Some("name"))?.and_then(|x| x.3);
+            let source = self.live_end(members, &from, &to, true, Stating::Any)?.map(|x| x.1).unwrap_or_default();
             let (symbol, venue_mic) = g[0].label();
+            // a run whose sightings state no words and whose first states no venue reads
+            // as on the run before it, in its words too
+            let prior = runs.last().or(before);
+            let venue_name = match self.live_end(members, &from, &to, true, Stating::Words)?.and_then(|x| x.2) {
+                Some(w) => Some(w),
+                None if self.seek(members, &from, &Bound::Included(first.clone()), false, Stating::NoVenue)?.is_some() => prior.and_then(|r| r.venue_name.clone()),
+                None => None,
+            };
+            let name = self.live_end(members, &from, &to, true, Stating::Name)?.and_then(|x| x.3);
             runs.push(Run { first, last, symbol: symbol.to_string(), venue_mic: venue_mic.map(str::to_string), venue_name, name, source });
         }
         let mut del = self.conn().prepare_cached("DELETE FROM instrument_names WHERE instrument_id = ?1 AND first_day = ?2 AND first_symbol = ?3 AND first_sighting = ?4")?;

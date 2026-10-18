@@ -22,7 +22,7 @@ use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, Currency, RecordId, Rounding, SourceName};
 use bagholder_engine::Engine;
 
-use crate::entries::{contract_by_terms, held_by_symbol, manual_account, Refused};
+use crate::entries::{contract_by_terms, held_on_day, manual_account, Called, Refused};
 use crate::figures::Figures;
 
 /// A row the report names: its line in the file and what it says.
@@ -220,10 +220,19 @@ pub fn import_from(
                         }
                     }
                 };
+                // a symbol the book cannot tell the instrument of is kept unplaced, with why
+                let mut unnamed = None;
                 let instrument = match &stated {
                     Ok(s) => match (&s.instrument, s.currency) {
-                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, *kind, currency)? {
-                            Some(t) => Some(book.name(placed, &t).map_err(|e| match e {
+                        // the file's symbol is stated where it is what the instrument was called on the row's day
+                        (Some((symbol, kind)), Some(currency)) if unplaced.is_none() => match traded(f, symbol, s.exchange.as_deref(), *kind, currency, s.day).or_else(|e| match e {
+                            Refused::Entry(why) => {
+                                unnamed = Some(why);
+                                Ok(None)
+                            }
+                            other => Err(other),
+                        })? {
+                            Some((t, its_name)) => Some(book.name_stated(placed, &t, its_name.then_some(symbol.as_str())).map_err(|e| match e {
                                 bagholder_book::BookError::Refused(why) => Refused::Entry(format!("line {}: {why}", row.line)),
                                 other => Refused::Failed(other.to_string()),
                             })?),
@@ -234,7 +243,7 @@ pub fn import_from(
                     Err(_) => None,
                 };
                 let r = book.account_ref(placed).map_err(fail)?;
-                let payload = Payload { layout, cells: row.cells.clone(), occurrence: row.occurrence, account: (r.broker.to_string(), r.value), unplaced, instrument };
+                let payload = Payload { layout, cells: row.cells.clone(), occurrence: row.occurrence, account: (r.broker.to_string(), r.value), unplaced, instrument, unnamed };
                 let text = serde_json::to_string(&payload).map_err(|e| Refused::Failed(e.to_string()))?;
                 let stored = book.store(&CsvMapping, &Incoming { connection: None, source_key: &payload.key(), payload: &text, refs: vec![] }, now).map_err(fail)?;
                 let problems = book.problems_of(stored.record).map_err(fail)?.into_iter().map(|p| RowNote { line: row.line as u32, message: p.detail }).collect();
@@ -291,23 +300,45 @@ pub fn import_from(
     Ok(report)
 }
 
-/// What a row's symbol trades, as the book knows it: the instrument it holds by
-/// that symbol in that currency, else a contract by its terms or a security the
-/// book has not met. `None` for a kind neither is (a coin the book does not
-/// hold, an option whose name states no terms): the row names nothing.
-fn traded(f: &Figures, symbol: &str, kind: InstrumentKind, currency: Currency) -> Result<Option<Traded>, Refused> {
+/// What a row's symbol trades, as the book knows it, and whether the symbol is
+/// what that was called on the row's day. A row that names its exchange is the
+/// listing it names: the security the book holds there, by its name on `day`
+/// first and its name now after (`entries::held_on_day`), else a security the book
+/// has not met, on that venue. A row that names none is the instrument the book
+/// holds by that symbol in that currency, the same way, else a contract by its
+/// terms or a security whose records state no venue, which gets no market data
+/// until one does (plan `market-data-keyed-by-listing`, Approach, 5). `None` for a
+/// kind neither is (a coin the book does not hold, an option whose name states no
+/// terms): the row names nothing.
+pub(crate) fn traded(f: &Figures, symbol: &str, exchange: Option<&str>, kind: InstrumentKind, currency: Currency, day: bagholder_core::jiff::civil::Date) -> Result<Option<(Traded, bool)>, Refused> {
     let symbol = symbol.trim().to_uppercase();
+    let listing = match exchange.map(str::trim).filter(|ex| !ex.is_empty() && kind == InstrumentKind::Security) {
+        Some(ex) => {
+            let mic = bagholder_core::listing::mic_of(ex).ok_or_else(|| Refused::Entry(format!("{ex:?} is not an exchange")))?;
+            Some((bagholder_core::ListingKey::on(&symbol, mic).map_err(|e| Refused::Entry(e.to_string()))?, Some(mic.to_string())))
+        }
+        None => None,
+    };
     f.read(|e| {
-        if let Some(id) = held_by_symbol(e, &symbol, currency, |k| k == kind) {
-            return Some(Traded::Held(id));
+        if let Some((key, venue)) = &listing {
+            return held_on_day(e, Called::Listing(key), currency, day).map(|found| {
+                Some(match found {
+                    Some((id, its_name)) => (Traded::Held(id), its_name),
+                    None => (Traded::Named { symbol: symbol.clone(), currency, contract: None, venue: venue.clone() }, true),
+                })
+            });
         }
-        match kind {
-            InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency),
-            InstrumentKind::Security => Some(Traded::Named { symbol, currency, contract: None }),
+        if let Some((id, its_name)) = held_on_day(e, Called::Symbol(&symbol, &|k| k == kind), currency, day)? {
+            return Ok(Some((Traded::Held(id), its_name)));
+        }
+        Ok(match kind {
+            InstrumentKind::OptionContract => contract_by_terms(e, &symbol, currency).map(|t| (t, true)),
+            InstrumentKind::Security => Some((Traded::Named { symbol, currency, contract: None, venue: None }, true)),
             _ => None,
-        }
+        })
     })
-    .ok_or_else(|| Refused::Failed("the figures are not built yet".into()))
+    .ok_or_else(|| Refused::Failed("the figures are not built yet".into()))?
+    .map_err(Refused::Entry)
 }
 
 /// What a linking pass did.

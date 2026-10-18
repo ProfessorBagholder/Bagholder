@@ -121,7 +121,8 @@ fn pace(_st: &mut State) -> Fetched<()> {
 
 fn session(st: &mut State) -> Fetched<&mut Session> {
     if st.session.is_none() {
-        st.session = Some(Session::new().ok_or_else(|| unavailable("the browser helper is not installed"))?);
+        // a process told to stay off the network opens no session: nothing is asked
+        st.session = Some(Session::new().ok_or_else(|| if bagholder_net::client::offline() { SourceError::Offline } else { unavailable("the browser helper is not installed") })?);
     }
     Ok(st.session.as_mut().unwrap())
 }
@@ -543,6 +544,107 @@ pub fn rank(rows: &mut [ReportingIssuer], q: &str) -> Vec<ReportingIssuer> {
     rows.to_vec()
 }
 
+// --- which profile a listing's issuer is --------------------------------------
+
+/// What SEDAR+'s reporting-issuer search is asked for an issuer's name: the name
+/// up to its first comma, period or parenthesis, with "The" taken off either end.
+/// Its search matches names by their leading words, and punctuation in the query
+/// breaks it ("Waste Connections, Inc" finds nothing, "Waste Connections" finds
+/// the one profile; checked against SEDAR+ for the S&P/TSX 60, 2026-10-16,
+/// `tests/replies/sedar-tsx60`).
+pub fn query_of(name: &str) -> String {
+    let n = strip_the(name.trim());
+    let cut = n.find([',', '.', '(']).map_or(n.as_str(), |i| &n[..i]);
+    trim_space(cut).to_string()
+}
+
+/// A name with "The" taken off either end: a leading "The", a trailing ", The"
+/// or "(The)" (the TSX directory's form, `Toronto-Dominion Bank (The)`).
+fn strip_the(name: &str) -> String {
+    let mut n = name.trim().to_string();
+    for tail in ["(the)", ", the"] {
+        if n.to_lowercase().ends_with(tail) {
+            n.truncate(n.len() - tail.len());
+        }
+    }
+    let n = n.trim();
+    match n.get(..4) {
+        Some(head) if head.eq_ignore_ascii_case("the ") => n[4..].trim().to_string(),
+        _ => n.to_string(),
+    }
+}
+
+/// An issuer's legal name as names are compared, the one rule applied to both
+/// names a comparison takes (brief 41): without letter case, spacing, periods or
+/// commas, the placement of "The", or a note SEDAR+ adds after the name, a
+/// "formerly" ("Waste Connections, Inc. (formerly Progressive Waste Solutions
+/// Ltd.)") or an "Operating name" ("Royal Bank of Canada … Operating name: RBC").
+pub fn comparable(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let cut = ["operating name", "formerly"].iter().filter_map(|note| lower.find(note)).min();
+    let cut = match cut {
+        Some(i) => lower[..i].trim_end().trim_end_matches('(').to_string(),
+        None => lower,
+    };
+    let n = strip_the(&cut).replace(['.', ','], " ");
+    n.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A reporting issuer's legal names as SEDAR+ lists them: its English name and
+/// its French one (`English / French`), before any operating name.
+pub fn legal_names(cell: &str) -> Vec<String> {
+    let head = cell.split(" Operating name:").next().unwrap_or(cell);
+    head.split(" / ").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()
+}
+
+/// How long a listed issuer can go without filing: a reporting issuer files its
+/// annual financial statements every year, within 120 days of its year-end at the
+/// latest (National Instrument 51-102, s. 4.2: 90 days, or 120 for a venture
+/// issuer). A profile with nothing filed in twelve months and those 120 days is
+/// not a listed issuer's (plan `market-data-keyed-by-listing`, Open questions, 1).
+pub const LISTED_FILING_WINDOW_DAYS: i64 = 365 + 120;
+
+/// The one profile an issuer's name settles to: among SEDAR+'s answer, the profiles
+/// whose English or French legal name is the name; of two or more, those that have
+/// filed within `LISTED_FILING_WINDOW_DAYS` of `today` (`newest` gives a profile's
+/// newest filing day). The rule only narrows the exact matches, never adds one, and
+/// settles only where exactly one remains; it is decided again each time the
+/// listing's filer is checked. An answer with no exact match, a page SEDAR+ filled
+/// with other names among them, is a miss. The profile, or why none settles: never
+/// one picked from several, nor by the order SEDAR+ answered in (brief 41).
+pub fn pick_profile(name: &str, answer: &[ReportingIssuer], today: &str, newest: &dyn Fn(&str) -> Fetched<Option<String>>) -> Fetched<Result<String, String>> {
+    let want = comparable(name);
+    let mut named: Vec<&ReportingIssuer> = answer.iter().filter(|r| legal_names(&r.name).iter().any(|l| comparable(l) == want)).collect();
+    named.dedup_by(|a, b| a.profile_no == b.profile_no);
+    if named.len() > 1 {
+        let since = bagholder_model::dates::shift_date(today, -LISTED_FILING_WINDOW_DAYS);
+        let mut filing = Vec::new();
+        for r in named {
+            if newest(&r.profile_no)?.is_some_and(|d| d.as_str() >= since.as_str()) {
+                filing.push(r);
+            }
+        }
+        named = filing;
+    }
+    Ok(match named.as_slice() {
+        [one] => Ok(one.profile_no.clone()),
+        [] => Err(format!("SEDAR+ lists no single issuer named {name}.")),
+        _ => Err(format!("SEDAR+ lists more than one issuer named {name}.")),
+    })
+}
+
+/// The profile an issuer's name settles to, asked of SEDAR+ (`pick_profile`).
+pub fn profile_of(name: &str, today: &str) -> Fetched<Result<String, String>> {
+    let answer = match resolve_profile(&query_of(name))? {
+        Lookup::Found(rows) => rows,
+        Lookup::NotFound => vec![],
+    };
+    let newest = |profile: &str| -> Fetched<Option<String>> {
+        Ok(list_filings(None, Some(profile), 1)?.and_then(|l| l.filings.first().map(|f| iso(&f.submitted))).filter(|d| !d.is_empty()))
+    };
+    pick_profile(name, &answer, today, &newest)
+}
+
 /// What `list_filings` found for one issuer: its profile (when one is
 /// known), whether the issuer's own document page was walked directly, and
 /// the filings themselves.
@@ -575,7 +677,8 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
         match &profile_no {
             Some(p) => {
                 let name = profile.as_ref().map(|x| x.name.clone()).or_else(|| query.map(|s| s.to_string()));
-                match scoped_documents(&mut st, p, name.as_deref()) {
+                // a walk SEDAR+ did not answer is its failure, never the unscoped list in its place
+                match scoped_documents(&mut st, p, name.as_deref())? {
                     Some(h) => {
                         scoped = Some(true);
                         h
@@ -603,14 +706,15 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
 }
 
 /// The issuer's document page, reused for a short
-/// window so a run of its documents walks the chain once.
-fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Option<String> {
+/// window so a run of its documents walks the chain once. A walk SEDAR+ did not
+/// answer is its failure, in its own kind and words, and is kept for no one.
+fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Fetched<Option<String>> {
     if let Some(h) = st.scope.fresh(profile_no) {
-        return Some(h);
+        return Ok(Some(h));
     }
-    let html = scoped_documents_uncached(st, profile_no, name).ok().flatten();
+    let html = scoped_documents_uncached(st, profile_no, name)?;
     st.scope.keep(profile_no, &html);
-    html
+    Ok(html)
 }
 
 /// Search the reporting-issuer list for
@@ -668,8 +772,7 @@ pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fet
     let key = doc_id.rsplit(':').next().unwrap_or("").to_string();
     let answer = {
         let mut st = state().lock().unwrap();
-        let html = scoped_documents(&mut st, profile_no, name)
-            .ok_or_else(|| unavailable("could not open the profile's documents to download from"))?;
+        let html = scoped_documents(&mut st, profile_no, name)?.ok_or_else(|| unavailable("SEDAR+ did not open the profile's documents to download from"))?;
         let row = parse_filings(&html).into_iter().find(|f| !key.is_empty() && f.url.contains(&key));
         let row = match row { Some(r) => r, None => return Ok(None) };
         let url = unescape(&row.url);
@@ -712,14 +815,6 @@ pub fn enrichment(row: &FiledDocument) -> Option<Enrichment> {
     Some(Enrichment { subject: title, summary: String::new(), final_: true })
 }
 
-pub fn covers(_symbol: &str, exchange: &str, currency: &str) -> bool {
-    let ex = exchange.to_uppercase();
-    let cur = currency.to_uppercase();
-    if cur == "USD" || ["NASDAQ", "NYSE", "AMEX", "ARCA", "US"].contains(&ex.as_str()) {
-        return false;
-    }
-    cur == "CAD" || CA_EXCHANGES.contains(&ex.as_str()) || (ex.is_empty() && cur.is_empty())
-}
 
 /// A document name in the shared vocabulary.
 pub fn category(file: &str) -> &'static str {
@@ -793,15 +888,13 @@ pub fn to_item(raw: &SedarRow, profile_no: &str) -> FiledDocument {
     }
 }
 
-/// One Canadian issuer's filings as disclosure items.
-pub fn fetch(symbol: &str, name: &str, _exchange: &str, _currency: &str, limit: usize, profile_no: &str) -> Fetched<Vec<FiledDocument>> {
-    let query = if name.is_empty() { symbol } else { name };
-    let result = match list_filings(Some(query), Some(profile_no), limit)? {
+/// A filer's documents, newest first, by its SEDAR+ profile.
+pub fn fetch_profile(profile_no: &str, limit: usize) -> Fetched<Vec<FiledDocument>> {
+    let result = match list_filings(None, Some(profile_no), limit)? {
         Some(r) => r,
         None => return Ok(vec![]),
     };
-    let pno = result.profile.as_ref().map(|p| p.profile_no.clone()).unwrap_or_default();
-    Ok(result.filings.iter().map(|r| to_item(r, &pno)).collect())
+    Ok(result.filings.iter().map(|r| to_item(r, profile_no)).collect())
 }
 
 /// One stored row's document. (bytes, content type).
@@ -810,5 +903,83 @@ pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
     match download_bytes(&row.profile_no, &row.id, if issuer.is_empty() { None } else { Some(&issuer) })? {
         Some(x) => Ok(x),
         None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&row.id), row.profile_no))),
+    }
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::*;
+
+    fn issuer(name: &str, profile: &str) -> ReportingIssuer {
+        ReportingIssuer { name: name.into(), profile_no: profile.into(), ..Default::default() }
+    }
+
+    /// For generated sets of profiles sharing an exact name, with newest filings on
+    /// either side of the bound, exactly the ones that filed within it are kept, and
+    /// a profile settles only where one remains, in either order SEDAR+ answers.
+    #[test]
+    fn a_tie_settles_only_on_the_one_profile_that_filed_within_the_bound() {
+        let today = "2026-10-16";
+        let bound = bagholder_model::dates::shift_date(today, -LISTED_FILING_WINDOW_DAYS);
+        let inside = [bound.clone(), bagholder_model::dates::shift_date(&bound, 1), today.to_string()];
+        let outside = [bagholder_model::dates::shift_date(&bound, -1), "1998-12-08".to_string()];
+        for n_in in 0..=3usize {
+            for n_out in 0..=3usize {
+                if n_in + n_out < 2 {
+                    continue;
+                }
+                let mut answer = Vec::new();
+                let mut newest: std::collections::HashMap<String, Option<String>> = Default::default();
+                for i in 0..n_in {
+                    let p = format!("{:09}", 100 + i);
+                    answer.push(issuer("Acme Corporation / Acme Corporation", &p));
+                    newest.insert(p, Some(inside[i % inside.len()].clone()));
+                }
+                for i in 0..n_out {
+                    let p = format!("{:09}", 200 + i);
+                    answer.push(issuer("Acme Corporation / Acme Corporation", &p));
+                    // a profile that never filed is outside the bound too
+                    newest.insert(p, if i == 2 { None } else { Some(outside[i % outside.len()].clone()) });
+                }
+                // a profile under another name never joins the tie, whenever it filed
+                answer.push(issuer("Acme Corporation Holdings / Acme Corporation Holdings", "000000999"));
+                newest.insert("000000999".into(), Some(today.into()));
+                for reversed in [false, true] {
+                    let mut a = answer.clone();
+                    if reversed {
+                        a.reverse();
+                    }
+                    let got = pick_profile("Acme Corporation", &a, today, &|p| Ok(newest[p].clone())).unwrap();
+                    match n_in {
+                        1 => assert_eq!(got, Ok("000000100".to_string()), "{n_in} in, {n_out} out"),
+                        _ => assert!(got.is_err(), "{n_in} in, {n_out} out: {got:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_names_are_read_by_one_rule_and_a_note_after_the_name_is_not_the_name() {
+        for (a, b) in [
+            ("Royal Bank of Canada", "Royal Bank of Canada / Banque Royale du Canada Operating name: RBC"),
+            ("Toronto-Dominion Bank (The)", "The Toronto-Dominion Bank / La Banque Toronto-Dominion"),
+            ("Bank of Nova Scotia (The)", "Bank of Nova Scotia, The / La Banque de Nouvelle - Ecosse"),
+            ("Waste Connections, Inc.", "Waste Connections, Inc. (formerly Progressive Waste Solutions Ltd.) / Waste Connections, Inc."),
+            ("First Quantum Minerals Ltd.", "First Quantum Minerals Ltd / First Quantum Minerals Ltd"),
+        ] {
+            assert!(legal_names(b).iter().any(|l| comparable(l) == comparable(a)), "{a} and {b}");
+            // one rule, whichever side a name is on
+            assert_eq!(comparable(&comparable(a)), comparable(a));
+        }
+        assert_ne!(comparable("Energy Fuels Inc."), comparable("Energy Transfer LP"));
+        assert_ne!(comparable("TELUS Corporation"), comparable("AT&T Inc."));
+    }
+
+    /// An answer with no exact match, however full, is a miss, never its first row.
+    #[test]
+    fn an_answer_with_no_exact_match_is_a_miss() {
+        let a: Vec<ReportingIssuer> = (0..100).map(|i| issuer(&format!("Acme Corporation {i} / Acme Corporation {i}"), &format!("{i:09}"))).collect();
+        assert!(pick_profile("Acme Corporation", &a, "2026-10-16", &|_| Ok(Some("2026-10-01".into()))).unwrap().is_err());
     }
 }

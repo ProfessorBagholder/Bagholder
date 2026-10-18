@@ -672,24 +672,14 @@ pub fn parse_nasdaq_news(data: &Value, now_unix: i64, symbol: &str, kind: Option
 // ---------------------------------------------------------------------------
 
 /// The ticker the gateway tags items with: `PNG.V`, `SXHI.TO`, `HG.CN`,
-/// `HBIX.NE`, or `ASTS`, as every other Yahoo read names the listing; a
-/// Canadian listing with no venue takes the one TMX answered to.
-pub fn yahoo_form(conn: &Connection, symbol: &str, exchange: &str, currency: &str) -> rusqlite::Result<String> {
-    if tmx_form(exchange, currency).is_none() {
-        return Ok(String::new());
+/// `HBIX.NE`, or `ASTS`, as every other Yahoo read names the listing; none for
+/// a listing that names no venue, which is never read under a guessed one.
+pub fn yahoo_form(symbol: &str, exchange: &str, currency: &str) -> String {
+    if exchange.trim().is_empty() || tmx_form(exchange).is_none() {
+        return String::new();
     }
     let forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(symbol, exchange, currency, ""));
-    if let Some(first) = forms.first() {
-        if exchange.trim().is_empty() && first.ends_with(".TO") {
-            let remembered = crate::tmx::tmx_remembered(conn, &tmx_symbol(symbol))?;
-            let bare = crate::tmx::tmx_bare(&remembered);
-            let venue = match &remembered[bare.len()..] { ":CNX" => Some("XCNQ"), ":AQL" => Some("NEOE"), _ => None };
-            if let Some(form) = venue.and_then(|mic| bagholder_sources::venue::yahoo_forms(symbol, mic).into_iter().next()) {
-                return Ok(form);
-            }
-        }
-    }
-    Ok(forms.first().map(|f| f.to_uppercase()).unwrap_or_default())
+    forms.first().map(|f| f.to_uppercase()).unwrap_or_default()
 }
 
 fn otc_twin(t: &str) -> bool {
@@ -800,9 +790,9 @@ pub fn fetch_yahoo(net: &Net, ask: &Ask) -> Result<Option<Vec<NewsItem>>, NetErr
 /// bare ticker for a US one. It has no form for the CSE or Cboe Canada, which
 /// it reaches only through a US OTC symbol the app does not keep, so those are
 /// left to the other sources.
-pub fn sa_form(symbol: &str, exchange: &str, currency: &str) -> String {
+pub fn sa_form(symbol: &str, exchange: &str) -> String {
     let sym = tmx_symbol(symbol).to_uppercase();
-    match tmx_form(exchange, currency) {
+    match tmx_form(exchange) {
         Some(":US") => sym,
         Some("") => format!("{}:CA", sym),
         _ => String::new(),
@@ -839,8 +829,8 @@ pub fn parse_sa_news(xml: &str, form: &str) -> Vec<NewsItem> {
 
 /// `None` when Seeking Alpha has no feed for the listing: nothing was read,
 /// and nothing failed.
-pub fn fetch_sa(net: &Net, symbol: &str, exchange: &str, currency: &str) -> Result<Option<Vec<NewsItem>>, NetError> {
-    let form = sa_form(symbol, exchange, currency);
+pub fn fetch_sa(net: &Net, symbol: &str, exchange: &str) -> Result<Option<Vec<NewsItem>>, NetError> {
+    let form = sa_form(symbol, exchange);
     if form.is_empty() {
         return Ok(None);
     }
@@ -1171,14 +1161,14 @@ pub fn parse_google_news(xml: &str, symbol: &str, name: &str, us: bool) -> Vec<N
 /// What Google is asked for a listing: its name in quotes when the book has
 /// one, and its ticker in its venue's form (`"TSXV:CH"`, `"CSE:HG"`,
 /// `"NEO:HBIX"`).
-pub fn google_queries(symbol: &str, exchange: &str, currency: &str, name: &str) -> Vec<String> {
+pub fn google_queries(symbol: &str, exchange: &str, name: &str) -> Vec<String> {
     let sym = tmx_symbol(symbol).to_uppercase();
     let mut out = Vec::new();
     let clean = search_name(name);
     if !clean.is_empty() && clean.to_uppercase() != sym {
         out.push(format!("\"{}\"", clean));
     }
-    let form = tmx_form(exchange, currency);
+    let form = tmx_form(exchange);
     let ex = exchange.trim().to_uppercase();
     let venue = match form {
         Some(":CNX") => Some("CSE"),
@@ -1195,9 +1185,9 @@ pub fn google_queries(symbol: &str, exchange: &str, currency: &str, name: &str) 
 
 /// `None` when there is nothing to search for.
 pub fn fetch_google(net: &Net, ask: &Ask) -> Result<Option<Vec<NewsItem>>, NetError> {
-    let (symbol, exchange, currency, name) = (ask.symbol.as_str(), ask.exchange.as_str(), ask.currency.as_str(), ask.name.as_str());
-    let us = tmx_form(exchange, currency) == Some(":US");
-    let queries = google_queries(symbol, exchange, currency, name);
+    let (symbol, exchange, name) = (ask.symbol.as_str(), ask.exchange.as_str(), ask.name.as_str());
+    let us = tmx_form(exchange) == Some(":US");
+    let queries = google_queries(symbol, exchange, name);
     if queries.is_empty() {
         return Ok(None);
     }
@@ -1485,7 +1475,7 @@ impl WireAnswer {
     }
 }
 
-pub type WireFn<'a> = dyn Fn(&Connection, &str, &str, &str, &Clock) -> (Feed, Option<WireAnswer>) + Sync + 'a;
+pub type WireFn<'a> = dyn Fn(&str, &str, &Clock) -> (Feed, Option<WireAnswer>) + Sync + 'a;
 pub type ExtraFn<'a> = dyn Fn(Feed, &Ask) -> Result<Option<Vec<NewsItem>>, NetError> + Sync + 'a;
 
 /// How a listing is read: its wire, and the sources beside it.
@@ -1494,8 +1484,8 @@ pub struct Readers<'a> {
     pub extra: &'a ExtraFn<'a>,
 }
 
-fn live_wire(conn: &Connection, symbol: &str, exchange: &str, currency: &str, clock: &Clock) -> (Feed, Option<WireAnswer>) {
-    fetch_symbol(conn, &LIVE, symbol, exchange, currency, clock)
+fn live_wire(symbol: &str, exchange: &str, clock: &Clock) -> (Feed, Option<WireAnswer>) {
+    fetch_symbol(&LIVE, symbol, exchange, clock)
 }
 
 fn live_extra(key: Feed, ask: &Ask) -> Result<Option<Vec<NewsItem>>, NetError> {
@@ -1508,7 +1498,7 @@ pub const LIVE_READERS: Readers<'static> = Readers { wire: &live_wire, extra: &l
 pub fn read_extra(net: &Net, key: Feed, ask: &Ask) -> Result<Option<Vec<NewsItem>>, NetError> {
     match key {
         Feed::Yahoo => fetch_yahoo(net, ask),
-        Feed::Sa => fetch_sa(net, &ask.symbol, &ask.exchange, &ask.currency),
+        Feed::Sa => fetch_sa(net, &ask.symbol, &ask.exchange),
         _ => fetch_google(net, ask),
     }
 }
@@ -1516,14 +1506,14 @@ pub fn read_extra(net: &Net, key: Feed, ask: &Ask) -> Result<Option<Vec<NewsItem
 /// The sources beside the wire that have something to ask for a listing:
 /// Yahoo a ticker form, Seeking Alpha a feed, Google a search. A listing with
 /// no venue and no currency is left to the wire.
-pub fn sources_for(conn: &Connection, symbol: &str, exchange: &str, currency: &str, name: &str) -> rusqlite::Result<Vec<Feed>> {
-    if symbol == MARKET.0 || tmx_form(exchange, currency).is_none() {
+pub fn sources_for(symbol: &str, exchange: &str, currency: &str, name: &str) -> rusqlite::Result<Vec<Feed>> {
+    if symbol == MARKET.0 || tmx_form(exchange).is_none() {
         return Ok(vec![]);
     }
     let have = [
-        !yahoo_form(conn, symbol, exchange, currency)?.is_empty(),
-        !sa_form(symbol, exchange, currency).is_empty(),
-        !google_queries(symbol, exchange, currency, name).is_empty(),
+        !yahoo_form(symbol, exchange, currency).is_empty(),
+        !sa_form(symbol, exchange).is_empty(),
+        !google_queries(symbol, exchange, name).is_empty(),
     ];
     Ok(EXTRA_SOURCES.iter().zip(have).filter(|(_, h)| *h).map(|(k, _)| *k).collect())
 }
@@ -1544,16 +1534,26 @@ pub fn news_text(headline: &str) -> String {
     words(headline).join(" ")
 }
 
-fn stamp_key(source: Feed, symbol: &str, exchange: &str) -> String {
-    format!("news_source_fetched:{}:{}", source.as_str(), sf::news_key(symbol, exchange))
+/// The key a listing's news is kept under: the market's own feed's, or the
+/// listing's on the venue it names; none for a listing that names no venue a key
+/// is made from, which is read under none.
+pub fn news_listing(symbol: &str, exchange: &str) -> Option<bagholder_core::ListingKey> {
+    if symbol == MARKET.0 && exchange.eq_ignore_ascii_case(MARKET.1) {
+        return Some(bagholder_core::ListingKey::market_feed());
+    }
+    bagholder_core::ListingKey::on(symbol, exchange).ok()
+}
+
+fn stamp_key(source: Feed, listing: &bagholder_core::ListingKey) -> String {
+    listing.meta(bagholder_core::listing::meta::NEWS_SOURCE_FETCHED, &[source.as_str()])
 }
 
 fn meta(conn: &Connection, key: &str) -> rusqlite::Result<String> {
     bagholder_store::tables::get_meta(conn, key, "")
 }
 
-fn due(conn: &Connection, source: Feed, symbol: &str, exchange: &str, now: i64) -> rusqlite::Result<bool> {
-    let last = meta(conn, &stamp_key(source, symbol, exchange))?;
+fn due(conn: &Connection, source: Feed, listing: &bagholder_core::ListingKey, now: i64) -> rusqlite::Result<bool> {
+    let last = meta(conn, &stamp_key(source, listing))?;
     Ok(match if last.is_empty() { None } else { instant(&last) } {
         None => true,
         Some(then) => now - then > source_minutes(source) * 60,
@@ -1581,14 +1581,18 @@ pub fn fetch_listing(
     force: bool,
     clock: &Clock,
 ) -> rusqlite::Result<(Feed, Option<Vec<NewsItem>>, HashSet<Feed>)> {
-    if symbol == MARKET.0 {
-        let (src, rows) = (readers.wire)(conn, symbol, exchange, currency, clock);
+    // a listing that names no venue is read under none
+    let Some(key) = news_listing(symbol, exchange) else {
+        return Ok((source_for(symbol, exchange).unwrap_or(Feed::Nasdaq), None, HashSet::new()));
+    };
+    if key.is_market_feed() {
+        let (src, rows) = (readers.wire)(symbol, exchange, clock);
         let answered: HashSet<Feed> = if rows.is_some() { [src].into() } else { HashSet::new() };
         return Ok((src, rows.map(|w| w.rows), answered));
     }
     let mut extras: Vec<Feed> = Vec::new();
-    for k in sources_for(conn, symbol, exchange, currency, name)? {
-        if force || due(conn, k, symbol, exchange, clock.now)? {
+    for k in sources_for(symbol, exchange, currency, name)? {
+        if force || due(conn, k, &key, clock.now)? {
             extras.push(k);
         }
     }
@@ -1597,10 +1601,10 @@ pub fn fetch_listing(
         exchange: exchange.to_string(),
         currency: currency.to_string(),
         name: name.to_string(),
-        yahoo: if extras.contains(&Feed::Yahoo) { yahoo_form(conn, symbol, exchange, currency)? } else { String::new() },
-        articles: read_articles(conn, symbol, exchange)?,
-        held: sf::news_for(conn, symbol, exchange)?.into_iter().filter(|r| Feed::of_id(&r.id) == Some(Feed::Gnews)).map(|r| r.id).collect(),
-        first_read: meta(conn, &stamp_key(Feed::Gnews, symbol, exchange))?.is_empty(),
+        yahoo: if extras.contains(&Feed::Yahoo) { yahoo_form(symbol, exchange, currency) } else { String::new() },
+        articles: read_articles(conn, &key)?,
+        held: sf::news_for(conn, &key)?.into_iter().filter(|r| Feed::of_id(&r.id) == Some(Feed::Gnews)).map(|r| r.id).collect(),
+        first_read: meta(conn, &stamp_key(Feed::Gnews, &key))?.is_empty(),
     };
     let mut results: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let (src, primary) = std::thread::scope(|scope| {
@@ -1611,7 +1615,7 @@ pub fn fetch_listing(
                 (*k, scope.spawn(move || (readers.extra)(k2, ask)))
             })
             .collect();
-        let wire = (readers.wire)(conn, symbol, exchange, currency, clock);
+        let wire = (readers.wire)(symbol, exchange, clock);
         for (k, job) in jobs {
             match job.join() {
                 Ok(Ok(Some(got))) => {
@@ -1635,7 +1639,7 @@ pub fn fetch_listing(
     answered.extend(extras.iter().cloned());
     let mut stored: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
     let mut stored_feed: HashMap<Feed, Vec<NewsItem>> = HashMap::new();
-    for r in sf::news_for(conn, symbol, exchange)? {
+    for r in sf::news_for(conn, &key)? {
         let origin = sf::Feed::of_id(&r.id);
         let item = match r.item() { Some(i) => i, None => continue };
         if let Some(o) = origin {
@@ -1692,9 +1696,9 @@ pub fn fetch_listing(
 
 /// The Google items of a listing whose article was read: kept with the
 /// publisher's URL in place of Google's link.
-fn read_articles(conn: &Connection, symbol: &str, exchange: &str) -> rusqlite::Result<HashMap<String, Article>> {
+fn read_articles(conn: &Connection, listing: &bagholder_core::ListingKey) -> rusqlite::Result<HashMap<String, Article>> {
     let mut out = HashMap::new();
-    for r in sf::news_for(conn, symbol, exchange)? {
+    for r in sf::news_for(conn, listing)? {
         let Some(item) = r.item() else { continue };
         if item.via == Feed::Gnews && google_article_id(&item.url).is_none() {
             out.insert(item.id.clone(), Article { url: item.url, headline: item.headline, summary: item.summary });
@@ -1721,6 +1725,8 @@ pub fn read_listing(
 ) -> rusqlite::Result<(Feed, Option<Vec<NewsItem>>)> {
     let (src, rows, answered) = fetch_listing(conn, readers, symbol, exchange, currency, name, force, clock)?;
     let rows = match rows { Some(r) => r, None => return Ok((src, None)) };
+    // rows were answered, so the listing has a key (`fetch_listing` reads none without)
+    let Some(key) = news_listing(symbol, exchange) else { return Ok((src, None)) };
     let extra_answered: Vec<Feed> = answered.iter().filter(|k| EXTRA_SOURCES.contains(k)).cloned().collect();
     let (mut before, mut before_text, mut first_read) = (HashSet::new(), HashMap::<String, Vec<String>>::new(), HashSet::new());
     if on_new.is_some() {
@@ -1728,7 +1734,7 @@ pub fn read_listing(
         // had, not a story it had under another source's id, and nothing from
         // a source read for the listing the first time, whose back catalogue
         // is history, as every stream's is when it is first met
-        for r in sf::news_for(conn, symbol, exchange)? {
+        for r in sf::news_for(conn, &key)? {
             before.insert(r.id.clone());
             let t = news_text(&r.headline);
             if !t.is_empty() {
@@ -1736,15 +1742,15 @@ pub fn read_listing(
             }
         }
         for k in &extra_answered {
-            if meta(conn, &stamp_key(*k, symbol, exchange))?.is_empty() {
+            if meta(conn, &stamp_key(*k, &key))?.is_empty() {
                 first_read.insert(*k);
             }
         }
     }
     let stamp = clock.stamp();
-    sf::replace_news(conn, symbol, exchange, &rows, &stamp)?;
+    sf::replace_news(conn, &key, exchange, &rows, &stamp)?;
     for k in &extra_answered {
-        bagholder_store::tables::set_meta(conn, &stamp_key(*k, symbol, exchange), &stamp)?;
+        bagholder_store::tables::set_meta(conn, &stamp_key(*k, &key), &stamp)?;
     }
     if let Some(f) = on_new {
         let mut new_ids: Vec<String> = rows
@@ -1765,11 +1771,11 @@ pub fn read_listing(
 
 /// Which wire answers for a listing: TMX for the Canadian venues it carries,
 /// Nasdaq for US ones and for the market feed.
-pub fn source_for(symbol: &str, exchange: &str, currency: &str) -> Option<Feed> {
+pub fn source_for(symbol: &str, exchange: &str) -> Option<Feed> {
     if symbol == MARKET.0 && exchange.to_uppercase() == MARKET.1 {
         return Some(Feed::Nasdaq);
     }
-    match tmx_form(exchange, currency) {
+    match tmx_form(exchange) {
         Some(":US") => Some(Feed::Nasdaq),
         None => None,
         Some(_) => Some(Feed::Tmx),
@@ -1780,14 +1786,14 @@ pub fn source_for(symbol: &str, exchange: &str, currency: &str) -> Option<Feed> 
 ///
 /// `None` means the wire failed and what is stored should stand; an empty
 /// answer means it answered with nothing.
-pub fn fetch_symbol(conn: &Connection, net: &Net, symbol: &str, exchange: &str, currency: &str, clock: &Clock) -> (Feed, Option<WireAnswer>) {
+pub fn fetch_symbol(net: &Net, symbol: &str, exchange: &str, clock: &Clock) -> (Feed, Option<WireAnswer>) {
     // A ticker asked for with no venue at all is an ambiguous name: TMX's
     // news answers on the bare ticker whatever venue it is asked under, so
     // `F` there is a Canadian company's halt notice and not Ford's
     // releases. Only Nasdaq is asked, whose items name the symbols they
     // belong to and are kept only when this one is among them, so nothing
     // comes back rather than another company's news.
-    let src = source_for(symbol, exchange, currency).unwrap_or(Feed::Nasdaq);
+    let src = source_for(symbol, exchange).unwrap_or(Feed::Nasdaq);
     let sym = tmx_symbol(symbol);
     if sym.is_empty() {
         return (src, Some(WireAnswer::default()));
@@ -1811,7 +1817,7 @@ pub fn fetch_symbol(conn: &Connection, net: &Net, symbol: &str, exchange: &str, 
         // under the wrong name: the same code the quote asks under, through
         // the same lookup, so a record with a wrong or missing venue resolves
         // here as it does everywhere else and is remembered once
-        let code = match crate::quotes::tmx_quote_symbol(symbol, exchange, currency) {
+        let code = match crate::quotes::tmx_quote_symbol(symbol, exchange) {
             Some(c) => c,
             None => return (src, Some(WireAnswer::default())),
         };
@@ -1845,13 +1851,13 @@ pub fn fetch_symbol(conn: &Connection, net: &Net, symbol: &str, exchange: &str, 
                 }
                 rows.extend(got);
             }
-            // an answer with no rows is no answer, so the lookup tries the
-            // form TMX resolves instead
+            // an answer with no rows is no answer: the listing's own form
+            // carries nothing, and no other venue's is asked
             Ok(if rows.is_empty() { None } else { Some(WireAnswer { rows, missing }) })
         };
-        return match crate::tmx::tmx_lookup_try(conn, &code, &clock.today, ask) {
-            Ok((Some(got), _)) => (src, Some(got)),
-            Ok((None, _)) => (src, Some(WireAnswer { rows: vec![], missing: [Feed::Tmx, Feed::TmxMedia].into() })),
+        return match ask(&code) {
+            Ok(Some(got)) => (src, Some(got)),
+            Ok(None) => (src, Some(WireAnswer { rows: vec![], missing: [Feed::Tmx, Feed::TmxMedia].into() })),
             Err(e) => {
                 log(&format!("bagholder news: {} from {} failed: {}", sym, src.as_str(), e));
                 (src, None)
@@ -1916,15 +1922,17 @@ pub fn stale(conn: &Connection, listings: &[Listing], now: i64, minutes: i64) ->
     let mut out = Vec::new();
     for l in listings {
         let (symbol, exchange, currency, name) = (&l.symbol, &l.exchange, &l.currency, &l.name);
-        let last = fetched.get(&sf::news_key(symbol, exchange)).cloned().unwrap_or_default();
+        // a listing that names no venue is read under none
+        let Some(key) = news_listing(symbol, exchange) else { continue };
+        let last = fetched.get(&key.to_string()).cloned().unwrap_or_default();
         let old = match if last.is_empty() { None } else { instant(&last) } {
             None => true,
             Some(then) => now - then > minutes * 60,
         };
         let mut any_due = old;
         if !any_due {
-            for k in sources_for(conn, symbol, exchange, currency, name)? {
-                if due(conn, k, symbol, exchange, now)? {
+            for k in sources_for(symbol, exchange, currency, name)? {
+                if due(conn, k, &key, now)? {
                     any_due = true;
                     break;
                 }

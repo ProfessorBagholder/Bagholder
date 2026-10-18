@@ -164,7 +164,9 @@ impl Bus {
     /// machine slept through is met on its waking.
     pub fn park_until_or(&self, app: &App, most: Duration, ready: impl Fn() -> bool) -> bool {
         let (m, c) = &self.bell;
-        let until = app.wall.now() + most;
+        // one reading ends each slice and begins the next (`Wall::slice`)
+        let mut before = app.wall.now();
+        let until = before + most;
         loop {
             if app.stopping() {
                 return false;
@@ -174,10 +176,11 @@ impl Bus {
                 return true;
             }
             let g = m.lock().unwrap_or_else(|e| e.into_inner());
-            let before = app.wall.now();
             let Some(slice) = app.wall.slice(until, before) else { return false };
             drop(c.wait_timeout_while(g, slice, |n| *n == seen && !app.stopping()));
-            app.wall.waited(before, slice, app.wall.now());
+            let after = app.wall.now();
+            app.wall.waited(before, slice, after);
+            before = after;
         }
     }
 

@@ -8,6 +8,8 @@ fn db() -> (tempfile::TempDir, rusqlite::Connection) {
     let dir = tempfile::tempdir().unwrap();
     let conn = open_db(&dir.path().join("bagholder.db")).unwrap();
     relabel::ensure(&conn).unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     (dir, conn)
 }
 
@@ -30,17 +32,18 @@ fn test_an_exposure_whose_stored_weights_do_not_parse_is_an_error_not_an_empty_r
 #[test]
 fn test_short_selling_whose_stored_series_does_not_parse_is_an_error_on_read_and_on_save() {
     let (_d, c) = db();
+    let qnc = bagholder_core::ListingKey::on("QNC", "TSXV").unwrap();
     let rec = Shorts { symbol: "QNC".into(), exchange: "TSXV".into(), series: Some(vec![ShortPoint { date: "2026-09-15".into(), shares: 10.0 }]), ..Default::default() };
-    feeds::save_shorts(&c, &rec, NOW, 1).unwrap();
-    assert!(feeds::shorts_for(&c, "QNC", "TSXV").unwrap().is_some());
-    c.execute("UPDATE shorts SET series = '[{' WHERE symbol = 'QNC'", []).unwrap();
-    assert!(feeds::shorts_for(&c, "QNC", "TSXV").unwrap_err().to_string().contains("series"));
+    feeds::save_shorts(&c, &qnc, &rec, NOW, 1).unwrap();
+    assert!(feeds::shorts_for(&c, &qnc).unwrap().is_some());
+    c.execute("UPDATE shorts SET series = '[{' WHERE listing = ?", [qnc.to_string()]).unwrap();
+    assert!(feeds::shorts_for(&c, &qnc).unwrap_err().to_string().contains("series"));
     // a later read that did not ask for the run keeps the stored one: a stored run it cannot read fails it
     let later = Shorts { series: None, ..rec.clone() };
-    assert!(feeds::save_shorts(&c, &later, NOW, 1).is_err());
+    assert!(feeds::save_shorts(&c, &qnc, &later, NOW, 1).is_err());
     // with no row stored yet there is nothing to keep, and nothing fails
     let other = Shorts { symbol: "ABC".into(), series: None, ..rec };
-    feeds::save_shorts(&c, &other, NOW, 1).unwrap();
+    feeds::save_shorts(&c, &bagholder_core::ListingKey::on("ABC", "TSXV").unwrap(), &other, NOW, 1).unwrap();
 }
 
 #[test]
@@ -62,13 +65,14 @@ fn test_a_notification_whose_stored_extra_does_not_parse_is_an_error() {
 }
 
 #[test]
-fn test_a_legacy_filing_column_holding_a_number_reads_as_its_text() {
+fn test_a_filing_column_holding_a_number_reads_as_its_text() {
     let (_d, c) = db();
     let e = String::new;
     let doc = feeds::FiledDocument { id: "d1".into(), source: feeds::Regulator::Sedar, category: e(), profile_no: e(), issuer: e(), form: "News release".into(), title: e(), date: "2026-09-01".into(), date_text: e(), size: e(), url: e() };
-    feeds::replace_filings(&c, "QNC", feeds::Regulator::Sedar, &[doc], NOW).unwrap();
+    let filer = feeds::Filer { source: feeds::Regulator::Sedar, id: "000012345".into() };
+    feeds::replace_filings(&c, &filer, &[doc], NOW).unwrap();
     c.execute("UPDATE filings SET size = 1234 WHERE id = 'd1'", []).unwrap();
-    assert_eq!(feeds::filings_for(&c, "QNC").unwrap()[0].doc.size, "1234");
+    assert_eq!(feeds::filings_of(&c, std::slice::from_ref(&filer)).unwrap()[0].doc.size, "1234");
     c.execute("UPDATE filings SET size = x'00' WHERE id = 'd1'", []).unwrap();
-    assert!(feeds::filings_for(&c, "QNC").is_err());
+    assert!(feeds::filings_of(&c, std::slice::from_ref(&filer)).is_err());
 }

@@ -111,3 +111,29 @@ describe('the re-read button', () => {
     expect(c.textContent).toContain('Could not read disclosures: store unavailable')
   })
 })
+
+describe('a listing whose venue is none known', () => {
+  // brief 42, 9 and 10: its filings wait, said in words, and nothing is offered to re-read
+  it('says its filings wait for its exchange, with no Re-read', () => {
+    const t = { symbol: 'ZQLS', name: 'Test Co', exchange: 'LSE', currency: 'GBP' } as unknown as Trade
+    const view = render(Disclosures, { props: { trade: t } })
+    flushSync()
+    expect(view.container.textContent).toContain('Filings wait for this listing’s exchange.')
+    expect(view.container.querySelector('[aria-label="Re-read disclosures"]')).toBeNull()
+    expect(asked).toEqual([])
+  })
+})
+
+describe('a document', () => {
+  // brief 42, 9: a document is opened by its source and its id, never by a symbol
+  it('opens through the server by its source and id, or at the SEC by its own address', () => {
+    const opened: string[] = []
+    vi.stubGlobal('open', (u: string) => (opened.push(u), null))
+    const sedar = { ...row('a', ''), id: 'sedar:7', source: 'SEDAR+', url: '' } as Filing
+    const sec = { ...row('bb', ''), id: 'sec:0001-26-1', url: 'https://www.sec.gov/x/1' } as Filing
+    const c = show([sedar, sec])
+    for (const b of c.querySelectorAll<HTMLButtonElement>('.dc-open')) b.click()
+    expect(opened.sort()).toEqual(['/api/filings/doc?source=SEDAR%2B&id=sedar%3A7', 'https://www.sec.gov/x/1'])
+    vi.unstubAllGlobals()
+  })
+})

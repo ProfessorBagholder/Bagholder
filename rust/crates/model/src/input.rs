@@ -278,4 +278,46 @@ impl Listing {
     pub fn to_value(&self) -> serde_json::Value {
         serde_json::to_value(self).expect("a listing is plain data")
     }
+
+    /// The key its market data is kept under: a coin by its asset, a directory
+    /// instrument by its symbol, a contract by its OCC symbol, anything else by its
+    /// symbol on the venue it names. None where it names no venue a key is made
+    /// from: such a listing gets no market data until a record states its venue.
+    pub fn key(&self) -> Result<bagholder_core::ListingKey, bagholder_core::listing::NotAListing> {
+        use bagholder_core::ListingKey;
+        match self.kind.as_str() {
+            "Crypto" => ListingKey::coin(&self.symbol),
+            "Instrument" | "Futures" => ListingKey::index(&self.symbol),
+            "Options" => ListingKey::option(&self.symbol),
+            _ => ListingKey::on(&self.symbol, &self.exchange),
+        }
+    }
+
+    /// The listing with its key, for a market reader; the reason where it has none.
+    pub fn keyed(self) -> Result<Keyed, bagholder_core::listing::NotAListing> {
+        Ok(Keyed { key: self.key()?, listing: self })
+    }
+}
+
+/// A listing with the key its market data is kept under. A market reader takes
+/// one, so a listing that names no venue never reaches a reader and nothing is
+/// kept for it under a guessed key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Keyed {
+    pub key: bagholder_core::ListingKey,
+    listing: Listing,
+}
+
+impl Keyed {
+    /// The listing as it was asked for.
+    pub fn listing(&self) -> &Listing {
+        &self.listing
+    }
+}
+
+impl std::ops::Deref for Keyed {
+    type Target = Listing;
+    fn deref(&self) -> &Listing {
+        &self.listing
+    }
 }

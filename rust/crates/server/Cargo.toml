@@ -48,6 +48,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # fs, io-util: an import is written to disk as it arrives, never held whole (`http::model::import`)
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "fs", "io-util"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+# the query string read as axum reads it (its own parser, already built for axum), so
+# a refused request says the reason alone, not axum's wrapper around it
+serde_urlencoded = "0.7"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic", "limit", "set-header", "timeout"] }
 # streams for response bodies (the event stream, the sign-in frames)

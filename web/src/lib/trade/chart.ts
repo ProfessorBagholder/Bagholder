@@ -14,8 +14,11 @@ export type { DayBar, TimeBar } from '../generated/chart'
 // A daily (or weekly/monthly) bar has a `date`; an intraday one has a `time`
 // instead -- never both. `'date' in b` tells the two apart.
 export type Bar = DayBar | TimeBar
-/** `uncovered`: the server answered that no history source covers the instrument (a failed request is not that). */
-export type History = Pick<ChartHistory, 'reason' | 'available' | 'chartSymbol' | 'pending'> & { bars: Bar[]; uncovered: boolean }
+/**
+ * `uncovered`: the server answered that no history source covers the instrument (a failed request is not that).
+ * `refused`: the server did not answer with bars -- a timeframe it does not offer, or a failure -- and `reason` says why.
+ */
+export type History = Pick<ChartHistory, 'reason' | 'available' | 'chartSymbol' | 'pending'> & { bars: Bar[]; uncovered: boolean; refused: boolean }
 export interface ChartColors {
   text: string
   grid: string
@@ -37,6 +40,10 @@ export const STEP: Record<string, number> = { '1h': 3600, '4h': 14400 }
 const _tfByTrade: Record<string, string> = {}
 export function setChartTf(id: string, tf: string): void {
   if (id) _tfByTrade[id] = tf
+}
+/** The timeframe the person picked for this trade, if they picked one. */
+export function chosenTf(id: string): string {
+  return _tfByTrade[id] || ''
 }
 
 // The default timeframe follows the trade's length so the whole trade fits the view.
@@ -92,14 +99,17 @@ export function keptHistory(t: Trade, tf: string): History | null {
   const r = held('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf })
   return r && final(r) ? historyOf(t, r) : null
 }
-/** A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped. */
-export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal, ahead = false): Promise<History> {
-  return historyOf(t, await read('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal, final, ahead }))
+/**
+ * A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped.
+ * `again`: asked of the server whatever this page load holds, as when it said what the listing offers changed.
+ */
+export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal, ahead = false, again = false): Promise<History> {
+  return historyOf(t, await read('GET /api/history', { query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal, final, ahead, maxAgeMs: again ? 0 : undefined }))
 }
 function historyOf(t: Trade, r: Answer<HistoryAnswer>): History {
   // a request that failed is said in the chart's place, in the failure's own words, never as a span with no bars
-  if (!('bars' in r)) return { reason: r.error || 'The chart was not answered.', bars: [], available: [], chartSymbol: t.symbol, pending: false, uncovered: false }
-  return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending, uncovered: !r.source }
+  if (!('bars' in r)) return { reason: r.error || 'The chart was not answered.', bars: [], available: [], chartSymbol: t.symbol, pending: false, uncovered: false, refused: true }
+  return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending, uncovered: !r.source, refused: false }
 }
 
 export function underlyingOf(t: Trade): string {

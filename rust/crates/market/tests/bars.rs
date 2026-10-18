@@ -115,8 +115,10 @@ fn answers() -> Value {
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
-    let stored_days = bagholder_store::market::upsert_price_history(&conn, "RDDY", &daily, "tmx").unwrap();
-    let stored_hours = bagholder_store::market::upsert_price_bars(&conn, "RDDY", "1h", &history::aggregate_session(&minutes, 60), "tmx").unwrap();
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    let rddy = bagholder_core::ListingKey::on("RDDY", "TSX").unwrap();
+    let stored_days = bagholder_store::market::upsert_price_history(&conn, &rddy, &daily, "tmx").unwrap();
+    let stored_hours = bagholder_store::market::upsert_price_bars(&conn, &rddy, "1h", &history::aggregate_session(&minutes, 60), "tmx").unwrap();
 
     json!({
         "tmxDaily": of(&daily),
@@ -139,8 +141,8 @@ fn answers() -> Value {
         "stored": {
             "days": stored_days,
             "hours": stored_hours,
-            "history": of(bagholder_store::market::price_history(&conn, "RDDY", "2026-03-03", "2026-04-30").unwrap()),
-            "bars": of(bagholder_store::market::price_bars(&conn, "RDDY", "1h", 0, 1 << 40).unwrap()),
+            "history": of(bagholder_store::market::price_history(&conn, &rddy, "2026-03-03", "2026-04-30").unwrap()),
+            "bars": of(bagholder_store::market::price_bars(&conn, &rddy, "1h", 0, 1 << 40).unwrap()),
         },
     })
 }

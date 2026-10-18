@@ -264,3 +264,38 @@ fn migration_26_keeps_what_every_account_s_statements_answer() {
         }
     }
 }
+
+/// A book stored before migration 30 kept a sighting that states no venue as a
+/// name of its own, on no venue; migrated, its names are the rule's (a sighting
+/// stating none reads as on the venue before it), every instrument refolded once.
+#[test]
+fn a_book_from_before_migration_30_has_its_names_refolded_by_the_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.db");
+    let partial: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..29] }));
+    {
+        let (c, _) = migrate::open(partial, &path, "test", t0()).unwrap();
+        let id = "01a0ce23-1200-7000-8000-000000000001";
+        c.execute_batch(&format!(
+            "INSERT INTO instruments (id, kind, currency, created_at) VALUES ('{id}', 'security', 'CAD', '2026-03-01T00:00:00Z');
+             INSERT INTO source_records (id, connection_id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES
+               ('01a0ce23-1200-7000-8000-0000000000a1', NULL, 'test-broker', 'a', 'live', 1, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'),
+               ('01a0ce23-1200-7000-8000-0000000000a2', NULL, 'csv', 'b', 'live', 1, '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z');
+             INSERT INTO instrument_sightings (record_id, leg, instrument_id, symbol, venue_mic, venue_name, name, day) VALUES
+               ('01a0ce23-1200-7000-8000-0000000000a1', 'trade', '{id}', 'ZQV', 'XTSE', 'TSX', NULL, '2026-03-01'),
+               ('01a0ce23-1200-7000-8000-0000000000a2', 'trade', '{id}', 'ZQV', NULL, NULL, NULL, '2026-03-05');
+             -- the names as the fold before migration 30 kept them, nothing left due
+             DELETE FROM instrument_names;
+             INSERT INTO instrument_names VALUES
+               ('{id}', '2026-03-01', 'ZQV', 1, '2026-03-01', 'ZQV', 1, 'ZQV', 'XTSE', 'TSX', NULL, 'test-broker'),
+               ('{id}', '2026-03-05', 'ZQV', 2, '2026-03-05', 'ZQV', 2, 'ZQV', NULL, NULL, NULL, 'csv');
+             DELETE FROM names_due;"
+        ))
+        .unwrap();
+    }
+    let (book, _) = Book::open(&path, "test", t0()).unwrap();
+    let id = bagholder_core::InstrumentId::parse("01a0ce23-1200-7000-8000-000000000001").unwrap();
+    let names: Vec<(String, Option<String>, Option<String>, String, String)> =
+        book.names(id).unwrap().into_iter().map(|n| (n.symbol, n.venue_mic, n.venue_name, n.first_seen.to_string(), n.last_seen.to_string())).collect();
+    assert_eq!(names, [("ZQV".to_string(), Some("XTSE".to_string()), Some("TSX".to_string()), "2026-03-01".to_string(), "2026-03-05".to_string())]);
+}

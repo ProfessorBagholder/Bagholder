@@ -3,7 +3,12 @@
 
 import type { NotifyStatus } from './status'
 
-export type NotificationExtra = { symbol: string, exchange: string, at: string, url: string, doc: string, source: string, };
+export type NotificationExtra = { symbol: string, 
+/**
+ * The listing it is about (`SYMBOL@VENUE`): what the card opens, never a
+ * listing found by its ticker alone. Empty on a notice stored before.
+ */
+listing: string, exchange: string, at: string, url: string, doc: string, source: string, };
 
 export type Notification = { id: number, at: string, kind: string, key: string, title: string, body: string, extra: NotificationExtra, seenAt: string, readAt: string, };
 

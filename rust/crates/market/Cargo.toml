@@ -23,10 +23,18 @@ unicode-normalization = "0.1"
 # the text of an issuer PDF where no system pdftotext is present
 pdf-extract = "0.12"
 
+[features]
+# a test moves the readers' wall clock on as a machine asleep sees it (`sleep_through`)
+test-clock = []
+
 [dev-dependencies]
+bagholder-market = { path = ".", features = ["test-clock"] }
 # tests read the time zone rules built into jiff, never the machine's
 bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"
+# the SEC's recorded ticker list is kept gzipped (180 KB, not 520): already in the
+# workspace through bagholder-net
+flate2 = "1"
 
 [lints]
 workspace = true

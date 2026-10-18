@@ -71,6 +71,17 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("history_fetches", Place::Of(Kind::Market)),
     ("price_bars", Place::Of(Kind::Market)),
     ("bar_fetches", Place::Of(Kind::Market)),
+    // which filers a listing's filings come from, and the TSX's interlisted list
+    // (migration 6): each can be asked again
+    ("listing_filers", Place::Of(Kind::Market)),
+    ("listing_filer_misses", Place::Of(Kind::Market)),
+    ("filer_fetches", Place::Of(Kind::Market)),
+    ("interlisted", Place::Of(Kind::Market)),
+    // the reads that failed and rest before they are asked again (migration 7)
+    ("read_failures", Place::Of(Kind::Market)),
+    // the tickers the filings were kept under before migration 6, for carrying the
+    // book's told marks once
+    ("filings_carried", Place::Of(Kind::Market)),
     ("meta", Place::Meta),
     ("gen", Place::Kept),
     ("schema_migrations", Place::Kept),
@@ -283,7 +294,7 @@ mod tests {
     fn filled(app: &Arc<App>) {
         let f = app.figures.get().unwrap();
         let t = now();
-        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
+        crate::entries::enter(f, &crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), exchange: "NASDAQ".into(), currency: "USD".into(), day: "2025-11-19".into(), side: "buy".into(), quantity: "1".into(), price: "2".into(), fee: String::new() }, t).unwrap();
         crate::csv_import::import(f, "a.csv", "Date,Action,Symbol,Quantity,Price,Amount,Currency\n2025-11-18,Buy,ZZQR,1,1,1,USD\n11/18/2025,Buy,ZZQR,1,1,1,USD\n", None, t).unwrap();
         let trade = f.read(|e| e.figures().trades.iter().find_map(|x| x.trade)).unwrap().expect("a trade");
         f.write_journal(&trade.to_string(), &bagholder_core::journal::JournalEntry { thesis: "why".into(), grade: None, tags: vec!["t".into()] }, t).unwrap();
@@ -331,9 +342,11 @@ mod tests {
             .unwrap();
         // an order and a bracket with their logs
         use bagholder_core::order::{Asker, OrderKind, OrderRole, Side, TimeInForce};
-        let place = bagholder_book::orders::BracketPlace { id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "bracket-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
         book.write_bracket(&place, &bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(px_of("3")) }, &Asker::Person, t).unwrap();
         let order = bagholder_book::orders::OrderRequest {
+            venue_mic: None,
+            venue_name: None,
             id: "order-x".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd,
             side: Side::Buy, kind: OrderKind::Market, quantity: bagholder_core::Dec::ONE, limit_price: None, stop_price: None, time_in_force: TimeInForce::Day,
             bracket: Some(("bracket-x".into(), OrderRole::Entry)), request: serde_json::json!({}),
@@ -578,7 +591,7 @@ mod tests {
         let (_h, app) = app();
         let f = app.figures.get().unwrap();
         let usd = bagholder_core::Currency::parse("USD").unwrap();
-        let place = bagholder_book::orders::BracketPlace { id: "b1".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
+        let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "b1".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "ZZQQ".into(), currency: usd };
         let created = bagholder_core::bracket::BracketEvent::Created { quantity: bagholder_core::Dec::ONE, stop: None, target: Some(bagholder_core::Dec::ONE) };
         f.book().unwrap().write_bracket(&place, &created, &bagholder_core::order::Asker::Person, now()).unwrap();
         for kinds in [vec![Kind::Orders], vec![Kind::Login], ALL.to_vec()] {

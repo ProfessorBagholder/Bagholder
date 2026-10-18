@@ -38,7 +38,7 @@ jobs:
           workspaces: rust
           shared-key: capacity
       - name: The server, as released
-        run: cargo build --release --bin bagholder
+        run: cargo build --locked --release --bin bagholder
         working-directory: rust
       - name: The cost budget
         run: |

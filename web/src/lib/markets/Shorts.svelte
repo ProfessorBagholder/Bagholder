@@ -14,6 +14,7 @@
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
   import { escapable } from '../escape'
+  import { listingKey } from '../listingKey'
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const SHORTS_COLS = [
@@ -47,7 +48,8 @@
     get reading() { return !!feedDoc.data?.reading },
     get loading() { return feedDoc.data == null },
   }
-  const found = $state<Record<string, { loading?: boolean; missing?: boolean; error?: string; row?: ShortsFeedRow }>>({})
+  // a ticker typed: every listing of it, each read on its own venue (`/api/listings`), never one picked by the ticker
+  const found = $state<Record<string, { loading?: boolean; missing?: boolean; none?: boolean; error?: string; rows?: ShortsFeedRow[] }>>({})
   $effect.pre(() => watchDoc('shorts', {}, feedDoc))
 
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
@@ -56,20 +58,34 @@
     clearTimeout(lookupTimer)
     // a lookup that failed is not remembered: typed again, it is asked again
     if (!key || key.length > 12 || /[^A-Z0-9.\-]/.test(key) || (found[key] && !found[key].error)) return
-    lookupTimer = setTimeout(() => {
+    lookupTimer = setTimeout(async () => {
       if (query.trim().toUpperCase() !== key) return
-      if ((feed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return
       found[key] = { loading: true }
-      read('GET /api/shorts', { query: { symbol: key, exchange: '', currency: '', name: '', trend: false } }).then((d) => {
-        found[key] = !d.ok ? { error: d.error } : 'covered' in d && d.covered ? { row: d.shorts as unknown as ShortsFeedRow } : { missing: true }
-      })
+      const r = await read('GET /api/listings', { query: { symbol: key } })
+      const listings = r.ok ? r.listings : []
+      if (!listings.length) {
+        // no exchange lists the ticker: no listing is by that name; one that could not be asked says why
+        found[key] = !r.ok ? { error: r.error } : r.unread.length ? { error: r.unread.join(' ') } : { none: true }
+        return
+      }
+      const fed = new Set((feed.rows || []).map(rowKey))
+      const read1 = (l: (typeof listings)[number]) =>
+        read('GET /api/shorts', { query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name, trend: false } })
+      const answers = await Promise.all(listings.filter((l) => !fed.has(l.listing)).map(read1))
+      const rows = answers.flatMap((d) => (d.ok && 'covered' in d && d.covered ? [d.shorts as unknown as ShortsFeedRow] : []))
+      // a directory that did not answer, or a venue whose read failed, is said beside the rows the others gave
+      const errors = r.ok ? [...r.unread] : []
+      for (const d of answers) if (!d.ok) errors.push(d.error)
+      const error = errors.length ? errors.join(' ') : undefined
+      found[key] = rows.length || listings.some((l) => fed.has(l.listing)) ? { rows, error } : error ? { error } : { missing: true }
     }, 450)
   }
   $effect(() => {
     shortsLookup(query)
   })
 
-  const rowKey = (r: ShortsFeedRow) => r.symbol + '@' + String(r.exchange || '')
+  // a row is its listing: the same ticker on another venue is another row
+  const rowKey = (r: ShortsFeedRow) => listingKey(r.symbol, r.exchange) ?? r.symbol + '@'
   const rows = $derived.by(() => {
     const q = query.trim().toUpperCase()
     const s = sort.shorts
@@ -80,13 +96,16 @@
       // a ticker that is none of the listings in scope is a row of its own, beside
       // whatever the words also match: the book's own row where the book has one
       // outside the scope, else the one read for it on its own
-      const exact = (r: ShortsFeedRow) => String(r.symbol).toUpperCase() === q
-      if (!pool.some(exact)) {
-        const own = (feed.rows || []).filter((r) => exact(r) && !inScope(r))
-        const f = found[q]
-        const add = own.length ? own : f && f.row ? [f.row] : []
-        const have = new Set(pool.map(rowKey))
-        pool = pool.concat(add.filter((r) => !have.has(rowKey(r))))
+      // every listing of a ticker typed is a row: the book's own outside the scope, and
+      // those read for it on their own venues
+      const exact = (r: ShortsFeedRow) => bareSymbol(String(r.symbol)).toUpperCase() === bareSymbol(q)
+      const own = (feed.rows || []).filter((r) => exact(r) && !inScope(r))
+      const add = own.concat(found[q]?.rows ?? [])
+      const have = new Set(pool.map(rowKey))
+      for (const r of add) {
+        if (have.has(rowKey(r))) continue
+        have.add(rowKey(r))
+        pool = pool.concat([r])
       }
     }
     return sortRows(pool, s.key, s.dir, (r, k) =>
@@ -100,6 +119,14 @@
     if (feed.loading) return 'Reading…'
     if (q) return f && f.loading ? 'Reading ' + q + '…' : f && f.error ? 'Could not read short interest for ' + q + ': ' + f.error : f && f.missing ? 'No short interest is reported for ' + q + '.' : 'No listing by that name.'
     return 'Nothing reported yet.'
+  })
+
+  // what could not be read for a ticker typed is said beside whatever rows show for
+  // it, its own or the feed's that its words match
+  const lookupError = $derived.by(() => {
+    const q = query.trim().toUpperCase()
+    const f = q ? found[q] : null
+    return f?.error ? 'Could not read short interest for ' + q + ': ' + f.error : ''
   })
 
   function pickScope(v: string) {
@@ -135,6 +162,7 @@
         </div>
       {/each}
     </div>
+    {#if lookupError}<div class="status-err" style="font-size:12px;margin-top:6px">{lookupError}</div>{/if}
   {:else}
     <div class="muted" style="font-size:12px">{emptyText}</div>
   {/if}

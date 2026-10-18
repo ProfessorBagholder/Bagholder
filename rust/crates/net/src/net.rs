@@ -68,6 +68,8 @@ pub enum NetError {
     Resting { host: String, until: Timestamp },
     /// The host could not be reached, or the transport failed.
     Unreachable(String),
+    /// Refused by `BAGHOLDER_OFFLINE`: nothing was sent.
+    Offline,
 }
 
 impl std::fmt::Display for NetError {
@@ -75,6 +77,7 @@ impl std::fmt::Display for NetError {
         match self {
             NetError::Resting { host, until } => write!(f, "{host} refused a request and is not asked again before {until}"),
             NetError::Unreachable(why) => write!(f, "{why}"),
+            NetError::Offline => f.write_str(client::OFFLINE),
         }
     }
 }
@@ -163,15 +166,23 @@ impl Net {
     pub fn send(&self, ask: &Ask) -> Result<Reply, NetError> {
         let host = host_of(ask.url);
         // told to stay off the network: refused at the client's one door
-        // (`client::leave`), named as every request is, before the host is waited on
+        // (`client::leave`), named as every request is, before the host is waited on;
+        // the refusal is its own kind
         if self.replaced.is_none() && client::refused_offline(&host) {
-            client::leave(ask.method, ask.url).map_err(|e| NetError::Unreachable(e.to_string()))?;
+            client::leave(ask.method, ask.url).map_err(|e| match e {
+                client::Error::Offline => NetError::Offline,
+                e => NetError::Unreachable(e.to_string()),
+            })?;
+            return Err(NetError::Offline);
         }
         self.limiter.turn(&host, &*self.clock).map_err(|Resting { until }| NetError::Resting { host: host.clone(), until })?;
         let (status, url, headers, body) = match (&self.replaced, ask.via) {
             (Some(t), _) => t.answer(ask)?,
             (None, Via::Direct) => {
-                let r = client::request_any(ask.method, ask.url, ask.headers, ask.body, ask.timeout).map_err(|e| NetError::Unreachable(e.to_string()))?;
+                let r = client::request_any(ask.method, ask.url, ask.headers, ask.body, ask.timeout).map_err(|e| match e {
+                    client::Error::Offline => NetError::Offline,
+                    e => NetError::Unreachable(e.to_string()),
+                })?;
                 (r.status, ask.url.to_string(), r.headers, r.body)
             }
             (None, Via::Browser) => {

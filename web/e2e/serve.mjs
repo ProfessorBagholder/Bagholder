@@ -35,7 +35,7 @@ for (const name of readdirSync(tmpdir())) {
 }
 // named for the port and the process that owns it
 const home = mkdtempSync(join(tmpdir(), `bagholder-e2e-${port}-${process.pid}-`))
-execFileSync(join(rust, 'target', 'debug', 'demo-book' + exe), ['--home', home, '--bars'], { stdio: 'inherit' })
+execFileSync(join(rust, 'target', 'debug', 'demo-book' + exe), ['--home', home], { stdio: 'inherit' })
 // the book the engine reads, carried from it, with the made-up facts and prices beside it
 execFileSync(join(rust, 'target', 'debug', 'bagholder' + exe), ['demo-facts', home], { stdio: 'inherit' })
 

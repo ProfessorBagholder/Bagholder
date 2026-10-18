@@ -122,6 +122,20 @@ pub struct Wall {
     check_ms: std::sync::atomic::AtomicU64,
     /// The last time the machine was seen to have slept: from, to.
     slept: Mutex<Option<(std::time::SystemTime, std::time::SystemTime)>>,
+    /// Tests only: the clock read in place of the system's, a moment of the wall
+    /// clock and the monotonic instant it was taken at, so nothing outside the test
+    /// (a time sync stepping a runner's clock) moves what the test measures.
+    #[cfg(test)]
+    pinned: Mutex<Option<(std::time::SystemTime, std::time::Instant)>>,
+    /// Tests only: every sleep seen, in order. A thread held off the CPU longer than
+    /// a test's short check reads as a sleep too, and is the last seen where it
+    /// comes after the one the test made.
+    #[cfg(test)]
+    seen: Mutex<Vec<(std::time::SystemTime, std::time::SystemTime)>>,
+    /// Tests only: the threads that have begun a slice of a wait, so a test knows
+    /// its waiter has read the clock it measures every later moment from.
+    #[cfg(test)]
+    slicing: Mutex<std::collections::HashSet<std::thread::ThreadId>>,
 }
 
 /// How often a long wait looks at the wall clock: a minute, as cron looks for the
@@ -132,13 +146,29 @@ pub const WALL_CHECK: Duration = Duration::from_secs(60);
 
 impl Default for Wall {
     fn default() -> Wall {
-        Wall { offset_ms: std::sync::atomic::AtomicI64::new(0), check_ms: std::sync::atomic::AtomicU64::new(WALL_CHECK.as_millis() as u64), slept: Mutex::new(None) }
+        Wall {
+            offset_ms: std::sync::atomic::AtomicI64::new(0),
+            check_ms: std::sync::atomic::AtomicU64::new(WALL_CHECK.as_millis() as u64),
+            slept: Mutex::new(None),
+            #[cfg(test)]
+            pinned: Mutex::new(None),
+            #[cfg(test)]
+            seen: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            slicing: Mutex::new(Default::default()),
+        }
     }
 }
 
 impl Wall {
     pub fn now(&self) -> std::time::SystemTime {
         let off = self.offset_ms.load(Ordering::SeqCst);
+        #[cfg(test)]
+        let now = match *self.pinned.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some((wall, at)) => wall + at.elapsed(),
+            None => std::time::SystemTime::now(),
+        };
+        #[cfg(not(test))]
         let now = std::time::SystemTime::now();
         if off >= 0 { now + Duration::from_millis(off as u64) } else { now - Duration::from_millis(off.unsigned_abs()) }
     }
@@ -149,9 +179,13 @@ impl Wall {
 
     /// What is left at `now` of a wait until `until`, and how long to sleep in the
     /// kernel for before looking at the clock again; none once it has come. `now` is
-    /// the reading the wait then stamps as its start (`waited`), one reading for
-    /// both, so a sleep that begins at any moment after it falls inside the wait.
+    /// the reading the wait then stamps as its start (`waited`), and the reading that
+    /// ended the slice before (or set the deadline, for the first): one reading
+    /// for each moment, so a sleep that begins at any moment of the wait falls
+    /// inside one of its slices.
     pub fn slice(&self, until: std::time::SystemTime, now: std::time::SystemTime) -> Option<Duration> {
+        #[cfg(test)]
+        self.slicing.lock().unwrap_or_else(|e| e.into_inner()).insert(std::thread::current().id());
         let left = until.duration_since(now).ok().filter(|l| !l.is_zero())?;
         Some(left.min(self.check()))
     }
@@ -167,6 +201,8 @@ impl Wall {
                 return;
             }
             *slept = Some((before + slice, after));
+            #[cfg(test)]
+            self.seen.lock().unwrap_or_else(|e| e.into_inner()).push((before + slice, after));
             let at = |t: std::time::SystemTime| match bagholder_core::jiff::Timestamp::try_from(t) {
                 Ok(t) => t.to_string(),
                 Err(e) => format!("a moment the clock cannot state ({e})"),
@@ -175,16 +211,30 @@ impl Wall {
         }
     }
 
-    /// The last time the machine was seen to have slept. Tests only.
+    /// Whether `thread` has begun a slice of a wait. Tests only.
     #[cfg(test)]
-    pub fn last_sleep(&self) -> Option<(std::time::SystemTime, std::time::SystemTime)> {
-        *self.slept.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn slicing(&self, thread: std::thread::ThreadId) -> bool {
+        self.slicing.lock().unwrap_or_else(|e| e.into_inner()).contains(&thread)
+    }
+
+    /// Every sleep seen since the last call, emptied. Tests only.
+    #[cfg(test)]
+    pub fn sleeps_seen(&self) -> Vec<(std::time::SystemTime, std::time::SystemTime)> {
+        std::mem::take(&mut *self.seen.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// A machine that slept for `d`: the wall clock moves on and no timer does. Tests only.
     #[cfg(test)]
     pub fn sleep_through(&self, d: Duration) {
         self.offset_ms.fetch_add(d.as_millis() as i64, Ordering::SeqCst);
+    }
+
+    /// Read the wall clock from now on as the moment it reads now plus the time the
+    /// monotonic clock has run since: the test's own clock, which only the test's
+    /// `sleep_through` moves. Tests only.
+    #[cfg(test)]
+    pub fn pin(&self) {
+        *self.pinned.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::SystemTime::now(), std::time::Instant::now()));
     }
 
     /// How often waits look at the clock. Tests only.
@@ -355,17 +405,19 @@ impl App {
     /// loops waiting that was about seventy wake-ups a second from an app doing
     /// nothing; a minute is one wake-up each for a loop waiting longer than that.)
     pub fn wait(&self, d: Duration) -> bool {
-        let until = self.wall.now() + d;
+        let mut before = self.wall.now();
+        let until = before + d;
         let (m, c) = &self.stop_bell;
         let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if self.stopping() {
                 return true;
             }
-            let before = self.wall.now();
             let Some(slice) = self.wall.slice(until, before) else { return false };
             g = c.wait_timeout_while(g, slice, |_| !self.stopping()).unwrap_or_else(|e| e.into_inner()).0;
-            self.wall.waited(before, slice, self.wall.now());
+            let after = self.wall.now();
+            self.wall.waited(before, slice, after);
+            before = after;
         }
     }
 
@@ -590,20 +642,28 @@ mod wall_tests {
         let home = tempfile::tempdir().unwrap();
         let app = App::new(home.path().to_path_buf(), home.path().to_path_buf(), "127.0.0.1".into());
         app.wall.set_check(Duration::from_millis(20));
+        // the test's own clock: a runner whose clock a time sync steps would move what is measured
+        app.wall.pin();
         for which in ["wait", "park_until_or"] {
             let (tx, rx) = std::sync::mpsc::channel();
             let a = app.clone();
-            std::thread::spawn(move || {
+            let waiter = std::thread::spawn(move || {
                 let hour = Duration::from_secs(3600);
                 let stopped = if which == "wait" { a.wait(hour) } else { a.events.park_until_or(&a, hour, || false) };
                 tx.send(stopped).unwrap();
             });
-            assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "{which}: still waiting, its hour not come");
+            // the machine sleeps once the waiter has read its clock, which every later moment of its wait is measured from
+            while !app.wall.slicing(waiter.thread().id()) {
+                std::thread::yield_now();
+            }
+            assert!(rx.try_recv().is_err(), "{which}: still waiting, its hour not come");
             app.wall.sleep_through(Duration::from_secs(3600));
             let stopped = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("{which}: its deadline passed while the machine slept, and it did not end on waking"));
             assert!(!stopped, "{which}: the time came; nothing stopped");
-            let (from, to) = app.wall.last_sleep().unwrap_or_else(|| panic!("{which}: the sleep was not seen"));
-            assert!(to.duration_since(from).unwrap() >= Duration::from_secs(3500), "{which}: about the hour slept");
+            // the hour among the sleeps seen: a runner holding a thread off the CPU
+            // longer than the test's check is seen as a short one beside it
+            let seen = app.wall.sleeps_seen();
+            assert!(seen.iter().any(|(from, to)| to.duration_since(*from).is_ok_and(|d| d >= Duration::from_secs(3500))), "{which}: about the hour slept, among {seen:?}");
             *app.wall.slept.lock().unwrap() = None;
         }
         // and a stop still ends a wait at once

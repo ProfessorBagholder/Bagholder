@@ -2,7 +2,7 @@
   import { book, status } from './subs.svelte'
   // The three menu modals — Add trade, Import CSV report, Load folder — ported
   // from tradeModalHtml / importModalHtml / folderModalHtml + modalShell.
-  import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch, stopImport } from './ui.svelte'
+  import { ui, closeModal, saveTrade, chooseFiles, watchFolder, scanFolder, stopWatch, stopImport, isContract, resolveTradeSymbol, tradeListingChosen } from './ui.svelte'
   import type { ImportReport as FileReport } from './generated/model_api'
   import { symText } from './sym'
   import { relTime } from './fmt'
@@ -81,7 +81,17 @@
             {#each accounts.filter((a) => a.name && a.brokerAccount !== 'manual') as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
           </select>
         </div>
-        <div><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
+        <!-- the symbol and its listing each the form's width: a listing is its venue and its name, which a half-width box cuts -->
+        <div style="grid-column:1 / -1"><div class="lbl" style="margin-bottom:5px">Symbol</div><input class="input" bind:value={f.symbol} oninput={() => (f.symbolError = '')} onchange={() => resolveTradeSymbol(f.symbol)} placeholder="e.g. LUNR or LUNR 15JAN27 12.00 CALL" autocapitalize="characters" /></div>
+        <div style="grid-column:1 / -1"><div class="lbl" style="margin-bottom:5px">Exchange</div>
+          <!-- each listing of the symbol, by its venue: one is taken where every directory
+               answered; two or more, or one beside a directory unread, wait for the choice -->
+          <select class="input" bind:value={f.listing} onchange={tradeListingChosen} aria-label="Exchange" disabled={isContract(f.symbol) || (f.listings.length < 2 && !(f.listings.length === 1 && f.listingsError))}>
+            {#if f.listings.length !== 1 || f.listingsError}<option value="">{!isContract(f.symbol) && f.listingsOf && f.listingsOf === f.symbol.trim().toUpperCase() && !f.listings.length && !f.listingsError ? 'Not listed' : ''}</option>{/if}
+            {#each f.listings as l (l.listing)}<option value={l.listing}>{l.exchange}{l.name ? ' · ' + l.name : ''}</option>{/each}
+          </select>
+          {#if f.listingsError && f.listingsOf === f.symbol.trim().toUpperCase()}<div class="status-err" style="font-size:12px;margin-top:6px">{f.listingsError}</div>{/if}
+        </div>
         <div><div class="lbl" style="margin-bottom:5px">Side</div>
           <div class="seg">
             {#each ['BUY', 'SELL'] as o (o)}<label class="seg-opt" class:on={f.side === o}><input type="radio" bind:group={f.side} value={o} />{o}</label>{/each}
@@ -96,6 +106,7 @@
         </div>
         <div><div class="lbl" style="margin-bottom:5px">Fees</div><input class="input" inputmode="decimal" bind:value={f.fees} placeholder="0" /></div>
       </div>
+      {#if f.symbolError}<div class="status-err" style="font-size:12px;margin-top:10px">{f.symbolError}</div>{/if}
       {#if f.error}<div class="status-err" style="font-size:12px;margin-top:10px">{f.error}</div>{/if}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn btn-secondary" onclick={closeModal}>Cancel</button>

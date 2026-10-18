@@ -28,11 +28,23 @@ type: string, title: string, date: string, dateText: string, size: string, url: 
 
 export type SourceStatus = { available: boolean, matched: boolean, filer: boolean, error: string, };
 
-export type FilingsDoc = { ok: true, symbol: string, available: boolean, sources: { [key in string]: SourceStatus }, categories: Array<string>, fetchedAt: string, everRead: boolean, summaryStatus: string, reading: Array<string>, filings: Array<Filing>, };
+export type FilingsDoc = { ok: true, symbol: string, 
+/**
+ * The listing (`SYMBOL@VENUE`).
+ */
+listing: string, available: boolean, sources: { [key in string]: SourceStatus }, categories: Array<string>, fetchedAt: string, everRead: boolean, summaryStatus: string, reading: Array<string>, filings: Array<Filing>, };
 
-export type FilingsPayload = { ok: true, symbol: string, available: boolean, sources: { [key in string]: SourceStatus }, categories: Array<string>, profileNo: string, fetchedAt: string, refreshed: boolean, sourceUnavailable: boolean, filings: Array<Filing>, };
+export type FilingsPayload = { ok: true, symbol: string, 
+/**
+ * The listing (`SYMBOL@VENUE`).
+ */
+listing: string, available: boolean, sources: { [key in string]: SourceStatus }, categories: Array<string>, profileNo: string, fetchedAt: string, refreshed: boolean, sourceUnavailable: boolean, filings: Array<Filing>, };
 
-export type FeedFiling = { symbol: string, exchange: string, subject: string, summary: string, enrichedAt: string, 
+export type FeedFiling = { symbol: string, exchange: string, 
+/**
+ * The listing it belongs to (`SYMBOL@VENUE`): what its symbol opens.
+ */
+listing: string, subject: string, summary: string, enrichedAt: string, 
 /**
  * The version of the logic that read it; `None` when never read.
  */
@@ -62,4 +74,4 @@ refresh: boolean, symbol: string, exchange: string, currency: string, name: stri
 
 export type Scope = { scope: string, };
 
-export type Document = { symbol: string | null, id: string | null, };
+export type Document = { source: string | null, id: string | null, };

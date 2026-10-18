@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { ready, view } from './helpers'
 
@@ -73,11 +73,80 @@ async function screens(request: APIRequestContext): Promise<Screen[]> {
   return out
 }
 
-/** Every message the stream brings, and every placeholder drawn, from the page's first script on. */
+/**
+ * Whether an answer says the server is still working on it: anywhere in it, a
+ * `pending` that is true, or a `reading` that is true or names anything (#531).
+ * Such an answer is not the one the server will give once it is done, so a screen
+ * drawn from it is not the screen to compare against. Self-contained: it is also
+ * the page's own, injected from this source.
+ */
+function stillWorking(v: unknown): boolean {
+  if (Array.isArray(v)) return v.some(stillWorking)
+  if (typeof v !== 'object' || v === null) return false
+  return Object.entries(v).some(([k, x]) => ((k === 'pending' || k === 'reading') && (x === true || (Array.isArray(x) && x.length > 0))) || stillWorking(x))
+}
+
+/**
+ * Every message the stream brings, every placeholder drawn, and each document the
+ * page watches as the server has it (whole on a snapshot, then patched), from the
+ * page's first script on. The documents watched are what is on screen: a chart
+ * whose bars are still being read watches its own (`history:…`), as a disclosure
+ * list watches the titles being read; a read made ahead for a screen not shown is
+ * waited on by nothing, so it is not counted.
+ */
 async function watchFromTheStart(page: Page): Promise<void> {
+  await page.addInitScript({ content: `window.__stillWorking = ${stillWorking.toString()}` })
   await page.addInitScript(() => {
-    const w = window as unknown as { __messages: number; __placeholders: string[]; __changes: string[]; __counting: boolean }
+    const w = window as unknown as {
+      __messages: number; __placeholders: string[]; __changes: string[]; __counting: boolean
+      __docs: Record<string, unknown>; __working: () => string[]; __stillWorking: (v: unknown) => boolean
+    }
     w.__messages = 0
+    w.__docs = {}
+    w.__working = () => Object.entries(w.__docs).filter(([, v]) => w.__stillWorking(v)).map(([k]) => k)
+    // a document the page stops watching (the whole set is said each time) is no longer on screen
+    const realFetch = window.fetch
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (new URL(url, location.href).pathname === '/api/events/watch' && typeof init?.body === 'string') {
+        const watched = Object.keys(JSON.parse(init.body).docs ?? {})
+        for (const k of Object.keys(w.__docs)) if (!watched.includes(k)) delete w.__docs[k]
+      }
+      return realFetch(input, init)
+    }
+    // a stream document, whole on a snapshot and patched as the page patches it
+    type Step = string | { k: string; v: string }
+    const at = (root: unknown, path: Step[]): unknown => {
+      let cur = root
+      for (const s of path) {
+        if (cur == null) return undefined
+        cur = typeof s === 'string' ? (cur as Record<string, unknown>)[s] : (cur as Record<string, unknown>[]).find((r) => String(r?.[s.k]) === s.v)
+      }
+      return cur
+    }
+    const patch = (root: unknown, ops: unknown[][]) => {
+      for (const op of ops) {
+        const path = op[1] as Step[]
+        if (op[0] === 'rows') {
+          const list = at(root, path)
+          if (!Array.isArray(list)) continue
+          const [, , key, order, added] = op as [string, Step[], string, string[], Record<string, unknown>]
+          const have = new Map(list.map((r) => [String(r?.[key]), r]))
+          list.splice(0, list.length, ...order.map((id) => have.get(id) ?? added[id]).filter((r) => r !== undefined))
+          continue
+        }
+        const last = path[path.length - 1]
+        const parent = at(root, path.slice(0, -1))
+        if (parent == null) continue
+        if (typeof last === 'string') {
+          if (op[0] === 'set') (parent as Record<string, unknown>)[last] = op[2]
+          else delete (parent as Record<string, unknown>)[last]
+        } else if (op[0] === 'set' && Array.isArray(parent)) {
+          const i = parent.findIndex((r) => String(r?.[last.k]) === last.v)
+          if (i >= 0) parent[i] = op[2]
+        }
+      }
+    }
     w.__placeholders = []
     w.__changes = []
     w.__counting = false
@@ -86,6 +155,8 @@ async function watchFromTheStart(page: Page): Promise<void> {
       constructor(url: string | URL, init?: EventSourceInit) {
         super(url, init)
         for (const name of ['hello', 'snapshot', 'patch', 'same', 'refused']) this.addEventListener(name, () => w.__messages++)
+        this.addEventListener('snapshot', (e) => { const { doc, data } = JSON.parse((e as MessageEvent).data); w.__docs[doc] = data })
+        this.addEventListener('patch', (e) => { const { doc, ops } = JSON.parse((e as MessageEvent).data); if (w.__docs[doc] != null) patch(w.__docs[doc], ops) })
       }
     }
     window.EventSource = Counted as unknown as typeof EventSource
@@ -128,16 +199,24 @@ async function holdServer(page: Page): Promise<() => void> {
   }
 }
 
-/** Every read answered and the stream quiet: nothing more is on its way. */
-async function settled(page: Page): Promise<void> {
+/**
+ * Every read answered and the stream quiet: nothing more is on its way. `done`:
+ * and no answer the page holds says the server is still working on it, so what is
+ * drawn is what the server will answer again.
+ */
+async function settled(page: Page, done = false): Promise<void> {
   let last = -1
   await expect
     .poll(async () => {
-      const n = await page.evaluate(() => (window as unknown as { __messages: number }).__messages)
-      const quiet = n === last && inFlight.get(page) === 0
+      const [n, working] = await page.evaluate(() => {
+        const w = window as unknown as { __messages: number; __working: () => string[] }
+        return [w.__messages, w.__working()] as const
+      })
+      const quiet = n === last && inFlight.get(page) === 0 && (!done || working.length === 0)
       last = n
-      return quiet
-    }, { intervals: [300], timeout: 20_000 })
+      // not settled: what the server is still working on, so a wait that never ends names it
+      return quiet || (done && working.length ? 'still working: ' + working.join(', ') : false)
+    }, { intervals: [300], timeout: 60_000 })
     .toBe(true)
 }
 const inFlight = new WeakMap<Page, number>()
@@ -156,6 +235,21 @@ test('the walk finds the router\'s tabs and the page\'s panels and dialogs', () 
   expect(MODALS.length).toBeGreaterThan(0)
 })
 
+test('an answer that says the server is still working is told from one it gives when done, for every such field on the wire', () => {
+  // every field of the page's generated types whose name says work is under way
+  const dir = new URL('../src/lib/generated/', import.meta.url)
+  const fields = readdirSync(dir).flatMap((f) => [...readFileSync(new URL(f, dir), 'utf8').matchAll(/\b(\w*(?:pending|reading|loading|busy|inFlight)\w*)\??: (boolean|Array<[^>]+>)/gi)].map((m) => ({ file: f, name: m[1], type: m[2] })))
+  expect(fields.length).toBeGreaterThan(0)
+  for (const { file, name, type } of fields) {
+    const on = type === 'boolean' ? true : ['x']
+    const off = type === 'boolean' ? false : []
+    expect(stillWorking({ ok: true, nested: [{ [name]: on }] }), `${file}: ${name} under way`).toBe(true)
+    expect(stillWorking({ ok: true, nested: [{ [name]: off }] }), `${file}: ${name} done`).toBe(false)
+  }
+  // a status word is not a field saying work is under way
+  expect(stillWorking({ status: 'pending' })).toBe(false)
+})
+
 test('every screen, opened again after a reload with the server held back, is drawn at once from what the app had, and the server\'s unchanged answers move nothing', async ({ page, request }) => {
   test.setTimeout(300_000)
   // a page that throws is stuck on what it last drew: every error fails the walk
@@ -167,13 +261,27 @@ test('every screen, opened again after a reload with the server held back, is dr
   await page.goto('/#dashboard')
   await ready(page)
   const list = await screens(request)
-  const seen: Record<string, string> = {}
-  for (const s of list) {
-    await s.open(page)
-    await settled(page)
-    seen[s.name] = await shownText(page)
-    await page.keyboard.press('Escape')
-    await page.keyboard.press('Escape')
+  // walked until a walk captures what the one before it did: a walk sets off reads the
+  // app makes ahead for pages not open, which can change what the server answers for a
+  // screen walked before them (a listing's minute bars found missing stops it offering
+  // 1H, #531), so a screen is recorded once nothing the walk sets off changes it any
+  // more. Each screen is captured once the server has finished what it reads for it.
+  const WALKS = 4 // read-ahead settles in one walk; a walk that keeps changing past this is a fault of its own
+  let seen: Record<string, string> = {}
+  for (let walk = 1; ; walk++) {
+    const now: Record<string, string> = {}
+    for (const s of list) {
+      await s.open(page)
+      await settled(page, true)
+      now[s.name] = await shownText(page)
+      await page.keyboard.press('Escape')
+      await page.keyboard.press('Escape')
+    }
+    const moved = list.map((s) => s.name).filter((n) => walk > 1 && now[n] !== seen[n])
+    const fixed = walk > 1 && moved.length === 0
+    seen = now
+    if (fixed) break
+    expect(walk < WALKS, `still changing after ${WALKS} walks: ${moved.join(', ')}`).toBe(true)
   }
   for (const s of list) {
     await test.step(s.name, async () => {

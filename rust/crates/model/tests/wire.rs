@@ -213,8 +213,8 @@ fn test_markets_and_the_corners_keep_their_payload() {
     ]));
     o.insert("exposures".into(), json!({
         "sec-enb": {"sectors": {"energy": 0.9, "Utilities": 0.1}, "countries": {"Canada": 1.0}},
-        "share:ASTS::US": {"sectors": {"Communication Services": 1}, "countries": {"United States": "1.0"}},
-        "share:QNC:": {"sectors": {"Technology": 0.6, "Industrials": 0.6}, "countries": {"Canada": 1}},
+        "share:ASTS@US": {"sectors": {"Communication Services": 1}, "countries": {"United States": "1.0"}},
+        "share:QNC@XTSX": {"sectors": {"Technology": 0.6, "Industrials": 0.6}, "countries": {"Canada": 1}},
     }));
     o.insert("watchlist".into(), json!([
         {"symbol": "ENB", "exchange": "TSX", "name": "Enbridge Inc.", "currency": "CAD", "securityId": "sec-enb", "addedAt": "2026-01-01T00:00:00Z"},

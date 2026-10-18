@@ -53,6 +53,9 @@ pub enum Market {
     /// Cboe Canada: quoted by its own feed, not TMX's.
     CboeCanada,
     UnitedStates,
+    /// The US over-the-counter market: OTC Markets Group's tiers, quoted under the
+    /// bare symbol as a US exchange's listing, on the US sessions.
+    Otc,
     Crypto,
     /// US-listed option contracts.
     UsOptions,
@@ -128,15 +131,15 @@ pub struct Listing {
 }
 
 impl Listing {
-    /// The market the instrument trades in, from its kind and venue, a listing
-    /// whose venue is none known here by its currency; `None` for an instrument
-    /// no source of this part covers (an event contract, an option contract not
-    /// in US dollars, which no US chain lists).
+    /// The market the instrument trades in, from its kind and venue; `None` for an
+    /// instrument no source of this part covers (a share whose record names no
+    /// venue known here, which no currency stands in for; an event contract; an
+    /// option contract not in US dollars, which no US chain lists).
     pub fn market(&self) -> Option<Market> {
         match self.kind {
             InstrumentKind::Crypto => Some(Market::Crypto),
             InstrumentKind::OptionContract if self.currency == Currency::USD => Some(Market::UsOptions),
-            InstrumentKind::Security => crate::venue::market_of_listing(self.venue_mic.as_deref(), self.currency),
+            InstrumentKind::Security => crate::venue::market_of(self.venue_mic.as_deref()),
             _ => None,
         }
     }

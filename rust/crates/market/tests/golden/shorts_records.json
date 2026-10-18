@@ -10,31 +10,31 @@
     }
   },
   "parse_ca_positions": {
-    "TGIF": {
-      "venue": "CSE",
-      "shares": 72000.0,
-      "change": 68990.0,
-      "name": "1933 INDUSTRIES INC."
-    },
-    "QNC": {
+    "QNC@XTSX": {
       "venue": "TSXV",
       "shares": 2667164.0,
       "change": 64077.0,
       "name": "QUANTUM EMOTION CORP."
+    },
+    "TGIF@XCNQ": {
+      "venue": "CSE",
+      "shares": 72000.0,
+      "change": 68990.0,
+      "name": "1933 INDUSTRIES INC."
     }
   },
   "parse_ca_volume_ok": {
-    "TGIF": {
-      "venue": "CSE",
-      "shortVolume": 5000.0,
-      "volumePct": 0.0,
-      "totalVolume": null
-    },
-    "QNC": {
+    "QNC@XTSX": {
       "venue": "TSXV",
       "shortVolume": 1197633.0,
       "volumePct": 21.319,
       "totalVolume": 5617679.065622215
+    },
+    "TGIF@XCNQ": {
+      "venue": "CSE",
+      "shortVolume": 5000.0,
+      "volumePct": 0.0,
+      "totalVolume": null
     }
   },
   "parse_ca_volume_err": "new-line character seen in unquoted field",

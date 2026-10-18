@@ -13,7 +13,7 @@
     discStore,
     discRereading,
     discRereadError,
-    discSymbol,
+    discKey,
     showDisclosures,
     refreshDisclosures,
     enrichLoading,
@@ -22,11 +22,12 @@
     titleComing,
     discDate,
     discSortValue,
+    filingDocUrl,
   } from './discStore.svelte'
 
   let { trade }: { trade: Trade } = $props()
 
-  const sym = $derived(discSymbol(trade))
+  const sym = $derived(discKey(trade))
   const rec = $derived(discStore[sym])
 
   // local view state (the originals live on the global `state`)
@@ -56,12 +57,14 @@
   const view = $derived.by(() => {
     // until the sources have been asked once there is nothing to say about this listing;
     // a forced read under way leaves the list held on screen until its answer replaces it
+    // a listing whose records name no venue: its filings wait for one (plan `market-data-keyed-by-listing`, Approach, 5)
+    if (!sym) return { state: 'empty' as const, right: '', msg: 'Filings wait for this listing’s exchange.' }
     const held = !!rec?.payload && rec.payload.everRead !== false
     if (!rec || (!held && (rec.loading || discRereading[sym] || rec.payload?.everRead === false))) return { state: 'loading' as const }
     if (discRereadError[sym]) return { state: 'error' as const, error: discRereadError[sym] }
     if (rec.error) return { state: 'error' as const, error: rec.error }
     const p: FilingsDoc = rec.payload || {
-      ok: true, symbol: sym, available: false, sources: {}, categories: [], fetchedAt: '', everRead: false, summaryStatus: '', reading: [], filings: [],
+      ok: true, symbol: trade.symbol, listing: sym, available: false, sources: {}, categories: [], fetchedAt: '', everRead: false, summaryStatus: '', reading: [], filings: [],
     }
     const all = p.filings || []
     const srcStatus: Record<string, SourceStatus> = p.sources || {}
@@ -117,7 +120,7 @@
   }
   function openDoc(f: Filing) {
     discOpening = f.id
-    const durl = f.source === 'SEC' && f.url ? f.url : '/api/filings/doc?symbol=' + encodeURIComponent(sym) + '&id=' + encodeURIComponent(f.id)
+    const durl = f.source === 'SEC' && f.url ? f.url : filingDocUrl(f.source, f.id)
     window.open(durl, '_blank', 'noopener')
     clearTimeout(openTimer)
     openTimer = setTimeout(() => (discOpening = null), 4000)
@@ -162,7 +165,7 @@
     <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{@render readBtn()}</span></div>
     <div class="muted" style="font-size:12px;padding:6px 0 10px">{view.error}</div>
   {:else if view.state === 'empty'}
-    <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{#if view.right}<span>{view.right}</span>{/if}{@render readBtn()}</span></div>
+    <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{#if view.right}<span>{view.right}</span>{/if}{#if sym}{@render readBtn()}{/if}</span></div>
     <div class="muted" style="font-size:12px;padding:8px 0 10px">{view.msg}</div>
   {:else if view.state === 'list'}
     <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px">

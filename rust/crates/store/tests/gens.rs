@@ -67,9 +67,12 @@ fn test_news_and_a_universe_read_again_unchanged_are_not_a_change() {
         id: "n1".into(), headline: "QNC files its quarter".into(), source: "Newswire".into(), url: "https://example.test/n1".into(),
         published_at: "2026-09-19T12:00:00Z".into(), summary: String::new(), kind: feeds::NewsKind::Story, via: feeds::Feed::Tmx,
     }];
-    feeds::replace_news(&conn, "QNC", "TSX-V", &story, "2026-09-20T10:00:00Z").unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    let qnc = bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap();
+    feeds::replace_news(&conn, &qnc, "TSX-V", &story, "2026-09-20T10:00:00Z").unwrap();
     let n = gen(&conn, "news");
-    feeds::replace_news(&conn, "QNC", "TSX-V", &story, "2026-09-20T10:15:00Z").unwrap();
+    feeds::replace_news(&conn, &qnc, "TSX-V", &story, "2026-09-20T10:15:00Z").unwrap();
     assert_eq!(gen(&conn, "news"), n);
 
     let rows = [bagholder_model::input::UniverseRow { symbol: "AAA".into(), name: "Aaa Corp".into(), value: 10.0, percent_change: Some(1.5), sector: "Energy".into(), country: "CA".into() }];

@@ -1,6 +1,13 @@
-//! The disclosures pipeline: one instrument's regulatory filings gathered from
-//! every source that covers it, normalized to a single shape, merged newest
-//! first.
+//! The disclosures pipeline: a listing's regulatory filings, normalized to a
+//! single shape, merged newest first.
+//!
+//! Filings belong to a filer, an issuer as a regulator numbers it (an SEC CIK, a
+//! SEDAR+ profile). A listing reaches its own regulator's filer by that source's
+//! own key: a US listing its CIK in the SEC's ticker-and-exchange list, a
+//! Canadian listing the one SEDAR+ profile whose legal name is the issuer name its
+//! exchange gives. A Canadian and a US listing are one company only where the
+//! TSX's interlisted list pairs them; then each shows both filers' documents. No
+//! name comparison joins anything (plan `market-data-keyed-by-listing`, Approach, 2).
 //!
 //! A source is a regulator's filing system (SEDAR+ for Canada, SEC EDGAR for
 //! the US); a category is the kind of disclosure, the same across sources. A
@@ -11,7 +18,22 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use bagholder_store::feeds::{FiledDocument, Regulator};
+use bagholder_core::ListingKey;
+use bagholder_store::feeds::{FiledDocument, Filer, Regulator};
+
+/// How long a listing's filers stand before they are settled again, and the SEC's
+/// list is read again: the SEC's list and SEDAR+'s answer change when an issuer
+/// lists, renames or delists.
+pub const FILERS_RECHECK_HOURS: f64 = 24.0;
+
+/// How often the filings are swept: a filer's documents, a listing's filer and the
+/// lists they are read from are looked at again this often.
+pub const FILINGS_SWEEP_EVERY_SEC: u64 = 300;
+
+/// A read that failed is asked again after one sweep, then twice as long after
+/// each failure in a row after it, as every source is (`market::grown_rest`, the
+/// app's one backoff); never on every pass.
+pub const FAILED_READ_REST: std::time::Duration = std::time::Duration::from_secs(FILINGS_SWEEP_EVERY_SEC);
 
 pub const FINANCIALS: &str = "Financials";
 pub const EVENTS: &str = "Material events";
@@ -28,12 +50,25 @@ pub enum SourceError {
     Unavailable(String),
     /// Anything else that went wrong, as `kind: message`.
     Other(String),
+    /// Not asked: the process is offline (`BAGHOLDER_OFFLINE`); no failure of the source's.
+    Offline,
 }
 
 impl std::fmt::Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SourceError::Unavailable(m) | SourceError::Other(m) => write!(f, "{}", m),
+            SourceError::Offline => f.write_str(bagholder_net::client::OFFLINE),
+        }
+    }
+}
+
+impl SourceError {
+    /// The failure as the header carries it: an offline refusal by its kind.
+    pub fn failure(&self) -> bagholder_net::Failure {
+        match self {
+            SourceError::Offline => bagholder_net::Failure::Offline,
+            e => bagholder_net::Failure::Said(e.to_string()),
         }
     }
 }
@@ -51,26 +86,6 @@ pub fn clean(text: &str) -> String {
     let t = re(&TAGS, r"<[^>]+>").replace_all(text, " ");
     let t = re(&WS, r"\s+").replace_all(&t, " ");
     bagholder_model::textrules::trim_space(&t).to_string()
-}
-
-fn name_tokens(name: &str) -> std::collections::HashSet<String> {
-    static NOISE: OnceLock<Regex> = OnceLock::new();
-    static SPLIT: OnceLock<Regex> = OnceLock::new();
-    let lower = name.to_lowercase();
-    let n = re(&NOISE, r"(?i)\b(inc|corp|corporation|ltd|limited|co|company|plc|the|sa|nv|ag|llc|lp|trust|fund|holdings?)\b").replace_all(&lower, " ");
-    re(&SPLIT, r"[^a-z0-9]+").split(&n).filter(|t| t.chars().count() > 1).map(|t| t.to_string()).collect()
-}
-
-/// Whether two issuer names plausibly denote the
-/// same company, used to reject a ticker that collides with an unrelated filer
-/// in another market.
-pub fn names_match(a: &str, b: &str) -> bool {
-    let (ta, tb) = (name_tokens(a), name_tokens(b));
-    if ta.is_empty() || tb.is_empty() {
-        return false;
-    }
-    let overlap = ta.intersection(&tb).count();
-    overlap > 0 && overlap as f64 >= ta.len().min(tb.len()) as f64 * 0.5
 }
 
 fn sort_key(item: &FiledDocument) -> (String, Regulator) {
@@ -112,78 +127,102 @@ pub struct Gathered {
     pub sources: BTreeMap<Regulator, SourceOutcome>,
 }
 
-/// A filing source.
-pub trait Provider {
-    fn source(&self) -> Regulator;
-    fn available(&self) -> bool;
-    fn covers(&self, symbol: &str, exchange: &str, currency: &str) -> bool;
-    fn fetch(&self, symbol: &str, name: &str, exchange: &str, currency: &str, profile_no: &str) -> Fetched<Vec<FiledDocument>>;
-    /// Whether the source knows a filer even when it listed nothing.
-    fn has_filer(&self, _symbol: &str, _name: &str, _exchange: &str, _currency: &str) -> bool {
-        false
+/// The regulators, as the pipeline asks them: which filer a listing's own
+/// regulator lists it under, and a filer's documents. A trait so a test stands
+/// in for the regulators.
+pub trait Regulators {
+    /// The regulator a listing files with, and its filer there or why none
+    /// settles; `None` for a listing no regulator here covers (a coin, an index).
+    fn filer(&self, listing: &ListingKey, today: &str) -> Option<(Regulator, Fetched<Result<String, String>>)>;
+    /// A filer's documents, newest first.
+    fn documents(&self, filer: &Filer, limit: usize) -> Fetched<Vec<FiledDocument>>;
+    /// The TSX's interlisted list as published now: the day it is as of, and its pairs.
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)>;
+}
+
+/// The regulators themselves.
+pub struct Live;
+
+impl Regulators for Live {
+    fn filer(&self, listing: &ListingKey, today: &str) -> Option<(Regulator, Fetched<Result<String, String>>)> {
+        if listing.us() || listing.otc() {
+            let found = crate::edgar::filer_of(listing).map(|f| f.map(|(cik, _)| cik.to_string()));
+            return Some((Regulator::Sec, found));
+        }
+        if listing.canadian() {
+            let found = issuer_name(listing).and_then(|n| match n {
+                Ok(name) => crate::sedar::profile_of(&name, today),
+                Err(why) => Ok(Err(why)),
+            });
+            return Some((Regulator::Sedar, found));
+        }
+        None
     }
-    fn document(&self, row: &FiledDocument) -> Fetched<(Vec<u8>, String)>;
-}
 
-struct Sedar;
-impl Provider for Sedar {
-    fn source(&self) -> Regulator { Regulator::Sedar }
-    fn available(&self) -> bool { crate::sedar::available() }
-    fn covers(&self, s: &str, e: &str, c: &str) -> bool { crate::sedar::covers(s, e, c) }
-    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, p: &str) -> Fetched<Vec<FiledDocument>> {
-        crate::sedar::fetch(s, n, e, c, crate::sedar::SEARCH_LIMIT, p)
+    fn documents(&self, filer: &Filer, limit: usize) -> Fetched<Vec<FiledDocument>> {
+        match filer.source {
+            Regulator::Sec => {
+                let cik: i64 = filer.id.parse().map_err(|_| SourceError::Other(format!("{} is not a CIK", repr_quoted(&filer.id))))?;
+                crate::edgar::fetch(cik, limit)
+            }
+            Regulator::Sedar => crate::sedar::fetch_profile(&filer.id, limit),
+        }
     }
-    fn document(&self, row: &FiledDocument) -> Fetched<(Vec<u8>, String)> { crate::sedar::document(row) }
-}
 
-struct Edgar;
-impl Provider for Edgar {
-    fn source(&self) -> Regulator { Regulator::Sec }
-    fn available(&self) -> bool { crate::edgar::available() }
-    fn covers(&self, s: &str, e: &str, c: &str) -> bool { crate::edgar::covers(s, e, c) }
-    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, _p: &str) -> Fetched<Vec<FiledDocument>> {
-        crate::edgar::fetch(s, n, e, c, 200)
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+        crate::interlisted::fetch().map_err(fetch_failed)
     }
-    fn has_filer(&self, s: &str, n: &str, e: &str, c: &str) -> bool { crate::edgar::has_filer(s, n, e, c) }
-    fn document(&self, row: &FiledDocument) -> Fetched<(Vec<u8>, String)> { crate::edgar::document(row) }
 }
 
-/// SEDAR+ first, then EDGAR.
-pub fn providers() -> [&'static dyn Provider; 2] {
-    [&Sedar, &Edgar]
+/// A fetch that did not answer, as a source's failure; one refused by
+/// `BAGHOLDER_OFFLINE` asked nobody, so it is no failure of the source's.
+fn fetch_failed(e: crate::http::FetchError) -> SourceError {
+    match e {
+        crate::http::FetchError::Offline => SourceError::Offline,
+        e => SourceError::Unavailable(crate::http::describe_failure(&e)),
+    }
 }
 
-/// Every covering source's filings for one instrument,
-/// merged newest first, with each source's outcome beside them. A source that
-/// fails is recorded and skipped; the others still return.
-pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Gathered {
-    fetch_from(&providers(), symbol, name, exchange, currency, limit, profile_no)
+/// The issuer's name a Canadian listing's exchange gives: the TSX directory's
+/// company record that holds the symbol, for the TSX and the TSX Venture; TMX's
+/// quote's name for the CSE and Cboe Canada. Why none, where none does.
+pub fn issuer_name(listing: &ListingKey) -> Fetched<Result<String, String>> {
+    let failed = fetch_failed;
+    match listing.venue() {
+        "XTSE" | "XTSX" => Ok(crate::search::tsx_issuer_name(listing).map_err(failed)?.ok_or_else(|| format!("The TSX's directory names no single company holding {}.", listing.symbol()))),
+        _ => {
+            let form = bagholder_sources::venue::tmx_form(listing.symbol(), listing.venue()).ok_or_else(|| SourceError::Other(format!("no TMX form for {listing}")))?;
+            let q = crate::tmx::fetch_tmx_quote(&form).map_err(failed)?;
+            Ok(q.map(|q| q.name).filter(|n| !n.trim().is_empty()).ok_or_else(|| format!("TMX Money names no company for {}.", listing.symbol())))
+        }
+    }
 }
 
-/// `fetch` over the providers given.
-pub fn fetch_from(providers: &[&dyn Provider], symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Gathered {
+/// A listing's filings gathered as the regulators answer now: its own filer's,
+/// and, where the TSX's interlisted list pairs it with `partner`, the partner's
+/// filer's, merged newest first, with each regulator's outcome beside them. A
+/// regulator that fails is recorded and skipped; the other still returns.
+pub fn gather(regulators: &dyn Regulators, listing: &ListingKey, partner: Option<&ListingKey>, today: &str, limit: usize) -> Gathered {
     let mut items: Vec<FiledDocument> = Vec::new();
     let mut sources: BTreeMap<Regulator, SourceOutcome> = BTreeMap::new();
-    for p in providers {
-        let avail = p.available();
-        if !(avail && p.covers(symbol, exchange, currency)) {
-            sources.insert(p.source(), SourceOutcome { available: avail, matched: false, filer: false, count: 0, error: String::new() });
-            continue;
-        }
-        match p.fetch(symbol, name, exchange, currency, profile_no) {
-            Ok(got) => {
-                let n = got.len();
-                items.extend(got);
-                let filer = n > 0 || p.has_filer(symbol, name, exchange, currency);
-                sources.insert(p.source(), SourceOutcome { available: true, matched: n > 0, filer, count: n, error: String::new() });
-            }
-            Err(e) => {
-                sources.insert(p.source(), outcome_of(&e));
-            }
-        }
+    for l in std::iter::once(listing).chain(partner) {
+        let Some((source, found)) = regulators.filer(l, today) else { continue };
+        let outcome = match found {
+            Ok(Ok(id)) => match regulators.documents(&Filer { source, id }, limit) {
+                Ok(got) => {
+                    let n = got.len();
+                    items.extend(got);
+                    SourceOutcome { available: true, matched: n > 0, filer: true, count: n, error: String::new() }
+                }
+                Err(e) => outcome_of(&e),
+            },
+            Ok(Err(why)) => SourceOutcome { available: true, matched: false, filer: false, count: 0, error: why },
+            Err(e) => outcome_of(&e),
+        };
+        sources.insert(source, outcome);
     }
-    // `sort(key=..., reverse=True)` is stable: equal keys keep their order
     items.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
+    items.dedup_by(|a, b| a.source == b.source && a.id == b.id);
     items.truncate(limit.max(1));
     Gathered { items, sources }
 }
@@ -191,6 +230,8 @@ pub fn fetch_from(providers: &[&dyn Provider], symbol: &str, name: &str, exchang
 fn outcome_of(e: &SourceError) -> SourceOutcome {
     match e {
         SourceError::Unavailable(m) => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: m.clone() },
+        // not asked: the card says the source could not be had, in the refusal's words
+        SourceError::Offline => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: bagholder_net::client::OFFLINE.into() },
         SourceError::Other(m) => SourceOutcome { available: true, matched: false, filer: false, count: 0, error: m.clone() },
     }
 }
@@ -198,14 +239,9 @@ fn outcome_of(e: &SourceError) -> SourceOutcome {
 /// The document a stored row points at, from its
 /// source. (bytes, content type).
 pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
-    document_from(&providers(), row)
-}
-
-/// `document` over the providers given.
-pub fn document_from(providers: &[&dyn Provider], row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
-    match providers.iter().find(|p| p.source() == row.source) {
-        Some(p) => p.document(row),
-        None => Err(SourceError::Unavailable(format!("no provider for source {}", repr_quoted(row.source.as_str())))),
+    match row.source {
+        Regulator::Sedar => crate::sedar::document(row),
+        Regulator::Sec => crate::edgar::document(row),
     }
 }
 

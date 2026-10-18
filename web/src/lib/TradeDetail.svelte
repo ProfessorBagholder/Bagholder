@@ -18,7 +18,8 @@
   import { listingVenue } from './listing.svelte'
   import { untrack } from 'svelte'
   import { recall, remember } from './reads.svelte'
-  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, keptHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import { chartColors, chartTfFor, chosenTf, setChartTf, listingTicker, loadHistory, keptHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import type { HistoryDoc } from './generated/chart'
   import { watchDoc } from './live.svelte'
   import { tradeChart } from './actions/tradeChart'
   import { fillsChart } from './actions/fillsChart'
@@ -67,13 +68,50 @@
     let cancelled = false
     const closing = new AbortController() // bars nobody is waiting for any more are not read
     let stopWatching: (() => void) | undefined
-    const mount = async (want: string) => {
-      const h = await loadHistory(t, want, closing.signal)
+    // what the listing offered when the chart was last asked again: asked once for each
+    let askedFor = ''
+    // the chart's own document while it is shown: whether its listing's bars are still
+    // being read, and the timeframes the listing offers now. The bars waited for coming
+    // in, or the offer changing (a miss recorded, bars stored), asks once more -- not
+    // every three seconds until they do
+    const follow = (want: string, offered: string[], waiting: boolean) => {
+      stopWatching?.()
+      const holder: { data: HistoryDoc } = { data: { pending: waiting, available: [...offered] } }
+      stopWatching = watchDoc(historyKey(t, want), {}, holder, () => {
+        const d = holder.data
+        if (d.pending || cancelled) return
+        const now = JSON.stringify(d.available)
+        if (!waiting && (now === JSON.stringify(offered) || now === askedFor)) return
+        askedFor = now
+        stopWatching?.()
+        stopWatching = undefined
+        mount(wanted, true)
+      })
+    }
+    // `again`: asked of the server, not of this page load's memory
+    const mount = async (want: string, again = false) => {
+      const h = await loadHistory(t, want, closing.signal, false, again)
       if (cancelled) return
+      if (h.refused) {
+        // no bars: a timeframe the listing does not offer, or a failure. What it offers
+        // is the daily answer's; a timeframe the person picked is never swapped for
+        // another's bars -- the chart says why, with the buttons it does offer
+        const d = want === '1d' ? null : await loadHistory(t, '1d', closing.signal, false, again)
+        if (cancelled) return
+        const offered = d && !d.refused ? d.available : []
+        const tf = chosenTf(t.id) === want ? '' : chartTfFor(t, offered)
+        if (tf && tf !== want) {
+          mount(tf, again)
+          return
+        }
+        show({ tf: want, hist: { ...h, available: offered }, provisional: false })
+        follow(want, offered, false)
+        return
+      }
       const available = h.available
       const tf = chartTfFor(t, available)
       if (tf && tf !== want) {
-        mount(tf)
+        mount(tf, again)
         return
       }
       if (h.pending) {
@@ -81,26 +119,14 @@
         // stored for minute bars, the daily chart stands in
         if (h.bars.length) show({ tf, hist: h, provisional: true })
         else if (want !== '1d' && available.indexOf('1d') >= 0) {
-          const d = await loadHistory(t, '1d', closing.signal)
+          const d = await loadHistory(t, '1d', closing.signal, false, again)
           if (!cancelled) show({ tf: '1d', hist: d, provisional: true })
         }
-        // the minute bars are being read: be told when they are in, and ask once more
-        // then -- not every three seconds until they are
-        let pending = true
-        const flag = {
-          get pending() { return pending },
-          set pending(v: boolean) {
-            pending = v
-            if (v || cancelled) return
-            stopWatching?.()
-            if (chartTfFor(t) === want) mount(want)
-          },
-        }
-        stopWatching?.()
-        stopWatching = watchDoc(historyKey(t, want), {}, { data: flag })
+        follow(want, available, true)
         return
       }
       show({ tf, hist: h, provisional: false })
+      follow(want, available, false)
     }
     mount(wanted)
     return () => {

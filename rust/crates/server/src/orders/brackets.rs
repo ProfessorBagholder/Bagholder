@@ -174,6 +174,8 @@ pub fn exit_order(sb: &StoredBracket, role: ExitRole, price: Option<Dec>, quanti
         ExitRole::Sale => return None,
     };
     let mut o = OrderRequest {
+        venue_mic: sb.place.venue_mic.clone(),
+        venue_name: sb.place.venue_name.clone(),
         id,
         broker: sb.place.broker.clone(),
         broker_account: sb.place.broker_account.clone(),

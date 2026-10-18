@@ -591,9 +591,12 @@ mod tests {
     #[test]
     fn a_glance_at_a_listing_on_an_unknown_venue_follows_its_currency_and_a_coin_keeps_its_own() {
         // a venue the app does not know, with the currency the page states
-        let g = glance_of("ABC", "OTC", "USD").unwrap();
+        let g = glance_of("ABC", "LSE", "USD").unwrap();
         assert_eq!((g.kind, g.currency, g.venue_mic), (InstrumentKind::Security, Currency::USD, None));
-        assert!(glance_of("ABC", "OTC", "").is_err(), "no venue known and no currency: nothing says where it trades");
+        assert!(glance_of("ABC", "LSE", "").is_err(), "no venue known and no currency: nothing says where it trades");
+        // an OTC listing is its own venue, in US dollars
+        let g = glance_of("TCEHY", "OTC", "").unwrap();
+        assert_eq!((g.currency, g.venue_mic.as_deref()), (Currency::USD, Some("OTCM")));
         // the old words for a venue still name it
         assert_eq!(glance_of("ONE", "TSX Venture Exchange", "").unwrap().venue_mic.as_deref(), Some("XTSX"));
         // a coin in the currency the page names, US dollars where it names none

@@ -442,6 +442,11 @@ impl Generated {
                 let opened = 1 + (k as i64 * (days - 3)) / size.deep as i64;
                 let closed = (1 + ((k as i64 + 1) * (days - 3)) / size.deep as i64 - 1).max(opened);
                 out.entry(day(opened)).or_default().push(Plan::Buy { account, listing, units: r.range(1, 200) });
+                // a distribution in the middle of the history, whatever its depth: the
+                // capacity test's back-dated record (`capacity`, `Op::BackdatedRecord`)
+                if k == size.deep / 2 {
+                    out.entry(day(opened)).or_default().push(Plan::Dividend { account, listing });
+                }
                 // the last stays open: the listing is held today
                 if k + 1 < size.deep {
                     out.entry(day(closed)).or_default().push(Plan::Sell { account, listing, all: true });

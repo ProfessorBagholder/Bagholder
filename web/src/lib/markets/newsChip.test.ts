@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bookListing, directoryListing, tickerKey } from './newsChip'
+import { chipKey, tickerKey } from './newsChip'
 
 describe('a word typed in the News box', () => {
   it('can be a ticker only as one short word', () => {
@@ -9,20 +9,9 @@ describe('a word typed in the News box', () => {
     expect(tickerKey('')).toBeNull()
   })
 
-  it("names the book's listing by its ticker, never a contract written on it", () => {
-    const rows = [
-      { symbol: 'ABC 20NOV26 3.00 CALL', exchange: 'OPRA' },
-      { symbol: 'ABC.TO', exchange: 'TSX', name: 'Abc Corp', currency: 'CAD' },
-    ]
-    expect(bookListing('ABC', rows)).toEqual({ symbol: 'ABC', exchange: 'TSX', name: 'Abc Corp', currency: 'CAD' })
-    expect(bookListing('ABD', rows)).toBeNull()
-    expect(bookListing('ABC', rows.slice(0, 1))).toBeNull()
-  })
-
-  it("names a directory's listing only where the directory states that ticker: a name match is a text search", () => {
-    const matches = [{ symbol: 'XYZW', exchange: 'NASDAQ', name: 'Word Holdings' }, { symbol: 'WORD', exchange: 'NYSE', name: 'Other' }]
-    expect(directoryListing('WORD', matches)?.exchange).toBe('NYSE')
-    expect(directoryListing('WOR', matches)).toBeNull()
-    expect(directoryListing('ANY', [])).toBeNull()
+  it('is a listing by its key: the same ticker on two venues is two chips, and one with no venue is none', () => {
+    expect(chipKey({ symbol: 'ABC', exchange: 'TSX' })).toBe('ABC@XTSE')
+    expect(chipKey({ symbol: 'ABC', exchange: 'NYSE' })).toBe('ABC@US')
+    expect(chipKey({ symbol: 'ABC', exchange: '' })).toBe('')
   })
 })

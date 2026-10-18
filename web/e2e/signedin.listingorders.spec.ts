@@ -96,7 +96,7 @@ test("a directory row and its page open on the listing Wealthsimple's search fin
   const enb = await holdings(request, 'ENB')
   const margin = ((await figures(request)).accounts as { brokerAccount: string; margin: boolean; tradable: boolean; status: string }[]).find((a) => a.margin && a.tradable && a.status !== 'closed')!.brokerAccount
   // the exchanges' directories are out of reach offline: their row is stood in
-  await page.route('**/api/symbols/search?*', (route) => route.fulfill({ json: { ok: true, matches: [{ symbol: 'ENB', name: 'Enbridge Inc.', exchange: 'NYSE', currency: 'USD' }] } }))
+  await page.route('**/api/symbols/search?*', (route) => route.fulfill({ json: { ok: true, unread: [], matches: [{ symbol: 'ENB', name: 'Enbridge Inc.', exchange: 'NYSE', currency: 'USD' }] } }))
   const asked: unknown[] = []
   page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/order/listing') asked.push(r.postDataJSON()) })
   await page.goto('/')
@@ -114,22 +114,22 @@ test("a directory row and its page open on the listing Wealthsimple's search fin
   await placed(page, { security: 'sec-enb-nyse', account: margin, qty: '1' }, seen)
 })
 
-test('a listing page whose address names no venue offers no Buy and opens no holding, for tickers the book has traded and holds', async ({ page }) => {
+test('a listing page whose address names no venue is resolved: one listing opens, two are offered, and nothing is ordered by the ticker', async ({ page }) => {
   const asked: string[] = []
   page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/order/listing') asked.push(r.url()) })
+  // the server is offline, so its directories go unread and no single listing would be
+  // taken alone: they are stood in as answering, with nothing beyond the book's own
+  await page.route('**/api/listings?*', async (route) => route.fulfill({ json: { ...(await (await route.fetch()).json()), unread: [] } }))
   await page.goto('/')
   await ready(page)
-  // a heatmap tile or a notification opens a listing by its ticker alone: UBER the book
-  // traded and closed, TD it holds on two venues
-  for (const symbol of ['UBER', 'TD']) {
-    const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/listing' && new URL(r.url()).searchParams.get('symbol') === symbol)
-    await page.evaluate((s) => { location.hash = `markets/listing:${s}@` }, symbol)
-    await answered
-    await expect(page.locator('.tk-rowbtns').first()).toBeVisible()
-    await expect(page.getByRole('button', { name: `Buy ${symbol}`, exact: true })).toHaveCount(0)
-    // the page stays the listing's: no holding is opened by the ticker
-    await expect(page).toHaveURL(new RegExp(`#markets/listing:${symbol}@$`))
-  }
+  // UBER, the book traded and closed on one venue: its one listing's page
+  await page.evaluate(() => { location.hash = 'markets/listing:UBER@' })
+  await expect(page).toHaveURL(/#markets\/listing:UBER@US$/)
+  // TD, it holds on two venues: each offered, none opened, no Buy
+  await page.evaluate(() => { location.hash = 'markets/listing:TD@' })
+  await expect(page).toHaveURL(/#markets\/listing:TD$/)
+  await expect(page.locator('#page .lc-row')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: 'Buy TD', exact: true })).toHaveCount(0)
   expect(asked, 'no listing is asked for an order').toEqual([])
 })
 

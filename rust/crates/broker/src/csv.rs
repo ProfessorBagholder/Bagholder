@@ -336,6 +336,9 @@ pub struct Stated {
     pub kind: Kind,
     /// The instrument, by the symbol the row gives and what kind it is.
     pub instrument: Option<(String, InstrumentKind)>,
+    /// The exchange the row names its symbol on, where the file has an
+    /// `exchange` column: a ticker alone can be two companies on two exchanges.
+    pub exchange: Option<String>,
     /// Signed: into the account is positive.
     pub quantity: Option<Dec>,
     pub price: Option<Dec>,
@@ -431,6 +434,7 @@ fn activities(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
     let commission = opt_number(cells, "commission", "commission")?;
     let direction = cell(cells, "direction").unwrap_or("").to_uppercase();
     let mut out = Stated {
+        exchange: cell(cells, "exchange").map(str::to_string),
         day: date,
         settle,
         kind: Kind::Unclassified,
@@ -518,6 +522,7 @@ fn statement(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
     let description = cell(cells, "description").unwrap_or("");
     let amount = number("amount", cell(cells, "amount").ok_or_else(|| unreadable("the row has no amount".into()))?)?;
     let mut out = Stated {
+        exchange: cell(cells, "exchange").map(str::to_string),
         day: date,
         settle: None,
         kind: Kind::Unclassified,
@@ -573,6 +578,7 @@ fn simple(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         (None, None) => None,
     };
     let mut out = Stated {
+        exchange: cell(cells, "exchange").map(str::to_string),
         day: date,
         settle: None,
         kind: Kind::Unclassified,
@@ -636,6 +642,10 @@ pub struct Payload {
     /// Why the row is not placed in that account (it names another the book does not hold).
     pub unplaced: Option<String>,
     pub instrument: Option<Named>,
+    /// Why the book named no instrument for the row's symbol, where it could not
+    /// tell which (two instruments had the name on the row's day).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unnamed: Option<String>,
 }
 
 impl Payload {
@@ -719,7 +729,7 @@ impl Mapping for CsvMapping {
                 Err(why) => return Mapped::unreadable(format!("a file's row whose instrument does not read: {why}")),
             },
             (Some((symbol, _)), None) => {
-                problems.push(Problem::new("instrument-not-named", format!("the book named no instrument for {symbol}")));
+                problems.push(Problem::new("instrument-not-named", p.unnamed.clone().unwrap_or_else(|| format!("the book named no instrument for {symbol}"))));
                 return unplaced(s.day, problems);
             }
         };
@@ -860,7 +870,7 @@ mod tests {
     }
 
     fn payload(layout: Layout, c: BTreeMap<String, String>, instrument: Option<Named>) -> String {
-        serde_json::to_string(&Payload { layout, cells: c, occurrence: 0, account: ("manual".into(), "manual".into()), unplaced: None, instrument }).unwrap()
+        serde_json::to_string(&Payload { layout, cells: c, occurrence: 0, account: ("manual".into(), "manual".into()), unplaced: None, instrument, unnamed: None }).unwrap()
     }
 
     fn ctx() -> (bagholder_book::zones::Zones, bagholder_core::RecordId) {
@@ -871,7 +881,7 @@ mod tests {
     fn a_row_maps_to_its_transaction_in_the_file_s_currency() {
         let (zones, record) = ctx();
         let c = MapContext { connection: None, record, zones: &zones };
-        let named = Named { refs: vec![("isin".into(), "US0000000001".into())], kind: "security".into(), currency: "USD".into(), symbol: "ZZZ".into(), contract: None };
+        let named = Named { refs: vec![("isin".into(), "US0000000001".into())], kind: "security".into(), currency: "USD".into(), symbol: "ZZZ".into(), contract: None, venue: None, by_reference: false };
         let m = CsvMapping.map(&c, &payload(Layout::Simple, cells(&[("date", "2024-03-01"), ("action", "buy"), ("symbol", "ZZZ"), ("quantity", "5"), ("price", "20"), ("amount", "100"), ("currency", "USD")]), Some(named)));
         assert!(m.problems.is_empty(), "{:?}", m.problems);
         let d = &m.legs[0];
@@ -890,14 +900,14 @@ mod tests {
     fn a_row_naming_an_account_the_book_does_not_hold_counts_in_no_figure() {
         let (zones, record) = ctx();
         let c = MapContext { connection: None, record, zones: &zones };
-        let p = Payload { layout: Layout::Simple, cells: cells(&[("date", "2024-03-01"), ("action", "deposit"), ("symbol", ""), ("quantity", ""), ("price", ""), ("amount", "1"), ("currency", "CAD")]), occurrence: 0, account: ("manual".into(), "manual".into()), unplaced: Some("the row names account X".into()), instrument: None };
+        let p = Payload { layout: Layout::Simple, cells: cells(&[("date", "2024-03-01"), ("action", "deposit"), ("symbol", ""), ("quantity", ""), ("price", ""), ("amount", "1"), ("currency", "CAD")]), occurrence: 0, account: ("manual".into(), "manual".into()), unplaced: Some("the row names account X".into()), instrument: None, unnamed: None };
         let m = CsvMapping.map(&c, &serde_json::to_string(&p).unwrap());
         assert_eq!((m.legs[0].kind, m.legs[0].cash, m.problems[0].code.as_str()), (Kind::Unclassified, None, "account-unknown"));
     }
 
     #[test]
     fn the_key_is_the_row_not_the_file() {
-        let a = Payload { layout: Layout::Simple, cells: cells(&[("date", "2024-03-01")]), occurrence: 0, account: ("manual".into(), "manual".into()), unplaced: None, instrument: None };
+        let a = Payload { layout: Layout::Simple, cells: cells(&[("date", "2024-03-01")]), occurrence: 0, account: ("manual".into(), "manual".into()), unplaced: None, instrument: None, unnamed: None };
         let mut b = a.clone();
         assert_eq!(a.key(), b.key());
         b.occurrence = 1;

@@ -165,7 +165,7 @@ pub const BOC_PUBLISH_MINUTE_ET: i64 = 16 * 60 + 30;
 /// dividend payers whose record is stale, or all of them when forced. A payer
 /// whose read fails keeps its record and is said; the others are read.
 pub fn refresh_distributions(conn: &Connection, symbols: &[Listing], force: bool) -> Result<usize, String> {
-    let (today, now_unix, stamp) = crate::clock_now();
+    let (_, now_unix, stamp) = crate::clock_now();
     let todo: Vec<String> = if force {
         symbols
             .iter()
@@ -187,7 +187,7 @@ pub fn refresh_distributions(conn: &Connection, symbols: &[Listing], force: bool
     let mut failures = Vec::new();
     for sym in todo {
         let exchange = exchanges.get(&sym).cloned().unwrap_or_default();
-        let (quote, divs) = match crate::tmx::fetch_tmx(conn, &sym, &exchange, &today) {
+        let (quote, divs) = match crate::tmx::fetch_tmx(&sym, &exchange) {
             Ok(got) => got,
             Err(e) => {
                 failures.push(format!("The distributions of {sym} could not be read: {e}."));

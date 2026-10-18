@@ -165,7 +165,7 @@ pub fn failure(o: &OutcomeRow) -> Option<String> {
         OutcomeKind::Unreachable => "could not be reached",
         OutcomeKind::Mismatch => "answered in a form Bagholder cannot read",
         OutcomeKind::Meaning => "answered with data that cannot be right",
-        OutcomeKind::Answered | OutcomeKind::NotCarried => return None,
+        OutcomeKind::Answered | OutcomeKind::NotCarried | OutcomeKind::Offline => return None,
     };
     Some(format!("{} {what}.", label(&o.source)))
 }

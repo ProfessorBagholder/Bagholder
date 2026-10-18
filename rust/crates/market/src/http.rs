@@ -64,6 +64,7 @@ fn send(ask: &Ask) -> Result<bagholder_net::Reply, FetchError> {
             FetchError::Transport(format!("{host}: refused a request; not asked again before {until}"))
         }
         NetError::Unreachable(m) => FetchError::Transport(m),
+        NetError::Offline => FetchError::Offline,
     })?;
     if reply.status >= 400 {
         return Err(FetchError::Status(reply.status));
@@ -86,6 +87,7 @@ pub fn get_published(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u
     let reply = bagholder_net::machine::net().send(&ask).map_err(|e| match e {
         NetError::Resting { host, until } => FetchError::Transport(format!("{host}: refused a request; not asked again before {until}")),
         NetError::Unreachable(m) => FetchError::Transport(m),
+        NetError::Offline => FetchError::Offline,
     })?;
     if not_published(url, &reply) {
         return Ok(None);

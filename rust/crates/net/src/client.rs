@@ -21,6 +21,8 @@ const POOL_PER_HOST: usize = 2;
 pub enum Error {
     Status(u16),
     Transport(String),
+    /// Refused by `BAGHOLDER_OFFLINE`: nothing was asked of anyone.
+    Offline,
 }
 
 impl std::fmt::Display for Error {
@@ -28,7 +30,63 @@ impl std::fmt::Display for Error {
         match self {
             Error::Status(c) => write!(f, "HTTP {}", c),
             Error::Transport(m) => write!(f, "{}", m),
+            Error::Offline => f.write_str(OFFLINE),
         }
+    }
+}
+
+/// What failed, in words a person reads; or a request the process was told not to
+/// make (`BAGHOLDER_OFFLINE`), which asked nobody and is no failure of anyone's,
+/// known by its type wherever it is carried, never by its words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    Offline,
+    Said(String),
+}
+
+impl Failure {
+    /// The words changed by `f`; an offline refusal stays one.
+    pub fn map(self, f: impl FnOnce(String) -> String) -> Failure {
+        match self {
+            Failure::Offline => Failure::Offline,
+            Failure::Said(s) => Failure::Said(f(s)),
+        }
+    }
+
+    /// Whether nothing was asked because the process is offline.
+    pub fn is_offline(&self) -> bool {
+        matches!(self, Failure::Offline)
+    }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Offline => f.write_str(OFFLINE),
+            Failure::Said(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<String> for Failure {
+    fn from(s: String) -> Failure {
+        Failure::Said(s)
+    }
+}
+
+impl From<Error> for Failure {
+    /// A failed request: an offline refusal by its kind, any other in its words.
+    fn from(e: Error) -> Failure {
+        match e {
+            Error::Offline => Failure::Offline,
+            e => Failure::Said(e.to_string()),
+        }
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(s: &str) -> Failure {
+        Failure::Said(s.to_string())
     }
 }
 
@@ -566,12 +624,6 @@ pub fn outbound_requests() -> usize {
 /// anyone, so it tells nothing of the source it was meant for.
 pub const OFFLINE: &str = "offline: BAGHOLDER_OFFLINE is set";
 
-/// Whether a failure's words are that refusal, as it reads or with the reader's
-/// own subject before it (`SPY: offline: …`).
-pub fn is_offline_refusal(detail: &str) -> bool {
-    detail == OFFLINE || detail.strip_suffix(OFFLINE).is_some_and(|head| head.ends_with(": "))
-}
-
 /// Whether the process was told to stay off the network (`BAGHOLDER_OFFLINE`).
 pub fn offline() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -608,7 +660,7 @@ fn leaving(method: &str, u: &Url) -> Result<(), Error> {
         eprintln!("outbound {} {}{}{}{}", method, u.host, port, u.path.split('?').next().unwrap_or(""), if refused { " (refused: offline)" } else { "" });
     }
     if refused {
-        return Err(Error::Transport(OFFLINE.into()));
+        return Err(Error::Offline);
     }
     Ok(())
 }

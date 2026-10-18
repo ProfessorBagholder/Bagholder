@@ -8,6 +8,7 @@ import type { Trade, Filing, FilingsDoc } from '../model'
 import { listingTicker } from './chart'
 import { watchDoc } from '../live.svelte'
 import { read } from '../reads.svelte'
+import { keyParts, listingKey } from '../listingKey'
 
 export const DISC_ORDER = ['Financials', 'Material events', 'Governance', 'Offerings', 'Insider & ownership', 'News releases', 'Other']
 
@@ -19,6 +20,7 @@ export interface DiscRec {
   error?: string
 }
 
+/** Each listing's disclosures, by its key (`SYMBOL@VENUE`): two listings of one ticker are two. */
 export const discStore = $state<Record<string, DiscRec>>({})
 
 /**
@@ -29,15 +31,21 @@ export const discRereading = $state<Record<string, boolean>>({})
 /** A forced read that was refused, per listing, until the next one is asked for. */
 export const discRereadError = $state<Record<string, string>>({})
 
-export function discSymbol(t: { symbol: string; kind?: string; underlying?: string }): string {
-  return String(listingTicker(t as Trade) || t.symbol || '').toUpperCase()
+/**
+ * The listing whose disclosures a trade or holding shows (an option's, its
+ * underlying's on the venue its records name); '' where its records name no venue:
+ * its filings wait for one, and none are asked for by its ticker alone.
+ */
+export function discKey(t: { symbol: string; kind?: string; underlying?: string; exchange?: string | null }): string {
+  return listingKey(listingTicker(t as Trade) || t.symbol, t.exchange) ?? ''
 }
 
-function docKey(sym: string, t: { name?: string; exchange?: string; currency?: string }): string {
+function docKey(key: string, t: { name?: string; currency?: string }): string {
+  const { symbol, venue } = keyParts(key)
   return (
-    'filings:symbol=' + encodeURIComponent(sym) +
+    'filings:symbol=' + encodeURIComponent(symbol) +
+    '&exchange=' + encodeURIComponent(venue) +
     (t.name ? '&name=' + encodeURIComponent(t.name) : '') +
-    (t.exchange ? '&exchange=' + encodeURIComponent(t.exchange) : '') +
     (t.currency ? '&currency=' + encodeURIComponent(t.currency) : '')
   )
 }
@@ -49,7 +57,7 @@ const watching = new Map<string, { count: number; stop: () => void }>()
  * the same listing; it is watched once. Returns what the caller runs when it stops.
  */
 export function showDisclosures(t: { symbol: string; kind?: string; underlying?: string; name?: string; exchange?: string; currency?: string }): () => void {
-  const sym = discSymbol(t)
+  const sym = discKey(t)
   if (!sym) return () => {}
   const held = watching.get(sym)
   if (held) held.count++
@@ -79,12 +87,13 @@ export function showDisclosures(t: { symbol: string; kind?: string; underlying?:
  * Read the sources again now, whatever their age; what they say reaches the rows as
  * changes. The card reads as Reading until the read answers; a refusal is said.
  */
-export async function refreshDisclosures(sym: string, t: { name?: string; exchange?: string; currency?: string } | null): Promise<void> {
-  if (discRereading[sym]) return
+export async function refreshDisclosures(sym: string, t: { name?: string; currency?: string } | null): Promise<void> {
+  if (!sym || discRereading[sym]) return
   discRereading[sym] = true
   delete discRereadError[sym]
+  const { symbol, venue } = keyParts(sym)
   try {
-    const a = await read('GET /api/filings', { query: { symbol: sym, name: t?.name ?? '', exchange: t?.exchange ?? '', currency: t?.currency ?? '', refresh: true } })
+    const a = await read('GET /api/filings', { query: { symbol, name: t?.name ?? '', exchange: venue, currency: t?.currency ?? '', refresh: true } })
     if (!a.ok) discRereadError[sym] = 'Could not read disclosures: ' + a.error
   } finally {
     delete discRereading[sym]
@@ -137,4 +146,9 @@ export function discSortValue(item: Filing, key: string): unknown {
         : key === 'size'
           ? discSizeBytes(item.size)
           : item.date
+}
+
+/** Where a stored document is opened through the app: by its source and id, never by a ticker. */
+export function filingDocUrl(source: string, id: string): string {
+  return '/api/filings/doc?source=' + encodeURIComponent(source) + '&id=' + encodeURIComponent(id)
 }

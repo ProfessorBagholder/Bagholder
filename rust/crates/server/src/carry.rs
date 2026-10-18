@@ -18,17 +18,19 @@ use crate::app::{log, App};
 use crate::clear::Kind;
 use crate::figures::{Figures, CACHE_FILE, OLD_FILE};
 
-/// The earlier readers' tables, carried whole into the market cache.
-pub const MARKET_TABLES: [&str; 10] =
-    ["news", "filings", "exposures", "gauges", "shorts", "universes", "price_history", "history_fetches", "price_bars", "bar_fetches"];
+/// The earlier readers' tables carried whole into the market cache: those not
+/// kept per listing. What the earlier store kept per listing it kept by a bare
+/// ticker two listings could share (charts, short interest, news, a share's or a
+/// fund's breakdown), so it cannot be told apart and is read again (plan
+/// `market-data-keyed-by-listing`, Approach, 4); filings are carried to their
+/// filers (`bagholder_sources::cache::carry_filings`).
+pub const MARKET_TABLES: [&str; 3] = ["exposures", "gauges", "universes"];
 
 /// The earlier store's `meta` keys the market readers remember by, by what each
-/// begins with: a symbol's form at TMX, the source that answered a chart or a
-/// listing's filings, a miss remembered for the day, when a listing's news was read.
-pub const MARKET_META_PREFIXES: [&str; 11] = [
-    "tmx_form:", "bars_source:", "bars_miss:", "coinbase_product:", "coinbase_prev:", "yahoo_miss:",
-    "news_fetched:", "news_source_fetched:", "filings_fetched:", "filings_sources:", "sedar_profile:",
-];
+/// begins with: each names one listing by the source's own name for it (a
+/// Coinbase market, a Yahoo symbol), so it is carried; a key naming a bare
+/// ticker is not.
+pub const MARKET_META_PREFIXES: [&str; 3] = ["coinbase_product:", "coinbase_prev:", "yahoo_miss:"];
 
 /// The earlier store's `meta` keys carried whole: the disclosures' hold on what
 /// cannot be named yet, and the update check.
@@ -42,6 +44,8 @@ pub const CARRIED: &str = "carried.earlier-store";
 pub struct CarriedMarket {
     pub rows: Vec<(String, i64)>,
     pub keys: i64,
+    /// Filings that named no filer, so could not be carried.
+    pub dropped_filings: i64,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -91,8 +95,16 @@ pub fn carry_market(old: Option<&Path>, cache: &Path, at: Timestamp) -> Result<O
             let theirs = cols("old")?;
             let both: Vec<String> = cols("main")?.into_iter().filter(|x| theirs.contains(x)).map(|x| format!("\"{x}\"")).collect();
             let list = both.join(", ");
-            let n = c.execute(&format!("INSERT INTO main.\"{t}\" ({list}) SELECT {list} FROM old.\"{t}\""), [])?;
+            // a share's or a fund's breakdown was kept by ticker, and is read again
+            let only = if t == "exposures" { " WHERE key NOT LIKE 'share:%' AND key NOT LIKE 'fund:%'" } else { "" };
+            let n = c.execute(&format!("INSERT INTO main.\"{t}\" ({list}) SELECT {list} FROM old.\"{t}\"{only}"), [])?;
             out.rows.push((t.to_string(), n as i64));
+        }
+        let there: i64 = c.query_row("SELECT COUNT(*) FROM old.sqlite_master WHERE type = 'table' AND name = 'filings'", [], |r| r.get(0))?;
+        if there > 0 {
+            let (carried, dropped) = bagholder_sources::cache::carry_filings(&c, "old")?;
+            out.rows.push(("filings".into(), carried as i64));
+            out.dropped_filings = dropped as i64;
         }
         let keys: Vec<(String, Option<String>)> = c.prepare("SELECT key, value FROM old.meta ORDER BY key")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         for (key, value) in keys.into_iter().filter(|(k, _)| market_key(k)) {
@@ -307,6 +319,109 @@ pub fn from_old_store(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<(),
     Ok(())
 }
 
+/// The book's setting that says its told marks were carried to the scopes a
+/// listing and a filer are kept under (plan `market-data-keyed-by-listing`,
+/// Approach, 3), and how many.
+pub const TOLD_BY_LISTING: &str = "carried.told-by-listing";
+
+/// What a stream's mark says it has shown up to: the moment before its `|`.
+fn mark_moment(value: &str) -> &str {
+    value.split_once('|').map_or(value, |(m, _)| m)
+}
+
+/// The scopes an earlier build kept what was told under, by a ticker, and those
+/// the same marks belong under now: `news:<SYM>@<venue words>` is its listing's
+/// `news:<ListingKey>`; `filings:<SYM>:<source>` is each filer the market cache
+/// carried that ticker's filings to (`filings_carried`), `filings:<source>:<filer>`.
+/// A scope already in the new form, or one whose listing names no venue a key is
+/// made from, has none: it is left to lapse, and the stream it was is a new scope
+/// whose first sweep sets its mark without telling (`notify::fresh_in`).
+fn told_scopes(cache: &Connection, scope: &str) -> Result<Vec<String>, String> {
+    use bagholder_store::feeds::Regulator;
+    if let Some(rest) = scope.strip_prefix("news:") {
+        if rest.parse::<bagholder_core::ListingKey>().is_ok() {
+            return Ok(vec![]);
+        }
+        let Some((sym, ex)) = rest.rsplit_once('@') else { return Ok(vec![]) };
+        // a scope whose venue words name no venue a key is made from is left to lapse
+        return Ok(bagholder_core::ListingKey::on(sym, ex).map_or_else(|_| vec![], |k| vec![format!("news:{k}")]));
+    }
+    if let Some(rest) = scope.strip_prefix("filings:") {
+        let parts: Vec<&str> = rest.split(':').collect();
+        let is_source = |s: &str| Regulator::parse(s).is_some();
+        let [sym, source] = parts.as_slice() else { return Ok(vec![]) };
+        if is_source(sym) || !is_source(source) {
+            return Ok(vec![]);
+        }
+        let mut stmt = cache.prepare("SELECT filer FROM filings_carried WHERE symbol = ? AND source = ? ORDER BY filer").map_err(err)?;
+        let filers = stmt.query_map([sym, source], |r| r.get::<_, String>(0)).map_err(err)?.collect::<rusqlite::Result<Vec<_>>>().map_err(err)?;
+        return Ok(filers.into_iter().map(|f| format!("filings:{source}:{f}")).collect());
+    }
+    Ok(vec![])
+}
+
+/// Whether a told scope is of an earlier build's form: a news scope by a ticker
+/// and venue words, or a filings scope by a ticker and a source.
+fn earlier_form(scope: &str) -> bool {
+    use bagholder_store::feeds::Regulator;
+    if let Some(rest) = scope.strip_prefix("news:") {
+        return rest.parse::<bagholder_core::ListingKey>().is_err();
+    }
+    match scope.strip_prefix("filings:").map(|r| r.split(':').collect::<Vec<_>>()) {
+        Some(parts) => parts.len() == 2 && Regulator::parse(parts[0]).is_none() && Regulator::parse(parts[1]).is_some(),
+        None => false,
+    }
+}
+
+/// Carry the book's told marks to the scopes a listing and a filer are kept
+/// under, once, after the market cache's migration 6 has named each ticker's
+/// filers: each event told under an old scope is told under each new one, and
+/// each stream's mark is the later of the old and the new, so nothing is told
+/// twice and a filing that arrives after the old mark is still told. The old
+/// scopes are removed. What came, as (events, marks); `None` when carried before.
+pub fn carry_told_by_listing(book: &Book, cache: &Connection, now: Timestamp) -> Result<Option<(usize, usize)>, String> {
+    if book.setting(TOLD_BY_LISTING).map_err(err)?.is_some() {
+        return Ok(None);
+    }
+    let c = book.notices();
+    let seen = bagholder_book::notices::SEEN;
+    let carried = bagholder_sqlite::atomically(c, || -> rusqlite::Result<(usize, usize)> {
+        let as_sql = |e: String| rusqlite::Error::ToSqlConversionFailure(e.into());
+        let mut scopes: Vec<String> = c.prepare("SELECT DISTINCT scope FROM told WHERE scope LIKE 'news:%' OR scope LIKE 'filings:%'")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let marked: Vec<(String, String)> = c
+            .prepare("SELECT key, value FROM settings WHERE key LIKE ? || 'news:%' OR key LIKE ? || 'filings:%'")?
+            .query_map([seen, seen], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        scopes.extend(marked.iter().map(|(k, _)| k[seen.len()..].to_string()));
+        scopes.sort();
+        scopes.dedup();
+        let (mut events, mut marks) = (0usize, 0usize);
+        for old in scopes {
+            let new = told_scopes(cache, &old).map_err(as_sql)?;
+            for n in &new {
+                events += c.execute("INSERT OR IGNORE INTO told (scope, event, at) SELECT ?1, event, at FROM told WHERE scope = ?2", [n, &old])?;
+                if let Some((_, v)) = marked.iter().find(|(k, _)| k[seen.len()..] == old) {
+                    let key = format!("{seen}{n}");
+                    let held: Option<String> = c.query_row("SELECT value FROM settings WHERE key = ?", [&key], |r| r.get(0)).ok();
+                    if held.as_deref().is_none_or(|h| mark_moment(h) < mark_moment(v)) {
+                        book.set_setting(&key, Some(v), now).map_err(crate::notify::sql)?;
+                        marks += 1;
+                    }
+                }
+            }
+            // a scope of the earlier form is gone once carried, or when it names nothing a scope is kept under now
+            if earlier_form(&old) {
+                c.execute("DELETE FROM told WHERE scope = ?", [&old])?;
+                book.set_setting(&format!("{seen}{old}"), None, now).map_err(crate::notify::sql)?;
+            }
+        }
+        book.set_setting(TOLD_BY_LISTING, Some(&format!("{events} events, {marks} marks")), now).map_err(crate::notify::sql)?;
+        Ok((events, marks))
+    })
+    .map_err(err)?;
+    Ok(Some(carried))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,9 +493,12 @@ mod tests {
         crate::tests_common::pulled_book(home.path());
         let old = bagholder_store::connect(home.path()).unwrap();
         bagholder_store::relabel::ensure(&old).unwrap();
-        for t in MARKET_TABLES.iter().chain(&["notifications", "told"]) {
+        for t in MARKET_TABLES.iter().chain(&["notifications", "told", "filings", "price_history", "news", "shorts"]) {
             fill(&old, t);
         }
+        // the filled filings name a filer: a SEDAR+ profile, or an SEC address
+        old.execute("UPDATE filings SET source = 'SEDAR+', profile_no = '000012345' WHERE rowid = 1", []).unwrap();
+        old.execute("UPDATE filings SET source = 'SEC', url = 'https://www.sec.gov/Archives/edgar/data/0000320193/1/a.htm' WHERE rowid = 2", []).unwrap();
         for (k, v) in KEYS {
             bagholder_store::tables::set_meta(&old, k, v).unwrap();
         }
@@ -408,13 +526,21 @@ mod tests {
             assert_eq!(was.len(), 2, "{t} held rows to carry");
             assert_eq!(is, was, "the market cache's {t}");
         }
+        // filings carried to their filers, with what they held
+        let filed: Vec<(String, String, String)> = cache.prepare("SELECT source, id, filer FROM filings ORDER BY source").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(filed, vec![("SEC".into(), "filings.id.2".into(), "320193".into()), ("SEDAR+".into(), "filings.id.1".into(), "000012345".into())]);
+        // what was kept by a bare ticker is read again, never carried
+        for t in ["price_history", "news", "shorts"] {
+            let n: i64 = cache.query_row(&format!("SELECT COUNT(*) FROM \"{t}\""), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{t} is read again");
+        }
         for t in ["notifications", "told"] {
             let cols = columns(book.notices(), t);
             assert_eq!(rows(book.notices(), t, &cols), rows(&old, t, &cols), "the book's {t}");
         }
         let kept: BTreeMap<String, String> = cache.prepare("SELECT key, value FROM meta WHERE key != ?").unwrap().query_map([CARRIED], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         let want: BTreeMap<String, String> = KEYS.iter().filter(|(k, _)| market_key(k)).map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        assert_eq!(want.len(), 13, "every reader's key, the update check among them");
+        assert_eq!(want.len(), 5, "every reader's key that names a listing by a source's own name, the update check among them");
         assert_eq!(kept, want, "the readers' keys and nothing else");
         assert_eq!(book.setting(crate::notify::SETTINGS_KEY).unwrap().as_deref(), Some("{\"fills\":true,\"releasesAll\":true}"));
         assert_eq!(book.setting(&format!("{}news:QNC@TSX", crate::notify::WATERMARK)).unwrap().as_deref(), Some("2026-09-25T10:00:00Z|a"));
@@ -482,16 +608,69 @@ mod tests {
     fn a_carry_that_fails_part_way_carries_nothing_and_says_what() {
         let (home, _app, _f) = home_with_an_earlier_store();
         let old = bagholder_store::connect(home.path()).unwrap();
-        // a price bar with no close, which the market cache refuses
-        old.execute_batch("PRAGMA ignore_check_constraints = ON; DROP TABLE price_bars; CREATE TABLE price_bars (symbol TEXT, tf TEXT, ts INTEGER, open REAL, high REAL, low REAL, close REAL, volume REAL, source TEXT); INSERT INTO price_bars (symbol, tf, ts) VALUES ('QNC', '1h', 1);").unwrap();
+        // a universe row with no symbol, which the market cache refuses
+        old.execute_batch("DROP TABLE universes; CREATE TABLE universes (key TEXT, symbol TEXT, name TEXT, value REAL, percent_change REAL, sector TEXT, country TEXT, fetched_at TEXT); INSERT INTO universes (key) VALUES ('tsx60');").unwrap();
         drop(old);
         let cache = home.path().join(CACHE_FILE);
         let e = carry_market(Some(&home.path().join(OLD_FILE)), &cache, now()).unwrap_err();
-        assert!(e.contains("could not be carried") && e.contains("price_bars.close"), "{e}");
+        assert!(e.contains("could not be carried") && e.contains("universes.symbol"), "{e}");
         let c = open(&cache);
         for t in MARKET_TABLES {
             assert_eq!(c.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
         assert_eq!(c.query_row("SELECT COUNT(*) FROM meta", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "not marked: tried again at the next start");
+    }
+
+    /// The told marks of an earlier build go to the scopes each listing and filer
+    /// is kept under: every event told under an old scope is told under each new
+    /// one, each stream's mark is the later of the two, the old scopes go, and a
+    /// second start carries nothing. Over every venue a news scope may name.
+    #[test]
+    fn told_marks_are_carried_to_each_listing_and_filer_once() {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let at: Timestamp = "2026-10-01T12:00:00Z".parse().unwrap();
+        let f = Figures::open(home.path(), at).unwrap();
+        let book = f.book().unwrap();
+        let cache = Connection::open_in_memory().unwrap();
+        for m in &bagholder_sources::cache::MIGRATIONS {
+            cache.execute_batch(m.sql).unwrap();
+        }
+        // a ticker whose filings were carried to two filers, and one carried to none
+        cache.execute_batch("INSERT INTO filings_carried VALUES ('ZQ', 'SEDAR+', '000000001'), ('ZQ', 'SEC', '111'), ('ZQ', 'SEC', '222');").unwrap();
+        let seen = bagholder_book::notices::SEEN;
+        let tell = |scope: &str, event: &str| {
+            book.notices().execute("INSERT INTO told (scope, event, at) VALUES (?, ?, '2026-09-01')", [scope, event]).unwrap();
+        };
+        let words: Vec<&str> = bagholder_core::listing::VENUE_WORDS.iter().map(|(_, w)| w[0]).collect();
+        for w in &words {
+            tell(&format!("news:ZQ@{w}"), "e-news");
+            book.set_setting(&format!("{seen}news:ZQ@{w}"), Some("2026-09-02T00:00:00Z|a"), at).unwrap();
+        }
+        tell("filings:ZQ:SEC", "e-sec");
+        book.set_setting(&format!("{seen}filings:ZQ:SEC"), Some("2026-09-03T00:00:00Z|x"), at).unwrap();
+        tell("filings:NONE:SEDAR+", "e-none");
+        // a new scope already further on keeps its own mark
+        book.set_setting(&format!("{seen}filings:SEC:222"), Some("2026-09-09T00:00:00Z|y"), at).unwrap();
+
+        let (events, _) = carry_told_by_listing(&book, &cache, at).unwrap().expect("carried");
+        assert!(events > 0);
+        let told = |scope: &str| -> Vec<String> {
+            book.notices().prepare("SELECT event FROM told WHERE scope = ? ORDER BY event").unwrap().query_map([scope], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        for w in &words {
+            let key = bagholder_core::ListingKey::on("ZQ", w).unwrap();
+            assert_eq!(told(&format!("news:{key}")), vec!["e-news".to_string()], "{w}");
+            assert_eq!(book.setting(&format!("{seen}news:{key}")).unwrap().as_deref(), Some("2026-09-02T00:00:00Z|a"), "{w}");
+            assert!(told(&format!("news:ZQ@{w}")).is_empty() || bagholder_core::ListingKey::on("ZQ", w).unwrap().to_string() == format!("ZQ@{w}"), "the old scope goes: {w}");
+        }
+        assert_eq!(told("filings:SEC:111"), vec!["e-sec".to_string()]);
+        assert_eq!(told("filings:SEC:222"), vec!["e-sec".to_string()]);
+        assert!(told("filings:SEDAR+:000000001").is_empty(), "nothing was told of that source under the ticker");
+        assert_eq!(book.setting(&format!("{seen}filings:SEC:111")).unwrap().as_deref(), Some("2026-09-03T00:00:00Z|x"));
+        assert_eq!(book.setting(&format!("{seen}filings:SEC:222")).unwrap().as_deref(), Some("2026-09-09T00:00:00Z|y"), "the later mark stands");
+        assert!(told("filings:ZQ:SEC").is_empty() && told("filings:NONE:SEDAR+").is_empty(), "the old scopes go");
+        assert_eq!(book.setting(&format!("{seen}filings:ZQ:SEC")).unwrap(), None);
+        assert_eq!(carry_told_by_listing(&book, &cache, at).unwrap(), None, "once");
     }
 }

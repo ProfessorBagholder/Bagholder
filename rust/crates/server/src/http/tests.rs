@@ -95,7 +95,9 @@ fn test_every_answer_is_private_and_every_failure_has_one_shape() {
         assert_eq!(json_of(from_the_page(Method::GET, "/api/nothing", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "not found"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/figures/detail?id=none-such", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no such trade or holding"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/filings?symbol=%20", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "symbol required"})));
-        assert_eq!(json_of(from_the_page(Method::GET, "/api/filings/doc?symbol=QNC", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "symbol and id required"})));
+        // a listing is named by its venue too: a ticker can be two companies on two exchanges
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/filings?symbol=QNC", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "QNC names no exchange: a ticker can be two companies on two exchanges"})));
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/filings/doc?symbol=QNC", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "source (SEDAR+ or SEC) and id required"})));
         assert_eq!(json_of(from_the_page(Method::POST, "/api/journal", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "id required"})));
         let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(r#"{"id":"x","thesis":"x"}"#))).await;
         assert_eq!((code, &body["ok"]), (StatusCode::BAD_REQUEST, &json!(false)), "the page sends the whole entry");
