@@ -1,6 +1,6 @@
 //! What the market readers are asked for, read off the built model:
 //! `held_symbols`, `payer_symbols`, `intraday_archive_symbols`,
-//! `watch_exposure_key`, and the one-shot journal migration
+//! and the one-shot journal migration
 //! `migrate_legacy_notes`.
 
 use serde_json::{json, Map, Value};
@@ -17,23 +17,30 @@ fn listing(symbol: &str, exchange: &str, currency: &str, kind: &str) -> Listing 
     Listing { symbol: symbol.into(), exchange: exchange.into(), currency: currency.into(), kind: kind.into(), quote_key: None, yahoo: None, start: None }
 }
 
-/// Every held instrument, with what a quote source needs.
+/// Every held listing, once each, with what a quote source needs: two holdings
+/// of one ticker on two venues are two listings (brief 34, U10).
 pub fn held_symbols(base: &Base) -> Vec<Listing> {
     let mut seen = HashSet::new();
-    base.positions.iter().filter(|p| seen.insert(p.symbol.as_str())).map(|p| listing(&p.symbol, &p.exchange, &p.currency, p.kind.as_str())).collect()
+    base.positions
+        .iter()
+        .map(|p| listing(&p.symbol, &p.exchange, &p.currency, p.kind.as_str()))
+        .filter(|l| seen.insert(l.key().map_or_else(|_| format!("{}|{}", l.symbol, l.exchange), |k| k.to_string())))
+        .collect()
 }
 
-/// Every symbol traded or held in the past year, with the earliest date its bars
-/// are wanted from. A contract is charted as what it is written on.
-pub fn intraday_archive_symbols(base: &Base) -> Vec<Listing> {
+/// Every listing traded or held in the past year, once each by its key, with the
+/// earliest date its bars are wanted from. A contract is charted as what it is
+/// written on; a listing that names no venue is archived under none (brief 34, U22).
+pub fn intraday_archive_symbols(base: &Base) -> Vec<crate::input::Keyed> {
     let since = crate::dates::shift_date(&base.today, -365);
-    let mut out: BTreeMap<String, Listing> = BTreeMap::new();
+    let mut out: BTreeMap<bagholder_core::ListingKey, crate::input::Keyed> = BTreeMap::new();
     let mut want = |symbol: &str, exchange: &str, currency: &str, kind: Kind, start: &str| {
         let under = crate::symbols::underlying_symbol(symbol);
         let charted = if kind == Kind::Options && !under.is_empty() && under != "—" { listing(&under, exchange, currency, "Shares") } else { listing(symbol, exchange, currency, kind.as_str()) };
         let start = if start > since.as_str() { start } else { since.as_str() };
-        if out.get(&charted.symbol).map_or(true, |known| start < known.start.as_deref().unwrap_or("")) {
-            out.insert(charted.symbol.clone(), Listing { start: Some(start.to_string()), ..charted });
+        let Ok(charted) = Listing { start: Some(start.to_string()), ..charted }.keyed() else { return };
+        if out.get(&charted.key).map_or(true, |known| start < known.start.as_deref().unwrap_or("")) {
+            out.insert(charted.key.clone(), charted);
         }
     };
     for t in base.traded.iter().filter(|t| t.exit_date.is_empty() || t.exit_date >= since) {
@@ -45,10 +52,6 @@ pub fn intraday_archive_symbols(base: &Base) -> Vec<Listing> {
     out.into_values().collect()
 }
 
-/// `watch_exposure_key`.
-pub fn watch_exposure_key(symbol: &str, exchange: &str, currency: &str) -> String {
-    format!("share:{}:{}", crate::venues::tmx_symbol(symbol), crate::venues::tmx_form(exchange, currency).unwrap_or(""))
-}
 
 /// `migrate_legacy_notes`: the old page's note keys (a hash of the slices
 /// in a lane group) mapped onto round-trip ids, so an existing journal is not

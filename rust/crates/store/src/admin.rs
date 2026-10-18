@@ -302,8 +302,11 @@ pub fn clear_synced_data(conn: &Connection, keep_journal: bool, keep_market: boo
                 conn.execute(&format!("DELETE FROM {}", table), [])?;
             }
             conn.execute("DELETE FROM meta WHERE key IN ('spy_by_date', 'market_attempt_at')", [])?;
-            for prefix in ["bars_miss:", "bars_source:", "coinbase_product:", "coingecko_id:", "tmx_form:", "yahoo_miss:"] {
-                conn.execute("DELETE FROM meta WHERE key LIKE ?", [format!("{}%", prefix)])?;
+            // the listings' own (`bagholder_core::listing::meta`), then the sources' own
+            // names for one listing, and a form an earlier store kept under a ticker
+            let listing = bagholder_core::listing::meta::ALL.iter().copied();
+            for prefix in listing.chain(["coinbase_product", "coingecko_id", "tmx_form", "yahoo_miss"]) {
+                conn.execute("DELETE FROM meta WHERE key LIKE ?", [format!("{prefix}:%")])?;
             }
         }
         Ok(())

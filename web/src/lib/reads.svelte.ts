@@ -52,6 +52,12 @@ export function whenIdle(): Promise<void> {
   return pageReads ? new Promise((r) => idle.push(r)) : Promise.resolve()
 }
 
+/** Whether an answer is whole: one naming a directory it could not read (`unread`) is not. */
+function complete(a: unknown): boolean {
+  const unread = (a as { unread?: unknown }).unread
+  return !(Array.isArray(unread) && unread.length > 0)
+}
+
 /** An answer asked this page load: given again from memory while it is young enough. */
 const asked = new Map<string, { at: number; answer: Answer<unknown> }>()
 /** The same question in the air: one request, however many ask. */
@@ -120,7 +126,8 @@ export function read<K extends GetKey>(
       answer: call(route, input as never, stop.signal).then((a) => {
         if (own && --pageReads === 0) idle.splice(0).forEach((r) => r())
         if (flying.get(k) === made) flying.delete(k)
-        if (a.ok && (!opts.final || opts.final(a as A))) {
+        // an answer that names a source it could not read is not kept: asked again, it asks again
+        if (a.ok && complete(a) && (!opts.final || opts.final(a as A))) {
           if (!ASKED_EACH_TIME.includes(route)) asked.set(k, { at: askedAt, answer: a })
           if (!ephemeral) void save(bookShown(), [{ key: storeKey(k), params: {}, data: structuredClone(a), v: '' }])
         }
@@ -177,13 +184,15 @@ export function askAgain(prefix?: GetKey): void {
 }
 
 /**
- * Listings by name or ticker, asked from the filter's symbol picker, the watchlist's
- * add row and the news and short-interest lookups. A search the person types is
- * never kept.
+ * Listings by name or ticker, asked from the filter's symbol picker and the
+ * watchlist's add row, with what could not be read (`error`, '' when every
+ * directory answered): nothing found reads as "no listing" only where it is ''.
+ * A search the person types is never kept.
  */
-export async function searchSymbols(text: string): Promise<SymbolMatch[]> {
+export async function searchSymbols(text: string): Promise<{ matches: SymbolMatch[]; error: string }> {
   const q = text.trim()
-  if (!q) return []
+  if (!q) return { matches: [], error: '' }
   const r = await read('GET /api/symbols/search', { query: { q } }, { key: q.toLowerCase() })
-  return r.ok ? r.matches : [] // a failed lookup is not remembered
+  // a failed lookup, or one a directory did not answer, is not remembered
+  return r.ok ? { matches: r.matches, error: r.unread.join(' ') } : { matches: [], error: r.error }
 }

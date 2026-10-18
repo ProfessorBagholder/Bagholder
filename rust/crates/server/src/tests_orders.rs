@@ -240,6 +240,7 @@ fn listing_search_picks_the_symbol_on_its_exchange() {
     // sources name the NYSE's venues differently
     assert_eq!(pick("BBAI", "XNAS").unwrap().id, "sec-s-bbai");
     assert_eq!(pick("BBAI", "ARCX").unwrap().id, "sec-s-bbai");
+    assert_eq!(pick("BBAI", "US").unwrap().id, "sec-s-bbai", "a listing's key names the US market itself");
     assert!(pick("BBAI", "XTSE").is_err(), "a Canadian venue is its own");
     // two listings of one symbol on one venue: said, never chosen between
     let mut two = a.clone();
@@ -364,7 +365,7 @@ fn listings_of_one_ticker_in_and_outside_the_book_each_open_on_their_own() {
     let now = Timestamp::now();
     let day = now.to_zoned(jiff::tz::TimeZone::get("America/Toronto").unwrap()).date().to_string();
     for currency in ["CAD", "USD"] {
-        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "TWN".into(), currency: currency.into(), day: day.clone(), side: "BUY".into(), quantity: "1".into(), price: "10".into(), fee: String::new() };
+        let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "TWN".into(), exchange: "TSX".into(), currency: currency.into(), day: day.clone(), side: "BUY".into(), quantity: "1".into(), price: "10".into(), fee: String::new() };
         crate::entries::enter(f, &req, now).unwrap();
     }
     let book = f.book().unwrap();
@@ -487,6 +488,9 @@ fn an_order_is_recorded_in_wealthsimples_words_for_its_listing_never_the_pages()
     let page = json!({"listing": {"securityId": "sec-s-ry-us", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
     let asked = o::ticket_order(&app, &ticket(page)).expect("an order on the listing");
     assert_eq!((asked.order.broker_security.as_str(), asked.order.symbol.as_str(), asked.order.currency), ("sec-s-ry-us", "RY", bagholder_core::Currency::USD));
+    // the order states its listing's venue as Wealthsimple does, code and words, so its
+    // fill names the instrument as the broker's own rows do (brief 44)
+    assert_eq!((asked.order.venue_mic.as_deref(), asked.order.venue_name.as_deref()), (Some("XNYS"), Some("NYSE")));
     let unknown = json!({"listing": {"securityId": "sec-s-nowhere", "symbol": "TD", "exchange": "TSX", "currency": "CAD"}, "stopLoss": null, "takeProfit": null});
     assert_eq!(o::ticket_order(&app, &ticket(unknown)).unwrap_err(), "Wealthsimple does not know TD on TSX.");
     // a listing whose summary states no currency, or no symbol, is never ordered in the
@@ -511,10 +515,14 @@ fn an_order_is_recorded_in_wealthsimples_words_for_its_listing_never_the_pages()
 fn the_preview_is_in_the_listings_currency_never_the_pages() {
     use crate::orders::preview::{preview_for, PreviewRequest, QuoteInput};
     let _g = crate::tests_common::guard();
-    let a = crate::tests_common::app();
+    let (_h, a, _) = ticket_app();
     let f = a.figures.get().unwrap();
-    // a currency the figures hold a rate for, other than CAD
-    let usd = f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, bagholder_core::Currency::USD, e.inputs().clock.today)).unwrap();
+    // the Bank's USD rate for today, so the listing's figure is stated, not waited on
+    let today = f.read(|e| e.inputs().clock.today).unwrap();
+    let rate = d("1.3871");
+    f.book().unwrap().store_rates(bagholder_core::Currency::USD, &[(today, rate)], (today, today), &bagholder_core::SourceName::named("bank-of-canada"), Timestamp::now()).unwrap();
+    f.rates_changed().unwrap();
+    assert_eq!(f.read(|e| bagholder_engine::fx::rate(&e.inputs().facts.rates, &e.inputs().clock, bagholder_core::Currency::USD, today)).unwrap(), Ok(rate));
     a.orders.found.lock().unwrap().insert("sec-s-usd-listing".into(), bagholder_model::securities::Security { id: "sec-s-usd-listing".into(), symbol: "QNC".into(), currency: "USD".into(), ..Default::default() });
     let r = PreviewRequest {
         security_id: sid("sec-s-usd-listing"),
@@ -527,14 +535,8 @@ fn the_preview_is_in_the_listings_currency_never_the_pages() {
         nav: Some("10000".into()),
         ..Default::default()
     };
-    let p = preview_for(&a, &r).unwrap();
-    // at the listing's USD rate, or waiting on it: never the page's CAD, 1:1
-    let want = match usd {
-        Ok(rate) => Fig::Stated(crate::wire::Dec(d("1000").checked_mul(rate).unwrap())),
-        Err(g) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
-    };
-    assert_eq!(p.cad, Some(want));
-    assert_ne!(p.cad, Some(Fig::Stated(crate::wire::Dec(d("1000")))));
+    // at the listing's USD rate, never the page's CAD, 1:1
+    assert_eq!(preview_for(&a, &r).unwrap().cad, Some(Fig::Stated(crate::wire::Dec(d("1387.1")))));
 }
 
 /// An id the search finds is recorded against the book's instrument only where the
@@ -1265,7 +1267,7 @@ fn an_order_a_stopped_run_left_sending_is_read_back_and_wealthsimple_decides_it(
     set_session(&w.app, Some(ident()));
     feed_gql(&w.app, Arc::default(), Arc::default());
     // written, and the app stopped before any answer: a bracket waits on one of them
-    let place = bagholder_book::orders::BracketPlace { id: "b-held".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: bagholder_core::Currency::parse("USD").unwrap() };
+    let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "b-held".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: bagholder_core::Currency::parse("USD").unwrap() };
     w.book.write_bracket(&place, &bagholder_core::bracket::BracketEvent::Created { quantity: d("10"), stop: World::stop("95"), target: None }, &Asker::Person, w.now).unwrap();
     let mut held = order("o-held", Some(("b-held", OrderRole::Entry)));
     held.request = json!({"externalId": "o-held"});
@@ -2202,4 +2204,25 @@ fn a_repeat_while_the_first_is_being_placed_is_in_flight_and_never_sent() {
     let r = o::place_ticket(&app, &t);
     assert_eq!((r.ok, r.id.as_deref(), r.status.as_deref()), (true, Some(id.as_str()), Some("sending")));
     assert!(fake.0.lock().unwrap().creates.is_empty(), "nothing sent for the repeat");
+}
+
+/// An order states its listing's venue as Wealthsimple states it, for every code it
+/// may give, an older spelling included: never left out, never respelled (brief 44).
+#[test]
+fn an_order_states_its_listings_venue_as_wealthsimple_does() {
+    let _g = crate::tests_common::guard();
+    let (_h, app, _fake) = ticket_app();
+    set_session(&app, Some(tok()));
+    for (mic, words, ccy) in [("XTSV", "TSX-V", "CAD"), ("XTSX", "TSX-V", "CAD"), ("XTSE", "TSX", "CAD"), ("XNAS", "NASDAQ", "USD"), ("OTCM", "OTC", "USD")] {
+        let (m, w, c) = (mic.to_string(), words.to_string(), ccy.to_string());
+        let id = format!("sec-s-venue-{}", mic.to_lowercase());
+        let sid = id.clone();
+        set_gql(&app, move |op, _| match op {
+            "FetchSecuritiesSummary" => Ok(json!({"securities": [found_row(&sid, "ZQVN", "EQUITY", &m, &w, &c)]})),
+            _ => panic!("{op}"),
+        });
+        let page = json!({"listing": {"securityId": id, "symbol": "ZQVN", "exchange": words, "currency": ccy}, "stopLoss": null, "takeProfit": null});
+        let asked = o::ticket_order(&app, &ticket(page)).expect("an order on the listing");
+        assert_eq!((asked.order.venue_mic.as_deref(), asked.order.venue_name.as_deref()), (Some(mic), Some(words)), "{mic}");
+    }
 }

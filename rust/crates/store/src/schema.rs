@@ -118,20 +118,16 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(SCHEMA_0)?;
 
         migrate_nav_history(conn)?;
-        ensure_bar_columns(conn)?;
         ensure_activity_security_id(conn)?;
         migrate_spy_meta(conn)?;
         ensure_quote_columns(conn)?;
-        ensure_shorts_columns(conn)?;
         ensure_order_columns(conn)?;
         ensure_account_columns(conn)?;
 
         conn.execute_batch(SCHEMA_1)?;
 
         ensure_notifications_columns(conn)?;
-        ensure_news_columns(conn)?;
         ensure_filings_columns(conn)?;
-        migrate_history_sources(conn)?;
 
         conn.execute(
             "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -182,20 +178,6 @@ fn migrate_nav_history(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `_ensure_bar_columns`: bars stored before the chart drew candles hold
-/// closes only, so the table is rebuilt and refetched rather than patched.
-fn ensure_bar_columns(conn: &Connection) -> Result<()> {
-    let cols = columns(conn, "price_bars")?;
-    if !cols.is_empty() && !cols.contains("open") {
-        conn.execute_batch(
-            "DROP TABLE price_bars;
-             DELETE FROM bar_fetches;
-             CREATE TABLE price_bars (symbol TEXT NOT NULL, tf TEXT NOT NULL, ts INTEGER NOT NULL, open REAL, high REAL, low REAL, close REAL NOT NULL, volume REAL, source TEXT NOT NULL DEFAULT '', PRIMARY KEY (symbol, tf, ts));",
-        )?;
-    }
-    Ok(())
-}
-
 /// `_ensure_activity_security_id`.
 fn ensure_activity_security_id(conn: &Connection) -> Result<()> {
     add_missing(conn, "activities", &[("security_id", "TEXT")])
@@ -207,10 +189,6 @@ fn ensure_quote_columns(conn: &Connection) -> Result<()> {
         "quotes",
         &[("price_change", "REAL"), ("percent_change", "REAL"), ("prev_close", "REAL")],
     )
-}
-
-fn ensure_shorts_columns(conn: &Connection) -> Result<()> {
-    add_missing(conn, "shorts", &[("read_version", "INTEGER"), ("name", "TEXT")])
 }
 
 fn ensure_order_columns(conn: &Connection) -> Result<()> {
@@ -241,22 +219,6 @@ fn ensure_notifications_columns(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     add_missing(conn, "notifications", &[("read_at", "TEXT")])
-}
-
-/// `_ensure_news_columns`: a news table from before releases were told
-/// apart gains the kind, and each row is told by the name of the wire it came
-/// on -- a wire's item is a release, a publisher's a story.
-fn ensure_news_columns(conn: &Connection) -> Result<()> {
-    if !table_exists(conn, "news")? {
-        return Ok(());
-    }
-    // `summary` is what the source said beneath the headline; a row read before this is simply
-    // without one
-    add_missing(conn, "news", &[("kind", "TEXT"), ("summary", "TEXT")])?;
-    conn.execute_batch(
-        "UPDATE news SET kind = CASE WHEN LOWER(COALESCE(wire, '')) LIKE '%wire%' OR LOWER(COALESCE(wire, '')) LIKE '%newsfile%' OR LOWER(COALESCE(wire, '')) LIKE '%cision%' OR LOWER(COALESCE(wire, '')) LIKE '%cnw%' THEN 'release' ELSE 'story' END WHERE kind IS NULL OR kind = ''",
-    )?;
-    Ok(())
 }
 
 /// `_ensure_filings_columns`: a filings table created under the
@@ -316,31 +278,3 @@ fn migrate_spy_meta(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `_migrate_history_sources`: runs once when the chart's history
-/// sources change. Bars from a source that gave closes only are dropped; the
-/// fetch stamps of every symbol either source served are dropped, so the chart
-/// refetches the whole span from the source that replaced it.
-fn migrate_history_sources(conn: &Connection) -> Result<()> {
-    let done: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM meta WHERE key = 'history_sources_migrated'",
-        [],
-        |r| r.get(0),
-    )?;
-    if done > 0 {
-        return Ok(());
-    }
-    conn.execute_batch(
-        "DELETE FROM price_history WHERE source = 'coingecko';
-         DELETE FROM history_fetches WHERE symbol NOT IN (SELECT DISTINCT symbol FROM price_history WHERE source NOT IN ('coingecko', 'cboe_ca'));
-         DELETE FROM price_bars WHERE source = 'coingecko';
-         DELETE FROM bar_fetches WHERE symbol NOT IN (SELECT DISTINCT symbol FROM price_bars);",
-    )?;
-    // a stamp claiming a span its bars begin well after is dropped, so the
-    // chain is asked again for the earlier days
-    conn.execute_batch(
-        "DELETE FROM history_fetches WHERE symbol IN (SELECT h.symbol FROM history_fetches h JOIN (SELECT symbol, MIN(date) AS first FROM price_history GROUP BY symbol) p ON p.symbol = h.symbol WHERE julianday(p.first) - julianday(h.start) > 7);
-         DELETE FROM bar_fetches WHERE (symbol, tf) IN (SELECT b.symbol, b.tf FROM bar_fetches b JOIN (SELECT symbol, tf, MIN(ts) AS first FROM price_bars GROUP BY symbol, tf) p ON p.symbol = b.symbol AND p.tf = b.tf WHERE p.first - b.start_ts > 7 * 86400);
-         INSERT INTO meta(key, value) VALUES ('history_sources_migrated', '1');",
-    )?;
-    Ok(())
-}

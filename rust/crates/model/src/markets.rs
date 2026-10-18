@@ -8,7 +8,7 @@ use crate::context::MarketBase as Base;
 use crate::exposure::{norm_sector, underlying_exposure, Exposure, Exposures, UNCLASSIFIED};
 use crate::input::{Listing, Quotes};
 use crate::instruments;
-use crate::venues::{tmx_symbol, watch_exposure_key};
+use crate::venues::{share_key_of, tmx_symbol};
 use crate::wire::{HeldTile, MarketInstrument, MarketTile, Markets, NewsItem, NewsTag, Ordered, Position, UniverseTile, WatchItem};
 
 /// The feed whose items belong to the market rather than to a listing.
@@ -158,7 +158,7 @@ pub fn watch_rows(base: &Base, quotes: &Quotes, positions: &[&Position]) -> Vec<
             let (exchange, sector, kind) = match inst {
                 Some(i) => (i.exchange.to_string(), instruments::kind_label(i.kind), i.kind.to_string()),
                 None if crypto => ("Crypto".to_string(), "Digital assets".to_string(), "Crypto".to_string()),
-                None => (w.exchange.clone(), dominant_sector(base.exposures.get(&watch_exposure_key(&w.symbol, &w.exchange, &w.currency))), "Shares".to_string()),
+                None => (w.exchange.clone(), dominant_sector(share_key_of(&w.symbol, &w.exchange).and_then(|k| base.exposures.get(&k))), "Shares".to_string()),
             };
             WatchItem {
                 symbol: w.symbol.clone(),
@@ -197,7 +197,7 @@ pub fn heatmap_items(positions: &[&Position], exposures: &Exposures, cad: &dyn F
         let sector = match p.kind {
             Kind::Crypto => "Digital assets".to_string(),
             // a contract counts under its underlying's record
-            Kind::Options => dominant_sector(underlying_exposure(exposures, &p.underlying, &p.currency)),
+            Kind::Options => dominant_sector(underlying_exposure(exposures, &p.underlying, &p.exchange)),
             _ => dominant_sector(exposures.get(&p.security_id)),
         };
         if !known {

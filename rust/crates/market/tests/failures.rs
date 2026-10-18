@@ -19,6 +19,7 @@ fn db() -> rusqlite::Connection {
     offline();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     conn
 }
 
@@ -51,19 +52,19 @@ fn allow_misses(conn: &rusqlite::Connection) {
 fn an_archive_pass_whose_bars_the_store_refuses_fails_and_the_next_one_goes_through() {
     let conn = db();
     let (today, now, stamp) = bagholder_market::clock_now();
-    let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares")];
+    let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap()];
     refuse_misses(&conn);
     let err = history::archive_intraday(&conn, &no_rates(), &recs, &today, now, &stamp, 1).unwrap_err();
     assert!(err.to_string().contains("refused"), "{err}");
     allow_misses(&conn);
-    assert_eq!(history::archive_intraday(&conn, &no_rates(), &recs, &today, now, &stamp, 1).unwrap(), vec!["QMET".to_string()]);
+    assert_eq!(history::archive_intraday(&conn, &no_rates(), &recs, &today, now, &stamp, 1).unwrap(), vec!["QMET@XTSX".to_string()]);
 }
 
 #[test]
 fn a_daily_bar_read_the_store_refuses_is_the_reads_failure() {
     let conn = db();
     let (today, now, stamp) = bagholder_market::clock_now();
-    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares");
+    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap();
     refuse_misses(&conn);
     let err = history::ensure_history(&conn, &no_rates(), &rec, &today, &today, &today, now, &stamp).unwrap_err();
     assert!(err.to_string().contains("refused"), "{err}");
@@ -76,7 +77,7 @@ fn a_daily_bar_read_the_store_refuses_is_the_reads_failure() {
 fn a_bar_store_that_cannot_be_read_is_not_a_chart_with_nothing_due() {
     let conn = db();
     let (today, now, _) = bagholder_market::clock_now();
-    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares");
+    let rec = Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap();
     conn.execute_batch("DROP TABLE meta;").unwrap();
     assert!(history::daily_due(&conn, &rec, &today, &today, &today, now).is_err());
     assert!(history::offered_timeframes(&conn, &rec, &today, &today, now).is_err());
@@ -103,8 +104,9 @@ fn a_market_series_top_up_returns_what_failed() {
 #[test]
 fn short_interest_from_a_regulator_that_did_not_answer_is_the_failure() {
     let conn = db();
-    let err = shorts::for_listing(&conn, "GME", "NYSE", "USD", "2026-09-16", false, "").unwrap_err();
-    assert!(err.contains("FINRA"), "{err}");
+    // the test process is offline, so FINRA is never asked: the read fails as refused, never as no position
+    let err = shorts::for_listing(&conn, "GME", "NYSE", "2026-09-16", false, "").unwrap_err();
+    assert!(err.is_offline(), "{err}");
 }
 
 /// The market's trading days are read from the store: a store that cannot be
@@ -113,28 +115,19 @@ fn short_interest_from_a_regulator_that_did_not_answer_is_the_failure() {
 fn short_interest_whose_store_cannot_be_read_is_the_failure() {
     let conn = cache_db();
     let mut position = HashMap::new();
-    position.insert("QNC".to_string(), CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
+    position.insert("QNC@XTSX".to_string(), CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
     shorts::clear_files();
     shorts::ca_position_with("QNC", "TSX-V", "2026-09-16", || Ok(Some(("2026-09-15".to_string(), position)))).unwrap();
     let mut volume = HashMap::new();
-    volume.insert("QNC".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1_000_000.0, volume_pct: Some(20.0), total_volume: Some(5_000_000.0) });
+    volume.insert("QNC@XTSX".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1_000_000.0, volume_pct: Some(20.0), total_volume: Some(5_000_000.0) });
     shorts::warm_ca_volume("ca_volume", "2026-09-01/2026-09-15", volume);
-    assert!(shorts::for_listing(&conn, "QNC", "TSX-V", "CAD", "2026-09-16", false, "").unwrap().is_some());
+    assert!(shorts::for_listing(&conn, "QNC", "TSX-V", "2026-09-16", false, "").unwrap().is_some());
     conn.execute_batch("DROP TABLE benchmark_closes;").unwrap();
-    let err = shorts::for_listing(&conn, "QNC", "TSX-V", "CAD", "2026-09-16", false, "").unwrap_err();
-    assert!(err.contains("could not be read"), "{err}");
+    let err = shorts::for_listing(&conn, "QNC", "TSX-V", "2026-09-16", false, "").unwrap_err();
+    assert!(err.to_string().contains("could not be read"), "{err}");
 }
 
-/// A form TMX was not asked about, the process being offline, is no miss: the
-/// failure is returned and nothing is remembered for the day.
-#[test]
-fn a_tmx_form_lookup_that_failed_is_not_remembered_as_a_miss() {
-    let conn = db();
-    assert!(bagholder_market::tmx::tmx_resolve(&conn, "QNC", "2026-09-16").is_err());
-    assert_eq!(bagholder_store::tables::get_meta(&conn, "tmx_form:QNC", "").unwrap(), "");
-}
-
-/// The same for Coinbase's market for a pair.
+/// A Coinbase market lookup that failed is not remembered as a miss.
 #[test]
 fn a_coinbase_market_lookup_that_failed_is_not_remembered_as_a_miss() {
     let conn = db();
@@ -161,4 +154,59 @@ fn a_chart_in_another_currency_converts_at_the_rates_it_is_given() {
     assert!(err.to_string().contains("the book is locked"), "{err}");
     // the same currency is never converted, and asks for no rate
     assert_eq!(history::in_position_currency(&failing, &bars, "CAD", "cad").unwrap().len(), 4);
+}
+
+/// An SEC document read in a process told to stay off the network is refused by
+/// its kind, its index and its document alike, never a failure in words.
+#[test]
+fn an_sec_document_read_offline_is_refused_by_its_kind() {
+    offline();
+    let row = bagholder_store::feeds::FiledDocument {
+        id: "sec:0000000000-26-000001-0".into(), source: bagholder_store::feeds::Regulator::Sec, category: String::new(), profile_no: String::new(), issuer: String::new(),
+        form: "10-K".into(), title: String::new(), date: String::new(), date_text: String::new(), size: String::new(),
+        url: "https://www.sec.gov/Archives/edgar/data/1/000000000026000001/doc.htm".into(),
+    };
+    assert!(matches!(bagholder_market::edgar::content(&row), Err(bagholder_market::disclosures::SourceError::Offline)));
+    assert!(matches!(bagholder_market::edgar::document(&row), Err(bagholder_market::disclosures::SourceError::Offline)));
+}
+
+/// A Canadian listing's filer asked in a process told to stay off the network:
+/// the exchange's directory and SEDAR+ are refused by their kind, never said as
+/// a failure of either (brief 45, 4).
+#[test]
+fn a_canadian_filer_asked_offline_is_refused_by_its_kind() {
+    use bagholder_market::disclosures::{self as d, Regulators, SourceError};
+    offline();
+    for venue in ["TSX", "TSX-V", "CSE", "NEO"] {
+        let listing = bagholder_core::ListingKey::on("ZQOFF", venue).unwrap();
+        assert!(matches!(d::issuer_name(&listing), Err(SourceError::Offline)), "{venue}");
+        let (_, found) = d::Live.filer(&listing, "2026-09-16").unwrap();
+        assert!(matches!(found, Err(SourceError::Offline)), "{venue}: {found:?}");
+    }
+    assert!(matches!(bagholder_market::sedar::profile_of("Zqoff Corp", "2026-09-16"), Err(SourceError::Offline)));
+    assert!(matches!(bagholder_market::sedar::fetch_profile("000000001", 5), Err(SourceError::Offline)));
+    // a document of the profile, downloaded and read for its content (brief 46, 4)
+    assert!(matches!(bagholder_market::sedar::download_bytes("000000001", "sedar:1", Some("Zqoff Corp")), Err(SourceError::Offline)));
+    let row = bagholder_store::feeds::FiledDocument {
+        id: "sedar:1".into(), source: bagholder_store::feeds::Regulator::Sedar, category: String::new(), profile_no: "000000001".into(), issuer: "Zqoff Corp".into(),
+        form: "Interim MD&A".into(), title: String::new(), date: String::new(), date_text: String::new(), size: String::new(),
+        url: "https://www.sedarplus.ca/x?drmKey=1".into(),
+    };
+    assert!(matches!(d::content(&row), Err(SourceError::Offline)), "{:?}", d::content(&row).err());
+    assert!(matches!(d::document(&row), Err(SourceError::Offline)), "{:?}", d::document(&row).err());
+}
+
+/// The SEC's list ages by the wall clock, which goes on through a machine's sleep:
+/// a list read before a day's sleep is read again after it, through `ticker_map`
+/// itself (refused here, the process being offline), never kept as a monotonic
+/// clock that stopped while the machine slept would keep it (brief 45).
+#[test]
+fn the_secs_list_read_before_a_days_sleep_is_read_again_after_it() {
+    use bagholder_market::{disclosures as d, edgar};
+    offline();
+    let list = serde_json::json!({"fields": ["cik", "name", "ticker", "exchange"], "data": [[7, "X CO", "ZQSL", "NYSE"]]});
+    edgar::ticker_map_at(bagholder_market::wall_now(), || Ok(list)).unwrap();
+    assert_eq!(edgar::ticker_map().unwrap()["ZQSL"][0].0, 7, "kept within the day");
+    bagholder_market::sleep_through(std::time::Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0));
+    assert!(matches!(edgar::ticker_map(), Err(d::SourceError::Offline)), "asked again once a day has passed on the wall clock");
 }

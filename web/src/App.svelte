@@ -32,7 +32,8 @@
   import OrdersPanel from './lib/orders/OrdersPanel.svelte'
   import { panel as ordersPanel } from './lib/orders/orders.svelte'
   import NotesPanel from './lib/notes/NotesPanel.svelte'
-  import { isListingId, listingAsTrade, loadListing } from './lib/listing.svelte'
+  import { isListingId, listingAsTrade, loadListing, canonicalListingId, namesListing, resolveListing, listingChoices, rememberListing } from './lib/listing.svelte'
+  import ListingChoice from './lib/markets/ListingChoice.svelte'
   import { PROTOCOL } from './lib/protocol'
   import { dismissInnermost } from './lib/escape'
   import { holdingAsTrade } from './lib/holding'
@@ -262,9 +263,24 @@
   // nothing to show yet: every tab is the first-run page, which carries a sync error itself
   const showingEmpty = $derived(!!book.data && !book.data.activityCount)
   // a listing the book does not hold: its own page, under Markets
-  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, markets.data ?? null) : null)
+  // an address naming only a symbol is no listing: it shows every listing of the symbol to pick from
+  const choosing = $derived(route.tab === 'markets' && isListingId(route.sub) && !namesListing(route.sub!) ? route.sub! : null)
+  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) && !choosing ? listingAsTrade(route.sub!, markets.data ?? null) : null)
+  const goListing = (id: string, replace: boolean) => {
+    if (replace) history.replaceState(null, '', '#' + subHash('markets', id))
+    else history.pushState(null, '', '#' + subHash('markets', id))
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
   $effect(() => {
     if (route.tab !== 'markets' || !isListingId(route.sub)) return
+    // an older link that wrote the venue in words is the same listing's page
+    const canonical = canonicalListingId(route.sub!)
+    if (canonical !== route.sub) return goListing(canonical, true)
+    if (!namesListing(route.sub!)) {
+      const asked = route.sub!
+      resolveListing(asked, (id) => goListing(id, true), () => route.tab === 'markets' && route.sub === asked)
+      return
+    }
     loadListing(route.sub!, (positionId) => {
       // held after all: its page is the holding's, and Back does not return here
       history.replaceState(null, '', '#' + subHash('portfolio', positionId))
@@ -526,7 +542,15 @@
     {:else if route.tab === 'trades'}
       {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else if trades.data}<Trades doc={trades.data} />{/if}
     {:else if route.tab === 'markets'}
-      {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else if markets.data}<Markets markets={markets.data} />{/if}
+      {#if choosing}
+        {@const c = listingChoices[choosing]}
+        <div class="card elev-sm" style="padding:14px 16px 12px;max-width:640px">
+          <h5 style="margin-bottom:8px">{choosing.slice('listing:'.length)}</h5>
+          {#if !c}<div class="muted" style="font-size:12px">Reading…</div>
+          {:else if c.listings.length}<ListingChoice listings={c.listings} onpick={(l) => goListing(rememberListing(l), true)} />{#if c.error}<div class="status-err" style="font-size:12px;margin-top:6px">{c.error}</div>{/if}
+          {:else}<div class={c.error ? 'status-err' : 'muted'} style="font-size:12px">{c.error || 'No exchange lists this symbol.'}</div>{/if}
+        </div>
+      {:else if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else if markets.data}<Markets markets={markets.data} />{/if}
     {/if}
     </div>
     {/if}

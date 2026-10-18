@@ -24,6 +24,7 @@ mod pull_broker;
 mod read_sources;
 mod events;
 mod feeds;
+mod filings;
 mod http;
 mod legacy_import;
 mod legacy_orders;
@@ -185,8 +186,19 @@ fn serve() -> i32 {
     }
     // the market cache's first borrow brings it to this build's schema; one that
     // cannot be opened is said, and each later borrow tries again
-    if let Err(e) = a.cache() {
-        failed(format!("the market cache could not be opened: {e}"));
+    match a.cache() {
+        Err(e) => failed(format!("the market cache could not be opened: {e}")),
+        // the book's told marks, carried once to the scopes a listing and a filer are kept
+        // under now that the cache names each ticker's filers; one that fails tells nothing
+        // twice (a scope with no mark sets one without telling) and is tried at the next start
+        Ok(cache) => {
+            let carried = a.figures.get().ok_or_else(|| "the book is not open".to_string()).and_then(|f| f.book()).and_then(|b| carry::carry_told_by_listing(&b, &cache, bagholder_core::jiff::Timestamp::now()));
+            match carried {
+                Ok(Some((events, marks))) => log(&format!("bagholder: {events} told events and {marks} marks carried to the scopes each listing and filer is kept under")),
+                Ok(None) => {}
+                Err(e) => feeds::went(&a, "told-by-listing", Err::<(), _>(format!("What was told could not be carried to each listing's own scope: {e}"))).unwrap_or_default(),
+            }
+        }
     }
     session::boot_session(&a);
 
@@ -510,6 +522,8 @@ mod tests_routes_golden;
 mod tests_boundary;
 #[cfg(test)]
 mod tests_lints;
+#[cfg(test)]
+mod tests_listing_rules;
 #[cfg(test)]
 mod tests_ledger_log;
 #[cfg(test)]

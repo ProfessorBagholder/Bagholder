@@ -227,6 +227,7 @@ fn remember_summary(app: &Arc<App>, q: &TicketQuoteDetail) -> Option<bagholder_m
         symbol: q.symbol.clone(),
         name: q.name.clone(),
         primary_exchange: q.exchange.clone(),
+        primary_mic: q.mic.clone(),
         currency: q.currency.to_uppercase(),
         ..Default::default()
     };
@@ -278,7 +279,7 @@ pub fn resolve_listing(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> 
 
 fn listing_for(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> Result<OrderListing, String> {
     use bagholder_core::instrument::{InstrumentKind, RefScheme, Reference};
-    use bagholder_sources::venue::{known_mic, listing_venue, mic_of};
+    use bagholder_sources::venue::{known_mic, mic_of};
     let f = app.figures.get().ok_or("The book is not open.")?;
     // the instrument it is, where the book's; the symbol, the venue's code and its words
     let (instrument, symbol, mic, words) = match r {
@@ -302,15 +303,16 @@ fn listing_for(app: &Arc<App>, r: &ListingRef, now: jiff::Timestamp) -> Result<O
             let mic = mic.ok_or_else(|| format!("The book names no venue for {symbol}: Wealthsimple cannot be asked for it."))?;
             (Some((id, currency, kind)), symbol, mic, exchange)
         }
+        // a venue in words, as a code, or as a listing's key names it (`US` for any US exchange)
         ListingRef::Venue { symbol, venue } => {
-            let mic = mic_of(venue).ok_or_else(|| format!("{venue} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
+            let mic = mic_of(venue).or_else(|| bagholder_core::listing::key_venue(venue)).ok_or_else(|| format!("{venue} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
             (None, symbol.trim().to_string(), mic.to_string(), venue.trim().to_string())
         }
     };
     if symbol.is_empty() {
         return Err("No symbol named.".into());
     }
-    let venue = listing_venue(&mic).ok_or_else(|| format!("{words} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
+    let venue = bagholder_core::listing::key_venue(&mic).map(str::to_string).ok_or_else(|| format!("{words} is not a venue the app knows: no listing of {symbol} can be found on it."))?;
     let key = (bare_symbol(&symbol), venue.clone());
     let cached = app.orders.found_at.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
     let sec = match cached.and_then(|id| app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned()) {
@@ -349,6 +351,8 @@ pub struct TicketQuoteDetail {
     pub symbol: String,
     pub name: String,
     pub exchange: String,
+    /// The venue's code as Wealthsimple states it (`XTSE`); empty where it states none.
+    pub mic: String,
     pub currency: String,
     pub security_type: String,
     pub buyable: bool,
@@ -395,6 +399,7 @@ pub fn parse_quote(node: &wire::SummarySecurity) -> Option<TicketQuoteDetail> {
         symbol: stock.symbol,
         name: stock.name,
         exchange: stock.primary_exchange,
+        mic: stock.primary_mic,
         currency: if q.currency.is_empty() { &node.currency } else { &q.currency }.to_uppercase(),
         security_type: node.security_type.clone(),
         buyable: node.buyable,
@@ -568,14 +573,15 @@ pub(crate) fn bare_symbol(sym: &str) -> String {
 pub fn parse_listing_search(data: &wire::SecuritySearchAnswer, symbol: &str, mic: &str, words: &str) -> Result<bagholder_model::securities::Security, String> {
     use bagholder_sources::venue::{listing_venue, mic_of};
     let want_sym = bare_symbol(symbol);
-    let want = listing_venue(mic);
+    // `mic` is a venue's code, or the key's `US` for any US exchange
+    let want = bagholder_core::listing::key_venue(mic);
     let results = data.security_search.as_ref().map(|s| s.results.as_slice()).unwrap_or_default();
     let found: Vec<bagholder_model::securities::Security> = results
         .iter()
         .filter(|r| {
             let stock = r.stock.clone().unwrap_or_default();
             let venue = mic_of(&stock.primary_mic).or_else(|| mic_of(&stock.primary_exchange)).and_then(listing_venue);
-            !r.id.is_empty() && bare_symbol(&stock.symbol) == want_sym && want.is_some() && venue == want && LOOKUP_TYPES.contains(&r.security_type.to_uppercase().as_str())
+            !r.id.is_empty() && bare_symbol(&stock.symbol) == want_sym && want.is_some() && venue.as_deref() == want && LOOKUP_TYPES.contains(&r.security_type.to_uppercase().as_str())
         })
         .map(|r| {
             let stock = r.stock.clone().unwrap_or_default();
@@ -901,7 +907,14 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<TicketOrder, String> {
     }
     let currency = Currency::parse(&sec.currency.trim().to_uppercase()).map_err(|_| format!("The currency of {} is not known.", sec.symbol))?;
     let id = order_id(&t.id)?;
+    // the venue of the listing traded as Wealthsimple states it, code and words, as its
+    // own rows state it: its fill states it the same, so its names never split on a
+    // spelling (`XTSV` stays `XTSV`; the venue rule reads either as the same venue)
+    let venue_mic = Some(sec.primary_mic.trim().to_string()).filter(|m| !m.is_empty());
+    let venue_name = Some(sec.primary_exchange.trim().to_string()).filter(|w| !w.is_empty());
     let mut order = OrderRequest {
+        venue_mic,
+        venue_name,
         id,
         broker: "wealthsimple".into(),
         broker_account: acct.id,
@@ -1041,7 +1054,7 @@ pub(crate) fn entry(app: &Arc<App>, book: &Book, asked: TicketOrder) -> Result<P
     let wants_bracket = (asked.stop.is_some() || asked.target.is_some()) && orders_live(app) && ticket_session(app).is_ok();
     let bracket = if wants_bracket {
         let id = format!("bracket-{}", uuid4());
-        let place = BracketPlace { id: id.clone(), broker: o.broker.clone(), broker_account: o.broker_account.clone(), broker_security: o.broker_security.clone(), symbol: o.symbol.clone(), currency: o.currency };
+        let place = BracketPlace { venue_mic: o.venue_mic.clone(), venue_name: o.venue_name.clone(), id: id.clone(), broker: o.broker.clone(), broker_account: o.broker_account.clone(), broker_security: o.broker_security.clone(), symbol: o.symbol.clone(), currency: o.currency };
         book.write_bracket(&place, &BracketEvent::Created { quantity: o.quantity, stop: asked.stop, target: asked.target }, &Asker::Person, now).map_err(|e| e.to_string())?;
         o.bracket = Some((id.clone(), OrderRole::Entry));
         Some(id)

@@ -18,7 +18,13 @@ export interface Drawn {
 /** The chart a page opening now would settle on, as `TradeDetail` draws it. */
 export async function chartAsDrawn(t: Trade): Promise<Drawn | null> {
   const want = chartTfFor(t)
-  const h = await loadHistory(t, want, undefined, true)
+  let h = await loadHistory(t, want, undefined, true)
+  if (h.refused && want !== '1d') {
+    // a timeframe the listing does not offer: what it offers is the daily answer's,
+    // and the page settles on the nearest of those, as `TradeDetail` does
+    const d = await loadHistory(t, '1d', undefined, true)
+    h = { ...h, available: d.refused ? [] : d.available }
+  }
   const tf = chartTfFor(t, h.available)
   if (tf && tf !== want) {
     const h2 = await loadHistory(t, tf, undefined, true)

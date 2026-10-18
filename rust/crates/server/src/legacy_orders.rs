@@ -99,6 +99,8 @@ fn order_of(o: &OldOrder, bracket: Option<(String, OrderRole)>) -> Result<(Order
         row,
     };
     let request = OrderRequest {
+        venue_mic: None,
+        venue_name: None,
         id: id.clone(),
         broker: "wealthsimple".into(),
         broker_account: o.account_id.clone(),
@@ -170,7 +172,7 @@ fn bracket_of(b: &OldBracket, exits: &[&OldOrder]) -> Result<(BracketPlace, Brac
     // an ended one keeps no exit; a waiting one has none yet
     let exit = if matches!(phase, Phase::Ended | Phase::Waiting) { None } else { exit };
     let currency = Currency::parse(&b.currency.to_uppercase()).map_err(|_| format!("{id}: the currency {:?}", b.currency))?;
-    let place = BracketPlace { id: id.clone(), broker: "wealthsimple".into(), broker_account: b.account_id.clone(), broker_security: b.security_id.clone(), symbol: b.symbol.clone(), currency };
+    let place = BracketPlace { venue_mic: None, venue_name: None, id: id.clone(), broker: "wealthsimple".into(), broker_account: b.account_id.clone(), broker_security: b.security_id.clone(), symbol: b.symbol.clone(), currency };
     let first = BracketEvent::Imported {
         phase,
         quantity,

@@ -774,7 +774,7 @@ mod tests {
         let f = app.figures.get().unwrap();
         let before = error(&app);
         let trade = |day: &str, side: &str, quantity: &str| {
-            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), currency: "USD".into(), day: day.into(), side: side.into(), quantity: quantity.into(), price: "2".into(), fee: String::new() };
+            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), exchange: "NASDAQ".into(), currency: "USD".into(), day: day.into(), side: side.into(), quantity: quantity.into(), price: "2".into(), fee: String::new() };
             crate::entries::enter(f, &req, Timestamp::now()).unwrap();
         };
         trade("2025-11-10", "buy", "1");

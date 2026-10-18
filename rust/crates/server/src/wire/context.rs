@@ -47,18 +47,18 @@ pub struct Door<'a> {
 }
 
 impl Tables for Door<'_> {
-    fn holding(&self, kind: InstrumentKind, security: &str, underlying: &str, currency: Currency) -> Option<Record> {
+    fn holding(&self, kind: InstrumentKind, security: &str, underlying: Option<&bagholder_core::ListingKey>) -> Option<Record> {
         let exposures = &self.built.base.exposures;
         let found = match kind {
-            // a contract is its underlying's exposure, under the share's record
-            InstrumentKind::OptionContract => bagholder_model::exposure::underlying_exposure(exposures, underlying, currency.as_str()),
+            // a contract is its underlying's exposure, under its listing's share record
+            InstrumentKind::OptionContract => exposures.get(&bagholder_model::venues::share_key(underlying?)),
             _ => exposures.get(security),
         };
         found.map(record)
     }
 
-    fn listing(&self, symbol: &str, exchange: &str, currency: Currency) -> Option<Record> {
-        self.built.base.exposures.get(&bagholder_model::venues::watch_exposure_key(symbol, exchange, currency.as_str())).map(record)
+    fn listing(&self, symbol: &str, exchange: &str, _currency: Currency) -> Option<Record> {
+        self.built.base.exposures.get(&bagholder_model::venues::share_key_of(symbol, exchange)?).map(record)
     }
 
     fn universe(&self, key: &str) -> Vec<UniverseRow> {
@@ -101,7 +101,14 @@ impl Tables for Door<'_> {
         if let Some(rows) = kept.get(&key) {
             return Ok(rows.clone());
         }
-        let rows = Arc::new(crate::feeds::filed_releases(self.app, scope, chip)?);
+        // a chip names its listing by symbol and venue; one that names no venue has none kept
+        let rows = match chip {
+            Some((s, e)) => match bagholder_core::ListingKey::on(s, e) {
+                Ok(listing) => Arc::new(crate::feeds::filed_releases(self.app, scope, Some((&listing, e)))?),
+                Err(_) => Arc::new(vec![]),
+            },
+            None => Arc::new(crate::feeds::filed_releases(self.app, scope, None)?),
+        };
         kept.insert(key, rows.clone());
         Ok(rows)
     }

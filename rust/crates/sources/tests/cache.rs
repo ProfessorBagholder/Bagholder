@@ -223,7 +223,8 @@ fn each_subjects_newest_counted_outcome_is_the_one_that_says_how_it_is() {
     let (_d, c) = open();
     let at = |n: u64| t("2026-09-24T12:00:00Z") + Duration::from_secs(n);
     // every outcome that says how a source is, followed by one that does not
-    for (n, kind) in OutcomeKind::ALL.into_iter().filter(|k| *k != OutcomeKind::NotCarried).enumerate() {
+    // (an offline refusal is no outcome at all, `a_request_the_process_was_told_not_to_make_…`)
+    for (n, kind) in OutcomeKind::ALL.into_iter().filter(|k| !matches!(k, OutcomeKind::NotCarried | OutcomeKind::Offline)).enumerate() {
         let n = n as u64 * 10;
         c.record(&outcome("a", OutcomeKind::Answered, at(n))).unwrap();
         c.record(&outcome("a", kind, at(n + 1))).unwrap();
@@ -243,15 +244,17 @@ fn each_subjects_newest_counted_outcome_is_the_one_that_says_how_it_is() {
 fn a_request_the_process_was_told_not_to_make_is_no_outcome_of_the_source() {
     let (_d, c) = open();
     let at = t("2026-09-24T12:00:00Z");
-    // refused by BAGHOLDER_OFFLINE: nothing was asked, nothing is recorded
-    let offline = OutcomeRow { detail: bagholder_net::client::OFFLINE.into(), ..outcome("a", OutcomeKind::Unreachable, at) };
-    c.record(&offline).unwrap();
-    // as it reads, or with the reader's own subject before it
-    c.record(&OutcomeRow { detail: format!("SPY: {}", bagholder_net::client::OFFLINE), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
+    // refused by BAGHOLDER_OFFLINE: nothing was asked, nothing is recorded; known by
+    // its kind, whatever its words
+    c.record(&outcome("a", OutcomeKind::Offline, at)).unwrap();
+    c.record(&OutcomeRow { detail: "anything at all".into(), ..outcome("a", OutcomeKind::Offline, at) }).unwrap();
     assert!(c.outcomes(&SourceName::named("a")).unwrap().is_empty());
+    // the transport's refusal is that kind, from the reader's error on
+    let refused: bagholder_sources::outcome::Outcome<()> = bagholder_net::NetError::Offline.into();
+    assert_eq!(refused.kind(), OutcomeKind::Offline);
     assert!(c.newest_counted_by_subject().unwrap().is_empty(), "a source nobody asked is not failing");
-    // a source that could not be reached is still one, whatever else its words say
-    c.record(&OutcomeRow { detail: "offline: the host said so".into(), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
+    // a source that could not be reached is still one, whatever its words say
+    c.record(&OutcomeRow { detail: bagholder_net::client::OFFLINE.into(), ..outcome("a", OutcomeKind::Unreachable, at) }).unwrap();
     assert_eq!(c.newest_counted_by_subject().unwrap().len(), 1);
 }
 
@@ -298,4 +301,159 @@ fn a_failing_source_rests_twice_as_long_each_time_up_to_six_hours() {
     assert!(rests.windows(2).all(|w| w[0] <= w[1]), "never shorter after another failure");
     assert_eq!(*rests.last().unwrap(), 6 * 3600, "six hours at most");
     assert_eq!(grown_rest(Duration::from_secs(10 * 3600), 1).as_secs(), 6 * 3600, "a long own rest is capped too");
+}
+
+/// Migration 6 carries filings to one row per document under its own source and
+/// id, with its filer read from the row, its read text byte for byte, the most
+/// complete read of a document stored under two tickers, and a count of the rows
+/// that named no filer; the ticker each filer was stored under is kept for the
+/// book's told marks (plan `market-data-keyed-by-listing`, Approach, 3).
+#[test]
+fn migration_6_carries_every_filing_it_can_attribute_with_its_read_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("market.db");
+    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
+    {
+        let (conn, _) = migrate::open(five, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+        let row = |symbol: &str, id: &str, source: &str, profile: &str, url: &str, summary: Option<&str>, version: Option<i64>, last: bool| {
+            conn.execute(
+                "INSERT INTO filings (symbol, id, source, profile_no, url, title, date, summary, enrich_version, enrich_final, enriched_at) VALUES (?, ?, ?, ?, ?, 't', '2026-09-01', ?, ?, ?, ?)",
+                rusqlite::params![symbol, id, source, profile, url, summary, version, last as i64, summary.map(|_| "2026-09-02T00:00:00Z")],
+            )
+            .unwrap();
+        };
+        // a SEDAR+ row with its profile; one without, whose ticker's profile is stored
+        row("ABC", "sedar:1", "SEDAR+", "000001234", "", Some("read text, \u{e9}\u{2014} kept"), Some(3), true);
+        row("ABC", "sedar:2", "SEDAR+", "", "", None, None, false);
+        conn.execute("INSERT INTO meta (key, value) VALUES ('sedar_profile:ABC', '000001234')", []).unwrap();
+        // SEC rows by their address, both forms; one document under two tickers,
+        // read further under the second
+        row("XY", "sec:0001-26-1", "SEC", "", "https://www.sec.gov/Archives/edgar/data/0000320193/000126/doc.htm", Some("partial"), Some(1), false);
+        row("XY.B", "sec:0001-26-1", "SEC", "", "https://www.sec.gov/Archives/edgar/data/320193/000126/doc.htm", Some("final"), Some(2), true);
+        row("XY", "sec:0001-26-2", "SEC", "", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193", None, None, false);
+        // a row naming no filer: SEDAR+ with no profile anywhere, SEC with no address
+        row("NOPE", "sedar:9", "SEDAR+", "", "", None, None, false);
+        row("NOPE", "sec:9", "SEC", "", "", None, None, false);
+    }
+    let (conn, _) = migrate::open(&SCHEMA, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+    let rows: Vec<(String, String, String, Option<String>)> = conn
+        .prepare("SELECT source, id, filer, summary FROM filings ORDER BY source, id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("SEC".into(), "sec:0001-26-1".into(), "320193".into(), Some("final".into())),
+            ("SEC".into(), "sec:0001-26-2".into(), "320193".into(), None),
+            ("SEDAR+".into(), "sedar:1".into(), "000001234".into(), Some("read text, \u{e9}\u{2014} kept".into())),
+            ("SEDAR+".into(), "sedar:2".into(), "000001234".into(), None),
+        ]
+    );
+    let dropped: String = conn.query_row("SELECT value FROM meta WHERE key = 'carry:filings_without_a_filer'", [], |r| r.get(0)).unwrap();
+    assert_eq!(dropped, "2");
+    let carried: Vec<(String, String, String)> = conn
+        .prepare("SELECT symbol, source, filer FROM filings_carried ORDER BY symbol, source")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(carried, vec![("ABC".into(), "SEDAR+".into(), "000001234".into()), ("XY".into(), "SEC".into(), "320193".into()), ("XY.B".into(), "SEC".into(), "320193".into())]);
+    let left: i64 = conn.query_row("SELECT COUNT(*) FROM meta WHERE key LIKE 'sedar_profile:%'", [], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0, "no meta key names a ticker");
+}
+
+/// A document stored under several tickers whose reads disagree, as the store
+/// before migration 6 held it: (ticker, document, version, final, read at, the
+/// read's own words). Of each, the most complete read is the one kept: a final
+/// read over any partial one whatever its version, then the newer version, then a
+/// read made over none, then the newer read.
+type Read = (&'static str, &'static str, Option<i64>, Option<i64>, Option<&'static str>, &'static str);
+const DISAGREEING: [Read; 9] = [
+    // final at a lower version over partial at a higher
+    ("A", "sec:1", Some(5), Some(0), Some("2026-09-05T00:00:00Z"), "partial-newer-version"),
+    ("B", "sec:1", Some(2), Some(1), Some("2026-09-01T00:00:00Z"), "final"),
+    // both partial: the newer version
+    ("A", "sec:2", Some(1), Some(0), Some("2026-09-09T00:00:00Z"), "older-version"),
+    ("B", "sec:2", Some(3), Some(0), Some("2026-09-01T00:00:00Z"), "newer-version"),
+    // one version, one read and one not: the read
+    ("A", "sec:3", Some(2), Some(0), None, "unread"),
+    ("B", "sec:3", Some(2), Some(0), Some("2026-09-01T00:00:00Z"), "read"),
+    // all alike but when: the newer read
+    ("A", "sec:4", Some(2), Some(1), Some("2026-09-01T00:00:00Z"), "older-read"),
+    ("B", "sec:4", Some(2), Some(1), Some("2026-09-03T00:00:00Z"), "newer-read"),
+    ("C", "sec:4", Some(2), Some(1), Some("2026-09-02T00:00:00Z"), "middle-read"),
+];
+
+fn store_disagreeing(conn: &rusqlite::Connection, schema: &str) {
+    for (i, (sym, id, version, last, at, words)) in DISAGREEING.iter().enumerate() {
+        conn.execute(
+            &format!(
+                "INSERT INTO {schema}.filings (symbol, id, source, profile_no, url, title, date, subject, summary, enrich_version, enrich_final, enrich_reads, enriched_at, fetched_at)
+                 VALUES (?, ?, 'SEC', '', 'https://www.sec.gov/Archives/edgar/data/320193/000126/doc.htm', 't', '2026-09-01', ?, ?, ?, ?, ?, ?, '2026-09-10T00:00:00Z')"
+            ),
+            rusqlite::params![sym, id, format!("subject {words}"), format!("summary {words}"), version, last, i as i64 + 1, at],
+        )
+        .unwrap();
+    }
+}
+
+/// The rows kept of `DISAGREEING`: each document's most complete read, whole (its
+/// subject, its text, how many reads it took).
+fn the_most_complete_kept(conn: &rusqlite::Connection) {
+    let rows: Vec<(String, String, String, i64)> = conn
+        .prepare("SELECT id, subject, summary, enrich_reads FROM main.filings ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let want = |id: &str, words: &str| {
+        let i = DISAGREEING.iter().position(|r| r.1 == id && r.5 == words).unwrap();
+        (id.to_string(), format!("subject {words}"), format!("summary {words}"), i as i64 + 1)
+    };
+    assert_eq!(rows, vec![want("sec:1", "final"), want("sec:2", "newer-version"), want("sec:3", "read"), want("sec:4", "newer-read")]);
+}
+
+/// Migration 6 keeps the most complete of disagreeing reads of a document, whole.
+#[test]
+fn migration_6_keeps_the_most_complete_read_of_a_document_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("market.db");
+    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
+    {
+        let (conn, _) = migrate::open(five, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+        store_disagreeing(&conn, "main");
+    }
+    let (conn, _) = migrate::open(&SCHEMA, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+    the_most_complete_kept(&conn);
+}
+
+/// An earlier store's filings are carried by the same order: the most complete of
+/// disagreeing reads of a document, whole.
+#[test]
+fn an_earlier_stores_filings_carry_the_most_complete_read_of_a_document_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old.db");
+    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
+    drop(migrate::open(five, &old, "test", t("2026-09-24T00:00:00Z")).unwrap());
+    let (conn, _) = migrate::open(&SCHEMA, &dir.path().join("market.db"), "test", t("2026-09-24T00:00:00Z")).unwrap();
+    conn.execute("ATTACH DATABASE ? AS old", [old.to_string_lossy()]).unwrap();
+    store_disagreeing(&conn, "old");
+    let (carried, dropped) = bagholder_sources::cache::carry_filings(&conn, "old").unwrap();
+    assert_eq!((carried, dropped), (4, 0));
+    the_most_complete_kept(&conn);
+}
+
+/// Migration 6 attributes filers by the one rule `carry_filings` uses for an
+/// earlier store, so a filing carries to the same filer whichever way it came.
+#[test]
+fn migration_6_attributes_filers_by_the_one_rule() {
+    let sql = MIGRATIONS[5].sql;
+    let rule = bagholder_sources::cache::FILER_OF_ROW.replace("{meta}", "meta");
+    let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(squash(sql).contains(&squash(&rule)), "migration 6 attributes filers by FILER_OF_ROW");
 }

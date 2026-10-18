@@ -16,6 +16,7 @@
 //! cover is the one derived number, and it is derived the same way on both
 //! markets.
 
+use bagholder_net::Failure;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -117,7 +118,7 @@ fn lenient_num<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D:
 /// The regulator that publishes for an instrument, or `None` for one no one
 /// reports short selling on -- a coin, an index, a futures or currency
 /// contract, an option.
-pub fn market_of(symbol: &str, exchange: &str, currency: &str) -> Option<ShortMarket> {
+pub fn market_of(symbol: &str, exchange: &str) -> Option<ShortMarket> {
     let sym = symbol.trim().to_uppercase();
     let ex = exchange.trim().to_uppercase();
     if sym.is_empty()
@@ -127,10 +128,12 @@ pub fn market_of(symbol: &str, exchange: &str, currency: &str) -> Option<ShortMa
     {
         return None;
     }
-    match bagholder_model::venues::tmx_form(&ex, currency) {
-        None => None,
-        Some(":US") => Some(ShortMarket::Us),
-        Some(_) => Some(ShortMarket::Ca),
+    // FINRA publishes the short interest of every US listing, on an exchange or
+    // over the counter; CIRO the Canadian venues'
+    match bagholder_core::listing::key_venue(&ex)? {
+        bagholder_core::listing::US | bagholder_core::listing::OTC => Some(ShortMarket::Us),
+        v if bagholder_core::listing::CANADA_MICS.contains(&v) => Some(ShortMarket::Ca),
+        _ => None,
     }
 }
 
@@ -265,9 +268,9 @@ impl<T: Clone> Files<T> {
     /// every FILE_HOURS. A fetch that fails keeps what was already read rather
     /// than emptying it, for the reads after it, and is itself the failure; one
     /// that found no file keeps what was read the same way.
-    pub fn table<F>(&self, name: &str, build: F) -> Result<Held<T>, String>
+    pub fn table<F>(&self, name: &str, build: F) -> Result<Held<T>, Failure>
     where
-        F: FnOnce() -> Result<Option<(String, HashMap<String, T>)>, String>,
+        F: FnOnce() -> Result<Option<(String, HashMap<String, T>)>, Failure>,
     {
         if let Some(held) = self.cache().lock().unwrap().get(name) {
             if held.at.elapsed() < Duration::from_secs(FILE_HOURS * 3600) {
@@ -364,11 +367,13 @@ pub fn parse_us_volume(text: &str) -> HashMap<String, UsVolumeRow> {
 }
 
 /// A fetch through `source`'s words: what failed, named.
-fn said(source: &str) -> impl Fn(FetchError) -> String + '_ {
-    move |e| format!("{source}: {e}")
+/// A source's failed request in its words after the source's name; a request
+/// refused offline (`BAGHOLDER_OFFLINE`) by its kind.
+fn said(source: &str) -> impl Fn(FetchError) -> Failure + '_ {
+    move |e| Failure::from(e).map(|e| format!("{source}: {e}"))
 }
 
-fn us_volume_file(today: &str) -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, String> {
+fn us_volume_file(today: &str) -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, Failure> {
     // a day FINRA has not published is no file, not a failure: the day before is tried
     us_volume_file_with(today, |url| published_text(url).map_err(said("FINRA")))
 }
@@ -376,7 +381,7 @@ fn us_volume_file(today: &str) -> Result<Option<(String, HashMap<String, UsVolum
 /// The newest of the files tried that answers with rows. A date with no file
 /// yet is the next date's turn; when none answered and one failed, that
 /// failure is the read's.
-fn newest_of<R>(tries: impl IntoIterator<Item = (String, Result<R, String>)>, has_rows: impl Fn(&R) -> bool) -> Result<Option<(String, R)>, String> {
+fn newest_of<R>(tries: impl IntoIterator<Item = (String, Result<R, Failure>)>, has_rows: impl Fn(&R) -> bool) -> Result<Option<(String, R)>, Failure> {
     let mut failed = None;
     for (key, got) in tries {
         match got {
@@ -392,7 +397,7 @@ fn newest_of<R>(tries: impl IntoIterator<Item = (String, Result<R, String>)>, ha
 }
 
 /// `us_volume_file` with the fetch handed in.
-pub fn us_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str, mut get: G) -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, String> {
+pub fn us_volume_file_with<G: FnMut(&str) -> Result<String, Failure>>(today: &str, mut get: G) -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, Failure> {
     let tries = trading_days(today, TRIES).into_iter().map(|d| {
         let got = get(&US_VOLUME_URL.replace("{}", &compact(&d))).map(|t| parse_us_volume(&t));
         (d, got)
@@ -400,8 +405,23 @@ pub fn us_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str
     newest_of(tries, |rows| !rows.is_empty())
 }
 
+/// The key a Canadian file's row is kept under: the listing its symbol and its
+/// venue code are (`ListingKey`), so one ticker on two venues is two rows; none
+/// for a code the files' table does not name.
+pub fn ciro_key(symbol: &str, code: &str) -> Option<String> {
+    let code = code.trim().to_uppercase();
+    let words = CA_VENUE_NAMES.iter().find(|(k, _)| *k == code)?.1;
+    bagholder_core::ListingKey::on(symbol, words).ok().map(|k| k.to_string())
+}
+
+/// The key a listing's row is looked up under in a Canadian file; none for a
+/// listing whose venue is none known here, which no row is.
+pub fn ca_row_key(symbol: &str, exchange: &str) -> Option<String> {
+    bagholder_core::ListingKey::on(symbol, exchange).ok().filter(|k| k.canadian()).map(|k| k.to_string())
+}
+
 /// CIRO's position report -- issue name, symbol,
-/// venue, shares short, net change.
+/// venue, shares short, net change -- each row by its listing.
 pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow> {
     let mut rows = HashMap::new();
     for r in grid {
@@ -410,11 +430,10 @@ pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow>
         }
         let sym = vs(Some(&r[1])).trim().to_uppercase();
         let shares = num(Some(&r[3]));
-        if sym.is_empty() || shares.is_none() {
-            continue;
-        }
-        rows.insert(sym, CaPositionRow {
-            venue: vs(Some(&r[2])).trim().to_uppercase(),
+        let venue = vs(Some(&r[2])).trim().to_uppercase();
+        let Some(key) = ciro_key(&sym, &venue).filter(|_| shares.is_some()) else { continue };
+        rows.insert(key, CaPositionRow {
+            venue,
             shares: shares.unwrap(),
             change: num(Some(&r[4])),
             name: vs(Some(&r[0])).trim().to_string(),
@@ -429,19 +448,19 @@ fn published_text(url: &str) -> Result<String, FetchError> {
 }
 
 /// CIRO's position report for one date, `None` where it is not published yet.
-fn ca_position_grid(url: &str) -> Result<Option<Vec<Vec<Value>>>, String> {
+fn ca_position_grid(url: &str) -> Result<Option<Vec<Vec<Value>>>, Failure> {
     match crate::http::get_published(url, &headers()).map_err(said("CIRO"))? {
         None => Ok(None),
-        Some(raw) => crate::xls::table(&raw).map(Some).map_err(|e| format!("CIRO's position report does not read: {e}")),
+        Some(raw) => crate::xls::table(&raw).map(Some).map_err(|e| Failure::Said(format!("CIRO's position report does not read: {e}"))),
     }
 }
 
-fn ca_position_file(today: &str) -> Result<Option<(String, HashMap<String, CaPositionRow>)>, String> {
+fn ca_position_file(today: &str) -> Result<Option<(String, HashMap<String, CaPositionRow>)>, Failure> {
     ca_position_file_with(today, |url| ca_position_grid(url).map(Option::unwrap_or_default))
 }
 
 /// `ca_position_file` with the fetch and the spreadsheet reading handed in.
-pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(today: &str, mut grid_of: G) -> Result<Option<(String, HashMap<String, CaPositionRow>)>, String> {
+pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, Failure>>(today: &str, mut grid_of: G) -> Result<Option<(String, HashMap<String, CaPositionRow>)>, Failure> {
     let tries = position_dates(today, TRIES).into_iter().map(|d| {
         let got = grid_of(&CA_POSITION_URL.replace("{}", &compact(&d))).map(|grid| parse_ca_positions(&grid));
         (d, got)
@@ -451,12 +470,12 @@ pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(
 
 /// A Canadian listing's own volume over the report's
 /// period, from TMX's daily series under the venue's own form.
-pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, span: &str, today: &str) -> Result<Option<f64>, String> {
+pub fn ca_traded(symbol: &str, exchange: &str, span: &str) -> Result<Option<f64>, Failure> {
     let (start, end) = match span.split_once('/') { Some((a, b)) => (a.to_string(), b.to_string()), None => (span.to_string(), String::new()) };
     if end.is_empty() {
         return Ok(None);
     }
-    let Some(code) = crate::quotes::tmx_quote_symbol(symbol, exchange, currency) else { return Ok(None) };
+    let Some(code) = crate::quotes::tmx_quote_symbol(symbol, exchange) else { return Ok(None) };
     let ask = |form: &str| -> Result<Option<Vec<bagholder_store::bars::DayBar>>, FetchError> {
         let data = post_json(crate::tmx::TMX_URL, &json!({
             "operationName": "getTimeSeriesData",
@@ -466,13 +485,14 @@ pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, curr
         let bars = crate::parse::parse_tmx_history(&data);
         Ok(if bars.is_empty() { None } else { Some(bars) })
     };
-    let bars = crate::tmx::tmx_lookup_try(conn, &code, today, ask).map_err(|e| format!("the traded volume from TMX Money: {e}"))?.0.unwrap_or_default();
+    // the listing's own form; nothing there is this listing's miss
+    let bars = ask(&code).map_err(said("the traded volume from TMX Money"))?.unwrap_or_default();
     let traded: Vec<f64> = bars.iter().filter_map(|b| b.px.volume.filter(|v| *v != 0.0)).collect();
     Ok(if traded.is_empty() { None } else { Some(traded.iter().sum()) })
 }
 
 /// CIRO's short sale summary, the short part of a
-/// period's trading, per listing.
+/// period's trading, per listing (each row by its listing).
 pub fn parse_ca_volume(text: &str) -> Result<HashMap<String, CaVolumeRow>, String> {
     let mut rows = HashMap::new();
     for r in csv_records(text.trim_start_matches('\u{feff}'))? {
@@ -480,12 +500,11 @@ pub fn parse_ca_volume(text: &str) -> Result<HashMap<String, CaVolumeRow>, Strin
         let sym = field(&r, "Security").trim().to_uppercase();
         let short = num(get(&r, "Short Traded Volume"));
         let pct = num(get(&r, "% Total Traded Volume"));
-        if sym.is_empty() || short.is_none() {
-            continue;
-        }
+        let venue = field(&r, "Listing Market").trim().to_uppercase();
+        let Some(key) = ciro_key(&sym, &venue).filter(|_| short.is_some()) else { continue };
         let total = if truthy(pct) { finite(short.unwrap() / pct.unwrap() * 100.0) } else { None };
-        rows.insert(sym, CaVolumeRow {
-            venue: field(&r, "Listing Market").trim().to_uppercase(),
+        rows.insert(key, CaVolumeRow {
+            venue,
             short_volume: short.unwrap(),
             volume_pct: pct,
             total_volume: total,
@@ -494,16 +513,16 @@ pub fn parse_ca_volume(text: &str) -> Result<HashMap<String, CaVolumeRow>, Strin
     Ok(rows)
 }
 
-fn ca_volume_file(today: &str) -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, String> {
+fn ca_volume_file(today: &str) -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, Failure> {
     ca_volume_file_with(today, |url| published_text(url).map_err(said("CIRO")))
 }
 
 /// `ca_volume_file` with the fetch handed in.
-pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str, mut get: G) -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, String> {
+pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, Failure>>(today: &str, mut get: G) -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, Failure> {
     let tries = volume_periods(today, TRIES).into_iter().map(|(start, end)| {
         let url = CA_VOLUME_URL.replacen("{}", &compact(&start), 1).replacen("{}", &compact(&end), 1);
         // an empty text is a period not published yet: no rows, the period before is tried
-        let got = get(&url).and_then(|t| if t.is_empty() { Ok(HashMap::new()) } else { parse_ca_volume(&t).map_err(|e| format!("CIRO's short sale summary does not read: {e}")) });
+        let got = get(&url).and_then(|t| if t.is_empty() { Ok(HashMap::new()) } else { parse_ca_volume(&t).map_err(|e| Failure::Said(format!("CIRO's short sale summary does not read: {e}"))) });
         (format!("{}/{}", start, end), got)
     });
     newest_of(tries, |rows| !rows.is_empty())
@@ -513,7 +532,7 @@ pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str
 /// so a run of them is read once. A report that could not be read is the
 /// failure, and is not kept; one not published yet has no rows, and is not kept
 /// either, so it is read once it is.
-fn ca_positions_on(day: &str) -> Result<HashMap<String, CaPositionRow>, String> {
+fn ca_positions_on(day: &str) -> Result<HashMap<String, CaPositionRow>, Failure> {
     let name = format!("ca_position:{}", day);
     if let Some(rows) = CA_POSITION_FILES.cached(&name) {
         return Ok(rows);
@@ -527,25 +546,23 @@ fn ca_positions_on(day: &str) -> Result<HashMap<String, CaPositionRow>, String> 
 /// The listing's position across the last reports, oldest
 /// first. Canada publishes one file per reporting date, so each is read on its
 /// own and kept.
-pub fn ca_series(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize) -> Result<Vec<ShortPoint>, String> {
+pub fn ca_series(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize) -> Result<Vec<ShortPoint>, Failure> {
     ca_series_with(symbol, exchange, asof, today, back, ca_positions_on)
 }
 
 /// `ca_series` with each dated report's rows handed in. Every date is at or
 /// before the report on show, so each is published: one that cannot be read
 /// fails the run.
-pub fn ca_series_with<R: FnMut(&str) -> Result<HashMap<String, CaPositionRow>, String>>(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize, mut ca_positions_on: R) -> Result<Vec<ShortPoint>, String> {
-    let sym = symbol.trim().to_uppercase();
+pub fn ca_series_with<R: FnMut(&str) -> Result<HashMap<String, CaPositionRow>, Failure>>(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize, mut ca_positions_on: R) -> Result<Vec<ShortPoint>, Failure> {
+    let Some(key) = ca_row_key(symbol, exchange) else { return Ok(vec![]) };
     let mut out: Vec<ShortPoint> = Vec::new();
     for day in position_dates(today, back) {
         if !asof.is_empty() && day.as_str() > asof {
             continue;
         }
         let rows = ca_positions_on(&day)?;
-        if let Some(row) = rows.get(&sym) {
-            if venue_fits(&row.venue, exchange) {
-                out.push(ShortPoint { date: day, shares: row.shares });
-            }
+        if let Some(row) = rows.get(&key) {
+            out.push(ShortPoint { date: day, shares: row.shares });
         }
     }
     out.sort_by(|a, b| a.date.cmp(&b.date));
@@ -568,7 +585,7 @@ fn yahoo() -> &'static Mutex<Option<Yahoo>> {
 /// own TLS handshake is the gate, so it goes through the browser helper;
 /// without it the float is simply unknown, as it is for a listing Yahoo does
 /// not carry. Yahoo not letting the session open is Yahoo's failure.
-fn yahoo_open(slot: &mut Option<Yahoo>) -> Result<bool, String> {
+fn yahoo_open(slot: &mut Option<Yahoo>) -> Result<bool, Failure> {
     if slot.is_some() {
         return Ok(true);
     }
@@ -578,7 +595,7 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> Result<bool, String> {
     session.get(&YAHOO_QUOTE_URL.replace("{}", "AAPL"), timeout).map_err(would_not_open)?;
     let crumb = session.get(YAHOO_CRUMB_URL, timeout).map_err(would_not_open)?.text().trim().to_string();
     if crumb.is_empty() || crumb.chars().count() > 32 {
-        return Err(would_not_open("it gave no crumb".into()));
+        return Err(would_not_open("it gave no crumb".into()).into());
     }
     *slot = Some(Yahoo { session, crumb });
     Ok(true)
@@ -590,10 +607,10 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> Result<bool, String> {
 /// plain client (429 to a full browser User-Agent, an invalid-cookie answer to a
 /// bare one), so every reader of them goes through here. `None` when the
 /// browser helper cannot be started.
-pub fn yahoo_quote_summary(form: &str, modules: &str) -> Result<Option<(u16, String)>, String> {
+pub fn yahoo_quote_summary(form: &str, modules: &str) -> Result<Option<(u16, String)>, Failure> {
     // a process told to stay off the network asks no one, and says so in the words that mark it
     if bagholder_net::client::offline() {
-        return Err(format!("Yahoo Finance: {}", bagholder_net::client::OFFLINE));
+        return Err(Failure::Offline);
     }
     let mut slot = yahoo().lock().unwrap();
     if !yahoo_open(&mut slot)? {
@@ -612,13 +629,13 @@ pub fn yahoo_quote_summary(form: &str, modules: &str) -> Result<Option<(u16, Str
 /// from that venue's own directory -- its market capitalisation divided by its
 /// last price, which gives back the count the exchange put in, whole for every
 /// listing it carries.
-fn cboe_units(symbol: &str) -> Result<Option<f64>, String> {
+fn cboe_units(symbol: &str) -> Result<Option<f64>, Failure> {
     cboe_units_with(symbol, || get_text(CA_CBOE_URL, &headers()).map_err(said("Cboe Canada")))
 }
 
 /// `cboe_units` with the directory's fetch handed in; the directory is kept as
 /// a whole-market file. A directory that does not read is the venue's failure.
-pub fn cboe_units_with<G: FnOnce() -> Result<String, String>>(symbol: &str, get: G) -> Result<Option<f64>, String> {
+pub fn cboe_units_with<G: FnOnce() -> Result<String, Failure>>(symbol: &str, get: G) -> Result<Option<f64>, Failure> {
     let held = CBOE_FILES.table("cboe_listings", || {
         let rows = parse_cboe_directory(&get()?).ok_or_else(|| "Cboe Canada's listing directory does not read".to_string())?;
         Ok(Some(("cboe".to_string(), rows)))
@@ -649,22 +666,22 @@ pub fn parse_cboe_directory(text: &str) -> Option<HashMap<String, f64>> {
 
 /// The units an exchange-traded fund has in issue, from
 /// the market's own source. For a fund this is the float, not a stand-in.
-fn fund_units(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, today: &str) -> Result<Option<f64>, String> {
-    fund_units_with(symbol, exchange, currency, |code| tmx_units(conn, code, today), cboe_units)
+fn fund_units(symbol: &str, exchange: &str) -> Result<Option<f64>, Failure> {
+    fund_units_with(symbol, exchange, tmx_units, cboe_units)
 }
 
 /// `fund_units` with TMX's count and the venue's directory handed in.
-pub fn fund_units_with<T, C>(symbol: &str, exchange: &str, currency: &str, tmx: T, cboe: C) -> Result<Option<f64>, String>
+pub fn fund_units_with<T, C>(symbol: &str, exchange: &str, tmx: T, cboe: C) -> Result<Option<f64>, Failure>
 where
-    T: FnOnce(&str) -> Result<Option<f64>, String>,
-    C: FnOnce(&str) -> Result<Option<f64>, String>,
+    T: FnOnce(&str) -> Result<Option<f64>, Failure>,
+    C: FnOnce(&str) -> Result<Option<f64>, Failure>,
 {
     let sym = symbol.trim().to_uppercase();
-    if market_of(&sym, exchange, currency) == Some(ShortMarket::Us) {
+    if market_of(&sym, exchange) == Some(ShortMarket::Us) {
         // the US count comes from Yahoo with the float
         return Ok(None);
     }
-    let count = match crate::quotes::tmx_quote_symbol(&sym, exchange, currency) {
+    let count = match crate::quotes::tmx_quote_symbol(&sym, exchange) {
         Some(code) => tmx(&code)?.filter(|c| *c != 0.0),
         None => None,
     };
@@ -680,7 +697,7 @@ where
     cboe(&sym)
 }
 
-fn tmx_units(conn: &rusqlite::Connection, code: &str, today: &str) -> Result<Option<f64>, String> {
+fn tmx_units(code: &str) -> Result<Option<f64>, Failure> {
     let count: Option<f64>;
     {
         let ask = |form: &str| -> Result<Option<Value>, FetchError> {
@@ -692,7 +709,8 @@ fn tmx_units(conn: &rusqlite::Connection, code: &str, today: &str) -> Result<Opt
             let q = answered.get("data").and_then(|d| d.get("getQuoteBySymbol")).cloned().unwrap_or(Value::Null);
             Ok(match &q { Value::Object(m) if !m.is_empty() => Some(q), _ => None })
         };
-        let (q, _) = crate::tmx::tmx_lookup_try(conn, code, today, ask).map_err(|e| format!("the units in issue from TMX Money: {e}"))?;
+        // the listing's own form; nothing there is this listing's miss
+        let q = ask(code).map_err(said("the units in issue from TMX Money"))?;
         count = q.and_then(|q| num(q.get("shareOutStanding"))).filter(|c| *c != 0.0);
     }
     Ok(count)
@@ -712,17 +730,17 @@ fn floats() -> &'static Mutex<HashMap<String, Float>> {
 /// shares actually available to trade. For a company that is the free float
 /// Yahoo publishes, never swapped for the shares in issue; a fund's units in
 /// issue are its float, and stand in where no float is published for one.
-pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, name: &str, today: &str) -> Result<Option<f64>, String> {
+pub fn float_shares(symbol: &str, exchange: &str, name: &str) -> Result<Option<f64>, Failure> {
     let mut slot = yahoo().lock().unwrap();
     let opened = yahoo_open(&mut slot)?;
-    let ask = |form: &str| -> Result<(u16, String), String> {
+    let ask = |form: &str| -> Result<(u16, String), Failure> {
         let y = slot.as_mut().ok_or_else(|| "no Yahoo Finance session".to_string())?;
         let url = YAHOO_STATS_URL.replacen("{}", form, 1).replacen("{}", &y.crumb, 1);
         let a = y.session.get(&url, Duration::from_secs(TIMEOUT_SEC)).map_err(|e| format!("the float of {form} from Yahoo Finance: {e}"))?;
         Ok((a.status, a.text()))
     };
-    float_shares_with(symbol, exchange, currency, name, opened, ask, crate::quotes::yahoo_may_ask, crate::quotes::yahoo_back_off, |sym, ccy| {
-        fund_units(conn, sym, exchange, ccy, today)
+    float_shares_with(symbol, exchange, name, opened, ask, crate::quotes::yahoo_may_ask, crate::quotes::yahoo_back_off, |sym| {
+        fund_units(sym, exchange)
     })
 }
 
@@ -743,12 +761,12 @@ pub fn age_float(key: &str, secs: u64) {
 /// client to ask with at all. A request that fails, or a statistics answer
 /// that does not read, is the failure, and nothing is kept for it.
 #[allow(clippy::too_many_arguments)]
-pub fn float_shares_with<A, T, B, U>(symbol: &str, exchange: &str, currency: &str, name: &str, session: bool, mut ask: A, mut turn: T, mut back_off: B, units: U) -> Result<Option<f64>, String>
+pub fn float_shares_with<A, T, B, U>(symbol: &str, exchange: &str, name: &str, session: bool, mut ask: A, mut turn: T, mut back_off: B, units: U) -> Result<Option<f64>, Failure>
 where
-    A: FnMut(&str) -> Result<(u16, String), String>,
+    A: FnMut(&str) -> Result<(u16, String), Failure>,
     T: FnMut() -> bool,
     B: FnMut(),
-    U: FnOnce(&str, &str) -> Result<Option<f64>, String>,
+    U: FnOnce(&str) -> Result<Option<f64>, Failure>,
 {
     let sym = symbol.trim().to_uppercase();
     let key = format!("{}|{}", sym, exchange.trim().to_uppercase());
@@ -761,14 +779,10 @@ where
     let fund = bagholder_model::exposure::is_fund(name);
     // the symbol forms follow the market the venue already settled on, not the
     // currency the row happens to carry
-    let where_ = market_of(&sym, exchange, currency);
-    let ccy = if currency.trim().is_empty() { if where_ == Some(ShortMarket::Us) { "USD".to_string() } else { "CAD".to_string() } } else { currency.trim().to_string() };
     let mut count: Option<f64> = None;
     if session {
-        let mut forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(sym.clone(), exchange, ccy.clone(), ""));
-        if forms.is_empty() {
-            forms = vec![bagholder_model::venues::tmx_symbol(&sym)];
-        }
+        // the listing's own venue's forms alone: one whose venue is none known here is asked under none
+        let forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(sym.clone(), exchange, "", ""));
         for form in forms {
             if !turn() {
                 continue;
@@ -783,7 +797,7 @@ where
             }
             let doc: Value = match serde_json::from_str(&text) {
                 Ok(Value::Object(m)) => Value::Object(m),
-                _ => return Err(format!("the float of {form} from Yahoo Finance: not a statistics answer")),
+                _ => return Err(format!("the float of {form} from Yahoo Finance: not a statistics answer").into()),
             };
             let result = doc.get("quoteSummary").filter(|v| truthy_json(v)).and_then(|q| q.get("result")).filter(|v| truthy_json(v));
             let first = match result.and_then(|r| r.as_array()).and_then(|a| a.first()) {
@@ -805,7 +819,7 @@ where
         }
     }
     if !truthy(count) && fund {
-        count = units(&sym, &ccy)?;
+        count = units(&sym)?;
     }
     let count = count.filter(|c| *c != 0.0);
     floats().lock().unwrap().insert(key, Float { value: count, at: Instant::now() });
@@ -825,15 +839,6 @@ fn truthy_json(v: &Value) -> bool {
     }
 }
 
-/// Whether a row's venue is the listing's.
-pub fn venue_fits(code: &str, exchange: &str) -> bool {
-    let ex = exchange.trim().to_uppercase();
-    if ex.is_empty() {
-        return true;
-    }
-    let code = code.trim().to_uppercase();
-    CA_VENUES.iter().find(|(k, _)| *k == code).map(|(_, v)| v.contains(&ex.as_str())).unwrap_or(false)
-}
 
 // --- one listing ---------------------------------------------------------------
 
@@ -913,46 +918,46 @@ pub fn parse_us_position(answered: &Value) -> Position {
 }
 
 /// The newest settlement FINRA has for a US listing; FINRA not answering is the failure.
-pub fn us_position(symbol: &str, today: &str) -> Result<Position, String> {
+pub fn us_position(symbol: &str, today: &str) -> Result<Position, Failure> {
     let body = json!({
         "limit": 20,
         "compareFilters": [{"fieldName": "symbolCode", "fieldValue": symbol.trim().to_uppercase(), "compareType": "EQUAL"}],
         "dateRangeFilters": [{"fieldName": "settlementDate", "startDate": dates::shift_date(today, -150), "endDate": today}],
     });
-    let answered = post_json(US_POSITION_URL, &body, &[("Accept", "application/json")]).map_err(|e| format!("the position from FINRA: {e}"))?;
+    let answered = post_json(US_POSITION_URL, &body, &[("Accept", "application/json")]).map_err(said("the position from FINRA"))?;
     Ok(parse_us_position(&answered))
 }
 
 /// The last trading day's short volume for a US listing.
-pub fn us_volume(symbol: &str, today: &str) -> Result<Option<ShortVolume>, String> {
+pub fn us_volume(symbol: &str, today: &str) -> Result<Option<ShortVolume>, Failure> {
     us_volume_with(symbol, || us_volume_file(today))
 }
 
 /// `us_volume` with the file's reading handed in.
-pub fn us_volume_with<G: FnOnce() -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, String>>(symbol: &str, read: G) -> Result<Option<ShortVolume>, String> {
+pub fn us_volume_with<G: FnOnce() -> Result<Option<(String, HashMap<String, UsVolumeRow>)>, Failure>>(symbol: &str, read: G) -> Result<Option<ShortVolume>, Failure> {
     let held = US_VOLUME_FILES.table("us_volume", read)?;
     Ok(us_volume_from(&held.key, &held.rows, symbol))
 }
 
 /// `ca_position` with the file's reading handed in.
-pub fn ca_position_with<G: FnOnce() -> Result<Option<(String, HashMap<String, CaPositionRow>)>, String>>(symbol: &str, exchange: &str, today: &str, read: G) -> Result<Position, String> {
+pub fn ca_position_with<G: FnOnce() -> Result<Option<(String, HashMap<String, CaPositionRow>)>, Failure>>(symbol: &str, exchange: &str, today: &str, read: G) -> Result<Position, Failure> {
     let held = CA_POSITION_FILES.table("ca_position", read)?;
     Ok(ca_position_from(&held.key, &held.rows, symbol, exchange, today))
 }
 
 /// `ca_volume` with the file's reading and the exchange's traded volume
 /// (given the report's period) handed in.
-pub fn ca_volume_with<G, F>(symbol: &str, exchange: &str, read: G, traded: F) -> Result<Option<ShortVolume>, String>
+pub fn ca_volume_with<G, F>(symbol: &str, exchange: &str, read: G, traded: F) -> Result<Option<ShortVolume>, Failure>
 where
-    G: FnOnce() -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, String>,
-    F: FnOnce(&str) -> Result<Option<f64>, String>,
+    G: FnOnce() -> Result<Option<(String, HashMap<String, CaVolumeRow>)>, Failure>,
+    F: FnOnce(&str) -> Result<Option<f64>, Failure>,
 {
     let held = CA_VOLUME_FILES.table("ca_volume", read)?;
     if held.key.is_empty() {
         return Ok(None);
     }
-    let row = held.rows.get(&symbol.trim().to_uppercase());
-    ca_volume_from(&held.key, row, exchange, || traded(&held.key))
+    let Some(key) = ca_row_key(symbol, exchange) else { return Ok(None) };
+    ca_volume_from(&held.key, held.rows.get(&key), || traded(&held.key))
 }
 
 pub fn us_volume_from(key: &str, rows: &HashMap<String, UsVolumeRow>, symbol: &str) -> Option<ShortVolume> {
@@ -967,15 +972,13 @@ pub fn us_volume_from(key: &str, rows: &HashMap<String, UsVolumeRow>, symbol: &s
     })
 }
 
-pub fn ca_position(symbol: &str, exchange: &str, today: &str) -> Result<Position, String> {
+pub fn ca_position(symbol: &str, exchange: &str, today: &str) -> Result<Position, Failure> {
     ca_position_with(symbol, exchange, today, || ca_position_file(today))
 }
 
 pub fn ca_position_from(key: &str, rows: &HashMap<String, CaPositionRow>, symbol: &str, exchange: &str, today: &str) -> Position {
-    let row = match rows.get(&symbol.trim().to_uppercase()) { Some(r) => r, None => return Position::default() };
-    if !venue_fits(&row.venue, exchange) {
-        return Position::default();
-    }
+    // the row of this very listing: the same ticker on another venue is another row
+    let Some(row) = ca_row_key(symbol, exchange).and_then(|k| rows.get(&k)) else { return Position::default() };
     // the report before this one is the previous reporting date, which is what
     // the change is against
     let earlier: Vec<String> = position_dates(today, TRIES).into_iter().filter(|d| d.as_str() < key).collect();
@@ -997,13 +1000,12 @@ pub fn ca_position_from(key: &str, rows: &HashMap<String, CaPositionRow>, symbol
 /// report's period. A listing the report does not carry was not sold short in
 /// it, so its short volume is none of its trading rather than unknown, and
 /// what it did trade comes from the exchange.
-pub fn ca_volume(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, today: &str) -> Result<Option<ShortVolume>, String> {
-    ca_volume_with(symbol, exchange, || ca_volume_file(today), |span| ca_traded(conn, symbol, exchange, currency, span, today))
+pub fn ca_volume(symbol: &str, exchange: &str, today: &str) -> Result<Option<ShortVolume>, Failure> {
+    ca_volume_with(symbol, exchange, || ca_volume_file(today), |span| ca_traded(symbol, exchange, span))
 }
 
-pub fn ca_volume_from<F: FnOnce() -> Result<Option<f64>, String>>(key: &str, row: Option<&CaVolumeRow>, exchange: &str, traded: F) -> Result<Option<ShortVolume>, String> {
+pub fn ca_volume_from<F: FnOnce() -> Result<Option<f64>, Failure>>(key: &str, row: Option<&CaVolumeRow>, traded: F) -> Result<Option<ShortVolume>, Failure> {
     Ok(match row {
-        Some(r) if !venue_fits(&r.venue, exchange) => None,
         None => match traded()? {
             Some(t) if t != 0.0 => Some(ShortVolume { volume_of: key.to_string(), volume_span: VolumeSpan::Period, short_volume: Some(0.0), total_volume: finite(t), volume_pct: Some(0.0) }),
             _ => None,
@@ -1057,20 +1059,19 @@ pub fn for_listing(
     conn: &rusqlite::Connection,
     symbol: &str,
     exchange: &str,
-    currency: &str,
     today: &str,
     trend: bool,
     name: &str,
-) -> Result<Option<Shorts>, String> {
+) -> Result<Option<Shorts>, Failure> {
     let sym = symbol.trim().to_uppercase();
-    let Some(market) = market_of(&sym, exchange, currency) else { return Ok(None) };
+    let Some(market) = market_of(&sym, exchange) else { return Ok(None) };
     let (position, volume) = if market == ShortMarket::Us {
         (us_position(&sym, today)?, us_volume(&sym, today)?)
     } else {
-        (ca_position(&sym, exchange, today)?, ca_volume(conn, &sym, exchange, currency, today)?)
+        (ca_position(&sym, exchange, today)?, ca_volume(&sym, exchange, today)?)
     };
     finish(conn, position, volume, &sym, exchange, trend, market, |asof| ca_series(&sym, exchange, asof, today, SERIES), |issuer| {
-        float_shares(conn, &sym, exchange, currency, if name.trim().is_empty() { issuer } else { name.trim() }, today)
+        float_shares(&sym, exchange, if name.trim().is_empty() { issuer } else { name.trim() })
     })
     .map(Some)
 }
@@ -1088,10 +1089,10 @@ pub fn finish<S, F>(
     market: ShortMarket,
     series: S,
     float_of: F,
-) -> Result<Shorts, String>
+) -> Result<Shorts, Failure>
 where
-    S: FnOnce(&str) -> Result<Vec<ShortPoint>, String>,
-    F: FnOnce(&str) -> Result<Option<f64>, String>,
+    S: FnOnce(&str) -> Result<Vec<ShortPoint>, Failure>,
+    F: FnOnce(&str) -> Result<Option<f64>, Failure>,
 {
     // a listing the app knew no venue for takes the one the regulator's own
     // report gives it, and the issuer's name with it

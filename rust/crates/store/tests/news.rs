@@ -8,6 +8,8 @@ fn db() -> (tempfile::TempDir, rusqlite::Connection) {
     let dir = tempfile::tempdir().unwrap();
     let conn = open_db(&dir.path().join("bagholder.db")).unwrap();
     relabel::ensure(&conn).unwrap();
+    // the market cache's per-listing tables, as its migration 6 makes them
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
     (dir, conn)
 }
 
@@ -45,8 +47,9 @@ fn test_a_replaced_item_reads_back_the_same_through_its_feed() {
         kind: NewsKind::Release,
         via: Feed::Tmx,
     };
-    feeds::replace_news(&conn, "PNG", "TSX-V", &[item.clone()], "2026-09-05T12:05:00Z").unwrap();
-    let stored = feeds::news_for(&conn, "PNG", "TSX-V").unwrap();
+    let png = bagholder_core::ListingKey::on("PNG", "TSX-V").unwrap();
+    feeds::replace_news(&conn, &png, "TSX-V", &[item.clone()], "2026-09-05T12:05:00Z").unwrap();
+    let stored = feeds::news_for(&conn, &png).unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].feed, Some(Feed::Tmx));
     assert_eq!(stored[0].item(), Some(item));

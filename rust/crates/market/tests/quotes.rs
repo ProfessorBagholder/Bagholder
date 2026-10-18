@@ -13,8 +13,10 @@ fn test_quote_sources_cover_every_held_kind() {
     }
     assert_eq!(quotes::yahoo_forms(&Listing::new("PLTR", "NASDAQ", "", "")), ["PLTR"]);
     assert_eq!(quotes::yahoo_forms(&Listing::new("HHIS.U", "TSX", "USD", ""))[0], "HHIS-U.TO", "a Toronto listing in US dollars is still Toronto's");
-    assert_eq!(quotes::yahoo_forms(&Listing::new("QNC", "", "", ""))[0], "QNC.TO", "no venue and no currency: Canada, as before");
-    assert_eq!(quotes::yahoo_forms(&Listing::new("ASTS", "", "USD", "")), ["ASTS"]);
+    // no venue: no form, whatever the currency, since a currency names no venue
+    for currency in ["", "CAD", "USD"] {
+        assert!(quotes::yahoo_forms(&Listing::new("QNC", "", currency, "")).is_empty(), "{currency}");
+    }
 }
 
 #[test]
@@ -74,15 +76,17 @@ fn test_a_share_read_after_the_close_is_not_read_again_until_the_open_and_a_coin
 fn test_a_listing_with_no_bars_is_not_asked_again_until_the_next_top_up() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     bagholder_store::schema::init_schema(&conn).unwrap();
-    let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares")];
+    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    let recs = [Listing::new("QMET", "TSXV", "CAD", "Shares").keyed().unwrap()];
+    let key = recs[0].key.clone();
     let now = ny(16, 12, 0);
     let due = |at: f64| history::archive_intraday_due(&conn, &recs, "2026-09-16", at).unwrap().iter().map(|t| (t.0, t.1.clone())).collect::<Vec<_>>();
-    assert_eq!(due(now), vec![(0, "QMET".to_string())], "never asked: first in line");
+    assert_eq!(due(now), vec![(0, key.clone())], "never asked: first in line");
     assert_eq!(history::archive_next_due_secs(&conn, &recs, "2026-09-16", now).unwrap(), Some(0.0));
-    history::record_intraday_miss(&conn, "QMET", "1h", "2026-09-16T16:00:00Z").unwrap(); // asked, and the source had nothing
+    history::record_intraday_miss(&conn, &key, "1h", "2026-09-16T16:00:00Z").unwrap(); // asked, and the source had nothing
     assert_eq!(due(now), vec![], "a miss is a read");
     assert_eq!(history::archive_next_due_secs(&conn, &recs, "2026-09-16", now).unwrap(), Some(history::ARCHIVE_TOPUP_HOURS * 3600.0));
-    assert_eq!(due(now + 21.0 * 3600.0), vec![(1, "QMET".to_string())], "due again with the others' top-up");
+    assert_eq!(due(now + 21.0 * 3600.0), vec![(1, key)], "due again with the others' top-up");
     assert_eq!(history::archive_next_due_secs(&conn, &[], "2026-09-16", now).unwrap(), None, "nothing archived: only the book can make work");
 }
 

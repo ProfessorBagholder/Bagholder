@@ -20,7 +20,7 @@ pub mod scope;
 pub mod engine;
 pub mod needs;
 
-pub use engine::{Change, Engine, Entity, Moved};
+pub use engine::{CalledOn, Change, Engine, Entity, Moved};
 
 /// Whether a probe's measured window is open on this thread, where the test
 /// oracles stay out of what is measured (`bagholder_sqlite::work::measuring`

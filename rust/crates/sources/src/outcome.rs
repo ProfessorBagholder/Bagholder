@@ -27,6 +27,9 @@ pub enum Outcome<A> {
     /// The reply is well formed and says something that cannot be so (another
     /// series than asked, a day outside the span, a negative rate).
     Meaning(String),
+    /// Not asked: the process was told to stay off the network
+    /// (`BAGHOLDER_OFFLINE`). No outcome of the source's, and never recorded.
+    Offline,
 }
 
 /// The kind of an outcome, as it is stored and counted.
@@ -38,10 +41,12 @@ pub enum OutcomeKind {
     Unreachable,
     Mismatch,
     Meaning,
+    /// Not asked (`Outcome::Offline`); never stored.
+    Offline,
 }
 
 impl OutcomeKind {
-    pub const ALL: [OutcomeKind; 6] = [OutcomeKind::Answered, OutcomeKind::NotCarried, OutcomeKind::Refused, OutcomeKind::Unreachable, OutcomeKind::Mismatch, OutcomeKind::Meaning];
+    pub const ALL: [OutcomeKind; 7] = [OutcomeKind::Answered, OutcomeKind::NotCarried, OutcomeKind::Refused, OutcomeKind::Unreachable, OutcomeKind::Mismatch, OutcomeKind::Meaning, OutcomeKind::Offline];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -51,6 +56,7 @@ impl OutcomeKind {
             OutcomeKind::Unreachable => "unreachable",
             OutcomeKind::Mismatch => "mismatch",
             OutcomeKind::Meaning => "meaning",
+            OutcomeKind::Offline => "offline",
         }
     }
 
@@ -94,6 +100,7 @@ impl<A> Outcome<A> {
             Outcome::Unreachable(_) => OutcomeKind::Unreachable,
             Outcome::Mismatch(_) => OutcomeKind::Mismatch,
             Outcome::Meaning(_) => OutcomeKind::Meaning,
+            Outcome::Offline => OutcomeKind::Offline,
         }
     }
 
@@ -110,6 +117,7 @@ impl<A> Outcome<A> {
                 s
             }
             Outcome::Mismatch(m) => m.to_string(),
+            Outcome::Offline => bagholder_net::client::OFFLINE.to_string(),
         }
     }
 
@@ -121,6 +129,7 @@ impl<A> Outcome<A> {
             Outcome::Unreachable(w) => Outcome::Unreachable(w),
             Outcome::Mismatch(m) => Outcome::Mismatch(m),
             Outcome::Meaning(w) => Outcome::Meaning(w),
+            Outcome::Offline => Outcome::Offline,
         }
     }
 
@@ -144,6 +153,7 @@ impl<A> From<NetError> for Outcome<A> {
         match e {
             NetError::Resting { .. } => Outcome::Refused { status: None, retry_after: None },
             NetError::Unreachable(why) => Outcome::Unreachable(why),
+            NetError::Offline => Outcome::Offline,
         }
     }
 }

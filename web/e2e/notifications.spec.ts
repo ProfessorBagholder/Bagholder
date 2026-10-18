@@ -77,7 +77,7 @@ test("a disclosure's or a release's banner opens the instrument's page: the hold
   const positions = model.positions as P[]
   const held = positions.find((p) => p.kind === 'Shares' && positions.filter((q) => q.symbol === p.symbol).length === 1)!
   const cases = [
-    { kind: 'disclosures', symbol: 'ZZQX', exchange: 'TSX', lands: (u: string) => u.endsWith('#markets/listing:ZZQX@TSX') },
+    { kind: 'disclosures', symbol: 'ZZQX', exchange: 'TSX', lands: (u: string) => u.endsWith('#markets/listing:ZZQX@XTSE') },
     { kind: 'releases', symbol: held.symbol, exchange: held.exchange, lands: (u: string) => u.endsWith('#portfolio/' + held.id) },
   ]
   await browserSays(page, 'granted')

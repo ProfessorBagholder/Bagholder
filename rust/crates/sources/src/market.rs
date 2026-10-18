@@ -158,13 +158,12 @@ fn rest_of(ctx: &Ctx, host: &str) -> Duration {
     ctx.net.limiter().pace(host).rest
 }
 
-/// The Yahoo forms of a listing to ask, in order: the book's routing reference
-/// alone where it holds one, else its venue's forms and then its market's others
-/// (its currency's market where its venue is none known).
+/// The Yahoo forms of a listing to ask: the book's routing reference alone where
+/// it holds one, else its own venue's forms (none where its venue is none known).
 pub fn yahoo_forms(l: &crate::contract::Listing) -> Vec<String> {
     match l.route(&RefScheme::Yahoo) {
         Some(r) => vec![r.to_string()],
-        None => venue::yahoo_forms_of(&l.symbol, l.venue_mic.as_deref(), l.currency),
+        None => venue::yahoo_forms_of(&l.symbol, l.venue_mic.as_deref()),
     }
 }
 

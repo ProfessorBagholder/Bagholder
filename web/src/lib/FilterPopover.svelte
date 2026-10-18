@@ -54,19 +54,19 @@
   // is scheduled imperatively from the input handler (extSchedule, like the old page)
   // — deterministic per keystroke — and the results land in flat $state tagged with
   // the query they belong to, so the rows derived tracks them and shows the matches.
-  let extResults = $state<{ q: string; rows: SymRow[] }>({ q: '', rows: [] })
+  let extResults = $state<{ q: string; rows: SymRow[]; error: string }>({ q: '', rows: [], error: '' })
   let extTimer: ReturnType<typeof setTimeout> | undefined
   function extSchedule(v: string) {
     clearTimeout(extTimer)
     const q = v.trim().toUpperCase()
     if (!q) {
-      extResults = { q: '', rows: [] }
+      extResults = { q: '', rows: [], error: '' }
       return
     }
     // an answer already had comes back at once (api.ts keeps them); a new one waits for a pause in the typing
     extTimer = setTimeout(async () => {
-      const rows = await searchSymbols(q)
-      if (rows.length || q === v.trim().toUpperCase()) extResults = { q, rows }
+      const found = await searchSymbols(q)
+      if (found.matches.length || q === v.trim().toUpperCase()) extResults = { q, rows: found.matches, error: found.error }
     }, 300)
   }
   function extRows(q: string): SymRow[] {
@@ -152,6 +152,8 @@
     return r.rank !== 2 || S.indexOf(Q) >= 0 || S.indexOf(bareSymbol(Q)) >= 0
   }
   const bookSyms = $derived(syms.filter((r) => r.book && byTicker(r, fieldsQ)))
+  // what the directories could not read for the text typed, said beside what they found
+  const extError = $derived(fieldsQ && extResults.q === fieldsQ.trim().toUpperCase() ? extResults.error : '')
   const extSyms = $derived(syms.filter((r) => r.book && !byTicker(r, fieldsQ)).concat(syms.filter((r) => !r.book)))
   const others = $derived(fieldMatches(fieldsQ).filter((m) => m.key !== 'symbol'))
   const matchTotal = $derived(bookSyms.length + others.length + extSyms.length)
@@ -379,8 +381,10 @@
             {/if}
           {/each}
         </div>
+        {#if extError}<div class="status-err" style="padding:4px 7px 2px;font-size:12px">{extError}</div>{/if}
       {:else}
-        {#if fieldsQ}<div class="muted" style="padding:2px 7px 8px;font-size:12px">No match.</div>{/if}
+        {#if extError}<div class="status-err" style="padding:2px 7px 8px;font-size:12px">{extError}</div>
+        {:else if fieldsQ}<div class="muted" style="padding:2px 7px 8px;font-size:12px">No match.</div>{/if}
         <div class="lbl" style="padding:2px 7px 7px">Filter by</div>
         <div class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">
           {#each FIELDS as x (x.key)}
