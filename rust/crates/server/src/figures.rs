@@ -326,21 +326,44 @@ fn prepared(book: &Book, cache: &MarketCache, at: Timestamp) -> Result<(), Strin
     forget_unkeyed_prices(book, cache)
 }
 
+/// Why the figure path could not be opened: the market cache, said under the
+/// cache's own name as every other borrow of it is, or the book (the book itself,
+/// or the earlier database carried into it), said as the book's.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OpenFailure {
+    Cache(String),
+    Book(String),
+}
+
+impl std::fmt::Display for OpenFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenFailure::Cache(s) | OpenFailure::Book(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<OpenFailure> for String {
+    fn from(e: OpenFailure) -> String {
+        e.to_string()
+    }
+}
+
 impl Figures {
     /// Open the figure path in `home` at `at`: the old store imported into a new
     /// book the first time (its journal, groups and notes carried; the first pull
     /// then supersedes its rows), both files brought to this build's schema, and
     /// the engine built when the book holds a zone. A book or cache this build
-    /// cannot open stops the server, saying why.
-    pub fn open(home: &Path, at: Timestamp) -> Result<Figures, String> {
+    /// cannot open is said by what failed, and the open is tried again later.
+    pub fn open(home: &Path, at: Timestamp) -> Result<Figures, OpenFailure> {
         let book_path = home.join(bagholder_book::BOOK_FILE);
         let old = home.join(OLD_FILE);
         if !book_path.exists() && old.exists() {
-            crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
+            crate::legacy_import::import(&old, home, at).map_err(|e| OpenFailure::Book(format!("The earlier database could not be carried into the book: {e}")))?;
         }
         let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
-        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
-        let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
+        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
+        let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Cache(format!("The market cache could not be opened: {e}")))?;
         // the records derived again and the prices kept under a guessed venue forgotten,
         // both before anything is built: either failing is said on the page and tried
         // again at the next pass; it never stops the server, which a service manager
@@ -352,7 +375,7 @@ impl Figures {
         if !f.rederived.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(f);
         }
-        if let Some(z) = book.zone().map_err(err)? {
+        if let Some(z) = book.zone().map_err(|e| OpenFailure::Book(format!("The book could not be read: {e}")))? {
             match built(home, &book, &cache, &z.zone, at) {
                 Ok(b) => {
                     let mut engine = f.engine.write().unwrap_or_else(|e| e.into_inner());
@@ -870,6 +893,33 @@ mod tests {
         f.ensure_built(now).unwrap();
         assert!(f.read(|_| ()).is_some(), "the pass that derived them built the figures");
         same_as_fresh(&f, now);
+    }
+
+    /// Nothing is built from records not derived again, even where the build could
+    /// read them (brief 50, 5): a record this build's mapping refuses (an id the
+    /// book reads, with nothing it can map) leaves the build able to run, so only
+    /// the open's own guard keeps the figures unbuilt until the pass derives it.
+    #[test]
+    fn nothing_is_built_from_records_not_derived_again_where_the_build_could_read_them() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let book_file = home.path().join(bagholder_book::BOOK_FILE);
+        let now = at("2025-11-20T12:00:00Z");
+        {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            book.state_zone("America/Toronto", now).unwrap();
+        }
+        let c = rusqlite::Connection::open(&book_file).unwrap();
+        let source: String = c.query_row("SELECT source FROM source_records LIMIT 1", [], |r| r.get(0)).unwrap();
+        c.execute("INSERT INTO source_records(id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('01893c4a-0000-7000-8000-000000000001', ?, 'planted', 'live', 0, '2025-11-19T20:00:00Z', '2025-11-19T20:00:00Z')", [&source]).unwrap();
+        // the build itself reads the book with the record in it
+        let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+        assert!(rederive_all(&book, now).is_err(), "the mapping refuses the record");
+        let cache = MarketCache::open(&home.path().join(CACHE_FILE), crate::app::APP_VERSION, now).unwrap().0;
+        assert!(build(&book, &cache, clock(&book.zone().unwrap().unwrap().zone, now).unwrap()).is_ok(), "the build alone would run");
+        drop((book, cache));
+        let f = Figures::open(home.path(), now).expect("the open never stops on it");
+        assert!(f.read(|_| ()).is_none(), "nothing is built from records not derived again");
     }
 
     /// The engine the figure path holds, against one built fresh from the files.

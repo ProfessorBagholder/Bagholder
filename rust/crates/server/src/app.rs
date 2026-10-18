@@ -40,6 +40,12 @@ pub struct State {
     /// each: the server stays up with its page and its update button, and this is
     /// said until the next start (#516).
     pub start_error: String,
+    /// Why the figure path (the book) could not be opened, as the last try found
+    /// it; empty once it opens (`open_figures`).
+    pub open_error: String,
+    /// The figure path's opening was tried, so a header read finding it closed
+    /// tries again; never set where a step before it stopped it on purpose.
+    pub open_tried: bool,
     /// Each month whose broker statement the book does not reconcile with, as
     /// the last pull found it; cleared by a pull that finds none.
     pub statement_error: String,

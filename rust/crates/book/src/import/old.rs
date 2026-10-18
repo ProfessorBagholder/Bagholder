@@ -17,9 +17,14 @@ use crate::{BookError, Result};
 
 /// A copy of the database at `src`, made at `dst` with SQLite's backup API from a
 /// read-only connection: consistent even while the earlier app is writing, and
-/// the original is not written.
-pub fn copy_database(src: &Path, dst: &Path) -> Result<()> {
+/// the original is not written. Its failure is SQLite's own, about the file named,
+/// never said as the book's.
+pub fn copy_database(src: &Path, dst: &Path) -> rusqlite::Result<()> {
     let from = Connection::open_with_flags(src, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    // read once before it is copied: a backup's failure is told by the copy's own
+    // connection, which says "not an error" for a source that is no database, so a
+    // source that cannot be read is said here in its own words
+    let _: i64 = from.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
     let mut to = Connection::open(dst)?;
     {
         let backup = rusqlite::backup::Backup::new(&from, &mut to)?;
@@ -229,6 +234,18 @@ fn rows<T>(conn: &Connection, sql: &str, f: impl FnMut(&rusqlite::Row) -> rusqli
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A source that is no database is refused in its own words, never as the
+    /// copy's "not an error" (brief 50, 4).
+    #[test]
+    fn a_source_that_is_no_database_is_refused_saying_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, dst) = (dir.path().join("old.db"), dir.path().join("copy.db"));
+        std::fs::write(&src, b"this file is not a database, whatever its name says").unwrap();
+        let said = copy_database(&src, &dst).unwrap_err().to_string();
+        assert!(said.contains("file is not a database"), "{said}");
+        assert!(!said.contains("not an error") && !said.contains("the book"), "{said}");
+    }
 
     #[test]
     fn a_float_reads_as_its_shortest_decimal() {

@@ -48,13 +48,19 @@ fn test_a_market_cache_that_will_not_open_is_said_by_the_pass_that_met_it_until_
     assert_eq!(crate::feeds::sweep_shorts(&app), 0);
     let said = error(&app);
     assert_eq!(said.matches("The market cache could not be opened").count(), 1, "said once, by the pass and the header alike: {said}");
-    // the request that meets it answers it, not an empty or a default answer
-    assert!(crate::status::answer(&app).unwrap_err().contains("The market cache could not be opened"));
+    // the header is answered whatever the cache does (brief 50, 1): its versions,
+    // which only the cache holds, are absent, never made up, and its error line
+    // says why; any other request that meets it answers it, not an empty or a
+    // default answer
+    let answered = crate::status::answer(&app);
+    assert_eq!((answered.data_version.as_deref(), answered.core_version.as_deref()), (None, None));
+    assert_eq!(answered.status.error.matches("The market cache could not be opened").count(), 1, "{}", answered.status.error);
     assert!(crate::feeds::filings_stored(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap()).unwrap_err().contains("The market cache could not be opened"));
     mend_cache(home.path());
     assert_eq!(crate::feeds::sweep_shorts(&app), 0);
     assert_eq!(error(&app), "", "the next pass that opens it takes the failure away");
-    assert!(crate::status::answer(&app).is_ok());
+    let answered = crate::status::answer(&app);
+    assert!(answered.data_version.is_some() && answered.core_version.is_some());
 }
 
 #[test]

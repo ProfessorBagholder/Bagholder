@@ -77,37 +77,57 @@ fn get(port: u16, path: &str) -> (String, String) {
     (head.lines().next().unwrap_or("").to_string(), body.to_string())
 }
 
-/// The page is served, and the header's error line names `said`.
+/// The header as `/api/status` answers it.
+fn header(server: &Server) -> serde_json::Value {
+    let (status, body) = get(server.port, "/api/status");
+    assert!(status.contains(" 200 "), "the header is answered whatever failed: {status} {body}");
+    serde_json::from_str(&body).unwrap()
+}
+
+/// The page is served, the header is answered whole (its version and its update
+/// fields, so the update button works), and its error line is exactly `said`:
+/// one sentence, naming what failed.
 fn up_saying(server: &Server, said: &str) {
     let (status, page) = get(server.port, "/");
     assert!(status.contains(" 200 "), "the page: {status}");
     assert!(page.contains("the page"), "the page is the one the server was given: {page}");
-    // the header's error line; a market cache that cannot be read is said by the
-    // status answer refusing with it, as every request that meets it does
-    let (status, body) = get(server.port, "/api/status");
-    assert!(status.contains(" 200 ") || status.contains(" 500 "), "the status: {status}");
-    assert!(body.contains(said), "the header names the failure ({said}): {body}");
+    // read twice: a reader's failure is said once it fails again, so a reader
+    // adding a sentence of its own would show by the second read
+    header(server);
+    let h = header(server);
+    assert_eq!(h["ok"], true, "{h}");
+    assert!(h["version"].as_str().is_some_and(|v| !v.is_empty()), "the version: {h}");
+    for field in ["latestVersion", "updateAvailable", "canUpdate", "updateUrl"] {
+        assert!(h.get(field).is_some(), "the update field {field}: {h}");
+    }
+    assert_eq!(h["error"], said, "the whole error line");
 }
 
 #[test]
 fn a_book_this_build_cannot_open_is_said_and_the_server_stays_up() {
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     std::fs::write(home.path().join("book.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "book could not be opened");
+    up_saying(&started(home.path(), user.path()), "The book could not be opened: file is not a database.");
 }
 
 #[test]
 fn a_market_cache_this_build_cannot_open_is_said_and_the_server_stays_up() {
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     std::fs::write(home.path().join("market.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "market cache could not be opened");
+    let server = started(home.path(), user.path());
+    up_saying(&server, "The market cache could not be opened: file is not a database.");
+    // read again, it says the same: one failure, one wording, whichever reader met it
+    assert_eq!(header(&server)["error"], "The market cache could not be opened: file is not a database.");
+    // its versions, which only the cache holds, are absent, never made up
+    let h = header(&server);
+    assert_eq!((&h["dataVersion"], &h["coreVersion"]), (&serde_json::Value::Null, &serde_json::Value::Null));
 }
 
 #[test]
 fn an_earlier_database_that_cannot_be_carried_into_a_new_book_is_said_and_the_server_stays_up() {
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     std::fs::write(home.path().join("bagholder.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "could not be carried into the book");
+    up_saying(&started(home.path(), user.path()), "The earlier database could not be carried into the book: file is not a database.");
     // no book was made beside it, so the next start tries again
     assert!(!home.path().join("book.db").exists());
 }
@@ -118,7 +138,7 @@ fn an_earlier_store_that_cannot_be_carried_beside_a_book_is_said_and_the_server_
     // a book of its own first, from an ordinary start
     drop(started(home.path(), user.path()));
     std::fs::write(home.path().join("bagholder.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "earlier store could not be opened");
+    up_saying(&started(home.path(), user.path()), "The earlier store could not be opened: file is not a database.");
 }
 
 #[test]
@@ -126,5 +146,42 @@ fn the_python_apps_database_that_cannot_be_carried_is_said_and_the_server_stays_
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     std::fs::create_dir_all(user.path().join(".bagholder")).unwrap();
     std::fs::write(user.path().join(".bagholder").join("bagholder.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "earlier database could not be carried into the book");
+    up_saying(&started(home.path(), user.path()), "The earlier database could not be carried into the book: file is not a database.");
+}
+
+/// Whether the figure path is open: `/api/view` refuses with "the figures are not
+/// open" until it is (a book with no zone stated yet answers otherwise).
+fn figures_open(server: &Server) -> bool {
+    !get(server.port, "/api/view?key=book&params=%7B%7D").1.contains("the figures are not open")
+}
+
+/// A store mended while the server runs opens without a restart: the next header
+/// read no longer says it, and the figures open (brief 50, 2). For the market
+/// cache (its file a folder, then put back) and for the book (a file no database
+/// reads, then taken away).
+#[test]
+fn a_store_mended_while_the_server_runs_opens_at_the_next_header_read() {
+    // the market cache
+    let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    drop(started(home.path(), user.path()));
+    std::fs::rename(home.path().join("market.db"), home.path().join("market.db.kept")).unwrap();
+    std::fs::create_dir(home.path().join("market.db")).unwrap();
+    let server = started(home.path(), user.path());
+    let said = header(&server)["error"].as_str().unwrap().to_string();
+    assert!(said.starts_with("The market cache could not be opened"), "{said}");
+    assert!(!figures_open(&server), "nothing is built without its cache");
+    std::fs::remove_dir(home.path().join("market.db")).unwrap();
+    std::fs::rename(home.path().join("market.db.kept"), home.path().join("market.db")).unwrap();
+    assert_eq!(header(&server)["error"], "", "the next header read opens it");
+    assert!(figures_open(&server));
+    drop(server);
+    // the book
+    let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(home.path().join("book.db"), NOT_A_DATABASE).unwrap();
+    let server = started(home.path(), user.path());
+    assert_eq!(header(&server)["error"], "The book could not be opened: file is not a database.");
+    assert!(!figures_open(&server));
+    std::fs::remove_file(home.path().join("book.db")).unwrap();
+    assert_eq!(header(&server)["error"], "", "the next header read opens it");
+    assert!(figures_open(&server));
 }

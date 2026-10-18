@@ -134,7 +134,7 @@ const SHORTS_OF: &str = "shorts:";
 
 /// The header's entry for the market cache itself, where the feeds are kept: a
 /// pass that could not open it says so there until the next open succeeds.
-const CACHE: &str = "market-cache";
+pub(crate) const CACHE: &str = "market-cache";
 /// The header's entry for the book the notices are kept in, as the sweeps open it.
 const NOTICES_BOOK: &str = "notices-book";
 /// The header's entry for the market's context the earlier readers are given.
@@ -200,6 +200,10 @@ fn own_conn(app: &Arc<App>) -> Result<Connection, String> {
 /// header (`NOTICES_BOOK`) until one does.
 pub(crate) fn notices(app: &Arc<App>) -> Result<notify::NoticesBook<'_>, String> {
     let b = notify::book(app).map_err(|e| format!("The book could not be opened for the notifications: {e}"));
+    // the book not open: its open's own failure is said, once; nothing under this name
+    if app.figures.get().is_none() {
+        return b;
+    }
     went(app, NOTICES_BOOK, b.as_ref().map(|_| ()).map_err(String::clone));
     b
 }
