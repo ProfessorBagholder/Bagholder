@@ -63,5 +63,5 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 50 | [#523 as built: not yet; a market cache that cannot be opened still leaves no header and no update button](50-start-never-stops-as-built.md) | Current |
 | 51 | [Tests touched run locally; one full CI run per head to be merged; the trial merge a8e3a84f resolves the three files right](51-verifying-on-two-cores.md) | Current; amends 49 items 3 and 4; corrected 2026-10-18 (one full CI run per head) |
 | 52 | [#525 at e98e4176: the merge holds; fix the chart's timeframes (#531) in the same push, then merge](52-525-merge.md) | Applied; checked in 53 |
-| 53 | [#525 at 2d887849: merge (owner OK given); then close plan #522](53-525-merge.md) | Current |
-| 54 | [Verdict on plan #535, agents read the trade history: Go with changes; same machine only](54-agents-read-plan-verdict.md) | Current |
+| 53 | [#525 at 2d887849: merge (owner OK given); then close plan #522](53-525-merge.md) | Applied (#525 merged, ddb5a3cc) |
+| 54 | [Verdict on plan #535, agents read the trade history: Go with changes; same machine only](54-agents-read-plan-verdict.md) | Applied to #535 at d3329a62 |
