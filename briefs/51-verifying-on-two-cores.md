@@ -12,6 +12,35 @@
 - **Of the three questions put to the owner, only one was the owner's:** the OK to merge #521. Which work comes first, and where the tests run, are settled here (`docs/decisions.md`, 2026-10-04 and 2026-10-09: never put a solvable question to the owner).
 - **The trial merge `a8e3a84f`** (#521's head merged into #525, on the scratch branch `check-merge-521-into-525`) resolves the three files as brief 49 asks.
 
+## How rules 1–3 are kept
+
+**Which tests run.** The list is written down before anything runs:
+- each required change in a brief names the test that holds it, and each planted reverse names the test that must fail. Those named tests are what runs, and nothing else;
+- a fix the CTO makes also runs the tests in the files it touches.
+
+The commands are `cargo test --locked -p <crate> --test <file> <name>` (or `--bin bagholder <name>` for the server's own tests) and `npx playwright test e2e/<file>.spec.ts:<line>`. A whole crate, the workspace, or the whole browser suite never runs locally.
+
+**Builds stay warm.**
+- Each session keeps one worktree per PR it is working on, and keeps it until that PR merges.
+- All of a session's worktrees share one `CARGO_TARGET_DIR`, so moving to another PR rebuilds only the crates that differ.
+- Incremental compilation stays on. `CARGO_INCREMENTAL=0` was a fix for the cloud container's disk, and here it makes every rebuild slower.
+- The page is built once per head, for its browser tests.
+
+**One build at a time, enforced by a lock.** Every cargo, `npm run build` or Playwright run on this machine, by either session, goes through one lock:
+
+    flock /tmp/bagholder-build.lock nice -n 10 cargo test --locked ...
+
+A second build waits for the first, never runs beside it.
+
+**Where each task runs:**
+
+| Task | Where | Why |
+|---|---|---|
+| a named Rust test, a planted reverse | here, on the warm build | seconds to a few minutes; CI would take ten or more |
+| a named browser test | here (Chromium 1.63.0 installed) | about a minute, against a 10-minute browser job |
+| the whole suite, the macOS and Windows jobs, the container, capacity, audit | CI, the one run the push to the PR starts | eight machines in parallel; macOS and Windows aren't available here; a container build would hold this machine's two cores |
+| anything | never a cloud session, never the owner's Mac | a cloud session builds from cold; the Mac runs the live app |
+
 ## Correction (2026-10-18)
 
 This brief first said that full suites run on CI, without limiting how many runs. It allowed `workflow_dispatch` on a scratch branch. The CTO's trial merge and my own browser plant (`review-plant-ws-elsewhere`) each started a full run of all eight jobs to prove one thing. Rules 1–3 above replace that. The scratch branches are deleted, and my plant's run is cancelled. Its browser job had already shown the planted failure.
