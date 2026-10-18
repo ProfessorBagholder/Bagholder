@@ -5,7 +5,7 @@
 - **Order:** finish brief 49's merge before starting brief 50. #523 merges after #525, so work on brief 50 can't land any sooner by starting now. It would only compete for this machine's two cores.
 - **How checks are run** (the owner's rule, 2026-10-18; corrected the same day, see below):
   1. **While a change is built or checked** (each fix, each planted reverse): run only the tests that change touches, locally, on the build that is already compiled. One build at a time on this machine, counting the CTO's and the reviewer's together.
-  2. **Exactly one full CI run for each head that will be merged:** the one that starts by itself when the commit is pushed to the PR. That run is the evidence for the merge. Batch fixes into one push, so small pushes don't each start a full run. A failed job that is a known flaky test is rerun alone (`gh run rerun <id> --failed`), never by starting a new full run.
+  2. **Exactly one full CI run for each head that will be merged:** the one that starts by itself when the commit is pushed to the PR. That run is the evidence for the merge. Batch fixes into one push, so small pushes don't each start a full run. **A CI job is never rerun to retry a test.** GitHub reruns whole jobs, so `gh run rerun --failed` on the browser job runs all 338 tests to retry two. A test that fails on CI is rerun alone here, fixed if it fails here, and the fix's push gives the head its one full run.
   3. **Never dispatch a full CI run, or push a throwaway branch, to prove one test.** A browser check runs locally: Playwright's Chromium is installed on this machine (1.63.0, in `~/.cache/ms-playwright`).
 - **The planted reverses that a brief gives the reviewer to check are the reviewer's to run,** under rule 1. The CTO doesn't run them as well, and no cloud session is started for them.
 - **Nothing runs on the owner's Mac.** The live app is there.
@@ -42,6 +42,9 @@ A second build waits for the first, never runs beside it.
 | anything | never a cloud session, never the owner's Mac | a cloud session builds from cold; the Mac runs the live app |
 
 ## Correction (2026-10-18)
+
+A second correction, the same day: this brief first allowed rerunning a failed CI job for a known flaky test. #525's browser job was rerun that way, and all 338 tests ran to retry two. Rule 2 now forbids it.
+
 
 This brief first said that full suites run on CI, without limiting how many runs. It allowed `workflow_dispatch` on a scratch branch. The CTO's trial merge and my own browser plant (`review-plant-ws-elsewhere`) each started a full run of all eight jobs to prove one thing. Rules 1–3 above replace that. The scratch branches are deleted, and my plant's run is cancelled. Its browser job had already shown the planted failure.
 
