@@ -60,7 +60,7 @@ jobs:
       - name: No discarded failure
         env:
           RUSTFLAGS: "-D warnings"
-        run: cargo clippy --workspace --lib --bins
+        run: cargo clippy --locked --workspace --lib --bins
         working-directory: rust
 
   # The same suite on a Mac, and the test a sandboxed local run cannot hold: the notification
@@ -79,7 +79,7 @@ jobs:
       - name: The Rust suite
         env:
           CI: "true"
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
         working-directory: rust
       # the one test kept out of the suite for the machine it needs: the notification
       # applet, built with osacompile (the capture tests read the owner's own data,
@@ -87,7 +87,7 @@ jobs:
       - name: The notification applet, on macOS
         env:
           CI: "true"
-        run: cargo test -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
+        run: cargo test --locked -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
         working-directory: rust
 
   # Windows has no system time zone database, so the model reads the copy built into
@@ -103,7 +103,7 @@ jobs:
       - name: The model's suite
         env:
           CI: "true"
-        run: cargo test -p bagholder-model
+        run: cargo test --locked -p bagholder-model
         working-directory: rust
 
   web:

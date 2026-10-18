@@ -1431,6 +1431,17 @@ mod tests {
         assert!(measured(true), "the names folded whole in the window went unseen");
     }
 
+    /// An operation a person waits on is timed against its budget, and one that runs
+    /// on a cadence is not: its budget's source says which (a RAIL budget is a
+    /// person's wait), and the two never disagree (brief 47).
+    #[test]
+    fn every_operation_a_person_waits_on_is_timed() {
+        for op in Op::ALL {
+            let (_, from) = budget_ms(op, 1);
+            assert_eq!(op.waited_on(), from.starts_with("RAIL"), "{op:?}: its budget comes from {from}");
+        }
+    }
+
     /// The verdict: a listed operation within its budget fails the run as an
     /// unlisted one over it does.
     #[test]

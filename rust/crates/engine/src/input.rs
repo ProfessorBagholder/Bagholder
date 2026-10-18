@@ -37,12 +37,6 @@ pub struct InstrumentInfo {
 }
 
 impl InstrumentInfo {
-    /// The name in force on a day: the last one first seen on or before it, else
-    /// the earliest.
-    pub fn name_on(&self, day: Date) -> Option<&Name> {
-        self.names.iter().rev().find(|n| n.first_seen <= day).or(self.names.first())
-    }
-
     /// What it is called now.
     pub fn current_name(&self) -> Option<&Name> {
         self.names.last()

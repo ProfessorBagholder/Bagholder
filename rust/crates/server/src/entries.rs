@@ -139,7 +139,7 @@ pub(crate) enum Called<'a> {
 /// refusal saying why, never a pick and never a third instrument.
 pub(crate) fn held_on_day(e: &Engine, called: Called<'_>, currency: Currency, day: bagholder_core::jiff::civil::Date) -> Result<Option<(InstrumentId, bool)>, String> {
     let instruments = &e.inputs().ledger.instruments;
-    let (then, now, named): (Vec<InstrumentId>, Vec<InstrumentId>, String) = match called {
+    let (then, now, named): (bagholder_engine::CalledOn, Vec<InstrumentId>, String) = match called {
         Called::Listing(key) => (e.listed_on(key, currency, day), e.listed(key, currency).collect(), key.named()),
         Called::Symbol(symbol, k) => (
             e.named_on(symbol, currency, day, k),
@@ -147,12 +147,18 @@ pub(crate) fn held_on_day(e: &Engine, called: Called<'_>, currency: Currency, da
             symbol.to_string(),
         ),
     };
-    match (then.as_slice(), now.as_slice()) {
+    // each refusal says what is true: two bore the name on that day, or two came to bear it since
+    let two = |n: usize, on_the_day: bool| {
+        let when = if on_the_day { format!("was the name of {n} instruments on {day}") } else { format!("has been the name of {n} instruments since {day}") };
+        Err(format!("{named} {when}: the book cannot tell which this is"))
+    };
+    match (then.ids.as_slice(), now.as_slice()) {
+        // one whose history begins after the day is named on it by its first name, as a file older than the broker's history names it
         ([one], _) => Ok(Some((*one, true))),
         ([], []) => Ok(None),
         ([], [one]) => Ok(Some((*one, false))),
-        ([], _) => Err(format!("{named} is the name of {} instruments: the book cannot tell which this is", now.len())),
-        (_, _) => Err(format!("{named} was the name of {} instruments on {day}: the book cannot tell which this is", then.len())),
+        ([], _) => two(now.len(), false),
+        (_, _) => two(then.ids.len(), then.on_the_day),
     }
 }
 
@@ -568,6 +574,75 @@ mod tests {
         }
     }
 
+    /// Two listed shares of one venue, both renamed by the broker to one ticker after
+    /// their histories: a trade entered by hand on that listing is refused, never
+    /// booked on either (brief 47, 1). On the rename's day, both bore the name; on a
+    /// day before either's history, none did and both do now. Each refusal reaches
+    /// the person through `enter`, in words true of its day.
+    #[test]
+    fn a_trade_entered_on_a_listing_two_instruments_came_to_bear_is_refused() {
+        let (_h, f) = figures();
+        let by_venue: std::collections::BTreeMap<String, Vec<(InstrumentId, bagholder_core::RecordId, AccountId)>> = f
+            .read(|e| {
+                let mut m: std::collections::BTreeMap<String, Vec<_>> = Default::default();
+                for (id, i) in &e.inputs().ledger.instruments {
+                    let Some(mic) = i.names.first().and_then(|n| n.venue_mic.clone()) else { continue };
+                    if i.instrument.kind != InstrumentKind::Security || i.instrument.currency != Currency::CAD || i.names.len() != 1 {
+                        continue;
+                    }
+                    if let Some(t) = e.inputs().ledger.transactions.of_instrument(*id).find(|t| e.inputs().ledger.records.get(&t.id.record).is_some_and(|r| r.connection.is_some())) {
+                        m.entry(mic).or_default().push((*id, t.id.record, t.account));
+                    }
+                }
+                m
+            })
+            .unwrap();
+        let (venue, shares) = by_venue.into_iter().find(|(_, v)| v.len() >= 2).expect("two listed shares on one venue");
+        let book = f.book().unwrap();
+        for (n, (_, record, _)) in shares.iter().take(2).enumerate() {
+            let rec = book.record(*record).unwrap();
+            let mut payload: serde_json::Value = serde_json::from_str(&book.revisions(*record).unwrap().pop().unwrap().2).unwrap();
+            payload["activity"]["occurredAt"] = serde_json::json!("2025-11-19T15:00:00.000000Z");
+            for (_, sec) in payload["securities"].as_object_mut().unwrap().iter_mut() {
+                if sec["stock"].is_object() {
+                    sec["stock"]["symbol"] = serde_json::json!("ZQTWO");
+                }
+            }
+            book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &format!("{}-two{n}", rec.source_key), payload: &payload.to_string(), refs: vec![] }, now()).unwrap();
+        }
+        f.record_changed(now()).unwrap();
+        let named = bagholder_core::ListingKey::on("ZQTWO", &venue).unwrap().named();
+        let account = shares[0].2.to_string();
+        for (day, said) in [("2025-11-19", format!("{named} was the name of 2 instruments on 2025-11-19")), ("2020-01-02", format!("{named} has been the name of 2 instruments since 2020-01-02"))] {
+            let req = EntryRequest::Trade { account: account.clone(), instrument: None, symbol: "ZQTWO".into(), exchange: venue.clone(), currency: "CAD".into(), day: day.into(), side: "buy".into(), quantity: "1".into(), price: "1".into(), fee: "".into() };
+            let before = person_trades(&f).len();
+            match enter(&f, &req, now()) {
+                Err(Refused::Entry(why)) => assert_eq!(why, format!("{said}: the book cannot tell which this is")),
+                other => panic!("an entry on {day} was taken: {other:?}"),
+            }
+            assert_eq!(person_trades(&f).len(), before, "nothing booked on {day}");
+        }
+    }
+
+    /// A file's row whose instrument cannot be named, an exchange no venue is
+    /// written as among them, is kept with its problem, and the rest of the file is
+    /// imported (trade-37; brief 47, 3).
+    #[test]
+    fn a_files_row_naming_an_unknown_exchange_is_kept_with_its_problem_and_the_file_imported() {
+        let (_h, f) = figures();
+        let book = f.book().unwrap();
+        let account = f.read(|e| e.figures().positions[0].account).unwrap();
+        let account = AccountId::parse(&account.to_string()).unwrap();
+        let text = "Date,Action,Symbol,Exchange,Quantity,Price,Amount,Currency\n2025-11-12,Buy,ZQUX,ZZEX,1,1.00,-1.00,CAD\n2025-11-12,Buy,ZQUY,TSX,1,1.00,-1.00,CAD\n".to_string();
+        let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+        let before = file_rows(&book);
+        let report = crate::csv_import::import_from(&f, "unknown-exchange.csv", &open, Some(account), now(), &mut |_| crate::csv_import::Go::On).expect("the file is imported");
+        assert_eq!((report.rows, report.added), (2, 2), "{report:?}");
+        assert!(report.problems.iter().any(|p| p.line == 2 && p.message == "\"ZZEX\" is not an exchange"), "{:?}", report.problems);
+        let new: Vec<_> = file_rows(&book).difference(&before).cloned().collect();
+        assert_eq!(new.iter().filter(|(_, i)| i.is_some()).count(), 1, "the other row names its instrument: {new:?}");
+    }
+
     fn file_rows(book: &bagholder_book::Book) -> std::collections::BTreeSet<(String, Option<String>)> {
         book.conn_for_tests()
             .prepare("SELECT t.record_id, t.instrument_id FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' WHERE r.connection_id IS NULL AND r.source = 'csv'")
@@ -592,10 +667,11 @@ mod tests {
         let held: Vec<InstrumentId> = person_trades(&f).iter().filter_map(|t| t.instrument).collect();
         assert_eq!(held.len(), 2);
         assert_ne!(held[0], held[1], "two listings, two instruments");
-        // on the day both were named so, and on a day before either, when both are named so now
-        for day in ["2025-11-19", "2020-01-02"] {
+        // on the day both bore the name, and on a day before either's history, each
+        // refusal in words that are true of that day (brief 47, 2)
+        for (day, said) in [("2025-11-19", "ZQRA was the name of 2 instruments on 2025-11-19"), ("2020-01-02", "ZQRA has been the name of 2 instruments since 2020-01-02")] {
             match crate::csv_import::traded(&f, "zqra", None, InstrumentKind::Security, Currency::CAD, day.parse().unwrap()) {
-                Err(Refused::Entry(why)) => assert!(why.contains("ZQRA") && why.contains("2 instruments"), "{why}"),
+                Err(Refused::Entry(why)) => assert_eq!(why, format!("{said}: the book cannot tell which this is")),
                 other => panic!("a venue-less row of {day} was taken as {other:?}"),
             }
         }

@@ -302,6 +302,15 @@ fn path(log: &mut Vec<(Node, bool)>, f: Node, continued: bool) {
     PATHS.with(|p| p.borrow_mut().push((f, continued)));
 }
 
+/// The instruments a name finds on a day (`Engine::named_on`, `listed_on`), and
+/// whether they bore it on that day; otherwise each first bore it after the day,
+/// its history beginning then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CalledOn {
+    pub ids: Vec<InstrumentId>,
+    pub on_the_day: bool,
+}
+
 /// What an instrument is found by when named under `n`: the symbol in ASCII
 /// capitals, and its currency.
 fn symbol_key(i: &crate::input::InstrumentInfo, n: &bagholder_core::instrument::Name) -> (String, bagholder_core::Currency) {
@@ -576,7 +585,7 @@ impl Engine {
     /// The instruments of a kind `of_kind` takes called `symbol` on `day`, in
     /// `currency` (`called_on`): the kind is part of the match, as a broker names a
     /// contract by its underlying's symbol.
-    pub fn named_on(&self, symbol: &str, currency: bagholder_core::Currency, day: Date, of_kind: impl Fn(bagholder_core::instrument::InstrumentKind) -> bool) -> Vec<InstrumentId> {
+    pub fn named_on(&self, symbol: &str, currency: bagholder_core::Currency, day: Date, of_kind: impl Fn(bagholder_core::instrument::InstrumentKind) -> bool) -> CalledOn {
         let symbol = symbol.to_ascii_uppercase();
         let instruments = &self.inputs.ledger.instruments;
         let ids = self.symbols.get(&(symbol.clone(), currency)).into_iter().flatten().copied().filter(|id| instruments.get(id).is_some_and(|i| of_kind(i.instrument.kind)));
@@ -588,13 +597,14 @@ impl Engine {
     /// history begins after `day` is taken by its first name only where none of
     /// `ids` had the name on that day: a file older than the broker's history still
     /// finds it, and a day another instrument held the name is never given to it.
-    fn called_on(&self, ids: impl Iterator<Item = InstrumentId>, day: Date, is: impl Fn(&crate::input::InstrumentInfo, &bagholder_core::instrument::Name) -> bool) -> Vec<InstrumentId> {
+    fn called_on(&self, ids: impl Iterator<Item = InstrumentId>, day: Date, is: impl Fn(&crate::input::InstrumentInfo, &bagholder_core::instrument::Name) -> bool) -> CalledOn {
         let infos: Vec<(InstrumentId, &crate::input::InstrumentInfo)> = ids.filter_map(|id| self.inputs.ledger.instruments.get(&id).map(|i| (id, i))).collect();
         let then: Vec<InstrumentId> = infos.iter().filter(|(_, i)| i.names.iter().rev().find(|n| n.first_seen <= day).is_some_and(|n| is(i, n))).map(|(id, _)| *id).collect();
         if !then.is_empty() {
-            return then;
+            return CalledOn { ids: then, on_the_day: true };
         }
-        infos.iter().filter(|(_, i)| i.names.first().is_some_and(|n| n.first_seen > day && is(i, n))).map(|(id, _)| *id).collect()
+        let ids = infos.iter().filter(|(_, i)| i.names.first().is_some_and(|n| n.first_seen > day && is(i, n))).map(|(id, _)| *id).collect();
+        CalledOn { ids, on_the_day: false }
     }
 
     /// The instruments that are the listing `key` now, in `currency`.
@@ -606,7 +616,7 @@ impl Engine {
     }
 
     /// The instruments that were the listing `key` on `day`, in `currency` (`called_on`).
-    pub fn listed_on(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Date) -> Vec<InstrumentId> {
+    pub fn listed_on(&self, key: &bagholder_core::ListingKey, currency: bagholder_core::Currency, day: Date) -> CalledOn {
         let whole = (key.clone(), currency);
         let ids = self.listings.get(&whole).into_iter().flatten().copied();
         self.called_on(ids, day, |i, n| listing_key(i, n).is_some_and(|k| k == whole))
