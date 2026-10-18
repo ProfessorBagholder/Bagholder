@@ -14,3 +14,5 @@ export type ChartHistory = { ok: boolean, symbol: string, chartSymbol: string, s
 export type HistoryAnswer = ChartHistory | OkOr;
 
 export type HistoryQuery = { symbol: string, exchange: string, currency: string, kind: string, from: string, to: string, tf: string, };
+
+export type HistoryDoc = { pending: boolean, available: Array<string>, };

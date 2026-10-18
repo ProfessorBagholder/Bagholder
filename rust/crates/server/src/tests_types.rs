@@ -63,7 +63,7 @@ fn chart_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory, crate::feeds::HistoryAnswer, crate::feeds::HistoryQuery];
+    let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory, crate::feeds::HistoryAnswer, crate::feeds::HistoryQuery, crate::docs::HistoryDoc];
     let mut out = String::from("// Generated from rust/crates/store/src/bars.rs and the server's chart history. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.\n\nimport type { OkOr } from './common'\n\n");
     for d in decls {
         out.push_str("export ");
@@ -508,7 +508,7 @@ fn keys_declarations() -> String {
         ("filings-feed", keys_of::<crate::feeds::FilingsFeed>()),
         ("fear", keys_of::<crate::feeds::FearDoc>()),
         ("quote", keys_of::<crate::orders::TicketQuote>()),
-        ("history", keys_of::<crate::docs::HistoryPending>()),
+        ("history", keys_of::<crate::docs::HistoryDoc>()),
         ("universe", keys_of::<crate::feeds::UniverseDoc>()),
         ("news", keys_of::<crate::feeds::NewsDoc>()),
     ];

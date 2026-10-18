@@ -786,16 +786,25 @@ test.describe('News', () => {
   // brief 42, 9: a chip is held or watched by its listing, never its ticker
   test('a chip on a listing of a held ticker\'s other venue is not the holding: its own quote is asked', async ({ page, request }) => {
     const model = await figures(request)
-    const held = (model.positions as { symbol: string; exchange: string; kind: string }[]).find((p) => p.kind === 'Shares' && ['TSX', 'TSX-V', 'NYSE', 'NASDAQ'].includes(p.exchange))!
-    const other = held.exchange === 'TSX' ? { exchange: 'TSX-V', venue: 'XTSX' } : { exchange: 'TSX', venue: 'XTSE' }
+    // the premise, checked: the other venue's listing is neither held nor watched. A
+    // ticker held on two venues (the book's cross-listed holdings) would make the
+    // other one a holding too, and which holding comes first is the book's order (#532)
+    const listed = (x: { symbol: string; exchange?: string }) => bareSymbol(x.symbol).toUpperCase() + '@' + String(x.exchange || '').toUpperCase()
+    const book = new Set([...(model.positions as { symbol: string; exchange: string }[]), ...(model.markets.watchlist as { symbol: string; exchange: string }[])].map(listed))
+    const otherOf = (exchange: string) => (exchange === 'TSX' ? { exchange: 'TSX-V', venue: 'XTSX' } : { exchange: 'TSX', venue: 'XTSE' })
+    const held = (model.positions as { symbol: string; exchange: string; kind: string }[]).find(
+      (p) => p.kind === 'Shares' && ['TSX', 'TSX-V', 'NYSE', 'NASDAQ'].includes(p.exchange) && !book.has(listed({ symbol: p.symbol, exchange: otherOf(p.exchange).exchange })),
+    )
+    expect(held, 'a holding whose ticker on another venue is neither held nor watched').toBeTruthy()
+    const other = otherOf(held!.exchange)
     await openWithStatus(page, request, {}, '#markets', () => {}, two)
     await page.route('**/api/listings?*', (route) =>
-      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: held.symbol + '@' + other.venue, symbol: held.symbol, name: held.symbol + ' elsewhere', exchange: other.exchange, currency: 'CAD', held: false }] } }),
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: held!.symbol + '@' + other.venue, symbol: held!.symbol, name: held!.symbol + ' elsewhere', exchange: other.exchange, currency: 'CAD', held: false }] } }),
     )
     const quoted = page.waitForRequest((r) => r.url().includes('/api/symbols/quote?') && new URL(r.url()).searchParams.get('exchange') === other.exchange)
-    await page.getByLabel('Search the news').fill(held.symbol.toLowerCase())
+    await page.getByLabel('Search the news').fill(held!.symbol.toLowerCase())
     const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
-    await expect(card.locator('.chip')).toContainText(held.symbol)
+    await expect(card.locator('.chip')).toContainText(held!.symbol)
     await quoted
   })
 

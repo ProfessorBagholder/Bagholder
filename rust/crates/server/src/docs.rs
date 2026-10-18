@@ -83,11 +83,13 @@ impl Diff for FilingsAnswer {
     }
 }
 
-/// `history:<the chart's own query>`: only whether its intraday bars are still
-/// being read -- the bars themselves are fetched once, when this says they are in.
+/// `history:<the chart's own query>`: whether its listing's bars are still being
+/// read, and the timeframes the listing offers now -- the bars themselves are
+/// fetched once, when this says they are in or that what is offered changed.
 #[derive(Clone, Debug, Serialize, TS, Diff)]
-pub struct HistoryPending {
+pub struct HistoryDoc {
     pub pending: bool,
+    pub available: Vec<String>,
 }
 
 /// One document a page can watch, whole once and then by what changes in it.
@@ -108,7 +110,7 @@ pub enum Doc {
     /// `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the
     /// first answer.
     Quote(crate::orders::TicketQuote),
-    History(HistoryPending),
+    History(HistoryDoc),
     /// `universe:<key>`: what the last read of a market universe came to.
     Universe(UniverseDoc),
     /// `news`: the News card's pass, the listings it has still to read.
@@ -181,7 +183,7 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         // `fear:<index>`: the fear and greed meter
         k if k.starts_with("fear:") => Some(Doc::Fear(crate::feeds::fear_stored(app, &k["fear:".len()..]))),
         k if k.starts_with("quote:") => app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned().map(Doc::Quote),
-        k if k.starts_with("history:") => Some(Doc::History(HistoryPending { pending: crate::feeds::history_pending(app, &crate::feeds::HistoryQuery::parse(&k["history:".len()..])) })),
+        k if k.starts_with("history:") => Some(Doc::History(crate::feeds::history_doc(app, &crate::feeds::HistoryQuery::parse(&k["history:".len()..])))),
         // `universe:<key>`: a market universe the heatmap shows
         k if k.starts_with("universe:") => crate::feeds::universe_stored(app, &k["universe:".len()..]).map(Doc::Universe),
         "news" => Some(Doc::News(crate::feeds::news_stored(app))),

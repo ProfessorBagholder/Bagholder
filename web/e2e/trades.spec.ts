@@ -302,6 +302,32 @@ test.describe('Trade detail', () => {
     await expect(page.locator('#page .pill')).toHaveText(['1D', '1W', '1M'])
   })
 
+  // brief 52, 2: what a listing offers is the server's word as it changes, not as it was
+  test('a timeframe the listing stops offering goes from the chart once the server says so, with no reload; picked, it says why and draws no other bars', async ({ page, request }) => {
+    const model = await getModel(request)
+    // a trade whose listing offers 1H now: nothing has read its minute bars yet
+    let found = false
+    for (const t of closed(model).filter((x: any) => x.kind === 'Shares' && x.holdDays > 10)) {
+      await page.goto('/#trades/' + encodeURIComponent(t.id))
+      await ready(page)
+      await expect(page.locator('#page .pill.on')).toBeVisible()
+      if ((await page.locator('#page .pill').allTextContents()).includes('1H')) {
+        found = true
+        break
+      }
+    }
+    expect(found, 'a trade whose listing offers 1H').toBe(true)
+    await page.evaluate(() => { (window as unknown as { __sameLoad: boolean }).__sameLoad = true })
+    // the person picks 1H: the server is offline, so its read finds no bars and the
+    // listing stops offering it; the server says so on the stream
+    await page.locator('#page .pill', { hasText: '1H' }).click()
+    await expect(page.locator('#page .pill')).toHaveText(['1D', '1W', '1M'], { timeout: 20_000 })
+    expect(await page.evaluate(() => (window as unknown as { __sameLoad?: boolean }).__sameLoad), 'the page was not loaded again').toBe(true)
+    // the pick is answered with why, never with the daily bars in its place
+    await expect(page.locator('#page .muted.empty', { hasText: '1H is not offered for this listing now.' })).toBeVisible()
+    await expect(page.locator('#page .pill.on')).toHaveCount(0)
+  })
+
   test('picking a timeframe highlights it and it is remembered for that trade while the page stays open', async ({ page, request }) => {
     const model = await getModel(request)
     const t = closed(model).find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)

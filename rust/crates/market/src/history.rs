@@ -988,14 +988,22 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Keyed, tf: &str, start:
     Ok(last.and_then(|l| l.start_ts).map(|s| s <= start_ts).unwrap_or(false))
 }
 
+/// The listings whose intraday bars are being read now.
+static INTRADAY_PENDING: std::sync::Mutex<Vec<ListingKey>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether an intraday read for this listing is under way now: until it ends,
+/// what its chart offers can still change (a miss, or bars stored).
+pub fn intraday_pending(rec: &Keyed) -> bool {
+    INTRADAY_PENDING.lock().unwrap_or_else(|e| e.into_inner()).contains(&rec.key)
+}
+
 /// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once; `done` is called when
 /// it ends, with whether the store could be read and written.
 pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rates: Rates, rec: Keyed, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
-    static PENDING: std::sync::Mutex<Vec<ListingKey>> = std::sync::Mutex::new(Vec::new());
     let sym = rec.key.clone();
     {
-        let mut p = PENDING.lock().unwrap();
+        let mut p = INTRADAY_PENDING.lock().unwrap();
         if p.contains(&sym) {
             return;
         }
@@ -1007,12 +1015,12 @@ pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool:
             let (today, now_unix, stamp) = crate::clock_now();
             ensure_intraday(&conn, &rates, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true)
         });
-        PENDING.lock().unwrap().retain(|s| *s != sym);
+        INTRADAY_PENDING.lock().unwrap().retain(|s| *s != sym);
         done(read.map(|_| ()).map_err(|e| format!("The hourly bars of {} could not be stored: {e}", sym.named())));
     };
     if std::thread::Builder::new().name(format!("bagholder-intraday-{}", left)).spawn(run).is_err() {
         // no thread to read on: nothing is under way, so nothing is left pending
-        PENDING.lock().unwrap().retain(|s| *s != left);
+        INTRADAY_PENDING.lock().unwrap().retain(|s| *s != left);
     }
 }
 

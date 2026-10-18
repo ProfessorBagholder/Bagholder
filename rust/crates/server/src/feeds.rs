@@ -1628,6 +1628,27 @@ pub fn qs_one(query: &str, name: &str) -> String {
 /// and cached on demand.
 /// Whether the intraday bars this chart asked for are still being read. What the
 /// chart watches (`docs`) in place of asking for its history again every few seconds.
+/// What a chart watches while it is shown (`history:<its query>`): whether any of
+/// its listing's bars are being read, and the timeframes its listing offers now.
+/// A miss recorded or bars stored for an intraday timeframe changes what is
+/// offered, and that change reaches the chart showing that listing alone.
+pub fn history_doc(app: &Arc<App>, q: &HistoryQuery) -> crate::docs::HistoryDoc {
+    let (rec, start, _, _) = q.read();
+    let Ok(inst) = history::chart_instrument(&rec).keyed() else {
+        return crate::docs::HistoryDoc { pending: false, available: vec![] };
+    };
+    let (today_s, now, _) = bagholder_market::clock_now();
+    let available = match conn(app).map_err(|e| e.to_string()).and_then(|c| history::offered_timeframes(&c, &inst, &start, &today_s, now).map_err(|e| e.to_string())) {
+        Ok(a) => a.into_iter().map(String::from).collect(),
+        Err(e) => {
+            feed_failed(app, "bars", format!("The bars could not be read: {e}"));
+            vec![]
+        }
+    };
+    let pending = history_pending(app, q) || history::daily_pending(&inst) || history::intraday_pending(&inst);
+    crate::docs::HistoryDoc { pending, available }
+}
+
 pub fn history_pending(app: &Arc<App>, q: &HistoryQuery) -> bool {
     let (rec, start, _, tf) = q.read();
     // a listing that names no venue is read under none, so nothing is pending
@@ -1704,6 +1725,12 @@ pub enum HistoryAnswer {
     Refused(OkOr),
 }
 
+/// Why a timeframe is not offered for a listing, named as its button is (`1H`):
+/// its sources' own failure where one is noted, else that none had its bars.
+fn not_offered(inst: &bagholder_model::input::Keyed, tf: &str) -> String {
+    format!("{} is not offered for this listing now. {}", tf.to_uppercase(), history::chart_reason(inst, tf))
+}
+
 /// A background read of a chart's bars ended: a store that failed it is said in
 /// the header until a read goes through.
 fn bars_read(app: &Arc<App>, read: Result<(), String>) {
@@ -1763,6 +1790,11 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
         Ok(a) => a,
         Err(e) => return HistoryAnswer::Refused(OkOr::err(format!("The bars could not be read: {e}"))),
     };
+    // a timeframe the listing does not offer is refused with why, never answered
+    // with another timeframe's bars or an empty chart
+    if src.is_some() && !available.contains(&tf.as_str()) {
+        return HistoryAnswer::Refused(OkOr::err(not_offered(&inst, &tf)));
+    }
     let mut pending = false;
     let bars: ChartBars = {
         {
@@ -1775,7 +1807,11 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
                 }
             {
                 let told = app.clone();
-                history::ensure_intraday_in_background(p.clone(), rates.clone(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| bars_read(&told, read));
+                // its end is told: what the listing offers may have changed with it
+                history::ensure_intraday_in_background(p.clone(), rates.clone(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| {
+                    bars_read(&told, read);
+                    told.events.signal();
+                });
                 pending = true;
                 ChartBars::default()
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
@@ -1844,6 +1880,73 @@ mod tests {
         f.state_zone("America/Toronto", at).unwrap();
         app.set_figures(f);
         (home, app)
+    }
+
+    /// What a listing offers is its own chart document's to say: for generated
+    /// listings and each intraday timeframe, a miss recorded and then bars stored
+    /// each change that listing's document once (what it offers) and no other
+    /// listing's, and each write reaches the bus every page's stream waits on
+    /// (brief 52, 1). A timeframe it no longer offers is refused with why.
+    #[test]
+    fn a_miss_recorded_or_bars_stored_changes_that_listings_chart_document_once_and_no_others() {
+        let (_home, app) = built_app();
+        let (today, _, stamp) = bagholder_market::clock_now();
+        let from = bagholder_model::dates::shift_date(&today, -10);
+        // generated listings on the venues with intraday sources, symbols drawn at random
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let venues = [("TSX", "CAD"), ("TSX-V", "CAD"), ("NASDAQ", "USD"), ("NYSE", "USD")];
+        let queries: Vec<HistoryQuery> = (0..12u8)
+            .map(|i| {
+                let n = next();
+                let len = 1 + (n % 4) as usize;
+                let symbol: String = (0..len).map(|k| (b'A' + ((n >> (8 * (k + 1))) % 26) as u8) as char).chain(std::iter::once((b'A' + i) as char)).collect();
+                let (exchange, currency) = venues[(n >> 56) as usize % venues.len()];
+                HistoryQuery::parse(&format!("symbol={symbol}&exchange={exchange}&currency={currency}&kind=Shares&from={from}&to={today}&tf=1d"))
+            })
+            .collect();
+        let docs = || queries.iter().map(|q| history_doc(&app, q)).collect::<Vec<_>>();
+        let c = conn(&app).unwrap();
+        for (i, q) in queries.iter().enumerate() {
+            let key = history::chart_instrument(&q.read().0).keyed().unwrap().key;
+            for tf in ["1h", "4h"] {
+                let before = docs();
+                assert!(before[i].available.iter().any(|a| a == tf), "{} offers {tf} before its miss: {:?}", q.symbol, before[i].available);
+                let rung = app.events.stamp();
+                history::record_intraday_miss(&c, &key, tf, &stamp).unwrap();
+                assert_ne!(app.events.stamp(), rung, "a miss recorded reaches the bus");
+                let missed = docs();
+                let without: Vec<String> = before[i].available.iter().filter(|a| *a != tf).cloned().collect();
+                assert_eq!(bagholder_model::patch::typed(&before[i], &missed[i]), vec![json!(["set", ["available"], without])], "{} {tf}: one change, what it offers", q.symbol);
+                for (j, (b, a)) in before.iter().zip(&missed).enumerate() {
+                    if j != i {
+                        assert!(bagholder_model::patch::typed(b, a).is_empty(), "{}'s miss changed {}'s document", q.symbol, queries[j].symbol);
+                    }
+                }
+                // asked for now, the timeframe is refused with why, never answered with other bars
+                let asked = HistoryQuery { tf: tf.into(), ..HistoryQuery::parse(&format!("symbol={}&exchange={}&currency={}&kind=Shares&from={from}&to={today}", q.symbol, q.exchange, q.currency)) };
+                match history_payload(&app, &asked) {
+                    HistoryAnswer::Refused(r) => assert!(serde_json::to_string(&r).unwrap().contains(&format!("{} is not offered", tf.to_uppercase())), "{}", serde_json::to_string(&r).unwrap()),
+                    HistoryAnswer::Ok(h) => panic!("{} {tf} answered with {} bars after its miss", q.symbol, h.tf),
+                }
+                let rung = app.events.stamp();
+                let bar = bagholder_store::bars::TimeBar { time: 1_700_000_000, px: bagholder_store::bars::Ohlcv { open: Some(1.0), high: Some(1.0), low: Some(1.0), close: 1.0, volume: None } };
+                bagholder_store::market::upsert_price_bars(&c, &key, tf, &[bar], "test").unwrap();
+                assert_ne!(app.events.stamp(), rung, "bars stored reach the bus");
+                let stored = docs();
+                assert_eq!(bagholder_model::patch::typed(&missed[i], &stored[i]), vec![json!(["set", ["available"], before[i].available])], "{} {tf}: bars stored offer it again", q.symbol);
+                for (j, (b, a)) in missed.iter().zip(&stored).enumerate() {
+                    if j != i {
+                        assert!(bagholder_model::patch::typed(b, a).is_empty(), "{}'s bars changed {}'s document", q.symbol, queries[j].symbol);
+                    }
+                }
+            }
+        }
     }
 
     /// A chart that cannot be keyed says why: no record names its venue, or the

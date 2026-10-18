@@ -16,7 +16,7 @@ use bagholder_store::feeds::{
     FiledDocument, Filing, Gauge, GaugePoint, GaugeReading, Regulator, ShortMarket, Shorts, StoredGauge, StoredShorts,
 };
 
-use crate::docs::HistoryPending;
+use crate::docs::HistoryDoc;
 use crate::feeds::{FearDoc, ShortsFeedRow, ShortsFeed};
 use crate::notify::{NotifySettings, NotifyStatus};
 use crate::orders::{OrderCard, OrdersDoc};
@@ -282,6 +282,7 @@ fn test_a_shorts_figure_change_is_the_row_that_moved() {
 
 #[test]
 fn test_history_pending_flip_is_one_set() {
-    let ops = tdiff(&HistoryPending { pending: true }, &HistoryPending { pending: false });
+    let offered = vec!["1d".to_string(), "1w".to_string(), "1M".to_string()];
+    let ops = tdiff(&HistoryDoc { pending: true, available: offered.clone() }, &HistoryDoc { pending: false, available: offered });
     assert_eq!(ops, vec![json!(["set", ["pending"], false])]);
 }

@@ -1403,7 +1403,11 @@ fn read_while_shown(app: &Arc<App>, doc: &str, key: &ListingKey, read: &dyn Fn(R
             .collect();
         left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
         let Some(next) = left.first().map(|r| (r.doc.source, r.doc.id.clone())) else { break };
-        set_reading(app, key, left.iter().map(|r| r.doc.id.clone()).collect());
+        // offline, each read is refused at the door and nothing is read, so nothing is
+        // said to be reading: a page shown again draws no placeholders that come and go
+        if !bagholder_net::client::offline() {
+            set_reading(app, key, left.iter().map(|r| r.doc.id.clone()).collect());
+        }
         // waits for the local model itself when one is coming up
         went(app, DISCLOSURES_READING, read(next.0, &next.1).map_err(|e| e.map(|e| format!("{}'s document {} could not be read: {e}", key.named(), next.1))));
         tried.insert(next);
@@ -2061,6 +2065,33 @@ mod tests {
             read_while_shown(&app, doc, &key, &|_, _| Err("the SEC could not be reached".into()));
         }
         assert!(said().contains("XYZ · US's document sec:1 could not be read: the SEC could not be reached"), "{}", said());
+        drop(feed);
+    }
+
+    /// Offline, a document's read is refused at the door, so nothing is read and the
+    /// listing's disclosures never say a document is being read: a page shown again
+    /// draws no title placeholders that come and go (#531).
+    #[test]
+    fn an_offline_pass_never_says_a_document_is_being_read() {
+        let (_home, app) = built_app();
+        assert!(bagholder_net::client::offline(), "the tests run offline");
+        let key = on("XYZ", "NYSE");
+        let mut r = Regs::new();
+        r.filers = vec![(key.clone(), Ok("0000000001".into()))];
+        let unread: Vec<_> = (1..=3).map(|n| { let mut d = item(Regulator::Sec, n, "0000000001"); d.title = String::new(); d }).collect();
+        r.documents = vec![(filer("0000000001", Regulator::Sec), Ok(unread))];
+        refresh_filings_in(&app, &crate::feeds::conn(&app).unwrap(), &key, &r).unwrap();
+        let feed = crate::events::Feed::open(app.clone());
+        let doc = "disclosures-shown";
+        assert!(app.events.watch(&app, feed.id(), [(doc.to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
+        let asked = std::cell::Cell::new(0);
+        read_while_shown(&app, doc, &key, &|_, _| {
+            asked.set(asked.get() + 1);
+            // what a page showing the listing is sent while this read runs
+            assert_eq!(filings_stored(&app, &key).unwrap().reading, Vec::<String>::new(), "a read refused offline is said to be under way");
+            Err(bagholder_net::Failure::Offline)
+        });
+        assert_eq!(asked.get(), 3, "each document without a title is asked once");
         drop(feed);
     }
 
