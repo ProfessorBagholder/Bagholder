@@ -238,6 +238,57 @@ fn a_trade_is_orphaned_or_moved_only_on_the_anchor_the_engine_saw() {
     assert!(matches!(f.book.trade(trade).unwrap().anchor, Anchor::Orphaned(_)));
 }
 
+/// Many trades orphaned in one set write (#538), each only on the anchor the
+/// engine saw: of generated trades, the ones another writer moved in between are
+/// left as they are, and only the others are orphaned with their own reasons,
+/// over groups larger than one statement holds; each orphaned trade logs its own
+/// change, and their notes stay.
+#[test]
+fn trades_orphaned_together_are_each_orphaned_only_on_the_anchor_the_engine_saw() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    // what the log takes for one trade orphaned on its own
+    let one = f.store(&m, "one", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-30T15:00:00Z")]));
+    let lone = f.book.open_trade(&f.opens(one.record), None, t0()).unwrap();
+    let before = f.book.changes_upto().unwrap();
+    assert!(f.book.orphan_unclaimed(lone, &f.opens(one.record)).unwrap());
+    let per_trade = f.book.changes_upto().unwrap() - before;
+    for n in [1usize, 7, 151, 320] {
+        let mut asked = Vec::new();
+        let mut moved_since = std::collections::BTreeSet::new();
+        for k in 0..n {
+            let at = format!("2026-02-{:02}T15:{:02}:{:02}Z", 1 + k % 27, (k / 60) % 60, k % 60);
+            let a = f.store(&m, &format!("o{n}-{k}"), &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", &at)]));
+            let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
+            f.book.set_journal(JournalSubject::Trade(trade), &note("kept"), t0()).unwrap();
+            let seen = f.opens(a.record);
+            // every fifth moved by another writer since the engine saw it
+            if k % 5 == 3 {
+                let b = f.store(&m, &format!("r{n}-{k}"), &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", &at)]));
+                f.book.supersede(&[a.record], &[b.record], "the broker's own row", t0()).unwrap();
+                moved_since.insert(trade);
+            }
+            asked.push((trade, format!("reason {k}"), seen));
+        }
+        let before = f.book.changes_upto().unwrap();
+        let done = f.book.orphan_seen(&asked).unwrap();
+        assert_eq!(done as usize, n - moved_since.len(), "{n} trades");
+        assert_eq!(f.book.changes_upto().unwrap() - before, done as i64 * per_trade, "each trade orphaned logs what it logs orphaned alone");
+        for (trade, reason, _) in &asked {
+            let t = f.book.trade(*trade).unwrap();
+            if moved_since.contains(trade) {
+                assert!(matches!(t.anchor, Anchor::Opening(_)), "{n}: a trade moved since was written over");
+            } else {
+                assert_eq!(t.anchor, Anchor::Orphaned(reason.clone()), "{n}");
+            }
+            assert_eq!(f.book.journal(JournalSubject::Trade(*trade)).unwrap().unwrap().thesis, "kept");
+        }
+        // asked again, nothing is left to do
+        assert_eq!(f.book.orphan_seen(&asked).unwrap(), 0);
+    }
+}
+
 /// A trade whose anchor a correction made a fill of another opening's round trip
 /// moves to that opening (the engine names it, `Identity::moved`), keeping its id
 /// and note; never onto an opening another trade holds, nor onto a transaction
