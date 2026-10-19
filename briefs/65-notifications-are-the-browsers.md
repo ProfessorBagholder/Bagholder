@@ -4,7 +4,7 @@
 
 Bagholder is a web application. A web application tells the person things through the browser: Gmail, Google Calendar, Slack and Discord on the web all do it this way.
 - The page asks for permission once, from a click.
-- A service worker shows each notification under the site's name and icon.
+- A service worker shows each notification, as the browser shows any site's.
 - The server delivers events while no tab is open through the browser's own push channel (Web Push).
 
 There is no helper app, nothing in the Dock, and nothing installed on the computer. Brief 64's changes 1 and 2 patched a native helper that should never have been built. That was my error: I fixed the helper instead of asking whether there should be one. The owner: "there IS no app. this is literally a web application… show me where any top human engineer would be designing notifications for a webapp this way."
@@ -29,13 +29,12 @@ Delivery goes through the push service of the person's own browser: Google's for
    - `native_channel` and `channel_for`, and the native modes of `BAGHOLDER_NOTIFY`.
 
    At its next start, the server deletes what it made before: `Bagholder.app` in the data folder, and the Windows app id under the person's own registry hive. It logs each removal once.
-2. **A web app manifest:** the name Bagholder, its icons, `start_url` and `display: standalone`. A person who installs the page from the browser's own install button gets a window and notifications under Bagholder's name and icon. This is the web's mechanism for that, and SPEC's "under its own name and icon" is met this way.
-3. **A service worker** (`/sw.js`, built with the page, scope `/`):
+2. **A service worker** (`/sw.js`, built with the page, scope `/`):
    - `push`: always shows the notification (`showNotification`, with the tag set to the row's id), never a silent push;
    - `notificationclick`: focuses an open Bagholder tab, or opens one, at the row's own target (SPEC notifications-7 and notifications-12);
    - `pushsubscriptionchange`: subscribes again and tells the server.
-4. **Permission and subscription, from a click only:** a "Turn on notifications" control where the notification kinds are set. It calls `Notification.requestPermission()` and `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` in the click's handler. It shows the state (on, off, or blocked in the browser's settings, with how to change it) and never asks on its own.
-5. **The server sends Web Push itself:**
+3. **Permission and subscription, from a click only:** a "Turn on notifications" control where the notification kinds are set. It calls `Notification.requestPermission()` and `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` in the click's handler. It shows the state (on, off, or blocked in the browser's settings, with how to change it) and never asks on its own.
+4. **The server sends Web Push itself:**
    - a VAPID key pair (P-256) made once per data folder and kept in the book's settings;
    - subscriptions stored in the book. This is a migration, so a new one, never an edited one;
    - each row encrypted per RFC 8291 and sent per RFC 8030, with a VAPID token (RFC 8292);
@@ -43,13 +42,13 @@ Delivery goes through the push service of the person's own browser: Google's for
    - a failure to deliver is said in the header by the rule of 2026-10-09: said once confirmed, and standing until a send succeeds.
 
    **Dependencies:** weigh a maintained Web Push crate against RustCrypto's `p256`, `hkdf` and `aes-gcm`, which the workspace may already carry. Put the sizes in the PR.
-6. **One row, one banner:**
+5. **One row, one banner:**
    - a row sent by push is marked sent;
    - a page that is open shows the row through the same service worker, so the tag collapses it into one banner, and nothing goes through the push service;
    - the bell's history is unchanged (notifications-9 to notifications-13).
-7. **No other copy can notify the person, by construction.** Only a browser that subscribed to a copy, and only that copy's data folder, holds a subscription. A scratch copy has none, so `BAGHOLDER_NOTIFY` goes entirely.
-8. **SPEC and the wire:**
-   - SPEC notifications-1 to notifications-6 and notifications-8 are rewritten to this, citing the standards above. `architecture.md` §11's notifications line says "through the browser";
+6. **No other copy can notify the person, by construction.** Only a browser that subscribed to a copy, and only that copy's data folder, holds a subscription. A scratch copy has none, so `BAGHOLDER_NOTIFY` goes entirely.
+7. **SPEC and the wire:**
+   - SPEC notifications-1 to notifications-6 and notifications-8 are rewritten to this, citing the standards above. The words "under its own name and icon" go: the browser shows a site's notifications as it shows any site's. `architecture.md` §11's notifications line says "through the browser";
    - the status's `notify.native` field goes. That is a wire change, and this brief is its gate. `wire.ts` is regenerated.
 
 ## Tests
@@ -60,7 +59,7 @@ Delivery goes through the push service of the person's own browser: Google's for
 - **Browser (e2e):** with permission granted, the control subscribes and the server stores the subscription. With an open page, a new row shows one notification with its tag and sends nothing to the push service.
 - **Removal:** a source scan finds no `osacompile`, `open -n`, `notify-send` or `powershell` in the server. A start over a data folder holding an old `Bagholder.app` removes it.
 - **Verified once in real browsers,** by a session on the owner's Mac, not by the owner:
-  - Chrome and Safari, with no Bagholder tab open: a real push arrives, under the site's name, or under Bagholder's when installed;
+  - Chrome and Safari, with no Bagholder tab open: a real push arrives;
   - a click opens the right page;
   - nothing appears in the Dock (`log show`, as brief 64 described).
 
