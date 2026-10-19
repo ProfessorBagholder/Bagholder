@@ -205,6 +205,7 @@ fn filing(id: &str, form: &str, date: &str) -> Filing {
         enrich_final: false,
         enrich_reads: 0,
         fetched_at: String::new(),
+        unlisted_at: String::new(),
     }
 }
 

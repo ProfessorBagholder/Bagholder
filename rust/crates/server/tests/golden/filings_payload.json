@@ -49,7 +49,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sec:4",
@@ -68,7 +69,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sedar:3",
@@ -87,7 +89,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sec:2",
@@ -106,7 +109,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sedar:1",
@@ -125,7 +129,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       }
     ]
   },
@@ -179,7 +184,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sec:4",
@@ -198,7 +204,8 @@
         "enrichedAt": "*",
         "enrichVersion": null,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sedar:3",
@@ -217,7 +224,8 @@
         "enrichedAt": "*",
         "enrichVersion": 11,
         "enrichFinal": true,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sec:2",
@@ -236,7 +244,8 @@
         "enrichedAt": "*",
         "enrichVersion": 11,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       },
       {
         "id": "sedar:1",
@@ -255,7 +264,8 @@
         "enrichedAt": "*",
         "enrichVersion": 10,
         "enrichFinal": false,
-        "fetchedAt": "*"
+        "fetchedAt": "*",
+        "unlistedAt": ""
       }
     ]
   },

@@ -667,7 +667,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:a4ed95a46a63741e",
@@ -686,7 +687,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:762a5f69e21092bc",
@@ -705,7 +707,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:1dd456088a88c267",
@@ -724,7 +727,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:a206065c6c3728e5",
@@ -743,7 +747,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-01",
@@ -762,7 +767,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-02",
@@ -781,7 +787,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-03",
@@ -800,7 +807,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-04",
@@ -819,7 +827,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-05",
@@ -838,7 +847,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-06",
@@ -857,7 +867,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-07",
@@ -876,7 +887,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-08",
@@ -895,7 +907,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-09",
@@ -914,7 +927,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     }
   ],
   "store_read": [
@@ -935,7 +949,8 @@
       "enrichedAt": "2026-09-22T15:00:00Z",
       "enrichVersion": 3.0,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:a4ed95a46a63741e",
@@ -954,7 +969,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:762a5f69e21092bc",
@@ -973,7 +989,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:1dd456088a88c267",
@@ -992,7 +1009,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:a206065c6c3728e5",
@@ -1011,7 +1029,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-01",
@@ -1030,7 +1049,8 @@
       "enrichedAt": "2026-09-22T15:00:00Z",
       "enrichVersion": 7.0,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-02",
@@ -1049,7 +1069,8 @@
       "enrichedAt": "2026-09-22T15:00:00Z",
       "enrichVersion": null,
       "enrichFinal": true,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-03",
@@ -1068,7 +1089,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-04",
@@ -1087,7 +1109,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-05",
@@ -1106,7 +1129,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-06",
@@ -1125,7 +1149,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-07",
@@ -1144,7 +1169,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-08",
@@ -1163,7 +1189,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-09",
@@ -1182,7 +1209,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     }
   ],
   "store_refreshed": [
@@ -1203,7 +1231,8 @@
       "enrichedAt": "2026-09-22T15:00:00Z",
       "enrichVersion": 3.0,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:a4ed95a46a63741e",
@@ -1222,7 +1251,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:762a5f69e21092bc",
@@ -1241,7 +1271,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:1dd456088a88c267",
@@ -1260,7 +1291,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sedar:drm:a206065c6c3728e5",
@@ -1279,7 +1311,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-22T15:00:00Z"
+      "fetchedAt": "2026-09-22T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-01",
@@ -1298,7 +1331,8 @@
       "enrichedAt": "2026-09-22T15:00:00Z",
       "enrichVersion": 7.0,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-02",
@@ -1317,7 +1351,8 @@
       "enrichedAt": "2026-09-22T15:00:00Z",
       "enrichVersion": null,
       "enrichFinal": true,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-03",
@@ -1336,7 +1371,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-04",
@@ -1355,7 +1391,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-05",
@@ -1374,7 +1411,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-06",
@@ -1393,7 +1431,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-07",
@@ -1412,7 +1451,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     },
     {
       "id": "sec:0001-26-08",
@@ -1431,7 +1471,8 @@
       "enrichedAt": "",
       "enrichVersion": null,
       "enrichFinal": false,
-      "fetchedAt": "2026-09-23T15:00:00Z"
+      "fetchedAt": "2026-09-23T15:00:00Z",
+      "unlistedAt": ""
     }
   ],
   "store_all": [
@@ -1455,7 +1496,8 @@
           "enrichedAt": "2026-09-22T15:00:00Z",
           "enrichVersion": 3.0,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-22T15:00:00Z"
+          "fetchedAt": "2026-09-22T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sedar:drm:a4ed95a46a63741e",
@@ -1474,7 +1516,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-22T15:00:00Z"
+          "fetchedAt": "2026-09-22T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sedar:drm:762a5f69e21092bc",
@@ -1493,7 +1536,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-22T15:00:00Z"
+          "fetchedAt": "2026-09-22T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sedar:drm:1dd456088a88c267",
@@ -1512,7 +1556,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-22T15:00:00Z"
+          "fetchedAt": "2026-09-22T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sedar:drm:a206065c6c3728e5",
@@ -1531,7 +1576,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-22T15:00:00Z"
+          "fetchedAt": "2026-09-22T15:00:00Z",
+          "unlistedAt": ""
         }
       ]
     ],
@@ -1555,7 +1601,8 @@
           "enrichedAt": "2026-09-22T15:00:00Z",
           "enrichVersion": 7.0,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-02",
@@ -1574,7 +1621,8 @@
           "enrichedAt": "2026-09-22T15:00:00Z",
           "enrichVersion": null,
           "enrichFinal": true,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-03",
@@ -1593,7 +1641,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-04",
@@ -1612,7 +1661,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-05",
@@ -1631,7 +1681,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-06",
@@ -1650,7 +1701,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-07",
@@ -1669,7 +1721,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         },
         {
           "id": "sec:0001-26-08",
@@ -1688,7 +1741,8 @@
           "enrichedAt": "",
           "enrichVersion": null,
           "enrichFinal": false,
-          "fetchedAt": "2026-09-23T15:00:00Z"
+          "fetchedAt": "2026-09-23T15:00:00Z",
+          "unlistedAt": ""
         }
       ]
     ]
@@ -1710,7 +1764,8 @@
     "enrichedAt": "2026-09-22T15:00:00Z",
     "enrichVersion": 7.0,
     "enrichFinal": false,
-    "fetchedAt": "2026-09-23T15:00:00Z"
+    "fetchedAt": "2026-09-23T15:00:00Z",
+    "unlistedAt": ""
   },
   "store_none": null
 }
