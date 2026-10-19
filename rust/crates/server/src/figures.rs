@@ -203,8 +203,8 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
             _ => None,
         };
         #[cfg(test)]
-        if !identity.moved.is_empty() || !identity.unclaimed.is_empty() {
-            let named: Vec<_> = identity.moved.iter().map(|(t, _)| t).chain(identity.unclaimed.iter()).filter_map(|t| seen(t).map(|s| (*t, s))).collect();
+        if !identity.moved.is_empty() || !identity.unclaimed.is_empty() || !identity.joined.is_empty() {
+            let named: Vec<_> = identity.moved.iter().map(|(t, _)| t).chain(identity.unclaimed.iter()).chain(identity.joined.iter().map(|(t, _)| t)).filter_map(|t| seen(t).map(|s| (*t, s))).collect();
             BEFORE_SETTLE_WRITES.with(|h| h.borrow_mut().take().map(|f| f(named)));
         }
         let before = book.changes_upto().map_err(err)?;
@@ -222,16 +222,15 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
                 book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at)?;
                 done += 1;
             }
-            for (joined, keeps) in &identity.joined {
-                if let Some(s) = seen(joined) {
-                    done += u64::from(book.orphan_joined(*joined, *keeps, &s)?);
-                }
-            }
-            for trade in &identity.unclaimed {
-                if let Some(s) = seen(trade) {
-                    done += u64::from(book.orphan_unclaimed(*trade, &s)?);
-                }
-            }
+            // the trades orphaned, in set writes: each still only where it is
+            // anchored as the engine saw it (#538)
+            let orphaned: Vec<(bagholder_core::TradeId, String, Opening)> = identity
+                .joined
+                .iter()
+                .filter_map(|(joined, keeps)| seen(joined).map(|s| (*joined, Book::joined_reason(*keeps), s)))
+                .chain(identity.unclaimed.iter().filter_map(|t| seen(t).map(|s| (*t, Book::UNCLAIMED_REASON.to_string(), s))))
+                .collect();
+            done += book.orphan_seen(&orphaned)?;
             Ok(())
         })
         .map_err(err)?;
@@ -1328,6 +1327,89 @@ mod tests {
         let trade = settled.borrow().expect("the other writer ran between the naming and the write");
         let t = book.trade(trade).unwrap();
         assert!(t.orphaned_reason().is_some() && !matches!(t.anchor, bagholder_core::journal::Anchor::Opening(_)), "the move was written over the other writer's settling: {t:?}");
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+    }
+
+    /// A hand-entered round trip of one unit on `day_in`, sold on `day_out`, of a
+    /// listing the book does not hold, in the Manual account.
+    fn round_trip(f: &Figures, now: Timestamp, day_in: &str, day_out: Option<&str>) {
+        let trade = |day: &str, side: &str| crate::entries::EntryRequest::Trade {
+            account: String::new(),
+            instrument: None,
+            symbol: "JOINQ".into(),
+            exchange: "XNYS".into(),
+            currency: "USD".into(),
+            day: day.into(),
+            side: side.into(),
+            quantity: "1".into(),
+            price: "10".into(),
+            fee: "0".into(),
+        };
+        crate::entries::enter(f, &trade(day_in, "buy"), now).unwrap();
+        if let Some(out) = day_out {
+            crate::entries::enter(f, &trade(out, "sell"), now).unwrap();
+        }
+    }
+
+    /// The trades a back-dated buy's round trip joined, orphaned together in set
+    /// writes (#538): one settling leaves the figures a fresh build's, with no
+    /// second change needed, and each joined trade keeps its journal.
+    #[test]
+    fn trades_a_back_dated_buy_joined_are_orphaned_in_one_settling() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        for (a, b) in [("2025-11-03", "2025-11-04"), ("2025-11-05", "2025-11-06"), ("2025-11-07", "2025-11-10"), ("2025-11-11", "2025-11-12")] {
+            round_trip(&f, now, a, Some(b));
+        }
+        let book = f.book().unwrap();
+        let trades = |f: &Figures| f.read(|e| e.inputs().ledger.trades.iter().filter(|t| matches!(t.anchor, bagholder_core::journal::Anchor::Opening(_))).count()).unwrap();
+        let before = trades(&f);
+        round_trip(&f, now, "2025-11-01", None);
+        // one round trip from the first buy on: the first trade moves to its
+        // opening, and the three after it are joined into it
+        let orphaned = book.trades().unwrap().into_iter().filter(|t| t.orphaned_reason().is_some_and(|r| r.starts_with("its round trip joined"))).count();
+        assert_eq!(orphaned, 3, "every later trade joined");
+        assert_eq!(trades(&f), before - 3);
+        same_as_fresh(&f, now);
+    }
+
+    /// A joined trade another writer settles between the engine naming it and the
+    /// set write (#538, as brief 30's C1 for a move): the set write leaves it as
+    /// that writer left it, orphans the others, and the next change leaves the
+    /// figures a fresh build's.
+    #[test]
+    fn a_joined_trade_another_writer_settled_first_is_not_written_over() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        for (a, b) in [("2025-11-03", "2025-11-04"), ("2025-11-05", "2025-11-06"), ("2025-11-07", "2025-11-10")] {
+            round_trip(&f, now, a, Some(b));
+        }
+        let settled = std::rc::Rc::new(std::cell::RefCell::new(None));
+        {
+            let (home, settled) = (home.path().to_path_buf(), settled.clone());
+            BEFORE_SETTLE_WRITES.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |named: Vec<(bagholder_core::TradeId, bagholder_core::journal::Opening)>| {
+                    let (other, _) = Book::open_in(&home, crate::app::APP_VERSION, now).unwrap();
+                    // the last named is a joined one (moves, then unclaimed, then joined)
+                    let (trade, seen) = named.into_iter().last().expect("the engine names the joined trades");
+                    assert!(other.orphan_unclaimed(trade, &seen).unwrap());
+                    *settled.borrow_mut() = Some(trade);
+                }))
+            });
+        }
+        round_trip(&f, now, "2025-11-01", None);
+        let trade = settled.borrow().expect("the other writer ran between the naming and the write");
+        let book = f.book().unwrap();
+        assert_eq!(book.trade(trade).unwrap().orphaned_reason().as_deref(), Some(Book::UNCLAIMED_REASON), "the set write wrote over the other writer's settling");
+        let joined = book.trades().unwrap().into_iter().filter(|t| t.orphaned_reason().is_some_and(|r| r.starts_with("its round trip joined"))).count();
+        assert_eq!(joined, 1, "the other orphaned as joined");
         f.record_changed(now).unwrap();
         same_as_fresh(&f, now);
     }
