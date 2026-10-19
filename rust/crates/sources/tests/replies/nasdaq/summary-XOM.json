@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "XOM",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Energy"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Integrated oil Companies"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$174.50"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "13,207,955"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "24,580,956"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$174.68"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$178.69/$110.385"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "735,950,002,601"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

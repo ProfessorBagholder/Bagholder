@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "AAPL:US",
+      "name": "Apple Inc.",
+      "sector": "Technology",
+      "industry": "Hardware & Equipment",
+      "exchangeName": "Nasdaq Global Select"
+    }
+  }
+}

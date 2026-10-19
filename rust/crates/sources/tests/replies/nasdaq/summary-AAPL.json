@@ -1,0 +1,81 @@
+{
+  "data": {
+    "symbol": "AAPL",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NASDAQ-GS"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Technology"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Computer Manufacturing"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$335.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "59,946,749"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "39,701,200"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$342.00"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$348.1499/$243.42"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "5,012,517,062,800"
+      },
+      "AnnualizedDividend": {
+        "label": "Annualized Dividend",
+        "value": "$1.08"
+      },
+      "ExDividendDate": {
+        "label": "Ex Dividend Date",
+        "value": "Aug 10, 2026"
+      },
+      "DividendPaymentDate": {
+        "label": "Dividend Pay Date",
+        "value": "Aug 13, 2026"
+      },
+      "Yield": {
+        "label": "Current Yield",
+        "value": "0.32%"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

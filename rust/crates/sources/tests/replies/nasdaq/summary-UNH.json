@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "UNH",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Health Care"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Medical Specialities"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$485.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "8,109,885"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "2,988,379"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$406.67"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$461.62/$255.965"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "360,321,499,431"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

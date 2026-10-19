@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "ENB",
+      "name": "Enbridge Inc.",
+      "sector": "Energy",
+      "industry": "Oil & Gas Storage/Transport",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

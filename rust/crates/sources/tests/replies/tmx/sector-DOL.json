@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "DOL",
+      "name": "Dollarama Inc.",
+      "sector": "Consumer Staples",
+      "industry": "Retailers - Staples",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

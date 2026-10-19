@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "ATD",
+      "name": "Alimentation Couche-Tard Inc.",
+      "sector": "Consumer Discretionary",
+      "industry": "Retail - Discretionary",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

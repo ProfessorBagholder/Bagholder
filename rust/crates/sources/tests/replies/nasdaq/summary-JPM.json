@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "JPM",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Finance"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Major Banks"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$370.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "8,416,396"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "19,163,627"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$335.53"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$366.5/$279.1"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "903,039,014,165"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}
