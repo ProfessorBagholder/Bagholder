@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the official MCP SDK, which tracks the specification's revisions: `bagholder mcp`, server and stdio only (its archive cost measured in #535)
 rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
 # the diff `#[derive(Diff)]` implements
 bagholder-diff = { path = "../diff" }
