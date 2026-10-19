@@ -116,7 +116,8 @@ fn a_pull_with_nothing_new_asks_only_the_accounts_their_activity_and_their_cash(
     let (second, asked) = once(&book, &dir(), "2025-11-19T21:00:00Z");
     assert!(second.failures.is_empty(), "{:?}", second.failures);
     assert_eq!((second.records_new, second.records_revised), (0, 0));
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances"]);
+    // and the net worth feature's outside accounts, one read a pull (plan debts-held-outside-wealthsimple)
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "net worth"]);
 }
 
 #[test]
@@ -135,7 +136,7 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     let (third, asked) = once(&book, later.path(), "2025-11-19T22:00:00Z");
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances"]);
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth"]);
 }
 
 /// The accounts list's edges in an accounts reply.
