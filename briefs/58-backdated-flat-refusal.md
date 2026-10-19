@@ -24,3 +24,16 @@ File it as an issue now, with a plan through the gate after #524. The plan must 
 
   The plan lists, from `rust/crates/engine`, everything that reads across a flat point. A continuation from a flat point is allowed only where nothing in that list reaches past it, and otherwise the family is matched whole as now.
 - **Test:** the oracle's continued == whole check, over generated histories with inserted round trips on each side of every crossing rule's window.
+
+## Addendum: brief 57's change 1, corrected
+
+Brief 57 told #527 to move the settling of joined trips out of the add request if it sat there. That misread §16. An added trade is answered once its figures are recomputed, by design, so the page never holds round trips whose identities haven't settled. That is why one 100 ms row covers both the answer and the figures.
+
+Answering on the write alone would change that for every entry: added trades, journal writes and import rows. It is a change to how the app runs, not a fix inside #527.
+
+So:
+- **#527 pushes as it stands.** `("backdated-trade", Depth, Time)` stays listed, and the PR's cost section says what the 195 ms is: the request answer, made of the engine's catch-up plus the settling plus the names reload.
+- **A new issue:** measure how the 195 ms splits between catch-up and settling, at owner depth. Then make the smaller of the two changes that meets 100 ms.
+  - If the settling dominates: make the settling itself cheaper inside the request. Don't defer it.
+  - If catch-up dominates: that is #537's ground, matching from a point inside the history.
+  - Deferring the figures out of the request is the last resort, and a plan of its own.
