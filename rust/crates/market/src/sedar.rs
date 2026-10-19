@@ -775,29 +775,89 @@ fn search_days(filed: &str) -> Option<(String, String)> {
     Some((form(day.yesterday().ok()?), form(day.tomorrow().ok()?)))
 }
 
+/// An issuer's document list as SEDAR+ answers it: the list whole, the list
+/// searched for some days, and the page after one.
+trait DocumentList {
+    /// The list unsearched, its first page; none where the issuer offers none.
+    fn whole(&mut self) -> Fetched<Option<String>>;
+    /// The list searched from one day to another (`DD/MM/YYYY`), its first page.
+    fn dated(&mut self, from: &str, to: &str) -> Fetched<Option<String>>;
+    /// The page after `page`, as its own "Next Page" control asks for it.
+    fn next(&mut self, page: &str) -> Fetched<Option<String>>;
+}
+
+/// The live list, one walk to the issuer's documents a reading.
+struct Live<'a> {
+    st: &'a mut State,
+    profile_no: &'a str,
+    name: Option<&'a str>,
+    view: Option<View>,
+}
+
+impl DocumentList for Live<'_> {
+    fn whole(&mut self) -> Fetched<Option<String>> {
+        let Some((view, html)) = walk_documents(self.st, self.profile_no, self.name)? else { return Ok(None) };
+        self.view = Some(view);
+        Ok(Some(html))
+    }
+    fn dated(&mut self, from: &str, to: &str) -> Fetched<Option<String>> {
+        if self.whole()?.is_none() {
+            return Ok(None);
+        }
+        let view = self.view.as_ref().expect("walked");
+        let (node, cb, container) = search_action(&view.page).ok_or_else(|| unavailable("SEDAR+'s document list offered no search"))?;
+        // the dates alone: the form's other fields, posted with them, are refused as an empty search
+        Ok(Some(view.callback(self.st, &node, &cb, None, &[("SubmissionDate", from), ("SubmissionDate2", to)], Some(&container), false, Some(""))?))
+    }
+    fn next(&mut self, page: &str) -> Fetched<Option<String>> {
+        let (Some(view), Some((node, n, container))) = (self.view.as_ref(), next_page(page)) else { return Ok(None) };
+        // the page asked for alone, as the list's own control asks
+        Ok(Some(view.callback(self.st, &node, "selectPage", Some(&n), &[], Some(&container), false, Some(""))?))
+    }
+}
+
+/// A document's row on an issuer's list, wherever it is (`locate`), on SEDAR+.
+fn find_document(st: &mut State, profile_no: &str, name: Option<&str>, key: &str, filed: Option<&str>) -> Fetched<Option<SedarRow>> {
+    locate(&mut Live { st, profile_no, name, view: None }, key, filed)
+}
+
 /// A document's row on an issuer's list, wherever it is: SEDAR+ lists an issuer's
 /// documents thirty a page, newest first, so one older than the newest thirty is
 /// on a later page. Where the day it was filed is known, the list is searched for
-/// those days alone, so it sits on the first page (brief 69); otherwise the whole
-/// list is looked through, page by page, as many as the list itself counts. Its
-/// link is good in the session that found it. None where SEDAR+ lists it nowhere.
-fn find_document(st: &mut State, profile_no: &str, name: Option<&str>, key: &str, filed: Option<&str>) -> Fetched<Option<SedarRow>> {
-    let Some((view, mut html)) = walk_documents(st, profile_no, name)? else { return Ok(None) };
+/// the days around it first, so it sits on the first page (brief 69). A search
+/// that finds it not is no proof it is gone (the day kept may not be SEDAR+'s), so
+/// the whole list is then read, page by page, as many as it counts. None only
+/// where the whole list was read and it is on no page.
+fn locate(list: &mut dyn DocumentList, key: &str, filed: Option<&str>) -> Fetched<Option<SedarRow>> {
     if let Some((from, to)) = filed.and_then(search_days) {
-        let (node, cb, container) = search_action(&view.page).ok_or_else(|| unavailable("SEDAR+'s document list offered no search"))?;
-        // the dates alone: the form's other fields, posted with them, are refused as an empty search
-        html = view.callback(st, &node, &cb, None, &[("SubmissionDate", from.as_str()), ("SubmissionDate2", to.as_str())], Some(&container), false, Some(""))?;
+        if let Some(page) = list.dated(&from, &to)? {
+            if let Some(row) = read_through(list, page, key)? {
+                return Ok(Some(row));
+            }
+        }
     }
-    let pages = pages_of(&html);
-    for _ in 1..pages {
-        if let Some(row) = on_page(&parse_filings(&html), key) {
+    match list.whole()? {
+        Some(page) => read_through(list, page, key),
+        None => Ok(None),
+    }
+}
+
+/// The row of `key` on this list, from `page` on, through as many pages as the list counts.
+fn read_through(list: &mut dyn DocumentList, mut page: String, key: &str) -> Fetched<Option<SedarRow>> {
+    let pages = pages_of(&page);
+    for n in 1..=pages {
+        if let Some(row) = on_page(&parse_filings(&page), key) {
             return Ok(Some(row));
         }
-        let Some((node, n, container)) = next_page(&html) else { return Ok(None) };
-        // the page asked for alone, as the list's own control asks
-        html = view.callback(st, &node, "selectPage", Some(&n), &[], Some(&container), false, Some(""))?;
+        if n == pages {
+            break;
+        }
+        match list.next(&page)? {
+            Some(p) => page = p,
+            None => break,
+        }
     }
-    Ok(on_page(&parse_filings(&html), key))
+    Ok(None)
 }
 
 /// The row of a page that is the document looked for.
@@ -1078,6 +1138,64 @@ mod paging_tests {
 
     fn row(id: &str, at: &str) -> SedarRow {
         SedarRow { id: format!("sedar:drm:{id}"), submitted_at: at.into(), url: format!("/csa-party/records/document.html?id={id}"), ..Default::default() }
+    }
+
+    /// A stand-in list: the whole list's pages, and what a dated search answers.
+    struct StandIn {
+        whole: Vec<String>,
+        dated: Vec<String>,
+        /// Which pages were read, in order: `w1`, `d1`, …
+        read: Vec<String>,
+        on: (char, usize),
+    }
+
+    fn listing(rows: &[(&str, &str)], total: usize) -> String {
+        let links: String = rows
+            .iter()
+            .map(|(id, at)| format!(r#"<a class="appDocumentView appResourceLink appDocumentLink" href="/csa-party/records/document.html?id={id}"><span>A document</span></a><span>{at}</span>"#))
+            .collect();
+        format!("Displaying 1-30 of {total} results{links}")
+    }
+
+    impl DocumentList for StandIn {
+        fn whole(&mut self) -> Fetched<Option<String>> {
+            self.on = ('w', 1);
+            self.read.push("w1".into());
+            Ok(self.whole.first().cloned())
+        }
+        fn dated(&mut self, _: &str, _: &str) -> Fetched<Option<String>> {
+            self.on = ('d', 1);
+            self.read.push("d1".into());
+            Ok(self.dated.first().cloned())
+        }
+        fn next(&mut self, _: &str) -> Fetched<Option<String>> {
+            let pages = if self.on.0 == 'w' { &self.whole } else { &self.dated };
+            let page = pages.get(self.on.1).cloned();
+            self.on.1 += 1;
+            if page.is_some() {
+                self.read.push(format!("{}{}", self.on.0, self.on.1));
+            }
+            Ok(page)
+        }
+    }
+
+    /// A dated search that finds the document not is no proof it is gone: the whole
+    /// list is read, and a document on its second page is found. Only one on no
+    /// page of the whole list is none (brief 69).
+    #[test]
+    fn a_dated_search_that_finds_nothing_is_followed_by_the_whole_list() {
+        let whole = vec![listing(&[("aaa", "")], 31), listing(&[("bbb", "")], 31)];
+        let mut list = StandIn { whole: whole.clone(), dated: vec![listing(&[], 0)], read: vec![], on: ('w', 0) };
+        let found = locate(&mut list, "bbb", Some("2026-05-21")).unwrap();
+        assert!(found.is_some_and(|r| r.url.contains("bbb")));
+        assert_eq!(list.read, ["d1", "w1", "w2"]);
+        let mut list = StandIn { whole, dated: vec![listing(&[], 0)], read: vec![], on: ('w', 0) };
+        assert_eq!(locate(&mut list, "zzz", Some("2026-05-21")).unwrap(), None, "on no page at all");
+        assert_eq!(list.read, ["d1", "w1", "w2"], "every page the list counts, and no more");
+        // found by the dated search: the whole list is never read
+        let mut list = StandIn { whole: vec![], dated: vec![listing(&[("bbb", "")], 1)], read: vec![], on: ('w', 0) };
+        assert!(locate(&mut list, "bbb", Some("2026-05-21")).unwrap().is_some());
+        assert_eq!(list.read, ["d1"]);
     }
 
     #[test]
