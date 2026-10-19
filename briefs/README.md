@@ -64,7 +64,7 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 51 | [Tests touched run locally; one full CI run per head to be merged; the trial merge a8e3a84f resolves the three files right](51-verifying-on-two-cores.md) | Current; amends 49 items 3 and 4; corrected 2026-10-18 (one full CI run per head) |
 | 52 | [#525 at e98e4176: the merge holds; fix the chart's timeframes (#531) in the same push, then merge](52-525-merge.md) | Applied; checked in 53 |
 | 53 | [#525 at 2d887849: merge (owner OK given); then close plan #522](53-525-merge.md) | Applied (#525 merged, ddb5a3cc) |
-| 54 | [Verdict on plan #535, agents read the trade history: Go with changes; same machine only](54-agents-read-plan-verdict.md) | Applied to #535 at d3329a62 |
+| 54 | [Verdict on plan #535, agents read the trade history: Go with changes; same machine only](54-agents-read-plan-verdict.md) | Built in #535; released in v2.6.0 |
 | 55 | [#523 at 60ef5e04: one change left; a mended store reopens only through the route the page never asks](55-start-never-stops-recheck.md) | Applied at e44c4e6c |
 | 56 | [#523 at e44c4e6c: merge (owner OK given)](56-start-never-stops-merge.md) | Applied (#523 merged, af9a726a) |
 | 57 | [Verdict on plan #536, a back-dated change costs what it changed (#527): Go with changes](57-backdated-change-plan-verdict.md) | Applied in #539 (change 1 corrected in 58) |
@@ -73,7 +73,7 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 60 | [Verdict on plan #548, a round trip added on a past flat day (#537): Go with changes](60-matching-from-a-flat-point-verdict.md) | Applied in #548 (change 1 withdrawn) |
 | 61 | [#548 (#537) at 58ee5409: cleared](61-548-cleared.md) | Applied (#548 merged) |
 | 62 | [Verdict on plan #550, a back-dated buy matched from the flat point before it (#538): Go with changes](62-continuing-from-a-cut-verdict.md) | Applied in #550 and #551 |
-| 63 | [#538 closing: #549 and #550 merged, #551 cleared with the Time entry off](63-538-closing.md) | Current |
+| 63 | [#538 closing: #549 and #550 merged, #551 cleared with the Time entry off](63-538-closing.md) | Applied (#551 merged, #538 closed) |
 | 64 | [The Mac notifier never shows in the Dock; no copy of the app outlives the work that started it](64-notifier-and-leftover-servers.md) | Changes 1–2 superseded by 65 (wrong premise: a web app needs no helper); change 3 stands |
-| 65 | [Notifications are the browser's (Notifications API, Service Worker, Web Push); native channels removed](65-notifications-are-the-browsers.md) | Current |
-| 66 | [Verdict on plan #555, notifications through the browser: Go with two changes](66-notifications-plan-verdict.md) | Current |
+| 65 | [Notifications are the browser's (Notifications API, Service Worker, Web Push); native channels removed](65-notifications-are-the-browsers.md) | Built in #555; released in v2.6.0 |
+| 66 | [Verdict on plan #555, notifications through the browser: Go with two changes](66-notifications-plan-verdict.md) | Applied in #555 |
