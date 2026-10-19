@@ -67,5 +67,6 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 54 | [Verdict on plan #535, agents read the trade history: Go with changes; same machine only](54-agents-read-plan-verdict.md) | Applied to #535 at d3329a62 |
 | 55 | [#523 at 60ef5e04: one change left; a mended store reopens only through the route the page never asks](55-start-never-stops-recheck.md) | Applied at e44c4e6c |
 | 56 | [#523 at e44c4e6c: merge (owner OK given)](56-start-never-stops-merge.md) | Applied (#523 merged, af9a726a) |
-| 57 | [Verdict on plan #536, a back-dated change costs what it changed (#527): Go with changes](57-backdated-change-plan-verdict.md) | Current |
-| 58 | [#527: the backdated-flat refusal accepted; list it, plan matching from a flat point next](58-backdated-flat-refusal.md) | Current |
+| 57 | [Verdict on plan #536, a back-dated change costs what it changed (#527): Go with changes](57-backdated-change-plan-verdict.md) | Applied in #539 (change 1 corrected in 58) |
+| 58 | [#527: the backdated-flat refusal accepted; list it, plan matching from a flat point next](58-backdated-flat-refusal.md) | Applied in #539 |
+| 59 | [#539 ready; #540 accepted pending its run; #541 two changes](59-539-540-541.md) | Current |
