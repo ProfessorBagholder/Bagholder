@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "FTS",
+      "name": "Fortis Inc.",
+      "sector": "Utilities",
+      "industry": "Regulated Utilities",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

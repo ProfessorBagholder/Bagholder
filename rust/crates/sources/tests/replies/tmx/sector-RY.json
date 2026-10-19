@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "RY",
+      "name": "Royal Bank of Canada",
+      "sector": "Finance",
+      "industry": "Banking",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

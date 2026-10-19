@@ -278,6 +278,17 @@ pub const NASDAQ_SUMMARY_URL: &str = "https://api.nasdaq.com/api/quote/{}/summar
 
 /// TMX's record for one form; a request that fails, or an answer that does not
 /// read, is TMX's failure.
+/// TMX Money's `getQuoteBySymbol` reply for a sector lookup, as it answers: what
+/// `tmx_record` reads, and what the recorded replies hold.
+pub fn tmx_sector_reply(key: &str) -> Result<Value, FetchError> {
+    pace("app-money.tmx.com");
+    crate::http::post_json(
+        crate::tmx::TMX_URL,
+        &json!({"operationName": "getQuoteBySymbol", "variables": {"symbol": key, "locale": "en"}, "query": TMX_SECTOR_QUERY}),
+        &crate::http::TMX_HEADERS,
+    )
+}
+
 fn tmx_record(key: &str) -> Result<Option<TmxSector>, FetchError> {
     if let Some(r) = hooks::TMX_RECORD.with(|h| h.borrow().as_ref().map(|f| f(key))) {
         return Ok(r);
@@ -285,12 +296,7 @@ fn tmx_record(key: &str) -> Result<Option<TmxSector>, FetchError> {
     if key.is_empty() {
         return Ok(None);
     }
-    pace("app-money.tmx.com");
-    let d = crate::http::post_json(
-        crate::tmx::TMX_URL,
-        &json!({"operationName": "getQuoteBySymbol", "variables": {"symbol": key, "locale": "en"}, "query": TMX_SECTOR_QUERY}),
-        &crate::http::TMX_HEADERS,
-    )?;
+    let d = tmx_sector_reply(key)?;
     let answer = TmxSectorAnswer::deserialize(&d).map_err(|e| FetchError::Transport(format!("TMX Money's record does not read: {e}")))?;
     let Some(q) = answer.data.get_quote_by_symbol else { return Ok(None) };
     Ok(if !q.sector.is_empty() || !q.industry.is_empty() || !q.name.is_empty() { Some(q) } else { None })
@@ -341,8 +347,14 @@ fn joined(failures: Vec<Failure>) -> Failure {
     if said.is_empty() { Failure::Offline } else { Failure::Said(said.join("; ")) }
 }
 
+/// Nasdaq's summary of a US listing, as it answers: what `nasdaq_summary` reads,
+/// and what the recorded replies hold.
+pub fn nasdaq_summary_reply(symbol: &str) -> Result<String, Failure> {
+    get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]).map_err(failed("Nasdaq"))
+}
+
 fn nasdaq_summary(symbol: &str) -> Result<(String, String), Failure> {
-    let raw = get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]).map_err(failed("Nasdaq"))?;
+    let raw = nasdaq_summary_reply(symbol)?;
     let d: NasdaqSummaryAnswer = serde_json::from_str(&raw).map_err(|e| Failure::Said(format!("Nasdaq's summary does not read: {e}")))?;
     Ok((d.data.summary_data.sector.value, d.data.summary_data.industry.value))
 }
@@ -387,10 +399,17 @@ pub fn classify_share(symbol: &str, exchange: &str, currency: &str) -> Result<Sh
             source = "TMX Money".into();
         }
     }
+    // a sector the set does not hold, beside an industry wholly inside one: that one
+    if sector.is_empty() {
+        sector = bagholder_model::exposure::sector_of_industry(&industry);
+    }
     if sector.is_empty() && listing.us() && !sym.is_empty() && !sym.contains(' ') {
         let (nsec, nind) = nasdaq_summary(&sym)?;
         if !nsec.is_empty() {
             sector = norm_sector(&nsec);
+            if sector.is_empty() {
+                sector = bagholder_model::exposure::sector_of_industry(&nind);
+            }
             if industry.is_empty() {
                 industry = nind;
             }
@@ -931,8 +950,14 @@ pub fn parse_evolve_page(html: &str) -> Result<(Weights, Vec<Holding>), serde_js
     Ok((sectors, holdings))
 }
 
+/// Evolve's page for a fund, as it answers: what `evolve` reads, and what the
+/// recorded replies hold.
+pub fn evolve_page_reply(symbol: &str) -> Result<String, FetchError> {
+    get(&EVOLVE_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])
+}
+
 fn evolve(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
-    let (sectors, holdings) = parse_evolve_page(&get(&EVOLVE_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])?).map_err(unreadable("Evolve's page"))?;
+    let (sectors, holdings) = parse_evolve_page(&evolve_page_reply(symbol)?).map_err(unreadable("Evolve's page"))?;
     if sectors.is_empty() && holdings.is_empty() {
         return Ok(None);
     }

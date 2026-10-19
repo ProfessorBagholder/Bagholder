@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "T",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Telecommunications"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Telecommunications Equipment"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$29.50"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "53,008,537"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "34,878,833"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$23.50"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$29.435/$19.89"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "160,619,919,636"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

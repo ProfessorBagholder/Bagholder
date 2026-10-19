@@ -1,0 +1,81 @@
+{
+  "data": {
+    "symbol": "LIN",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NASDAQ-GS"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Basic Materials"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Major Chemicals"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$550.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "2,037,016"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "1,998,482"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$493.22"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$548.2/$387.78"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "229,766,342,644"
+      },
+      "AnnualizedDividend": {
+        "label": "Annualized Dividend",
+        "value": "$6.40"
+      },
+      "ExDividendDate": {
+        "label": "Ex Dividend Date",
+        "value": "Sep 3, 2026"
+      },
+      "DividendPaymentDate": {
+        "label": "Dividend Pay Date",
+        "value": "Sep 17, 2026"
+      },
+      "Yield": {
+        "label": "Current Yield",
+        "value": "1.3%"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

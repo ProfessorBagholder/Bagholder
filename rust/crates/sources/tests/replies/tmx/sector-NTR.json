@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "NTR",
+      "name": "Nutrien Ltd.",
+      "sector": "Materials",
+      "industry": "Agriculture",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

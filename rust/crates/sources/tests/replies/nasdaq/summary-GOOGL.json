@@ -1,0 +1,81 @@
+{
+  "data": {
+    "symbol": "GOOGL",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NASDAQ-GS"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Technology"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Computer Software: Programming, Data Processing"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$432.50"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "28,642,316"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "24,049,239"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$349.22"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$408.61/$244.15"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "4,165,415,700,000"
+      },
+      "AnnualizedDividend": {
+        "label": "Annualized Dividend",
+        "value": "$0.88"
+      },
+      "ExDividendDate": {
+        "label": "Ex Dividend Date",
+        "value": "Sep 4, 2026"
+      },
+      "DividendPaymentDate": {
+        "label": "Dividend Pay Date",
+        "value": "Sep 14, 2026"
+      },
+      "Yield": {
+        "label": "Current Yield",
+        "value": "0.25%"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "BCE",
+      "name": "BCE Inc.",
+      "sector": "Media & Telecommunications",
+      "industry": "Telecommunications",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

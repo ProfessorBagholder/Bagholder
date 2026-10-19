@@ -1,0 +1,81 @@
+{
+  "data": {
+    "symbol": "AMZN",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NASDAQ-GS"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Consumer Discretionary"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Catalog/Specialty Distribution"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$325.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "40,427,549"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "33,451,535"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$254.76"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$287.2/$196"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "2,696,578,393,000"
+      },
+      "AnnualizedDividend": {
+        "label": "Annualized Dividend",
+        "value": "N/A"
+      },
+      "ExDividendDate": {
+        "label": "Ex Dividend Date",
+        "value": "N/A"
+      },
+      "DividendPaymentDate": {
+        "label": "Dividend Pay Date",
+        "value": "N/A"
+      },
+      "Yield": {
+        "label": "Current Yield",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

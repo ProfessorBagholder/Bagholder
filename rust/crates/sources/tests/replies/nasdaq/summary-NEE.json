@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "NEE",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Utilities"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Electric Utilities: Central"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$100.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "12,705,085"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "1,905,199"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$78.96"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$98.75/$74.41"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "166,461,061,078"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

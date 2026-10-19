@@ -283,6 +283,21 @@ fn test_a_tsx_listing_that_is_a_depositary_receipt_is_classified_as_the_us_compa
     assert_eq!((none.sector.as_str(), none.country.as_str()), ("", ""));
 }
 
+/// A share whose source states a sector the set does not hold is placed by its
+/// industry, where that industry sits wholly inside one sector (#524); one whose
+/// industry two sectors share is not classified.
+#[test]
+fn a_share_whose_sector_folds_onto_nothing_is_placed_by_its_industry() {
+    db();
+    hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|k| match k {
+        "CAE" => Some(TmxSector { symbol: "CAE".into(), name: "CAE Inc.".into(), sector: "Aerospace".into(), industry: "Aerospace & Defense".into(), exchange_name: "Toronto Stock Exchange".into() }),
+        "NTR" => Some(TmxSector { symbol: "NTR".into(), name: "Nutrien Ltd.".into(), sector: "Fertilizers".into(), industry: "Agriculture".into(), exchange_name: "Toronto Stock Exchange".into() }),
+        _ => None,
+    })));
+    assert_eq!(exposure::classify_share("CAE", "TSX", "CAD").unwrap().sector, "Industrials");
+    assert_eq!(exposure::classify_share("NTR", "TSX", "CAD").unwrap().sector, "", "an industry two sectors share places nothing");
+}
+
 #[test]
 fn test_a_family_without_an_adapter_falls_back_to_yahoo() {
     let conn = db();

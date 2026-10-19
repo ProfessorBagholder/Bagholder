@@ -93,6 +93,127 @@ pub fn norm_sector(name: &str) -> String {
     SECTORS.iter().find(|s| s.to_lowercase() == key).map_or_else(String::new, |s| (*s).to_string())
 }
 
+/// Whether a name is one a source states for what is no sector (cash, other,
+/// blank): its weight is not classified, and it is no unknown name.
+pub fn stated_non_sector(name: &str) -> bool {
+    let key = name.trim().to_lowercase();
+    key.is_empty() || SECTOR_ALIAS.iter().any(|(k, v)| *k == key && v.is_empty())
+}
+
+/// Each industry that sits wholly inside one sector, with that sector: the GICS
+/// industries (MSCI's GICS structure, effective 2023-03-17), and the names TMX
+/// Money and Nasdaq give the industries of the listings recorded in
+/// `sources/tests/replies`. An industry two sectors share (TMX's "Agriculture",
+/// Nasdaq's "Telecommunications Equipment", which it gives a carrier) is none.
+const INDUSTRY_SECTOR: &[(&str, &str)] = &[
+    // GICS
+    ("energy equipment & services", "Energy"),
+    ("oil, gas & consumable fuels", "Energy"),
+    ("chemicals", "Materials"),
+    ("construction materials", "Materials"),
+    ("containers & packaging", "Materials"),
+    ("metals & mining", "Materials"),
+    ("paper & forest products", "Materials"),
+    ("aerospace & defense", "Industrials"),
+    ("building products", "Industrials"),
+    ("construction & engineering", "Industrials"),
+    ("electrical equipment", "Industrials"),
+    ("industrial conglomerates", "Industrials"),
+    ("machinery", "Industrials"),
+    ("trading companies & distributors", "Industrials"),
+    ("commercial services & supplies", "Industrials"),
+    ("professional services", "Industrials"),
+    ("air freight & logistics", "Industrials"),
+    ("passenger airlines", "Industrials"),
+    ("marine transportation", "Industrials"),
+    ("ground transportation", "Industrials"),
+    ("transportation infrastructure", "Industrials"),
+    ("automobile components", "Consumer Discretionary"),
+    ("automobiles", "Consumer Discretionary"),
+    ("household durables", "Consumer Discretionary"),
+    ("leisure products", "Consumer Discretionary"),
+    ("textiles, apparel & luxury goods", "Consumer Discretionary"),
+    ("hotels, restaurants & leisure", "Consumer Discretionary"),
+    ("diversified consumer services", "Consumer Discretionary"),
+    ("distributors", "Consumer Discretionary"),
+    ("broadline retail", "Consumer Discretionary"),
+    ("specialty retail", "Consumer Discretionary"),
+    ("consumer staples distribution & retail", "Consumer Staples"),
+    ("beverages", "Consumer Staples"),
+    ("food products", "Consumer Staples"),
+    ("tobacco", "Consumer Staples"),
+    ("household products", "Consumer Staples"),
+    ("personal care products", "Consumer Staples"),
+    ("health care equipment & supplies", "Health Care"),
+    ("health care providers & services", "Health Care"),
+    ("health care technology", "Health Care"),
+    ("biotechnology", "Health Care"),
+    ("pharmaceuticals", "Health Care"),
+    ("life sciences tools & services", "Health Care"),
+    ("banks", "Financials"),
+    ("financial services", "Financials"),
+    ("consumer finance", "Financials"),
+    ("capital markets", "Financials"),
+    ("mortgage real estate investment trusts (reits)", "Financials"),
+    ("insurance", "Financials"),
+    ("it services", "Information Technology"),
+    ("software", "Information Technology"),
+    ("communications equipment", "Information Technology"),
+    ("technology hardware, storage & peripherals", "Information Technology"),
+    ("electronic equipment, instruments & components", "Information Technology"),
+    ("semiconductors & semiconductor equipment", "Information Technology"),
+    ("diversified telecommunication services", "Communication Services"),
+    ("wireless telecommunication services", "Communication Services"),
+    ("media", "Communication Services"),
+    ("entertainment", "Communication Services"),
+    ("interactive media & services", "Communication Services"),
+    ("electric utilities", "Utilities"),
+    ("gas utilities", "Utilities"),
+    ("multi-utilities", "Utilities"),
+    ("water utilities", "Utilities"),
+    ("independent power and renewable electricity producers", "Utilities"),
+    ("diversified reits", "Real Estate"),
+    ("industrial reits", "Real Estate"),
+    ("hotel & resort reits", "Real Estate"),
+    ("office reits", "Real Estate"),
+    ("health care reits", "Real Estate"),
+    ("residential reits", "Real Estate"),
+    ("retail reits", "Real Estate"),
+    ("specialized reits", "Real Estate"),
+    ("real estate management & development", "Real Estate"),
+    // TMX Money's names
+    ("hardware & equipment", "Information Technology"),
+    ("software & it services", "Information Technology"),
+    ("retail - discretionary", "Consumer Discretionary"),
+    ("retailers - staples", "Consumer Staples"),
+    ("transportation", "Industrials"),
+    ("oil & gas storage/transport", "Energy"),
+    ("regulated utilities", "Utilities"),
+    ("reits", "Real Estate"),
+    ("banking", "Financials"),
+    ("telecommunications", "Communication Services"),
+    // Nasdaq's names
+    ("computer manufacturing", "Information Technology"),
+    ("catalog/specialty distribution", "Consumer Discretionary"),
+    ("aerospace", "Industrials"),
+    ("construction/ag equipment/trucks", "Industrials"),
+    ("major banks", "Financials"),
+    ("major chemicals", "Materials"),
+    ("electric utilities: central", "Utilities"),
+    ("package goods/cosmetics", "Consumer Staples"),
+    ("real estate investment trusts", "Real Estate"),
+    ("medical specialities", "Health Care"),
+    ("integrated oil companies", "Energy"),
+];
+
+/// The sector an industry sits wholly inside, empty for one it does not (or
+/// one no table names): what a share is classified by when its source states
+/// its industry and no sector the set holds.
+pub fn sector_of_industry(industry: &str) -> String {
+    let key = industry.trim().to_lowercase();
+    INDUSTRY_SECTOR.iter().find(|(k, _)| *k == key).map_or_else(String::new, |(_, s)| (*s).to_string())
+}
+
 /// What a security is exposed to: weights by sector and by country, in the
 /// order the record gives them (which decides a tie for the dominant sector).
 #[derive(Clone, Debug, Default, PartialEq)]
