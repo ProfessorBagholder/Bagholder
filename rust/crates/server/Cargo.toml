@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
 # the diff `#[derive(Diff)]` implements
 bagholder-diff = { path = "../diff" }
 # the page's order types are generated from these (web/src/lib/generated/orders.ts), as the

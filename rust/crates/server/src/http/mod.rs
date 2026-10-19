@@ -179,6 +179,51 @@ where
     }
 }
 
+/// A route the agents' read client may call (`crate::mcp`): its path, the query it
+/// takes and the answer it gives, made only from a handler whose signature takes
+/// no body (`Readable`), so no route that is sent a body can be one. That the
+/// route table declares it a `GET` is held by `crate::mcp`'s tests, for a route
+/// with no body either way.
+pub struct GetRoute<Q, A> {
+    pub path: &'static str,
+    _types: std::marker::PhantomData<fn(Q) -> A>,
+}
+
+/// The query of a route that takes none.
+#[derive(Serialize)]
+pub struct NoQuery {}
+
+/// A handler that takes no body: the state alone, or the state and a query.
+pub trait Readable<M> {
+    type Query;
+    type Answer;
+}
+impl<F, Fut> Readable<(State<AppState>,)> for F
+where
+    F: Fn(State<AppState>) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    type Query = NoQuery;
+    type Answer = <Fut::Output as Answered>::Answer;
+}
+impl<F, Fut, Q> Readable<(State<AppState>, Params<Q>)> for F
+where
+    F: Fn(State<AppState>, Params<Q>) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    type Query = Q;
+    type Answer = <Fut::Output as Answered>::Answer;
+}
+
+impl<Q, A> GetRoute<Q, A> {
+    /// The route `handler` answers at `path`.
+    pub fn of<M, H: Readable<M, Query = Q, Answer = A>>(_handler: H, path: &'static str) -> GetRoute<Q, A> {
+        GetRoute { path, _types: std::marker::PhantomData }
+    }
+}
+
 /// One module's routes, and the table entries it contributes.
 pub struct Routed {
     pub router: Router<AppState>,

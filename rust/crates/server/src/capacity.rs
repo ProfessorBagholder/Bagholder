@@ -111,7 +111,7 @@ impl Pair {
     /// instrument's history costs.
     fn ops(self) -> &'static [Op] {
         match self {
-            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep],
+            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::AgentTrades],
             // a change dated today, and one dated in the middle of the history: a
             // record that states no venue reads as on the one before it, so a
             // back-dated one re-forms the names after it (brief 44, 2)
@@ -176,10 +176,14 @@ pub enum Op {
     /// A buy and its sale, in one file, on a past day the holding is flat: a round
     /// trip of its own that changes no other, judged on its raw work (#527).
     BackdatedFlat,
+    /// A page of the trades an agent reads (`bagholder mcp`'s `trades`): the Trades
+    /// list's first page, as `GET /api/view` answers it. No person waits on it, so
+    /// its time is reported and not budgeted; its work is held by the growth rule.
+    AgentTrades,
 }
 
 impl Op {
-    pub const ALL: [Op; 11] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat];
+    pub const ALL: [Op; 12] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -193,6 +197,7 @@ impl Op {
             Op::BackdatedRecord => "backdated-record",
             Op::BackdatedFileRow => "backdated-file-row",
             Op::BackdatedFlat => "backdated-flat",
+            Op::AgentTrades => "agent-trades-page",
         }
     }
     fn parse(s: &str) -> Option<Op> {
@@ -261,6 +266,9 @@ static PLANT_NAMES_FOLD: AtomicBool = AtomicBool::new(false);
 pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // the whole view built and serialised to learn whether it changed
     ("feed-step", Pair::Breadth, Measure::Allocations, "#426"),
+    // the Trades list's first page builds and sorts every trade in scope before
+    // taking the page: the page's own read and an agent's alike
+    ("agent-trades-page", Pair::Breadth, Measure::Allocations, "#554"),
 ];
 
 /// What a measurement is judged by.
@@ -734,6 +742,20 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
     let accounts = f.book()?.accounts().map_err(err)?.len().max(1) as u64;
     match op {
         Op::Startup => unreachable!("measured above"),
+        Op::AgentTrades => {
+            // the page's own first read before it, as a page open in the app has made
+            let page = || -> Result<serde_json::Value, String> {
+                let names = f.names()?;
+                let context = app.market_context().map_err(err)?;
+                f.read(|e| crate::views::snapshot_of(&crate::views::Cx { engine: e, names: &names, tables: &crate::wire::context::Door { built: &context, app: &app }, following: &context.following }, "trades", serde_json::json!({ "limit": crate::views::FIRST_ROWS })))
+                    .ok_or("the figures are not built")?
+            };
+            page()?;
+            let m = mark();
+            let doc = page()?;
+            let out = since(&m, 1);
+            Ok(Measured { rows: doc.get("total").and_then(serde_json::Value::as_u64), ..out })
+        }
         Op::Brokers => {
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
@@ -1024,6 +1046,8 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         Op::Brokers => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::PriceChanged => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         Op::FeedStep => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / signals a pass sends"),
+        // an agent's read: nobody waits on it as on a screen, so no budget
+        Op::AgentTrades => (f64::INFINITY, "reported, not budgeted (an agent's read)"),
     }
 }
 

@@ -88,7 +88,8 @@ The journals that open to agents open read access first, and the one that also a
 ### Cost
 
 - **Nothing when unused.** The adapter is a process only while an agent has it open. The server gains no thread, timer or periodic read; `TIMED_WAITS` and the list of periodic reads are unchanged, and their tests hold that.
-- **A tool call is a read the page already makes.** It is answered from the figures the server keeps current, with no recompute (§13). The capacity job gains one operation, *an agent's trades page*: measured at the owner's size and at four times, under the growth rule (one page's work under twice at four times the size, since a page is bounded by its size and not by the book).
+- **A tool call is a read the page already makes.** It is answered from the figures the server keeps current, with no recompute (§13). The capacity job gains one operation, *an agent's trades page* (`agent-trades-page`), measured at the owner's size and at four times under the growth rule.
+  - **As measured, a page is not bounded by its size.** The Trades list's first page builds and sorts every trade in scope before it takes the page (`views::Trades::new`): allocations go 29,400 → 98,664 as the book goes 614 → 2,558 trades. That is the page's own read as much as the agent's. It is listed on `OVER_BUDGET` under #554, to be fixed as its own plan (the gate's starting point: a top-k selection bounded by the page).
 - **Its wall time is reported, not budgeted.** No person waits on an agent's read the way they wait on an added trade, so it does not take a RAIL row.
 - **Archive size:** the release archive before and after, given in the PR.
 - **Idle hour:** unchanged by construction, since nothing runs while no agent is connected. The paired idle hour is still run once (the change touches the server).
@@ -108,14 +109,23 @@ If the read client cannot be made unable to write by its type (for instance, if 
 
 ## Anti-stub self-check
 
-To initial at the end: no tool nobody can call; no field read from the server and dropped; no path only a test switch reaches; the real client actually run against the made-up book and the container, not asserted.
+Initialled at build:
+- no tool nobody can call: the client listed and called all four;
+- no field read from the server and dropped: the trades are held field for field to the page's;
+- no path only a test switch reaches;
+- the real client and the container actually run.
 
 ## Verification
 
-*Filled when built.*
+Built on the home server; the PR carries the numbers and the transcripts.
+- **The protocol.** `rmcp` 3.5.1 (2026-10-05) knows the 2026-07-28 revision. A client that still sends `initialize` is answered at 2025-11-25, the newest revision with that handshake, and a 2026-07-28 client is served without one.
+- **Its weight:** 19 new crates, 58 CPU-seconds to build them in release; the `bagholder` binary 41.7 → 44.8 MB, 13.4 → 14.2 MB gzipped, as the release archive carries it.
+- **Read-only.** The route test, the source scan, and the plants in the PR: a `GetRoute` made from a handler sent a body does not compile; a body-less `POST` fails the route test; a second request fails the scan.
+- **A real client.** Claude Code, given the adapter by `--mcp-config` against a server on a copy of the made-up owner-size book, listed the four tools and answered from them.
+- **The container.** The image built from this branch, the adapter run with `docker exec … bagholder mcp` against the server in it.
 
 ## Handoff
 
-*Filled when built.*
+Built in the PR that carries this plan. The cost of the Trades view's first page is #554.
 
-**Nothing left running.** *Filled when built.*
+**Nothing left running.**

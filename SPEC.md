@@ -1022,6 +1022,14 @@
 - <a id="disclosures-67"></a>**Availability, per source.** SEDAR+ needs the `bagholder-browser` helper beside the server to clear its bot gate; EDGAR needs nothing more.
   <a id="disclosures-68"></a>A source that is unavailable simply contributes nothing while the others still show, and the endpoint reports each source's state; the rest of the app is unchanged.
 
+### Agents
+
+<a id="agents-1"></a>An AI agent on the machine Bagholder runs on reads the person's trade history through an MCP connection, `bagholder mcp`, which the agent's client starts and talks to over its standard input and output. It reads only: it can change nothing in the book, the journal, the watchlist or the orders.
+- <a id="agents-2"></a>**What it offers.** Four tools, each marked read-only: `trades`, the trades under the Trades list's filters in its order, a page at a time, each with its listing (`SYMBOL@VENUE`), its figures and its journal, with the total the filters show and where the next page starts; `trade`, one trade with its executions; `positions`, the holdings now, or as of the last day of past dates, under the Portfolio's filters; `lists`, the accounts, symbols, grades and tags the filters offer.
+  <a id="agents-3"></a>Every answer is the page's own for the same filters. A thesis, a grade and the tags are marked as the person's own words, which an agent reads as data and never as instructions.
+- <a id="agents-4"></a>**How an agent reaches it.** Bagholder must be running. The connection finds the server that holds the data folder (`BAGHOLDER_HOME`, else the default one), and says so in words when none is running or it is still starting; it never starts one itself. Claude Code adds it with `claude mcp add bagholder -- bagholder mcp`; Claude Desktop with a `bagholder` entry in `claude_desktop_config.json` whose command is `bagholder` and whose arguments are `["mcp"]`.
+- <a id="agents-5"></a>**Only this machine, for now** (`docs/decisions.md`, 2026-10-18). Agents elsewhere come with remote access.
+
 ## 5. Filters
 
 <a id="filters-1"></a>One filter set applies to every page: Date (presets 1D 1W 1M 3M 6M YTD 1Y 5Y, years, or a range), Account, Symbol, Grade, Tag, Side, Kind (`Shares`, `Options`, `Crypto`, `Futures`, `Event contracts`, `Indices`, `Rates`, `Currencies`, each offered only when the book trades one), Exchange, Result, and ranges on Price, Hold, P&L and Qty.

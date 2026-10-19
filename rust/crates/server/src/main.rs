@@ -29,6 +29,7 @@ mod http;
 mod legacy_import;
 mod legacy_orders;
 mod market_context;
+mod mcp;
 mod login;
 mod notify;
 mod orders;
@@ -387,6 +388,16 @@ fn main() {
     if args.first().map(String::as_str) == Some("capacity") {
         std::process::exit(capacity::cli(&args[1..]));
     }
+    // the trade history read by an AI agent on this machine, over MCP on stdio
+    if args.first().map(String::as_str) == Some("mcp") {
+        match home_dir() {
+            Ok(home) => std::process::exit(mcp::cli(home)),
+            Err(e) => {
+                eprintln!("bagholder mcp: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));
     }
@@ -546,6 +557,8 @@ mod tests_common;
 
 #[cfg(test)]
 mod tests_misc;
+#[cfg(test)]
+mod tests_mcp;
 
 
 #[cfg(test)]
