@@ -276,30 +276,41 @@ pub struct Engine {
     kept: BTreeMap<Node, MatchState>,
     /// The round trips the saved groups hold.
     group_held: BTreeSet<TripKey>,
-    /// Each family matched, and whether its match was continued, over the
-    /// engine's life: what a test reads, on whichever thread the change ran.
+    /// Each family matched, and how, over the engine's life: what a test reads,
+    /// on whichever thread the change ran.
     #[cfg(feature = "oracles")]
-    paths: Vec<(Node, bool)>,
+    paths: Vec<(Node, Path)>,
+}
+
+/// How a change matched a family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Path {
+    /// Every row of it, from its first.
+    Whole,
+    /// From its kept state, for rows after everything it matched.
+    Continued,
+    /// A round trip placed inside one of its flat stretches
+    /// (`ledger::place_in_stretch`).
+    Placed,
 }
 
 #[cfg(feature = "oracles")]
 thread_local! {
-    /// Each family a change to the record matched, and whether its match was
-    /// continued: what a test compares with the path its own steps expect.
-    static PATHS: std::cell::RefCell<Vec<(Node, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Each family a change to the record matched, and how: what a test
+    /// compares with the path its own steps expect.
+    static PATHS: std::cell::RefCell<Vec<(Node, Path)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The families matched since last asked on this thread, and whether each was
-/// continued.
+/// The families matched since last asked on this thread, and how.
 #[cfg(feature = "oracles")]
-pub fn take_paths() -> Vec<(Node, bool)> {
+pub fn take_paths() -> Vec<(Node, Path)> {
     PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 #[cfg(feature = "oracles")]
-fn path(log: &mut Vec<(Node, bool)>, f: Node, continued: bool) {
-    log.push((f, continued));
-    PATHS.with(|p| p.borrow_mut().push((f, continued)));
+fn path(log: &mut Vec<(Node, Path)>, f: Node, how: Path) {
+    log.push((f, how));
+    PATHS.with(|p| p.borrow_mut().push((f, how)));
 }
 
 /// The instruments a name finds on a day (`Engine::named_on`, `listed_on`), and
@@ -465,7 +476,7 @@ impl Engine {
         let (matched, by_family, kept) = match_families(&self.inputs, &self.families, names);
         #[cfg(feature = "oracles")]
         for f in kept.keys() {
-            path(&mut self.paths, *f, false);
+            path(&mut self.paths, *f, Path::Whole);
         }
         self.matched = matched;
         self.kept = kept;
@@ -495,7 +506,7 @@ impl Engine {
         }
         #[cfg(feature = "oracles")]
         for f in &g.families {
-            path(&mut self.paths, *f, false);
+            path(&mut self.paths, *f, Path::Whole);
         }
         self.kept.extend(kept);
         // what waits on the person in the region, before and after
@@ -579,7 +590,7 @@ impl Engine {
     /// Each family matched over the engine's life, and whether its match was
     /// continued.
     #[cfg(feature = "oracles")]
-    pub fn paths(&self) -> &[(Node, bool)] {
+    pub fn paths(&self) -> &[(Node, Path)] {
         &self.paths
     }
 
@@ -825,8 +836,21 @@ impl Engine {
                         }
                         continued.retain(|f, _| !g.gone.contains(f));
                     }
-                    for (f, rows) in continued {
-                        let (c, waited) = self.continue_family(f, &rows);
+                    for (f, (rows, stretch)) in continued {
+                        let (c, waited) = match stretch {
+                            None => self.continue_family(f, &rows),
+                            Some(start) => match self.place_family(f, &rows, &start) {
+                                Some(placed) => placed,
+                                // the rows did not leave the family as they found it: matched whole
+                                None => {
+                                    let (g, cash_moved, waited) = self.rematch_families(self.families.members(f));
+                                    reach.accounts.extend(cash_moved);
+                                    reach.instruments.extend(g.region.iter().filter_map(|n| if let Node::Instrument(i) = n { Some(*i) } else { None }));
+                                    waiting_moved |= waited;
+                                    continue;
+                                }
+                            },
+                        };
                         waiting_moved |= waited;
                         reach.accounts.extend(c.cash.keys().copied());
                         reach.accounts.extend(c.holdings.iter().map(|(a, _)| *a));
@@ -1058,13 +1082,19 @@ impl Engine {
     /// instrument or an account changed, and the family's last expiry up to today
     /// quiet. Every other family the change reaches is matched whole. Decided
     /// from the change alone: no row of a family is read to decide it.
-    fn continuable(&self, delta: &LedgerDelta) -> BTreeMap<Node, Vec<TransactionId>> {
+    /// The families a change continues, each with the rows it adds and, where
+    /// they are a round trip placed inside one of its flat stretches, the
+    /// stretch's start (`docs/plans/matching-from-a-flat-point.md`, B).
+    fn continuable(&self, delta: &LedgerDelta) -> BTreeMap<Node, (Vec<TransactionId>, Option<Option<crate::ledger::OrderKey>>)> {
         use bagholder_core::transaction::{Effect, Kind};
         let l = &self.inputs.ledger;
         let fams = &self.families;
         let family = |n: Node| -> Option<Node> { fams.has(n).then(|| fams.of(n)) };
         let mut blocked: BTreeSet<Node> = BTreeSet::new();
         let mut added: BTreeMap<Node, Vec<TransactionId>> = BTreeMap::new();
+        // the families whose rows are placed inside a flat stretch, by its start
+        let mut placed: BTreeMap<Node, BTreeSet<Option<crate::ledger::OrderKey>>> = BTreeMap::new();
+        let mut went_on: BTreeSet<Node> = BTreeSet::new();
         let is_new = |r: &bagholder_core::RecordId| !l.records.contains_key(r) && l.transactions.of_record(*r).next().is_none();
         let new_row = |id: &TransactionId| -> Option<&bagholder_core::transaction::Transaction> {
             if !is_new(&id.record) {
@@ -1091,14 +1121,21 @@ impl Engine {
             for t in txs {
                 // a node no family holds yet is matched whole, as a family of its own
                 let Some(fam) = family(node_of(t)) else { continue };
-                let ok = (|| {
+                #[derive(PartialEq)]
+                enum Way {
+                    Continue,
+                    Place(Option<crate::ledger::OrderKey>),
+                    Whole,
+                }
+                let way = (|| {
+                    use Way::Whole;
                     // 3: a record whose legs are not stated can make its account one family
                     if unstated {
-                        return false;
+                        return Whole;
                     }
                     // 4: a row that decides how an earlier one ends, or an event
                     if matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise | Kind::CorporateEvent) {
-                        return false;
+                        return Whole;
                     }
                     // 3 and 4: a transfer's other side is added too, in this family
                     for (out, inn) in &delta.links {
@@ -1110,17 +1147,17 @@ impl Engine {
                             continue;
                         };
                         if new_row(other).map(node_of).and_then(family) != Some(fam) {
-                            return false;
+                            return Whole;
                         }
                     }
                     // 3: an account made one family holds it in that family already
                     if fams.is_whole(t.account) && family(Node::Cash(t.account)) != Some(fam) {
-                        return false;
+                        return Whole;
                     }
-                    let Some(k) = self.kept.get(&fam) else { return false };
+                    let Some(k) = self.kept.get(&fam) else { return Whole };
                     // 7
                     if !k.ended_quiet {
-                        return false;
+                        return Whole;
                     }
                     // 2: after everything the family walked, and not a close the
                     // look-ahead from a stated open at that instant would take first;
@@ -1128,29 +1165,37 @@ impl Engine {
                     // a distribution no adjustment names) is placed anywhere: it moves
                     // no lot, so the match after it is the match before it with its
                     // cash (#527)
-                    let Some(last) = &k.last else { return false };
+                    let Some(last) = &k.last else { return Whole };
                     let key = crate::ledger::order_key_of(t, &legs, &info.source_key);
                     let passed_over = legs.iter().all(|l| self.walk_passes_over(l));
                     if !passed_over && (key <= *last || earliest.as_ref().is_some_and(|e| e <= last)) {
-                        return false;
+                        return self.placeable(fam, k, t, &key).map_or(Whole, Way::Place);
                     }
                     let same_instant = (key.0, key.1, key.2) == (last.0, last.1, last.2);
                     if same_instant && t.effect == Some(Effect::Close) && txs.len() == 1 && t.instrument.is_some_and(|i| k.opens_at_last.contains(&(t.account, i))) {
-                        return false;
+                        return Whole;
                     }
                     // 5: a coin's row no finer than its source's rows were
                     if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
                         let coin = l.instruments.get(&i).is_some_and(|x| x.instrument.kind == bagholder_core::instrument::InstrumentKind::Crypto);
                         if coin && k.places.get(&(i, t.mapping.source.clone())).is_some_and(|p| q.places() > *p) {
-                            return false;
+                            return Whole;
                         }
                     }
-                    true
+                    Way::Continue
                 })();
-                if ok {
-                    added.entry(fam).or_default().push(t.id.clone());
-                } else {
-                    blocked.insert(fam);
+                match way {
+                    Way::Continue => {
+                        added.entry(fam).or_default().push(t.id.clone());
+                        went_on.insert(fam);
+                    }
+                    Way::Place(start) => {
+                        added.entry(fam).or_default().push(t.id.clone());
+                        placed.entry(fam).or_default().insert(start);
+                    }
+                    Way::Whole => {
+                        blocked.insert(fam);
+                    }
                 }
             }
         }
@@ -1187,6 +1232,49 @@ impl Engine {
         }
         added.retain(|f, _| !blocked.contains(f));
         added
+            .into_iter()
+            .filter_map(|(f, rows)| match placed.get(&f) {
+                None => Some((f, (rows, None))),
+                // every row placed, all in one stretch: a family is continued one way
+                Some(starts) if starts.len() == 1 && !went_on.contains(&f) => Some((f, (rows, starts.iter().next().cloned()))),
+                Some(_) => None,
+            })
+            .collect()
+    }
+
+    /// The start of the flat stretch `t`, a row placed before what its family
+    /// matched, falls strictly inside, where it can be placed there
+    /// (`docs/plans/matching-from-a-flat-point.md`, B): a security's row (a coin's
+    /// rows read its source's places and its dust, a contract's the expiry
+    /// calendar), in a family nothing of which waits on a multi-leg order whose
+    /// legs are not stated (a taint never clears, so none now is none at any
+    /// point), on a day strictly between the days the stretch starts and ends.
+    /// Whether the rows then leave the family as they found it is the walk's own
+    /// check (`ledger::place_in_stretch`).
+    fn placeable(&self, fam: Node, k: &MatchState, t: &bagholder_core::transaction::Transaction, key: &crate::ledger::OrderKey) -> Option<Option<crate::ledger::OrderKey>> {
+        let i = t.instrument?;
+        if self.inputs.ledger.instruments.get(&i).is_none_or(|x| x.instrument.kind != bagholder_core::instrument::InstrumentKind::Security) {
+            return None;
+        }
+        if !self.untainted(fam, k) {
+            return None;
+        }
+        let (start, end) = k.stretches.range(..=Some(key.clone())).next_back()?;
+        let day = key.0;
+        if start.as_ref().is_some_and(|s| s.0 >= day) || end.as_ref().is_some_and(|e| e.0 <= day) {
+            return None;
+        }
+        Some(start.clone())
+    }
+
+    /// Whether nothing of the family waits on a multi-leg order whose legs are
+    /// not stated: its kept state, and every book of its holdings.
+    fn untainted(&self, fam: Node, k: &MatchState) -> bool {
+        k.untainted()
+            && self.families.members(fam).into_iter().all(|n| {
+                let Node::Instrument(i) = n else { return true };
+                self.matched.held_by.get(&i).into_iter().flatten().all(|a| self.matched.books.get(&(*a, i)).is_none_or(|b| b.taint.is_empty()))
+            })
     }
 
     /// Whether the match walks past `t` moving nothing but cash: a row naming no
@@ -1194,8 +1282,7 @@ impl Engine {
     /// an adjustment, and moves the lots). Its place in the walk then decides
     /// nothing (`ledger::Matcher::apply`).
     fn walk_passes_over(&self, t: &bagholder_core::transaction::Transaction) -> bool {
-        use bagholder_core::transaction::Kind;
-        t.instrument.is_none() || (t.kind == Kind::Dividend && self.inputs.facts.adjustments.get(&t.id).is_none())
+        crate::ledger::passes_over(&self.inputs, t)
     }
 
     /// A family's match continued from its kept state for `rows`, its share of
@@ -1207,6 +1294,37 @@ impl Engine {
         let waiting = self.matched.waiting.len();
         let c = crate::ledger::continue_family(&self.inputs, &mut self.matched, &mut state, txs);
         self.kept.insert(family, state);
+        self.add_shares(family, &c);
+        #[cfg(feature = "oracles")]
+        {
+            path(&mut self.paths, family, Path::Continued);
+            self.same_as_whole(family);
+        }
+        let moved = self.matched.waiting.len() != waiting;
+        (c, moved)
+    }
+
+    /// A family's round trip placed inside the flat stretch starting at `start`
+    /// (`ledger::place_in_stretch`), its share of each account's cash brought with
+    /// it: what it wrote, and whether what waits on the person moved. None where
+    /// the walk left the family otherwise than it found it, and nothing written.
+    fn place_family(&mut self, family: Node, rows: &[TransactionId], start: &Option<crate::ledger::OrderKey>) -> Option<(crate::ledger::Continued, bool)> {
+        let mut state = self.kept.remove(&family).expect("a family placed into keeps its state");
+        let txs: Vec<&bagholder_core::transaction::Transaction> = rows.iter().filter_map(|id| self.inputs.ledger.transactions.get(id)).collect();
+        let c = crate::ledger::place_in_stretch(&self.inputs, &mut self.matched, &mut state, txs, start);
+        self.kept.insert(family, state);
+        let c = c?;
+        self.add_shares(family, &c);
+        #[cfg(feature = "oracles")]
+        {
+            path(&mut self.paths, family, Path::Placed);
+            self.same_as_whole(family);
+        }
+        Some((c, false))
+    }
+
+    /// The rows' cash added to the family's share of each account's.
+    fn add_shares(&mut self, family: Node, c: &crate::ledger::Continued) {
         for (a, cash) in &c.cash {
             let share = self.shares.entry(*a).or_default().entry(family).or_default();
             for (cur, v) in cash {
@@ -1221,26 +1339,27 @@ impl Engine {
             let t = total(&self.shares[a]);
             self.matched.cash.insert(*a, t);
         }
-        #[cfg(feature = "oracles")]
+    }
+
+    /// Under the oracles: the family's match as it stands equals matching it whole.
+    #[cfg(feature = "oracles")]
+    fn same_as_whole(&self, family: Node) {
         {
-            path(&mut self.paths, family, true);
             if !crate::oracles_off() {
                 let txs = self.families.transactions(&self.inputs.ledger, family);
                 let (whole, whole_state) = match_family(&self.inputs, txs);
-                assert_eq!(&whole_state, &self.kept[&family], "the continued match of {family:?} keeps what a whole match keeps");
+                assert_eq!(&whole_state, &self.kept[&family], "the match of {family:?} as it stands keeps what a whole match keeps");
                 let mut expect = self.matched.clone();
                 let region: BTreeSet<Node> = self.families.members(family);
                 let shares = whole.cash.clone();
                 expect.replace(&self.inputs.ledger, &region, whole);
                 expect.cash = self.matched.cash.clone();
-                assert!(expect == self.matched, "the continued match of {family:?} equals a whole one");
+                assert!(expect == self.matched, "the match of {family:?} as it stands equals a whole one");
                 for (a, s) in shares {
                     assert_eq!(self.shares.get(&a).and_then(|x| x.get(&family)), Some(&s), "{family:?}'s share of {a}'s cash");
                 }
             }
         }
-        let moved = self.matched.waiting.len() != waiting;
-        (c, moved)
     }
 
     /// The figures a change to the record reached, worked out again in place, and

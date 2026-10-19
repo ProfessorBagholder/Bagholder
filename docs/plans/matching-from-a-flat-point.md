@@ -72,29 +72,36 @@ A whole match rebuilds them, and a continued match (deep-history plan, B) append
 
 ### B. A back-dated round trip inside a stretch is placed there
 
-`Engine::continuable` lets a change with rows placed before the family's last walked place continue as a **placed** change, only if every one of these holds. Otherwise the family is matched whole, as now:
+`Engine::continuable` places a family's added rows, placed before its last walked place, only if every one of these holds. Otherwise the family is matched whole, as now:
 
-1. Guards 1, 3, 5 and 6 of the deep-history plan hold (only added records; families unchanged; no finer coin places; nothing the match reads of an instrument or an account changed), as they do for a continued change today.
-2. Every leg of every added record falls strictly inside one kept stretch: after its start's instant, and before its end's instant. The stretch holds no other row of the family that moves a lot.
-3. Nothing in the family is tainted: every book's taint is empty, and so are the three multi-leg taints. Taints never clear, so none at the end means none at any point.
-4. No added row is on a contract or a coin, is a transfer, an expiry, an assignment, an exercise or a corporate event, or names an adjustment.
-5. Walked from an empty state, the added rows leave every holding they touch flat again, and they write nothing to the match's lists (beyond what was held, dust, arrivals, disagreements, stock dividends, what was not applied).
+1. Guards 1, 3, 5 and 6 of the deep-history plan hold, as they do for a continued change today: only added records, the families unchanged, no finer coin places, and nothing the match reads of an instrument or an account changed. Guard 1 also refuses an adjustment set on a row, so an added row with an adjustment goes whole.
+2. Every added row falls on a day strictly between the days its kept stretch starts and ends, and all of the family's added rows fall in one stretch. A row on the stretch's first or last day goes whole, so nothing is placed at an instant the stretch's own rows share.
+3. Nothing in the family is tainted: neither the three multi-leg taints in its kept state, nor any book of its holdings. Taints never clear, so none now means none at any point (`Engine::untainted`).
+4. Every added row is on a security. A coin's rows read its source's finest place, the rounding held and dust, and a contract's rows read the expiry calendar.
+5. **The walk's own check** (`ledger::place_in_stretch`). Walked alone on a scratch match, from no lots and an empty state, the rows must leave every book flat and untainted, and every holding flat. They may write only round trips, roles, units and books: nothing beyond what was held, no dust, arrivals, disagreements, stock dividends, rows not applied or rows waiting on the person, and no expiry, consumed row or rounding left in the state. If this fails, nothing is written and the family is matched whole.
 
-**How it is placed.** The added rows are walked by `match_over`'s own loop, from a state with no lots, using the kept `MatchState`'s maps unchanged. By guards 3 and 4 nothing in those maps is read by these rows. The walk writes its round trips, roles, units entries and books into the engine's `Matched` in place, as a continued match does. Then:
-- each touched holding's `Basis::realized` gains the stretch's realized amount;
+As built, guard 5 also covers what the plan listed separately in its guard 4. A transfer leaves units waiting or beyond what was held. A contract leaves an expiry on the calendar. A record with a leg in another family is walked as the whole match walks it, by its place. The plants show which guard each case needs (the PR's table). A guard that no test could trip was not kept.
+
+**How it is placed.** The added rows are walked by `match_over`'s own loop on the scratch match. Then:
+- the round trips, roles and fill indexes are written into the engine's `Matched`;
+- each touched holding's book keeps its lots and cost, and its `Basis::realized` gains the stretch's realized amount; a holding the match had no book for takes the scratch's;
+- the units entries are added (below);
+- an instrument's last stated price (`Matched::last_price`, which `write_off_dust` sets on every row's fill) becomes the placed rows' only where no fill of that instrument after them states one;
 - the account shares (`Engine::shares`) gain the rows' cash;
-- the stretch is split in two at the added rows;
+- the stretch is split at the rows: from its start to their first, between their own round trips, and from their last to its end;
 - `last`, `opens_at_last`, `expired_at_end` and `ended_quiet` are unchanged, since nothing was walked after the family's last place.
 
-If guard 5 fails after the walk, the engine throws the attempt away and matches the family whole. This is decided before anything is written, on a scratch `Matched`.
+**The units timeline.** `record_units` writes an entry when a holding's units differ from the timeline's last entry. In a walk in order, that is the entry on or before the row's day. A placed walk is not at the timeline's end, so as built the scratch timeline is seeded with the holding's entry on or before the rows' first day, and the seed is dropped after the walk. `record_units` itself is unchanged, and a whole walk is unchanged.
 
-**The units timeline.** `record_units` writes an entry when the units differ from the timeline's last entry. In a walk in order, that is the entry before the row's day. A placed walk is not at the end of the timeline, so it compares with the entry on or before the row's day. A whole walk is unchanged by this.
+A same-day round trip ends that day at zero whichever entry it is compared with, so it cannot tell the two comparisons apart. The plant of the old comparison (the timeline's last entry) is caught by a round trip over days whose buy equals the units the holding holds at the end.
+
+**Distributions inside the span (brief 60, change 1, withdrawn in its addendum).** The match gives a distribution to no round trip. `Matcher::apply` returns at once for a row naming no instrument, and `apply_distribution` returns for one no adjustment names (`ledger.rs`, `apply` and `apply_distribution`). `Trip` carries no income. Which round trip a payment answers a filter by is read when the scope is worked out (`scope.rs`, `entitled`), from the trades list and the declared distribution's ex-date. So a placed round trip that spans a payment answers for it as after a whole match. The test holds it with payments before, on and between the round trip's days and after it, and with one declared distribution gone ex inside the round trip and one before it.
 
 **Figures.** The placed walk returns the round trips it wrote and the holdings it walked, like `Continued`, and `rederive` works on that reach (deep-history plan, C). Past days are forgotten from the change's first day (#527, 4).
 
 ### C. Held by the oracle
 
-Under the `oracles` feature, every placed change is checked against matching the family whole on a copy. The engine's `Matched` within the family, `MatchState` including the stretches, and the cash shares must be equal, as for a continued match today. The path counter records "placed" as a third path beside "continued" and "whole".
+Under the `oracles` feature, every placed change is checked against matching the family whole on a copy. The engine's `Matched` within the family, `MatchState` including the stretches, and the cash shares must be equal, as for a continued match today (`Engine::same_as_whole`, shared by both). The path counter (`engine::Path`) records `Placed` as a third path beside `Continued` and `Whole`.
 
 ### D. The gate
 
@@ -102,28 +109,26 @@ Under the `oracles` feature, every placed change is checked against matching the
 
 ## Acceptance criteria
 
-- [ ] `RUSTFLAGS="-D warnings" cargo test --workspace --locked` green, clippy clean, and the book's oracles green.
-- [ ] **Placed equals whole, and is used.** `engine/tests/by_change.rs` gains generated families with round trips inserted into each kind of stretch: the first, a middle one, the last open-ended one, a stretch between two accounts' trips, and a family with a share and its contracts flat on the day. They are interleaved with every case that must go whole:
-  - a round trip that ends open, or that oversells;
-  - a round trip at a stretch's start instant or end instant;
-  - one spanning two stretches;
-  - a tainted family;
-  - a coin or a contract;
-  - a transfer, an event, an adjustment;
-  - a one-day multi-leg record with a leg outside the family;
-  - an expiry or assignment row.
+- [x] `RUSTFLAGS="-D warnings" cargo test --workspace --locked` green on CI, clippy clean, and the book's oracles green.
+- [x] **Placed equals whole, and is used.** `engine/tests/placed.rs`, over 10 seeds, adds round trips into stretches: the middle of a long one, with a payment before, on, between, on the sale's day and after; across one declared distribution's ex-date; a same-day trip alone and beside another family's row that day; one in a family with a share and its contract, flat on the day; and one after which no fill of its instrument states a price. They are interleaved with the cases that must go whole:
+  - a same-day trip on the day its stretch starts, and on the day it ends;
+  - one over two stretches;
+  - a contract; a transfer; a coin;
+  - a one-day record with a leg in another family;
+  - a sale of more than is held; a buy that leaves the holding open;
+  - a record whose legs are not stated, then a tainted family.
 
-  After every step the engine equals a fresh build (`match_disagrees`). The path counter matches the generator's label on every step, with at least a stated number of placed steps.
-- [ ] **Each guard bites.** Planting the removal of each of guards 2–5, and of the units-timeline change, fails the property test. The plants are shown in the PR.
-- [ ] **The stretches are right.** After every step of the same sequences, the kept stretches equal those of a whole match.
-- [ ] **Capacity:** `backdated-flat` meets the growth rule at both depths and its budget, and its `OVER_BUDGET` entry is removed. The runner's table is pasted in the PR. The in-suite growth test asserts the placed path.
-- [ ] `docs/architecture.md` §13: a round trip added inside a flat stretch is placed there; anything else back-dated matches its family whole.
+  After every step the engine equals a fresh build (`differences`, `match_disagrees`, the match of the whole ledger, what moved), and so does the cashflow a side filter reads through each payment's round trip. The path counter matches the step's label, with at least 110 placed steps (11 a seed). Every step that places is also held by the oracle.
+- [x] **Each guard bites.** Planting the removal of each guard, the units seed, the realized sum and the last-price rule fails the test (the PR's table).
+- [x] **The stretches are right.** The oracle compares the kept state, stretches included, with a whole match's after every placed and continued step. `engine/tests/continued.rs` still passes with the stretches in the state.
+- [ ] **Capacity:** `backdated-flat` meets the growth rule at both depths and its budget on CI, and its `OVER_BUDGET` entry is removed. The runner's table is pasted in the PR. The in-suite growth test asserts the placed path on both books.
+- [x] `docs/architecture.md` §13: a round trip added inside a flat stretch is placed there; anything else back-dated matches its family whole.
 
 ## Surfaces to check beyond the diff
 
-- `ledger.rs`: `MatchState` (the stretches), `match_family`, `continue_family`, the new `place_in_stretch`, `record_units`.
-- `engine.rs`: `continuable` (the placed path and its guards), `continue_family`, `Reach`, the `oracles` paths.
-- `capacity.rs`: `OVER_BUDGET`, the in-suite growth test.
+- `ledger.rs`: `MatchState` (`open`, `stretches`, `untainted`), `match_family`, `walk` (`stretch_ends`, `stretch_starts`), `record_units` (the open holdings), `passes_over`, the new `place_in_stretch`.
+- `engine.rs`: `continuable` and `placeable`, `untainted`, `continue_family`, `place_family`, `add_shares`, `same_as_whole`, `Path`.
+- `capacity.rs`: `OVER_BUDGET`, the `backdated-flat` probe's path record, the in-suite growth test.
 
 ## Right to refuse
 
@@ -131,14 +136,20 @@ If the property test finds anything else a placed walk reads from the kept maps,
 
 ## Anti-stub self-check
 
-*Initialled when built.*
+Initialled at build:
+- no kept state the placed walk does not read or write;
+- no guard without a step in the test that trips it;
+- no oracle compiled out of the test that cites it;
+- the test, the plants and the in-suite growth test run, not asserted.
 
 ## Verification
 
 Before the build: the table in "What brief 58 asked", from a temporary probe in `Matcher::walk` and a test running the capacity job's `backdated-flat` probe at depths 20 and 320 of the test book, and at 174 and 698 (the owner's depth and four times it). Master `551e281a`, the home server, 2026-10-19. Neither the probe nor the test is committed.
 
+The build, on the home server: `cargo test -p bagholder-engine --test placed --test continued --test by_change --test past`, and `cargo test -p bagholder-server test_every_operation_is_measured_and_the_growth_rule_judged`, green. Clippy is clean on the engine and the server. The plants were run one by one against `placed`.
+
 ## Handoff
 
-Built in the PR that carries this plan, after the gate's verdict.
+Built in the PR that carries this plan, after brief 60.
 
-**Nothing left running.** *Filled when built.*
+**Nothing left running.**
