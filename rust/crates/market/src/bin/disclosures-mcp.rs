@@ -64,7 +64,7 @@ impl From<SourceError> for Fail {
     fn from(e: SourceError) -> Fail {
         match e {
             SourceError::Unavailable(m) => Fail::Source(m),
-            SourceError::Other(m) => Fail::Other(m),
+            SourceError::Other(m) | SourceError::NotListed(m) => Fail::Other(m),
             SourceError::Offline => Fail::Source(bagholder_net::client::OFFLINE.into()),
         }
     }

@@ -20,7 +20,11 @@ enrichVersion: number | null,
 /**
  * Read for good: a form read from its own boxes is not read again.
  */
-enrichFinal: boolean, fetchedAt: string, id: string, source: Regulator, category: string, profileNo: string, issuer: string, 
+enrichFinal: boolean, fetchedAt: string, 
+/**
+ * When its regulator was found no longer to list it; empty while it does.
+ */
+unlistedAt: string, id: string, source: Regulator, category: string, profileNo: string, issuer: string, 
 /**
  * The form or document type.
  */
@@ -52,7 +56,11 @@ enrichVersion: number | null,
 /**
  * Read for good: a form read from its own boxes is not read again.
  */
-enrichFinal: boolean, fetchedAt: string, id: string, source: Regulator, category: string, profileNo: string, issuer: string, 
+enrichFinal: boolean, fetchedAt: string, 
+/**
+ * When its regulator was found no longer to list it; empty while it does.
+ */
+unlistedAt: string, id: string, source: Regulator, category: string, profileNo: string, issuer: string, 
 /**
  * The form or document type.
  */

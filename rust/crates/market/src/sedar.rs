@@ -750,57 +750,59 @@ fn walk_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Fetch
     Ok(Some((view, html)))
 }
 
-/// How many pages of an issuer's documents a download looks through for one no
-/// longer on the first: SEDAR+ shows thirty a page, so a thousand and more.
-const DOWNLOAD_PAGES: usize = 40;
+/// How many documents SEDAR+ shows a page.
+const PAGE_ROWS: usize = 30;
 
 re!(re_next_page, r#"(?s)aria-label="Next Page"[^>]*?catHtmlFragmentCallback\('(W\d+)','selectPage',(\d+),\{[^}]*?containerNodeId:'(W\d+)'"#);
+re!(re_results, r"Displaying \d+-\d+ of (\d+) results");
 
 /// The next page of a document list, as its own "Next Page" control asks for it.
 fn next_page(page: &str) -> Option<(String, String, String)> {
     re_next_page().captures(page).map(|m| (m[1].to_string(), m[2].to_string(), m[3].to_string()))
 }
 
-/// A document's row on an issuer's list, looking past the first page: SEDAR+
-/// lists an issuer's documents thirty at a time, newest first, so one older than
-/// the newest thirty is on a later page. Its link is good in the session that
-/// found it. None where it is on no page down to `filed` (the day it was filed,
-/// where known), or on none at all: SEDAR+ no longer lists it.
+/// How many pages a list holds, by its own count ("Displaying 1-30 of 512 results").
+fn pages_of(page: &str) -> usize {
+    re_results().captures(page).and_then(|m| m[1].parse::<usize>().ok()).map_or(1, |n| n.div_ceil(PAGE_ROWS).max(1))
+}
+
+/// The days a search for a document filed on `filed` covers, as SEDAR+'s
+/// "From date" and "To date" take them (`DD/MM/YYYY`): the day before to the day
+/// after, so a filing near midnight in the regulator's zone is not missed.
+fn search_days(filed: &str) -> Option<(String, String)> {
+    let day: bagholder_core::jiff::civil::Date = filed.get(..10)?.parse().ok()?;
+    let form = |d: bagholder_core::jiff::civil::Date| format!("{:02}/{:02}/{:04}", d.day(), d.month(), d.year());
+    Some((form(day.yesterday().ok()?), form(day.tomorrow().ok()?)))
+}
+
+/// A document's row on an issuer's list, wherever it is: SEDAR+ lists an issuer's
+/// documents thirty a page, newest first, so one older than the newest thirty is
+/// on a later page. Where the day it was filed is known, the list is searched for
+/// those days alone, so it sits on the first page (brief 69); otherwise the whole
+/// list is looked through, page by page, as many as the list itself counts. Its
+/// link is good in the session that found it. None where SEDAR+ lists it nowhere.
 fn find_document(st: &mut State, profile_no: &str, name: Option<&str>, key: &str, filed: Option<&str>) -> Fetched<Option<SedarRow>> {
     let Some((view, mut html)) = walk_documents(st, profile_no, name)? else { return Ok(None) };
-    for _ in 0..DOWNLOAD_PAGES {
-        match on_page(&parse_filings(&html), key, filed) {
-            OnPage::Found(row) => return Ok(Some(row)),
-            OnPage::PastIt => return Ok(None),
-            OnPage::Further => {}
+    if let Some((from, to)) = filed.and_then(search_days) {
+        let (node, cb, container) = search_action(&view.page).ok_or_else(|| unavailable("SEDAR+'s document list offered no search"))?;
+        // the dates alone: the form's other fields, posted with them, are refused as an empty search
+        html = view.callback(st, &node, &cb, None, &[("SubmissionDate", from.as_str()), ("SubmissionDate2", to.as_str())], Some(&container), false, Some(""))?;
+    }
+    let pages = pages_of(&html);
+    for _ in 1..pages {
+        if let Some(row) = on_page(&parse_filings(&html), key) {
+            return Ok(Some(row));
         }
         let Some((node, n, container)) = next_page(&html) else { return Ok(None) };
-        // the page asked for alone, as the list's own control asks: the search
-        // form's fields, posted with it, are refused as an empty search
+        // the page asked for alone, as the list's own control asks
         html = view.callback(st, &node, "selectPage", Some(&n), &[], Some(&container), false, Some(""))?;
     }
-    Ok(None)
+    Ok(on_page(&parse_filings(&html), key))
 }
 
-/// What one page of an issuer's list says of a document looked for.
-#[derive(Debug, PartialEq)]
-enum OnPage {
-    Found(SedarRow),
-    /// The page is older than the day it was filed: the list, newest first, is past it.
-    PastIt,
-    Further,
-}
-
-fn on_page(rows: &[SedarRow], key: &str, filed: Option<&str>) -> OnPage {
-    if let Some(row) = rows.iter().find(|f| f.url.contains(key)) {
-        return OnPage::Found(row.clone());
-    }
-    let newest = rows.iter().map(|r| r.submitted_at.as_str()).max().unwrap_or("");
-    // compared as the list writes them (`2026-05-26T09:31`), day against day where only one is known
-    match filed.filter(|d| !d.is_empty()) {
-        Some(day) if !newest.is_empty() && newest[..newest.len().min(10)] < day[..day.len().min(10)] => OnPage::PastIt,
-        _ => OnPage::Further,
-    }
+/// The row of a page that is the document looked for.
+fn on_page(rows: &[SedarRow], key: &str) -> Option<SedarRow> {
+    rows.iter().find(|f| f.url.contains(key)).cloned()
 }
 
 /// The newest filings across SEDAR+.
@@ -979,7 +981,7 @@ pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
     let issuer = row.issuer.clone();
     match download_filed(&row.profile_no, &row.id, if issuer.is_empty() { None } else { Some(&issuer) }, Some(&row.date))? {
         Some(x) => Ok(x),
-        None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&row.id), row.profile_no))),
+        None => Err(SourceError::NotListed(format!("SEDAR+ no longer lists the document {} in profile {}", d::repr_quoted(&row.id), row.profile_no))),
     }
 }
 
@@ -1078,16 +1080,29 @@ mod paging_tests {
         SedarRow { id: format!("sedar:drm:{id}"), submitted_at: at.into(), url: format!("/csa-party/records/document.html?id={id}"), ..Default::default() }
     }
 
-    /// A document not on a page is looked for on the next, until a page is older
-    /// than the day it was filed (the list is newest first).
     #[test]
-    fn a_page_says_found_further_or_past_it() {
+    fn a_document_is_found_on_its_page_by_its_key() {
         let page = [row("aaa", "2026-05-26T09:31"), row("bbb", "2026-03-17T08:39")];
-        assert_eq!(on_page(&page, "bbb", Some("2026-03-17T08:39")), OnPage::Found(page[1].clone()));
-        assert_eq!(on_page(&page, "ccc", Some("2026-03-01")), OnPage::Further, "older than this page: on a later one");
-        assert_eq!(on_page(&page, "ccc", Some("2026-06-02T09:47")), OnPage::PastIt, "newer than this page's newest: not listed any more");
-        assert_eq!(on_page(&page, "ccc", Some("2026-05-26")), OnPage::Further, "the same day may sit across two pages");
-        assert_eq!(on_page(&page, "ccc", None), OnPage::Further, "no day known: every page is looked through");
-        assert_eq!(on_page(&[], "ccc", Some("2026-01-01")), OnPage::Further);
+        assert_eq!(on_page(&page, "bbb"), Some(page[1].clone()));
+        assert_eq!(on_page(&page, "ccc"), None);
+    }
+
+    /// The list's own count bounds the walk: thirty a page.
+    #[test]
+    fn the_pages_are_as_many_as_the_list_counts() {
+        assert_eq!(pages_of(r#"<div class="appPagerBanner">Displaying 1-30 of 512 results</div>"#), 18);
+        assert_eq!(pages_of("Displaying 1-30 of 30 results"), 1);
+        assert_eq!(pages_of("Displaying 1-30 of 31 results"), 2);
+        assert_eq!(pages_of("no banner"), 1, "a list that says no count is its one page");
+    }
+
+    /// A search covers the day before to the day after the filing, as SEDAR+'s
+    /// date fields take them.
+    #[test]
+    fn a_search_covers_the_days_around_the_filing() {
+        assert_eq!(search_days("2026-03-17T08:39"), Some(("16/03/2026".into(), "18/03/2026".into())));
+        assert_eq!(search_days("2026-03-01"), Some(("28/02/2026".into(), "02/03/2026".into())));
+        assert_eq!(search_days(""), None);
+        assert_eq!(search_days("17 Mar 2026"), None);
     }
 }

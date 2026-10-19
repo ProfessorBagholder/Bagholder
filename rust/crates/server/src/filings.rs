@@ -1228,7 +1228,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, key: &ListingKey, regu
             }
             Err(e) => match e {
                 disclosures::SourceError::Unavailable(m) => SourceOutcome { available: false, matched: false, filer: true, count: 0, error: m },
-                disclosures::SourceError::Other(m) => SourceOutcome { available: true, matched: false, filer: true, count: 0, error: m },
+                disclosures::SourceError::Other(m) | disclosures::SourceError::NotListed(m) => SourceOutcome { available: true, matched: false, filer: true, count: 0, error: m },
                 disclosures::SourceError::Offline => SourceOutcome { available: false, matched: false, filer: true, count: 0, error: bagholder_net::client::OFFLINE.into() },
             },
         };
@@ -1627,6 +1627,14 @@ pub fn filings_enrich_in(c: &Connection, source: Regulator, doc_id: &str, r: &dy
     }
     let (data, ct) = match r.content(&row.doc) {
         Ok(x) => x,
+        // no longer listed: a fact kept on its row, read for good as what it is, and
+        // never a failure that stands in the header (brief 69)
+        Err(disclosures::SourceError::NotListed(_)) => {
+            sf::set_filing_unlisted(c, source, doc_id, &now).map_err(|e| e.to_string())?;
+            let named = if subject.is_empty() { disclosures::quick_title(&row.doc).unwrap_or_else(|| row.doc.form.clone()).chars().take(90).collect() } else { subject.clone() };
+            sf::set_filing_enrichment(c, source, doc_id, Some(&named), Some(&summary), Some(ENRICH_VERSION), Some(true), &now).map_err(|e| e.to_string())?;
+            return Ok(answer(&named, &summary, model));
+        }
         Err(e) => return Err(e.failure()),
     };
     if data.is_empty() {
@@ -2411,6 +2419,8 @@ mod tests {
 
     struct Fake {
         model: bool,
+        /// The regulator no longer lists the document.
+        unlisted: bool,
         status: &'static str,
         wait: bool,
         read: (&'static str, &'static str),
@@ -2427,6 +2437,9 @@ mod tests {
         fn enrichment(&self, _: &FiledDocument) -> Option<disclosures::Enrichment> { None }
         fn content(&self, _: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> {
             self.reads.set(self.reads.get() + 1);
+            if self.unlisted {
+                return Err(disclosures::SourceError::NotListed("SEDAR+ no longer lists the document 'sedar:1' in profile 1".into()));
+            }
             Ok((b"%PDF-1.4 body".to_vec(), "application/pdf".into()))
         }
         fn enrich_document_of(&self, _: &str, _: &str, _: &[u8], _: &str) -> disclosures::Enrichment {
@@ -2435,7 +2448,34 @@ mod tests {
     }
 
     fn fake(model: bool, read: (&'static str, &'static str), final_: bool) -> Fake {
-        Fake { model, status: if model { "ready" } else { "off" }, wait: false, read, final_, reads: Cell::new(0), waits: Cell::new(0) }
+        Fake { model, unlisted: false, status: if model { "ready" } else { "off" }, wait: false, read, final_, reads: Cell::new(0), waits: Cell::new(0) }
+    }
+
+    /// A document its regulator no longer lists is a fact kept on its row: named by
+    /// what it is, read for good, never fetched again, and no failure (brief 69).
+    /// A transport failure is still a failure, asked again.
+    #[test]
+    fn a_document_no_longer_listed_is_kept_as_a_fact_and_never_a_failure() {
+        let c = enrich_store();
+        let gone = Fake { unlisted: true, ..fake(true, ("", ""), false) };
+        assert!(filings_enrich_in(&c, src_of(DOC), DOC, &gone).is_ok(), "no failure");
+        let row = sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap();
+        assert!(!row.unlisted_at.is_empty(), "kept with when it was found");
+        assert!(row.enrich_final, "read for good");
+        assert!(!row.subject.is_empty(), "named by what it is");
+        assert!(filings_enrich_in(&c, src_of(DOC), DOC, &gone).is_ok());
+        assert_eq!(gone.reads.get(), 1, "never fetched again");
+        // the regulator not answering is no such fact
+        struct Down;
+        impl Readers for Down {
+            fn summary_available(&self) -> bool { true }
+            fn disclosures_available(&self) -> bool { true }
+            fn enrichment(&self, _: &FiledDocument) -> Option<disclosures::Enrichment> { None }
+            fn content(&self, _: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> { Err(disclosures::SourceError::Unavailable("SEDAR+ did not answer".into())) }
+        }
+        let c = enrich_store();
+        assert!(filings_enrich_in(&c, src_of(DOC), DOC, &Down).is_err(), "a transport failure is a failure");
+        assert!(sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap().unlisted_at.is_empty());
     }
 
     const DOC: &str = "sedar:1";
@@ -2672,7 +2712,7 @@ mod tests {
     #[test]
     fn test_a_model_that_is_starting_is_waited_for_rather_than_the_read_wasted() {
         let c = enrich_store();
-        let r = Fake { model: false, status: "ready", wait: true, read: ("A title", "A sentence."), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
+        let r = Fake { model: false, unlisted: false, status: "ready", wait: true, read: ("A title", "A sentence."), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
         let out = v(filings_enrich_in(&c, src_of(DOC), DOC, &r));
         assert_eq!(r.waits.get(), 1);
         assert_eq!(out["summary"], "A sentence.");
@@ -2682,7 +2722,7 @@ mod tests {
     #[test]
     fn test_a_model_that_never_comes_up_leaves_the_row_to_be_read_again() {
         let c = enrich_store();
-        let r = Fake { model: false, status: "off", wait: false, read: ("A title", ""), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
+        let r = Fake { model: false, unlisted: false, status: "off", wait: false, read: ("A title", ""), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
         let out = v(filings_enrich_in(&c, src_of(DOC), DOC, &r));
         assert_eq!(out["subject"], "A title");
         let row = sf::filing(&c, src_of(DOC), DOC).unwrap().unwrap();
