@@ -57,7 +57,7 @@ Opening a PR starts its one CI run. Then send the Architect the head and run id.
 8. Older backlog as before: #509, #508, #512, the #414–#486 audit batch, Dependabot #488–#502.
 
 ### The release line
-- **v2.5.7** is the latest release. The "Release archives" runs seen on 2026-10-18 (01:15, 01:16 and 01:35 UTC) are `release.yml` running on pushes to master. No tag was pushed and no release was made (the Architect checked).
+- **v2.6.0** is the latest release (2026-10-19): notifications through the browser (#555), agents reading the trade history (#535), and everything since 2.5.7. The real push was tested in Firefox only; Safari on `127.0.0.1` still needs a check on a Mac.
 - Release steps are unchanged (`CLAUDE.md`, Releases).
 
 ## 3. How the owner wants to be worked with
@@ -81,7 +81,7 @@ Each rule below cost the owner real anger, often more than once. Treat them as h
 ### Doing the work
 
 - **Never stop mid-work.** Don't write "doing X now" and end the turn. Keep calling tools until it is done. End a turn only when the work is finished or one decision genuinely belongs to the owner.
-- **Done means every acceptance criterion has evidence.** That includes the idle hour and CI read to the end. Never write "not measured in this session".
+- **Done means every acceptance criterion has evidence.** That includes CI read to the end. Never write "not measured in this session".
 - **Nothing left running.** Before any final report, account for every background task you started and stop the rest (`TaskStop`). Every wait must end on every outcome (success, failure, any error), and errors are never read as "not yet". Servers live only as long as the step that uses them.
 - **Run only what the change needs.** One full run before the commit, not after every edit. Read CI once it should be done; don't poll it in tight loops.
 - **Gate commits on tests by exit status**, never on a parsed count. Run the suite in one call and commit in the next, or chain with `&&`. A red commit reached a PR three times before this rule.
@@ -198,11 +198,7 @@ All of these are standing orders from the owner, on top of `CLAUDE.md`.
   - Every listed `OVER_BUDGET` entry must still be over by its measure, or the run fails ("take it off").
   - The rule test `every_operation_a_person_waits_on_is_timed` ties `waited_on` to the budget being a RAIL wait.
   - Bytes read are counted only on Linux CI.
-- **Idle hour** (CPU and peak memory over an hour, a page open) for any server change.
-  - It must be paired: master and the branch side by side, each on a fresh copy of the owner's data (`~/.bagholder-rust/{book,market,bagholder}.db`, never `session.json`).
-  - Copy the `models/` folder into each copy, or the local language model downloads and swamps the measurement.
-  - Run a warm-up hour first (the branch's one-time migrations), then the hour that counts.
-  - The last pair: master 62.9 s and 119 MB peak, the branch 58.0 s and 110 MB.
+- **No idle hours.** Never measure a change by running the app idle for an hour or more; the owner rejected it outright on 2026-10-19 (`docs/decisions.md`). Idle cost is held by `TIMED_WAITS` and the capacity job.
 - **CI** has eight jobs: rust, rust-macos, rust-windows, web, browser, capacity, container, audit. Read each failure's log; never re-run blindly.
   - Two flakes that were fixed: the macOS wall-clock sleep test, and a stale lock that only the container job's unlocked build had hidden.
 - **Scratch servers:** use a copy of the data, never the live folder.
