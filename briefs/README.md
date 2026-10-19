@@ -70,4 +70,5 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 57 | [Verdict on plan #536, a back-dated change costs what it changed (#527): Go with changes](57-backdated-change-plan-verdict.md) | Applied in #539 (change 1 corrected in 58) |
 | 58 | [#527: the backdated-flat refusal accepted; list it, plan matching from a flat point next](58-backdated-flat-refusal.md) | Applied in #539 |
 | 59 | [#539 ready; #540 accepted pending its run; #541 two changes](59-539-540-541.md) | Current |
-| 60 | [Verdict on plan #548, a round trip added on a past flat day (#537): Go with changes](60-matching-from-a-flat-point-verdict.md) | Current |
+| 60 | [Verdict on plan #548, a round trip added on a past flat day (#537): Go with changes](60-matching-from-a-flat-point-verdict.md) | Applied in #548 (change 1 withdrawn) |
+| 61 | [#548 (#537) at 58ee5409: cleared](61-548-cleared.md) | Current |
