@@ -29,3 +29,13 @@ The tax-window note is right. The engine applies no superficial-loss or wash-sal
    Plant the old comparison (with the timeline's last entry), and the test fails.
 
 Everything else stands as written, including the right to refuse if the guards send the ordinary case whole. Build it next, in one push.
+
+## Addendum: change 1 withdrawn
+
+Change 1 rested on #536's plan text: a distribution's income goes "to the round trip open on its day". The code doesn't do that.
+- The match gives a distribution to no trip. `apply` returns for a `Dividend` into `apply_distribution`, which returns at once with no adjustment (`ledger.rs`). `Trip` has no income field.
+- A payment answers to a trip at read time, from the trades list and the ex-date (SPEC filters-8, in the scope).
+
+So a guard, or a walk of the passed-over rows, would change nothing that any test could catch, which is the kind of guard the deep-history plan rejects. **No guard and no extra walk.**
+
+The generated distributions stay in the test, around and inside the added trip, with the ex-date and pay date on either side. Each step equals whole (`Matched`, `MatchState`), a fresh build's trades and cash rows, and the scope's entitled filter. The PR states the reason, citing those lines. Change 2 stands.
