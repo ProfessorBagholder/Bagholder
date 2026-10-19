@@ -193,11 +193,12 @@
         <div class="dc-row" class:on={discExpanded === f.id} onclick={() => toggleExpand(f.id)} style="grid-template-columns:{view.tmpl}">
           <div class="dc-date">{discDate(f)}</div>
           <div class="dc-doc"><b>{f.type}</b></div>
-          <div class="dc-title">{#if f.subject}{f.subject}{:else if enriching || titleComing(f, sym)}<span class="dc-skel" style="width:70%"></span>{/if}</div>
+          <div class="dc-title">{#if f.subject}{f.subject}{:else if enriching || titleComing(f, sym)}<span class="dc-skel" style="width:70%"></span>{/if}{#if f.unlistedAt}<div class="dc-gone" style="font-size:11.5px;color:var(--ink55);margin-top:2px">No longer listed on {f.source}</div>{/if}</div>
           {#if view.anySummary}<div class="dc-sumcell">{#if f.summary}{f.summary}{:else if enriching || (preparing(sym) && !f.enrichFinal)}<span class="dc-skel" style="width:90%"></span>{/if}</div>{/if}
           {#if view.multiSource}<button class="dc-src" onclick={(e) => { e.stopPropagation(); pickSource(f.source) }}>{f.source}</button>{/if}
           {#if view.anySize}<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">{f.size || ''}</div>{/if}
-          <button class="dc-open" class:lit={discOpening === f.id} onclick={(e) => { e.stopPropagation(); openDoc(f) }} aria-label="Open document">{discOpening === f.id ? 'Opening…' : '↗'}</button>
+          <!-- a document its regulator no longer lists has nothing to open -->
+          <button class="dc-open" class:lit={discOpening === f.id} disabled={!!f.unlistedAt} onclick={(e) => { e.stopPropagation(); openDoc(f) }} aria-label={f.unlistedAt ? 'No longer listed: nothing to open' : 'Open document'}>{discOpening === f.id ? 'Opening…' : '↗'}</button>
         </div>
       {/each}
     </div>

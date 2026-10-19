@@ -7,7 +7,7 @@
 //! of a document survives a refresh of the list it came from.
 
 use bagholder_core::ListingKey;
-use rusqlite::{Connection, Result, Row};
+use rusqlite::{params, Connection, Result, Row};
 use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 use serde_json::Value;
@@ -606,6 +606,8 @@ pub struct Filing {
     #[ts(skip)]
     pub enrich_reads: i64,
     pub fetched_at: String,
+    /// When its regulator was found no longer to list it; empty while it does.
+    pub unlisted_at: String,
 }
 
 /// A column that may not exist on this table at all, so it reads as empty
@@ -670,6 +672,7 @@ fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
             Err(_) => 0,
         },
         fetched_at: maybe(r, "fetched_at")?,
+        unlisted_at: maybe(r, "unlisted_at")?,
     }))
 }
 
@@ -715,6 +718,12 @@ pub fn filing(conn: &Connection, source: Regulator, doc_id: &str) -> Result<Opti
 /// `set_filing_enrichment`: what was read out of a document, stamped
 /// with the version of the logic that read it so a better one re-reads it
 /// once. A value not given is left as it was.
+/// A document its regulator no longer lists, found so at `at`.
+pub fn set_filing_unlisted(conn: &Connection, source: Regulator, doc_id: &str, at: &str) -> Result<()> {
+    conn.execute("UPDATE filings SET unlisted_at = ? WHERE source = ? AND id = ?", params![at, source.as_str(), doc_id])?;
+    Ok(())
+}
+
 pub fn set_filing_enrichment(
     conn: &Connection,
     source: Regulator,

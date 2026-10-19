@@ -52,12 +52,15 @@ pub enum SourceError {
     Other(String),
     /// Not asked: the process is offline (`BAGHOLDER_OFFLINE`); no failure of the source's.
     Offline,
+    /// The regulator answered and no longer lists the document: a fact about it,
+    /// never a failure that stands (brief 69).
+    NotListed(String),
 }
 
 impl std::fmt::Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SourceError::Unavailable(m) | SourceError::Other(m) => write!(f, "{}", m),
+            SourceError::Unavailable(m) | SourceError::Other(m) | SourceError::NotListed(m) => write!(f, "{}", m),
             SourceError::Offline => f.write_str(bagholder_net::client::OFFLINE),
         }
     }
@@ -232,7 +235,7 @@ fn outcome_of(e: &SourceError) -> SourceOutcome {
         SourceError::Unavailable(m) => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: m.clone() },
         // not asked: the card says the source could not be had, in the refusal's words
         SourceError::Offline => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: bagholder_net::client::OFFLINE.into() },
-        SourceError::Other(m) => SourceOutcome { available: true, matched: false, filer: false, count: 0, error: m.clone() },
+        SourceError::Other(m) | SourceError::NotListed(m) => SourceOutcome { available: true, matched: false, filer: false, count: 0, error: m.clone() },
     }
 }
 

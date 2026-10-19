@@ -910,6 +910,27 @@ test.describe('Disclosures', () => {
     await popup.close()
   })
 
+  // brief 69: a document its regulator no longer lists says so on its row, and has nothing to open
+  test('a document SEDAR+ no longer lists says so on its row, with nothing to open', async ({ page, request }) => {
+    const model = await figures(request)
+    const aapl = (model.positions as { symbol: string; id: string; name: string; currency: string }[]).find((p) => p.symbol === 'AAPL')!
+    const docKey = 'filings:symbol=AAPL&exchange=US&name=' + encodeURIComponent(aapl.name) + '&currency=' + encodeURIComponent(aapl.currency)
+    const row = (id: string, subject: string, unlistedAt: string) => ({ id, source: 'SEDAR+', category: 'News releases', type: 'News release', title: '', subject, summary: '', date: '2026-05-21', dateText: '2026-05-21', size: '', url: '', enrichFinal: true, unlistedAt })
+    const payload = {
+      ok: true, everRead: true, reading: [], fetchedAt: '2026-09-19T00:00:00Z', summaryStatus: 'ready',
+      sources: { 'SEDAR+': { available: true, filer: true, matched: true } },
+      filings: [row('sedar:gone', 'A release withdrawn', '2026-10-19T20:00:00Z'), row('sedar:here', 'A release still listed', '')],
+    }
+    await openWithStatus(page, request, {}, '#portfolio/' + encodeURIComponent(aapl.id), () => {}, { [docKey]: payload })
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Disclosures' }) })
+    const gone = card.locator('.dc-row', { hasText: 'A release withdrawn' })
+    await expect(gone.locator('.dc-gone')).toHaveText('No longer listed on SEDAR+')
+    await expect(gone.locator('.dc-open')).toBeDisabled()
+    const here = card.locator('.dc-row', { hasText: 'A release still listed' })
+    await expect(here.locator('.dc-gone')).toHaveCount(0)
+    await expect(here.locator('.dc-open')).toBeEnabled()
+  })
+
   // brief 42, 9: a document is opened by its source and its id, never by a symbol
   test('a SEDAR+ document opens through the server by its source and id, and a page answers it', async ({ page, request }) => {
     const model = await figures(request)

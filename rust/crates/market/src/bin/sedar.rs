@@ -3,13 +3,13 @@
 //!     sedar resolve <name|number>              profiles matching an issuer
 //!     sedar filings <name|number> [n]          an issuer's filings
 //!     sedar newest [n]                         newest filings across SEDAR+
-//!     sedar get <profileNo> <id> <dest.pdf>    download one document
+//!     sedar get <profileNo> <id> <dest.pdf> [filed]   download one document (filed: the day it was filed, to search those days alone)
 
 use bagholder_market::disclosures::{repr_quoted, SourceError};
 use bagholder_market::sedar;
 use serde_json::{json, Value};
 
-const USAGE: &str = "sedar — SEDAR+ filings over HTTP\n  sedar resolve <name|number>       profiles matching an issuer\n  sedar filings <name|number> [n]   an issuer's filings (JSON)\n  sedar newest [n]                  newest filings across SEDAR+\n  sedar get <profileNo> <id> <dest.pdf>   download one document\n";
+const USAGE: &str = "sedar — SEDAR+ filings over HTTP\n  sedar resolve <name|number>       profiles matching an issuer\n  sedar filings <name|number> [n]   an issuer's filings (JSON)\n  sedar newest [n]                  newest filings across SEDAR+\n  sedar get <profileNo> <id> <dest.pdf> [filed]   download one document\n";
 
 fn fail(msg: String) -> i32 {
     println!("{}", json!({"ok": false, "error": msg}));
@@ -55,10 +55,10 @@ fn run(argv: &[String]) -> Result<i32, SourceError> {
         }
         "get" => {
             if argv.len() < 4 {
-                eprintln!("usage: sedar get <profileNo> <id> <dest.pdf>");
+                eprintln!("usage: sedar get <profileNo> <id> <dest.pdf> [filed]");
                 return Ok(2);
             }
-            match sedar::download_bytes(&argv[1], &argv[2], None)? {
+            match sedar::download_filed(&argv[1], &argv[2], None, argv.get(4).map(String::as_str))? {
                 Some((data, ct)) => {
                     if let Err(e) = std::fs::write(&argv[3], &data) {
                         return Ok(fail(e.to_string()));
