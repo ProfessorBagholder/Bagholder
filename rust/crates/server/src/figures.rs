@@ -166,6 +166,18 @@ pub(crate) struct Named {
     accounts: BTreeSet<bagholder_core::AccountId>,
 }
 
+thread_local! {
+    /// The trades whose identity this thread's settlings changed (opened, moved,
+    /// orphaned): what a change did to the trade identity, which the capacity job
+    /// measures a change's work by (#527).
+    static SETTLED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The trades whose identity this thread's settlings have changed so far.
+pub(crate) fn settled() -> u64 {
+    SETTLED.with(std::cell::Cell::get)
+}
+
 /// Every round trip given its trade in the book: one opened for each that has
 /// none, a trade whose anchor a correction made a fill of another opening's round
 /// trip moved to it, a trade a correction joined into another's orphaned, and one
@@ -196,24 +208,34 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
             BEFORE_SETTLE_WRITES.with(|h| h.borrow_mut().take().map(|f| f(named)));
         }
         let before = book.changes_upto().map_err(err)?;
-        for (trade, key) in &identity.moved {
-            if let Some(s) = seen(trade) {
-                book.move_trade(*trade, &s, &Opening { transaction: key.opening.clone(), instrument: key.instrument }).map_err(err)?;
+        // every write of one settling in one transaction: a change that joins many
+        // round trips costs one commit (and one settling of names), not one each
+        // (#527); each write still checks the anchor the engine saw, inside it
+        let mut done = 0u64;
+        book.atomically(|| {
+            for (trade, key) in &identity.moved {
+                if let Some(s) = seen(trade) {
+                    done += u64::from(book.move_trade(*trade, &s, &Opening { transaction: key.opening.clone(), instrument: key.instrument })?);
+                }
             }
-        }
-        for key in &identity.needs_trade {
-            book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at).map_err(err)?;
-        }
-        for (joined, keeps) in &identity.joined {
-            if let Some(s) = seen(joined) {
-                book.orphan_joined(*joined, *keeps, &s).map_err(err)?;
+            for key in &identity.needs_trade {
+                book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at)?;
+                done += 1;
             }
-        }
-        for trade in &identity.unclaimed {
-            if let Some(s) = seen(trade) {
-                book.orphan_unclaimed(*trade, &s).map_err(err)?;
+            for (joined, keeps) in &identity.joined {
+                if let Some(s) = seen(joined) {
+                    done += u64::from(book.orphan_joined(*joined, *keeps, &s)?);
+                }
             }
-        }
+            for trade in &identity.unclaimed {
+                if let Some(s) = seen(trade) {
+                    done += u64::from(book.orphan_unclaimed(*trade, &s)?);
+                }
+            }
+            Ok(())
+        })
+        .map_err(err)?;
+        SETTLED.with(|c| c.set(c.get() + done));
         // nothing written: what the engine named was already moved by another
         if book.changes_upto().map_err(err)? == before {
             return Ok(moved);

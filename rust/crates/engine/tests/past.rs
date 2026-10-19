@@ -67,3 +67,48 @@ fn a_past_days_holdings_move_only_with_what_they_are_worked_out_from() {
     drop(held);
     assert!(!e.apply(Change::Ledger(restated(&e))).0.contains_key(&Entity::Past), "a day no screen holds was said to move");
 }
+
+/// A change made of rows forgets the past days from the earliest date its rows
+/// state, never all of them (#527): a day before it keeps the holdings worked out
+/// for it, the same object, and every day from it on equals a fresh working-out.
+/// Rows are generated on many days, each with a settlement before, on and after
+/// its trade date, so the earliest of the two is what decides.
+#[test]
+fn a_row_added_forgets_the_past_days_from_its_earliest_date_on() {
+    let start: Date = "2026-02-03".parse().unwrap();
+    let held_days: Vec<Date> = (0..17).map(|k| "2026-02-02".parse::<Date>().unwrap().checked_add(bagholder_core::jiff::Span::new().days(k * 5)).unwrap()).collect();
+    let mut n = 0u32;
+    for week in 0..10i64 {
+        for settle in [-3i64, 0, 3] {
+            n += 1;
+            let mut b = build(&case("weekend"));
+            let mut e = engine(&mut b);
+            let held: Vec<_> = held_days.iter().map(|d| (*d, e.past(*d))).collect();
+            let day = start.checked_add(bagholder_core::jiff::Span::new().days(week * 7)).unwrap();
+            let settles = day.checked_add(bagholder_core::jiff::Span::new().days(settle)).unwrap();
+            let base = e.inputs().ledger.transactions.iter().find(|t| t.instrument == Some(b.ids.instrument("X"))).unwrap().clone();
+            let info = e.inputs().ledger.records[&base.id.record].clone();
+            let record = bagholder_core::RecordId::parse(&format!("01890000-0000-7000-8000-{n:012}")).unwrap();
+            let mut t = base.clone();
+            t.id = bagholder_core::TransactionId::new(record, base.id.leg.clone());
+            t.trade_date = day;
+            t.settle_date = Some(settles);
+            t.occurred_at = None;
+            t.quantity = Some(Dec::from_int(1));
+            let mut d = bagholder_engine::input::LedgerDelta::default();
+            d.records.insert(record, Some((info, vec![t])));
+            let first = day.min(settles);
+            let moved = e.apply(Change::Ledger(d));
+            let fresh = Engine::build(e.inputs().clone());
+            for (h, was) in &held {
+                let now = e.past(*h);
+                if *h < first {
+                    assert!(std::sync::Arc::ptr_eq(was, &now), "{h}, before a row of {day} settling {settles}: worked out again");
+                } else {
+                    assert_eq!(*now, *fresh.past(*h), "{h}, from a row of {day} settling {settles}: differs from a fresh working-out");
+                }
+            }
+            assert_eq!(moved.0.contains_key(&Entity::Past), held.iter().any(|(h, _)| *h >= first), "a row of {day} settling {settles}: the past moved as the days it reached");
+        }
+    }
+}
