@@ -22,9 +22,21 @@ let listedOn: Record<string, string[]> = {}
 // the directories that did not answer, and the venues whose read fails
 let unread: string[] = []
 let failsOn: string[] = []
+// a listing's short interest held back until let through: what shows while it is read
+let held: Promise<void> | null = null
 vi.mock(import('../api'), async (original) => ({
   ...(await original()),
   call: ((key: string, input: { query: { symbol: string; exchange?: string } }) => {
+    if (key !== 'GET /api/listings' && held) {
+      const waiting = held
+      held = null
+      return waiting.then(() => answer(key, input))
+    }
+    return answer(key, input)
+  }) as never,
+}))
+
+function answer(key: string, input: { query: { symbol: string; exchange?: string } }): Promise<unknown> {
     const s = input.query.symbol
     if (key === 'GET /api/listings') {
       const on = listedOn[s] ?? ['NYSE']
@@ -34,8 +46,7 @@ vi.mock(import('../api'), async (original) => ({
     asked.push(s + '@' + input.query.exchange)
     if (failsOn.includes(input.query.exchange ?? '')) return Promise.resolve({ ok: false, error: 'TMX could not be reached.' })
     return Promise.resolve({ ok: true, covered: true, shorts: row(s, 5, { exchange: input.query.exchange }) })
-  }) as never,
-}))
+}
 
 const { default: Shorts } = await import('./Shorts.svelte')
 
@@ -73,6 +84,7 @@ beforeEach(() => {
   listedOn = {}
   unread = []
   failsOn = []
+  held = null
 })
 afterEach(() => vi.useRealTimers())
 
@@ -149,6 +161,15 @@ describe('a ticker searched for', () => {
     expect(symbols(c)).toEqual([])
     expect(c.querySelector('.status-err')?.textContent).toContain('Could not read short interest for RV')
     expect([...c.querySelectorAll('.muted')].some((e) => e.textContent?.includes('Could not read'))).toBe(false)
+    // typed again, it is read again: a read under way is a quiet note, never a failure
+    failsOn = []
+    let let_through = () => {}
+    held = new Promise((r) => (let_through = r))
+    await type(c, '')
+    await type(c, 'RV')
+    expect(c.querySelector('.muted')?.textContent).toBe('Reading RV…')
+    expect(c.querySelector('.status-err')).toBeNull()
+    let_through()
   })
 
   it('found on no venue while a directory did not answer, says the failure, never that no listing is by that name', async () => {
