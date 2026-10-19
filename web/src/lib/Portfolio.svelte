@@ -4,7 +4,7 @@
   import { money0, signedMoney, pct, pctPlain, px, cls, color, waiting } from './fmt'
   import { waits } from './dec'
   import { symText } from './sym'
-  import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
   import { goSub, keepScroll } from './router.svelte'
   import Donut, { type DonutItem } from './Donut.svelte'
 
@@ -101,7 +101,7 @@
     if (key === 'dayPct') return p.percentChange
     return (p as unknown as Record<string, unknown>)[key]
   }
-  const rows = $derived(sortRows(model.positions || [], sort.positions.key, sort.positions.dir, posSortValue))
+  const rows = $derived(sortRows(model.positions || [], sort.positions.key, sort.positions.dir, posSortValue, TIES.positions))
 </script>
 
 <div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">

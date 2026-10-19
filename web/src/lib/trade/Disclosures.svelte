@@ -7,7 +7,7 @@
   import type { Trade, Filing, FilingsDoc, SourceStatus } from '../model'
   import { relTime } from '../fmt'
   import { ICONS } from '../icons'
-  import { sort, toggleSort, sortRows } from '../sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from '../sort.svelte'
   import {
     DISC_ORDER,
     discStore,
@@ -93,7 +93,7 @@
     if (discSource) rows = rows.filter((f) => f.source === discSource)
     if (effCat !== 'all') rows = rows.filter((f) => f.category === effCat)
     const s = sort.disc
-    rows = sortRows(rows, s.key, s.dir, discSortValue)
+    rows = sortRows(rows, s.key, s.dir, discSortValue, TIES.disclosures)
 
     const cols: Col[] = [
       { key: 'date', label: 'Date', w: '88px' },

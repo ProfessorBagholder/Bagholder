@@ -14,7 +14,7 @@
   import { watchDoc } from '../live.svelte'
   import { signedPct, newsWhen, discDate } from './util'
   import { bareSymbol, symText } from '../sym'
-  import { sort, sortRows } from '../sort.svelte'
+  import { sort, sortRows, TIES } from '../sort.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import { discFeed, discBySym, showDiscFeed, showDisclosures, discTitleComing, type DiscRow } from './disc.svelte'
   import { titleComing } from '../trade/discStore.svelte'
@@ -159,7 +159,7 @@
       rows = bySym.length ? bySym : rows.filter((f) => { const h = text(f); return tokens.every((t) => h.indexOf(t) >= 0) })
     }
     const s = sort.ndisc
-    rows = sortRows(rows, s.key, s.dir, (f, k) => (k === 'when' ? f.date : k === 'news' ? String(f.subject || f.type || '').toLowerCase() : String(f.symbol || '').toLowerCase()))
+    rows = sortRows(rows, s.key, s.dir, (f, k) => (k === 'when' ? f.date : k === 'news' ? String(f.subject || f.type || '').toLowerCase() : String(f.symbol || '').toLowerCase()), TIES.news)
     return { state: 'rows' as const, rows, empty }
   })
 
