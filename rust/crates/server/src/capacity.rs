@@ -115,7 +115,7 @@ impl Pair {
             // a change dated today, and one dated in the middle of the history: a
             // record that states no venue reads as on the one before it, so a
             // back-dated one re-forms the names after it (brief 44, 2)
-            Pair::Depth => &[Op::AddTrade, Op::Import, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow],
+            Pair::Depth => &[Op::AddTrade, Op::Import, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat],
         }
     }
     /// What a probe is told of the pair it measures.
@@ -173,10 +173,13 @@ pub enum Op {
     /// A file's row, dated in the middle of the history of a listing whose rows
     /// name its exchange by code and state no venue in words (`CODED`).
     BackdatedFileRow,
+    /// A buy and its sale, in one file, on a past day the holding is flat: a round
+    /// trip of its own that changes no other, judged on its raw work (#527).
+    BackdatedFlat,
 }
 
 impl Op {
-    pub const ALL: [Op; 10] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow];
+    pub const ALL: [Op; 11] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -189,6 +192,7 @@ impl Op {
             Op::BackdatedFill => "backdated-fill",
             Op::BackdatedRecord => "backdated-record",
             Op::BackdatedFileRow => "backdated-file-row",
+            Op::BackdatedFlat => "backdated-flat",
         }
     }
     fn parse(s: &str) -> Option<Op> {
@@ -196,7 +200,7 @@ impl Op {
     }
     /// A person waits on it: its wall time fails the run.
     fn waited_on(self) -> bool {
-        matches!(self, Op::Startup | Op::AddTrade | Op::Import | Op::BackdatedTrade | Op::BackdatedFileRow)
+        matches!(self, Op::Startup | Op::AddTrade | Op::Import | Op::BackdatedTrade | Op::BackdatedFileRow | Op::BackdatedFlat)
     }
     /// It answers one change: the growth rule holds it.
     fn per_change(self) -> bool {
@@ -241,7 +245,7 @@ static PLANT_WHOLE_READ: AtomicBool = AtomicBool::new(false);
 thread_local! {
     /// The matches of the target listing's family in the last probe's window, and
     /// whether each was continued.
-    static PROBED_PATHS: std::cell::RefCell<Vec<(bagholder_engine::families::Node, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static PROBED_PATHS: std::cell::RefCell<Vec<(bagholder_engine::families::Node, bagholder_engine::engine::Path)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A test's planted fold of the traded instrument's names from every sighting,
@@ -257,19 +261,7 @@ static PLANT_NAMES_FOLD: AtomicBool = AtomicBool::new(false);
 pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // the whole view built and serialised to learn whether it changed
     ("feed-step", Pair::Breadth, Measure::Allocations, "#426"),
-    // a change dated in the middle of a holding's history: the engine derives the
-    // holding's later trades and its later days again, from that day on
-    ("backdated-trade", Pair::Depth, Measure::Time, ENGINE_FROM_A_DAY),
-    ("backdated-trade", Pair::Depth, Measure::Steps, ENGINE_FROM_A_DAY),
-    ("backdated-trade", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
-    ("backdated-fill", Pair::Depth, Measure::Steps, ENGINE_FROM_A_DAY),
-    ("backdated-fill", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
-    ("backdated-record", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
-    ("backdated-file-row", Pair::Depth, Measure::Allocations, ENGINE_FROM_A_DAY),
 ];
-
-/// The issue of the engine's work after a back-dated change.
-const ENGINE_FROM_A_DAY: &str = "#527";
 
 /// What a measurement is judged by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +363,11 @@ pub struct Measured {
     pub divisor: u64,
     /// The rows of the listing an added trade or an import changed.
     pub rows: Option<u64>,
+    /// What the change did, in the units its work follows: the trades whose
+    /// identity a back-dated buy or fill changed (`figures::settled`), else 1.
+    /// The growth rule judges steps, allocations and bytes read per unit; wall
+    /// time, what a person waits for, is never divided by it (#527, brief 57).
+    pub changed: u64,
 }
 
 struct Mark {
@@ -399,6 +396,7 @@ fn since(m: &Mark, divisor: u64) -> Measured {
         },
         divisor,
         rows: None,
+        changed: 1,
     }
 }
 
@@ -814,6 +812,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             Ok(out)
         }
         Op::BackdatedTrade | Op::BackdatedFill | Op::BackdatedRecord => {
+            let settled_before = crate::figures::settled();
             let ((instrument, symbol, currency), rows) = target(f, pair, min_rows, &held)?;
             f.names()?;
             let book = f.book()?;
@@ -850,6 +849,8 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                     .map_err(err)?;
                 (record, day, account)
             };
+            #[cfg(test)]
+            let window = paths_mark(f, instrument);
             let m;
             if op == Op::BackdatedTrade {
                 // a buy in the holding's own account on that day, its answer measured:
@@ -869,7 +870,58 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                 book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &key, payload: &payload, refs: vec![] }, Timestamp::now()).map_err(err)?;
                 f.record_changed(Timestamp::now())?;
             }
-            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
+            let out = Measured { rows: Some(rows), changed: (crate::figures::settled() - settled_before).max(1), ..since(&m, 1) };
+            #[cfg(test)]
+            paths_taken(f, window);
+            Ok(out)
+        }
+        Op::BackdatedFlat => {
+            f.names()?;
+            let book = f.book()?;
+            // the listing whose history is file rows (`CODED`), one round trip after
+            // another: a day it is flat, after a sale and before the next buy, in the
+            // middle of that history; a buy and its sale on that day, in one file, open
+            // and close a round trip of their own and change no other
+            let (instrument, rows, day, account): (String, u64, String, String) = {
+                let c = book.conn_for_tests();
+                let instrument: String = c
+                    .query_row("SELECT instrument_id FROM instrument_names WHERE symbol = ?1 AND venue_mic IS NOT NULL LIMIT 1", [CODED.0], |r| r.get(0))
+                    .map_err(|e| format!("the listing named by code alone ({}) is not in the book: {e}", CODED.0))?;
+                let account: String = c
+                    .query_row("SELECT account_id FROM transactions WHERE instrument_id = ?1 GROUP BY account_id ORDER BY count(*) DESC, account_id LIMIT 1", [&instrument], |r| r.get(0))
+                    .map_err(err)?;
+                let mut q = c.prepare("SELECT trade_date, kind FROM transactions WHERE instrument_id = ?1 AND account_id = ?2 ORDER BY trade_date, record_id").map_err(err)?;
+                let days: Vec<(String, String)> = q.query_map([instrument.clone(), account.clone()], |r| Ok((r.get(0)?, r.get(1)?))).map_err(err)?.collect::<rusqlite::Result<_>>().map_err(err)?;
+                let mut flat: Vec<String> = Vec::new();
+                for (i, (d, kind)) in days.iter().enumerate() {
+                    // every round trip of this history is one buy and the sale of all of it
+                    let next = days.get(i + 1).map(|(n, _)| n.as_str());
+                    let after: bagholder_core::jiff::civil::Date = d.parse().map_err(err)?;
+                    let gap = after.checked_add(bagholder_core::jiff::Span::new().days(1)).map_err(err)?.to_string();
+                    if kind == "sell" && next.is_some_and(|n| n > gap.as_str()) {
+                        flat.push(gap);
+                    }
+                }
+                let day = flat.get(flat.len() / 2).cloned().ok_or("the listing named by code alone is never flat between two of its days")?;
+                (instrument, days.len() as u64, day, account)
+            };
+            if rows < min_rows / 2 {
+                return Err(format!("the listing named by code alone has {rows} rows, below the {} the book was built with", min_rows / 2));
+            }
+            drop(book);
+            let account = bagholder_core::AccountId::parse(&account).map_err(err)?;
+            let text = format!("{CODED_HEADER}{day},Buy,{s},{x},1,20.00,-20.00,CAD\n{day},Sell,{s},{x},1,21.00,21.00,CAD\n", s = CODED.0, x = CODED.1);
+            let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+            #[cfg(test)]
+            let window = paths_mark(f, bagholder_core::InstrumentId::parse(&instrument).map_err(err)?);
+            #[cfg(not(test))]
+            let _ = instrument; // what the test's record of the window keys on
+            let m = mark();
+            crate::csv_import::import_from(f, "flat.csv", &open, Some(account), Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
+            let measured = since(&m, 1);
+            #[cfg(test)]
+            paths_taken(f, window);
+            Ok(Measured { rows: Some(rows), ..measured })
         }
         Op::BackdatedFileRow => {
             f.names()?;
@@ -968,7 +1020,7 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         Op::BackdatedTrade => (ANSWER_MS as f64, "RAIL response (answered with its figures)"),
         // a row the pull brings: its figures by the next balances read
         Op::BackdatedFill | Op::BackdatedRecord => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
-        Op::BackdatedFileRow => (TO_FIGURES_MS as f64, "RAIL flow"),
+        Op::BackdatedFileRow | Op::BackdatedFlat => (TO_FIGURES_MS as f64, "RAIL flow"),
         Op::Brokers => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::PriceChanged => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         Op::FeedStep => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / signals a pass sends"),
@@ -998,7 +1050,7 @@ fn measure(exe: &Path, op: Op, pair: Pair, min_rows: u64, home: &Path, times: us
         let n = |k: &str| v[k].as_u64();
         // startup is timed from the exec, as a person starting the app waits on it
         let wall_ns = if op == Op::Startup { exec.elapsed().as_nanos() as u64 } else { n("wall_ns").unwrap_or(0) };
-        runs.push(Measured { wall_ns, steps: n("steps").unwrap_or(0), allocs: n("allocs").unwrap_or(0), read: n("read"), divisor: n("divisor").unwrap_or(1), rows: n("rows") });
+        runs.push(Measured { wall_ns, steps: n("steps").unwrap_or(0), allocs: n("allocs").unwrap_or(0), read: n("read"), divisor: n("divisor").unwrap_or(1), rows: n("rows"), changed: n("changed").unwrap_or(1) });
     }
     Ok(Measured {
         wall_ns: median(runs.iter().map(|r| r.wall_ns).collect()),
@@ -1007,6 +1059,7 @@ fn measure(exe: &Path, op: Op, pair: Pair, min_rows: u64, home: &Path, times: us
         read: runs.iter().map(|r| r.read).collect::<Option<Vec<_>>>().map(median),
         divisor: runs[0].divisor,
         rows: runs[0].rows,
+        changed: runs[0].changed,
     })
 }
 
@@ -1059,10 +1112,13 @@ pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
         over.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, over {budget:.0} ms", pi_ms)));
     }
     if op.per_change() {
-        let ratio = |a: u64, b: u64| if a == 0 { if b == 0 { 1.0 } else { f64::INFINITY } } else { b as f64 / a as f64 };
+        // per unit of what each change did: a change that did four times as much has
+        // four times the work to do (`Measured::changed`); time is judged above, whole
+        let per = |x: u64, m: &Measured| x as f64 / m.changed.max(1) as f64;
+        let ratio = |a: f64, b: f64| if a == 0.0 { if b == 0.0 { 1.0 } else { f64::INFINITY } } else { b / a };
         for (what, a, b) in [(Measure::Steps, Some(one.steps), Some(four.steps)), (Measure::Allocations, Some(one.allocs), Some(four.allocs)), (Measure::BytesRead, one.read, four.read)] {
             if let (Some(a), Some(b)) = (a, b) {
-                let r = ratio(a, b);
+                let r = ratio(per(a, one), per(b, four));
                 if r >= GROWTH_LIMIT {
                     over.push((what, format!("{} grew {r:.2} times with the book", what.name())));
                 }
@@ -1169,7 +1225,7 @@ pub fn cli(args: &[String]) -> i32 {
                     Some(i) => (Pair::Depth, args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0)),
                     None => (Pair::Breadth, 0),
                 };
-                probe(op, pair, min_rows, Path::new(dir)).map(|m| format!("{}\n", serde_json::json!({"wall_ns": m.wall_ns, "steps": m.steps, "allocs": m.allocs, "read": m.read, "divisor": m.divisor, "rows": m.rows})))
+                probe(op, pair, min_rows, Path::new(dir)).map(|m| format!("{}\n", serde_json::json!({"wall_ns": m.wall_ns, "steps": m.steps, "allocs": m.allocs, "read": m.read, "divisor": m.divisor, "rows": m.rows, "changed": m.changed})))
             }
             _ => Err(usage.into()),
         },
@@ -1197,7 +1253,7 @@ mod tests {
 
     /// The families a probe of `op` matched, and whether each was continued: the
     /// probe run on a copy, its paths taken from this thread.
-    fn probe_paths(op: Op, pair: Pair, min_rows: u64, home: &Path) -> (Vec<(bagholder_engine::families::Node, bool)>, Measured) {
+    fn probe_paths(op: Op, pair: Pair, min_rows: u64, home: &Path) -> (Vec<(bagholder_engine::families::Node, bagholder_engine::engine::Path)>, Measured) {
         let c = tempfile::tempdir().unwrap();
         copy_folder(home, c.path()).unwrap();
         let m = probe(op, pair, min_rows, c.path()).unwrap();
@@ -1362,6 +1418,22 @@ mod tests {
             let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
             build(one.path(), small, 2).unwrap();
             build(four.path(), large, 2).unwrap();
+            // the cuts the matches keep (#538): no more of them than the history
+            // grows by, and none larger for a longer history
+            if pair == Pair::Depth {
+                let cuts = |home: &Path| {
+                    // on a copy: the probes below measure the book as built
+                    let c = tempfile::tempdir().unwrap();
+                    copy_folder(home, c.path()).unwrap();
+                    let app = opened(c.path()).unwrap();
+                    figures(&app).unwrap().read(|e| e.cuts()).unwrap()
+                };
+                let ((n, _, b), (n4, _, b4)) = (cuts(one.path()), cuts(four.path()));
+                assert!(n > 0 && n4 > 0, "no cuts kept: {n}, {n4}");
+                let deeper = (min.1 as f64) / (min.0 as f64);
+                assert!((n4 as f64) <= 2.0 * deeper * n as f64, "{n} cuts, then {n4} at {deeper:.1} times the depth");
+                assert!((b4 as f64 / n4 as f64) <= 2.0 * (b as f64 / n as f64), "a cut of {} bytes, then {}", b / n, b4 / n4);
+            }
             for &op in pair.ops().iter().filter(|o| o.per_change()) {
                 let a = probe(op, pair, min.0, one.path()).unwrap();
                 let paths_a = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
@@ -1372,13 +1444,30 @@ mod tests {
                 // steps and allocations: what the process reads from storage at
                 // these small sizes is what this run's page cache holds, judged by
                 // the capacity job at the owner's size instead
-                let growth: Vec<_> = v.grew().into_iter().filter(|(m, _)| !listed(op, pair, *m)).collect();
+                // a broker's late buy at these depths joins no later round trip, so its
+                // match of the holding whole shows unshared; at the owner's size it joins
+                // every later one and is judged per trip, within the rule (#537)
+                let walks_whole_here = |m: Measure| op == Op::BackdatedFill && m == Measure::Allocations && b.changed == 1;
+                let growth: Vec<_> = v.grew().into_iter().filter(|(m, _)| !listed(op, pair, *m) && !walks_whole_here(*m)).collect();
                 assert!(growth.is_empty(), "{op:?} ({pair:?}): {growth:?} ({a:?} then {b:?})");
                 // an added trade and an import match the listing's family once, by
                 // continuing it, on each book (brief 30, C4)
                 if matches!(op, Op::AddTrade | Op::Import) {
                     for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
-                        assert!(paths.len() == 1 && paths[0].1, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                        assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::Continued, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                    }
+                }
+                // a round trip of its own on a past flat day is placed into the
+                // holding's flat stretch, on each book (#537)
+                if op == Op::BackdatedFlat {
+                    for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
+                        assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::Placed, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                    }
+                }
+                // a buy that stays open is walked on from the flat point before it (#538)
+                if op == Op::BackdatedTrade {
+                    for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
+                        assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::FromCut, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
                     }
                 }
             }
@@ -1442,12 +1531,60 @@ mod tests {
         }
     }
 
+    /// A change's work is judged per unit of what it did, and its wall time never
+    /// is (#527, brief 57): four times the work for four times the round trips
+    /// changed is within the rule, the same work for the same change is not, and a
+    /// slow change stays slow however much it changed.
+    #[test]
+    fn work_is_judged_per_round_trip_changed_and_wall_time_never_is() {
+        let one = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 1, rows: None, changed: 10 };
+        let four = Measured { steps: 400, allocs: 400, read: Some(4_000), changed: 40, ..one };
+        assert!(judge(Op::BackdatedTrade, Pair::Depth, &one, &four).over.is_empty(), "four times the work for four times the trips changed");
+        let same = Measured { changed: 10, ..four };
+        let v = judge(Op::BackdatedTrade, Pair::Depth, &one, &same);
+        assert!(v.over.iter().any(|(m, _)| *m == Measure::Steps), "{v:?}");
+        // the person waits on the whole change: a slow one is slow whatever it changed
+        for changed in [1, 40, 10_000] {
+            let slow = Measured { wall_ns: 1_000_000_000, changed, ..four };
+            assert!(judge(Op::BackdatedTrade, Pair::Depth, &one, &slow).over.iter().any(|(m, _)| *m == Measure::Time), "changed {changed}");
+        }
+        // and the unit never reaches a budget: it is not an argument of one
+        let _: fn(Op, u64) -> (f64, &'static str) = budget_ms;
+    }
+
+    /// What a back-dated buy or fill is judged per is what it did: the trades the
+    /// settling changed equal the trades whose identity differs between the book
+    /// before and after the change, read whole, at generated depths (brief 57, 2).
+    #[test]
+    fn the_trades_a_backdated_change_is_judged_per_are_those_whose_identity_changed() {
+        let _g = crate::tests_common::guard();
+        let identities = |home: &Path| -> std::collections::BTreeMap<String, (Option<String>, Option<String>, Option<String>, Option<String>)> {
+            let c = rusqlite::Connection::open(home.join(bagholder_book::BOOK_FILE)).unwrap();
+            let mut q = c.prepare("SELECT id, anchor_record, anchor_leg, anchor_instrument, orphaned_reason FROM trades").unwrap();
+            q.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        for deep in [12, 40, 90] {
+            let built = tempfile::tempdir().unwrap();
+            build(built.path(), Size { deep, ..SMALL }, 2).unwrap();
+            for op in [Op::BackdatedTrade, Op::BackdatedFill] {
+                let home = tempfile::tempdir().unwrap();
+                copy_folder(built.path(), home.path()).unwrap();
+                let before = identities(home.path());
+                let m = probe(op, Pair::Depth, 0, home.path()).unwrap();
+                let after = identities(home.path());
+                let differ = after.iter().filter(|(id, now)| before.get(*id) != Some(*now)).count() as u64;
+                assert!(differ > 0, "{op:?} at depth {deep}: the change moved no trade");
+                assert_eq!(m.changed, differ, "{op:?} at depth {deep}: judged per {} trades, {differ} changed", m.changed);
+            }
+        }
+    }
+
     /// The verdict: a listed operation within its budget fails the run as an
     /// unlisted one over it does.
     #[test]
     fn test_an_operation_over_budget_fails_unless_listed_and_a_listed_one_within_fails_too() {
-        let small = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 10, rows: None };
-        let linear = Measured { wall_ns: 1_000, steps: 400, allocs: 100, read: Some(1_000), divisor: 40, rows: None };
+        let small = Measured { wall_ns: 1_000, steps: 100, allocs: 100, read: Some(1_000), divisor: 10, rows: None, changed: 1 };
+        let linear = Measured { wall_ns: 1_000, steps: 400, allocs: 100, read: Some(1_000), divisor: 40, rows: None, changed: 1 };
         let v = judge(Op::PriceChanged, Pair::Breadth, &small, &linear);
         assert!(v.over.iter().any(|(m, o)| *m == Measure::Steps && o.contains("steps grew 4.00 times")), "{v:?}");
         assert!(judge(Op::PriceChanged, Pair::Breadth, &small, &small).over.is_empty());

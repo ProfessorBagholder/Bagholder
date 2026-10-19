@@ -60,7 +60,10 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
 
   await openWithStatus(page, request, { connected: false, loginView: true })
   await openMenu(page)
+  // counted once each request is made, never on the click's own timing (#530)
+  const start = page.waitForRequest('**/api/login/start')
   await page.getByRole('button', { name: 'Connect Wealthsimple' }).click()
+  await start
   expect(started).toBe(1)
   await expect(page.getByText('Waiting for Wealthsimple login…')).toBeVisible()
   await expect(page.getByText('Sign in to Wealthsimple')).toBeVisible()
@@ -72,9 +75,13 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
   await expect.poll(() => inputs).toContainEqual({ kind: 'key', key: 'Escape' })
   await expect(page.getByText('Sign in to Wealthsimple')).toBeVisible()
 
+  const cancel = page.waitForRequest('**/api/login/cancel')
   await page.locator('#loginDlg').getByRole('button', { name: 'Cancel' }).click()
+  await cancel
   expect(cancelled).toBe(1)
   await expect(page.getByText('Sign in to Wealthsimple')).toHaveCount(0)
+  // each asked once: the dialog's own steps since asked neither again
+  expect([started, cancelled]).toEqual([1, 1])
 })
 
 test('Sync now marks the header as syncing while the request is in flight', async ({ page, request }) => {
@@ -305,6 +312,8 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(dlg).toContainText('Watching /some/watched/folder')
   await expect(dlg).toContainText('Manual · activities · 3 rows · 2 new · 0 linked · 1 already stored')
   await expect(dlg).toContainText('line 1 is not UTF-8 text')
+  // a file that could not be read is said as a failure (#529)
+  await expect(dlg.locator('.status-err', { hasText: 'line 1 is not UTF-8 text' })).toBeVisible()
   // the header says what the scan brought in, not in red, until it is closed
   // (docs/decisions.md 2026-10-09: nothing removes itself on a timer)
   const notice = page.locator('#syncline')
@@ -326,7 +335,8 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await page.unroute('**/api/watch/scan')
   await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, scanError: 'the folder: No such file or directory' } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
-  await expect(dlg.locator('.status-err')).toHaveText('the folder: No such file or directory')
+  // the scan's own failure, beside the file whose read failed
+  await expect(dlg.locator('.status-err', { hasText: 'the folder: No such file or directory' })).toBeVisible()
   await expect(notice).not.toContainText('Folder scanned')
 
   await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { path: '', watching: false, account: '', lastScan: '', scanError: '', lastScanAdded: 0, files: [] } }))

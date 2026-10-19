@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "CAE",
+      "name": "CAE Inc.",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

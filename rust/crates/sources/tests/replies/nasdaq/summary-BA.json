@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "BA",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Industrials"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Aerospace"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$270.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "7,309,003"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "37,993,427"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$188.73"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$254.3499/$176.77"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "150,336,281,504"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

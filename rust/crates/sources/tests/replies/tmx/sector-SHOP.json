@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "SHOP",
+      "name": "Shopify Inc. Class A Subordinate Voting Shares",
+      "sector": "Technology",
+      "industry": "Software & IT Services",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "PG",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Consumer Discretionary"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Package Goods/Cosmetics"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$163.50"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "13,533,971"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "6,574,455"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$157.08"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$167.25/$137.62"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "370,398,408,111"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

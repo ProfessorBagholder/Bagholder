@@ -71,11 +71,19 @@ pub struct StatusAnswer {
     #[serde(flatten)]
     #[ts(flatten)]
     pub status: Status,
-    pub data_version: String,
-    pub core_version: String,
+    /// Absent when the market cache cannot be read, whose failure the error line
+    /// says: never made up.
+    pub data_version: Option<String>,
+    pub core_version: Option<String>,
 }
 
+/// The header, as the page's stream and `/api/status` both read it. Read with the
+/// figure path not open, it opens it again first: a book or cache mended while the
+/// server runs opens at the next reading of the header (#516).
 pub fn status(app: &Arc<App>) -> Status {
+    if app.figures.get().is_none() && app.state.lock().unwrap().open_tried {
+        crate::open_figures(app);
+    }
     // what the header reads that fails is said in its error line, never read as
     // nothing, once it fails again at the next reading, as every failure is
     // (`feeds::feed_failed`): each of its own reads by name, answered when it reads
@@ -83,11 +91,18 @@ pub fn status(app: &Arc<App>) -> Status {
         Some(why) => crate::feeds::feed_failed(app, key, why),
         None => crate::feeds::feed_answered(app, key),
     };
+    // with the book not open, the reason is the open's own failure, said once; the
+    // notifications add nothing under their own name
+    let open = app.figures.get().is_some();
     let notices = crate::notify::book(app).map_err(|e| format!("The book could not be opened: {e}"));
     // the book's counts, as the figures hold them
     let (acts, accounts) = app.figures.get().and_then(|f| f.read(|e| (e.inputs().ledger.transactions.len() as i64, e.inputs().ledger.accounts.len() as i64))).unwrap_or((0, 0));
     let upd = update::update_status(app);
-    read("header:update", upd.as_ref().err().cloned());
+    // the update check is kept in the market cache: with the cache not opening, the
+    // cache's own failure is said, once, and the check adds nothing of its own
+    if upd.is_ok() || app.cache().is_ok() {
+        read("header:update", upd.as_ref().err().cloned());
+    }
     // said above: the header reads on without it
     let upd = match upd {
         Ok(u) => u,
@@ -106,7 +121,9 @@ pub fn status(app: &Arc<App>) -> Status {
             }
         }
         Err(e) => {
-            read("header:notifications", Some(e.clone()));
+            if open {
+                read("header:notifications", Some(e.clone()));
+            }
             NotifyStatus::default()
         }
     };
@@ -162,7 +179,7 @@ pub fn status(app: &Arc<App>) -> Status {
 /// failure is said in the header until that source succeeds). Empty when
 /// nothing is failing; one failure met by two readers is said once.
 pub fn failures(st: &app::State, sources: &[String]) -> String {
-    let own = [st.error.as_str(), st.statement_error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str()];
+    let own = [st.error.as_str(), st.statement_error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str(), st.start_error.as_str(), st.open_error.as_str()];
     let mut said: Vec<String> = vec![];
     for s in own.into_iter().chain(sources.iter().map(String::as_str)).map(str::trim).filter(|e| !e.is_empty()).map(sentence) {
         if !said.contains(&s) {
@@ -498,30 +515,39 @@ fn grouped(plain: String) -> String {
 }
 
 /// `s` ending as a sentence does.
-fn sentence(s: &str) -> String {
-    if s.ends_with(['.', '!', '?', '…']) {
+pub(crate) fn sentence(s: &str) -> String {
+    // started with a capital, as a sentence is, whoever wrote the words; a first
+    // word with capitals of its own is a name written that way (iShares), kept
+    let first_word = s.split_whitespace().next().unwrap_or("");
+    let s = if first_word.chars().any(char::is_uppercase) {
         s.to_string()
+    } else {
+        let mut c = s.chars();
+        c.next().map(|first| first.to_uppercase().chain(c).collect::<String>()).unwrap_or_default()
+    };
+    if s.is_empty() || s.ends_with(['.', '!', '?', '…']) {
+        s
     } else {
         format!("{s}.")
     }
 }
 
 /// `GET /api/status`'s own answer: `status` plus the two version strings a
-/// polling page reloads on. A version that cannot be read fails the request: a
-/// page told nothing moved would reload nothing.
-pub fn answer(app: &Arc<App>) -> Result<StatusAnswer, String> {
-    let conn = app.cache().map_err(|e| format!("The market cache could not be opened: {e}"))?;
-    let data_version = versions::data_version(&conn).map_err(|e| format!("The market cache's version could not be read: {e}"))?;
-    let core_version = versions::core_version(&conn).map_err(|e| format!("The market cache's version could not be read: {e}"))?;
-    drop(conn);
+/// polling page reloads on. The header is answered whatever the market cache
+/// does: a version that cannot be read is absent, and why is in the error line.
+pub fn answer(app: &Arc<App>) -> StatusAnswer {
+    let versions = crate::feeds::conn(app).ok().and_then(|conn| {
+        let read = versions::data_version(&conn).and_then(|d| versions::core_version(&conn).map(|c| (d, c)));
+        crate::feeds::went(app, "header:versions", read.map_err(|e| format!("The market cache's version could not be read: {e}")))
+    });
     let today = bagholder_model::clock::today_local();
-    Ok(StatusAnswer {
+    StatusAnswer {
         status: status(app),
-        data_version: format!("{}|{}", data_version, today),
+        data_version: versions.as_ref().map(|(d, _)| format!("{d}|{today}")),
         // everything the model reads except the quotes: when this is unchanged but the
         // data version moved, only prices ticked (read by the legacy page, which polls)
-        core_version: format!("{}|{}", core_version, today),
-    })
+        core_version: versions.as_ref().map(|(_, c)| format!("{c}|{today}")),
+    }
 }
 
 #[cfg(test)]
@@ -564,6 +590,22 @@ mod tests {
 
     fn error(app: &Arc<App>) -> String {
         super::status(app).error
+    }
+
+    /// Each failure is a sentence: a capital first, a stop last, and a name written
+    /// with its own capitals left as it is.
+    #[test]
+    fn test_each_failure_is_said_as_a_sentence() {
+        for (said, sentence) in [
+            ("the book could not be opened: file is not a database", "The book could not be opened: file is not a database."),
+            ("The market cache could not be opened.", "The market cache could not be opened."),
+            ("iShares Canada refused the request.", "iShares Canada refused the request."),
+            ("éclair could not be read", "Éclair could not be read."),
+            ("why?", "Why?"),
+            ("", ""),
+        ] {
+            assert_eq!(super::sentence(said), sentence);
+        }
     }
 
     const FAILURES: [OutcomeKind; 4] = [OutcomeKind::Refused, OutcomeKind::Unreachable, OutcomeKind::Mismatch, OutcomeKind::Meaning];

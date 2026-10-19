@@ -808,6 +808,30 @@ test.describe('News', () => {
     await quoted
   })
 
+  // #528: what the card is narrowed to is never cut, whatever sits beside the chip
+  test('the Symbol chip shows its ticker whole at every width, in every scope and every tab', async ({ page, request }) => {
+    await openWithStatus(page, request, {}, '#markets', () => {}, two)
+    await page.route('**/api/listings?*', (route) =>
+      route.fulfill({ json: { ok: true, unread: [], listings: [{ listing: 'TECK.B@XTSE', symbol: 'TECK.B', name: 'Teck Resources Ltd.', exchange: 'TSX', currency: 'CAD', held: false }] } }),
+    )
+    const card = page.locator('.card', { has: page.locator('h5', { hasText: 'News' }) })
+    const opt = (label: string) => card.locator('.mseg-opt').filter({ hasText: new RegExp(`^${label}$`) })
+    for (const width of [1200, 1340, 1440, 1680]) {
+      await page.setViewportSize({ width, height: 900 })
+      for (const scope of ['All', 'Holdings', 'Watchlist']) {
+        // a scope picked clears the chip; the ticker typed takes it again
+        await opt(scope).click()
+        await page.getByLabel('Search the news').fill('teck.b')
+        await expect(card.locator('.chip')).toContainText('TECK.B')
+        for (const kind of ['Stories', 'Releases', 'Disclosures']) {
+          await opt(kind).click()
+          const [content, box] = await card.locator('.chip').evaluate((el) => [el.scrollWidth, el.clientWidth])
+          expect(content, `${width} px, ${scope}, ${kind}: the chip holds ${content} px in ${box}`).toBeLessThanOrEqual(box)
+        }
+      }
+    }
+  })
+
   test('clicking a row\'s symbol opens the Symbol chip, asking for that listing\'s items until it is cleared', async ({ page, request }) => {
     const said = saidShown(page)
     const last = asked(said)

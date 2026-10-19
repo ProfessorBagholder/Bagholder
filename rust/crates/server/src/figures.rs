@@ -166,6 +166,18 @@ pub(crate) struct Named {
     accounts: BTreeSet<bagholder_core::AccountId>,
 }
 
+thread_local! {
+    /// The trades whose identity this thread's settlings changed (opened, moved,
+    /// orphaned): what a change did to the trade identity, which the capacity job
+    /// measures a change's work by (#527).
+    static SETTLED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The trades whose identity this thread's settlings have changed so far.
+pub(crate) fn settled() -> u64 {
+    SETTLED.with(std::cell::Cell::get)
+}
+
 /// Every round trip given its trade in the book: one opened for each that has
 /// none, a trade whose anchor a correction made a fill of another opening's round
 /// trip moved to it, a trade a correction joined into another's orphaned, and one
@@ -191,29 +203,38 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
             _ => None,
         };
         #[cfg(test)]
-        if !identity.moved.is_empty() || !identity.unclaimed.is_empty() {
-            let named: Vec<_> = identity.moved.iter().map(|(t, _)| t).chain(identity.unclaimed.iter()).filter_map(|t| seen(t).map(|s| (*t, s))).collect();
+        if !identity.moved.is_empty() || !identity.unclaimed.is_empty() || !identity.joined.is_empty() {
+            let named: Vec<_> = identity.moved.iter().map(|(t, _)| t).chain(identity.unclaimed.iter()).chain(identity.joined.iter().map(|(t, _)| t)).filter_map(|t| seen(t).map(|s| (*t, s))).collect();
             BEFORE_SETTLE_WRITES.with(|h| h.borrow_mut().take().map(|f| f(named)));
         }
         let before = book.changes_upto().map_err(err)?;
-        for (trade, key) in &identity.moved {
-            if let Some(s) = seen(trade) {
-                book.move_trade(*trade, &s, &Opening { transaction: key.opening.clone(), instrument: key.instrument }).map_err(err)?;
+        // every write of one settling in one transaction: a change that joins many
+        // round trips costs one commit (and one settling of names), not one each
+        // (#527); each write still checks the anchor the engine saw, inside it
+        let mut done = 0u64;
+        book.atomically(|| {
+            for (trade, key) in &identity.moved {
+                if let Some(s) = seen(trade) {
+                    done += u64::from(book.move_trade(*trade, &s, &Opening { transaction: key.opening.clone(), instrument: key.instrument })?);
+                }
             }
-        }
-        for key in &identity.needs_trade {
-            book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at).map_err(err)?;
-        }
-        for (joined, keeps) in &identity.joined {
-            if let Some(s) = seen(joined) {
-                book.orphan_joined(*joined, *keeps, &s).map_err(err)?;
+            for key in &identity.needs_trade {
+                book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at)?;
+                done += 1;
             }
-        }
-        for trade in &identity.unclaimed {
-            if let Some(s) = seen(trade) {
-                book.orphan_unclaimed(*trade, &s).map_err(err)?;
-            }
-        }
+            // the trades orphaned, in set writes: each still only where it is
+            // anchored as the engine saw it (#538)
+            let orphaned: Vec<(bagholder_core::TradeId, String, Opening)> = identity
+                .joined
+                .iter()
+                .filter_map(|(joined, keeps)| seen(joined).map(|s| (*joined, Book::joined_reason(*keeps), s)))
+                .chain(identity.unclaimed.iter().filter_map(|t| seen(t).map(|s| (*t, Book::UNCLAIMED_REASON.to_string(), s))))
+                .collect();
+            done += book.orphan_seen(&orphaned)?;
+            Ok(())
+        })
+        .map_err(err)?;
+        SETTLED.with(|c| c.set(c.get() + done));
         // nothing written: what the engine named was already moved by another
         if book.changes_upto().map_err(err)? == before {
             return Ok(moved);
@@ -290,6 +311,10 @@ pub struct Figures {
     /// The ledger's rows by movement, and the movements touched since linking
     /// last looked (`csv_import::link`): kept with the engine.
     movements: std::sync::Mutex<crate::csv_import::Movements>,
+    /// The records were derived again under this build's mappings and the prices
+    /// kept under a guessed venue forgotten (`prepared`): false until both succeed,
+    /// at the open or at a later pass, and nothing is built before.
+    rederived: std::sync::atomic::AtomicBool,
 }
 
 /// What the cache holds of the prices of every share or fund whose records name no
@@ -315,27 +340,63 @@ fn forget_unkeyed_prices(book: &Book, cache: &MarketCache) -> Result<(), String>
     Ok(())
 }
 
+/// What must hold before anything is built from the book: its records derived
+/// again under this build's mappings, and no price kept under a guessed venue.
+fn prepared(book: &Book, cache: &MarketCache, at: Timestamp) -> Result<(), String> {
+    rederive_all(book, at)?;
+    forget_unkeyed_prices(book, cache)
+}
+
+/// Why the figure path could not be opened: the market cache, said under the
+/// cache's own name as every other borrow of it is, or the book (the book itself,
+/// or the earlier database carried into it), said as the book's.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OpenFailure {
+    Cache(String),
+    Book(String),
+}
+
+impl std::fmt::Display for OpenFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenFailure::Cache(s) | OpenFailure::Book(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<OpenFailure> for String {
+    fn from(e: OpenFailure) -> String {
+        e.to_string()
+    }
+}
+
 impl Figures {
     /// Open the figure path in `home` at `at`: the old store imported into a new
     /// book the first time (its journal, groups and notes carried; the first pull
     /// then supersedes its rows), both files brought to this build's schema, and
     /// the engine built when the book holds a zone. A book or cache this build
-    /// cannot open stops the server, saying why.
-    pub fn open(home: &Path, at: Timestamp) -> Result<Figures, String> {
+    /// cannot open is said by what failed, and the open is tried again later.
+    pub fn open(home: &Path, at: Timestamp) -> Result<Figures, OpenFailure> {
         let book_path = home.join(bagholder_book::BOOK_FILE);
         let old = home.join(OLD_FILE);
         if !book_path.exists() && old.exists() {
-            crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
+            crate::legacy_import::import(&old, home, at).map_err(|e| OpenFailure::Book(format!("The earlier database could not be carried into the book: {e}")))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), movements: Default::default() };
-        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
-        let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
-        rederive_all(&book, at)?;
-        forget_unkeyed_prices(&book, &cache)?;
-        // a record the figures cannot be built from is said on the page and tried
-        // again at the next pass; it never stops the server, which a service
-        // manager would only start again into the same failure
-        if let Some(z) = book.zone().map_err(err)? {
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
+        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
+        let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Cache(format!("The market cache could not be opened: {e}")))?;
+        // the records derived again and the prices kept under a guessed venue forgotten,
+        // both before anything is built: either failing is said on the page and tried
+        // again at the next pass; it never stops the server, which a service manager
+        // would only start again into the same failure (#516)
+        match prepared(&book, &cache, at) {
+            Ok(()) => f.rederived.store(true, std::sync::atomic::Ordering::SeqCst),
+            Err(e) => crate::app::log(&format!("bagholder: {e}")),
+        }
+        if !f.rederived.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(f);
+        }
+        if let Some(z) = book.zone().map_err(|e| OpenFailure::Book(format!("The book could not be read: {e}")))? {
             match built(home, &book, &cache, &z.zone, at) {
                 Ok(b) => {
                     let mut engine = f.engine.write().unwrap_or_else(|e| e.into_inner());
@@ -350,6 +411,11 @@ impl Figures {
     /// The engine built where a zone is known and it is not built yet: what a
     /// pass needs first. Its failure is the pass's, said on the page.
     pub fn ensure_built(&self, now: Timestamp) -> Result<(), String> {
+        // prepared first, where that failed when the book opened
+        if !self.rederived.load(std::sync::atomic::Ordering::SeqCst) {
+            prepared(&self.book()?, &self.cache()?, now)?;
+            self.rederived.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         if self.engine.read().unwrap_or_else(|e| e.into_inner()).is_some() {
             return Ok(());
         }
@@ -823,6 +889,60 @@ mod tests {
         }
     }
 
+    /// Records that cannot be derived again when the book opens never stop the
+    /// start (#516): the figure path opens, nothing is built from records left
+    /// as an older mapping read them, and the next pass derives them again and
+    /// builds, its failure the pass's, said in the header until then.
+    #[test]
+    fn records_that_cannot_be_derived_again_at_the_open_are_tried_again_by_the_pass() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let book_file = home.path().join(bagholder_book::BOOK_FILE);
+        let now = at("2025-11-20T12:00:00Z");
+        {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            book.state_zone("America/Toronto", now).unwrap();
+        }
+        // a record no reader can name, left for this build's mapping to derive
+        let c = rusqlite::Connection::open(&book_file).unwrap();
+        let source: String = c.query_row("SELECT source FROM source_records LIMIT 1", [], |r| r.get(0)).unwrap();
+        c.execute("INSERT INTO source_records(id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('not a record id', ?, 'k', 'live', 0, '2025-11-19T20:00:00Z', '2025-11-19T20:00:00Z')", [&source]).unwrap();
+        let f = Figures::open(home.path(), now).expect("the open never stops on it");
+        assert!(f.read(|_| ()).is_none(), "nothing is built from records not derived again");
+        assert!(f.ensure_built(now).unwrap_err().contains("could not be derived again"), "the pass's failure says why");
+        c.execute("DELETE FROM source_records WHERE id = 'not a record id'", []).unwrap();
+        f.ensure_built(now).unwrap();
+        assert!(f.read(|_| ()).is_some(), "the pass that derived them built the figures");
+        same_as_fresh(&f, now);
+    }
+
+    /// Nothing is built from records not derived again, even where the build could
+    /// read them (brief 50, 5): a record this build's mapping refuses (an id the
+    /// book reads, with nothing it can map) leaves the build able to run, so only
+    /// the open's own guard keeps the figures unbuilt until the pass derives it.
+    #[test]
+    fn nothing_is_built_from_records_not_derived_again_where_the_build_could_read_them() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let book_file = home.path().join(bagholder_book::BOOK_FILE);
+        let now = at("2025-11-20T12:00:00Z");
+        {
+            let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+            book.state_zone("America/Toronto", now).unwrap();
+        }
+        let c = rusqlite::Connection::open(&book_file).unwrap();
+        let source: String = c.query_row("SELECT source FROM source_records LIMIT 1", [], |r| r.get(0)).unwrap();
+        c.execute("INSERT INTO source_records(id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('01893c4a-0000-7000-8000-000000000001', ?, 'planted', 'live', 0, '2025-11-19T20:00:00Z', '2025-11-19T20:00:00Z')", [&source]).unwrap();
+        // the build itself reads the book with the record in it
+        let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
+        assert!(rederive_all(&book, now).is_err(), "the mapping refuses the record");
+        let cache = MarketCache::open(&home.path().join(CACHE_FILE), crate::app::APP_VERSION, now).unwrap().0;
+        assert!(build(&book, &cache, clock(&book.zone().unwrap().unwrap().zone, now).unwrap()).is_ok(), "the build alone would run");
+        drop((book, cache));
+        let f = Figures::open(home.path(), now).expect("the open never stops on it");
+        assert!(f.read(|_| ()).is_none(), "nothing is built from records not derived again");
+    }
+
     /// The engine the figure path holds, against one built fresh from the files.
     #[track_caller]
     fn same_as_fresh(f: &Figures, now: Timestamp) {
@@ -1207,6 +1327,89 @@ mod tests {
         let trade = settled.borrow().expect("the other writer ran between the naming and the write");
         let t = book.trade(trade).unwrap();
         assert!(t.orphaned_reason().is_some() && !matches!(t.anchor, bagholder_core::journal::Anchor::Opening(_)), "the move was written over the other writer's settling: {t:?}");
+        f.record_changed(now).unwrap();
+        same_as_fresh(&f, now);
+    }
+
+    /// A hand-entered round trip of one unit on `day_in`, sold on `day_out`, of a
+    /// listing the book does not hold, in the Manual account.
+    fn round_trip(f: &Figures, now: Timestamp, day_in: &str, day_out: Option<&str>) {
+        let trade = |day: &str, side: &str| crate::entries::EntryRequest::Trade {
+            account: String::new(),
+            instrument: None,
+            symbol: "JOINQ".into(),
+            exchange: "XNYS".into(),
+            currency: "USD".into(),
+            day: day.into(),
+            side: side.into(),
+            quantity: "1".into(),
+            price: "10".into(),
+            fee: "0".into(),
+        };
+        crate::entries::enter(f, &trade(day_in, "buy"), now).unwrap();
+        if let Some(out) = day_out {
+            crate::entries::enter(f, &trade(out, "sell"), now).unwrap();
+        }
+    }
+
+    /// The trades a back-dated buy's round trip joined, orphaned together in set
+    /// writes (#538): one settling leaves the figures a fresh build's, with no
+    /// second change needed, and each joined trade keeps its journal.
+    #[test]
+    fn trades_a_back_dated_buy_joined_are_orphaned_in_one_settling() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        for (a, b) in [("2025-11-03", "2025-11-04"), ("2025-11-05", "2025-11-06"), ("2025-11-07", "2025-11-10"), ("2025-11-11", "2025-11-12")] {
+            round_trip(&f, now, a, Some(b));
+        }
+        let book = f.book().unwrap();
+        let trades = |f: &Figures| f.read(|e| e.inputs().ledger.trades.iter().filter(|t| matches!(t.anchor, bagholder_core::journal::Anchor::Opening(_))).count()).unwrap();
+        let before = trades(&f);
+        round_trip(&f, now, "2025-11-01", None);
+        // one round trip from the first buy on: the first trade moves to its
+        // opening, and the three after it are joined into it
+        let orphaned = book.trades().unwrap().into_iter().filter(|t| t.orphaned_reason().is_some_and(|r| r.starts_with("its round trip joined"))).count();
+        assert_eq!(orphaned, 3, "every later trade joined");
+        assert_eq!(trades(&f), before - 3);
+        same_as_fresh(&f, now);
+    }
+
+    /// A joined trade another writer settles between the engine naming it and the
+    /// set write (#538, as brief 30's C1 for a move): the set write leaves it as
+    /// that writer left it, orphans the others, and the next change leaves the
+    /// figures a fresh build's.
+    #[test]
+    fn a_joined_trade_another_writer_settled_first_is_not_written_over() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        for (a, b) in [("2025-11-03", "2025-11-04"), ("2025-11-05", "2025-11-06"), ("2025-11-07", "2025-11-10")] {
+            round_trip(&f, now, a, Some(b));
+        }
+        let settled = std::rc::Rc::new(std::cell::RefCell::new(None));
+        {
+            let (home, settled) = (home.path().to_path_buf(), settled.clone());
+            BEFORE_SETTLE_WRITES.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |named: Vec<(bagholder_core::TradeId, bagholder_core::journal::Opening)>| {
+                    let (other, _) = Book::open_in(&home, crate::app::APP_VERSION, now).unwrap();
+                    // the last named is a joined one (moves, then unclaimed, then joined)
+                    let (trade, seen) = named.into_iter().last().expect("the engine names the joined trades");
+                    assert!(other.orphan_unclaimed(trade, &seen).unwrap());
+                    *settled.borrow_mut() = Some(trade);
+                }))
+            });
+        }
+        round_trip(&f, now, "2025-11-01", None);
+        let trade = settled.borrow().expect("the other writer ran between the naming and the write");
+        let book = f.book().unwrap();
+        assert_eq!(book.trade(trade).unwrap().orphaned_reason().as_deref(), Some(Book::UNCLAIMED_REASON), "the set write wrote over the other writer's settling");
+        let joined = book.trades().unwrap().into_iter().filter(|t| t.orphaned_reason().is_some_and(|r| r.starts_with("its round trip joined"))).count();
+        assert_eq!(joined, 1, "the other orphaned as joined");
         f.record_changed(now).unwrap();
         same_as_fresh(&f, now);
     }

@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "CNR",
+      "name": "Canadian National Railway Company",
+      "sector": "Industrials",
+      "industry": "Transportation",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

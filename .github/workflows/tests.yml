@@ -185,6 +185,25 @@ jobs:
           E2E_URL: http://127.0.0.1:8792
         run: npx playwright test
         working-directory: web
+      # #516: a store the image cannot open leaves the server up with its header
+      # whole -- the version, the update on offer and the error line saying why
+      - name: The image on a book whose market cache cannot be opened
+        run: |
+          docker rm -f bagholder
+          sudo cp -a "$RUNNER_TEMP/book" "$RUNNER_TEMP/broken"
+          sudo rm -f "$RUNNER_TEMP/broken/market.db-wal" "$RUNNER_TEMP/broken/market.db-shm"
+          echo 'this file is not a database, whatever its name says' | sudo tee "$RUNNER_TEMP/broken/market.db" > /dev/null
+          docker run -d --name bagholder -p 127.0.0.1:8792:8792 -e BAGHOLDER_PORT=8792 \
+            -e BAGHOLDER_DRY_ORDERS=1 -e BAGHOLDER_OFFLINE=1 -e BAGHOLDER_NOTIFY=browser \
+            -v "$RUNNER_TEMP/broken:/data" bagholder:ci
+          # until it serves the page, or the container has stopped
+          until curl -sf -o /dev/null http://127.0.0.1:8792/; do
+            [ "$(docker inspect -f '{{.State.Running}}' bagholder)" = true ] || { docker logs bagholder; exit 1; }
+            sleep 1
+          done
+          body=$(curl -s -H 'X-Bagholder: 1' http://127.0.0.1:8792/api/status)
+          echo "$body" | jq -e '.ok == true and (.version | length > 0) and (.updateUrl | length > 0) and has("canUpdate") and .dataVersion == null and .error == "The market cache could not be opened: file is not a database."' \
+            || { echo "$body"; exit 1; }
       - name: The container's log
         if: failure()
         run: docker logs bagholder

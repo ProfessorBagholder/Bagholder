@@ -7,7 +7,7 @@
   import { px } from '../fmt'
   import { signedPct } from './util'
   import { bareSymbol, symText } from '../sym'
-  import { sort, toggleSort, sortRows } from '../sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from '../sort.svelte'
   import { addWatch, removeWatch } from '../state.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import Icon from './Icon.svelte'
@@ -51,6 +51,7 @@
       s.key,
       s.dir,
       (w, k) => (k === 'symbol' ? bareSymbol(w.symbol).toLowerCase() : k === 'exchange' ? String(w.exchange || '').toLowerCase() : k === 'last' ? w.last : k === 'chg' ? w.percentChange : w.added),
+      TIES.watchlist,
     )
   })
 

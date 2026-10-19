@@ -1,0 +1,236 @@
+{
+  "quoteSummary": {
+    "result": [
+      {
+        "topHoldings": {
+          "maxAge": 1,
+          "cashPosition": {
+            "raw": 0.0057,
+            "fmt": "0.57%"
+          },
+          "stockPosition": {
+            "raw": 0.994,
+            "fmt": "99.40%"
+          },
+          "bondPosition": {
+            "raw": 0.0,
+            "fmt": "0.00%"
+          },
+          "otherPosition": {
+            "raw": 0.0004,
+            "fmt": "0.04%"
+          },
+          "preferredPosition": {
+            "raw": 0.0,
+            "fmt": "0.00%"
+          },
+          "convertiblePosition": {
+            "raw": 0.0,
+            "fmt": "0.00%"
+          },
+          "holdings": [
+            {
+              "symbol": "XTOT.TO",
+              "holdingName": "iShares Core S&P Total U.S. Stk Mktt ETF",
+              "holdingPercent": {
+                "raw": 0.3077582,
+                "fmt": "30.78%"
+              }
+            },
+            {
+              "symbol": "XIC.TO",
+              "holdingName": "iShares Core S&P/TSX Cap Composite ETF",
+              "holdingPercent": {
+                "raw": 0.24891701,
+                "fmt": "24.89%"
+              }
+            },
+            {
+              "symbol": "XEF.TO",
+              "holdingName": "iShares Core MSCI EAFE IMI ETF",
+              "holdingPercent": {
+                "raw": 0.2426486,
+                "fmt": "24.26%"
+              }
+            },
+            {
+              "symbol": "ITOT",
+              "holdingName": "iShares Core S&P Total US Stock Mkt ETF",
+              "holdingPercent": {
+                "raw": 0.1499401,
+                "fmt": "14.99%"
+              }
+            },
+            {
+              "symbol": "XEC.TO",
+              "holdingName": "iShares Core MSCI Emer Mkts IMI ETF",
+              "holdingPercent": {
+                "raw": 0.0488729,
+                "fmt": "4.89%"
+              }
+            }
+          ],
+          "equityHoldings": {
+            "priceToEarnings": {
+              "raw": 0.05045,
+              "fmt": "0.05"
+            },
+            "priceToBook": {
+              "raw": 0.32992,
+              "fmt": "0.33"
+            },
+            "priceToSales": {
+              "raw": 0.42342,
+              "fmt": "0.42"
+            },
+            "priceToCashflow": {
+              "raw": 0.07425,
+              "fmt": "0.07"
+            },
+            "medianMarketCap": {},
+            "threeYearEarningsGrowth": {},
+            "priceToEarningsCat": {},
+            "priceToBookCat": {},
+            "priceToSalesCat": {},
+            "priceToCashflowCat": {},
+            "medianMarketCapCat": {},
+            "threeYearEarningsGrowthCat": {}
+          },
+          "bondHoldings": {
+            "maturity": {},
+            "duration": {},
+            "creditQuality": {},
+            "maturityCat": {},
+            "durationCat": {},
+            "creditQualityCat": {}
+          },
+          "bondRatings": [
+            {
+              "bb": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "aa": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "aaa": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "a": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "other": {
+                "raw": 1.0,
+                "fmt": "100.00%"
+              }
+            },
+            {
+              "b": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "bbb": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "below_b": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            },
+            {
+              "us_government": {
+                "raw": 0.0,
+                "fmt": "0.00%"
+              }
+            }
+          ],
+          "sectorWeightings": [
+            {
+              "realestate": {
+                "raw": 0.0202,
+                "fmt": "2.02%"
+              }
+            },
+            {
+              "consumer_cyclical": {
+                "raw": 0.0716,
+                "fmt": "7.16%"
+              }
+            },
+            {
+              "basic_materials": {
+                "raw": 0.0723,
+                "fmt": "7.23%"
+              }
+            },
+            {
+              "consumer_defensive": {
+                "raw": 0.0425,
+                "fmt": "4.25%"
+              }
+            },
+            {
+              "technology": {
+                "raw": 0.2469,
+                "fmt": "24.69%"
+              }
+            },
+            {
+              "communication_services": {
+                "raw": 0.0598,
+                "fmt": "5.98%"
+              }
+            },
+            {
+              "financial_services": {
+                "raw": 0.2062,
+                "fmt": "20.62%"
+              }
+            },
+            {
+              "utilities": {
+                "raw": 0.025,
+                "fmt": "2.50%"
+              }
+            },
+            {
+              "industrials": {
+                "raw": 0.116000004,
+                "fmt": "11.60%"
+              }
+            },
+            {
+              "energy": {
+                "raw": 0.0687,
+                "fmt": "6.87%"
+              }
+            },
+            {
+              "healthcare": {
+                "raw": 0.0709,
+                "fmt": "7.09%"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

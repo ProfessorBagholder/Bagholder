@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "REI.UN",
+      "name": "RioCan Real Estate Investment Trust",
+      "sector": "Real Estate",
+      "industry": "REITs",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}

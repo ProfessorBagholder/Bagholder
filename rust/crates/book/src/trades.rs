@@ -119,10 +119,56 @@ impl Book {
             if !self.anchored_as(trade, seen)? {
                 return Ok(false);
             }
-            self.orphan(trade, &format!("its round trip joined trade {keeps}"))?;
+            self.orphan(trade, &Self::joined_reason(keeps))?;
             Ok(true)
         })
     }
+
+    /// Orphan many trades at once, each with its reason, each only while it is
+    /// anchored on the opening the engine saw it on, as `orphan_joined` and
+    /// `orphan_unclaimed` do one at a time (#538): a set write per group of
+    /// trades, the anchor compared inside it as the book reads it, so a trade
+    /// another writer settled in between is left for the next settling. Each
+    /// trade orphaned still logs its own change. How many were orphaned.
+    pub fn orphan_seen(&self, trades: &[(TradeId, String, Opening)]) -> Result<u64> {
+        // four values a trade: SQLite takes at most 999 parameters before 3.32.0
+        // (SQLITE_MAX_VARIABLE_NUMBER, 32766 since), so 200 trades and the reason
+        // fit under the oldest limit
+        const AT_ONCE: usize = 200;
+        // a statement for each reason: the trades a correction joined into one share theirs
+        let mut by_reason: std::collections::BTreeMap<&str, Vec<&(TradeId, String, Opening)>> = std::collections::BTreeMap::new();
+        for t in trades {
+            by_reason.entry(t.1.as_str()).or_default().push(t);
+        }
+        self.atomically(|| {
+            let mut done = 0u64;
+            for (reason, all) in &by_reason {
+                for group in all.chunks(AT_ONCE) {
+                    let values = vec!["(?, ?, ?, ?)"; group.len()].join(", ");
+                    // found by id through its key, and changed only on the anchor seen
+                    let sql = format!(
+                        "UPDATE trades SET anchor_record = NULL, anchor_leg = NULL, anchor_instrument = NULL, orphaned_reason = ?
+                         WHERE (id, anchor_record, anchor_leg, COALESCE((SELECT into_id FROM instrument_joins WHERE instrument_id = trades.anchor_instrument), anchor_instrument)) IN (VALUES {values})"
+                    );
+                    let mut args: Vec<String> = Vec::with_capacity(1 + group.len() * 4);
+                    args.push(reason.to_string());
+                    for (trade, _, seen) in group {
+                        args.extend([trade.to_string(), seen.transaction.record.to_string(), seen.transaction.leg.as_str().to_string(), seen.instrument.to_string()]);
+                    }
+                    done += self.conn().prepare_cached(&sql)?.execute(rusqlite::params_from_iter(args))? as u64;
+                }
+            }
+            Ok(done)
+        })
+    }
+
+    /// Why a trade whose round trip a correction joined into `keeps`' is orphaned.
+    pub fn joined_reason(keeps: TradeId) -> String {
+        format!("its round trip joined trade {keeps}")
+    }
+
+    /// Why a trade whose anchor opens no round trip any more is orphaned.
+    pub const UNCLAIMED_REASON: &'static str = "the transaction it opened on no longer opens a round trip";
 
     /// Orphan a trade whose anchor opens no round trip any more and is a fill of
     /// none it can move to (the engine names it, `Identity::unclaimed`); its
@@ -133,7 +179,7 @@ impl Book {
             if !self.anchored_as(trade, seen)? {
                 return Ok(false);
             }
-            self.orphan(trade, "the transaction it opened on no longer opens a round trip")?;
+            self.orphan(trade, Self::UNCLAIMED_REASON)?;
             Ok(true)
         })
     }

@@ -14,7 +14,7 @@
   import { watchDoc } from '../live.svelte'
   import { signedPct, newsWhen, discDate } from './util'
   import { bareSymbol, symText } from '../sym'
-  import { sort, sortRows } from '../sort.svelte'
+  import { sort, sortRows, TIES } from '../sort.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import { discFeed, discBySym, showDiscFeed, showDisclosures, discTitleComing, type DiscRow } from './disc.svelte'
   import { titleComing } from '../trade/discStore.svelte'
@@ -159,7 +159,7 @@
       rows = bySym.length ? bySym : rows.filter((f) => { const h = text(f); return tokens.every((t) => h.indexOf(t) >= 0) })
     }
     const s = sort.ndisc
-    rows = sortRows(rows, s.key, s.dir, (f, k) => (k === 'when' ? f.date : k === 'news' ? String(f.subject || f.type || '').toLowerCase() : String(f.symbol || '').toLowerCase()))
+    rows = sortRows(rows, s.key, s.dir, (f, k) => (k === 'when' ? f.date : k === 'news' ? String(f.subject || f.type || '').toLowerCase() : String(f.symbol || '').toLowerCase()), TIES.news)
     return { state: 'rows' as const, rows, empty }
   })
 
@@ -317,7 +317,7 @@
     {#if sym}
       <span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">{symText(sym.symbol)}</span><button class="cx" aria-label="Show every listing" onclick={() => newsChip(null)}>×</button></span>
     {/if}
-    <div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
+    <div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;flex:0 1 200px;min-width:120px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
       <input bind:this={box} bind:value={query} placeholder={kind === 'disc' ? 'Search symbol or filing' : 'Search symbol or headline'} aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
     </div>
   </div>

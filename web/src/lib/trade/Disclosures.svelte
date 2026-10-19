@@ -7,7 +7,7 @@
   import type { Trade, Filing, FilingsDoc, SourceStatus } from '../model'
   import { relTime } from '../fmt'
   import { ICONS } from '../icons'
-  import { sort, toggleSort, sortRows } from '../sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from '../sort.svelte'
   import {
     DISC_ORDER,
     discStore,
@@ -93,7 +93,7 @@
     if (discSource) rows = rows.filter((f) => f.source === discSource)
     if (effCat !== 'all') rows = rows.filter((f) => f.category === effCat)
     const s = sort.disc
-    rows = sortRows(rows, s.key, s.dir, discSortValue)
+    rows = sortRows(rows, s.key, s.dir, discSortValue, TIES.disclosures)
 
     const cols: Col[] = [
       { key: 'date', label: 'Date', w: '88px' },
@@ -163,7 +163,7 @@
     </div>
   {:else if view.state === 'error'}
     <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{@render readBtn()}</span></div>
-    <div class="muted" style="font-size:12px;padding:6px 0 10px">{view.error}</div>
+    <div class="status-err" style="font-size:12px;padding:6px 0 10px">{view.error}</div>
   {:else if view.state === 'empty'}
     <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{#if view.right}<span>{view.right}</span>{/if}{#if sym}{@render readBtn()}{/if}</span></div>
     <div class="muted" style="font-size:12px;padding:8px 0 10px">{view.msg}</div>

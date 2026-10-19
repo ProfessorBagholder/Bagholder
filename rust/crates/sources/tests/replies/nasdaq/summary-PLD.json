@@ -1,0 +1,77 @@
+{
+  "data": {
+    "symbol": "PLD",
+    "summaryData": {
+      "Exchange": {
+        "label": "Exchange",
+        "value": "NYSE"
+      },
+      "Sector": {
+        "label": "Sector",
+        "value": "Real Estate"
+      },
+      "Industry": {
+        "label": "Industry",
+        "value": "Real Estate Investment Trusts"
+      },
+      "OneYrTarget": {
+        "label": "1 Year Target",
+        "value": "$156.00"
+      },
+      "TodayHighLow": {
+        "label": "Today's High/Low",
+        "value": "N/A"
+      },
+      "ShareVolume": {
+        "label": "Share Volume",
+        "value": "5,791,772"
+      },
+      "AverageVolume": {
+        "label": "Average Volume",
+        "value": "2,953,478"
+      },
+      "PreviousClose": {
+        "label": "Previous Close",
+        "value": "$126.94"
+      },
+      "FiftTwoWeekHighLow": {
+        "label": "52 Week High/Low",
+        "value": "$153.35/$120.2511"
+      },
+      "MarketCap": {
+        "label": "Market Cap",
+        "value": "119,220,557,000"
+      },
+      "SpecialDividendDate": {
+        "label": "Special Dividend Date",
+        "value": "N/A"
+      },
+      "SpecialDividendAmount": {
+        "label": "Special Dividend",
+        "value": "N/A"
+      },
+      "SpecialDividendPaymentDate": {
+        "label": "Special Dividend Pay Date",
+        "value": "N/A"
+      }
+    },
+    "assetClass": "STOCKS",
+    "additionalData": null,
+    "bidAsk": {
+      "Bid * Size": {
+        "label": "Bid * Size",
+        "value": "N/A"
+      },
+      "Ask * Size": {
+        "label": "Ask * Size",
+        "value": "N/A"
+      }
+    }
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

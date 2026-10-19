@@ -4,7 +4,7 @@
   import { money, money0, signedMoney, pctPlain, qty, px, color, waiting } from './fmt'
   import { absBelow, plot, sign, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
-  import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
   import { more } from './subs.svelte'
   import { atEnd } from './actions/atEnd'
 
@@ -61,7 +61,7 @@
     const v = r[k === 'annual' ? 'perMonth' : k]
     return v != null && typeof v === 'object' && 'leftOut' in v ? (v as Partial).total : v
   }
-  const holdings = $derived(sortRows(c.holdings || [], sort.yoc.key, sort.yoc.dir, (r, k) => sortValue(r as unknown as Record<string, unknown>, k)))
+  const holdings = $derived(sortRows(c.holdings || [], sort.yoc.key, sort.yoc.dir, (r, k) => sortValue(r as unknown as Record<string, unknown>, k), TIES.yoc))
   // sorted by the server as the header says, as far down as scrolled
   const rows = $derived(c.rows || [])
 

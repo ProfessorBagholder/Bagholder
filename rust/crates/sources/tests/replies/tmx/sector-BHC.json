@@ -1,0 +1,11 @@
+{
+  "data": {
+    "getQuoteBySymbol": {
+      "symbol": "BHC",
+      "name": "Bausch Health Companies Inc.",
+      "sector": "Healthcare",
+      "industry": "Pharmaceuticals",
+      "exchangeName": "Toronto Stock Exchange"
+    }
+  }
+}
