@@ -305,6 +305,13 @@ mod tests {
         book.set_setting("watch.folder", Some("/somewhere"), t).unwrap();
         // a browser subscribed to this copy's pushes
         book.keep_push_subscription("https://push.example/sub", "BAAA", "AAAA", t).unwrap();
+        // a debt the broker's net worth feature states, and the person's word on a payee
+        {
+            let conn = book.connections().unwrap()[0].id;
+            let debt = bagholder_book::debts::OutsideDebt { entity_id: "efe-1".into(), kind: "PersonalLoan".into(), name: "Loan".into(), institution: "Omicron Trust".into(), last4: None, balance: bagholder_core::Dec::parse("1000").unwrap(), currency: bagholder_core::Currency::CAD, as_of: None };
+            book.keep_outside_debts(conn, t, &[debt]).unwrap();
+            book.answer_repayment("debit:omicron trust", Some("efe-1"), t).unwrap();
+        }
         // a month's statement kept from the broker
         {
             let conn = book.connections().unwrap()[0].id;

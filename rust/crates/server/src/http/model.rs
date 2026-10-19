@@ -21,6 +21,7 @@ pub fn routes() -> Routed {
         get "/api/view" => view;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
+        post "/api/debts/answer" => debts_answer;
         post "/api/import/told" => import_told;
         post "/api/entries" => entries;
         post "/api/watch/clear" => watch_clear;
@@ -212,6 +213,54 @@ async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryReques
             Err(crate::figures::JournalRefused::Unknown(id)) => Err(ApiError::NotFound(format!("no trade {id}"))),
             Err(crate::figures::JournalRefused::Failed(e)) => Err(ApiError::Failed(e)),
         }
+    })
+    .await?
+    .map(Json)
+}
+
+/// The person's answer for a payee no rule matched to a debt held outside: the
+/// debt its payments repay, or none (not a debt).
+#[derive(Deserialize, Default, TS)]
+#[serde(deny_unknown_fields)]
+pub struct DebtAnswerRequest {
+    /// The payee, as the Cashflow document's `asked` names it.
+    payee: String,
+    /// The outside debt's id, or null: not a debt.
+    debt: Option<String>,
+}
+
+/// `POST /api/debts/answer`: kept in the book; every payment to the payee follows
+/// it, and the page hears the figures move on its stream.
+#[derive(Serialize, TS)]
+pub struct DebtAnswer {
+    #[ts(type = "true")]
+    ok: bool,
+}
+
+async fn debts_answer(State(state): State<AppState>, Body(a): Body<DebtAnswerRequest>) -> Api<DebtAnswer> {
+    let payee = a.payee.trim().to_string();
+    if payee.is_empty() {
+        return Err(ApiError::BadRequest("payee required".into()));
+    }
+    let debt = a.debt.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    let app = state.app;
+    blocking(move || -> Result<DebtAnswer, ApiError> {
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        let book = f.book().map_err(ApiError::Failed)?;
+        // an answer is for a payee asked about, naming a debt it may be
+        let asked = crate::engine_inputs::debts(&book).map_err(ApiError::Failed)?.asked;
+        let Some(q) = asked.iter().find(|q| q.key == payee) else {
+            return Err(ApiError::NotFound(format!("no payment waits for an answer about {payee}")));
+        };
+        if let Some(d) = &debt {
+            if !q.candidates.contains(d) {
+                return Err(ApiError::BadRequest(format!("{d} is not a debt these payments may repay")));
+            }
+        }
+        let now = bagholder_core::jiff::Timestamp::now();
+        book.answer_repayment(&payee, debt.as_deref(), now).map_err(|e| ApiError::Failed(e.to_string()))?;
+        f.record_changed(now).map_err(ApiError::Failed)?;
+        Ok(DebtAnswer { ok: true })
     })
     .await?
     .map(Json)

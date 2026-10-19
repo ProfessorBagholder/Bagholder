@@ -485,6 +485,21 @@ pub struct Cashflow {
     pub income: Vec<Slice>,
     pub income_total: Partial,
     pub rows: Vec<CashflowRow>,
+    /// The payees whose payments may repay a debt held outside and nothing says
+    /// which: the person is asked, once a payee.
+    pub asked: Vec<AskedPayee>,
+}
+
+/// A payee the person is asked about, with the debts it may repay.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = key)]
+#[serde(rename_all = "camelCase")]
+pub struct AskedPayee {
+    pub key: String,
+    pub payee: String,
+    /// How many of its payments wait on the answer.
+    pub count: usize,
+    pub candidates: Vec<OwedDebt>,
 }
 
 // --------------------------------------------------------------------------

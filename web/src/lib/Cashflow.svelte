@@ -7,6 +7,8 @@
   import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
   import { more } from './subs.svelte'
   import { atEnd } from './actions/atEnd'
+  import { call } from './api'
+  import { tell } from './ui.svelte'
 
   let { model }: { model: CashflowDoc } = $props()
 
@@ -81,6 +83,18 @@
       return { i, circle: false, d, color: x.color, C, R, W } as const
     })
   })
+
+  // payments no rule matched to a debt held outside: the person says which, once a payee
+  const asked = $derived(c.asked || [])
+  const askedCount = $derived(asked.reduce((n, q) => n + q.count, 0))
+  let chosen = $state<Record<string, string>>({})
+  async function answer(key: string) {
+    const pick = chosen[key]
+    if (pick == null) return
+    const r = await call('POST /api/debts/answer', { body: { payee: key, debt: pick === '' ? null : pick } })
+    // said in the header, with the server's reason; the question stays until answered
+    if (!r.ok) tell('Could not save which debt these payments repay: ' + r.error, 'err')
+  }
 
   // hover state (replaces the original's DOM id lookups)
   let cfH = $state<number | null>(null)
@@ -161,6 +175,23 @@
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink60);padding-left:68px;margin-top:6px">
       {#each axis as a (a)}<span>{a}</span>{/each}
     </div>
+    {#if asked.length}
+      <!-- payments that may repay a debt held outside, and nothing says which: asked once a payee -->
+      <div class="asked" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--hair);font-size:12px">
+        <div style="color:var(--ink60);margin-bottom:6px">{askedCount === 1 ? '1 payment' : askedCount + ' payments'} could not be matched to a debt. Which debt did each payee's payments repay?</div>
+        {#each asked as q (q.key)}
+          <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{q.payee} <span style="color:var(--ink60)">· {q.count === 1 ? '1 payment' : q.count + ' payments'}</span></span>
+            <select aria-label={'Debt repaid by payments to ' + q.payee} bind:value={chosen[q.key]}>
+              <option value={undefined} disabled selected>Choose…</option>
+              {#each q.candidates as d (d.id)}<option value={d.id}>{d.name}{d.institution ? ' · ' + d.institution : ''}</option>{/each}
+              <option value="">Not a debt</option>
+            </select>
+            <button class="btn" disabled={chosen[q.key] == null} onclick={() => answer(q.key)}>Save</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <div class="card elev-sm" style="padding:16px 18px">

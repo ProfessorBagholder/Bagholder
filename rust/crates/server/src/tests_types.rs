@@ -322,7 +322,7 @@ fn model_api_declarations() -> String {
     let decls: Vec<String> = decls![
         bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
         crate::http::model::TradeQuery, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
-        crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer,
+        crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::DebtAnswerRequest, crate::http::model::DebtAnswer,
         crate::http::stream::Resync, crate::http::model::TradesQuery, crate::http::model::ViewQuery, crate::http::model::ViewAnswer,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
         crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport, crate::csv_import::ImportAccepted, crate::http::model::ImportTold,
@@ -362,7 +362,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",
         "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
+        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "DebtAnswerRequest" | "DebtAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
@@ -431,7 +431,7 @@ fn figures_declarations() -> String {
     let decls: Vec<String> = decls![
         crate::wire::Fig<()>,
         Partial, Status, Trade, Position, Fill, Detail, Details, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
-        Slice, crate::wire::figures::OwedDebt, crate::wire::figures::Owed, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
+        Slice, crate::wire::figures::OwedDebt, crate::wire::figures::Owed, crate::wire::figures::AskedPayee, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
         BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc,
         crate::wire::markets::MarketTile, crate::wire::markets::WatchItem, crate::wire::markets::DirectoryEntry, crate::wire::markets::MarketsDoc,
         crate::wire::markets::HeatTile, crate::wire::markets::HeatBlock, crate::wire::markets::HeatCounts, crate::wire::markets::HeatmapDoc, crate::wire::markets::ExposureDoc,

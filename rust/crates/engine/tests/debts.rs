@@ -29,6 +29,7 @@ fn with_a_loan() -> (Built, bagholder_engine::Engine) {
     e.apply(Change::Debts(Debts {
         owed: vec![Debt { id: "loan-1".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: Money::new(d("9000"), Currency::CAD), as_of: Some("2026-04-01T00:00:00Z".parse().unwrap()) }],
         repayments: BTreeMap::from([(b.tx["w1"].clone(), "loan-1".to_string())]),
+            asked: vec![],
     }));
     (b, e)
 }
@@ -45,7 +46,7 @@ fn a_repayment_is_its_months_own_part_of_the_bar() {
 #[test]
 fn a_withdrawal_no_match_named_is_no_repayment() {
     let (_, mut e) = with_a_loan();
-    e.apply(Change::Debts(Debts { owed: vec![], repayments: BTreeMap::new() }));
+    e.apply(Change::Debts(Debts { owed: vec![], repayments: BTreeMap::new(), asked: vec![] }));
     assert!(e.scope(&Filters::default()).cashflow.months.iter().all(|m| m.repayments.total.clone().unwrap().amount.is_zero()));
 }
 

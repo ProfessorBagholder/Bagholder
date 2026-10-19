@@ -684,7 +684,23 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
             currency: r.amount.currency.as_str().into(),
         })
         .collect();
-    Cashflow { tiles, months, holdings, income, income_total, rows }
+    let debts = &inputs.facts.debts;
+    let asked = debts
+        .asked
+        .iter()
+        .map(|q| crate::wire::figures::AskedPayee {
+            key: q.key.clone(),
+            payee: q.payee.clone(),
+            count: q.payments,
+            candidates: q
+                .candidates
+                .iter()
+                .filter_map(|id| debts.owed.iter().find(|d| &d.id == id))
+                .map(|d| crate::wire::figures::OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(&bagholder_engine::fx::live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance)), as_of: d.as_of.map(|t| t.to_string()) })
+                .collect(),
+        })
+        .collect();
+    Cashflow { tiles, months, holdings, income, income_total, rows, asked }
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or

@@ -163,6 +163,7 @@ pub fn debts(book: &Book) -> Result<bagholder_engine::input::Debts, String> {
     let liabilities: Vec<Liability> = owed.iter().map(|d| Liability { id: d.entity_id.clone(), kind: d.kind.clone(), institution: d.institution.clone(), last4: d.last4.clone() }).collect();
     let answers = book.repayment_answers().map_err(err)?.into_iter().collect();
     let mut repayments = BTreeMap::new();
+    let mut asked: BTreeMap<String, bagholder_engine::input::Asked> = BTreeMap::new();
     for w in book.withdrawals_of("wealthsimple").map_err(err)? {
         // a payload the book holds is the reply as received: one that is not JSON names no payee
         let Ok(record) = bagholder_core::json::parse(&w.payload) else { continue };
@@ -170,15 +171,26 @@ pub fn debts(book: &Book) -> Result<bagholder_engine::input::Debts, String> {
         let bagholder_core::json::Value::Object(parts) = &record else { continue };
         let Some(row) = parts.get("activity") else { continue };
         let Some(payment) = payment_of(row) else { continue };
-        if let Matched::Debt { liability, .. } = match_payment(&payment, &liabilities, &answers) {
-            repayments.insert(w.transaction, liability);
+        match match_payment(&payment, &liabilities, &answers) {
+            Matched::Debt { liability, .. } => {
+                repayments.insert(w.transaction, liability);
+            }
+            Matched::Unsettled { candidates } => {
+                let payee = match &payment {
+                    bagholder_wealthsimple::repayments::Payment::BillPay { company, .. } => company.clone(),
+                    bagholder_wealthsimple::repayments::Payment::Debit { originator, .. } => originator.clone(),
+                };
+                let a = asked.entry(payment.payee_key()).or_insert_with(|| bagholder_engine::input::Asked { key: payment.payee_key(), payee, payments: 0, candidates });
+                a.payments += 1;
+            }
+            Matched::NotDebt | Matched::NotOne => {}
         }
     }
     let owed = owed
         .into_iter()
         .map(|d| bagholder_engine::input::Debt { id: d.entity_id, name: d.name, institution: d.institution, balance: bagholder_core::Money::new(d.balance, d.currency), as_of: d.as_of })
         .collect();
-    Ok(bagholder_engine::input::Debts { owed, repayments })
+    Ok(bagholder_engine::input::Debts { owed, repayments, asked: asked.into_values().collect() })
 }
 
 /// The source name a stand-in fact read from the old store carries.
@@ -304,7 +316,9 @@ mod tests {
         // a second debt at the card's payee: asked, until answered
         let later: bagholder_core::jiff::Timestamp = "2025-11-21T00:00:00Z".parse().unwrap();
         book.keep_outside_debts(conn, later, &[debt("loan", "PersonalLoan", "anon-personal-229"), debt("card", "CreditCard", "anon-personal-117"), debt("loc", "LineOfCredit", "anon-personal-117")]).unwrap();
-        assert_eq!(debts(&book).unwrap().repayments.len(), 1, "the bill payment waits for an answer");
+        let waiting = debts(&book).unwrap();
+        assert_eq!(waiting.repayments.len(), 1, "the bill payment waits for an answer");
+        assert_eq!(waiting.asked.iter().map(|a| (a.payee.as_str(), a.payments, a.candidates.clone())).collect::<Vec<_>>(), [("anon-personal-117", 1, vec!["card".to_string(), "loc".to_string()])], "asked once, with the debts it may be");
         let key = bagholder_wealthsimple::repayments::Payment::BillPay { company: "anon-personal-117".into(), account: Some("anon-personal-119".into()) }.payee_key();
         book.answer_repayment(&key, Some("loc"), later).unwrap();
         assert_eq!(debts(&book).unwrap().repayments.values().filter(|v| v.as_str() == "loc").count(), 1, "the answer settles it");

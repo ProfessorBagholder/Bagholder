@@ -184,6 +184,12 @@ export type Owed = { total: Fig<Dec>,
  */
 net: Fig<Dec> | null, debts: Array<OwedDebt>, };
 
+export type AskedPayee = { key: string, payee: string, 
+/**
+ * How many of its payments wait on the answer.
+ */
+count: number, candidates: Array<OwedDebt>, };
+
 export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, 
 /**
  * What is owed outside the accounts, under every account and only then:
@@ -268,7 +274,12 @@ export type Cashflow = { tiles: Array<CashflowTile>, months: Array<CashflowMonth
 /**
  * Projected income a month in CAD, by holding, as the pie draws it.
  */
-income: Array<Slice>, incomeTotal: Partial, rows: Array<CashflowRow>, };
+income: Array<Slice>, incomeTotal: Partial, rows: Array<CashflowRow>, 
+/**
+ * The payees whose payments may repay a debt held outside and nothing says
+ * which: the person is asked, once a payee.
+ */
+asked: Array<AskedPayee>, };
 
 export type Waiting = { 
 /**

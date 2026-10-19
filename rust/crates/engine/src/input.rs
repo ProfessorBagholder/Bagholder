@@ -654,6 +654,22 @@ pub struct Debt {
 pub struct Debts {
     pub owed: Vec<Debt>,
     pub repayments: BTreeMap<TransactionId, String>,
+    /// The payees whose payments may repay a debt and nothing says which: the
+    /// person is asked, once a payee.
+    pub asked: Vec<Asked>,
+}
+
+/// A payee the person is asked about: who was paid, how many payments, and the
+/// debts it may be.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Asked {
+    /// What the answer is kept under.
+    pub key: String,
+    /// The payee as the payments name it.
+    pub payee: String,
+    pub payments: usize,
+    /// The debts it may repay, by id.
+    pub candidates: Vec<String>,
 }
 
 /// The adjustment that explains each transaction, chosen from every one the
