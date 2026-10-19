@@ -1325,11 +1325,15 @@ pub fn filings_payload(app: &Arc<App>, key: &ListingKey, refresh: bool) -> Filin
 // as it is read and reaches its row as a change to that row.
 
 fn set_reading(app: &Arc<App>, key: &ListingKey, ids: Vec<String>) {
-    {
+    let changed = {
         let mut r = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner());
-        if ids.is_empty() { r.remove(&key.to_string()); } else { r.insert(key.to_string(), ids); }
+        let was = if ids.is_empty() { r.remove(&key.to_string()) } else { r.insert(key.to_string(), ids.clone()) };
+        was.unwrap_or_default() != ids
+    };
+    // the rows still to be read wear the shimmer; said again only when they change
+    if changed {
+        app.events.signal();
     }
-    app.events.signal(); // the rows still to be read wear the shimmer
 }
 
 /// What `filings_stored` sends a page showing a listing's disclosures.
@@ -1403,13 +1407,26 @@ fn read_while_shown(app: &Arc<App>, doc: &str, key: &ListingKey, read: &dyn Fn(R
             .collect();
         left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
         let Some(next) = left.first().map(|r| (r.doc.source, r.doc.id.clone())) else { break };
-        // offline, each read is refused at the door and nothing is read, so nothing is
-        // said to be reading: a page shown again draws no placeholders that come and go
-        if !bagholder_net::client::offline() {
-            set_reading(app, key, left.iter().map(|r| r.doc.id.clone()).collect());
-        }
+        // the documents are said to be reading only once this one's read has actually
+        // been sent: one refused before it left (offline, its host resting, nothing to
+        // read it with) asked no one, and a page draws no placeholders that come and go
+        // (#534)
+        let reading: Vec<String> = left.iter().map(|r| r.doc.id.clone()).collect();
+        let sent = std::rc::Rc::new(std::cell::Cell::new(false));
+        let (a, k, said) = (app.clone(), key.clone(), sent.clone());
         // waits for the local model itself when one is coming up
-        went(app, DISCLOSURES_READING, read(next.0, &next.1).map_err(|e| e.map(|e| format!("{}'s document {} could not be read: {e}", key.named(), next.1))));
+        let read = bagholder_net::client::while_leaving(
+            move || {
+                if !said.replace(true) {
+                    set_reading(&a, &k, reading.clone());
+                }
+            },
+            || read(next.0, &next.1),
+        );
+        if !sent.get() {
+            set_reading(app, key, vec![]);
+        }
+        went(app, DISCLOSURES_READING, read.map_err(|e| e.map(|e| format!("{}'s document {} could not be read: {e}", key.named(), next.1))));
         tried.insert(next);
         if app.wait(Duration::from_millis(150)) { // a person's pace at the source
             break;
@@ -2068,31 +2085,74 @@ mod tests {
         drop(feed);
     }
 
-    /// Offline, a document's read is refused at the door, so nothing is read and the
-    /// listing's disclosures never say a document is being read: a page shown again
-    /// draws no title placeholders that come and go (#531).
+    /// A document is said to be under way only once its read has actually been sent
+    /// (#534). Over generated passes, each document's read is refused before it
+    /// leaves by one of the ways a read is (offline at the door, its host resting,
+    /// nothing to read it with, any refusal of a kind of its own), or sent and then
+    /// failed: while a refused read runs, and after it, the listing's disclosures name
+    /// nothing as reading; once a read is sent, they name the documents still to read.
     #[test]
-    fn an_offline_pass_never_says_a_document_is_being_read() {
-        let (_home, app) = built_app();
-        assert!(bagholder_net::client::offline(), "the tests run offline");
-        let key = on("XYZ", "NYSE");
-        let mut r = Regs::new();
-        r.filers = vec![(key.clone(), Ok("0000000001".into()))];
-        let unread: Vec<_> = (1..=3).map(|n| { let mut d = item(Regulator::Sec, n, "0000000001"); d.title = String::new(); d }).collect();
-        r.documents = vec![(filer("0000000001", Regulator::Sec), Ok(unread))];
-        refresh_filings_in(&app, &crate::feeds::conn(&app).unwrap(), &key, &r).unwrap();
-        let feed = crate::events::Feed::open(app.clone());
-        let doc = "disclosures-shown";
-        assert!(app.events.watch(&app, feed.id(), [(doc.to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
-        let asked = std::cell::Cell::new(0);
-        read_while_shown(&app, doc, &key, &|_, _| {
-            asked.set(asked.get() + 1);
-            // what a page showing the listing is sent while this read runs
-            assert_eq!(filings_stored(&app, &key).unwrap().reading, Vec::<String>::new(), "a read refused offline is said to be under way");
-            Err(bagholder_net::Failure::Offline)
-        });
-        assert_eq!(asked.get(), 3, "each document without a title is asked once");
-        drop(feed);
+    fn a_document_is_said_to_be_reading_only_once_its_read_is_sent() {
+        #[derive(Clone, Copy, Debug)]
+        enum Read {
+            Offline,
+            Resting,
+            NoSummarizer,
+            Refused,
+            SentAndFailed,
+        }
+        const READS: [Read; 5] = [Read::Offline, Read::Resting, Read::NoSummarizer, Read::Refused, Read::SentAndFailed];
+        let mut seed = 0x9E37_79B9u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for case in 0..12 {
+            let (_home, app) = built_app();
+            let key = on("XYZ", "NYSE");
+            let n = 2 + (next() % 4) as i64;
+            let mut r = Regs::new();
+            r.filers = vec![(key.clone(), Ok("0000000001".into()))];
+            let unread: Vec<_> = (1..=n).map(|k| { let mut d = item(Regulator::Sec, k, "0000000001"); d.title = String::new(); d }).collect();
+            r.documents = vec![(filer("0000000001", Regulator::Sec), Ok(unread))];
+            refresh_filings_in(&app, &crate::feeds::conn(&app).unwrap(), &key, &r).unwrap();
+            let feed = crate::events::Feed::open(app.clone());
+            let doc = "disclosures-shown";
+            assert!(app.events.watch(&app, feed.id(), [(doc.to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
+            let reads: Vec<Read> = (0..n).map(|_| READS[(next() % READS.len() as u64) as usize]).collect();
+            let at = std::cell::Cell::new(0usize);
+            // whether the read before this one was sent: the pass is then under way, and
+            // what it names stands until a read is refused (cleared at once then, never
+            // cleared and named again between two reads sent, which would come and go)
+            let after_sent = std::cell::Cell::new(false);
+            let reading = || filings_stored(&app, &key).unwrap().reading;
+            read_while_shown(&app, doc, &key, &|_, _| {
+                let kind = reads[at.get()];
+                at.set(at.get() + 1);
+                if !after_sent.get() {
+                    assert!(reading().is_empty(), "case {case}, {kind:?}: said to be reading before any read was sent");
+                }
+                after_sent.set(matches!(kind, Read::SentAndFailed));
+                match kind {
+                    Read::Offline => Err(bagholder_net::Failure::Offline),
+                    Read::Resting => Err("sec.gov refused a request and is not asked again before 10:00".into()),
+                    Read::NoSummarizer => Err("no local model is up to read it with".into()),
+                    Read::Refused => Err(bagholder_net::Failure::Said("refused before it was sent".into())),
+                    Read::SentAndFailed => {
+                        // sent: it leaves through the door, to a host on this machine
+                        assert!(bagholder_net::client::leave("GET", "http://127.0.0.1:9/document").is_ok());
+                        let now = reading();
+                        assert!(!now.is_empty(), "case {case}: a read sent is said to be under way");
+                        Err("the SEC could not be reached".into())
+                    }
+                }
+            });
+            assert!(at.get() > 0, "case {case}: every document was asked");
+            assert!(reading().is_empty(), "case {case}: nothing is said to be reading once the pass ends");
+            drop(feed);
+        }
     }
 
     /// The same through the live readers, for a SEDAR+ document: the process is

@@ -649,6 +649,22 @@ pub fn leave(method: &str, url: &str) -> Result<(), Error> {
     leaving(method, &parse_url(url)?)
 }
 
+thread_local! {
+    /// What runs on this thread as a request actually leaves (`while_leaving`).
+    static ON_LEAVING: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `work`, with `sent` run each time one of its requests on this thread actually
+/// leaves through the door: never for one the door refuses (offline), nor for one
+/// refused before it reaches the door (a host resting, nothing to send it with).
+/// How "under way" is said only of what was asked of someone (#534).
+pub fn while_leaving<T>(sent: impl Fn() + 'static, work: impl FnOnce() -> T) -> T {
+    let was = ON_LEAVING.with(|h| h.borrow_mut().replace(Box::new(sent)));
+    let out = work();
+    ON_LEAVING.with(|h| *h.borrow_mut() = was);
+    out
+}
+
 fn leaving(method: &str, u: &Url) -> Result<(), Error> {
     if !is_loopback(&u.host) {
         OUTBOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -662,6 +678,11 @@ fn leaving(method: &str, u: &Url) -> Result<(), Error> {
     if refused {
         return Err(Error::Offline);
     }
+    ON_LEAVING.with(|h| {
+        if let Some(sent) = h.borrow().as_ref() {
+            sent();
+        }
+    });
     Ok(())
 }
 
