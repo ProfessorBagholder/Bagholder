@@ -245,7 +245,7 @@ static PLANT_WHOLE_READ: AtomicBool = AtomicBool::new(false);
 thread_local! {
     /// The matches of the target listing's family in the last probe's window, and
     /// whether each was continued.
-    static PROBED_PATHS: std::cell::RefCell<Vec<(bagholder_engine::families::Node, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static PROBED_PATHS: std::cell::RefCell<Vec<(bagholder_engine::families::Node, bagholder_engine::engine::Path)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A test's planted fold of the traded instrument's names from every sighting,
@@ -265,10 +265,6 @@ pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // trip; the request is answered once they are settled and the figures
     // recomputed, which a person waits on whole (its work is judged per trip)
     ("backdated-trade", Pair::Depth, Measure::Time, "#538"),
-    // a round trip of its own placed inside the history: the match walks the
-    // holding whole, since it keeps its state only at the end; waits on matching
-    // from a point inside the history (#537)
-    ("backdated-flat", Pair::Depth, Measure::Allocations, "#537"),
 ];
 
 /// What a measurement is judged by.
@@ -885,7 +881,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // another: a day it is flat, after a sale and before the next buy, in the
             // middle of that history; a buy and its sale on that day, in one file, open
             // and close a round trip of their own and change no other
-            let (rows, day, account): (u64, String, String) = {
+            let (instrument, rows, day, account): (String, u64, String, String) = {
                 let c = book.conn_for_tests();
                 let instrument: String = c
                     .query_row("SELECT instrument_id FROM instrument_names WHERE symbol = ?1 AND venue_mic IS NOT NULL LIMIT 1", [CODED.0], |r| r.get(0))
@@ -906,7 +902,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                     }
                 }
                 let day = flat.get(flat.len() / 2).cloned().ok_or("the listing named by code alone is never flat between two of its days")?;
-                (days.len() as u64, day, account)
+                (instrument, days.len() as u64, day, account)
             };
             if rows < min_rows / 2 {
                 return Err(format!("the listing named by code alone has {rows} rows, below the {} the book was built with", min_rows / 2));
@@ -915,9 +911,16 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             let account = bagholder_core::AccountId::parse(&account).map_err(err)?;
             let text = format!("{CODED_HEADER}{day},Buy,{s},{x},1,20.00,-20.00,CAD\n{day},Sell,{s},{x},1,21.00,21.00,CAD\n", s = CODED.0, x = CODED.1);
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
+            #[cfg(test)]
+            let window = paths_mark(f, bagholder_core::InstrumentId::parse(&instrument).map_err(err)?);
+            #[cfg(not(test))]
+            let _ = instrument; // what the test's record of the window keys on
             let m = mark();
             crate::csv_import::import_from(f, "flat.csv", &open, Some(account), Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
-            Ok(Measured { rows: Some(rows), ..since(&m, 1) })
+            let measured = since(&m, 1);
+            #[cfg(test)]
+            paths_taken(f, window);
+            Ok(Measured { rows: Some(rows), ..measured })
         }
         Op::BackdatedFileRow => {
             f.names()?;
@@ -1249,7 +1252,7 @@ mod tests {
 
     /// The families a probe of `op` matched, and whether each was continued: the
     /// probe run on a copy, its paths taken from this thread.
-    fn probe_paths(op: Op, pair: Pair, min_rows: u64, home: &Path) -> (Vec<(bagholder_engine::families::Node, bool)>, Measured) {
+    fn probe_paths(op: Op, pair: Pair, min_rows: u64, home: &Path) -> (Vec<(bagholder_engine::families::Node, bagholder_engine::engine::Path)>, Measured) {
         let c = tempfile::tempdir().unwrap();
         copy_folder(home, c.path()).unwrap();
         let m = probe(op, pair, min_rows, c.path()).unwrap();
@@ -1434,7 +1437,14 @@ mod tests {
                 // continuing it, on each book (brief 30, C4)
                 if matches!(op, Op::AddTrade | Op::Import) {
                     for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
-                        assert!(paths.len() == 1 && paths[0].1, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                        assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::Continued, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                    }
+                }
+                // a round trip of its own on a past flat day is placed into the
+                // holding's flat stretch, on each book (#537)
+                if op == Op::BackdatedFlat {
+                    for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
+                        assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::Placed, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
                     }
                 }
             }

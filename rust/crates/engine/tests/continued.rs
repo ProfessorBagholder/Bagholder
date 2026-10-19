@@ -393,7 +393,7 @@ fn a_continued_match_equals_a_whole_one_and_is_taken_where_the_guards_allow() {
             let moved = e.apply(change.unwrap_or(Change::Ledger(d)));
             let paths = bagholder_engine::engine::take_paths();
             let family = e.family_of(Node::Instrument(b.ids.instrument(step.on)));
-            let took: Vec<bool> = paths.iter().filter(|(f, _)| *f == family).map(|(_, c)| *c).collect();
+            let took: Vec<bool> = paths.iter().filter(|(f, _)| *f == family).map(|(_, c)| *c == bagholder_engine::engine::Path::Continued).collect();
             let label = format!("seed {seed}, step {n} ({:?}, {:?})", step.records, step.path);
             match step.path {
                 Path::Continued => {
@@ -460,7 +460,7 @@ fn a_coin_judged_while_its_rate_is_pending_is_judged_again_when_the_rate_arrives
     bagholder_engine::engine::take_paths();
     e.apply(Change::Ledger(d));
     let family = e.family_of(Node::Instrument(known.ids.instrument("KU")));
-    assert_eq!(bagholder_engine::engine::take_paths(), vec![(family, true)]);
+    assert_eq!(bagholder_engine::engine::take_paths(), vec![(family, bagholder_engine::engine::Path::Continued)]);
     let fresh = Engine::build(known.inputs.clone());
     assert!(e.differences(&fresh).is_empty() && e.match_disagrees(&fresh).is_none(), "the continued match as a fresh build");
 }
