@@ -54,7 +54,11 @@ Opening a PR starts its one CI run. Then send the Architect the head and run id.
 5. **Plan #535** (agents read the trade history, read-only MCP), approved by brief 54: build after the bug list. Its decisions are already in the PR.
 6. **Brief 48:** Node 26 for the page build, not before 2026-10-28.
 7. A CI speed proposal (macOS runs the whole Rust suite, 18 min): raise it with the owner only if they ask about speed again.
-8. Older backlog as before: #509, #508, #512, the #414–#486 audit batch, Dependabot #488–#502.
+8. **Debts held outside Wealthsimple** (the owner's ask, 2026-10-11; designed and settled in brief 23 on `architecture-briefs`, never queued until now):
+   - A: repayments to outside loans, mortgages and credit cards stacked in each month's Cashflow bar beside margin interest, by brief 23's repayment rule;
+   - B: the Net asset value tile's second line `$x owed · $y net`, from the linked and manual liabilities in Wealthsimple's net worth feature, plus the Wealthsimple credit card. No new tile.
+   Read every brief in `briefs/README.md` for asks recorded there; the queue above missed this one.
+9. Older backlog as before: #509, #508, #512, the #414–#486 audit batch, Dependabot #488–#502.
 
 ### The release line
 - **v2.6.0** is the latest release (2026-10-19): notifications through the browser (#555), agents reading the trade history (#535), and everything since 2.5.7. The real push was tested in Firefox only; Safari on `127.0.0.1` still needs a check on a Mac.
