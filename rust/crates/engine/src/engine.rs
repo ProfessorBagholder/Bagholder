@@ -1384,7 +1384,8 @@ impl Engine {
     fn family_from_cut(&mut self, family: Node, rows: &[TransactionId], cut: &crate::ledger::OrderKey) -> (crate::ledger::Continued, bool) {
         let mut state = self.kept.remove(&family).expect("a family walked from a cut keeps its state");
         let added: Vec<&bagholder_core::transaction::Transaction> = rows.iter().filter_map(|id| self.inputs.ledger.transactions.get(id)).collect();
-        let all = self.families.transactions(&self.inputs.ledger, family);
+        let day = state.cuts.get(cut).expect("a cut walked on from is kept").day;
+        let all = self.families.transactions_after(&self.inputs.ledger, family, day);
         let waiting = self.matched.waiting.len();
         let scope = self.instruments_of(family);
         let c = crate::ledger::match_from_cut(&self.inputs, &mut self.matched, &mut state, all, &added, cut, scope);

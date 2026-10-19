@@ -108,6 +108,19 @@ impl Families {
         out
     }
 
+    /// The family's transactions dated after `day`, in the ledger's order.
+    pub fn transactions_after<'a>(&self, ledger: &'a Ledger, family: Node, day: bagholder_core::jiff::civil::Date) -> Vec<&'a Transaction> {
+        let mut out: Vec<&Transaction> = Vec::new();
+        for n in self.members(family) {
+            match n {
+                Node::Instrument(i) => out.extend(ledger.transactions.of_instrument(i).filter(|t| t.trade_date > day)),
+                Node::Cash(a) => out.extend(ledger.transactions.cash_of(a).filter(|t| t.trade_date > day)),
+            }
+        }
+        out.sort_by(|a, b| ledger.transactions.place_of(&a.id).cmp(&ledger.transactions.place_of(&b.id)));
+        out
+    }
+
     fn name_legs(&mut self, tx: &TransactionId, a: &crate::input::Adjustment, on: bool) {
         for i in a.legs.iter().flat_map(|l| [l.from, l.to]).flatten() {
             if on {
