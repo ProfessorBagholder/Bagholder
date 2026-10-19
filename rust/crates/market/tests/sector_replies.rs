@@ -1,5 +1,6 @@
 //! Every sector name the sources send folds onto the set, or is a stated
-//! non-sector (cash, other), or names a fund a fund of funds holds (#524). The
+//! non-sector (cash, other), or names a fund a fund of funds holds (#524), or
+//! spans two sectors of the set, leaving the fund to be looked through (#542). The
 //! replies are recorded from each source the classification reads (TMX Money's
 //! quote, Nasdaq's summary, Yahoo Finance's fund profile) for listings across every
 //! sector, through the app's own readers, and kept in `sources/tests/replies`; a
@@ -118,11 +119,11 @@ fn every_sector_a_fund_source_sends_folds_or_names_a_fund() {
         let html = std::fs::read_to_string(&f).unwrap();
         for r in between(&html, "portfolioBreakdownData")["data"]["sector"].as_array().unwrap() {
             let name = r["name"].as_str().unwrap();
-            assert!(folds(name) || exposure::is_fund(name), "{}: Evolve's breakdown row {name:?} is neither a sector nor a fund", f.display());
+            assert!(folds(name) || exposure::is_fund(name) || bagholder_model::exposure::spans_sectors(name), "{}: Evolve's breakdown row {name:?} is neither a sector nor a fund", f.display());
         }
         for r in between(&html, "holdingsData")["data"].as_array().unwrap() {
             let name = r["gics_sector"].as_str().unwrap_or("");
-            assert!(folds(name) || exposure::is_fund(name), "{}: Evolve's holding's sector {name:?} is neither a sector nor a fund", f.display());
+            assert!(folds(name) || exposure::is_fund(name) || bagholder_model::exposure::spans_sectors(name), "{}: Evolve's holding's sector {name:?} is neither a sector nor a fund", f.display());
         }
     }
 }

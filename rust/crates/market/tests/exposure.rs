@@ -62,7 +62,12 @@ fn test_sector_names_fold_onto_one_set() {
     assert_eq!(exposure::norm_sector("Technology"), "Information Technology");
     assert_eq!(exposure::norm_sector("Financial"), "Financials");
     assert_eq!(exposure::norm_sector("Communication"), "Communication Services");
-    assert_eq!(exposure::norm_sector("Consumer, Non-cyclical"), "Consumer Staples");
+    // Bloomberg's "Consumer, Non-cyclical" spans Health Care and Consumer Staples:
+    // it places nothing by itself (#542); Refinitiv's "Consumer Non-Cyclicals" is staples
+    assert_eq!(exposure::norm_sector("Consumer, Non-cyclical"), "");
+    assert!(bagholder_model::exposure::spans_sectors("Consumer, Non-cyclical"));
+    assert!(!bagholder_model::exposure::stated_non_sector("Consumer, Non-cyclical"), "it is a sector, only not one of the set");
+    assert_eq!(exposure::norm_sector("Consumer Non-Cyclicals"), "Consumer Staples");
     assert_eq!(exposure::norm_sector("Basic Materials"), "Materials");
     assert_eq!(exposure::norm_sector("Bitcoin Holding"), "Digital assets");
     assert_eq!(exposure::norm_sector("Cash and/or Derivatives"), "", "cash is no sector");
@@ -206,6 +211,60 @@ fn test_holdings_are_spread_by_weight_and_the_rest_is_unclassified() {
     close(weight_of(&agg.sectors, "Information Technology"), 0.2);
     close(weight_of(&agg.countries, "Canada"), 0.8);
     close(agg.coverage, 0.8);
+}
+
+/// Evolve's healthcare fund, as its page answers (#542): it states Bloomberg's
+/// "Consumer, Non-cyclical" for itself and for every holding, a name spanning
+/// Health Care and Consumer Staples. It is placed by its holdings, each by its
+/// own listing's classification, never by that name: here every holding is
+/// classified Health Care but one, which the test classifies Consumer Staples,
+/// and only that one's weight is Consumer Staples.
+#[test]
+fn test_a_fund_stating_a_sector_spanning_two_is_placed_by_its_holdings() {
+    let conn = db();
+    let html = std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sources/tests/replies/evolve/breakdown-life.html")).unwrap();
+    let (sectors, holdings) = exposure::parse_evolve_page(&html).unwrap();
+    assert!(sectors.iter().any(|(n, _)| bagholder_model::exposure::spans_sectors(n)), "the page states the spanning name: {sectors:?}");
+    assert!(holdings.iter().all(|h| h.sector.is_empty()), "no holding is placed by the spanning name");
+    let classified = Rc::new(RefCell::new(Vec::new()));
+    let asked = classified.clone();
+    hooks::CLASSIFY.with(|h| *h.borrow_mut() = Some(Box::new(move |sym, _, _| {
+        asked.borrow_mut().push(sym.to_string());
+        let sector = if sym == "ABT" { "Consumer Staples" } else { "Health Care" };
+        ShareClass { sector: sector.into(), industry: String::new(), country: "United States".into(), source: "test".into() }
+    })));
+    let page = (sectors.clone(), holdings.clone());
+    hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(move |_, _, _, _| Some(Breakdown { sectors: page.0.clone(), countries: Weights::default(), holdings: page.1.clone(), source: "Evolve ETFs".into(), as_of: String::new() }))));
+    let rec = exposure::fund_exposure(&ctx(&conn), "LIFE", "Evolve Global Healthcare Enhanced Yield Fund", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
+    let rows: Vec<&Holding> = holdings.iter().filter(|h| h.weight > 0.0).collect();
+    let total: f64 = rows.iter().map(|h| h.weight).sum();
+    let abt: f64 = rows.iter().filter(|h| h.ticker == "ABT").map(|h| h.weight).sum::<f64>() / total;
+    assert!(abt > 0.0, "the page holds ABT");
+    close(weight_of(&rec.sectors, "Consumer Staples"), abt);
+    close(weight_of(&rec.sectors, "Health Care"), 1.0 - abt);
+    assert!(classified.borrow().iter().any(|s| s == "LLY"), "each holding is classified by its own listing");
+}
+
+/// A breakdown naming a spanning sector beside sectors of the set is no split of
+/// the fund at all: it is looked through whole, never taken as the sectors it
+/// names that fold (#542).
+#[test]
+fn test_a_breakdown_naming_a_spanning_sector_beside_others_is_looked_through_whole() {
+    let conn = db();
+    set_classify(classified());
+    let mut stated = Weights::default();
+    stated.add("Consumer, Non-cyclical", 60.0);
+    stated.add("Technology", 40.0);
+    hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(move |_, _, _, _| Some(Breakdown {
+        sectors: stated.clone(),
+        countries: Weights::default(),
+        holdings: vec![holding("RY", "", 50.0, "", "", "TSX", "CAD", false), holding("SHOP", "", 50.0, "", "", "TSX", "CAD", false)],
+        source: "t".into(),
+        as_of: String::new(),
+    }))));
+    let rec = exposure::fund_exposure(&ctx(&conn), "MIXD", "Test Mixed ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
+    close(weight_of(&rec.sectors, "Financials"), 0.5);
+    close(weight_of(&rec.sectors, "Information Technology"), 0.5);
 }
 
 #[test]

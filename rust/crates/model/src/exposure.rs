@@ -46,8 +46,6 @@ const SECTOR_ALIAS: &[(&str, &str)] = &[
     ("consumer cyclical", "Consumer Discretionary"),
     ("consumer staples", "Consumer Staples"),
     ("consumer non-cyclicals", "Consumer Staples"),
-    ("consumer, non-cyclical", "Consumer Staples"),
-    ("consumer non-cyclical", "Consumer Staples"),
     ("consumer defensive", "Consumer Staples"),
     ("industrials", "Industrials"),
     ("industrial", "Industrials"),
@@ -78,8 +76,22 @@ const SECTOR_ALIAS: &[(&str, &str)] = &[
     ("n/a", ""),
 ];
 
+/// Names a source states that span two sectors of the set, so they place
+/// nothing by themselves: Bloomberg's "Consumer, Non-cyclical" holds health care
+/// beside staples (Evolve's healthcare fund states it for itself and for every
+/// holding: Eli Lilly, Pfizer, Johnson & Johnson, Intuitive Surgical, Thermo
+/// Fisher; `sources/tests/replies/evolve/breakdown-life.html`). A fund that
+/// states one is placed by its holdings, and a holding by its own listing (#542).
+const SPANNING: &[&str] = &["consumer, non-cyclical", "consumer non-cyclical"];
+
+/// Whether a name spans two sectors of the set (`SPANNING`).
+pub fn spans_sectors(name: &str) -> bool {
+    let key = name.trim().to_lowercase();
+    SPANNING.contains(&key.as_str())
+}
+
 /// `exposure.norm_sector`: the sector under the name the Portfolio uses, empty
-/// for none (cash, other, blank).
+/// for none (cash, other, blank) and for a name spanning two (`spans_sectors`).
 pub fn norm_sector(name: &str) -> String {
     let key = name.trim().to_lowercase();
     if key.is_empty() {
