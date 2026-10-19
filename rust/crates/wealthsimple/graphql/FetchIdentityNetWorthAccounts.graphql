@@ -1,0 +1,27 @@
+# A selection of the fields Wealthsimple's own FetchIdentityNetWorthAccounts asks (web app release 0.3.688170, brief 23 on architecture-briefs): the person's accounts outside Wealthsimple that its net worth feature states.
+query FetchIdentityNetWorthAccounts($identityId: ID!) {
+  identity(id: $identityId) {
+    id
+    netWorth {
+      externalFinancialEntities {
+        ... on ExternalFinancialEntity {
+          __typename
+          id: canonicalId
+          identityId
+          ownershipType
+          visibility {
+            household
+          }
+          displayName: name
+          institutionName
+          accountNumberLast4
+          balance: currentBalance {
+            amount
+            currency
+          }
+          balanceAsOf: currentBalanceAsOf
+        }
+      }
+    }
+  }
+}

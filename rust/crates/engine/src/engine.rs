@@ -32,6 +32,8 @@ pub enum Change {
     Rates(Rates),
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),
+    /// The debts held outside the broker, and the withdrawals that repaid them.
+    Debts(crate::input::Debts),
     Quote(InstrumentId, Option<Quote>),
     /// The ex-dividend date a listing's quote states.
     ExDividend(InstrumentId, Option<Date>),
@@ -958,6 +960,12 @@ impl Engine {
                 };
                 // that payer's rate, from its own payments
                 self.payer_again(i, &mut moved);
+            }
+            Change::Debts(d) => {
+                let before = self.snapshot(Parts::ALL);
+                self.inputs.facts.debts = d;
+                self.cash = build_cashflow(&self.inputs, &self.matched);
+                self.compare(&before, &mut moved);
             }
             Change::ExDividend(i, d) => {
                 match d {

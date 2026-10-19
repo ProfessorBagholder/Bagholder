@@ -7,6 +7,8 @@
   import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
   import { more } from './subs.svelte'
   import { atEnd } from './actions/atEnd'
+  import { call } from './api'
+  import { tell } from './ui.svelte'
 
   let { model }: { model: CashflowDoc } = $props()
 
@@ -47,7 +49,7 @@
 
   const c = $derived(model.cashflow)
   const ms = $derived(c.months || [])
-  const peak = $derived(Math.max(...ms.map((x) => at(x.value) + at(x.interest)), 0))
+  const peak = $derived(Math.max(...ms.map((x) => at(x.value) + at(x.interest) + at(x.repayments)), 0))
   const head = $derived(Math.max(100, Math.ceil(peak / 100) * 100))
   const axis = $derived.by(() => {
     const want = Math.min(6, ms.length)
@@ -82,16 +84,33 @@
     })
   })
 
+  // payments no rule matched to a debt held outside: the person says which, once a payee
+  const asked = $derived(c.asked || [])
+  const askedCount = $derived(asked.reduce((n, q) => n + q.count, 0))
+  let chosen = $state<Record<string, string>>({})
+  async function answer(key: string) {
+    const pick = chosen[key]
+    if (pick == null) return
+    const r = await call('POST /api/debts/answer', { body: { payee: key, debt: pick === '' ? null : pick } })
+    // said in the header, with the server's reason; the question stays until answered
+    if (!r.ok) tell('Could not save which debt these payments repay: ' + r.error, 'err')
+  }
+
   // hover state (replaces the original's DOM id lookups)
   let cfH = $state<number | null>(null)
   let pieH = $state<number>(-1)
 
-  // one bar a month: its margin interest at the bottom and its distributions on
-  // top of it, each its own height, so neither ever covers the other
-  function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; count: number }) {
+  // the repayments' colour: the negative side's, lighter, so it reads as money out
+  // and apart from the margin interest beside it
+  const REPAID = 'rgba(var(--neg-rgb),.5)'
+  // one bar a month: its repayments of outside debts at the bottom, its margin
+  // interest on them and its distributions on top, each its own height, so none
+  // ever covers another
+  function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; repayments: Fig<Dec>; count: number }) {
+    const hr = (at(b.repayments) / head) * 94
     const hi = (at(b.interest) / head) * 94
     const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
-    const parts = [...(hi > 0 ? [{ h: hi, at: 0, color: 'var(--neg)' }] : []), ...(hd > 0 ? [{ h: hd, at: hi, color: 'var(--accent-bar)' }] : [])]
+    const parts = [...(hr > 0 ? [{ h: hr, at: 0, color: REPAID }] : []), ...(hi > 0 ? [{ h: hi, at: hr, color: 'var(--neg)' }] : []), ...(hd > 0 ? [{ h: hd, at: hr + hi, color: 'var(--accent-bar)' }] : [])]
     return parts.map((p, k) => ({ ...p, radius: k === parts.length - 1 ? '2px 2px 0 0' : '0' }))
   }
 </script>
@@ -112,7 +131,7 @@
 
   <div class="card elev-sm" style="padding:16px 18px 12px">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px"><h5>Cashflow</h5>
-      <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:var(--ink60)"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--accent-bar)"></span>Distributions</span><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--neg)"></span>Margin interest</span></div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:var(--ink60)"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--accent-bar)"></span>Distributions</span><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--neg)"></span>Margin interest</span>{#if ms.some((m) => at(m.repayments) > 0)}<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:{REPAID}"></span>Repayments</span>{/if}</div>
     </div>
     <div style="display:flex;gap:10px;flex:1;min-height:232px;margin-top:14px">
       <div style="position:relative;width:58px;flex:none;font-size:10px;color:var(--ink60)" class="tab">
@@ -126,12 +145,14 @@
           {@const n = ms.length}
           {@const x = ((cfH + 0.5) / n * 100).toFixed(2) + '%'}
           {@const intr = b.interest}
+          {@const repaid = b.repayments}
           {@const net = b.net}
           <div class="xline" style="left:{x}"></div>
           <div class="tip" style="left:{x};transform:translateX({cfH > n * 0.7 ? '-100%' : '-8px'})">
             <div class="tl" style="margin-bottom:2px">{monthLong(b.key)}</div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--accent-300)"><span style="font-weight:400;color:var(--ink60)">Distributions</span><span>{money0(b.value)}</span></div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Margin interest</span><span>{waits(intr) ? waiting(intr) : sign(intr) === 0 ? money0(intr) : '−' + money0(intr)}</span></div>
+            {#if waits(repaid) || sign(repaid) !== 0 || ms.some((m) => at(m.repayments) > 0)}<div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Repayments</span><span>{waits(repaid) ? waiting(repaid) : sign(repaid) === 0 ? money0(repaid) : '−' + money0(repaid)}</span></div>{/if}
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:{color(net)}"><span style="font-weight:400;color:var(--ink60)">Net cashflow</span><span>{signedMoney(net, '', 0)}</span></div>
           </div>
         {/if}
@@ -154,6 +175,23 @@
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink60);padding-left:68px;margin-top:6px">
       {#each axis as a (a)}<span>{a}</span>{/each}
     </div>
+    {#if asked.length}
+      <!-- payments that may repay a debt held outside, and nothing says which: asked once a payee -->
+      <div class="asked" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--hair);font-size:12px">
+        <div style="color:var(--ink60);margin-bottom:6px">{askedCount === 1 ? '1 payment' : askedCount + ' payments'} could not be matched to a debt. Which debt did each payee's payments repay?</div>
+        {#each asked as q (q.key)}
+          <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{q.payee} <span style="color:var(--ink60)">· {q.count === 1 ? '1 payment' : q.count + ' payments'}</span></span>
+            <select aria-label={'Debt repaid by payments to ' + q.payee} bind:value={chosen[q.key]}>
+              <option value={undefined} disabled selected>Choose…</option>
+              {#each q.candidates as d (d.id)}<option value={d.id}>{d.name}{d.institution ? ' · ' + d.institution : ''}</option>{/each}
+              <option value="">Not a debt</option>
+            </select>
+            <button class="btn" disabled={chosen[q.key] == null} onclick={() => answer(q.key)}>Save</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <div class="card elev-sm" style="padding:16px 18px">

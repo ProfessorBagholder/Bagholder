@@ -104,6 +104,13 @@ fn test_every_answer_is_private_and_every_failure_has_one_shape() {
         let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(r#"{"id":"no-such","thesis":"","grade":"","tags":[]}"#))).await;
         assert_eq!((code, body), (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no trade no-such"})));
 
+        // an answer about a payee is for a payee asked about, naming a debt it may be
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/debts/answer", Some(r#"{"payee":" ","debt":null}"#))).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "payee required"})));
+        assert_eq!(
+            json_of(from_the_page(Method::POST, "/api/debts/answer", Some(r#"{"payee":"debit:no one","debt":null}"#))).await,
+            (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no payment waits for an answer about debit:no one"}))
+        );
+
         let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some("{not json"))).await;
         assert_eq!(code, StatusCode::BAD_REQUEST);
         assert_eq!(body["ok"], json!(false));

@@ -19,6 +19,7 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'queue': 'id',
   },
   'positions': {
+    'portfolio.owed.debts': 'id',
     'portfolio.allocation': 'label',
     'positions': 'id',
   },
@@ -31,6 +32,8 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'cashflow.holdings': 'id',
     'cashflow.income': 'label',
     'cashflow.rows': 'id',
+    'cashflow.asked': 'key',
+    'cashflow.asked.*.candidates': 'id',
   },
   'trade': {
   },

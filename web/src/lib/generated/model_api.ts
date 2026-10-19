@@ -39,6 +39,18 @@ grade: string, tags: Array<string>, };
 
 export type JournalAnswer = { ok: true, };
 
+export type DebtAnswerRequest = { 
+/**
+ * The payee, as the Cashflow document's `asked` names it.
+ */
+payee: string, 
+/**
+ * The outside debt's id, or null: not a debt.
+ */
+debt: string | null, };
+
+export type DebtAnswer = { ok: true, };
+
 export type Resync = { 
 /**
  * the stream this page holds, from its `hello`

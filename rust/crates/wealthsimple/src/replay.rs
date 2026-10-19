@@ -26,6 +26,8 @@ pub struct Replay {
     transfers: BTreeMap<String, Value>,
     cards: BTreeMap<String, Value>,
     buying_power: BTreeMap<String, Value>,
+    /// The net worth feature's `identity` node, where the capture holds one.
+    net_worth: Option<Value>,
     positions: BTreeMap<(String, String), Value>,
     /// The balances replies' accounts, each as Wealthsimple sent it.
     balances: Vec<Value>,
@@ -53,6 +55,7 @@ impl Replay {
             transfers: BTreeMap::new(),
             cards: BTreeMap::new(),
             buying_power: BTreeMap::new(),
+            net_worth: None,
             positions: BTreeMap::new(),
             balances: vec![],
             history: BTreeMap::new(),
@@ -141,6 +144,8 @@ impl Replay {
                         }
                     }
                 }
+            } else if let Some(i) = data.obj("identity").ok().filter(|i| i.obj("netWorth").is_ok()) {
+                r.net_worth = Some(i.value().clone());
             } else if let Ok(i) = data.obj("identity") {
                 for e in i.obj("accounts").and_then(|a| a.list("edges")).map_err(bad)? {
                     // the accounts list's nodes (a reply asking only for ids is not one)
@@ -218,6 +223,11 @@ impl Source for Replay {
     fn balances(&mut self, _accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
         Ok(self.balances.clone())
+    }
+    fn net_worth(&mut self) -> Answer<Option<Value>> {
+        // a capture taken before the net worth feature was read holds none: not read, not none owed
+        self.asked.push("net worth".into());
+        Ok(self.net_worth.clone())
     }
     fn buying_power(&mut self, account: &str) -> Answer<Value> {
         self.asked.push(format!("buying power {account}"));

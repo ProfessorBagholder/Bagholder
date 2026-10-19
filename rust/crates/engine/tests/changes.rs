@@ -29,6 +29,7 @@ fn kind(c: &Change) -> &'static str {
         Change::Rates(_) => "rates",
         Change::Declared(..) => "declared",
         Change::Frequency(..) => "frequency",
+        Change::Debts(_) => "debts",
         Change::Quote(..) => "quote",
         Change::ExDividend(..) => "ex-dividend",
         Change::Closes(..) => "closes",
@@ -38,7 +39,7 @@ fn kind(c: &Change) -> &'static str {
     }
 }
 
-const KINDS: [&str; 14] = ["ledger", "trades", "groups", "journal", "adjustments", "rates", "declared", "frequency", "quote", "ex-dividend", "closes", "benchmark", "broker", "clock"];
+const KINDS: [&str; 15] = ["ledger", "trades", "groups", "journal", "adjustments", "rates", "declared", "frequency", "debts", "quote", "ex-dividend", "closes", "benchmark", "broker", "clock"];
 
 /// The inputs as they are after a change: written here, apart from the engine,
 /// so the test does not grade the engine by its own reading of a change.
@@ -104,6 +105,7 @@ fn changed(inputs: &Inputs, c: &Change) -> Inputs {
                 None => i.facts.frequencies.remove(&k),
             };
         }
+        Change::Debts(d) => i.facts.debts = d,
         Change::Quote(k, q) => {
             match q {
                 Some(q) => i.market.quotes.insert(k, q),
@@ -192,6 +194,12 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
         Change::Rates(rates),
         Change::Declared(f, Some(declared)),
         Change::Frequency(f, Some(Sourced { value: 4, source: SourceName::named("tmx") })),
+        // an outside loan, and the withdrawal that repaid it
+        Change::Debts(bagholder_engine::input::Debts {
+            owed: vec![bagholder_engine::input::Debt { id: "loan-1".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: Money::new(d("9000"), Currency::CAD), as_of: None }],
+            repayments: BTreeMap::from([(b.tx["w1"].clone(), "loan-1".to_string())]),
+            asked: vec![],
+        }),
         Change::Quote(x, Some(quote)),
         // U has paid and has no declared record: its quote's ex-date is its Ex-Div
         Change::ExDividend(u, Some(day("2026-05-15"))),

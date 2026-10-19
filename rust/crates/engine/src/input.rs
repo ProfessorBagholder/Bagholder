@@ -632,6 +632,45 @@ pub struct Facts {
     pub frequencies: BTreeMap<InstrumentId, Sourced<u32>>,
     /// By the transaction each explains.
     pub adjustments: Adjustments,
+    /// The debts held outside the broker, and the withdrawals that repaid them
+    /// (`docs/plans/debts-held-outside-wealthsimple.md`).
+    pub debts: Debts,
+}
+
+/// A debt held outside the broker, as the broker's net worth feature states it:
+/// its balance in its currency (owed positive, in credit negative), as of when it
+/// was last stated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Debt {
+    pub id: String,
+    pub name: String,
+    pub institution: String,
+    pub balance: Money,
+    pub as_of: Option<Timestamp>,
+}
+
+/// The debts held outside the broker, and which withdrawals repaid one: each
+/// such withdrawal by the debt it repaid, as the matching settled it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Debts {
+    pub owed: Vec<Debt>,
+    pub repayments: BTreeMap<TransactionId, String>,
+    /// The payees whose payments may repay a debt and nothing says which: the
+    /// person is asked, once a payee.
+    pub asked: Vec<Asked>,
+}
+
+/// A payee the person is asked about: who was paid, how many payments, and the
+/// debts it may be.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Asked {
+    /// What the answer is kept under.
+    pub key: String,
+    /// The payee as the payments name it.
+    pub payee: String,
+    pub payments: usize,
+    /// The debts it may repay, by id.
+    pub candidates: Vec<String>,
 }
 
 /// The adjustment that explains each transaction, chosen from every one the

@@ -566,6 +566,14 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         unrealized_pct: pf.unrealized_pct.clone().into_wire(),
         nav: pf.net_value.as_ref().map(fig_money),
         nav_accounts: pf.net_value_accounts,
+        owed: pf.owed.as_ref().map(|(total, each)| crate::wire::figures::Owed {
+            total: fig_money(total),
+            net: pf.net_value.as_ref().map(|v| match (v, total) {
+                (Ok(v), Ok(t)) => v.amount.checked_sub(t.amount).map(|n| Fig::Stated(Dec(n))).unwrap_or(Fig::Waits { gaps: vec!["arithmetic".into()] }),
+                (Err(g), _) | (_, Err(g)) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
+            }),
+            debts: each.iter().map(|(d, cad)| crate::wire::figures::OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) }).collect(),
+        }),
         has_margin: pf.has_margin,
         margin_used: pf.margin_used.as_ref().map(fig_money),
         margin_used_pct: pf.margin_used_pct.clone().into_wire(),
@@ -600,11 +608,11 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
         .months
         .iter()
         .map(|m| {
-            let net = match (&m.distributions.total, &m.interest.total) {
-                (Ok(d), Ok(i)) => d.amount.checked_sub(i.amount).map(|n| Fig::Stated(Dec(n))).unwrap_or(Fig::Waits { gaps: vec!["arithmetic".into()] }),
-                (Err(g), _) | (_, Err(g)) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
+            let net = match (&m.distributions.total, &m.interest.total, &m.repayments.total) {
+                (Ok(d), Ok(i), Ok(r)) => d.amount.checked_sub(i.amount).and_then(|n| n.checked_sub(r.amount)).map(|n| Fig::Stated(Dec(n))).unwrap_or(Fig::Waits { gaps: vec!["arithmetic".into()] }),
+                (Err(g), _, _) | (_, Err(g), _) | (_, _, Err(g)) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
             };
-            CashflowMonth { key: month_key(m.year, m.month), label: month_label(m.year, m.month), value: fig_money(&m.distributions.total), count: m.count, interest: fig_money(&m.interest.total), net }
+            CashflowMonth { key: month_key(m.year, m.month), label: month_label(m.year, m.month), value: fig_money(&m.distributions.total), count: m.count, interest: fig_money(&m.interest.total), repayments: fig_money(&m.repayments.total), net }
         })
         .collect();
     let twelve = bagholder_core::Dec::from_int(12);
@@ -676,7 +684,23 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
             currency: r.amount.currency.as_str().into(),
         })
         .collect();
-    Cashflow { tiles, months, holdings, income, income_total, rows }
+    let debts = &inputs.facts.debts;
+    let asked = debts
+        .asked
+        .iter()
+        .map(|q| crate::wire::figures::AskedPayee {
+            key: q.key.clone(),
+            payee: q.payee.clone(),
+            count: q.payments,
+            candidates: q
+                .candidates
+                .iter()
+                .filter_map(|id| debts.owed.iter().find(|d| &d.id == id))
+                .map(|d| crate::wire::figures::OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(&bagholder_engine::fx::live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance)), as_of: d.as_of.map(|t| t.to_string()) })
+                .collect(),
+        })
+        .collect();
+    Cashflow { tiles, months, holdings, income, income_total, rows, asked }
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or

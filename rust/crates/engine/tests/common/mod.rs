@@ -275,7 +275,7 @@ pub fn build(case: &Value) -> Built {
         let source = SourceName::parse(s(&a, "source").unwrap_or("issuer")).unwrap();
         adjustments.push(Adjustment { applies_to, legs, source });
     }
-    let facts = Facts { rates, declared, frequencies, adjustments: Adjustments::choose(adjustments) };
+    let facts = Facts { rates, declared, frequencies, adjustments: Adjustments::choose(adjustments), debts: Default::default() };
 
     let mut market = Market::default();
     for (i, q) in obj(case, "quotes") {
