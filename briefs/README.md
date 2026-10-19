@@ -76,3 +76,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 63 | [#538 closing: #549 and #550 merged, #551 cleared with the Time entry off](63-538-closing.md) | Current |
 | 64 | [The Mac notifier never shows in the Dock; no copy of the app outlives the work that started it](64-notifier-and-leftover-servers.md) | Changes 1–2 superseded by 65 (wrong premise: a web app needs no helper); change 3 stands |
 | 65 | [Notifications are the browser's (Notifications API, Service Worker, Web Push); native channels removed](65-notifications-are-the-browsers.md) | Current |
+| 66 | [Verdict on plan #555, notifications through the browser: Go with two changes](66-notifications-plan-verdict.md) | Current |
