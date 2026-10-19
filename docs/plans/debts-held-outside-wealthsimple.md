@@ -52,10 +52,14 @@ The first rule that applies decides:
 1. **The person's answer** for this payee, if one is kept.
 2. **A bill payment:** its account's last four digits equal exactly one liability's `accountNumberLast4`.
 3. **A bill payment to a card issuer** (`isCreditCard`): the one credit-card liability at that issuer.
-4. **A pre-authorized debit:** the originator's name, normalised, names the institution of exactly one liability. Normalised means case, punctuation and the legal suffixes ("Bank of Canada", "Inc", "Ltd") folded. The normaliser is tested on generated variants.
+4. **A pre-authorized debit** whose stated purpose is a loan or mortgage, or names no purpose (brief 67, 3):
+   - its originator's whole name equals the institution of exactly one liability;
+   - names are compared once folded: case, accents, punctuation and legal-form words (Inc, Ltd, Ltée, Corp, LLC and the like). "Bank of Canada" is part of a name, so it isn't folded (brief 67, 2);
+   - a name inside another never matches.
+   The purposes are Wealthsimple's 130 `aftTransactionCategory` values (Standard 007), held as three sets: debt, no purpose, and every other purpose. A debit stating another purpose (insurance, a utility, a tax) is never a repayment by name.
 5. **Otherwise it is unsettled.** That covers several candidates, a name no institution matches, or a loan or mortgage debit (Standard 007 codes 350–356 and 370–373) with no outside account entered.
    - An unsettled payment to an issuer of debt, or carrying a loan or mortgage code, is said in the Cashflow header once: "N payments could not be matched to a debt", with a button that asks the person which liability it paid, or "not a debt".
-   - The answer is kept per payee: the originator's name, or the payee's id. Later payments follow it.
+   - The answer is kept per payee: the originator's folded name, or the bill payee's company and last four digits. Later payments follow it.
 
 No amount is matched, and no payee is named in code.
 
@@ -64,13 +68,13 @@ No amount is matched, and no payee is named in code.
   - The legend gains Repayments.
   - The hover shows Repayments, and Net cashflow becomes distributions less interest less repayments.
   - The month count and the tiles are otherwise unchanged.
-- **Portfolio:** the Net asset value tile keeps its value. Its subtitle, while any debt exists, is `$x owed · $y net`:
+- **Portfolio:** the Net asset value tile keeps its value. Its subtitle, while any debt exists and the scope covers all your accounts, is `$x owed · $y net`. Under a narrower scope it stays as today, since an outside debt belongs to no account (brief 67, 1):
   - *owed* is the liabilities' latest balances in CAD;
   - *net* is the value less owed;
   - margin is inside the value already and is not counted again.
   With no debt, the subtitle stays as it is.
 
-A balance older than 30 days says its as-of date on hover. Wealthsimple itself says outside balances may not refresh by themselves.
+Hover shows each debt's balance with its as-of date, always (brief 67, 4). Wealthsimple itself says outside balances may not refresh by themselves.
 
 ## Acceptance criteria
 
@@ -82,7 +86,7 @@ A balance older than 30 days says its as-of date on hover. Wealthsimple itself s
   - a utility bill payment, an e-Transfer, an EFT and the Wealthsimple card's own payment, none of which is a repayment;
   - an answer applied to a later payment.
 - [ ] Cashflow: a month with distributions, interest and repayments draws three segments, and its hover sums them. Engine and page tests, plus an e2e with a stood-in pull.
-- [ ] Portfolio: the subtitle with debt, without debt, and with a stale balance. The Wealthsimple card's balance is counted, and margin is not counted twice.
+- [ ] Portfolio: the subtitle with debt, without debt, and under each scope (only the full scope shows it). The hover shows each as-of date. The Wealthsimple card's balance is counted, and margin is not counted twice.
 - [ ] Reply shapes recorded from your session and anonymised. Each new query is read strictly (a named mismatch, never a quiet zero).
 - [ ] The book migration with its schema snapshot and clear-all classification. `wire.ts` is regenerated.
 - [ ] The capacity job is green. Two queries per pull are listed with their reason.

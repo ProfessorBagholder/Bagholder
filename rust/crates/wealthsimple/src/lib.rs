@@ -9,6 +9,7 @@ pub mod hosts;
 pub mod mapping;
 pub mod read;
 pub mod record;
+pub mod repayments;
 pub mod replay;
 pub mod session;
 pub mod statement;
