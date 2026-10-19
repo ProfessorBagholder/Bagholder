@@ -19,10 +19,11 @@ pub fn routes() -> Routed {
 }
 
 async fn list(State(state): State<AppState>) -> Api<notify::NotificationsAnswer> {
-    with_notices(&state, |book| {
+    let app = state.app.clone();
+    with_notices(&state, move |book| {
         Ok(notify::NotificationsAnswer {
             ok: true,
-            settings: notify::status(book)?,
+            settings: notify::status(&app, book)?,
             kinds: notify::KINDS.iter().map(|k| k.to_string()).collect(),
             rows: bagholder_store::feeds::list_notifications(book.notices(), 0, "", false, 50, true)?,
             unread: bagholder_store::feeds::unread_notifications(book.notices())?,
@@ -33,9 +34,10 @@ async fn list(State(state): State<AppState>) -> Api<notify::NotificationsAnswer>
 
 /// `POST /api/notifications/settings`: the switches that changed, by name.
 async fn settings(State(state): State<AppState>, Body(patch): Body<notify::NotifySettingsPatch>) -> Api<notify::NotifySettingsAnswer> {
+    let app = state.app.clone();
     with_notices(&state, move |book| {
         notify::set_settings(book, &patch)?;
-        Ok(notify::NotifySettingsAnswer { ok: true, settings: notify::status(book)? })
+        Ok(notify::NotifySettingsAnswer { ok: true, settings: notify::status(&app, book)? })
     })
     .await
 }

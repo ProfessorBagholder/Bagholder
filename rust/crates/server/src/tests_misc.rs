@@ -714,7 +714,7 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 const TERMINAL: [(&str, usize, &str); 10] = [
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
-    ("server/src/main.rs", 4, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read"),
+    ("server/src/main.rs", 5, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read; a command started for work that has already ended (`BAGHOLDER_EXIT_WITH`), before any log is open"),
     ("server/src/mcp.rs", 2, "the `mcp` subcommand's failure to start or to serve: its standard output is the protocol, so its client reads what went wrong from standard error"),
     ("server/src/read_sources.rs", 8, "the `read-sources` and `health` subcommands' own output"),
     ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),

@@ -72,6 +72,7 @@ test('Turn on notifications subscribes this browser; with the page open the page
     await browserSays(page, 'default', 'granted', endpoint)
     await page.goto('/')
     await openNotifyRow(page)
+    await expect(page.locator('.menu.sub button', { hasText: 'Turn on notifications' })).toBeEnabled()
     const subscribed = page.waitForResponse((r) => r.url().endsWith('/api/push/subscribe'))
     await page.locator('.menu.sub button', { hasText: 'Turn on notifications' }).click()
     expect(await (await subscribed).json()).toMatchObject({ ok: true, subscriptions: 1 })
@@ -110,6 +111,8 @@ test('the first switch asks the browser, then turns the kind on at the server', 
   await page.goto('/')
   await openNotifyRow(page)
   await expect(page.locator('.menu button', { hasText: 'Notifications' }).first()).toContainText('Off')
+  // dimmed until the server's key is on the page, as a person sees them
+  await expect(page.locator('.menu.sub button', { hasText: 'Updates' })).toBeEnabled()
   const subscribed = page.waitForRequest((r) => r.url().endsWith('/api/push/subscribe'))
   const saved = page.waitForRequest((r) => r.url().endsWith('/api/notifications/settings'))
   await page.locator('.menu.sub button', { hasText: 'Updates' }).click()

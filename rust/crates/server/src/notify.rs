@@ -369,9 +369,10 @@ pub struct NotificationsDoc {
     pub unread: i64,
 }
 
-/// The kinds, what Web Push needs, and the unread count.
-pub fn status(book: &Book) -> Result<NotifyStatus> {
-    let push = PushStatus { key: crate::webpush::b64url(&vapid(book)?.public()), subscriptions: book.push_subscriptions().map_err(sql)?.len() as i64 };
+/// The kinds, what Web Push needs, and the unread count. The key is the one made at
+/// start (`main.rs`, `keep_key`), empty until then: reading the status never writes.
+pub fn status(app: &App, book: &Book) -> Result<NotifyStatus> {
+    let push = PushStatus { key: push_key(app), subscriptions: book.push_subscriptions().map_err(sql)?.len() as i64 };
     Ok(NotifyStatus { settings: settings(book)?, push, unread: bagholder_store::feeds::unread_notifications(book.notices())? })
 }
 
@@ -574,8 +575,7 @@ pub fn default_ident(i: &serde_json::Value) -> String {
 }
 
 /// This app's notification streams: the bell that wakes them to look again, and
-/// the one thread that shows the system's own notifications, started with the
-/// first (`enqueue`).
+/// the one thread that sends pushes, started with the first (`enqueue`).
 #[derive(Default)]
 pub struct NotifyState {
     bell: (Mutex<u64>, Condvar),
@@ -583,6 +583,9 @@ pub struct NotifyState {
     /// The pages with the notifications' stream open: while one is, it shows each
     /// row, and nothing goes through a push service.
     pub pages: std::sync::atomic::AtomicUsize,
+    /// The data folder's VAPID public key in base64url, set once at start: what a
+    /// browser subscribes with, the same for the whole run.
+    pub key: OnceLock<String>,
     /// Each push service's VAPID token, by origin, with when it was made.
     tokens: Mutex<std::collections::HashMap<String, (String, u64)>>,
     /// Idle connections to the book the notices are kept on (`book`).
@@ -721,6 +724,20 @@ const PUSH_TTL: u64 = 86_400;
 /// (RFC 8292 §2), and how long one is used before it is made again.
 const TOKEN_LIFE: u64 = 12 * 3600;
 const TOKEN_REUSE: u64 = 3600;
+
+/// The public key browsers subscribe with, once the start has made it.
+pub fn push_key(app: &App) -> String {
+    app.notify.key.get().cloned().unwrap_or_default()
+}
+
+/// Make this data folder's VAPID key if it has none, and keep its public half for
+/// the run. Called once the book is open.
+pub fn keep_key(app: &App) -> Result<()> {
+    let b = book(app)?;
+    let key = vapid(&b)?;
+    let _kept = app.notify.key.set(crate::webpush::b64url(&key.public()));
+    Ok(())
+}
 
 /// This data folder's VAPID key, made the first time it is asked for.
 pub fn vapid(book: &Book) -> Result<crate::webpush::Keys> {
@@ -1036,17 +1053,18 @@ mod tests {
 
     #[test]
     fn test_every_kind_is_off_until_turned_on_and_the_settings_round_trip() {
-        let (_g, _app, conn) = setup();
+        let (_g, app, conn) = setup();
         assert_eq!(settings(&conn).unwrap(), off());
         let out = set(&conn, json!({"fills": true, "bogus": true, "updates": "yes"}));
         let mut want = off();
         want.fills = true;
         assert_eq!(out, want, "unknown keys and non-booleans are ignored");
         assert_eq!(settings(&conn).unwrap(), out);
-        let st = status(&conn).unwrap();
+        keep_key(&app).unwrap();
+        let st = status(&app, &conn).unwrap();
         assert_eq!((st.settings, st.push.subscriptions, st.unread), (out, 0, 0), "the kinds, no browser subscribed, and the unread count");
         assert_eq!(crate::webpush::unb64url(&st.push.key).unwrap().len(), 65, "the key a browser subscribes with");
-        assert_eq!(status(&conn).unwrap().push.key, st.push.key, "made once, then kept");
+        assert_eq!(crate::webpush::b64url(&vapid(&conn).unwrap().public()), st.push.key, "the folder's own key, made once, then kept");
     }
 
     #[test]

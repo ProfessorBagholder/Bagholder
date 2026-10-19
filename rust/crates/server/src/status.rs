@@ -113,11 +113,12 @@ pub fn status(app: &Arc<App>) -> Status {
     let sess = sess.unwrap_or(None);
     let notify_status = match &notices {
         Ok(b) => {
-            let s = notify::status(b).map_err(|e| format!("The notifications could not be read: {e}"));
+            let s = notify::status(app, b).map_err(|e| format!("The notifications could not be read: {e}"));
             read("header:notifications", s.as_ref().err().cloned());
             match s {
                 Ok(n) => n,
-                Err(_) => NotifyStatus::default(),
+                // the key stays the run's own whatever the read did
+                Err(_) => NotifyStatus { push: notify::PushStatus { key: notify::push_key(app), subscriptions: 0 }, ..NotifyStatus::default() },
             }
         }
         Err(e) => {

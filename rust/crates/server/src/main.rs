@@ -165,6 +165,13 @@ fn figures_opened(a: &std::sync::Arc<app::App>, f: figures::Figures) {
     a.set_figures(f);
     // the default tile row where none was chosen
     following::open(a);
+    // the data folder's VAPID key, made once here so that reading the status never writes
+    if let Err(e) = notify::keep_key(a) {
+        let e = format!("The key browsers subscribe to notifications with could not be made: {e}");
+        log(&format!("bagholder: {e}"));
+        let mut st = a.state.lock().unwrap();
+        st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
+    }
     // the book's told marks, carried once to the scopes a listing and a filer are kept
     // under now that the cache names each ticker's filers; one that fails tells nothing
     // twice (a scope with no mark sets one without telling) and is tried at the next start
@@ -197,9 +204,22 @@ fn serve() -> i32 {
         bagholder_core::log::set_sink(|line| logfile::write(line, bagholder_core::jiff::Timestamp::now()));
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
-        Ok((home, root_dir()?, bind_host, port_choices()?, exit_with::pid()?))
+        // a copy started for some work stops through its own stop when that work ends
+        // (brief 64); one whose work has already ended is refused here, before anything
+        let made = std::sync::Arc::new(std::sync::OnceLock::<std::sync::Arc<app::App>>::new());
+        if let Some(pid) = exit_with::pid()? {
+            let app = made.clone();
+            exit_with::watch(pid, move || {
+                log(&format!("bagholder: process {pid}, which this copy was started for, has ended: stopping"));
+                match app.get() {
+                    Some(a) => a.request_stop(),
+                    None => std::process::exit(0),
+                }
+            })?;
+        }
+        Ok((home, root_dir()?, bind_host, port_choices()?, made))
     })();
-    let (home, root, bind_host, ports, exit_with) = match started {
+    let (home, root, bind_host, ports, made) = match started {
         Ok(s) => s,
         Err(e) => {
             log(&format!("bagholder: {e}"));
@@ -224,16 +244,9 @@ fn serve() -> i32 {
         }
     };
     let a = app::App::new(home, root, bind_host.clone());
-    // a copy started for some work stops through its own stop when that work ends (brief 64)
-    if let Some(pid) = exit_with {
-        let stop = a.clone();
-        if let Err(e) = exit_with::watch(pid, move || {
-            log(&format!("bagholder: process {pid}, which this copy was started for, has ended: stopping"));
-            stop.request_stop();
-        }) {
-            log(&format!("bagholder: {e}"));
-            return 1;
-        }
+    // the watch on the work this copy was started for stops it from here on
+    if made.set(a.clone()).is_err() {
+        log("bagholder: the app was already bound to the work this copy was started for");
     }
     // what earlier versions made to post notifications themselves goes (brief 65)
     notify::remove_native_leftovers(&a.home);
