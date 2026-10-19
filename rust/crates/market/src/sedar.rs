@@ -721,6 +721,12 @@ fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Fet
 /// the profile, open the issuer, and follow its documents link; each step
 /// pushes a new view instance.
 fn scoped_documents_uncached(st: &mut State, profile_no: &str, name: Option<&str>) -> Fetched<Option<String>> {
+    Ok(walk_documents(st, profile_no, name)?.map(|(_, html)| html))
+}
+
+/// The walk to an issuer's documents, with the view it ends on: what a later page
+/// of them is asked from, in the same session as the first.
+fn walk_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Fetched<Option<(View, String)>> {
     let mut view = View::open(st, "searchReportingIssuers")?;
     let (node, cbname, container) = match search_action(&view.page) { Some(a) => a, None => return Ok(None) };
     let ri = view.callback(st, &node, &cbname, None, &[("QueryString", profile_no)], Some(&container), false, None)?;
@@ -732,13 +738,69 @@ fn scoped_documents_uncached(st: &mut State, profile_no: &str, name: Option<&str
     let docs = view.callback(st, &docs_node, "invokeMenuCb", None, &[], None, false, Some(&page))?;
     view.refresh_identity(&docs);
     if view.page.contains("appDocumentLink") {
-        return Ok(Some(view.page.clone()));
+        let html = view.page.clone();
+        return Ok(Some((view, html)));
     }
     if let Some((a, b, c)) = search_action(&view.page) {
         let page = view.page.clone();
-        return Ok(Some(view.callback(st, &a, &b, None, &[], Some(&c), false, Some(&page))?));
+        let html = view.callback(st, &a, &b, None, &[], Some(&c), false, Some(&page))?;
+        return Ok(Some((view, html)));
     }
-    Ok(Some(view.page.clone()))
+    let html = view.page.clone();
+    Ok(Some((view, html)))
+}
+
+/// How many pages of an issuer's documents a download looks through for one no
+/// longer on the first: SEDAR+ shows thirty a page, so a thousand and more.
+const DOWNLOAD_PAGES: usize = 40;
+
+re!(re_next_page, r#"(?s)aria-label="Next Page"[^>]*?catHtmlFragmentCallback\('(W\d+)','selectPage',(\d+),\{[^}]*?containerNodeId:'(W\d+)'"#);
+
+/// The next page of a document list, as its own "Next Page" control asks for it.
+fn next_page(page: &str) -> Option<(String, String, String)> {
+    re_next_page().captures(page).map(|m| (m[1].to_string(), m[2].to_string(), m[3].to_string()))
+}
+
+/// A document's row on an issuer's list, looking past the first page: SEDAR+
+/// lists an issuer's documents thirty at a time, newest first, so one older than
+/// the newest thirty is on a later page. Its link is good in the session that
+/// found it. None where it is on no page down to `filed` (the day it was filed,
+/// where known), or on none at all: SEDAR+ no longer lists it.
+fn find_document(st: &mut State, profile_no: &str, name: Option<&str>, key: &str, filed: Option<&str>) -> Fetched<Option<SedarRow>> {
+    let Some((view, mut html)) = walk_documents(st, profile_no, name)? else { return Ok(None) };
+    for _ in 0..DOWNLOAD_PAGES {
+        match on_page(&parse_filings(&html), key, filed) {
+            OnPage::Found(row) => return Ok(Some(row)),
+            OnPage::PastIt => return Ok(None),
+            OnPage::Further => {}
+        }
+        let Some((node, n, container)) = next_page(&html) else { return Ok(None) };
+        // the page asked for alone, as the list's own control asks: the search
+        // form's fields, posted with it, are refused as an empty search
+        html = view.callback(st, &node, "selectPage", Some(&n), &[], Some(&container), false, Some(""))?;
+    }
+    Ok(None)
+}
+
+/// What one page of an issuer's list says of a document looked for.
+#[derive(Debug, PartialEq)]
+enum OnPage {
+    Found(SedarRow),
+    /// The page is older than the day it was filed: the list, newest first, is past it.
+    PastIt,
+    Further,
+}
+
+fn on_page(rows: &[SedarRow], key: &str, filed: Option<&str>) -> OnPage {
+    if let Some(row) = rows.iter().find(|f| f.url.contains(key)) {
+        return OnPage::Found(row.clone());
+    }
+    let newest = rows.iter().map(|r| r.submitted_at.as_str()).max().unwrap_or("");
+    // compared as the list writes them (`2026-05-26T09:31`), day against day where only one is known
+    match filed.filter(|d| !d.is_empty()) {
+        Some(day) if !newest.is_empty() && newest[..newest.len().min(10)] < day[..day.len().min(10)] => OnPage::PastIt,
+        _ => OnPage::Further,
+    }
 }
 
 /// The newest filings across SEDAR+.
@@ -769,12 +831,27 @@ fn is_document(a: &bagholder_net::browser::Answer) -> bool {
 /// drmKey, fetch it in that live session. A document URL is bound to the
 /// session that minted it, so it is re-minted here rather than reused.
 pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fetched<Option<(Vec<u8>, String)>> {
+    download_filed(profile_no, doc_id, name, None)
+}
+
+/// `download_bytes` for a document filed on `filed` (an instant or a day, as the
+/// list states it): the pages past it are not looked through.
+pub fn download_filed(profile_no: &str, doc_id: &str, name: Option<&str>, filed: Option<&str>) -> Fetched<Option<(Vec<u8>, String)>> {
     let key = doc_id.rsplit(':').next().unwrap_or("").to_string();
+    if key.is_empty() {
+        return Ok(None);
+    }
     let answer = {
         let mut st = state().lock().unwrap();
         let html = scoped_documents(&mut st, profile_no, name)?.ok_or_else(|| unavailable("SEDAR+ did not open the profile's documents to download from"))?;
-        let row = parse_filings(&html).into_iter().find(|f| !key.is_empty() && f.url.contains(&key));
-        let row = match row { Some(r) => r, None => return Ok(None) };
+        let row = match parse_filings(&html).into_iter().find(|f| f.url.contains(&key)) {
+            Some(r) => r,
+            // older than the first page's: looked for on the later ones
+            None => match find_document(&mut st, profile_no, name, &key, filed)? {
+                Some(r) => r,
+                None => return Ok(None),
+            },
+        };
         let url = unescape(&row.url);
         let referer = format!("{}/csa-party/viewInstance/view.html", BASE);
         session(&mut st)?
@@ -900,7 +977,7 @@ pub fn fetch_profile(profile_no: &str, limit: usize) -> Fetched<Vec<FiledDocumen
 /// One stored row's document. (bytes, content type).
 pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
     let issuer = row.issuer.clone();
-    match download_bytes(&row.profile_no, &row.id, if issuer.is_empty() { None } else { Some(&issuer) })? {
+    match download_filed(&row.profile_no, &row.id, if issuer.is_empty() { None } else { Some(&issuer) }, Some(&row.date))? {
         Some(x) => Ok(x),
         None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&row.id), row.profile_no))),
     }
@@ -981,5 +1058,36 @@ mod settle_tests {
     fn an_answer_with_no_exact_match_is_a_miss() {
         let a: Vec<ReportingIssuer> = (0..100).map(|i| issuer(&format!("Acme Corporation {i} / Acme Corporation {i}"), &format!("{i:09}"))).collect();
         assert!(pick_profile("Acme Corporation", &a, "2026-10-16", &|_| Ok(Some("2026-10-01".into()))).unwrap().is_err());
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+
+    /// The list's own "Next Page" control, as SEDAR+ writes it (2026-10-19,
+    /// an issuer's documents page): its node, the page it asks for, its container.
+    #[test]
+    fn the_next_page_is_asked_as_the_lists_own_control_asks_for_it() {
+        let page = r##"<div class="appNext pagination-item" role="listitem"><a href="#" aria-label="Next Page" onclick="return function(me){var retVal = false; if (catHtmlFragmentCallback('W972','selectPage',2,{asyncUpdate:true,containerSelector:'#AsyncWrapperW908',containerNodeId:'W908',success:function(html){webuiReplaceHtml('#AsyncWrapperW908', html);}}, me) == 'skip') retVal = true;return retVal;}(this)">Next &raquo;</a></div>"##;
+        assert_eq!(next_page(page), Some(("W972".into(), "2".into(), "W908".into())));
+        assert_eq!(next_page(r#"<div class="appPage"><a class="active">18</a></div>"#), None, "the last page has none");
+    }
+
+    fn row(id: &str, at: &str) -> SedarRow {
+        SedarRow { id: format!("sedar:drm:{id}"), submitted_at: at.into(), url: format!("/csa-party/records/document.html?id={id}"), ..Default::default() }
+    }
+
+    /// A document not on a page is looked for on the next, until a page is older
+    /// than the day it was filed (the list is newest first).
+    #[test]
+    fn a_page_says_found_further_or_past_it() {
+        let page = [row("aaa", "2026-05-26T09:31"), row("bbb", "2026-03-17T08:39")];
+        assert_eq!(on_page(&page, "bbb", Some("2026-03-17T08:39")), OnPage::Found(page[1].clone()));
+        assert_eq!(on_page(&page, "ccc", Some("2026-03-01")), OnPage::Further, "older than this page: on a later one");
+        assert_eq!(on_page(&page, "ccc", Some("2026-06-02T09:47")), OnPage::PastIt, "newer than this page's newest: not listed any more");
+        assert_eq!(on_page(&page, "ccc", Some("2026-05-26")), OnPage::Further, "the same day may sit across two pages");
+        assert_eq!(on_page(&page, "ccc", None), OnPage::Further, "no day known: every page is looked through");
+        assert_eq!(on_page(&[], "ccc", Some("2026-01-01")), OnPage::Further);
     }
 }
