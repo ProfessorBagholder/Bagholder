@@ -89,7 +89,14 @@ Each was read on 2026-10-19 from the source linked.
   - `POST /api/push/unsubscribe`: the endpoint.
 - **Delivery** (`announce`):
   - with any page's stream open, the row goes to the pages only, as today, and the page shows it;
-  - with none open, the existing notify worker thread sends it to each subscription. The row's JSON is encrypted per RFC 8291 (`aes128gcm`, record size 4096, one record) and POSTed per RFC 8030, with `TTL`, `Urgency: normal`, `Content-Encoding: aes128gcm` and `Authorization: vapid t=<JWT>, k=<public key>` (RFC 8292). The JWT is ES256 with `aud` the endpoint's origin, `exp` 12 hours on, and `sub` a `mailto:` of no one: the RFC allows any contact URI, and this app has no operator;
+  - with none open, the existing notify worker thread sends it to each subscription. The row's JSON is encrypted per RFC 8291 (`aes128gcm`, record size 4096, one record) and POSTed per RFC 8030, with these headers and claims (brief 66, 2):
+    - `TTL` on every request;
+    - `Urgency: high` for fills and order problems, `normal` for every other kind;
+    - `Content-Encoding: aes128gcm`;
+    - `Authorization: vapid t=<JWT>, k=<public key>` (RFC 8292);
+    - the JWT is ES256 with `aud` the endpoint's origin, `exp` no more than 24 hours on, and `sub` `https://github.com/ProfessorBagholder/Bagholder`. That names the software, never the person, and is a URL, which Apple requires (brief 66, 1). The token is kept per push-service origin and made again at most hourly;
+  - **the payload is at most 4 KB once encrypted.** A row too long for that is sent as its id alone, and the service worker fetches the row (`GET /api/notifications`) before it shows it;
+  - a 429 or a 5xx is sent again once the push service's `Retry-After` has passed. That wait is in `TIMED_WAITS`, the push service's own stated time, and it is said in the header once confirmed;
   - a row a push reached is marked seen;
   - a 404 or a 410 deletes the subscription;
   - a failed send is said in the header under the existing `notifications` entry, by the 2026-10-09 rule: said once confirmed, and standing until a send succeeds.
@@ -114,7 +121,7 @@ What stays: the kinds and their switches, the store's `notifications` table, the
 
 - [ ] `cargo test --workspace --locked` green, clippy clean, no warnings. `npm run check`, `npm test` and the e2e suite green in `web/`.
 - [ ] **Encryption:** RFC 8291 Appendix A reproduced byte for byte, from its keys, salt and plaintext to its body. The VAPID JWT verifies against the public key and has RFC 8292's header and claims.
-- [ ] **Delivery:** a stand-in push service on loopback receives a generated row, decrypts it with the test subscription's private key and auth secret, and gets the row back field for field. A 410 deletes the subscription, and so does a 404. A refused send is said in the header on the second failure and cleared by the next success. With a page's stream open, nothing reaches the stand-in.
+- [ ] **Delivery:** a stand-in push service on loopback receives a generated row, decrypts it with the test subscription's private key and auth secret, and gets the row back field for field. Every header and claim is checked there: `TTL`; `Urgency` by kind; `Content-Encoding`; the JWT's `aud` (the stand-in's origin), its `exp` (at most 24 hours on) and its `sub`; and the same token reused within the hour for one origin. A row over 4 KB arrives as its id alone, at most 4 KB, and the service worker's fetch path shows it. A 410 deletes the subscription, and so does a 404. A 429 with `Retry-After` is sent again after it, and said once confirmed. A refused send is said in the header on the second failure and cleared by the next success. With a page's stream open, nothing reaches the stand-in.
 - [ ] **The service worker** (Vitest, with a stand-in `self`): every push shows a notification, one it cannot read included. The tag is the row's. A click focuses an open tab and sends it the row, or opens a tab at each kind's target URL. A subscription change subscribes again and posts.
 - [ ] **The page** (e2e, Chromium, permission granted by the test's context): the control subscribes, and the server stores the subscription. A new row with the page open shows one notification with its tag, and nothing goes to the push service. The control's three states render.
 - [ ] **Removal:** a source scan finds no `osacompile`, `open -n`, `notify-send` or `powershell` in the server's sources. A start over a data folder holding an old `Bagholder.app` removes it and logs it once.
