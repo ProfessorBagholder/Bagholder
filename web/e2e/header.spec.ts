@@ -8,7 +8,13 @@ test('a release that can be installed is a button, and pressing it asks for the 
   await openWithStatus(page, request, { updateAvailable: true, canUpdate: true, latestVersion: 'v9.9.9' })
   let asked = 0
   await page.route('**/api/update', (route) => { asked++; return route.fulfill({ json: { ok: true } }) })
+  // counted once the request is made, never on the click's own timing (#530)
+  const made = page.waitForRequest('**/api/update')
   await page.getByRole('button', { name: 'Update to v9.9.9' }).click()
+  await made
+  expect(asked).toBe(1)
+  // and asked once: nothing else the page does asks again
+  await expect(page.getByRole('button', { name: 'Update to v9.9.9' })).toBeVisible()
   expect(asked).toBe(1)
 })
 
