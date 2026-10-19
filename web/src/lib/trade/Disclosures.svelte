@@ -163,7 +163,7 @@
     </div>
   {:else if view.state === 'error'}
     <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{@render readBtn()}</span></div>
-    <div class="muted" style="font-size:12px;padding:6px 0 10px">{view.error}</div>
+    <div class="status-err" style="font-size:12px;padding:6px 0 10px">{view.error}</div>
   {:else if view.state === 'empty'}
     <div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5><span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">{#if view.right}<span>{view.right}</span>{/if}{#if sym}{@render readBtn()}{/if}</span></div>
     <div class="muted" style="font-size:12px;padding:8px 0 10px">{view.msg}</div>

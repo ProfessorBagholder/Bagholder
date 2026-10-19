@@ -113,12 +113,19 @@
     )
   })
 
-  const emptyText = $derived.by(() => {
+  // what the card says with no rows, and whether that is a failure, decided once:
+  // a read that failed is said as a failure, never as a quiet note (SPEC §4), and
+  // a read under way again after it is a quiet note again
+  const empty = $derived.by((): { text: string; failed: boolean } => {
     const q = query.trim().toUpperCase()
     const f = q ? found[q] : null
-    if (feed.loading) return 'Reading…'
-    if (q) return f && f.loading ? 'Reading ' + q + '…' : f && f.error ? 'Could not read short interest for ' + q + ': ' + f.error : f && f.missing ? 'No short interest is reported for ' + q + '.' : 'No listing by that name.'
-    return 'Nothing reported yet.'
+    if (feed.loading) return { text: 'Reading…', failed: false }
+    if (q) {
+      if (f && f.loading) return { text: 'Reading ' + q + '…', failed: false }
+      if (f && f.error) return { text: 'Could not read short interest for ' + q + ': ' + f.error, failed: true }
+      return { text: f && f.missing ? 'No short interest is reported for ' + q + '.' : 'No listing by that name.', failed: false }
+    }
+    return { text: 'Nothing reported yet.', failed: false }
   })
 
   // what could not be read for a ticker typed is said beside whatever rows show for
@@ -164,6 +171,6 @@
     </div>
     {#if lookupError}<div class="status-err" style="font-size:12px;margin-top:6px">{lookupError}</div>{/if}
   {:else}
-    <div class="muted" style="font-size:12px">{emptyText}</div>
+    <div class={empty.failed ? 'status-err' : 'muted'} style="font-size:12px">{empty.text}</div>
   {/if}
 </div>

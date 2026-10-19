@@ -129,7 +129,7 @@
         <div style="font-size:12.5px">{r.files.length}{r.files.length === 1 ? ' file' : ' files'} · {qty(total('added'))} new · {qty(total('linked'))} linked · {qty(total('unchanged'))} already stored</div>
         {#each r.files as x, i (i)}
           <div style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08)">
-            <div style="display:flex;gap:10px;font-size:12.5px"><span style="font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class="muted" style="margin-left:auto;min-width:0;text-align:right">{'error' in x ? x.error : fileLine(x.report)}</span></div>
+            <div style="display:flex;gap:10px;font-size:12.5px"><span style="font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class={'error' in x ? 'status-err' : 'muted'} style="margin-left:auto;min-width:0;text-align:right">{'error' in x ? x.error : fileLine(x.report)}</span></div>
             {#if 'report' in x}{@render notes(x.report)}{/if}
           </div>
         {/each}
@@ -157,7 +157,7 @@
       {#if w && w.watching}<div class="muted" style="font-size:11px;margin-top:12px">Watching {w.path}{w.lastScan ? ' · last scan ' + relTime(w.lastScan) : ''}</div>{/if}
       {#if w && w.files.length}
         <div class="scroll" style="max-height:220px;margin-top:6px">
-          {#each w.files as x (x.file)}<div style="font-size:12px;padding:6px 0;border-top:1px solid rgba(var(--ink-rgb),.08)"><div style="display:flex;gap:10px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class="muted" style="margin-left:auto;min-width:0;text-align:right">{x.read.outcome === 'failed' ? x.read.error : fileLine(x.read.report)}</span></div>{#if x.read.outcome === 'imported'}{@render notes(x.read.report)}{/if}</div>{/each}
+          {#each w.files as x (x.file)}<div style="font-size:12px;padding:6px 0;border-top:1px solid rgba(var(--ink-rgb),.08)"><div style="display:flex;gap:10px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">{x.file}</span><span class={x.read.outcome === 'failed' ? 'status-err' : 'muted'} style="margin-left:auto;min-width:0;text-align:right">{x.read.outcome === 'failed' ? x.read.error : fileLine(x.read.report)}</span></div>{#if x.read.outcome === 'imported'}{@render notes(x.read.report)}{/if}</div>{/each}
         </div>
       {/if}
     {/if}

@@ -305,6 +305,8 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(dlg).toContainText('Watching /some/watched/folder')
   await expect(dlg).toContainText('Manual · activities · 3 rows · 2 new · 0 linked · 1 already stored')
   await expect(dlg).toContainText('line 1 is not UTF-8 text')
+  // a file that could not be read is said as a failure (#529)
+  await expect(dlg.locator('.status-err', { hasText: 'line 1 is not UTF-8 text' })).toBeVisible()
   // the header says what the scan brought in, not in red, until it is closed
   // (docs/decisions.md 2026-10-09: nothing removes itself on a timer)
   const notice = page.locator('#syncline')
@@ -326,7 +328,8 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await page.unroute('**/api/watch/scan')
   await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, scanError: 'the folder: No such file or directory' } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
-  await expect(dlg.locator('.status-err')).toHaveText('the folder: No such file or directory')
+  // the scan's own failure, beside the file whose read failed
+  await expect(dlg.locator('.status-err', { hasText: 'the folder: No such file or directory' })).toBeVisible()
   await expect(notice).not.toContainText('Folder scanned')
 
   await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { path: '', watching: false, account: '', lastScan: '', scanError: '', lastScanAdded: 0, files: [] } }))
