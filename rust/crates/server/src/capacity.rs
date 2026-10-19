@@ -1064,7 +1064,7 @@ fn measure(exe: &Path, op: Op, pair: Pair, min_rows: u64, home: &Path, times: us
         let copy = home.with_extension("probe");
         copy_folder(home, &copy)?;
         let exec = std::time::Instant::now();
-        let out = std::process::Command::new(exe).args(["capacity", "probe", op.name()]).arg(&copy).args(pair.flag(min_rows)).env("BAGHOLDER_OFFLINE", "1").env("BAGHOLDER_DRY_ORDERS", "1").output().map_err(err)?;
+        let out = std::process::Command::new(exe).args(["capacity", "probe", op.name()]).arg(&copy).args(pair.flag(min_rows)).env("BAGHOLDER_OFFLINE", "1").env("BAGHOLDER_DRY_ORDERS", "1").env("BAGHOLDER_EXIT_WITH", std::process::id().to_string()).output().map_err(err)?;
         std::fs::remove_dir_all(&copy).map_err(err)?;
         if !out.status.success() {
             return Err(format!("{} on {}: {}", op.name(), home.display(), String::from_utf8_lossy(&out.stderr)));

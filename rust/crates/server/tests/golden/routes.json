@@ -38,7 +38,10 @@
         "disclosuresHeld": false,
         "disclosuresWatched": false,
         "disclosuresAll": false,
-        "native": "",
+        "push": {
+          "key": "<vapid-key>",
+          "subscriptions": 0
+        },
         "unread": 0
       },
       "importing": null,
@@ -115,7 +118,10 @@
         "disclosuresHeld": false,
         "disclosuresWatched": false,
         "disclosuresAll": false,
-        "native": "",
+        "push": {
+          "key": "<vapid-key>",
+          "subscriptions": 0
+        },
         "unread": 0
       },
       "kinds": [
@@ -145,7 +151,10 @@
         "disclosuresHeld": false,
         "disclosuresWatched": false,
         "disclosuresAll": false,
-        "native": "",
+        "push": {
+          "key": "<vapid-key>",
+          "subscriptions": 0
+        },
         "unread": 0
       }
     }

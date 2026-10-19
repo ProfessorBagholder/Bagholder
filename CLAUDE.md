@@ -73,7 +73,7 @@ Delegate only when all three hold: the task separates cleanly with a clear contr
 - **The page**, from `web/`: `npm run check` (svelte-check), `npm test` (Vitest), `npm run e2e` (builds the page, then Playwright against the real server on a made-up book: offline, dry orders, its own temporary home, port 8791; `E2E_PORT=<n>` gives a second run its own server). A behaviour in `SPEC.md` is not done until a browser test drives it.
 - **The wire** is typed in `rust/crates/model/src/wire.rs`; `cargo test -p bagholder-model --test types` regenerates `web/src/lib/generated/wire.ts`, and the page takes its types from there.
 - **Timers:** a timer anywhere is replaced by waiting for the thing itself, or argued for in `TIMED_WAITS` (`rust/crates/server/src/tests_misc.rs`), the one list of timers that remain; `test_no_wait_on_a_clock_that_is_not_accounted_for` holds the code to it.
-- **Cost**, for any change to the server or to what the page reads: the numbers pasted in the PR against the budget in `docs/architecture.md`: requests and bytes on a first and a second open, time to first figure, server CPU and resident memory over an hour idle with a page open, the time to add a trade on a book of the owner's size, the page's transfer size and the release archive's size. The capacity test on the owner-size book holds the server to the budget.
+- **Cost**, for any change to the server or to what the page reads: the numbers pasted in the PR against the budget in `docs/architecture.md`: requests and bytes on a first and a second open, time to first figure, the time to add a trade on a book of the owner's size, the page's transfer size and the release archive's size. The capacity test on the owner-size book holds the server to the budget; what runs while the app sits idle is held by the test that lists every wait on a clock (`TIMED_WAITS`), never by hours of measuring.
 - **States and screenshots**, for any change to a screen: a states table per screen the change touches (first run, kept, refreshing, source failed, nothing in scope, cleared) and a screenshot of each state in the PR.
 - **The container**, for any change to running, sign-in, updates or the entrypoint: the image built and started on the made-up book, and the changed path driven in it.
 - **A change to a test named in `docs/decisions.md`** restates in the PR what the test now proves.
@@ -81,9 +81,9 @@ Delegate only when all three hold: the task separates cleanly with a clear contr
   ```
   mkdir -p /tmp/bh-scratch-rust && cp ~/.bagholder-rust/*.db /tmp/bh-scratch-rust/
   cargo build --release --bins
-  BAGHOLDER_NO_BROWSER=1 BAGHOLDER_DRY_ORDERS=1 BAGHOLDER_HOME=/tmp/bh-scratch-rust BAGHOLDER_PORT=8798 target/release/bagholder
+  BAGHOLDER_NO_BROWSER=1 BAGHOLDER_DRY_ORDERS=1 BAGHOLDER_EXIT_WITH=$PPID BAGHOLDER_HOME=/tmp/bh-scratch-rust BAGHOLDER_PORT=8798 target/release/bagholder
   ```
-  `BAGHOLDER_DRY_ORDERS=1` is not optional: orders are live by default, and a scratch copy that ever carries a login must never place one. `BAGHOLDER_NO_BROWSER=1` is not optional: without it every scratch start opens the scratch data in the owner's browser. Open `http://127.0.0.1:8798/` (`localhost` is refused by design). The owner's own instance runs on 8765; never restart or write to it.
+  `BAGHOLDER_EXIT_WITH=$PPID` is not optional: the copy stops when the session that started it ends, so no copy is left running after the work (owner, 2026-10-19). `BAGHOLDER_DRY_ORDERS=1` is not optional: orders are live by default, and a scratch copy that ever carries a login must never place one. `BAGHOLDER_NO_BROWSER=1` is not optional: without it every scratch start opens the scratch data in the owner's browser. Open `http://127.0.0.1:8798/` (`localhost` is refused by design). The owner's own instance runs on 8765; never restart or write to it.
 - **What to check** is `SPEC.md` §7: every displayed figure traced to its field and meaning; every page at 1200, 1340, 1440 and 1680 px with no table overflowing or clipping at 1340 and above; headers level; lookups by id, exercised with a duplicate symbol in a second account. Take screenshots; measure with JavaScript rather than by eye.
 
 ## Releases
@@ -96,6 +96,7 @@ The file served from the design URL carries Design's preview harness on line 4 (
 
 ## Do not
 
+- Start the old Python app. It is frozen, and a copy of it left running posts notifications of its own (owner, 2026-10-19).
 - Commit `.env`, `session.json`, the database, backups, `.claude/`, `rust/target` or `web/node_modules` (all in `.gitignore`); the repository is public.
 - Reach for a dependency without weighing it. A crate or an npm package is a real cost (build time, binary size, supply chain), so add one only when the job genuinely needs it and the language and what the workspace already has cannot do it well. When you add or lean on one, list it in the relevant `Cargo.toml` with a comment on why (for an npm package, in the commit that adds it).
 - Reformat or "clean up" code you were not asked to change.

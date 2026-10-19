@@ -3,7 +3,7 @@
   import { ICONS } from './icons'
   import { THEMES, theme, applyTheme } from './theme.svelte'
   import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData } from './ui.svelte'
-  import { channel, notifyDead, notifyOn, notifyTest, notifyToggle } from './notes/channel.svelte'
+  import { channel, notifyDead, notifyOn, notifySubscribed, notifyTest, notifyToggle, turnOn } from './notes/channel.svelte'
 
   const status = $derived(statusSlot.data)
   // A row's list opens under the pointer and on a tap (a touch has no hover); it closes when the
@@ -63,6 +63,13 @@
     <button class:open={notifyOpen} onclick={() => { notifyOpen = true; themeOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.bell} /></svg>Notifications<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{notifyWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if notifyOpen}
       <div class="menu sub">
+        {#if channel() === 'denied'}
+          <div class="menu-h" style="white-space:normal;max-width:240px">Blocked in this browser. Allow notifications for this page in the browser's site settings.</div>
+          <div class="sep"></div>
+        {:else if channel() !== 'unavailable' && !notifySubscribed()}
+          <button class="primary" disabled={notifyDead()} onclick={turnOn}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.bell} /></svg>Turn on notifications</button>
+          <div class="sep"></div>
+        {/if}
         {#each NOTIFY_KINDS as k (k[0])}<button disabled={notifyDead()} onclick={() => notifyToggle(k[0])}>{k[1]}<span class="sw" class:on={notifyOn(k[0])} style="margin-left:auto"></span></button>{/each}
         <div class="sep"></div><div class="menu-h">Releases</div>
         {#each NOTIFY_RELEASE_SCOPES as k (k[0])}<button disabled={notifyDead()} onclick={() => notifyToggle(k[0])}>{k[1]}<span class="sw" class:on={notifyOn(k[0])} style="margin-left:auto"></span></button>{/each}

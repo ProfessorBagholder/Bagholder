@@ -305,6 +305,7 @@ dependencies = [
  "bagholder-ws",
  "futures-util",
  "jiff",
+ "libc",
  "openssl",
  "regex",
  "rmcp",
@@ -317,6 +318,7 @@ dependencies = [
  "tower",
  "tower-http",
  "ts-rs",
+ "windows-sys",
 ]
 
 [[package]]

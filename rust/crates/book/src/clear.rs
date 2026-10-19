@@ -120,6 +120,10 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("instrument_joins", Holds::Named),
     ("issuers", Holds::Named),
     ("settings", Holds::Settings),
+    // the browsers subscribed to this copy's pushes, with the key they were made
+    // for (`push.vapid`, a setting): the browser's tie to this copy, not data the
+    // person sees, kept through every clear as the browser keeps its side of it
+    ("push_subscriptions", Holds::Settings),
     ("schema_migrations", Holds::Schema),
     ("ledger_changes", Holds::Changes),
     // the sightings whose names are due to be settled: empty after every commit

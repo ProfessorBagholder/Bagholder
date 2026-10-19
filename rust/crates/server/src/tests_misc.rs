@@ -94,16 +94,12 @@ fn test_port_can_be_chosen_for_a_second_instance() {
 }
 
 /// GitHub answers through `update::FAKE_RELEASE`; notifications are recorded,
-/// never shown. Put back what it touched.
+/// and no browser is subscribed to be sent them. Put back what it touched.
 struct UpdateFakes;
 
 impl UpdateFakes {
     fn new(answer: Option<update::GithubRelease>) -> Self {
         *update::FAKE_RELEASE.lock().unwrap() = Some((0, answer));
-        let mut d = crate::notify::test_hooks::DELIVERED.lock().unwrap();
-        if d.is_none() {
-            *d = Some(Vec::new());
-        }
         UpdateFakes
     }
     fn answer(&self, answer: Option<update::GithubRelease>) {
@@ -123,7 +119,6 @@ impl Drop for UpdateFakes {
         if let Ok(b) = crate::notify::book(app_ref()) {
             let _ = b.notices().execute("DELETE FROM notifications WHERE key LIKE 'update:%'", []);
         }
-        *crate::notify::test_hooks::DELIVERED.lock().unwrap() = None;
     }
 }
 
@@ -719,7 +714,7 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 const TERMINAL: [(&str, usize, &str); 10] = [
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
-    ("server/src/main.rs", 4, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read"),
+    ("server/src/main.rs", 5, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read; a command started for work that has already ended (`BAGHOLDER_EXIT_WITH`), before any log is open"),
     ("server/src/mcp.rs", 2, "the `mcp` subcommand's failure to start or to serve: its standard output is the protocol, so its client reads what went wrong from standard error"),
     ("server/src/read_sources.rs", 8, "the `read-sources` and `health` subcommands' own output"),
     ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),
@@ -855,3 +850,48 @@ fn test_the_capacity_budget_is_the_one_the_architecture_states() {
         assert!(regex::Regex::new(r"^#\d+$").unwrap().is_match(issue), "{op}'s entry names its issue as #N: {issue}");
     }
 }
+
+/// Every way the repository starts a copy of the app on a data folder that is not
+/// the person's own names `BAGHOLDER_EXIT_WITH`, so the copy ends with the work
+/// that started it (brief 64, 6): the scratch command in `CLAUDE.md`, the browser
+/// tests' server, any workflow, and the capacity job's probes. A start is a line
+/// naming `BAGHOLDER_HOME` (or a capacity probe's command); the process to end with
+/// must be named within the same start.
+#[test]
+fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
+    fn missing(text: &str) -> Vec<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out = Vec::new();
+        for (n, l) in lines.iter().enumerate() {
+            if l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") {
+                let window = lines[n.saturating_sub(12)..(n + 13).min(lines.len())].join("\n");
+                if !window.contains("BAGHOLDER_EXIT_WITH") {
+                    out.push(format!("{}: {}", n + 1, l.trim()));
+                }
+            }
+        }
+        out
+    }
+    // the scan finds a start that names no process to end with, and passes one that does
+    assert_eq!(missing("BAGHOLDER_HOME=/tmp/x target/release/bagholder").len(), 1);
+    assert!(missing("BAGHOLDER_EXIT_WITH=$PPID BAGHOLDER_HOME=/tmp/x target/release/bagholder").is_empty());
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let mut files = vec![root.join("CLAUDE.md"), root.join("rust/crates/server/src/capacity.rs")];
+    for dir in ["web/e2e", ".github/workflows"] {
+        for e in std::fs::read_dir(root.join(dir)).unwrap() {
+            let p = e.unwrap().path();
+            if matches!(p.extension().and_then(|x| x.to_str()), Some("mjs" | "yml" | "yaml")) {
+                files.push(p);
+            }
+        }
+    }
+    let mut starts = 0;
+    for f in &files {
+        let text = std::fs::read_to_string(f).unwrap();
+        starts += text.lines().filter(|l| l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"")).count();
+        let m = missing(&text);
+        assert!(m.is_empty(), "{} starts a copy that names no BAGHOLDER_EXIT_WITH: {m:?}", f.display());
+    }
+    assert!(starts >= 3, "the scratch command, the browser tests' server and the capacity probes: {starts}");
+}
+

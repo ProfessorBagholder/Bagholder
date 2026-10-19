@@ -175,7 +175,7 @@ The part that moves money is built the way order systems are built.
 - AI agents reach the app through its MCP tools only (§14; built for reading, on the same machine).
 - **Broker credentials** (*not built: today a file in the data folder*) live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a copied or moved book never carries them.
 
-**Notifications** are events from the book, execution and sources, each identified by what it is (a fill, a filing's content, a release's words), so one event is told once, through the operating system's channel or the browser's.
+**Notifications** are events from the book, execution and sources, each identified by what it is (a fill, a filing's content, a release's words), so one event is told once, through the browser: the page's service worker shows it, sent on the page's stream while a tab is open and by Web Push while none is; the server posts nothing to the operating system.
 
 ## 13. Data flow: from a change in the world to the screen
 

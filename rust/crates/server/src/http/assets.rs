@@ -27,6 +27,8 @@ pub fn routes() -> Router<AppState> {
         .route("/index.html", get(index))
         .route("/assets/{*path}", get(asset))
         .route("/favicon.png", get(|s: State<AppState>| page_file(s, "favicon.png")))
+        // the service worker, at the root so its scope is the whole page, never kept stale
+        .route("/sw.js", get(|s: State<AppState>| page_file(s, "sw.js")))
         .route("/favicon.ico", get(|s: State<AppState>| page_file(s, "favicon.png")))
 }
 

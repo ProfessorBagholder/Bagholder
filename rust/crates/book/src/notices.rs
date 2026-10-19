@@ -51,6 +51,30 @@ impl Book {
         bagholder_sqlite::on_commit(self.conn(), heard)
     }
 
+    /// Every browser subscribed to Web Push: (endpoint, p256dh, auth), each as the
+    /// browser gave it (base64url keys).
+    pub fn push_subscriptions(&self) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn().prepare_cached("SELECT endpoint, p256dh, auth FROM push_subscriptions ORDER BY made_at, endpoint")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// A browser's subscription kept, or its keys replaced where it is kept.
+    pub fn keep_push_subscription(&self, endpoint: &str, p256dh: &str, auth: &str, at: jiff::Timestamp) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO push_subscriptions (endpoint, p256dh, auth, made_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth",
+            params![endpoint, p256dh, auth, at_text(at)],
+        )?;
+        Ok(())
+    }
+
+    /// A subscription gone: the browser left it, or its push service says it is
+    /// gone (RFC 8030 §7.3). Whether one was kept.
+    pub fn drop_push_subscription(&self, endpoint: &str) -> Result<bool> {
+        Ok(self.conn().execute("DELETE FROM push_subscriptions WHERE endpoint = ?1", params![endpoint])? > 0)
+    }
+
     /// Whether the earlier store's notices were carried.
     pub fn notices_carried(&self) -> Result<bool> {
         Ok(self.setting(CARRIED)?.is_some())

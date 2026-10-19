@@ -63,12 +63,12 @@ const server = spawn(join(rust, 'target', 'debug', 'bagholder' + exe), [], {
     ...(signedIn ? { BAGHOLDER_WS_BASE: wsBase } : {}),
     ...(requestLog ? { BAGHOLDER_LOG_REQUESTS: '1' } : {}),
     BAGHOLDER_HOME: home,
+    BAGHOLDER_EXIT_WITH: String(process.pid), // it ends when this script does, however this script ends
     BAGHOLDER_PORT: port,
     BAGHOLDER_CHILD: '1', // no supervisor: this script is what starts and stops it
     BAGHOLDER_NO_BROWSER: '1',
     BAGHOLDER_DRY_ORDERS: '1',
     BAGHOLDER_OFFLINE: '1',
-    BAGHOLDER_NOTIFY: 'browser',
   },
 })
 // stopped: the server first, and its home once it has exited (it writes there until then)

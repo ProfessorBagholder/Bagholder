@@ -11,7 +11,9 @@ describe('the one way to the server', () => {
     const callers = Object.entries(sources)
       .filter(([path, text]) => !path.endsWith('.test.ts') && /\bfetch\(/.test(text))
       .map(([path]) => path)
-    expect(callers).toEqual(['/src/lib/api.ts'])
+    // and the service worker, which runs apart from the page, with no page's api of its
+    // own: the row a push named by its id, and a renewed subscription
+    expect(callers).toEqual(['/src/lib/api.ts', '/src/sw.ts'])
     const streams = Object.entries(sources)
       .filter(([path, text]) => !path.endsWith('.test.ts') && /new EventSource\(/.test(text))
       .map(([path]) => path)
