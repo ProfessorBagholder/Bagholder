@@ -66,7 +66,10 @@ fn test_sector_names_fold_onto_one_set() {
     assert_eq!(exposure::norm_sector("Basic Materials"), "Materials");
     assert_eq!(exposure::norm_sector("Bitcoin Holding"), "Digital assets");
     assert_eq!(exposure::norm_sector("Cash and/or Derivatives"), "", "cash is no sector");
-    assert_eq!(exposure::norm_sector("Aerospace"), "Aerospace", "a name outside the set passes through");
+    assert_eq!(exposure::norm_sector("Aerospace"), "", "a name outside the set is no sector (SPEC portfolio-19): its weight is not classified");
+    for s in bagholder_model::exposure::SECTORS {
+        assert_eq!(exposure::norm_sector(&s.to_uppercase()), s, "a sector under its own name, in any case");
+    }
 }
 
 #[test]
@@ -393,6 +396,58 @@ fn test_a_stored_alias_folds_when_read() {
     assert_eq!(named(&sectors), vec![("Communication Services".to_string(), 200.0)]);
 }
 
+/// A record kept with names outside the set (an earlier build kept a fund of
+/// funds' sub-funds as its sectors, #524) shows only the set and `Not classified`:
+/// over generated records mixing sectors, aliases and other names, every slice is
+/// one of them, each sector's value is its weights', and nothing is lost.
+#[test]
+fn a_sector_name_outside_the_set_is_never_a_slice() {
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for case in 0..60 {
+        let n = 1 + (next() % 5) as usize;
+        let mut positions = vec![];
+        let mut exposures = serde_json::Map::new();
+        let mut known = 0.0;
+        let mut total = 0.0;
+        for k in 0..n {
+            let mv = 10.0 * (1 + next() % 100) as f64;
+            total += mv;
+            positions.push(json!({"mv": mv, "currency": "CAD", "securityId": format!("s{k}"), "short": false, "kind": "Shares"}));
+            let mut sectors = serde_json::Map::new();
+            for j in 0..(1 + next() % 4) {
+                let w = (1 + next() % 20) as f64 / 100.0;
+                let name = match next() % 3 {
+                    0 => bagholder_model::exposure::SECTORS[(next() % 12) as usize].to_string(),
+                    1 => "Technology".to_string(),
+                    _ => format!("Made-up Fund {case}-{k}-{j} ETF"),
+                };
+                if !exposure::norm_sector(&name).is_empty() {
+                    known += mv * w;
+                }
+                *sectors.entry(name).or_insert(json!(0.0)) = json!(sectors.get(&name).and_then(|v| v.as_f64()).unwrap_or(0.0) + w);
+            }
+            exposures.insert(format!("s{k}"), json!({"sectors": sectors, "countries": {}, "coverage": 1.0}));
+        }
+        let (slices, _) = bagholder_model::exposure::exposure_slices(&held(&positions).iter().collect::<Vec<_>>(), &read(&exposures), &|v, _| v);
+        let mut sectors_sum = 0.0;
+        for s in &slices {
+            assert!(bagholder_model::exposure::SECTORS.contains(&s.name.as_str()) || s.name == bagholder_model::exposure::UNCLASSIFIED, "case {case}: {:?} is a slice", s.name);
+            if s.name != bagholder_model::exposure::UNCLASSIFIED {
+                sectors_sum += s.value;
+            }
+        }
+        close(sectors_sum, known);
+        let all: f64 = slices.iter().map(|s| s.value).sum();
+        assert!((all - total).abs() < 0.01 || total - known <= 0.005, "case {case}: {all} of {total}");
+    }
+}
+
 // --- MarketsTest
 
 #[test]
@@ -472,4 +527,72 @@ fn a_holding_named_without_a_ticker_is_the_one_listing_found_where_every_directo
     assert!(exposure::resolve_name_with("Zqnm Corp", &unread).unwrap_err().to_string().contains("Nasdaq's directory"));
     let none = |_: &str| Searched::default();
     assert!(exposure::resolve_name_with("Zqnm Corp", &none).unwrap().is_none());
+}
+
+
+/// A fund of funds whose issuer states its breakdown by the funds it holds (as
+/// Evolve's page does) is looked through to each fund's own sectors (#524). Over
+/// generated funds of generated sub-funds, any issuer and any names: every sector
+/// of the fund is one of the set, and each sector's weight is the sub-funds'
+/// weighted by what the fund holds of each.
+#[test]
+fn a_fund_of_funds_is_looked_through_to_its_funds_sectors_never_named_by_them() {
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for case in 0..40 {
+        let conn = db();
+        set_classify(classified());
+        let funds = 1 + (next() % 4) as usize;
+        let held: Vec<f64> = (0..funds).map(|_| 1.0 + (next() % 50) as f64).collect();
+        let total: f64 = held.iter().sum();
+        // each sub-fund's own breakdown: two to four of the set, some under an alias
+        let subs: Vec<Vec<(String, f64)>> = (0..funds)
+            .map(|_| {
+                let n = 2 + (next() % 3) as usize;
+                (0..n).map(|_| {
+                    let s = bagholder_model::exposure::SECTORS[(next() % 12) as usize];
+                    let name = if next() % 2 == 0 { s.to_uppercase() } else { s.to_string() };
+                    (name, 1.0 + (next() % 30) as f64)
+                }).collect()
+            })
+            .collect();
+        let names: Vec<String> = (0..funds).map(|k| format!("Made-up Equity Fund {case}-{k} ETF")).collect();
+        let (h, s, n) = (held.clone(), subs.clone(), names.clone());
+        hooks::ADAPTER.with(|a| *a.borrow_mut() = Some(Box::new(move |_, symbol, _, _| {
+            if symbol == "OUTER" {
+                // the issuer's breakdown names the funds it holds as its "sectors"
+                let mut stated = Weights::default();
+                for (k, name) in n.iter().enumerate() {
+                    stated.add(name, h[k]);
+                }
+                let holdings = (0..n.len()).map(|k| holding(&format!("SUB{k}"), &n[k], h[k], "", "", "TSX", "CAD", true)).collect();
+                return Some(Breakdown { sectors: stated, countries: Weights::default(), holdings, source: "t".into(), as_of: String::new() });
+            }
+            let k: usize = symbol.strip_prefix("SUB")?.parse().ok()?;
+            let mut own = Weights::default();
+            let sum: f64 = s[k].iter().map(|(_, w)| w).sum();
+            for (name, w) in &s[k] {
+                own.add(name, 100.0 * w / sum);
+            }
+            Some(Breakdown { sectors: own, countries: Weights::default(), holdings: vec![], source: "t".into(), as_of: String::new() })
+        })));
+        let rec = exposure::fund_exposure(&ctx(&conn), "OUTER", "Made-up Fund of Funds ETF", "TSX", 0, &mut Vec::new()).unwrap().unwrap();
+        let mut want: HashMap<String, f64> = HashMap::new();
+        for (k, sub) in subs.iter().enumerate() {
+            let sum: f64 = sub.iter().map(|(_, w)| w).sum();
+            for (name, w) in sub {
+                *want.entry(exposure::norm_sector(name)).or_insert(0.0) += held[k] / total * w / sum;
+            }
+        }
+        for (name, w) in rec.sectors.iter() {
+            assert!(bagholder_model::exposure::SECTORS.contains(&name.as_str()), "case {case}: {name:?} is no sector");
+            close(*w, want.get(name).copied().unwrap_or(0.0));
+        }
+        assert_eq!(rec.sectors.iter().count(), want.len(), "case {case}: {:?} against {want:?}", rec.sectors);
+    }
 }

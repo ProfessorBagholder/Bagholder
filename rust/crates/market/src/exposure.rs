@@ -1302,7 +1302,17 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         None => return Err(joined(failures).map(|f| format!("{symbol}: {f}"))),
     };
     let scale = |w: Weights| -> Weights { Weights(w.0.into_iter().map(|(n, x)| (n, x / 100.0)).collect()) };
-    let mut sectors = scale(data.sectors);
+    // a stated breakdown is taken by the sectors it names, folded onto the set; a
+    // row that names none (a fund of funds' breakdown by the funds it holds, #524)
+    // is no sector, and a breakdown left with none is looked through instead
+    let mut stated = Weights::default();
+    for (n, w) in data.sectors.0 {
+        let s = norm_sector(&n);
+        if !s.is_empty() {
+            stated.add(&s, w);
+        }
+    }
+    let mut sectors = scale(stated);
     let mut countries = scale(data.countries);
     let mut coverage: f64 = if !sectors.is_empty() || !countries.is_empty() { 1.0 } else { 0.0 };
     let holdings = data.holdings;

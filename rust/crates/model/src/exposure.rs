@@ -13,6 +13,22 @@ use crate::wire::{ExposureSlice, Position};
 
 pub const UNCLASSIFIED: &str = "Not classified";
 
+/// The one set of sectors every name is folded onto (`SPEC.md` portfolio-19).
+pub const SECTORS: [&str; 12] = [
+    "Information Technology",
+    "Financials",
+    "Health Care",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Industrials",
+    "Energy",
+    "Materials",
+    "Utilities",
+    "Real Estate",
+    "Communication Services",
+    "Digital assets",
+];
+
 const SECTOR_ALIAS: &[(&str, &str)] = &[
     ("technology", "Information Technology"),
     ("information technology", "Information Technology"),
@@ -72,7 +88,9 @@ pub fn norm_sector(name: &str) -> String {
     if let Some((_, v)) = SECTOR_ALIAS.iter().find(|(k, _)| *k == key) {
         return (*v).to_string();
     }
-    name.trim().to_string()
+    // one of the set under its own name; any other name is no sector (a fund a
+    // fund of funds holds, a word no alias folds): its weight is not classified
+    SECTORS.iter().find(|s| s.to_lowercase() == key).map_or_else(String::new, |s| (*s).to_string())
 }
 
 /// What a security is exposed to: weights by sector and by country, in the
@@ -156,16 +174,22 @@ pub fn exposure_slices(positions: &[&Position], exposures: &Exposures, cad: &dyn
             Kind::Options => underlying_exposure(exposures, &p.underlying, &p.exchange).unwrap_or(&nothing),
             _ => exposures.get(&p.security_id).unwrap_or(&nothing),
         };
+        // a record read before an alias was known folds here; a name the set does
+        // not hold (one kept by an earlier build) is no sector, and its weight is
+        // not classified
+        let mut sector_weights: Vec<f64> = Vec::new();
         for (name, w) in &record.sectors {
-            // a record read before an alias was known folds here
             let known = norm_sector(name);
-            sectors.add(if known.is_empty() { name.clone() } else { known }, v * w);
+            if !known.is_empty() {
+                sectors.add(known, v * w);
+                sector_weights.push(*w);
+            }
         }
         for (name, w) in &record.countries {
             countries.add(name.clone(), v * w);
         }
         let covered = |weights: &[(String, f64)]| f64::min(1.0, weights.iter().map(|(_, w)| *w).fsum());
-        sectors.unclassified += v * f64::max(0.0, 1.0 - covered(&record.sectors));
+        sectors.unclassified += v * f64::max(0.0, 1.0 - f64::min(1.0, sector_weights.iter().copied().fsum()));
         countries.unclassified += v * f64::max(0.0, 1.0 - covered(&record.countries));
     }
     (sectors.rows(total), countries.rows(total))
