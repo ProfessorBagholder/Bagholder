@@ -46,7 +46,9 @@ fn record() {
     let (status, raw) = bagholder_market::shorts::yahoo_quote_summary(YAHOO_FUND, "topHoldings").unwrap().expect("the browser helper");
     assert_eq!(status, 200, "{raw}");
     let v: Value = serde_json::from_str(&raw).unwrap();
-    std::fs::write(dir.join("yahoo").join(format!("topholdings-{YAHOO_FUND}.json")), serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    // a fund profile is no chart: kept apart from Yahoo's chart answers, whose shape is held
+    std::fs::create_dir_all(dir.join("yahoo-fund")).unwrap();
+    std::fs::write(dir.join("yahoo-fund").join(format!("topholdings-{YAHOO_FUND}.json")), serde_json::to_string_pretty(&v).unwrap()).unwrap();
 }
 
 /// Industries the recorded sources give that two sectors share: no sector is
@@ -97,7 +99,7 @@ fn every_sector_and_industry_the_share_sources_send_is_placed() {
 
 #[test]
 fn every_sector_a_fund_source_sends_folds_or_names_a_fund() {
-    for f in recorded("yahoo", "topholdings-") {
+    for f in recorded("yahoo-fund", "topholdings-") {
         let th = &json(&f)["quoteSummary"]["result"][0]["topHoldings"];
         for w in th["sectorWeightings"].as_array().unwrap() {
             for k in w.as_object().unwrap().keys() {
