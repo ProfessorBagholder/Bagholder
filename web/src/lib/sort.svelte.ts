@@ -80,11 +80,28 @@ function cmp(a: unknown, b: unknown): number {
   return String(a).localeCompare(String(b))
 }
 
+/**
+ * Each table's columns a tie on the sort column is broken by, in order: fields the
+ * person can see, so rows equal in the column read the same on every load and on
+ * every install, never in the order the server's ids happened to give (#533).
+ * Holdings follow the listing, then the account's name, as the journals do.
+ */
+export const TIES = {
+  positions: ['symbol', 'exchange', 'account'],
+  bySymbol: ['symbol'],
+  execs: ['when', 'side', 'qty', 'price'],
+  yoc: ['symbol', 'account'],
+  watchlist: ['symbol', 'exchange'],
+  shorts: ['symbol', 'exchange'],
+  news: ['news', 'symbol'],
+  disclosures: ['document', 'source'],
+} as const satisfies Record<string, readonly string[]>
+
 // Sort a copy; a row with nothing in the column always sinks to the bottom,
 // whichever direction the rest is going. Rows equal in the column are ordered by
-// the `then` columns, ascending, so a tie reads the same on every load rather
-// than in whatever order the rows arrived.
-export function sortRows<T>(rows: T[], key: string, dir: Dir, get: (row: T, key: string) => unknown, then: string[] = []): T[] {
+// the `then` columns, ascending (each table's `TIES`), so a tie reads the same on
+// every load rather than in whatever order the rows arrived.
+export function sortRows<T>(rows: T[], key: string, dir: Dir, get: (row: T, key: string) => unknown, then: readonly string[]): T[] {
   const out = rows.slice()
   out.sort((a, b) => {
     const va = value(get(a, key))

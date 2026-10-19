@@ -11,7 +11,7 @@
   import { sign, waits } from './dec'
   import { symText } from './sym'
   import { ICONS } from './icons'
-  import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
   import { saveJournal, server, detail } from './state.svelte'
   import { use, filtered } from './subs.svelte'
   import { ticketOn, ticketOnInstrument } from './ticket/ticket.svelte'
@@ -164,7 +164,7 @@
     { key: 'price', label: 'Price', align: 'right' },
     { key: 'amount', label: 'Amount', align: 'right', padRight: '0' },
   ] as { key: string; label: string; align?: string; padLeft?: string; padRight?: string }[]
-  const execs = $derived(sortRows(fills || [], sort.execs.key, sort.execs.dir, execSortValue))
+  const execs = $derived(sortRows(fills || [], sort.execs.key, sort.execs.dir, execSortValue, TIES.execs))
 
   // ---- ticket buttons (ticketButtonsHtml) ----
   interface TkBtn { side: 'BUY' | 'SELL'; on: boolean; open?: () => void }

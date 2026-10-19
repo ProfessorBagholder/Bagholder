@@ -5,7 +5,7 @@
   import type { ShortsFeedRow } from '../model'
   import { qty, pctPlain } from '../fmt'
   import { n2, shortDay } from './util'
-  import { sort, sortRows } from '../sort.svelte'
+  import { sort, sortRows, TIES } from '../sort.svelte'
   import { bareSymbol } from '../sym'
   import { watchDoc } from '../live.svelte'
   import Mseg from './Mseg.svelte'
@@ -110,6 +110,7 @@
     }
     return sortRows(pool, s.key, s.dir, (r, k) =>
       k === 'symbol' ? String(r.symbol || '').toLowerCase() : k === 'exchange' ? String(r.exchange || '').toLowerCase() : k === 'asOf' ? String(r.asOf || '') : ((r as unknown as Record<string, unknown>)[k] ?? null),
+      TIES.shorts,
     )
   })
 

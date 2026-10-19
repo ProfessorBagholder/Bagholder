@@ -5,7 +5,7 @@
   import { money, money0, pct, pctPlain, pts, cls, color, stamp, stampDay, hold, shortMoney, waiting } from './fmt'
   import { abs, plot, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
-  import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
   import { setBenchmark, setFilters } from './state.svelte'
   import { filters } from './filters.svelte'
   import { goSub, go } from './router.svelte'
@@ -178,7 +178,7 @@
     { key: 'avgHold', label: 'Avg hold', align: 'right' },
   ]
   const bySymRows = $derived(
-    sortRows(model.bySymbol || [], sort.bySymbol.key, sort.bySymbol.dir, (r, key) => (r as unknown as Record<string, unknown>)[key]),
+    sortRows(model.bySymbol || [], sort.bySymbol.key, sort.bySymbol.dir, (r, key) => (r as unknown as Record<string, unknown>)[key], TIES.bySymbol),
   )
 
   // ---- queue ----
