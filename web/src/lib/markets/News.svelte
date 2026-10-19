@@ -317,7 +317,7 @@
     {#if sym}
       <span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">{symText(sym.symbol)}</span><button class="cx" aria-label="Show every listing" onclick={() => newsChip(null)}>×</button></span>
     {/if}
-    <div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
+    <div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;flex:0 1 200px;min-width:120px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
       <input bind:this={box} bind:value={query} placeholder={kind === 'disc' ? 'Search symbol or filing' : 'Search symbol or headline'} aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
     </div>
   </div>
