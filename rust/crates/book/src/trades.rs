@@ -131,7 +131,9 @@ impl Book {
     /// another writer settled in between is left for the next settling. Each
     /// trade orphaned still logs its own change. How many were orphaned.
     pub fn orphan_seen(&self, trades: &[(TradeId, String, Opening)]) -> Result<u64> {
-        // four values a trade, well within any SQLite's limit on parameters
+        // four values a trade: SQLite takes at most 999 parameters before 3.32.0
+        // (SQLITE_MAX_VARIABLE_NUMBER, 32766 since), so 200 trades and the reason
+        // fit under the oldest limit
         const AT_ONCE: usize = 200;
         // a statement for each reason: the trades a correction joined into one share theirs
         let mut by_reason: std::collections::BTreeMap<&str, Vec<&(TradeId, String, Opening)>> = std::collections::BTreeMap::new();

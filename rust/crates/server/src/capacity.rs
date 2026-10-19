@@ -853,6 +853,8 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                     .map_err(err)?;
                 (record, day, account)
             };
+            #[cfg(test)]
+            let window = paths_mark(f, instrument);
             let m;
             if op == Op::BackdatedTrade {
                 // a buy in the holding's own account on that day, its answer measured:
@@ -872,7 +874,10 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                 book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &key, payload: &payload, refs: vec![] }, Timestamp::now()).map_err(err)?;
                 f.record_changed(Timestamp::now())?;
             }
-            Ok(Measured { rows: Some(rows), changed: (crate::figures::settled() - settled_before).max(1), ..since(&m, 1) })
+            let out = Measured { rows: Some(rows), changed: (crate::figures::settled() - settled_before).max(1), ..since(&m, 1) };
+            #[cfg(test)]
+            paths_taken(f, window);
+            Ok(out)
         }
         Op::BackdatedFlat => {
             f.names()?;
@@ -1417,6 +1422,22 @@ mod tests {
             let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
             build(one.path(), small, 2).unwrap();
             build(four.path(), large, 2).unwrap();
+            // the cuts the matches keep (#538): no more of them than the history
+            // grows by, and none larger for a longer history
+            if pair == Pair::Depth {
+                let cuts = |home: &Path| {
+                    // on a copy: the probes below measure the book as built
+                    let c = tempfile::tempdir().unwrap();
+                    copy_folder(home, c.path()).unwrap();
+                    let app = opened(c.path()).unwrap();
+                    figures(&app).unwrap().read(|e| e.cuts()).unwrap()
+                };
+                let ((n, _, b), (n4, _, b4)) = (cuts(one.path()), cuts(four.path()));
+                assert!(n > 0 && n4 > 0, "no cuts kept: {n}, {n4}");
+                let deeper = (min.1 as f64) / (min.0 as f64);
+                assert!((n4 as f64) <= 2.0 * deeper * n as f64, "{n} cuts, then {n4} at {deeper:.1} times the depth");
+                assert!((b4 as f64 / n4 as f64) <= 2.0 * (b as f64 / n as f64), "a cut of {} bytes, then {}", b / n, b4 / n4);
+            }
             for &op in pair.ops().iter().filter(|o| o.per_change()) {
                 let a = probe(op, pair, min.0, one.path()).unwrap();
                 let paths_a = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
@@ -1445,6 +1466,12 @@ mod tests {
                 if op == Op::BackdatedFlat {
                     for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
                         assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::Placed, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
+                    }
+                }
+                // a buy that stays open is walked on from the flat point before it (#538)
+                if op == Op::BackdatedTrade {
+                    for (book, paths) in [("small", &paths_a), ("large", &paths_b)] {
+                        assert!(paths.len() == 1 && paths[0].1 == bagholder_engine::engine::Path::FromCut, "{op:?} ({pair:?}, the {book} book): the family's matches in the window were {paths:?}");
                     }
                 }
             }
