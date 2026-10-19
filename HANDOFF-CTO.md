@@ -1,6 +1,6 @@
 # Handoff: the CTO session for Bagholder
 
-Written 2026-10-18 by the CTO session that ran on the owner's Mac, for the session that takes the role over on the home server. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
+Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
 
 The old session's memory (about 95 notes) lived only on the Mac. Everything in it that still matters is folded in below. Where a rule is already in the repo's `CLAUDE.md`, this file points to it and does not restate it.
 
@@ -22,54 +22,43 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-18)
+## 2. Where things stand (2026-10-18, end of the home-server CTO session's first day)
 
-### Ready, waiting only on the owner's ok to merge
+The Architect now runs on the same home server as a peer session named **Architect** (SendMessage `to: "Architect"`, or reply to its `from=` address). Messages go both ways. Its verdicts are still recorded as briefs on `architecture-briefs` (latest: brief 59).
 
-**Brief 49 is the latest brief.** It says #525 is ready and sets this order. **Every merge needs the owner's explicit ok. Never merge on your own.**
+**Merging:** the owner's standing OK (`docs/decisions.md`, 2026-10-18). Merge a PR once the Architect says "cleared" and **every** workflow run on its current head has succeeded. Releases stay the owner's word alone.
 
-1. **Merge #521** (`wealthsimple-hosts-followups`, every request through one door). Brief 39 had already said "merge after its changes", and they are done.
-2. **Merge master into #525** with a merge commit, no rebase. Branch `market-data-by-listing`, head `4bec4024`, CI 8/8 green.
-   - **Three files conflict:** `rust/crates/net/src/client.rs`, `rust/crates/net/src/net.rs` and `web/e2e/serve.mjs`.
-   - **Resolve them so both rules hold:**
-     - every request still leaves through `client::leave`;
-     - its offline refusal is #525's typed one (`client::Error::Offline`, then `bagholder_net::Failure::Offline`), never words;
-     - `named_call` stays beside the `outbound` line;
-     - `serve.mjs` keeps #521's record of the calls answered and #525's changes.
-3. **Re-run in full on the merge:** `cargo test --workspace --locked`, clippy and the full e2e.
-4. **Run the planted cases that must still fail:**
-   - #521's two: the order call pointed at the real address fails the host scan, and a Wealthsimple call sent elsewhere fails the signed-in e2e;
-   - #525's `an_sec_document_read_offline_is_refused_by_its_kind` and `a_sedar_document_read_offline_through_the_live_readers_is_never_said`.
-5. **Send the merge commit to the Architect.** It checks the three files and those results before #525 merges.
-6. **#522** (`plan-market-data-by-listing`) is the plan #525 was built from. #525 carries its commits, so it merges with or before #525. Confirm with the owner.
+### Merged today
+- #521, #525 (with plan #522), #523 (#516 closed), #539 (#527 closed), #544 (the merge decision).
 
-### Open, not yet reviewed
+### In CI now: merge on green (the Architect has cleared all three)
+- **#540** (#524, fund-of-funds sectors), head `733239f6`.
+- **#541** (#529, failures said as failures), head `a92a22f7`.
+- **#543** (#528, chips never squeezed), head `62fa5441`.
+- `scratchpad/merge-when-green.sh <pr…>` merges each one once all runs on its head succeed; background jobs were running it for all three. If a session restarts, check each PR (`gh pr view N --json state`) and rerun the script for any still open.
+- A failed run is never rerun: read the log, fix locally, push a new head, tell the Architect.
 
-- **#523** (`start-never-stops`, the fix for #516): a data failure at start goes to the header, and the server stays up. It is a small fix, built and green, and was never sent to the Architect. Bring it up to date with master and send it for review once #525 is in.
+### Pushed as branches, no PR yet: open each PR once the runs above finish
+Opening a PR starts its one CI run. Then send the Architect the head and run id.
+- `holdings-tie-order` `27d2ba80` (#533): `TIES` per table in `web/src/lib/sort.svelte.ts`, `then` required. Accepted by the Architect.
+- `counted-once-made` `d8a3d21b` (#530): three e2e sites wait for their request, plus the scan `src/no_counted_before_made.test.ts`. Accepted.
+- `reading-only-once-sent` `18cc02cb` (#534): `client::while_leaving` hook at the net door. **Two changes required before the PR** (the Architect's review):
+  1. Restore the hook with a drop guard, so a panic in `work` can't leave it set on a pooled thread.
+  2. Check which thread each live reader the pass uses sends from: SEC, SEDAR+ via the browser helper / `Net::send`, the local model on loopback. Say it in the PR, and hold each one you can with a loopback stand-in (a sent read names, a refused one doesn't).
 
-### Next work, in order
-
-1. **Brief 48, Node 26 for the page's build.** Only after #525, and only once Node 26's long-term support begins on 2026-10-28.
-   - Move every Node 22 to 26: the three `setup-node` steps in `tests.yml`, `release.yml`, the `node:22-slim` stage in `rust/Dockerfile`, and the README.
-   - Set `@types/node` to ^26, and add `"engines": {"node": ">=26"}` to `web/package.json`.
-   - Verify: check, test, the full e2e, the container job and a release build. Give the page's transfer size and the archive's size before and after.
-2. **#527:** a back-dated change re-derives the holding's whole later history.
-   - `backdated-trade` is over budget at 127 ms on a Pi against 100. It is listed in `OVER_BUDGET` (`rust/crates/server/src/capacity.rs`) by time, steps and allocations, and `backdated-fill` by steps and allocations.
-   - This is engine work and a heavy lift. It needs a plan through the gate.
-3. **Known flaky tests, filed:**
-   - **#531:** `everyscreen.spec.ts:159` fails about 1 run in 6 against a fresh server. It also fails at older heads. The fix is in the test (the issue says how).
-   - **#532:** `marketcards.spec.ts:787` timed out once in four full runs.
-   - **#530:** `menu.spec.ts:64` counts a request before waiting for it.
-4. **Filed by the Architect's reviews, not started:** #528 (the News chip cut at 1340 px), #529 (Short interest's failure in grey), #524 (a fund of funds' sectors), #509, #508, #512, and the #414–#486 batch from the full audit (brief 33's triage).
-5. **Dependabot PRs #488–#502** are untouched. **#229, #232 and #250** are old Python-era PRs. The Python and Go builds are frozen, so leave them unless the owner asks.
+### Next, in order
+1. The three PRs above.
+2. **#537:** plan for matching from a flat point inside a history (checkpoints). Start from brief 58's two points: measure the kept-state cost, and list everything that reads across a flat point.
+3. **#538:** measure how `backdated-trade`'s 195 ms request splits, then make the smaller change. Deferring figures out of the request is a last resort and needs its own plan.
+4. **#542:** Bloomberg's "Consumer, Non-cyclical" folds a healthcare fund into Staples. Look the fund through instead.
+5. **Plan #535** (agents read the trade history, read-only MCP), approved by brief 54: build after the bug list. Its decisions are already in the PR.
+6. **Brief 48:** Node 26 for the page build, not before 2026-10-28.
+7. A CI speed proposal (macOS runs the whole Rust suite, 18 min): raise it with the owner only if they ask about speed again.
+8. Older backlog as before: #509, #508, #512, the #414–#486 audit batch, Dependabot #488–#502.
 
 ### The release line
-
-- **v2.5.7** is the latest release. Master is at `7e0782f1`.
-- Release steps are in `CLAUDE.md` (Releases). Bump `APP_VERSION` in `rust/crates/server/src/app.rs`, which `rust/Cargo.toml` mirrors, together with `server/tests/golden/routes.json`, then run `cargo update -w`.
-- Release only on the owner's word. Release runs come from the tag push: read `actions/runs?branch=vX.Y.Z` ("Release archives"; the image is built inside it). Never filter on `event=release`, which never matches.
-
----
+- **v2.5.7** is the latest release we know of. Two "Release archives" runs from tag pushes appeared today, and this session didn't start them; check `gh release list` before assuming.
+- Release steps are unchanged (`CLAUDE.md`, Releases).
 
 ## 3. How the owner wants to be worked with
 
@@ -108,6 +97,23 @@ Each rule below cost the owner real anger, often more than once. Treat them as h
 - **Subagents** follow `CLAUDE.md`'s delegation rules. Every prompt fences filesystem access to the repo, the scratchpad and `~/.bagholder*`: no `find /` or `find ~`. A disk-wide walk once set off macOS privacy prompts for Photos, Mail and Messages, and a prompt fence alone did not stop it.
 
 ---
+
+### Lessons from the home server (2026-10-18)
+- **Brief 51 is binding.**
+  - Locally, run only the named tests and plants; never a whole crate or suite.
+  - Wrap every cargo, npm build and Playwright run in `flock /tmp/bagholder-build.lock nice -n 10 …`, since the Architect builds on the same 2 cores.
+  - One CI run per merge head, the automatic one; never dispatch CI and never push throwaway branches.
+  - No cloud sessions, and nothing on the owner's Mac.
+- **Shared cargo target:** `scratchpad/cargo-target`. Each worktree symlinks `rust/target` to it, and Playwright's `serve.mjs` builds into it too. One worktree per PR, removed after merge.
+- **Restoring a planted file:** `touch` it after copying it back, or cargo keeps the planted binary (the restored copy carries the old mtime).
+- **Plants must be able to fail.** A test that makes its rows unique by the very columns being planted out passes the plant. State the test's own identity.
+- **Recorded replies of a new kind go in a folder of their own.** Each `replies/<source>` folder's shape test is the union of everything in it.
+- **gh here has no `--json` on `pr checks`:** read the workflow runs by head sha instead (`merge-when-green.sh`).
+- **The owner:**
+  - no extra or repeated runs beyond what the evidence needs;
+  - no pages or artifacts made for them that they won't use;
+  - clean up merged worktrees and scratch files;
+  - say plainly when a promised step hasn't started, and then do it.
 
 ## 4. The engineering standard
 
