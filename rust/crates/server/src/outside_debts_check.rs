@@ -1,7 +1,8 @@
 //! `bagholder outside-debts-check <data folder> <out folder>`
 //! (`docs/plans/debts-held-outside-wealthsimple.md`, brief 68): the one capture
-//! the person supplies. With the folder's saved sign-in it asks Wealthsimple's net
-//! worth feature once (a read), writes its reply anonymised to the out folder for
+//! the person supplies. With the folder's saved sign-in, used as it is and never
+//! renewed (their app holds the same one), it asks Wealthsimple's net worth
+//! feature once (a read), writes its reply anonymised to the out folder for
 //! the repository, and prints counts only, never a name or an amount:
 //! - each kind of outside account and the sign each debt's balance is stated with,
 //!   which settles how a balance owed is read;
@@ -37,7 +38,8 @@ pub fn cli(args: &[String]) -> i32 {
 fn run(home: &Path, out: &Path) -> Result<String, String> {
     let net = bagholder_net::Net::new(std::sync::Arc::new(bagholder_net::SystemClock), std::sync::Arc::new(bagholder_net::Limiter::new()));
     let file = bagholder_wealthsimple::session::SessionFile { path: home.join("session.json") };
-    let mut client = bagholder_wealthsimple::client::Client::new(&net, file);
+    // read-only: the person's app holds the same sign-in, which must never be renewed here
+    let mut client = bagholder_wealthsimple::client::Client::read_only(&net, file);
     let reply = client.net_worth().map_err(|f| f.to_string())?.ok_or("Wealthsimple answered no net worth")?;
     let mut text = String::new();
 

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use bagholder_broker::Failure;
 use bagholder_core::json::{self, Value};
 use bagholder_net::{Ask, Limiter, ManualClock, Net, NetError, Transport};
-use bagholder_wealthsimple::client::Client;
+use bagholder_wealthsimple::client::{Client, RENEW_IN_THE_APP};
 use bagholder_wealthsimple::session::{refresh, take_over, SessionFile, Tokens, LOST_REFRESH, REFUSED_SIGN_IN};
 
 /// Answers each request with the next reply queued, and fails a test on a
@@ -213,4 +213,36 @@ fn a_second_token_posted_meanwhile_hides_nothing_known_of_the_first() {
     assert_eq!(take_over(&n, &held("per-token-c"), |_| Ok(())), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
     assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
     assert_eq!(q.asked.lock().unwrap().len(), 1, "the refused first token was not posted again");
+}
+
+/// A read-only client (the capture run beside the person's app, brief 68) never
+/// renews the sign-in: with its token expired it asks nothing, the token endpoint
+/// least of all, and `session.json` is byte for byte as it was.
+#[test]
+fn a_read_only_client_never_renews_the_sign_in() {
+    // the token expired an hour before the clock's noon
+    let q = queue(&[]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    std::fs::write(&path, r#"{"access_token":"old-access","refresh_token":"r1","client_id":"the-client","identity_canonical_id":"identity-1","expires_at":"2026-09-24T11:00:00Z","wssdi":"kept"}"#).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let n = net(&q);
+    let mut c = Client::read_only(&n, SessionFile { path: path.clone() });
+    match c.graphql("Securities", json::parse(r#"{"ids":[]}"#).unwrap()) {
+        Err(Failure::Lapsed(why)) => assert_eq!(why, RENEW_IN_THE_APP),
+        other => panic!("{other:?}"),
+    }
+    assert!(q.asked.lock().unwrap().is_empty(), "nothing asked: {:?}", q.asked.lock().unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), before, "session.json untouched");
+    // a token the server refuses before its stated expiry: said, never refreshed
+    let q = queue(&[(401, UNAUTHENTICATED)]);
+    let (_d, file) = session_file("r1");
+    let path = file.path.clone();
+    let before = std::fs::read(&path).unwrap();
+    let n = net(&q);
+    let mut c = Client::read_only(&n, file);
+    assert!(matches!(c.graphql("Securities", json::parse(r#"{"ids":[]}"#).unwrap()), Err(Failure::Lapsed(_))));
+    assert_eq!(q.asked.lock().unwrap().len(), 1, "the read alone, no token request");
+    assert!(q.asked.lock().unwrap().iter().all(|u| u.contains("graphql")), "{:?}", q.asked.lock().unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), before, "session.json untouched");
 }

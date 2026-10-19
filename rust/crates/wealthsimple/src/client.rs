@@ -84,7 +84,13 @@ pub struct Client<'n> {
     file: SessionFile,
     tokens: Option<Tokens>,
     sent: AtomicUsize,
+    /// Never renew the sign-in: a client run beside the person's app, which
+    /// holds the same sign-in, must never rotate its refresh token (brief 68).
+    read_only: bool,
 }
+
+/// What a read-only client says when the saved sign-in needs renewing.
+pub const RENEW_IN_THE_APP: &str = "Open Bagholder once so it renews its sign-in, then run this again.";
 
 impl<'n> Client<'n> {
     /// A client on `net`, Wealthsimple's host paced on its one limiter: a
@@ -96,11 +102,24 @@ impl<'n> Client<'n> {
         if pace.gap < PACE {
             net.limiter().configure(&host, bagholder_net::Pace { gap: PACE, ..pace });
         }
-        Client { net, file, tokens: None, sent: AtomicUsize::new(0) }
+        Client { net, file, tokens: None, sent: AtomicUsize::new(0), read_only: false }
+    }
+
+    /// A client that only reads with the saved sign-in as it is: it never
+    /// renews it and never writes `session.json`, so the person's app, which
+    /// holds the same sign-in, keeps a token that works. An expired sign-in is
+    /// said ([`RENEW_IN_THE_APP`]) and nothing is asked.
+    pub fn read_only(net: &'n Net, file: SessionFile) -> Client<'n> {
+        Client { read_only: true, ..Client::new(net, file) }
     }
 
     fn tokens(&mut self) -> Answer<Tokens> {
         if let Some(t) = &self.tokens {
+            if self.read_only {
+                // used as it is until it expires, and never renewed
+                let now = self.net.clock().now();
+                return if t.expires_at.is_none_or(|e| e > now) { Ok(t.clone()) } else { Err(Failure::Lapsed(RENEW_IN_THE_APP.into())) };
+            }
             // a token about to expire is refreshed before it is used
             let soon = self.net.clock().now().checked_add(jiff::Span::new().minutes(5)).ok();
             if t.expires_at.zip(soon).is_none_or(|(e, s)| e > s) {
@@ -144,6 +163,9 @@ impl<'n> Client<'n> {
             bagholder_net::client::named_call("wealthsimple", &format!("graphql {op}"));
             let reply = self.net.send(&Ask::post(&crate::hosts::graphql_url(), &headers, body.as_bytes())).map_err(|e| Failure::Unreachable(e.to_string()))?;
             if reply.status == 401 || reply.status == 403 {
+                if self.read_only {
+                    return Err(Failure::Lapsed(RENEW_IN_THE_APP.into()));
+                }
                 if refreshed {
                     return Err(Failure::Lapsed(format!("{op}: Wealthsimple answered {} after a refresh", reply.status)));
                 }
