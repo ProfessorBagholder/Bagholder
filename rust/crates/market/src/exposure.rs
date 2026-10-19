@@ -918,10 +918,12 @@ pub fn parse_evolve_page(html: &str) -> Result<(Weights, Vec<Holding>), serde_js
     let mut sectors = Weights::default();
     let mut holdings = Vec::new();
     if let Some(m) = BREAKDOWN.get_or_init(|| Regex::new(r"(?s)var portfolioBreakdownData\s*=\s*(\{.*?\});\s*\n").unwrap()).captures(html) {
+        // folded onto the set; a name spanning two sectors is kept as the page
+        // names it, for the fund's reader to look the fund through (#542)
         for r in serde_json::from_str::<EvolveBreakdown>(&m[1])?.data.sector {
-            let (n, w) = (norm_sector(&r.name), r.weight);
-            if !n.is_empty() && w > 0.0 {
-                sectors.add(&n, w);
+            let n = if bagholder_model::exposure::spans_sectors(&r.name) { r.name.clone() } else { norm_sector(&r.name) };
+            if !n.is_empty() && r.weight > 0.0 {
+                sectors.add(&n, r.weight);
             }
         }
     }
@@ -1329,12 +1331,16 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
     let scale = |w: Weights| -> Weights { Weights(w.0.into_iter().map(|(n, x)| (n, x / 100.0)).collect()) };
     // a stated breakdown is taken by the sectors it names, folded onto the set; a
     // row that names none (a fund of funds' breakdown by the funds it holds, #524)
-    // is no sector, and a breakdown left with none is looked through instead
+    // is no sector, and a breakdown left with none is looked through instead; one
+    // that names a sector spanning two of the set says nothing of how its weight
+    // splits, so the fund is looked through whole (#542)
     let mut stated = Weights::default();
-    for (n, w) in data.sectors.0 {
-        let s = norm_sector(&n);
-        if !s.is_empty() {
-            stated.add(&s, w);
+    if !data.sectors.0.iter().any(|(n, _)| bagholder_model::exposure::spans_sectors(n)) {
+        for (n, w) in data.sectors.0 {
+            let s = norm_sector(&n);
+            if !s.is_empty() {
+                stated.add(&s, w);
+            }
         }
     }
     let mut sectors = scale(stated);
