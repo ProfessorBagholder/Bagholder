@@ -169,7 +169,8 @@ fn seed_refreshable_session(app: &Arc<App>) {
 /// Blanks the store's own path (this test's temp folder) and the app's own
 /// start time (now, every run).
 /// Blanks any nested `startedAt` or `fetchedAt` key, wherever it sits: both
-/// are `now` on every run, never a route's own data.
+/// are `now` on every run, never a route's own data; and the VAPID key, made
+/// at random for each folder.
 fn scrub_timestamps(v: &mut Value) {
     match v {
         Value::Object(m) => {
@@ -186,6 +187,12 @@ fn scrub_timestamps(v: &mut Value) {
                     if let Some((head, _)) = s.rsplit_once('|') {
                         *s = format!("{head}|<today>");
                     }
+                }
+            }
+            // the data folder's VAPID public key, made at random for this test's folder
+            if let Some(Value::Object(push)) = m.get_mut("push") {
+                if push.get("key").is_some_and(Value::is_string) {
+                    push.insert("key".into(), json!("<vapid-key>"));
                 }
             }
             for x in m.values_mut() {
@@ -219,7 +226,6 @@ fn scrub(mut v: Value) -> Value {
 fn test_routes_golden() {
     let _g = crate::tests_common::guard();
     std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
-    // "browser" keeps `notifications_test` from reaching this machine's own notifications
     let app = isolated();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/routes.json");
     let got: Map<String, Value> = runtime().block_on(async {
