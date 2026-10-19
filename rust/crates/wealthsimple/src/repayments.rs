@@ -63,6 +63,26 @@ impl Payment {
     }
 }
 
+/// What a withdrawal row states about where it went: a bill payment or a
+/// pre-authorized debit, read from the row as Wealthsimple sent it; none for
+/// any other withdrawal (an EFT to the person's bank, an e-Transfer).
+pub fn payment_of(row: &bagholder_core::json::Value) -> Option<Payment> {
+    let bagholder_core::json::Value::Object(fields) = row else { return None };
+    let text = |k: &str| match fields.get(k) {
+        Some(bagholder_core::json::Value::String(v)) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
+        _ => None,
+    };
+    if text("type").as_deref() != Some("WITHDRAWAL") {
+        return None;
+    }
+    match text("subType").as_deref() {
+        Some("BILL_PAY") => Some(Payment::BillPay { company: text("billPayCompanyName")?, account: text("redactedExternalAccountNumber") }),
+        // the purpose as Wealthsimple states it: its category, else its type
+        Some("AFT") => Some(Payment::Debit { originator: text("aftOriginatorName")?, purpose: text("aftTransactionCategory").or_else(|| text("aftTransactionType")) }),
+        _ => None,
+    }
+}
+
 /// How a payment was matched, or why it was not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Matched {
@@ -262,6 +282,16 @@ mod tests {
         let mut got = named_debt.clone();
         got.sort();
         assert_eq!(got, want, "every loan or mortgage purpose, and no insurance on one");
+    }
+
+    #[test]
+    fn a_withdrawal_row_says_where_it_went_and_nothing_else_does() {
+        let row = |text: &str| payment_of(&bagholder_core::json::parse(text).unwrap());
+        assert_eq!(row(r#"{"type": "WITHDRAWAL", "subType": "BILL_PAY", "billPayCompanyName": "Zeta Bank Visa", "redactedExternalAccountNumber": "****4821"}"#), Some(bill("Zeta Bank Visa", "****4821")));
+        assert_eq!(row(r#"{"type": "WITHDRAWAL", "subType": "AFT", "aftOriginatorName": "Omicron Trust", "aftTransactionCategory": null, "aftTransactionType": "loans"}"#), Some(debit("Omicron Trust", Some("loans"))));
+        assert_eq!(row(r#"{"type": "DEPOSIT", "subType": "AFT", "aftOriginatorName": "Payroll"}"#), None, "money in");
+        assert_eq!(row(r#"{"type": "WITHDRAWAL", "subType": "E_TRANSFER"}"#), None);
+        assert_eq!(row(r#"{"type": "WITHDRAWAL", "subType": "BILL_PAY", "billPayCompanyName": ""}"#), None, "a payment naming no one names no debt");
     }
 
     #[test]

@@ -406,6 +406,12 @@ pub struct Portfolio {
     /// Margin accounts whose buying power the broker could not state, and why.
     pub margin_unavailable: Vec<(AccountId, String)>,
     pub has_margin: bool,
+    /// What is owed outside the accounts, in CAD, with each debt and its CAD
+    /// value: the outside debts the broker's net worth feature states, and a
+    /// credit card's balance where the card's own value is not in the net value
+    /// already. Stated only while the scope covers every account (an outside
+    /// debt belongs to none, brief 67) and some debt exists.
+    pub owed: Option<(Fig<Money>, Vec<(crate::input::Debt, Fig<Money>)>)>,
     pub cash: Fig<Money>,
     pub cash_pct: Fig<Option<Ratio>>,
     pub day_change: Option<Partial>,
@@ -450,6 +456,8 @@ pub struct CashMonth {
     pub count: usize,
     /// The month's interest charges, shown positive.
     pub interest: Partial,
+    /// The month's repayments of debts held outside the broker, shown positive.
+    pub repayments: Partial,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -756,6 +764,37 @@ pub(crate) fn is_margin(a: &crate::input::AccountInfo) -> bool {
     matches!(a.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. })
 }
 
+/// What is owed outside the accounts now (`Portfolio::owed`).
+fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -> Option<(Fig<Money>, Vec<(crate::input::Debt, Fig<Money>)>)> {
+    if !f.accounts.is_empty() {
+        return None;
+    }
+    let (rates, clock) = (&inputs.facts.rates, &inputs.clock);
+    let mut debts: Vec<crate::input::Debt> = inputs.facts.debts.owed.clone();
+    // a card's balance owed is a debt, unless the card states a value of its own,
+    // which the net value holds already
+    for a in accounts {
+        let card = matches!(a.account.account_type, AccountType::Known { kind: AccountKind::CreditCard, .. });
+        let Some(b) = inputs.market.brokers.get(&a.account.id) else { continue };
+        if !card || b.net_value_now.is_some() {
+            continue;
+        }
+        for (c, v) in &b.cash {
+            if v.is_negative() {
+                debts.push(crate::input::Debt { id: a.account.id.to_string(), name: a.account.name(), institution: String::new(), balance: Money::new(v.abs(), *c), as_of: b.as_of });
+            }
+        }
+    }
+    if debts.is_empty() {
+        return None;
+    }
+    let each: Vec<(crate::input::Debt, Fig<Money>)> = debts.into_iter().map(|d| {
+        let cad = live_to_cad(rates, clock, Money::new(d.balance.amount.abs(), d.balance.currency));
+        (d, cad)
+    }).collect();
+    Some((fig_sum(&each.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>()), each))
+}
+
 fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfolio {
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
@@ -840,7 +879,9 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         a.share = allocated.clone().map(|t| money_ratio(a.value, t).unwrap_or(0.0));
     }
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
+    let owed = owed(f, inputs, &accounts);
     Portfolio {
+        owed,
         unrealized_pct: ratio_of(&unrealized.total, &cost_basis.total),
         margin_used_pct: ratio_of(&margin_used, &accounts_market.total),
         cash_pct: match &net_value {
@@ -912,6 +953,8 @@ pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate:
     p.margin_used = None;
     p.margin_used_pct = Ok(None);
     p.available_margin = None;
+    // no statement describes a past day's debts
+    p.owed = None;
     p.margin_unavailable = Vec::new();
     p.past = Some(past);
     p
@@ -957,7 +1000,9 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
 
     // the chart: every month from the first payment to the current month (or the date filter's end)
     let mut months: Vec<CashMonth> = Vec::new();
-    if let Some(first) = dividends.iter().map(|i| rows[*i].day).min() {
+    // the bars' own payments: distributions, interest charged and repayments
+    let charted = |i: &usize| matches!(rows[*i].kind, Payment::Dividend | Payment::InterestCharge | Payment::Repayment);
+    if let Some(first) = everything.iter().filter(|i| charted(i)).map(|i| rows[*i].day).min() {
         let end = match f.bounds(today) {
             Some((_, hi)) => hi.min(today),
             None => match &f.dates {
@@ -965,7 +1010,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
                 _ => today,
             },
         };
-        let last = dividends.iter().map(|i| rows[*i].day).max().unwrap_or(first).max(end);
+        let last = everything.iter().filter(|i| charted(i)).map(|i| rows[*i].day).max().unwrap_or(first).max(end);
         let (mut y, mut m) = (first.year(), first.month());
         while (y, m) <= (last.year(), last.month()) {
             let in_month = |i: &usize| rows[*i].day.year() == y && rows[*i].day.month() == m;
@@ -973,7 +1018,10 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
             let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge && in_month(i)).collect();
             let mut interest = partial(&mut charges.iter().copied());
             interest.total = interest.total.map(Money::neg);
-            months.push(CashMonth { year: y, month: m, count: paid.len(), distributions: partial(&mut paid.iter().copied()), interest });
+            let repaid: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::Repayment && in_month(i)).collect();
+            let mut repayments = partial(&mut repaid.iter().copied());
+            repayments.total = repayments.total.map(Money::neg);
+            months.push(CashMonth { year: y, month: m, count: paid.len(), distributions: partial(&mut paid.iter().copied()), interest, repayments });
             if m == 12 {
                 y += 1;
                 m = 1;

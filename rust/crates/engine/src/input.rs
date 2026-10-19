@@ -632,6 +632,28 @@ pub struct Facts {
     pub frequencies: BTreeMap<InstrumentId, Sourced<u32>>,
     /// By the transaction each explains.
     pub adjustments: Adjustments,
+    /// The debts held outside the broker, and the withdrawals that repaid them
+    /// (`docs/plans/debts-held-outside-wealthsimple.md`).
+    pub debts: Debts,
+}
+
+/// A debt held outside the broker, as the broker's net worth feature states it:
+/// what is owed, in its currency, as of when it was last stated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Debt {
+    pub id: String,
+    pub name: String,
+    pub institution: String,
+    pub balance: Money,
+    pub as_of: Option<Timestamp>,
+}
+
+/// The debts held outside the broker, and which withdrawals repaid one: each
+/// such withdrawal by the debt it repaid, as the matching settled it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Debts {
+    pub owed: Vec<Debt>,
+    pub repayments: BTreeMap<TransactionId, String>,
 }
 
 /// The adjustment that explains each transaction, chosen from every one the

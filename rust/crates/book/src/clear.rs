@@ -87,11 +87,16 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("statement_holds", Holds::Broker),
     ("account_values", Holds::Broker),
     ("monthly_statements", Holds::Broker),
+    // what the broker's net worth feature and its payees state (migration 33)
+    ("outside_debts", Holds::Broker),
+    ("bill_payees", Holds::Broker),
     ("journal", Holds::Journal),
     ("journal_tags", Holds::Journal),
     ("trade_groups", Holds::Journal),
     ("trade_group_members", Holds::Journal),
     ("trades", Holds::Journal),
+    // the person's word on which debt a payee's payments repay (migration 33)
+    ("repayment_answers", Holds::Journal),
     ("fx_rates", Holds::Market),
     ("fx_reads", Holds::Market),
     ("fx_series", Holds::Market),
@@ -196,14 +201,14 @@ impl Book {
                 c.execute_batch(
                     "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_holds; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
                      DELETE FROM buying_power; DELETE FROM account_days; DELETE FROM account_links; DELETE FROM margin_backing;
-                     DELETE FROM activity_reads; DELETE FROM broker_reads;",
+                     DELETE FROM activity_reads; DELETE FROM broker_reads; DELETE FROM outside_debts; DELETE FROM bill_payees;",
                 )?;
             }
             if what.entries {
                 c.execute("DELETE FROM settings WHERE key LIKE 'watch.%'", [])?;
             }
             if what.journal {
-                c.execute_batch("DELETE FROM journal_tags; DELETE FROM journal; DELETE FROM trade_group_members; DELETE FROM trade_groups; DELETE FROM trades;")?;
+                c.execute_batch("DELETE FROM journal_tags; DELETE FROM journal; DELETE FROM trade_group_members; DELETE FROM trade_groups; DELETE FROM trades; DELETE FROM repayment_answers;")?;
             }
             if what.market {
                 c.execute_batch(

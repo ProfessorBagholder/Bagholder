@@ -9,6 +9,7 @@
 pub mod canon;
 pub mod changes;
 pub mod clear;
+pub mod debts;
 pub mod facts;
 pub mod identity;
 pub mod import;

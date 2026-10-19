@@ -746,6 +746,12 @@ impl Figures {
                     merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
                 }
             }
+            // the debts held outside, and which withdrawals repaid them: a new
+            // withdrawal, a debt read, a payee or an answer can each move them
+            let debts = engine_inputs::debts(&book)?;
+            if e.inputs().facts.debts != debts {
+                merge(&mut moved, e.apply(Change::Debts(debts)));
+            }
             Ok(())
         })();
         let named = held.named.take();

@@ -150,7 +150,33 @@ pub fn facts(book: &Book) -> Result<Facts, String> {
         .collect();
     let frequencies = book.frequencies().map_err(err)?.into_iter().map(|(i, f)| (i, Sourced { value: f.per_year, source: f.source })).collect();
     let adjustments = Adjustments::choose(book.adjustments().map_err(err)?);
-    Ok(Facts { rates, declared, frequencies, adjustments })
+    Ok(Facts { rates, declared, frequencies, adjustments, debts: debts(book)? })
+}
+
+/// The debts held outside the broker and the withdrawals that repaid them
+/// (`docs/plans/debts-held-outside-wealthsimple.md`): each outside debt as the
+/// newest read states it, and each Wealthsimple withdrawal matched to the debt
+/// it paid, where a rule or the person's answer names exactly one.
+pub fn debts(book: &Book) -> Result<bagholder_engine::input::Debts, String> {
+    use bagholder_wealthsimple::repayments::{match_payment, payment_of, Liability, Matched, Payee, LIABILITY_TYPES};
+    let owed: Vec<_> = book.outside_debts().map_err(err)?.into_iter().filter(|d| LIABILITY_TYPES.contains(&d.kind.as_str())).collect();
+    let liabilities: Vec<Liability> = owed.iter().map(|d| Liability { id: d.entity_id.clone(), kind: d.kind.clone(), institution: d.institution.clone(), last4: d.last4.clone() }).collect();
+    let payees: Vec<Payee> = book.bill_payees().map_err(err)?.into_iter().map(|(company, is_credit_card)| Payee { company, is_credit_card }).collect();
+    let answers = book.repayment_answers().map_err(err)?.into_iter().collect();
+    let mut repayments = BTreeMap::new();
+    for w in book.withdrawals_of("wealthsimple").map_err(err)? {
+        // a payload the book holds is the reply as received: one that is not JSON names no payee
+        let Ok(row) = bagholder_core::json::parse(&w.payload) else { continue };
+        let Some(payment) = payment_of(&row) else { continue };
+        if let Matched::Debt { liability, .. } = match_payment(&payment, &liabilities, &payees, &answers) {
+            repayments.insert(w.transaction, liability);
+        }
+    }
+    let owed = owed
+        .into_iter()
+        .map(|d| bagholder_engine::input::Debt { id: d.entity_id, name: d.name, institution: d.institution, balance: bagholder_core::Money::new(d.balance, d.currency), as_of: d.as_of })
+        .collect();
+    Ok(bagholder_engine::input::Debts { owed, repayments })
 }
 
 /// The source name a stand-in fact read from the old store carries.

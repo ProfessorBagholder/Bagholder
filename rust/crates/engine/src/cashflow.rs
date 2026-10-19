@@ -28,6 +28,8 @@ pub enum Payment {
     Interest,
     WithholdingTax,
     InterestCharge,
+    /// A withdrawal that repaid a debt held outside the broker.
+    Repayment,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,14 +63,16 @@ pub fn shown_order(a: &CashRow, b: &CashRow) -> std::cmp::Ordering {
     (b.day, b.at, &b.id).cmp(&(a.day, a.at, &a.id))
 }
 
-/// A transaction's cashflow row: a dividend, interest, withholding tax or an
-/// interest charge that moved cash; none for anything else.
+/// A transaction's cashflow row: a dividend, interest, withholding tax, an
+/// interest charge or a repayment of a debt held outside that moved cash; none
+/// for anything else.
 pub fn cash_row(inputs: &Inputs, t: &bagholder_core::transaction::Transaction) -> Option<CashRow> {
     let kind = match t.kind {
         Kind::Dividend => Payment::Dividend,
         Kind::Interest => Payment::Interest,
         Kind::WithholdingTax => Payment::WithholdingTax,
         Kind::InterestCharge => Payment::InterestCharge,
+        Kind::Withdrawal if inputs.facts.debts.repayments.contains_key(&t.id) => Payment::Repayment,
         _ => return None,
     };
     // a dividend of no cash is the broker's notice of one to come, not a payment
