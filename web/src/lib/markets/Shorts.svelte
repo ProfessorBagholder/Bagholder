@@ -120,6 +120,8 @@
     if (q) return f && f.loading ? 'Reading ' + q + '…' : f && f.error ? 'Could not read short interest for ' + q + ': ' + f.error : f && f.missing ? 'No short interest is reported for ' + q + '.' : 'No listing by that name.'
     return 'Nothing reported yet.'
   })
+  // a read that failed is said as a failure, never as a quiet note (SPEC §4)
+  const emptyFailed = $derived(!feed.loading && !!query.trim() && !!found[query.trim().toUpperCase()]?.error)
 
   // what could not be read for a ticker typed is said beside whatever rows show for
   // it, its own or the feed's that its words match
@@ -164,6 +166,6 @@
     </div>
     {#if lookupError}<div class="status-err" style="font-size:12px;margin-top:6px">{lookupError}</div>{/if}
   {:else}
-    <div class="muted" style="font-size:12px">{emptyText}</div>
+    <div class={emptyFailed ? 'status-err' : 'muted'} style="font-size:12px">{emptyText}</div>
   {/if}
 </div>

@@ -140,6 +140,17 @@ describe('a ticker searched for', () => {
     expect(c.querySelector('.status-err')?.textContent).toBe('Could not read short interest for RW: TMX could not be reached.')
   })
 
+  // #529: with no row to show beside it, the failure is still said as a failure
+  it('with no rows and a read that failed, says the failure in the failure style, never as a quiet note', async () => {
+    const c = await show([], 'all')
+    listedOn = { RV: ['TSX'] }
+    failsOn = ['TSX']
+    await type(c, 'RV')
+    expect(symbols(c)).toEqual([])
+    expect(c.querySelector('.status-err')?.textContent).toContain('Could not read short interest for RV')
+    expect([...c.querySelectorAll('.muted')].some((e) => e.textContent?.includes('Could not read'))).toBe(false)
+  })
+
   it('found on no venue while a directory did not answer, says the failure, never that no listing is by that name', async () => {
     const c = await show([], 'all')
     listedOn = { RX: [] }
