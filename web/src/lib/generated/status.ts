@@ -5,7 +5,13 @@ import type { ImportReport } from './model_api'
 
 export type NotifySettings = { fills: boolean, problems: boolean, connection: boolean, updates: boolean, releasesHeld: boolean, releasesWatched: boolean, releasesAll: boolean, disclosuresHeld: boolean, disclosuresWatched: boolean, disclosuresAll: boolean, };
 
-export type NotifyStatus = { native: string, unread: number, fills: boolean, problems: boolean, connection: boolean, updates: boolean, releasesHeld: boolean, releasesWatched: boolean, releasesAll: boolean, disclosuresHeld: boolean, disclosuresWatched: boolean, disclosuresAll: boolean, };
+export type PushStatus = { key: string, subscriptions: number, };
+
+export type NotifyStatus = { 
+/**
+ * What the page subscribes with (`docs/plans/notifications-through-the-browser.md`).
+ */
+push: PushStatus, unread: number, fills: boolean, problems: boolean, connection: boolean, updates: boolean, releasesHeld: boolean, releasesWatched: boolean, releasesAll: boolean, disclosuresHeld: boolean, disclosuresWatched: boolean, disclosuresAll: boolean, };
 
 export type Importing = { 
 /**

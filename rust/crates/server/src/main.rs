@@ -23,6 +23,8 @@ mod following;
 mod pull_broker;
 mod read_sources;
 mod events;
+mod exit_with;
+mod webpush;
 mod feeds;
 mod filings;
 mod http;
@@ -195,9 +197,9 @@ fn serve() -> i32 {
         bagholder_core::log::set_sink(|line| logfile::write(line, bagholder_core::jiff::Timestamp::now()));
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
-        Ok((home, root_dir()?, bind_host, port_choices()?))
+        Ok((home, root_dir()?, bind_host, port_choices()?, exit_with::pid()?))
     })();
-    let (home, root, bind_host, ports) = match started {
+    let (home, root, bind_host, ports, exit_with) = match started {
         Ok(s) => s,
         Err(e) => {
             log(&format!("bagholder: {e}"));
@@ -222,6 +224,19 @@ fn serve() -> i32 {
         }
     };
     let a = app::App::new(home, root, bind_host.clone());
+    // a copy started for some work stops through its own stop when that work ends (brief 64)
+    if let Some(pid) = exit_with {
+        let stop = a.clone();
+        if let Err(e) = exit_with::watch(pid, move || {
+            log(&format!("bagholder: process {pid}, which this copy was started for, has ended: stopping"));
+            stop.request_stop();
+        }) {
+            log(&format!("bagholder: {e}"));
+            return 1;
+        }
+    }
+    // what earlier versions made to post notifications themselves goes (brief 65)
+    notify::remove_native_leftovers(&a.home);
     // a step here that reads the stored data never stops the server: a service
     // manager would only start it again into the same failure, with no page and no
     // update button. Each failure is said in the header until the next start (#516).
@@ -362,6 +377,15 @@ fn main() {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("bagholder {}", app::APP_VERSION);
         return;
+    }
+    // a command run for some work ends with what started it (brief 64): the server
+    // ends through its own stop (`serve`), a command at once
+    if !args.is_empty() {
+        let watched = exit_with::pid().and_then(|p| p.map_or(Ok(()), |pid| exit_with::watch(pid, || std::process::exit(0))));
+        if let Err(e) = watched {
+            eprintln!("bagholder: {e}");
+            std::process::exit(1);
+        }
     }
     // the book this build will move onto (docs/plans/stage-1-foundation.md), made
     // from a database kept today; nothing the app runs calls it yet

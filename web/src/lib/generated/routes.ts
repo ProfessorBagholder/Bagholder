@@ -7,7 +7,7 @@ import type { Detail, Details, TradesDoc } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
-import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
+import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, PushAnswer, PushEndpoint, PushSubscription } from './notifications'
 import type { Adjust, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
 import type { StatusAnswer } from './status'
@@ -19,6 +19,8 @@ export interface Routes {
   'POST /api/notifications/read': { body: NotificationIds; answer: NotificationsReadAnswer }
   'POST /api/notifications/seen': { body: NotificationIds; answer: NotificationsSeenAnswer }
   'POST /api/notifications/clear': { answer: NotificationsClearAnswer }
+  'POST /api/push/subscribe': { body: PushSubscription; answer: PushAnswer }
+  'POST /api/push/unsubscribe': { body: PushEndpoint; answer: PushAnswer }
   'POST /api/login/start': { answer: StartLoginAnswer }
   'POST /api/login/cancel': { answer: CancelLoginAnswer }
   'POST /api/login/input': { body: LoginInput; answer: OkOr }

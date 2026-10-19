@@ -128,7 +128,7 @@ What stays: the kinds and their switches, the store's `notifications` table, the
 - [ ] **No copy outlives its starter:** a server started with a child's pid stops through its own stop when the child is killed. A pid already gone refuses the start. The source scan passes, and fails on a planted start.
 - [ ] **Real browsers,** by a session on the owner's Mac, not the owner, with no Bagholder tab open: in Chrome and in Safari a real push arrives, a click opens the right page, and `log show` shows nothing new in the Dock. Recorded in the PR, or Safari's refusal on `127.0.0.1` stated, with SPEC saying so.
 - [ ] **The container:** the image built from the branch, its page subscribing in a browser on the host, and a row shown.
-- [ ] **Cost:** archive size before and after, the crate comparison (open question 1), and the paired idle hour (nothing new runs with no subscription).
+- [ ] **Cost:** archive size before and after, and the crate comparison (open question 1). Nothing new runs with no subscription: `TIMED_WAITS` holds it.
 
 ## Surfaces to check beyond the diff
 
@@ -147,14 +147,21 @@ What stays: the kinds and their switches, the store's `notifications` table, the
 
 ## Anti-stub self-check
 
-*Initialled when built.*
+Every path delivers for real: the encryption reproduces RFC 8291's example byte for byte, the stand-in push service opens what it receives with the browser's own private key, and a real Firefox showed a real push.
 
 ## Verification
 
-*Filled when built.*
+- **Encryption:** `webpush::tests::rfc_8291_appendix_a_byte_for_byte`; the VAPID token verifies against the public key (`a_vapid_token_has_rfc_8292s_form_and_verifies`).
+- **Delivery,** on a stand-in push service on loopback (`notify.rs`): every header and claim, one token per origin within the hour, the row opened field for field (`a_row_pushed_with_no_page_open_reaches_the_browser_as_the_push_services_require`); a row over 4 KB as its id, at most 4096 bytes (`a_row_too_long_for_a_push_goes_as_its_id`); 410 and 404 drop, 429 with `Retry-After` sent again, a refusal said on the second failure and cleared by a success (`a_push_service_is_answered_as_it_answers`); nothing pushed with a page open (`with_a_page_open_nothing_is_pushed`); a subscription taken only as a browser makes one, its key a P-256 point (`a_subscription_is_taken_only_as_a_browser_makes_one`).
+- **The service worker:** `web/src/sw.test.ts`. It is built as one plain script with no import or export (`src/sw-worker.ts`), as a classic service worker must be.
+- **The page,** e2e (`web/e2e/notifications.spec.ts`): Turn on subscribes and the server keeps it; with the page open the page shows the row once under its tag and nothing reaches the push service; with the page closed the row reaches the stand-in, `aes128gcm`, VAPID-signed, at most 4 KB. The controls wait for the server's key.
+- **A real browser:** Firefox 158, headless, through Mozilla's own push service: the page's Turn on subscribed (`updates.push.services.mozilla.com`), the tab was closed, the server pushed a row, and the service worker showed it (`getNotifications()` listed `bh-<id>`), the row marked seen. Headless Chromium has no push service ("Registration failed - permission denied"), so Chrome was not run; Safari needs a Mac and was not run.
+- **Removal:** `the_server_names_no_native_notification_tool`; `an_earlier_versions_applet_is_removed_at_start`.
+- **No copy outlives its starter:** `tests/exit_with.rs`; `every_copy_the_repository_starts_on_another_folder_ends_with_its_starter`.
+- **Cost:** crates added: 0 (`openssl`, already linked); `web-push` would add 122 to the server, `p256` + `hkdf` + `aes-gcm` 28. Nothing new runs with no subscription: `TIMED_WAITS` holds it.
 
 ## Handoff
 
-*Filled when built.*
+Safari on `127.0.0.1` is unverified until a session on a Mac runs the same check.
 
-**Nothing left running.** *Filled when built.*
+**Nothing left running.** Every scratch server and browser this work started was stopped, and `pgrep` finds none.

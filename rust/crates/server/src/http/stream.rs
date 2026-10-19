@@ -102,7 +102,10 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
             first.push(("refused", serde_json::json!({"doc": "", "error": "what the page shows was not taken: the work stopped short"})));
         }
     }
+    // a page is open while its stream lasts: it shows each notification, and none is pushed
+    let open = crate::notify::PageOpen::new(&app);
     let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {
+    let _open = &open;
     let value = app.clone();
     async move {
         let mut feed = feed?;

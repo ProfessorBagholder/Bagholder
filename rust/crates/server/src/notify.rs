@@ -1,15 +1,13 @@
 //! Notifications: what Bagholder tells the person about while they are not
-//! looking.
+//! looking (`docs/plans/notifications-through-the-browser.md`).
 //!
 //! Every event starts here, since the server is what keeps watching while the
 //! page sits in a background tab or is closed. Each becomes one row, keyed so
-//! the same event is never told twice. Where the computer has a desktop, the
-//! server posts the row as the system's own notification under Bagholder's
-//! name and icon: on a Mac through a small applet it builds for itself in the
-//! home folder, on Windows through a toast registered under Bagholder's name,
-//! on Linux through the desktop's notification service. Where it has none, the
-//! page shows the row through the browser's Notification API. Every open page
-//! keeps the history, fed by a stream of every row as it is made.
+//! the same event is never told twice. Bagholder is a web application, so every
+//! row is shown by the browser: by an open page through its service worker, or,
+//! with no page open, by Web Push to each browser that subscribed (`webpush`),
+//! whose service worker shows it. Every open page keeps the history, fed by a
+//! stream of every row as it is made.
 //!
 //! The rows, what each stream has met, the settings and the marks are kept in the
 //! book (`bagholder_book::notices`), on connections kept between uses whose
@@ -17,8 +15,7 @@
 
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -38,10 +35,7 @@ pub const SETTINGS_KEY: &str = bagholder_book::notices::SETTINGS;
 /// A comment on the stream this often keeps the connection through proxies
 /// and sleeps.
 pub const HEARTBEAT: Duration = Duration::from_secs(15);
-/// "browser": never post from this process; the page shows them.
-pub const MODE_ENV: &str = "BAGHOLDER_NOTIFY";
 pub const APP_NAME: &str = "Bagholder";
-pub const MAC_BUNDLE_ID: &str = "com.bagholder.notifier";
 /// Before a stream's name: the book's setting its mark is kept under.
 pub const WATERMARK: &str = bagholder_book::notices::SEEN;
 
@@ -52,30 +46,6 @@ pub fn setting_keys() -> Vec<&'static str> {
     out
 }
 
-fn url(app: &App) -> String {
-    format!("http://127.0.0.1:{}/", *app.port.lock().unwrap())
-}
-
-/// The icon a notification is shown with: the page's own (`favicon.png`, in the
-/// binary or the checkout), kept in the data folder for the system to read, and
-/// written again whenever the page's differs. With no page icon there is none.
-fn icon(app: &App) -> PathBuf {
-    let at = app.home.join("icon.png");
-    if let Some(data) = crate::http::assets::unhashed(&app.root, "favicon.png") {
-        if std::fs::read(&at).ok().as_deref() != Some(&data[..]) {
-            let tmp = app.home.join(format!("icon.png.{}", crate::app::uuid4()));
-            if let Err(e) = std::fs::write(&tmp, &data).and_then(|()| std::fs::rename(&tmp, &at)) {
-                // a notification still goes out, without the icon; what was left of the write is said with it
-                let left = match std::fs::remove_file(&tmp) {
-                    Err(r) if r.kind() != std::io::ErrorKind::NotFound => format!("; and {} could not be removed: {r}", tmp.display()),
-                    _ => String::new(),
-                };
-                log(&format!("bagholder notify: the icon could not be written to {}: {e}{left}", at.display()));
-            }
-        }
-    }
-    at
-}
 
 /// A JSON value that reads as a plain boolean, or as `false` for anything
 /// else -- absent, `null`, a stray non-boolean a hand-edited store might
@@ -266,15 +236,26 @@ impl NotifySettingsPatch {
     }
 }
 
-/// The kinds, the native channel, and the unread count -- what the header's
+/// The kinds, what Web Push needs, and the unread count -- what the header's
 /// stream carries, and `GET /api/notifications` besides.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
 pub struct NotifyStatus {
     #[serde(flatten)]
     #[ts(flatten)]
     pub settings: NotifySettings,
-    pub native: String,
+    /// What the page subscribes with (`docs/plans/notifications-through-the-browser.md`).
+    pub push: PushStatus,
     pub unread: i64,
+}
+
+/// What Web Push needs of this copy: its VAPID public key (base64url, the
+/// `applicationServerKey` a browser subscribes with) and how many browsers are
+/// subscribed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct PushStatus {
+    pub key: String,
+    pub subscriptions: i64,
 }
 
 /// A failure of the book, as the notices' SQL says one.
@@ -388,9 +369,10 @@ pub struct NotificationsDoc {
     pub unread: i64,
 }
 
-/// The kinds, the native channel, and the unread count.
+/// The kinds, what Web Push needs, and the unread count.
 pub fn status(book: &Book) -> Result<NotifyStatus> {
-    Ok(NotifyStatus { settings: settings(book)?, native: native_channel(), unread: bagholder_store::feeds::unread_notifications(book.notices())? })
+    let push = PushStatus { key: crate::webpush::b64url(&vapid(book)?.public()), subscriptions: book.push_subscriptions().map_err(sql)?.len() as i64 };
+    Ok(NotifyStatus { settings: settings(book)?, push, unread: bagholder_store::feeds::unread_notifications(book.notices())? })
 }
 
 /// `GET /api/notifications`: the settings, kinds, the list and the unread
@@ -439,6 +421,54 @@ pub struct NotificationsClearAnswer {
     pub cleared: usize,
 }
 
+/// A browser's push subscription, as `PushSubscription.toJSON()` gives it.
+#[derive(Clone, Debug, Default, Deserialize, TS)]
+pub struct PushSubscription {
+    pub endpoint: String,
+    pub keys: PushKeys,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, TS)]
+pub struct PushKeys {
+    pub p256dh: String,
+    pub auth: String,
+}
+
+impl PushSubscription {
+    /// The endpoint and keys, where they are what a push subscription is: an
+    /// `https` capability URL (or one on this machine, for a stand-in), a P-256
+    /// public key and a 16-octet secret (RFC 8291 §2).
+    pub fn checked(&self) -> std::result::Result<(String, String, String), String> {
+        let e = self.endpoint.trim();
+        let on_this_machine = e.starts_with("http://127.0.0.1:") || e.starts_with("http://[::1]:");
+        if !e.starts_with("https://") && !on_this_machine {
+            return Err(format!("{e:?} is not a push service's address"));
+        }
+        crate::webpush::origin_of(e)?;
+        let key = crate::webpush::unb64url(&self.keys.p256dh)?;
+        if key.len() != 65 || key[0] != 4 || !crate::webpush::Keys::is_point(&key) {
+            return Err("the browser's key is not an uncompressed P-256 key".into());
+        }
+        if crate::webpush::unb64url(&self.keys.auth)?.len() != 16 {
+            return Err("the browser's secret is not 16 octets".into());
+        }
+        Ok((e.to_string(), self.keys.p256dh.trim().to_string(), self.keys.auth.trim().to_string()))
+    }
+}
+
+/// A push subscription by its endpoint.
+#[derive(Clone, Debug, Default, Deserialize, TS)]
+pub struct PushEndpoint {
+    pub endpoint: String,
+}
+
+/// How many browsers are subscribed, after a change.
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct PushAnswer {
+    pub ok: bool,
+    pub subscriptions: i64,
+}
+
 /// Notifications by id, for `read` and `seen`. For `read`, no ids at all
 /// means every one.
 #[derive(Clone, Debug, Default, Deserialize, TS)]
@@ -446,48 +476,9 @@ pub struct NotificationIds {
     pub ids: Option<Vec<i64>>,
 }
 
-fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
-}
-
-pub fn native_channel() -> String {
-    #[cfg(test)]
-    if let Some(c) = test_hooks::CHANNEL.lock().unwrap().clone() {
-        return c;
-    }
-    // unset is the system's own channel; a mode that is not text names none of the modes
-    let mode = std::env::var(MODE_ENV).ok().unwrap_or_default();
-    let display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false) || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
-    channel_for(&mode, std::env::consts::OS, &|n| which(n).is_some(), display)
-}
-
-/// The channel a system offers: its mode, its kind, the tools it has and
-/// whether it has a desktop.
-pub(crate) fn channel_for(mode: &str, os: &str, has: &dyn Fn(&str) -> bool, display: bool) -> String {
-    let mode = mode.trim().to_lowercase();
-    if ["browser", "off", "0", "none"].contains(&mode.as_str()) {
-        return String::new();
-    }
-    if os == "macos" {
-        return if has("osascript") { "mac".into() } else { String::new() };
-    }
-    if os == "windows" {
-        return if has("powershell.exe") || has("pwsh.exe") || has("powershell") { "windows".into() } else { String::new() };
-    }
-    if has("notify-send") && display {
-        return "linux".into();
-    }
-    String::new()
-}
-
 #[cfg(test)]
 pub(crate) mod test_hooks {
     use std::sync::Mutex;
-    /// A channel standing in for the system's.
-    pub static CHANNEL: Mutex<Option<String>> = Mutex::new(None);
-    /// While set, deliveries are recorded here and never reach the system.
-    pub static DELIVERED: Mutex<Option<Vec<(String, String, String)>>> = Mutex::new(None);
     /// The heartbeat, in milliseconds, when set.
     pub static HEARTBEAT_MS: Mutex<Option<u64>> = Mutex::new(None);
 }
@@ -588,7 +579,12 @@ pub fn default_ident(i: &serde_json::Value) -> String {
 #[derive(Default)]
 pub struct NotifyState {
     bell: (Mutex<u64>, Condvar),
-    worker: OnceLock<Mutex<std::sync::mpsc::Sender<(String, String, String)>>>,
+    worker: OnceLock<Mutex<std::sync::mpsc::Sender<bagholder_store::feeds::Notification>>>,
+    /// The pages with the notifications' stream open: while one is, it shows each
+    /// row, and nothing goes through a push service.
+    pub pages: std::sync::atomic::AtomicUsize,
+    /// Each push service's VAPID token, by origin, with when it was made.
+    tokens: Mutex<std::collections::HashMap<String, (String, u64)>>,
     /// Idle connections to the book the notices are kept on (`book`).
     books: Mutex<Vec<Book>>,
 }
@@ -661,293 +657,237 @@ fn post(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, body: &
 
 /// A notice's row, kept once under its key.
 fn store_row(book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
-    // posted from here, the row is the server's own to show: seen from the start
-    bagholder_store::feeds::add_notification(book.notices(), kind, key, title, body, extra.as_ref(), !native_channel().is_empty(), &now_iso())
+    // unseen until the page that is open shows it, or a push reaches a browser
+    bagholder_store::feeds::add_notification(book.notices(), kind, key, title, body, extra.as_ref(), false, &now_iso())
 }
 
-/// A kept notice shown: through the system where it has a channel, and to every
-/// page's stream.
-pub fn announce(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
-    let channel = native_channel();
-    if !channel.is_empty() {
-        enqueue(app.clone(), row.title.clone(), row.body.clone(), channel);
+/// A page open: held by its stream (`GET /api/events`) for as long as the stream
+/// lasts. While any is held, a row goes to the pages, which show it, and no push
+/// is sent.
+pub struct PageOpen(Arc<App>);
+
+impl PageOpen {
+    pub fn new(app: &Arc<App>) -> PageOpen {
+        app.notify.pages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        PageOpen(app.clone())
     }
-    app.notify.wake_streams();
 }
 
-fn enqueue(app: Arc<App>, title: String, body: String, chan: String) {
+impl Drop for PageOpen {
+    fn drop(&mut self) {
+        self.0.notify.pages.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A kept notice shown: to every open page's stream, whose page shows it through
+/// its service worker; with no page open, to every subscribed browser by Web Push.
+pub fn announce(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
+    app.notify.wake_streams();
+    if app.notify.pages.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        enqueue(app.clone(), row.clone());
+    }
+}
+
+fn enqueue(app: Arc<App>, row: bagholder_store::feeds::Notification) {
     let tx = app.notify.worker.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<(String, String, String)>();
+        let (tx, rx) = std::sync::mpsc::channel::<bagholder_store::feeds::Notification>();
         // the app holds the sender and the thread only a weak hold on the app: when
         // the app goes, the sender goes with it and the thread ends
         let weak = Arc::downgrade(&app);
         crate::app::spawn("bagholder-notify", move || {
-            for (title, body, ch) in rx {
+            for row in rx {
                 let Some(app) = weak.upgrade() else { return };
-                if !deliver(&app, &ch, &title, &body) {
-                    log(&format!("bagholder notify: {} not shown ({})", title, ch));
-                }
+                push_all(&app, &row);
             }
         });
         Mutex::new(tx)
     });
     // the thread ends only with the app, whose sender this is: a send it refuses
-    // means the thread died, and the system's notifications with it
-    match tx.lock().unwrap().send((title, body, chan)) {
-        Ok(()) => crate::feeds::feed_answered(&app, SYSTEM_NOTICES),
-        // nothing asked again brings it back: said at once
-        Err(_) => crate::feeds::feed_down(&app, SYSTEM_NOTICES, "The system's notifications stopped: the thread that shows them ended".into()),
+    // means the thread died, and the pushes with it
+    if tx.lock().unwrap().send(row).is_err() {
+        crate::feeds::feed_down(&app, PUSHED, "Notifications stopped reaching the browsers: the thread that sends them ended".into());
     }
 }
 
-/// The header's entry for showing notices through the system.
-const SYSTEM_NOTICES: &str = "notifications-system";
+/// The book's setting this data folder's VAPID key is kept under (RFC 8292): its
+/// private scalar in base64url, made once.
+pub const VAPID_KEY: &str = "push.vapid";
 
-/// Post one notification through the system.
-pub fn deliver(app: &App, channel: &str, title: &str, body: &str) -> bool {
-    #[cfg(test)]
-    {
-        if let Some(v) = test_hooks::DELIVERED.lock().unwrap().as_mut() {
-            v.push((channel.to_string(), title.to_string(), body.to_string()));
-            return true;
-        }
-        if !channel.is_empty() {
-            panic!("a test reached the system's notifications");
-        }
+/// How long a push service keeps a row for a browser that is away: a day, after
+/// which a notification is no longer news (RFC 8030 §5.2).
+const PUSH_TTL: u64 = 86_400;
+
+/// How long a VAPID token is good for, under the 24 hours every push service takes
+/// (RFC 8292 §2), and how long one is used before it is made again.
+const TOKEN_LIFE: u64 = 12 * 3600;
+const TOKEN_REUSE: u64 = 3600;
+
+/// This data folder's VAPID key, made the first time it is asked for.
+pub fn vapid(book: &Book) -> Result<crate::webpush::Keys> {
+    if let Some(k) = book.setting(VAPID_KEY).map_err(sql)? {
+        let raw = crate::webpush::unb64url(&k).map_err(said)?;
+        return crate::webpush::Keys::from_private(&raw).map_err(said);
     }
-    match channel {
-        "mac" => mac_deliver(app, title, body),
-        "windows" => windows_deliver(app, title, body),
-        "linux" => linux_deliver(app, title, body),
-        _ => false,
-    }
+    let k = crate::webpush::Keys::generate();
+    book.set_setting(VAPID_KEY, Some(&crate::webpush::b64url(&k.private())), bagholder_core::jiff::Timestamp::now()).map_err(sql)?;
+    Ok(k)
 }
 
-// --- macOS: an applet of Bagholder's own ---------------------------------------
-
-fn mac_script(app: &App) -> String {
-    format!(
-        "on run\n\tset t to system attribute \"BAGHOLDER_TITLE\"\n\tif t is \"\" then\n\t\topen location \"{}\"\n\telse\n\t\tdisplay notification (system attribute \"BAGHOLDER_BODY\") with title t\n\tend if\nend run\n",
-        url(app)
-    )
-}
-
-pub fn mac_app_path(app: &App) -> PathBuf {
-    app.home.join(format!("{}.app", APP_NAME))
-}
-
-/// What the applet is built from: its script and the icon, where there is one; an
-/// icon there that cannot be read is the error.
-fn mac_stamp(app: &App) -> std::io::Result<String> {
-    let mut h = openssl::sha::Sha1::new();
-    h.update(mac_script(app).as_bytes());
-    match std::fs::read(icon(app)) {
-        Ok(b) => h.update(&b),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
-    }
-    Ok(h.finish().iter().map(|b| format!("{:02x}", b)).collect())
-}
-
-fn run(cmd: &str, args: &[&str]) -> bool {
-    Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-}
-
-/// The applet, built once and again whenever its script, the
-/// app's address or the icon changes.
-pub fn mac_app(app: &App) -> Option<PathBuf> {
-    let appdir = mac_app_path(app);
-    let stamp_file = appdir.join("Contents/Resources/bagholder.stamp");
-    let want = match mac_stamp(app) {
-        Ok(w) => w,
-        Err(e) => {
-            log(&format!("bagholder notify: the notifier app's icon could not be read: {}", e));
-            return None;
-        }
-    };
-    if appdir.join("Contents/MacOS/applet").exists() && std::fs::read_to_string(&stamp_file).ok().as_deref() == Some(want.as_str()) {
-        return Some(appdir);
-    }
-    match mac_build(app, &appdir, &want) {
-        Ok(p) => p,
-        Err(e) => {
-            log(&format!("bagholder notify: the notifier app could not be built: {}", e));
-            None
-        }
+/// What Web Push carries of a row: the row itself, or, where that does not fit in
+/// one push once encrypted, its id alone, for the service worker to fetch.
+pub fn push_payload(row: &bagholder_store::feeds::Notification) -> Vec<u8> {
+    // the id alone is what the service worker fetches the row by: a row that does
+    // not fit, or that could not be written, still arrives as itself
+    let by_id = format!("{{\"id\":{}}}", row.id).into_bytes();
+    match serde_json::to_vec(row) {
+        Ok(whole) if whole.len() <= crate::webpush::MAX_PLAINTEXT => whole,
+        _ => by_id,
     }
 }
 
-fn mac_build(app: &App, appdir: &Path, stamp: &str) -> std::io::Result<Option<PathBuf>> {
-    if which("osacompile").is_none() {
-        return Ok(None);
+/// How urgent a push is (RFC 8030 §5.3): a fill or an order's problem is told at
+/// once, everything else as the push service sees fit.
+pub fn push_urgency(kind: &str) -> &'static str {
+    if kind == "fills" || kind == "problems" {
+        "high"
+    } else {
+        "normal"
     }
-    let work = std::env::temp_dir().join(format!("bagholder-notifier-{}", crate::app::uuid4()));
-    std::fs::create_dir_all(&work)?;
-    let result = (|| -> std::io::Result<Option<PathBuf>> {
-        let script = work.join("notifier.applescript");
-        std::fs::write(&script, mac_script(app))?;
-        let built = work.join(format!("{}.app", APP_NAME));
-        let ws = |p: &Path| p.to_string_lossy().into_owned();
-        if !run("osacompile", &["-o", &ws(&built), &ws(&script)]) {
-            return Err(std::io::Error::other("osacompile failed"));
-        }
-        let plist = built.join("Contents/Info.plist");
-        if !run("plutil", &["-replace", "CFBundleIdentifier", "-string", MAC_BUNDLE_ID, &ws(&plist)])
-            || !run("plutil", &["-replace", "CFBundleDisplayName", "-string", APP_NAME, &ws(&plist)])
-        {
-            return Err(std::io::Error::other("plutil failed"));
-        }
-        if let Some(icns) = mac_icon(app, &work) {
-            let res = built.join("Contents/Resources");
-            std::fs::copy(&icns, res.join("applet.icns"))?;
-            let car = res.join("Assets.car");
-            if car.exists() {
-                std::fs::remove_file(car)?;
+}
+
+/// The header's entry for sending notifications through the browsers' push services.
+const PUSHED: &str = "notifications-push";
+
+/// What one push came to.
+#[derive(Debug, PartialEq)]
+pub enum Pushed {
+    Sent,
+    /// The push service says the subscription is gone (404, 410): it is dropped.
+    Gone,
+    /// Refused or unreachable, with why.
+    Failed(String),
+}
+
+impl NotifyState {
+    /// The VAPID token for the push service at `origin`: kept, and made again once
+    /// it is an hour old (brief 66, 2).
+    fn token(&self, key: &crate::webpush::Keys, origin: &str) -> String {
+        let now = crate::app::now_unix() as u64;
+        let mut kept = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((t, made)) = kept.get(origin) {
+            if now < made + TOKEN_REUSE {
+                return t.clone();
             }
-            run("plutil", &["-remove", "CFBundleIconName", &ws(&plist)]);
         }
-        std::fs::write(built.join("Contents/Resources/bagholder.stamp"), stamp)?;
-        if which("codesign").is_some() {
-            // sealed last, with the stamp inside the seal
-            run("codesign", &["--force", "--sign", "-", &ws(&built)]);
-        }
-        if appdir.exists() {
-            std::fs::remove_dir_all(appdir)?;
-        }
-        if let Some(parent) = appdir.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::rename(&built, appdir)?;
-        Ok(Some(appdir.to_path_buf()))
-    })();
-    // the working folder goes whatever the build came to; one that cannot be removed fails the build
-    match std::fs::remove_dir_all(&work) {
-        Ok(()) => result,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => result,
-        Err(e) => result.and(Err(e)),
+        let t = crate::webpush::vapid_token(key, origin, now + TOKEN_LIFE);
+        kept.insert(origin.to_string(), (t.clone(), now));
+        t
     }
 }
 
-fn mac_icon(app: &App, work: &Path) -> Option<PathBuf> {
-    let src = icon(app);
-    if which("sips").is_none() || which("iconutil").is_none() || !src.exists() {
-        return None;
-    }
-    let iconset = work.join("icon.iconset");
-    std::fs::create_dir_all(&iconset).ok()?;
-    let sizes: [(u32, &[&str]); 6] = [
-        (16, &["icon_16x16.png"]),
-        (32, &["icon_16x16@2x.png", "icon_32x32.png"]),
-        (64, &["icon_32x32@2x.png"]),
-        (128, &["icon_128x128.png"]),
-        (256, &["icon_128x128@2x.png", "icon_256x256.png"]),
-        (512, &["icon_256x256@2x.png", "icon_512x512.png"]),
-    ];
-    for (size, names) in sizes {
-        let first = iconset.join(names[0]);
-        let sz = size.to_string();
-        if !run("sips", &["-z", &sz, &sz, &src.to_string_lossy(), "--out", &first.to_string_lossy()]) {
-            return None;
+/// One row sent to one subscription (RFC 8030 §5, RFC 8291, RFC 8292). A push
+/// service that asks to be asked later (429, 5xx with `Retry-After`) is asked
+/// once more after the time it states.
+pub fn push_one(app: &Arc<App>, key: &crate::webpush::Keys, endpoint: &str, p256dh: &str, auth: &str, row: &bagholder_store::feeds::Notification) -> Pushed {
+    let sealed = crate::webpush::unb64url(p256dh)
+        .and_then(|k| crate::webpush::unb64url(auth).map(|a| (k, a)))
+        .and_then(|(k, a)| crate::webpush::encrypt(&push_payload(row), &k, &a));
+    let body = match sealed {
+        Ok(b) => b,
+        Err(e) => return Pushed::Failed(format!("the message could not be encrypted for this browser: {e}")),
+    };
+    let origin = match crate::webpush::origin_of(endpoint) {
+        Ok(o) => o,
+        Err(e) => return Pushed::Failed(e),
+    };
+    let ttl = PUSH_TTL.to_string();
+    let mut asked_again = false;
+    loop {
+        let auth_header = crate::webpush::authorization(&app.notify.token(key, &origin), key);
+        let headers = [("TTL", ttl.as_str()), ("Urgency", push_urgency(&row.kind)), ("Content-Encoding", "aes128gcm"), ("Content-Type", "application/octet-stream"), ("Authorization", auth_header.as_str())];
+        // sent once, its answer read whatever it is: a push sent twice shows twice
+        let answer = bagholder_net::client::request_once("POST", endpoint, &headers, Some(&body), Duration::from_secs(30));
+        let r = match answer {
+            Ok(r) => r,
+            Err(e) => return Pushed::Failed(format!("the push service did not answer: {e}")),
+        };
+        match r.status {
+            200..=299 => return Pushed::Sent,
+            404 | 410 => return Pushed::Gone,
+            429 | 500..=599 if !asked_again => {
+                // the push service's own stated wait (RFC 9110 §10.2.3), in seconds
+                let after = r.headers.iter().find(|(k, _)| k == "retry-after").and_then(|(_, v)| v.trim().parse::<u64>().ok());
+                let Some(secs) = after else { return Pushed::Failed(format!("the push service answered {}", r.status)) };
+                asked_again = true;
+                if app.wait(Duration::from_secs(secs)) {
+                    return Pushed::Failed("stopping".into());
+                }
+            }
+            s => return Pushed::Failed(format!("the push service answered {s}")),
         }
-        for other in &names[1..] {
-            std::fs::copy(&first, iconset.join(other)).ok()?;
+    }
+}
+
+/// A row sent to every subscribed browser: marked seen once one has it, a
+/// subscription its push service says is gone dropped, and a failure said in the
+/// header once confirmed, standing until a send succeeds.
+pub fn push_all(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
+    let b = match book(app) {
+        Ok(b) => b,
+        Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {e}")),
+    };
+    let (key, subs) = match vapid(&b).and_then(|k| b.push_subscriptions().map_err(sql).map(|s| (k, s))) {
+        Ok(x) => x,
+        Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {e}")),
+    };
+    let mut reached = false;
+    let mut failed: Option<String> = None;
+    for (endpoint, p256dh, auth) in subs {
+        match push_one(app, &key, &endpoint, &p256dh, &auth, row) {
+            Pushed::Sent => reached = true,
+            Pushed::Gone => {
+                if let Err(e) = b.drop_push_subscription(&endpoint) {
+                    failed = Some(format!("a browser's subscription that ended could not be dropped: {e}"));
+                }
+            }
+            Pushed::Failed(why) => failed = Some(why),
         }
     }
-    let icns = work.join("icon.icns");
-    if !run("iconutil", &["-c", "icns", &iconset.to_string_lossy(), "-o", &icns.to_string_lossy()]) {
-        return None;
-    }
-    if icns.exists() { Some(icns) } else { None }
-}
-
-fn mac_deliver(app: &App, title: &str, body: &str) -> bool {
-    if let Some(appdir) = mac_app(app) {
-        let out = mac_open_command(&appdir, title, body).output();
-        match out {
-            Ok(o) if o.status.success() => return true,
-            Ok(o) => log(&format!("bagholder notify: the notifier app refused: {}", String::from_utf8_lossy(&o.stderr).trim())),
-            Err(e) => log(&format!("bagholder notify: the notifier app refused: {}", e)),
+    if reached {
+        if let Err(e) = bagholder_store::feeds::mark_notifications_seen(b.notices(), &[row.id], &now_iso()) {
+            log(&format!("bagholder notify: a pushed notification could not be marked shown: {e}"));
         }
     }
-    // without the app: the system's plain notification, under Script Editor's name
-    mac_plain_command(title, body)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn mac_open_command(appdir: &Path, title: &str, body: &str) -> Command {
-    let mut c = Command::new("open");
-    c.args(["-n", "-W", "--env", &format!("BAGHOLDER_TITLE={}", title), "--env", &format!("BAGHOLDER_BODY={}", body)]).arg(appdir);
-    c
-}
-
-fn mac_plain_command(title: &str, body: &str) -> Command {
-    let mut c = Command::new("osascript");
-    c.args(["-e", "display notification (system attribute \"BAGHOLDER_BODY\") with title (system attribute \"BAGHOLDER_TITLE\")"])
-        .env("BAGHOLDER_TITLE", title)
-        .env("BAGHOLDER_BODY", body);
-    c
-}
-
-// --- Windows: a toast under an app id registered as Bagholder --------------------
-
-const WINDOWS_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml('<toast activationType="protocol" launch="__URL__"><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>')
-$t = $xml.GetElementsByTagName('text')
-$t.Item(0).AppendChild($xml.CreateTextNode($env:BAGHOLDER_TITLE)) | Out-Null
-$t.Item(1).AppendChild($xml.CreateTextNode($env:BAGHOLDER_BODY)) | Out-Null
-$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('__APP__').Show($toast)
-"#;
-
-pub fn windows_script(app: &App) -> String {
-    WINDOWS_SCRIPT.replace("__URL__", &url(app)).replace("__APP__", APP_NAME)
-}
-
-fn windows_deliver(app: &App, title: &str, body: &str) -> bool {
-    // the app id a toast is shown under, with Bagholder's name and icon, in the
-    // person's own registry hive
-    static REGISTERED: OnceLock<()> = OnceLock::new();
-    REGISTERED.get_or_init(|| {
-        let key = format!("HKCU\\Software\\Classes\\AppUserModelId\\{}", APP_NAME);
-        run("reg", &["add", &key, "/v", "DisplayName", "/t", "REG_SZ", "/d", APP_NAME, "/f"]);
-        if icon(app).exists() {
-            run("reg", &["add", &key, "/v", "IconUri", "/t", "REG_SZ", "/d", &icon(app).to_string_lossy(), "/f"]);
-        }
-    });
-    let shell = if which("powershell.exe").is_some() || which("powershell").is_some() { "powershell" } else { "pwsh" };
-    windows_command(shell, title, body, &windows_script(app))
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn windows_command(shell: &str, title: &str, body: &str, script: &str) -> Command {
-    let mut c = Command::new(shell);
-    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", script])
-        .env("BAGHOLDER_TITLE", title)
-        .env("BAGHOLDER_BODY", body);
-    c
-}
-
-// --- Linux ------------------------------------------------------------------------
-
-fn linux_deliver(app: &App, title: &str, body: &str) -> bool {
-    linux_command(app, title, body).output().map(|o| o.status.success()).unwrap_or(false)
-}
-
-fn linux_command(app: &App, title: &str, body: &str) -> Command {
-    let mut cmd = Command::new("notify-send");
-    cmd.arg(format!("--app-name={}", APP_NAME));
-    if icon(app).exists() {
-        cmd.arg(format!("--icon={}", icon(app).to_string_lossy()));
+    match failed {
+        Some(why) => crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent to a browser: {why}")),
+        None => crate::feeds::feed_answered(app, PUSHED),
     }
-    cmd.args([title, body]);
-    cmd
+}
+
+/// What earlier versions made on this computer to post notifications themselves,
+/// removed at start: the applet in the data folder, and on Windows the app id in
+/// the person's own registry hive. Each removal is said once.
+pub fn remove_native_leftovers(home: &Path) {
+    let applet = home.join("Bagholder.app");
+    if applet.exists() {
+        match std::fs::remove_dir_all(&applet) {
+            Ok(()) => log(&format!("bagholder notify: removed {}, which an earlier version made to post notifications", applet.display())),
+            Err(e) => log(&format!("bagholder notify: {} could not be removed: {e}", applet.display())),
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+        let path: Vec<u16> = "Software\\Classes\\AppUserModelId\\Bagholder".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: a null-terminated path under the person's own hive
+        let r = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, path.as_ptr()) };
+        // 2 is ERROR_FILE_NOT_FOUND: nothing was there
+        if r == 0 {
+            log("bagholder notify: removed the app id an earlier version registered to post notifications");
+        } else if r != 2 {
+            log(&format!("bagholder notify: the app id an earlier version registered could not be removed (error {r})"));
+        }
+    }
 }
 
 // --- the page's channel -------------------------------------------------------------
@@ -1027,7 +967,7 @@ mod tests {
     use crate::app::f;
     use serde_json::{json, Value};
     use bagholder_store::feeds as st;
-    use std::ffi::OsStr;
+    use std::path::PathBuf;
     use std::sync::MutexGuard;
 
     static SERIAL: Mutex<()> = Mutex::new(());
@@ -1037,7 +977,6 @@ mod tests {
     fn setup() -> (MutexGuard<'static, ()>, Arc<App>, NoticesBook<'static>) {
         static APP: std::sync::OnceLock<Arc<App>> = std::sync::OnceLock::new();
         let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var(MODE_ENV, "browser");
         let app: &'static Arc<App> = APP.get_or_init(|| {
             let home = std::env::temp_dir().join(format!("bagholder-notify-tests-{}", std::process::id()));
             std::fs::create_dir_all(&home).unwrap();
@@ -1056,9 +995,9 @@ mod tests {
         conn.notices().execute("DELETE FROM settings WHERE key = ? OR key LIKE 'notify.seen.%'", [SETTINGS_KEY]).unwrap();
         // the streams' own memory too, so one test's releases are never another's history
         conn.notices().execute_batch("DELETE FROM told").unwrap();
+        // no browser subscribed but where a test subscribes one
+        conn.notices().execute_batch("DELETE FROM push_subscriptions").unwrap();
         app.cache().unwrap().execute_batch("DELETE FROM news").unwrap();
-        *test_hooks::CHANNEL.lock().unwrap() = Some(String::new());
-        *test_hooks::DELIVERED.lock().unwrap() = None;
         *test_hooks::HEARTBEAT_MS.lock().unwrap() = None;
         {
             let mut s = app.state.lock().unwrap();
@@ -1095,14 +1034,6 @@ mod tests {
         r.id
     }
 
-    fn argv(c: &Command) -> Vec<String> {
-        std::iter::once(c.get_program()).chain(c.get_args()).map(|a| a.to_string_lossy().into_owned()).collect()
-    }
-
-    fn env_of(c: &Command, k: &str) -> String {
-        c.get_envs().find(|(n, _)| *n == OsStr::new(k)).and_then(|(_, v)| v).map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()
-    }
-
     #[test]
     fn test_every_kind_is_off_until_turned_on_and_the_settings_round_trip() {
         let (_g, _app, conn) = setup();
@@ -1112,12 +1043,10 @@ mod tests {
         want.fills = true;
         assert_eq!(out, want, "unknown keys and non-booleans are ignored");
         assert_eq!(settings(&conn).unwrap(), out);
-        assert_eq!(status(&conn).unwrap(), NotifyStatus { settings: out, native: String::new(), unread: 0 }, "the kinds, the channel and the unread count");
-        assert_eq!(channel_for("", "macos", &|_| true, false), "mac");
-        assert_eq!(channel_for("", "windows", &|n| n == "powershell", false), "windows");
-        assert_eq!(channel_for("", "linux", &|n| n == "notify-send", true), "linux");
-        assert_eq!(channel_for("", "linux", &|_| false, false), "", "no desktop: the page is the channel");
-        assert_eq!(channel_for("browser", "macos", &|_| true, true), "", "told to stand aside");
+        let st = status(&conn).unwrap();
+        assert_eq!((st.settings, st.push.subscriptions, st.unread), (out, 0, 0), "the kinds, no browser subscribed, and the unread count");
+        assert_eq!(crate::webpush::unb64url(&st.push.key).unwrap().len(), 65, "the key a browser subscribes with");
+        assert_eq!(status(&conn).unwrap().push.key, st.push.key, "made once, then kept");
     }
 
     #[test]
@@ -1208,13 +1137,6 @@ mod tests {
         assert_eq!(ping, ": ping\n\n", "nothing new by the heartbeat: a comment keeps the connection");
         assert!(row2.starts_with(&format!("id: {}\ndata: ", second)), "{}", row2);
 
-        *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
-        *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
-        let rx = open_stream(&app, None, 1);
-        assert_eq!((next(&rx), next(&rx)), (": bagholder\n\n".to_string(), ": ping\n\n".to_string()), "no id: only what is made after the stream opens");
-        let third = idn(&emit(&app, &conn, "fills", "third", "Third", "b", None).unwrap().unwrap());
-        let chunk = next_row(&rx);
-        assert!(chunk.starts_with(&format!("id: {}\n", third)) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
     }
 
     #[test]
@@ -1232,94 +1154,6 @@ mod tests {
         }
         let got: Vec<(String, String)> = list(&conn).iter().map(|r| (f(r, "title"), f(r, "body"))).collect();
         assert_eq!(got, [("Sign in needed".to_string(), "The Wealthsimple session expired. Connect again from the menu.".to_string()), ("Sync failing".to_string(), "Wealthsimple did not answer".to_string())]);
-    }
-
-    #[test]
-    fn test_posted_by_the_server_a_row_is_stored_seen_and_handed_to_the_system() {
-        let (_g, app, conn) = setup();
-        set(&conn, json!({"fills": true}));
-        *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
-        *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
-        let row = emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while std::time::Instant::now() < deadline && test_hooks::DELIVERED.lock().unwrap().as_ref().unwrap().is_empty() {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_ne!(row.seen_at, "", "the server shows it: no page shows it too");
-        assert_eq!(test_hooks::DELIVERED.lock().unwrap().clone().unwrap(), vec![("mac".to_string(), "Order filled · QNC".to_string(), "Bought 5 at 1.75".to_string())]);
-        assert!(st::list_notifications(conn.notices(), 0, "", true, 1000, false).unwrap().is_empty(), "nothing left for a page");
-    }
-
-    #[test]
-    fn test_each_system_is_asked_in_its_own_words() {
-        let (_g, app, _conn) = setup();
-        *app.port.lock().unwrap() = 8799;
-        let c = mac_open_command(Path::new("/x/Bagholder.app"), "Stopped out · QNC", "Sold 5 at 1.64");
-        assert_eq!(argv(&c), ["open", "-n", "-W", "--env", "BAGHOLDER_TITLE=Stopped out · QNC", "--env", "BAGHOLDER_BODY=Sold 5 at 1.64", "/x/Bagholder.app"]);
-        assert!(mac_script(&app).contains("open location \"http://127.0.0.1:8799/\""));
-        let c = mac_plain_command("T", "B");
-        assert_eq!((argv(&c)[0].as_str(), env_of(&c, "BAGHOLDER_TITLE").as_str(), env_of(&c, "BAGHOLDER_BODY").as_str()), ("osascript", "T", "B"), "without the applet, the system's plain notification");
-        let c = windows_command("powershell.exe", "T", "B", &windows_script(&app));
-        let a = argv(&c);
-        assert_eq!((a[0].as_str(), &a[1..7], env_of(&c, "BAGHOLDER_TITLE").as_str()), ("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden"].map(String::from)[..], "T"));
-        assert!(a.last().unwrap().contains("CreateToastNotifier('Bagholder')"));
-        assert!(a.last().unwrap().contains("launch=\"http://127.0.0.1:8799/\""), "a click on the toast opens the app");
-        let a = argv(&linux_command(&app, "T", "B"));
-        assert_eq!([&a[..2], &a[a.len() - 2..]].concat(), ["notify-send", "--app-name=Bagholder", "T", "B"]);
-        assert!(a[2].starts_with("--icon="));
-        assert!(!deliver(&app, "", "T", "B"));
-    }
-
-    /// The icon is the page's own, found in a release (the binary's page), in the
-    /// container (the page beside it) and in a checkout (its sources), with no
-    /// other file at the root.
-    #[test]
-    fn test_the_notification_icon_is_the_pages_own() {
-        let page_icon = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/public/favicon.png")).unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        for root in [PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), elsewhere.path().to_path_buf()] {
-            let home = tempfile::tempdir().unwrap();
-            let app = App::new(home.path().to_path_buf(), root.clone(), "127.0.0.1".into());
-            let embedded = crate::http::assets::unhashed(&root, "favicon.png");
-            let at = icon(&app);
-            assert_eq!(at, home.path().join("icon.png"));
-            match embedded {
-                // the page's copy is written for the system to read, and again when it differs
-                Some(data) => {
-                    assert_eq!(data, page_icon, "the built page carries web/public's icon");
-                    assert_eq!(std::fs::read(&at).unwrap(), page_icon);
-                    std::fs::write(&at, b"another").unwrap();
-                    assert_eq!(std::fs::read(icon(&app)).unwrap(), page_icon);
-                }
-                // a binary built without the page, away from any checkout: no icon, and no file said to be one
-                None => assert!(!at.exists()),
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    #[ignore = "builds a real applet with osacompile, which needs Apple Events: a sandboxed run refuses them, so this runs on its own, outside it, with --ignored"]
-    fn test_the_mac_applet_is_built_once_under_bagholders_name_and_icon() {
-        assert!(Path::new("/usr/bin/osacompile").exists(), "the applet is built with macOS's own tools");
-        let (_g, app, _conn) = setup();
-        *app.port.lock().unwrap() = 8799;
-        let appdir = mac_app(&app).expect("built");
-        assert_eq!(appdir, app.home.join("Bagholder.app"));
-        let plist = Command::new("plutil").args(["-p"]).arg(appdir.join("Contents/Info.plist")).output().unwrap();
-        let plist = String::from_utf8_lossy(&plist.stdout);
-        assert!(plist.contains("\"CFBundleName\" => \"Bagholder\""), "{}", plist);
-        assert!(plist.contains("\"CFBundleIdentifier\" => \"com.bagholder.notifier\""));
-        assert!(!plist.contains("CFBundleIconName"), "the app's own icon file");
-        assert!(std::fs::metadata(appdir.join("Contents/Resources/applet.icns")).unwrap().len() > 10000, "the icon built from the favicon");
-        assert!(!appdir.join("Contents/Resources/Assets.car").exists());
-        assert!(appdir.join("Contents/Resources/Scripts").exists() && mac_script(&app).contains("open location \"http://127.0.0.1:8799/\""));
-        let stamp = std::fs::read_to_string(appdir.join("Contents/Resources/bagholder.stamp")).unwrap();
-        let mtime = std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap();
-        assert_eq!(mac_app(&app), Some(appdir.clone()));
-        assert_eq!(std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap(), mtime, "already built: not built again");
-        *app.port.lock().unwrap() = 8800;
-        assert_ne!(mac_stamp(&app).unwrap(), stamp, "a new address means a new applet");
     }
 
     #[test]
@@ -1669,6 +1503,250 @@ mod tests {
         assert_eq!(st::events_told(c.notices(), "news:X@TSX", &events).unwrap().len(), 2);
         assert!(st::events_told(c.notices(), "news:Y@TSX", &events).unwrap().is_empty(), "each stream keeps its own");
         assert!(st::events_told(c.notices(), "news:X@TSX", &[String::new()]).unwrap().is_empty(), "nothing is not an event");
+    }
+
+
+    /// A push service on this machine, answering each request with the next of
+    /// `answers` (a status, and a `Retry-After` where given), keeping every request:
+    /// its path, its headers (names lower-cased) and its body.
+    struct StandIn {
+        origin: String,
+        got: Arc<Mutex<Vec<(String, std::collections::BTreeMap<String, String>, Vec<u8>)>>>,
+    }
+
+    fn stand_in(answers: Vec<(u16, Option<u64>)>) -> StandIn {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let kept = got.clone();
+        std::thread::spawn(move || {
+            for (stream, (code, after)) in l.incoming().zip(answers) {
+                let Ok(mut stream) = stream else { return };
+                let mut r = BufReader::new(stream.try_clone().unwrap());
+                let mut first = String::new();
+                r.read_line(&mut first).unwrap();
+                let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
+                let mut headers = std::collections::BTreeMap::new();
+                loop {
+                    let mut line = String::new();
+                    r.read_line(&mut line).unwrap();
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = line.split_once(':') {
+                        headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+                    }
+                }
+                let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+                let mut body = vec![0; len];
+                r.read_exact(&mut body).unwrap();
+                kept.lock().unwrap().push((path, headers, body));
+                let extra = after.map(|a| format!("Retry-After: {a}\r\n")).unwrap_or_default();
+                write!(stream, "HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n{extra}\r\n").unwrap();
+            }
+        });
+        StandIn { origin, got }
+    }
+
+    /// A browser's subscription: its keys, the private one kept to open what arrives.
+    fn browser(book: &Book, endpoint: &str) -> (crate::webpush::Keys, Vec<u8>) {
+        let ua = crate::webpush::Keys::generate();
+        let mut auth = vec![0u8; 16];
+        openssl::rand::rand_bytes(&mut auth).unwrap();
+        book.keep_push_subscription(endpoint, &crate::webpush::b64url(&ua.public()), &crate::webpush::b64url(&auth), bagholder_core::jiff::Timestamp::now()).unwrap();
+        (ua, auth)
+    }
+
+    fn clear_push(conn: &Book) {
+        conn.notices().execute("DELETE FROM push_subscriptions", []).unwrap();
+    }
+
+    /// A row pushed to a browser with no page open (brief 66, 2): the stand-in
+    /// receives it encrypted for that browser alone, opens it to the row field for
+    /// field, and every header and claim is what the push services state: `TTL`,
+    /// `Urgency` by kind, `aes128gcm`, and a VAPID token for its own origin, at most
+    /// 24 hours good, naming the software, kept for the next push to that origin.
+    #[test]
+    fn a_row_pushed_with_no_page_open_reaches_the_browser_as_the_push_services_require() {
+        let (_g, app, conn) = setup();
+        clear_push(&conn);
+        let push = stand_in(vec![(201, None), (201, None)]);
+        let (ua, auth) = browser(&conn, &format!("{}/push/1", push.origin));
+        let key = vapid(&conn).unwrap();
+        set(&conn, json!({"fills": true, "updates": true}));
+        let fill = record(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap().unwrap();
+        push_all(&app, &fill);
+        let update = record(&conn, "updates", "update:9", "Update available", "Bagholder 9.9.9", None).unwrap().unwrap();
+        push_all(&app, &update);
+        let got = push.got.lock().unwrap().clone();
+        assert_eq!(got.len(), 2);
+        let now = crate::app::now_unix() as u64;
+        let mut tokens = Vec::new();
+        for ((path, h, body), (row, urgency)) in got.iter().zip([(&fill, "high"), (&update, "normal")]) {
+            assert_eq!(path, "/push/1");
+            assert_eq!(h.get("ttl").map(String::as_str), Some("86400"));
+            assert_eq!(h.get("urgency").map(String::as_str), Some(urgency), "{}", row.kind);
+            assert_eq!(h.get("content-encoding").map(String::as_str), Some("aes128gcm"));
+            let auth_header = h.get("authorization").unwrap();
+            let (t, k) = auth_header.strip_prefix("vapid t=").and_then(|r| r.split_once(", k=")).unwrap();
+            assert_eq!(k, crate::webpush::b64url(&key.public()), "the folder's own key");
+            let claims: Value = serde_json::from_slice(&crate::webpush::unb64url(t.split('.').nth(1).unwrap()).unwrap()).unwrap();
+            assert_eq!(claims["aud"], json!(push.origin), "the push service's own origin");
+            assert_eq!(claims["sub"], json!("https://github.com/ProfessorBagholder/Bagholder"));
+            let exp = claims["exp"].as_u64().unwrap();
+            assert!(exp > now && exp <= now + 24 * 3600, "good for at most a day: {exp}");
+            tokens.push(t.to_string());
+            assert!(body.len() <= crate::webpush::MAX_BODY);
+            let opened: Value = serde_json::from_slice(&crate::webpush::decrypt(body, &ua, &auth).unwrap()).unwrap();
+            assert_eq!(opened, serde_json::to_value(row).unwrap(), "the row, field for field");
+        }
+        assert_eq!(tokens[0], tokens[1], "one token for one push service, within the hour");
+        let seen: Vec<i64> = st::list_notifications(conn.notices(), 0, "", true, 1000, false).unwrap().iter().map(|r| r.id).collect();
+        assert!(!seen.contains(&fill.id) && !seen.contains(&update.id), "a pushed row is shown: no page shows it again");
+    }
+
+    /// A row too long for one push goes as its id alone, still at most 4 KB, for
+    /// the service worker to fetch.
+    #[test]
+    fn a_row_too_long_for_a_push_goes_as_its_id() {
+        let (_g, app, conn) = setup();
+        clear_push(&conn);
+        let push = stand_in(vec![(201, None)]);
+        let (ua, auth) = browser(&conn, &format!("{}/push/long", push.origin));
+        set(&conn, json!({"updates": true}));
+        let long = "x".repeat(6000);
+        let row = record(&conn, "updates", "update:long", "Update available", &long, None).unwrap().unwrap();
+        push_all(&app, &row);
+        let (_, _, body) = push.got.lock().unwrap()[0].clone();
+        assert!(body.len() <= crate::webpush::MAX_BODY, "{}", body.len());
+        let opened: Value = serde_json::from_slice(&crate::webpush::decrypt(&body, &ua, &auth).unwrap()).unwrap();
+        assert_eq!(opened, json!({"id": row.id}));
+    }
+
+    /// A subscription its push service says is gone (410, 404) is dropped; one
+    /// told to wait (429 with `Retry-After`) is sent again after the wait; a refusal
+    /// is said in the header once confirmed, and cleared by the next push that lands.
+    #[test]
+    fn a_push_service_is_answered_as_it_answers() {
+        let (_g, app, conn) = setup();
+        clear_push(&conn);
+        set(&conn, json!({"fills": true}));
+        let row = record(&conn, "fills", "order:2:filled", "Order filled · QNC", "Bought 1", None).unwrap().unwrap();
+        for gone in [410, 404] {
+            let push = stand_in(vec![(gone, None)]);
+            browser(&conn, &format!("{}/push/gone", push.origin));
+            push_all(&app, &row);
+            assert!(conn.push_subscriptions().unwrap().is_empty(), "{gone}: dropped");
+        }
+        let push = stand_in(vec![(429, Some(1)), (201, None)]);
+        browser(&conn, &format!("{}/push/busy", push.origin));
+        push_all(&app, &row);
+        assert_eq!(push.got.lock().unwrap().len(), 2, "asked again once the stated wait passed");
+        clear_push(&conn);
+        let push = stand_in(vec![(500, None), (500, None), (201, None)]);
+        browser(&conn, &format!("{}/push/down", push.origin));
+        let said = |app: &Arc<App>| crate::status::status(app).error;
+        push_all(&app, &row);
+        assert!(!said(&app).contains("could not be sent"), "one failure is not said yet");
+        push_all(&app, &row);
+        assert!(said(&app).contains("could not be sent to a browser"), "said once confirmed: {}", said(&app));
+        push_all(&app, &row);
+        assert!(!said(&app).contains("could not be sent"), "cleared by a push that lands");
+        clear_push(&conn);
+    }
+
+    /// With a page's stream open, the page shows the row and nothing goes through
+    /// a push service; with none open, the row is pushed.
+    #[test]
+    fn with_a_page_open_nothing_is_pushed() {
+        let (_g, app, conn) = setup();
+        clear_push(&conn);
+        let push = stand_in(vec![(201, None)]);
+        browser(&conn, &format!("{}/push/page", push.origin));
+        set(&conn, json!({"fills": true}));
+        let page = PageOpen::new(&app);
+        emit(&app, &conn, "fills", "order:3:filled", "Shown by the page", "", None).unwrap().unwrap();
+        drop(page);
+        let pushed = emit(&app, &conn, "fills", "order:4:filled", "Pushed", "", None).unwrap().unwrap();
+        // the worker sends in order: once the second has landed, the first was never sent
+        while push.got.lock().unwrap().is_empty() {
+            std::thread::yield_now();
+        }
+        assert_eq!(push.got.lock().unwrap().len(), 1);
+        let _ = pushed;
+        clear_push(&conn);
+    }
+
+    /// A subscription is kept only as a browser makes one: a push service's https
+    /// address (or one on this machine), a P-256 point for its key, a 16-octet secret.
+    #[test]
+    fn a_subscription_is_taken_only_as_a_browser_makes_one() {
+        let b64 = crate::webpush::b64url;
+        let real = b64(&crate::webpush::Keys::generate().public());
+        let auth = b64(&[7u8; 16]);
+        let sub = |endpoint: &str, key: &str, auth: &str| PushSubscription { endpoint: endpoint.into(), keys: PushKeys { p256dh: key.into(), auth: auth.into() } }.checked();
+        assert!(sub("https://updates.push.services.mozilla.com/wpush/v2/x", &real, &auth).is_ok());
+        assert!(sub("http://127.0.0.1:9/push", &real, &auth).is_ok(), "a stand-in on this machine");
+        let mut off_curve = vec![4u8];
+        off_curve.extend([0u8; 64]);
+        for (endpoint, key, secret, why) in [
+            ("http://push.example/x", real.clone(), auth.clone(), "plain http elsewhere"),
+            ("https://push.example/x", b64(&off_curve), auth.clone(), "a key off the curve"),
+            ("https://push.example/x", b64(&[4u8; 33]), auth.clone(), "a short key"),
+            ("https://push.example/x", real.clone(), b64(&[7u8; 8]), "a short secret"),
+        ] {
+            assert!(sub(endpoint, &key, &secret).is_err(), "{why}");
+        }
+    }
+
+    /// A start over a data folder holding an earlier version's applet removes it.
+    #[test]
+    fn an_earlier_versions_applet_is_removed_at_start() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("Bagholder.app/Contents/MacOS")).unwrap();
+        std::fs::write(home.path().join("Bagholder.app/Contents/MacOS/applet"), b"x").unwrap();
+        remove_native_leftovers(home.path());
+        assert!(!home.path().join("Bagholder.app").exists());
+        remove_native_leftovers(home.path());
+    }
+
+    /// No native channel is left in the server: nothing it runs posts to the
+    /// computer's own notifications (brief 65).
+    #[test]
+    fn the_server_names_no_native_notification_tool() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        for e in walk(&src) {
+            let text = std::fs::read_to_string(&e).unwrap();
+            for word in ["osacompile", "\"open\", &[\"-n\"", "\"-n\", \"-W\"", "notify-send", "powershell", "plutil"] {
+                if text.contains(word) && !e.ends_with("notify.rs") {
+                    found.push(format!("{}: {word}", e.display()));
+                }
+            }
+        }
+        let own = include_str!("notify.rs");
+        let code: String = own.lines().filter(|l| !l.contains("for word in")).collect::<Vec<_>>().join("\n");
+        for word in ["osacompile", "notify-send", "powershell", "plutil"] {
+            if code.contains(word) {
+                found.push(format!("notify.rs: {word}"));
+            }
+        }
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+        out
     }
 
 }

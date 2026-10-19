@@ -1,29 +1,100 @@
+import { createECDH, randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
 import { expect, test, type Page } from '@playwright/test'
 import { modelDoc, openWithStatus, streamBody, standIn } from './helpers'
 
-// SPEC §3, Notifications: the server tells, the browser shows -- under its own permission.
+// SPEC §3, Notifications: the server tells, the browser shows, through the page's
+// service worker and under the browser's own permission.
 
-/** Stand in for the browser's Notification, in the state given, recording the banners made. */
-const browserSays = (page: Page, permission: 'granted' | 'denied' | 'default', answer: 'granted' | 'denied' = 'granted') =>
-  page.addInitScript(
-    ([permission, answer]) => {
-      const made: { title: string; body: string }[] = []
+/**
+ * Stand in for the browser's permission, in the state given, and for its push
+ * service: a subscription made here names `endpoint`. Every banner the service
+ * worker is asked to show is recorded, with its options.
+ */
+const browserSays = (page: Page, permission: 'granted' | 'denied' | 'default', answer: 'granted' | 'denied' = 'granted', endpoint = 'http://127.0.0.1:9/push/e2e') => {
+  // a browser's own key pair and secret, as its push manager makes them
+  const ecdh = createECDH('prime256v1')
+  const keys = { p256dh: ecdh.generateKeys().toString('base64url'), auth: randomBytes(16).toString('base64url') }
+  return page.addInitScript(
+    ([permission, answer, endpoint, keys]) => {
+      const made: { title: string; body: string; tag: string; data: unknown }[] = []
       class Banner {
         static permission = permission
         static requestPermission() { Banner.permission = answer; return Promise.resolve(answer) }
-        onclick: (() => void) | null = null
-        constructor(title: string, o: { body?: string }) { made.push({ title, body: o?.body ?? '' }); (window as unknown as { __last: Banner }).__last = this }
-        close() {}
       }
       Object.assign(window, { Notification: Banner, __banners: made })
+      ServiceWorkerRegistration.prototype.showNotification = function (title: string, o?: NotificationOptions) {
+        made.push({ title, body: o?.body ?? '', tag: o?.tag ?? '', data: o?.data })
+        return Promise.resolve()
+      }
+      const sub = { endpoint, toJSON: () => ({ endpoint, keys }) }
+      let held: typeof sub | null = null
+      PushManager.prototype.subscribe = function () { held = sub; return Promise.resolve(sub as unknown as PushSubscription) }
+      PushManager.prototype.getSubscription = function () { return Promise.resolve(held as unknown as PushSubscription) }
     },
-    [permission, answer] as const,
+    [permission, answer, endpoint, keys] as const,
   )
+}
+
+/** A click on the banner for `row`, as the service worker passes it to an open tab. */
+const clickBanner = (page: Page, row: unknown) =>
+  page.evaluate((row) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'bh-note', row } })), row)
 
 const openNotifyRow = async (page: Page) => {
   await page.getByRole('button', { name: 'Menu' }).click()
   await page.locator('.menu button', { hasText: 'Notifications' }).first().click() // a tap opens the row, as hovering does
 }
+
+const W = { 'X-Bagholder': '1' }
+
+// a subscription a test made is the shared server's until dropped: none outlives its test
+test.afterEach(async ({ request }) => {
+  await request.post('/api/push/unsubscribe', { headers: W, data: { endpoint: 'http://127.0.0.1:9/push/e2e' } })
+})
+
+test('Turn on notifications subscribes this browser; with the page open the page shows a row and nothing goes to the push service; with it closed the row is pushed', async ({ browser, request }) => {
+  // the stream's end is noticed at its next write, the keep-alive at the latest (15 s)
+  test.setTimeout(60_000)
+  // the push service, on this machine: what reaches it is kept
+  const got: { path: string; headers: Record<string, unknown>; bytes: number }[] = []
+  const service = createServer((req, res) => {
+    let bytes = 0
+    req.on('data', (c: Buffer) => (bytes += c.length))
+    req.on('end', () => {
+      got.push({ path: req.url ?? '', headers: req.headers, bytes })
+      res.writeHead(201).end()
+    })
+  })
+  await new Promise<void>((r) => service.listen(0, '127.0.0.1', r))
+  const endpoint = `http://127.0.0.1:${(service.address() as { port: number }).port}/push/one`
+  const page = await (await browser.newContext()).newPage()
+  try {
+    await browserSays(page, 'default', 'granted', endpoint)
+    await page.goto('/')
+    await openNotifyRow(page)
+    const subscribed = page.waitForResponse((r) => r.url().endsWith('/api/push/subscribe'))
+    await page.locator('.menu.sub button', { hasText: 'Turn on notifications' }).click()
+    expect(await (await subscribed).json()).toMatchObject({ ok: true, subscriptions: 1 })
+    await expect(page.locator('.menu.sub button', { hasText: 'Turn on notifications' })).toHaveCount(0)
+    // open: the page shows it, once, and the push service hears nothing
+    await page.locator('.menu.sub button', { hasText: 'Send a test notification' }).click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __banners: unknown[] }).__banners.length)).toBe(1)
+    expect(got).toEqual([])
+    // closed: the server pushes it
+    await page.context().close()
+    await expect.poll(async () => {
+      await request.post('/api/notifications/test', { headers: W })
+      return got.length
+    }, { timeout: 40_000, intervals: [2000] }).toBeGreaterThan(0)
+    expect(got[0].path).toBe('/push/one')
+    expect(got[0].headers['content-encoding']).toBe('aes128gcm')
+    expect(String(got[0].headers.authorization)).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]{87}$/)
+    expect(got[0].bytes).toBeLessThanOrEqual(4096)
+  } finally {
+    await request.post('/api/push/unsubscribe', { headers: W, data: { endpoint } })
+    service.close()
+  }
+})
 
 test('a browser that refuses says Blocked and its switches are dimmed', async ({ page }) => {
   await browserSays(page, 'denied')
@@ -39,8 +110,10 @@ test('the first switch asks the browser, then turns the kind on at the server', 
   await page.goto('/')
   await openNotifyRow(page)
   await expect(page.locator('.menu button', { hasText: 'Notifications' }).first()).toContainText('Off')
+  const subscribed = page.waitForRequest((r) => r.url().endsWith('/api/push/subscribe'))
   const saved = page.waitForRequest((r) => r.url().endsWith('/api/notifications/settings'))
   await page.locator('.menu.sub button', { hasText: 'Updates' }).click()
+  expect(((await subscribed).postDataJSON() as { endpoint: string }).endpoint).toBe('http://127.0.0.1:9/push/e2e')
   expect((await saved).postDataJSON()).toEqual({ updates: true })
   await expect(page.locator('.menu button', { hasText: 'Notifications' }).first()).toContainText('On')
   // put back
@@ -48,17 +121,18 @@ test('the first switch asks the browser, then turns the kind on at the server', 
   await expect(page.locator('.menu button', { hasText: 'Notifications' }).first()).toContainText('Off')
 })
 
-test('a test notification arrives over the page\'s one stream, is shown by the browser once, and is marked seen', async ({ page }) => {
+test('a test notification arrives over the page\'s one stream, is shown by the service worker once under its row\'s tag, and is marked seen', async ({ page }) => {
   await browserSays(page, 'granted')
   await page.goto('/')
   await expect(page.locator('#syncline')).toHaveText('Not connected')
   const seen = page.waitForRequest((r) => r.url().endsWith('/api/notifications/seen'))
   await openNotifyRow(page)
   await page.locator('.menu.sub button', { hasText: 'Send a test notification' }).click()
-  expect(((await seen).postDataJSON() as { ids: number[] }).ids).toHaveLength(1)
-  const banners = await page.evaluate(() => (window as unknown as { __banners: { title: string }[] }).__banners)
-  expect(banners).toHaveLength(1)
+  const ids = ((await seen).postDataJSON() as { ids: number[] }).ids
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __banners: unknown[] }).__banners.length)).toBe(1)
+  const banners = await page.evaluate(() => (window as unknown as { __banners: { title: string; tag: string }[] }).__banners)
   expect(banners[0].title).toContain('Bagholder')
+  expect(banners[0].tag).toBe('bh-' + ids[0])
 })
 
 test('a fill\'s card opens the Orders panel at Filled', async ({ page, request }) => {
@@ -92,7 +166,7 @@ test("a disclosure's or a release's banner opens the instrument's page: the hold
     row = { id: ++id, kind: c.kind, key: c.kind + ':' + id, title: c.symbol + ' filed', body: '', at: '2026-09-18T14:31:00Z', readAt: null, seenAt: null, extra: { symbol: c.symbol, exchange: c.exchange } }
     // the stream reconnects every 200 ms here, and the row arrives with it
     await expect.poll(() => page.evaluate(() => (window as unknown as { __banners: unknown[] }).__banners.length)).toBe(before + 1)
-    await page.evaluate(() => (window as unknown as { __last: { onclick: () => void } }).__last.onclick())
+    await clickBanner(page, row)
     await expect.poll(() => c.lands(decodeURIComponent(page.url())), c.kind).toBe(true)
     await page.goto('/#dashboard')
   }

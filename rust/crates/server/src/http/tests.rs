@@ -237,7 +237,6 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
 #[test]
 fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let _g = guard();
-    std::env::set_var(crate::notify::MODE_ENV, "browser"); // never the system's own notifications from a test
     let conn = crate::notify::book(app_ref()).unwrap();
     crate::notify::set_settings(&conn, &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
     bagholder_store::feeds::clear_notifications(conn.notices()).unwrap();

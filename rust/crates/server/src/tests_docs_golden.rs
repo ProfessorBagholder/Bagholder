@@ -56,7 +56,7 @@ fn status_doc(sync_step: &str) -> Status {
         open_orders: 0,
         updating: String::new(),
         update_error: String::new(),
-        notify: NotifyStatus { settings: NotifySettings { fills: true, ..Default::default() }, native: String::new(), unread: 0 },
+        notify: NotifyStatus { settings: NotifySettings { fills: true, ..Default::default() }, push: Default::default(), unread: 0 },
         importing: None,
         imported: None,
         model_download: None,

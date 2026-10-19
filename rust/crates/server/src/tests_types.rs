@@ -195,7 +195,7 @@ fn status_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::csv_import::Imported, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
+    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::PushStatus, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::csv_import::Imported, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
     let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\nimport type { ImportReport } from './model_api'\n\n");
     for d in decls {
         out.push_str("export ");
@@ -228,6 +228,7 @@ fn notifications_declarations() -> String {
         NotificationExtra, Notification, crate::notify::NotifySettingsPatch, crate::notify::NotificationIds,
         crate::notify::NotificationsAnswer, crate::notify::NotifySettingsAnswer, crate::notify::NotifyTestAnswer,
         crate::notify::NotificationsReadAnswer, crate::notify::NotificationsSeenAnswer, crate::notify::NotificationsClearAnswer,
+        crate::notify::PushKeys, crate::notify::PushSubscription, crate::notify::PushEndpoint, crate::notify::PushAnswer,
     ];
     let mut out = String::from(
         "// Generated from rust/crates/store/src/feeds.rs and the server's notify module. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_notifications_types`.\n\nimport type { NotifyStatus } from './status'\n\n",
@@ -355,7 +356,7 @@ fn test_the_pages_model_api_types_are_the_servers() {
 /// it lives rather than repeating its declaration.
 fn generated_file_of(name: &str) -> &'static str {
     match name {
-        "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" => "notifications",
+        "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" | "PushSubscription" | "PushEndpoint" | "PushAnswer" => "notifications",
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",

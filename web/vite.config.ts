@@ -8,6 +8,14 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 export default defineConfig(({ mode }) => ({
   base: './',
   plugins: [svelte()],
+  // the service worker (`src/sw-worker.ts`) beside the page, as /sw.js: a fixed name at the
+  // root, so the browser finds it and its scope is the whole page
+  build: {
+    rollupOptions: {
+      input: { main: 'index.html', sw: 'src/sw-worker.ts' },
+      output: { entryFileNames: (chunk: { name: string }) => (chunk.name === 'sw' ? 'sw.js' : 'assets/[name]-[hash].js') },
+    },
+  },
   // Vitest must resolve Svelte's browser build, not its server build, so
   // component mount() works under jsdom. Vitest reads top-level resolve.conditions.
   // Only override in test mode — clobbering conditions in dev/build drops Vite's

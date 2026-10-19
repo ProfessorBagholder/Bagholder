@@ -76,3 +76,11 @@ tempfile = "3"
 
 [lints]
 workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# the system's own calls for BAGHOLDER_EXIT_WITH: a process's exit woken by a pidfd (Linux) or a kqueue NOTE_EXIT (macOS)
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# a process handle's wait, for BAGHOLDER_EXIT_WITH on Windows; the registry, to remove the app id earlier versions registered for notifications
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry"] }

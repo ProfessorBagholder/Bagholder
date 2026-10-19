@@ -8,7 +8,7 @@ import { call } from '../api'
 import { tell } from '../ui.svelte'
 import { resyncAll } from '../live.svelte'
 import { watchDoc, type Holder } from '../live.svelte'
-import { arrived } from './channel.svelte'
+import { arrived, openFromLink } from './channel.svelte'
 
 export interface NoteExtra {
   symbol?: string
@@ -57,6 +57,7 @@ export function showNotifications(): () => void {
   let known: Set<Note['id']> | null = null
   return watchDoc('notifications', {}, doc, () => {
     const rows = doc.data?.rows ?? []
+    if (!known) openFromLink(rows)
     if (known) for (const n of rows) if (!known.has(n.id)) arrived(n)
     known = new Set(rows.map((n) => n.id))
   })

@@ -27,3 +27,11 @@ export type NotificationsReadAnswer = { ok: boolean, read: number, };
 export type NotificationsSeenAnswer = { ok: boolean, seen: number, };
 
 export type NotificationsClearAnswer = { ok: boolean, cleared: number, };
+
+export type PushKeys = { p256dh: string, auth: string, };
+
+export type PushSubscription = { endpoint: string, keys: PushKeys, };
+
+export type PushEndpoint = { endpoint: string, };
+
+export type PushAnswer = { ok: boolean, subscriptions: number, };

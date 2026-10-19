@@ -303,6 +303,8 @@ mod tests {
         let day: bagholder_core::jiff::civil::Date = "2025-11-18".parse().unwrap();
         book.store_rates(usd, &[(day, bagholder_core::Dec::parse("1.4").unwrap())], (day, day), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
         book.set_setting("watch.folder", Some("/somewhere"), t).unwrap();
+        // a browser subscribed to this copy's pushes
+        book.keep_push_subscription("https://push.example/sub", "BAAA", "AAAA", t).unwrap();
         // a month's statement kept from the broker
         {
             let conn = book.connections().unwrap()[0].id;
@@ -430,6 +432,8 @@ mod tests {
                 // default tiles, the trades given again) is logged afresh
                 "ledger_changes" => {}
                 "settings" => assert_eq!(f.book().unwrap().setting("zone").unwrap().as_deref(), Some("America/Toronto"), "the zone stays"),
+                // the browsers subscribed stay subscribed: their tie to this copy, not data
+                "push_subscriptions" => assert_eq!(n, 1, "a subscribed browser stays subscribed"),
                 // the tile row is the default six again, and nothing else names an instrument
                 "tiles" => assert_eq!(n as usize, crate::following::DEFAULT_TILES.len(), "the default tiles after Clear all"),
                 "instruments" | "instrument_refs" | "instrument_routes" | "listings_named" => {
