@@ -33,7 +33,7 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 20 | [Verdict on the figures plan (#355): Go with changes](20-figures-category-verdict.md) | Current; item 3 corrected 2026-10-08, sources in [20/](20/) |
 | 21 | [Verdict on the Stage P plan (capacity test and the process stage): Go with changes](21-stage-p-verdict.md) | Current |
 | 22 | [Verdict on the Stage 3 statements plan (#503): Go with changes](22-stage-3-statements-verdict.md) | Current |
-| 23 | [Debts held outside Wealthsimple, read from its net worth feature: findings and proposal](23-external-debt-from-wealthsimple.md) | Current; queries and sources in [23/](23/) |
+| 23 | [Debts held outside Wealthsimple, read from its net worth feature: findings and proposal](23-external-debt-from-wealthsimple.md) | Current; queries and sources in [23/](23/) ; "nothing matched by name" overruled by the owner 2026-10-19, built per 67 |
 | 24 | [The 85 open issues re-checked against master d6824aa7: 83 stand, #412 closes, #442 narrows](24-issues-rechecked.md) | Corrected 2026-10-15: 17 more (#383–#399) were left out; all present; evidence in [24/](24/) |
 | 25 | [The Stage 3 statements build as built (#503): accepted, one fix](25-stage-3-statements-as-built.md) | Current; verdicts in [25/](25/) |
 | 26 | [Verdict on the Stage 3 record-by-change plan (#506): Go with changes](26-record-by-change-verdict.md) | Current; findings in [26/](26/) |
@@ -77,3 +77,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 64 | [The Mac notifier never shows in the Dock; no copy of the app outlives the work that started it](64-notifier-and-leftover-servers.md) | Changes 1–2 superseded by 65 (wrong premise: a web app needs no helper); change 3 stands |
 | 65 | [Notifications are the browser's (Notifications API, Service Worker, Web Push); native channels removed](65-notifications-are-the-browsers.md) | Built in #555; released in v2.6.0 |
 | 66 | [Verdict on plan #555, notifications through the browser: Go with two changes](66-notifications-plan-verdict.md) | Applied in #555 |
+| 67 | [Verdict on plan #557, debts held outside Wealthsimple: Go with four changes](67-outside-debts-plan-verdict.md) | Current |
