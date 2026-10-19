@@ -77,6 +77,6 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 64 | [The Mac notifier never shows in the Dock; no copy of the app outlives the work that started it](64-notifier-and-leftover-servers.md) | Changes 1–2 superseded by 65 (wrong premise: a web app needs no helper); change 3 stands |
 | 65 | [Notifications are the browser's (Notifications API, Service Worker, Web Push); native channels removed](65-notifications-are-the-browsers.md) | Built in #555; released in v2.6.0 |
 | 66 | [Verdict on plan #555, notifications through the browser: Go with two changes](66-notifications-plan-verdict.md) | Applied in #555 |
-| 67 | [Verdict on plan #557, debts held outside Wealthsimple: Go with four changes](67-outside-debts-plan-verdict.md) | Applied at 0a9c15f3 |
+| 67 | [Verdict on plan #557, debts held outside Wealthsimple: Go with four changes](67-outside-debts-plan-verdict.md) | Built in #557; released in v2.7.0 |
 | 68 | [#557 as built: not yet; ownership of debts, and the balance sign from a real reply](68-outside-debts-as-built.md) | Applied in #557 (capture taken; figures replaced at 381d5cdc) |
-| 69 | [#559, a SEDAR+ document past the first page: two changes](69-sedar-document-paging.md) | Current |
+| 69 | [#559, a SEDAR+ document past the first page: two changes](69-sedar-document-paging.md) | Built in #559; released in v2.7.0 |
