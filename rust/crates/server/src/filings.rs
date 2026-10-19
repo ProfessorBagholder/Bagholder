@@ -2180,6 +2180,113 @@ mod tests {
         drop(feed);
     }
 
+    /// Each live reader sends from the thread that reads the document, so its read is
+    /// named as under way once it leaves (#534): the SEC's through this client, the
+    /// local model on loopback through this client too, and SEDAR+'s through the
+    /// browser helper, whose `Session::request` passes the same door on the caller's
+    /// thread before writing to the helper (not held here: the helper is a process of
+    /// its own). Held with a host on this machine standing in for the SEC and for the
+    /// model: a read sent names the documents, a refused one names none.
+    #[test]
+    fn each_live_reader_names_a_read_once_it_is_sent() {
+        use bagholder_market::localmodel::hooks;
+        use std::io::{Read as _, Write as _};
+        // one host on 127.0.0.1 standing in for both: a document, and the model's answer
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(mut c) = c else { return };
+                let mut buf = [0u8; 8192];
+                let n = c.read(&mut buf).unwrap_or(0);
+                let body = if String::from_utf8_lossy(&buf[..n]).starts_with("POST") {
+                    r#"{"choices": [{"message": {"content": "The company reported its quarter."}}]}"#
+                } else {
+                    "<html><body>The company reported its quarter.</body></html>"
+                };
+                let _ = c.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+            }
+        });
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Way {
+            /// the SEC's reader: the document asked of its host through this client
+            Sec,
+            /// a document already in hand: only the model's request leaves
+            ModelOnly,
+            /// refused before anything leaves
+            Refused,
+        }
+        struct StandIn<'a> {
+            way: Way,
+            port: u16,
+            app: &'a Arc<App>,
+            key: &'a ListingKey,
+            named: Cell<Vec<bool>>,
+        }
+        impl StandIn<'_> {
+            fn note(&self) {
+                let mut v = self.named.take();
+                v.push(!filings_stored(self.app, self.key).unwrap().reading.is_empty());
+                self.named.set(v);
+            }
+        }
+        impl Readers for StandIn<'_> {
+            fn summary_available(&self) -> bool { true }
+            fn summary_status(&self) -> &'static str { "ready" }
+            fn wait_for_summary(&self, _: f64) -> bool { true }
+            fn disclosures_available(&self) -> bool { true }
+            fn enrichment(&self, _: &FiledDocument) -> Option<disclosures::Enrichment> { None }
+            fn content(&self, _: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> {
+                self.note();
+                match self.way {
+                    Way::Sec => {
+                        let r = bagholder_net::client::request("GET", &format!("http://127.0.0.1:{}/doc", self.port), &[], None, Duration::from_secs(5))
+                            .map_err(|e| disclosures::SourceError::Other(e.to_string()))?;
+                        self.note();
+                        Ok((r.body, "text/html".into()))
+                    }
+                    Way::ModelOnly => Ok((b"<html><body>The company reported its quarter.</body></html>".to_vec(), "text/html".into())),
+                    Way::Refused => Err(disclosures::SourceError::Offline),
+                }
+            }
+            fn enrich_document_of(&self, code: &str, source: &str, data: &[u8], ct: &str) -> disclosures::Enrichment {
+                // the live reading, its model asked on loopback
+                let port = self.port;
+                hooks::ENDPOINT.with(|h| *h.borrow_mut() = Some(Box::new(move || format!("http://127.0.0.1:{port}"))));
+                let got = bagholder_market::enrich::enrich_document_of(code, source, data, ct);
+                hooks::ENDPOINT.with(|h| *h.borrow_mut() = None);
+                self.note();
+                got
+            }
+        }
+        for way in [Way::Sec, Way::ModelOnly, Way::Refused] {
+            let (_home, app) = built_app();
+            let key = on("XYZ", "NYSE");
+            let mut r = Regs::new();
+            r.filers = vec![(key.clone(), Ok("0000000001".into()))];
+            let mut unread = item(Regulator::Sec, 1, "0000000001");
+            unread.title = String::new();
+            r.documents = vec![(filer("0000000001", Regulator::Sec), Ok(vec![unread]))];
+            refresh_filings_in(&app, &crate::feeds::conn(&app).unwrap(), &key, &r).unwrap();
+            let feed = crate::events::Feed::open(app.clone());
+            let doc = "disclosures-shown";
+            assert!(app.events.watch(&app, feed.id(), [(doc.to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
+            let readers = StandIn { way, port, app: &app, key: &key, named: Cell::new(vec![]) };
+            read_while_shown(&app, doc, &key, &|source, id| filings_enrich_in(&crate::feeds::conn(&app).unwrap(), source, id, &readers));
+            let named = readers.named.take();
+            let want = match way {
+                // before the document is asked for, nothing; once it was sent, and after the model
+                Way::Sec => vec![false, true, true],
+                // nothing until the model's request left
+                Way::ModelOnly => vec![false, true],
+                Way::Refused => vec![false],
+            };
+            assert_eq!(named, want, "{way:?}");
+            assert!(filings_stored(&app, &key).unwrap().reading.is_empty(), "{way:?}: nothing is said to be reading once the pass ends");
+            drop(feed);
+        }
+    }
+
     /// A filer that could not be settled is said, and nothing is guessed in its place.
     #[test]
     fn a_listing_whose_filer_is_not_settled_shows_why_and_nothing_else() {

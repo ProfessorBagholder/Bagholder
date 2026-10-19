@@ -659,10 +659,17 @@ thread_local! {
 /// refused before it reaches the door (a host resting, nothing to send it with).
 /// How "under way" is said only of what was asked of someone (#534).
 pub fn while_leaving<T>(sent: impl Fn() + 'static, work: impl FnOnce() -> T) -> T {
-    let was = ON_LEAVING.with(|h| h.borrow_mut().replace(Box::new(sent)));
-    let out = work();
-    ON_LEAVING.with(|h| *h.borrow_mut() = was);
-    out
+    // the hook before is put back however `work` ends, a panic too, so a pooled
+    // thread never carries this one into the next work it runs
+    struct Restore(Option<Box<dyn Fn()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let was = self.0.take();
+            ON_LEAVING.with(|h| *h.borrow_mut() = was);
+        }
+    }
+    let _restore = Restore(ON_LEAVING.with(|h| h.borrow_mut().replace(Box::new(sent))));
+    work()
 }
 
 fn leaving(method: &str, u: &Url) -> Result<(), Error> {
@@ -898,6 +905,37 @@ fn send_into(
         return Ok((Response { status: head.status, body, headers: head.headers.clone() }, written));
     }
     Err(Error::Transport("too many redirects".into()))
+}
+
+#[cfg(test)]
+mod leaving_tests {
+    use super::{leave, while_leaving};
+    use std::{cell::Cell, rc::Rc};
+
+    /// The hook `while_leaving` sets is put back however its work ends, a panic too,
+    /// so a pooled thread that caught the panic and runs on never says a later
+    /// request was sent for work that has gone (#534).
+    #[test]
+    fn a_panic_in_the_work_leaves_no_hook_behind() {
+        let said = Rc::new(Cell::new(0));
+        let s = said.clone();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            while_leaving(move || s.set(s.get() + 1), || panic!("the work failed"))
+        }));
+        assert!(caught.is_err());
+        // a request on the same thread, after: no hook of the work that panicked runs
+        assert!(leave("GET", "http://127.0.0.1:9/after").is_ok());
+        assert_eq!(said.get(), 0, "the hook outlived its work");
+        // and one set around another work's request runs as before, nested ones too
+        let outer = Rc::new(Cell::new(0));
+        let inner = Rc::new(Cell::new(0));
+        let (o, i) = (outer.clone(), inner.clone());
+        while_leaving(move || o.set(o.get() + 1), || {
+            while_leaving(move || i.set(i.get() + 1), || leave("GET", "http://127.0.0.1:9/inner").unwrap());
+            leave("GET", "http://127.0.0.1:9/outer").unwrap();
+        });
+        assert_eq!((outer.get(), inner.get()), (1, 1));
+    }
 }
 
 #[cfg(test)]
