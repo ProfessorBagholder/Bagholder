@@ -261,10 +261,6 @@ static PLANT_NAMES_FOLD: AtomicBool = AtomicBool::new(false);
 pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // the whole view built and serialised to learn whether it changed
     ("feed-step", Pair::Breadth, Measure::Allocations, "#426"),
-    // a buy dated in the middle of a holding's history joins every later round
-    // trip; the request is answered once they are settled and the figures
-    // recomputed, which a person waits on whole (its work is judged per trip)
-    ("backdated-trade", Pair::Depth, Measure::Time, "#538"),
 ];
 
 /// What a measurement is judged by.

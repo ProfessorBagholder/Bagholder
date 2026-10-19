@@ -2730,31 +2730,48 @@ fn walk_from(inputs: &Inputs, out: &mut Matched, s: MatchState, rows: &[&Transac
 /// within the family's instruments `scope`, then the family's rows after the
 /// cut walked from the cut, as the whole match walks them. What it wrote,
 /// with the round trips it took out.
-pub fn match_from_cut(inputs: &Inputs, out: &mut Matched, state: &mut MatchState, family: Vec<&Transaction>, added: &[&Transaction], cut: &OrderKey, scope: BTreeSet<InstrumentId>) -> Continued {
+pub fn match_from_cut(inputs: &Inputs, out: &mut Matched, state: &mut MatchState, after: Vec<&Transaction>, added: &[&Transaction], cut: &OrderKey, scope: BTreeSet<InstrumentId>) -> Continued {
     let ledger = &inputs.ledger;
-    let c = state.cuts.get(cut).expect("a cut matched from is kept").clone();
+    // the cuts and stretches up to this cut, taken from the state: the walk keeps
+    // its own from here on
+    let mut cuts = std::mem::take(&mut state.cuts);
+    let mut later_cuts = cuts.split_off(cut);
+    let c = later_cuts.remove(cut).expect("a cut matched from is kept");
     let day = c.day;
-    // after the cut: no row of the family follows it on its day
-    let after: Vec<&Transaction> = family.into_iter().filter(|t| t.trade_date > day).collect();
     let later: BTreeSet<&TransactionId> = after.iter().map(|t| &t.id).collect();
-    let mine = |i: &InstrumentId| scope.contains(i);
-    let tx_after = |id: &TransactionId| later.contains(id) || ledger.transactions.get(id).is_none();
-    // what the match wrote after the cut, taken out
+    debug_assert!(after.iter().all(|t| t.trade_date > day), "the family's rows after the cut's day: none follows it on its day");
+    // what the match wrote after the cut, taken out, within the family's holdings
     let opened_after = |k: &TripKey| ledger.transactions.get(&k.opening).is_none_or(|t| t.trade_date > day);
-    let gone: BTreeSet<TripKey> = out.trips.keys().filter(|k| mine(&k.instrument) && opened_after(k)).cloned().collect();
-    out.trips.retain(|k, _| !gone.contains(k));
+    let mut gone: BTreeSet<TripKey> = BTreeSet::new();
     for i in &scope {
         if let Some(ks) = out.trips_of.get_mut(i) {
-            ks.retain(|k| !gone.contains(k));
+            let off: Vec<TripKey> = ks.iter().filter(|k| opened_after(k)).cloned().collect();
+            for k in off {
+                ks.remove(&k);
+                gone.insert(k);
+            }
+            if ks.is_empty() {
+                out.trips_of.remove(i);
+            }
         }
     }
-    out.trips_of.retain(|_, ks| !ks.is_empty());
-    out.trips_by_fill.retain(|_, ks| {
-        ks.retain(|k| !gone.contains(k));
-        !ks.is_empty()
-    });
-    out.roles.retain(|id, _| !tx_after(id));
-    out.waiting.retain(|id, _| !tx_after(id));
+    for k in &gone {
+        if let Some(t) = out.trips.remove(k) {
+            for f in &t.fills {
+                if let Some(ks) = out.trips_by_fill.get_mut(f) {
+                    ks.remove(k);
+                    if ks.is_empty() {
+                        out.trips_by_fill.remove(f);
+                    }
+                }
+            }
+        }
+    }
+    for id in &later {
+        out.roles.remove(*id);
+        out.waiting.remove(*id);
+    }
+    let tx_after = |id: &TransactionId| later.contains(id);
     out.beyond.retain(|x| !tx_after(&x.transaction));
     out.dust.retain(|x| !tx_after(&x.transaction));
     out.arrived.retain(|x| !tx_after(&x.transaction));
@@ -2763,30 +2780,35 @@ pub fn match_from_cut(inputs: &Inputs, out: &mut Matched, state: &mut MatchState
     out.disagreements.retain(|x| !tx_after(x));
     out.unit_disagreements.retain(|x| !tx_after(&x.transaction));
     out.unapplied.retain(|x| !tx_after(&x.0));
-    // each holding as the cut has it: flat, its taint and average cost
-    out.books.retain(|(_, i), _| !mine(i));
+    // each holding as the cut has it: flat, its taint and average cost; each
+    // timeline up to the cut's day, whose last entry is the cut's
+    for i in &scope {
+        for a in out.held_by.remove(i).unwrap_or_default() {
+            out.books.remove(&(a, *i));
+            if let Some(u) = out.units.get_mut(&(a, *i)) {
+                u.retain(|d, _| *d <= day);
+                if u.is_empty() {
+                    out.units.remove(&(a, *i));
+                } else {
+                    out.held_by.entry(*i).or_default().insert(a);
+                }
+            }
+        }
+    }
     for (k, (taint, basis)) in &c.books {
+        // a holding with a book has a timeline before the cut too, kept above
         out.books.insert(*k, Book { taint: taint.clone(), basis: basis.clone(), ..Book::default() });
     }
-    // each timeline up to the cut's day, whose last entry is the cut's
-    out.units.retain(|(_, i), u| {
-        if mine(i) {
-            u.retain(|d, _| *d <= day);
-        }
-        !u.is_empty()
-    });
     debug_assert!(c.units.iter().all(|(k, (d, v))| out.units.get(k).and_then(|u| u.iter().next_back()) == Some((d, v))), "the timelines up to the cut are the cut's");
-    out.held_by.retain(|i, _| !mine(i));
-    for (a, i) in out.books.keys().chain(out.units.keys()).filter(|(_, i)| mine(i)) {
-        out.held_by.entry(*i).or_default().insert(*a);
-    }
-    // the state at the cut, the stretches and cuts before it kept
+    // the state at the cut, with the stretches up to it, its own open again
     let mut s = c.maps.clone();
-    s.stretches = state.stretches.range(..=Some(cut.clone())).map(|(k, v)| (k.clone(), v.clone())).collect();
-    if let Some(e) = s.stretches.get_mut(&Some(cut.clone())) {
-        *e = None;
-    }
-    s.cuts = state.cuts.range(..=cut.clone()).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut stretches = std::mem::take(&mut state.stretches);
+    let _later = stretches.split_off(&Some(cut.clone()));
+    stretches.insert(Some(cut.clone()), None);
+    s.stretches = stretches;
+    // the cut itself still holds: nothing before it changed
+    cuts.insert(cut.clone(), c);
+    s.cuts = cuts;
     set_up(inputs, added, &mut s);
     let (s, mut trips, holdings) = walk_from(inputs, out, s, &after, None, BTreeSet::new(), scope);
     *state = s;
