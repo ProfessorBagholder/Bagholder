@@ -324,6 +324,26 @@ pub(crate) mod tests {
         assert_eq!(debts(&book).unwrap().repayments.values().filter(|v| v.as_str() == "loc").count(), 1, "the answer settles it");
     }
 
+    /// A read stating what the newest one stated keeps nothing and leaves the
+    /// fingerprint as it was, so a pull that finds the debts as they were costs
+    /// no reading of the withdrawals; a debt that moved, or an answer, moves it.
+    #[test]
+    fn the_debts_fingerprint_moves_only_with_what_moves_them() {
+        let (_d, book, conn) = with_payments();
+        let at = |s: &str| -> bagholder_core::jiff::Timestamp { s.parse().unwrap() };
+        book.keep_outside_debts(conn, at("2025-11-20T00:00:00Z"), &[debt("loan", "PersonalLoan", "anon-personal-229")]).unwrap();
+        let first = book.debts_print().unwrap();
+        book.keep_outside_debts(conn, at("2025-11-21T00:00:00Z"), &[debt("loan", "PersonalLoan", "anon-personal-229")]).unwrap();
+        assert_eq!(book.debts_print().unwrap(), first, "the same debts read again: nothing kept");
+        let mut moved = debt("loan", "PersonalLoan", "anon-personal-229");
+        moved.balance = Dec::parse("900").unwrap();
+        book.keep_outside_debts(conn, at("2025-11-22T00:00:00Z"), &[moved]).unwrap();
+        let second = book.debts_print().unwrap();
+        assert_ne!(second, first, "a balance moved");
+        book.answer_repayment("debit:x", None, at("2025-11-23T00:00:00Z")).unwrap();
+        assert_ne!(book.debts_print().unwrap(), second, "an answer given");
+    }
+
     #[test]
     fn a_statement_of_units_kept_before_their_worth_was_is_not_compared_and_one_with_it_is() {
         let dir = tempfile::tempdir().unwrap();

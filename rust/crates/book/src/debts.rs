@@ -39,6 +39,10 @@ impl Book {
     /// Keep what one read of the net worth feature states: every outside account,
     /// under the read's moment. An earlier read stays as it was.
     pub fn keep_outside_debts(&self, connection: ConnectionId, read_at: jiff::Timestamp, debts: &[OutsideDebt]) -> Result<()> {
+        // a read stating what the newest one stated is no new statement
+        if self.outside_debts_of(connection)? == debts {
+            return Ok(());
+        }
         let tx = self.conn().unchecked_transaction()?;
         for d in debts {
             tx.execute(
@@ -57,14 +61,34 @@ impl Book {
         Ok(())
     }
 
+    /// What a fingerprint of the outside debts and the answers about them reads
+    /// now: it moves with every read kept and every answer given.
+    pub fn debts_print(&self) -> Result<String> {
+        Ok(self.conn().query_row(
+            "SELECT COALESCE((SELECT MAX(read_at) FROM outside_debts), '') || '|' || (SELECT COUNT(*) FROM repayment_answers) || '|' || COALESCE((SELECT MAX(answered_at) FROM repayment_answers), '')",
+            [],
+            |r| r.get::<_, String>(0),
+        )?)
+    }
+
     /// What each connection's newest read states is owed outside, every connection's.
     pub fn outside_debts(&self) -> Result<Vec<OutsideDebt>> {
+        self.outside_debts_where(None)
+    }
+
+    /// What one connection's newest read states.
+    fn outside_debts_of(&self, connection: ConnectionId) -> Result<Vec<OutsideDebt>> {
+        self.outside_debts_where(Some(connection))
+    }
+
+    fn outside_debts_where(&self, connection: Option<ConnectionId>) -> Result<Vec<OutsideDebt>> {
         let mut stmt = self.conn().prepare(
             "SELECT entity_id, kind, name, institution, last4, balance, currency, as_of FROM outside_debts d
              WHERE entity_id <> '' AND read_at = (SELECT MAX(read_at) FROM outside_debts n WHERE n.connection_id = d.connection_id)
+             AND (?1 IS NULL OR d.connection_id = ?1)
              ORDER BY entity_id",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?)))?;
+        let rows = stmt.query_map([connection.map(|c| c.to_string())], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?)))?;
         let t = "outside_debts";
         rows.map(|row| {
             let (entity_id, kind, name, institution, last4, balance, currency, as_of) = row?;

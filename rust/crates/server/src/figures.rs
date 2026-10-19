@@ -81,11 +81,14 @@ pub(crate) struct Held<'a> {
     /// The instruments and accounts every catch-up through this read: whose
     /// broker names the page holds are read again (brief 27, 5).
     pub named: std::cell::RefCell<Named>,
+    /// Whether a catch-up through this read touched a withdrawal: only then can a
+    /// repayment of a debt held outside have moved (`pulled`).
+    pub withdrawals: std::cell::Cell<bool>,
 }
 
 impl<'a> Held<'a> {
     pub(crate) fn new(applied: &'a std::sync::atomic::AtomicI64, movements: &'a std::sync::Mutex<crate::csv_import::Movements>) -> Held<'a> {
-        Held { applied, movements, named: Default::default() }
+        Held { applied, movements, named: Default::default(), withdrawals: Default::default() }
     }
 }
 
@@ -121,7 +124,12 @@ fn catch_up(book: &Book, engine: &mut Engine, held: &Held) -> Result<Moved, Stri
         let rows = |e: &Engine| -> Vec<bagholder_core::transaction::Transaction> { records.iter().flat_map(|r| e.inputs().ledger.transactions.of_record(*r).cloned().collect::<Vec<_>>()).collect() };
         let gone = rows(engine);
         merge(&mut moved, engine.apply(Change::Ledger(delta)));
-        held.movements.lock().unwrap_or_else(|e| e.into_inner()).changed(&gone, &rows(engine));
+        let now = rows(engine);
+        let withdrawal = |t: &bagholder_core::transaction::Transaction| t.kind == bagholder_core::transaction::Kind::Withdrawal;
+        if gone.iter().chain(now.iter()).any(withdrawal) {
+            held.withdrawals.set(true);
+        }
+        held.movements.lock().unwrap_or_else(|e| e.into_inner()).changed(&gone, &now);
     }
     applied.store(changes.upto, std::sync::atomic::Ordering::SeqCst);
     // what is applied is dropped from the log as it is applied: the log holds only
@@ -249,7 +257,9 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
 /// from the earlier app put back on the round trips an earlier build orphaned
 /// them from (`legacy_import::reattach_carried_notes`, once per book).
 fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp) -> Result<Built, String> {
-    let (mut e, upto) = in_snapshot(book, || Ok((build(book, cache, clock(zone, now)?)?, book.changes_upto().map_err(err)?)))?;
+    // the debts' fingerprint read with them, so the first change after the build
+    // reads them again only where they moved
+    let (mut e, upto, debts_print) = in_snapshot(book, || Ok((build(book, cache, clock(zone, now)?)?, book.changes_upto().map_err(err)?, book.debts_print().map_err(err)?)))?;
     // a sequence and an index of the build's own: nothing the server holds moves
     // until the engine is in place (brief 27, 6)
     let applied = std::sync::atomic::AtomicI64::new(upto);
@@ -262,7 +272,7 @@ fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Ti
     }
     let applied = applied.load(std::sync::atomic::Ordering::SeqCst);
     let movements = movements.into_inner().unwrap_or_else(|e| e.into_inner());
-    Ok(Built { engine: e, applied, movements })
+    Ok(Built { engine: e, applied, movements, debts_print })
 }
 
 /// An engine built whole, with the sequence of the change log it holds and its
@@ -271,6 +281,7 @@ struct Built {
     engine: Engine,
     applied: i64,
     movements: crate::csv_import::Movements,
+    debts_print: String,
 }
 
 /// Why a journal was not written.
@@ -308,6 +319,9 @@ pub struct Figures {
     /// The last sequence of the record's change log the engine holds: written only
     /// with the engine's lock held (`catch_up`).
     applied: std::sync::atomic::AtomicI64,
+    /// What the outside debts and the answers about them were the last time the
+    /// repayments were matched (`Book::debts_print`).
+    debts_print: std::sync::Mutex<Option<String>>,
     /// The ledger's rows by movement, and the movements touched since linking
     /// last looked (`csv_import::link`): kept with the engine.
     movements: std::sync::Mutex<crate::csv_import::Movements>,
@@ -382,7 +396,7 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| OpenFailure::Book(format!("The earlier database could not be carried into the book: {e}")))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), debts_print: std::sync::Mutex::new(None), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Cache(format!("The market cache could not be opened: {e}")))?;
         // the records derived again and the prices kept under a guessed venue forgotten,
@@ -515,9 +529,10 @@ impl Figures {
     /// file's row pending, so the first link after it looks at them all), the log
     /// dropped up to it, and the broker names read again.
     fn install(&self, engine: &mut Option<Engine>, book: &Book, b: Built) {
-        let Built { engine: e, applied, mut movements } = b;
+        let Built { engine: e, applied, mut movements, debts_print } = b;
         movements.pend_every_file_row(&e.inputs().ledger);
         *engine = Some(e);
+        *self.debts_print.lock().unwrap_or_else(|e| e.into_inner()) = Some(debts_print);
         self.applied.store(applied, std::sync::atomic::Ordering::SeqCst);
         *self.movements.lock().unwrap_or_else(|e| e.into_inner()) = movements;
         forget(book, applied);
@@ -746,11 +761,17 @@ impl Figures {
                     merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
                 }
             }
-            // the debts held outside, and which withdrawals repaid them: a new
-            // withdrawal, a debt read, a payee or an answer can each move them
-            let debts = engine_inputs::debts(&book)?;
-            if e.inputs().facts.debts != debts {
-                merge(&mut moved, e.apply(Change::Debts(debts)));
+            // the debts held outside, and which withdrawals repaid them: read again
+            // only where a withdrawal was touched or the debts or the answers moved,
+            // so a change costs what it changed
+            let print = book.debts_print().map_err(|e| e.to_string())?;
+            let mut last = self.debts_print.lock().unwrap_or_else(|e| e.into_inner());
+            if held.withdrawals.get() || *last != Some(print.clone()) {
+                let debts = engine_inputs::debts(&book)?;
+                if e.inputs().facts.debts != debts {
+                    merge(&mut moved, e.apply(Change::Debts(debts)));
+                }
+                *last = Some(print);
             }
             Ok(())
         })();
