@@ -60,7 +60,10 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
 
   await openWithStatus(page, request, { connected: false, loginView: true })
   await openMenu(page)
+  // counted once each request is made, never on the click's own timing (#530)
+  const start = page.waitForRequest('**/api/login/start')
   await page.getByRole('button', { name: 'Connect Wealthsimple' }).click()
+  await start
   expect(started).toBe(1)
   await expect(page.getByText('Waiting for Wealthsimple login…')).toBeVisible()
   await expect(page.getByText('Sign in to Wealthsimple')).toBeVisible()
@@ -72,9 +75,13 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
   await expect.poll(() => inputs).toContainEqual({ kind: 'key', key: 'Escape' })
   await expect(page.getByText('Sign in to Wealthsimple')).toBeVisible()
 
+  const cancel = page.waitForRequest('**/api/login/cancel')
   await page.locator('#loginDlg').getByRole('button', { name: 'Cancel' }).click()
+  await cancel
   expect(cancelled).toBe(1)
   await expect(page.getByText('Sign in to Wealthsimple')).toHaveCount(0)
+  // each asked once: the dialog's own steps since asked neither again
+  expect([started, cancelled]).toEqual([1, 1])
 })
 
 test('Sync now marks the header as syncing while the request is in flight', async ({ page, request }) => {
