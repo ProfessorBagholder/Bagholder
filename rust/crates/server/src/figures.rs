@@ -764,15 +764,7 @@ impl Figures {
             // the debts held outside, and which withdrawals repaid them: read again
             // only where a withdrawal was touched or the debts or the answers moved,
             // so a change costs what it changed
-            let print = book.debts_print().map_err(|e| e.to_string())?;
-            let mut last = self.debts_print.lock().unwrap_or_else(|e| e.into_inner());
-            if held.withdrawals.get() || *last != Some(print.clone()) {
-                let debts = engine_inputs::debts(&book)?;
-                if e.inputs().facts.debts != debts {
-                    merge(&mut moved, e.apply(Change::Debts(debts)));
-                }
-                *last = Some(print);
-            }
+            merge(&mut moved, self.debts_again(&book, e, held.withdrawals.get())?);
             Ok(())
         })();
         let named = held.named.take();
@@ -796,6 +788,32 @@ impl Figures {
     /// what it is worth) changed: that account's statements read through their
     /// indexes, its day history left as the figures hold it (a balances read never
     /// states a day), and that account's figures alone moved.
+    /// The debts held outside, and which withdrawals repaid them, read again where
+    /// a withdrawal was touched or the debts or the answers moved since they were
+    /// last read (`Book::debts_print`), so a change costs what it changed.
+    fn debts_again(&self, book: &Book, e: &mut Engine, withdrawals: bool) -> Result<Moved, String> {
+        let print = book.debts_print().map_err(|e| e.to_string())?;
+        let mut last = self.debts_print.lock().unwrap_or_else(|e| e.into_inner());
+        if !withdrawals && *last == Some(print.clone()) {
+            return Ok(Moved::default());
+        }
+        let debts = engine_inputs::debts(book)?;
+        let moved = if e.inputs().facts.debts != debts { e.apply(Change::Debts(debts)) } else { Moved::default() };
+        *last = Some(print);
+        Ok(moved)
+    }
+
+    /// The broker's balances were read, the debts held outside with them: what
+    /// is owed and the repayments follow at once, not at the next sync.
+    pub fn debts_changed(&self) -> Result<Moved, String> {
+        let book = self.book()?;
+        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
+        let m = self.debts_again(&book, e, false)?;
+        drop(guard);
+        Ok(self.moved(m))
+    }
+
     pub fn broker_changed(&self, account: bagholder_core::AccountId) -> Result<Moved, String> {
         let now = self.book()?.stated_latest(account).map_err(|e| e.to_string())?;
         let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
@@ -894,6 +912,25 @@ mod tests {
 
     fn pulled(home: &Path) {
         crate::tests_common::pulled_book(home)
+    }
+
+    /// The debts held outside, read with the balances while a page is open, reach
+    /// the figures at once: what is owed shows without waiting for the next sync.
+    #[test]
+    fn debts_read_with_the_balances_reach_the_figures_at_once() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let owed = |f: &Figures| f.read(|e| e.scope(&Default::default()).portfolio.owed.map(|(t, _)| t.unwrap())).unwrap();
+        assert_eq!(owed(&f), None);
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap()[0].id;
+        let debt = bagholder_book::debts::OutsideDebt { entity_id: "loc".into(), kind: "LineOfCredit".into(), name: "Line of credit".into(), institution: "ATB Financial".into(), last4: None, balance: bagholder_core::Dec::parse("7600").unwrap(), currency: bagholder_core::Currency::CAD, as_of: None };
+        book.keep_outside_debts(conn, now, &[debt]).unwrap();
+        f.debts_changed().unwrap();
+        assert_eq!(owed(&f).map(|m| m.amount.to_string()), Some("7600".to_string()));
     }
 
     #[test]

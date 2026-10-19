@@ -46,7 +46,7 @@ test("a month's repayments are their own part of the bar, in the legend and the 
   await expect(tip).toContainText('−' + money0('450'))
 })
 
-test('a payee no rule matched is asked once, and the answer is sent for every payment to it', async ({ page, request }) => {
+test('a payee no rule matched is asked once, with a choice of each debt it may be, and the answer is sent', async ({ page, request }) => {
   const model = await modelDoc(request)
   model.cashflow.asked = [{ key: 'debit:zeta bank', payee: 'ZETA BANK', count: 3, candidates: [card, { ...loan, id: 'loc-1', name: 'Line of credit', institution: 'Zeta Bank' }] }]
   await standIn(page, streamBody(model))
@@ -56,13 +56,12 @@ test('a payee no rule matched is asked once, and the answer is sent for every pa
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
   })
   await page.goto('/#cashflow')
-  await expect(page.getByText('3 payments could not be matched to a debt')).toBeVisible()
-  const save = page.getByRole('button', { name: 'Save' })
-  await expect(save).toBeDisabled()
-  await page.getByLabel('Debt repaid by payments to ZETA BANK').selectOption({ label: 'Line of credit · Zeta Bank' })
-  await save.click()
+  const ask = page.locator('.asked')
+  await expect(ask).toContainText('3 payments to ZETA BANK: which debt did they repay?')
+  const choices = page.getByRole('group', { name: 'Debt repaid by payments to ZETA BANK' })
+  await expect(choices.getByRole('button')).toHaveText(['Visa · Zeta Bank', 'Line of credit · Zeta Bank', 'Not a debt'])
+  await choices.getByRole('button', { name: 'Line of credit · Zeta Bank' }).click()
   await expect.poll(() => sent).toEqual({ payee: 'debit:zeta bank', debt: 'loc-1' })
-  await page.getByLabel('Debt repaid by payments to ZETA BANK').selectOption({ label: 'Not a debt' })
-  await save.click()
+  await choices.getByRole('button', { name: 'Not a debt' }).click()
   await expect.poll(() => sent).toEqual({ payee: 'debit:zeta bank', debt: null })
 })
