@@ -116,7 +116,18 @@ fn universe(seed: u64) -> Value {
     add(json!({"id": "k2", "account": "C", "day": "2026-06-30", "at": "2026-06-30T15:00:00Z", "kind": "sell", "instrument": "K", "qty": "-0.100000", "cash": "45"}));
     add(json!({"id": "x0", "account": "A", "day": "2026-01-03", "at": "2026-01-03T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "1", "cash": "-10"}));
     add(json!({"id": "y0", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "Y", "qty": "5", "cash": "-50"}));
+    // Z: one round trip in B, opened and closed, then bought again
+    add(json!({"id": "z1", "account": "B", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "Z", "qty": "10", "cash": format!("-{}", cash(&mut r))}));
+    add(json!({"id": "z2", "account": "B", "day": "2026-03-20", "at": "2026-03-20T15:00:00Z", "kind": "sell", "instrument": "Z", "qty": "-10", "cash": cash(&mut r)}));
+    add(json!({"id": "z3", "account": "B", "day": "2026-05-04", "at": "2026-05-04T15:00:00Z", "kind": "buy", "instrument": "Z", "qty": "4", "cash": format!("-{}", cash(&mut r))}));
     // the steps' rows
+    // late rows that move no lot, each placed before what its family matched (#527):
+    // a distribution on the day Z's round trip opens, on the day it closes, one paid
+    // with nothing open, and cash in another currency than the account's
+    add(json!({"id": "zd1", "account": "B", "day": "2026-03-02", "at": "2026-03-02T20:00:00Z", "kind": "dividend", "instrument": "Z", "cash": cash(&mut r)}));
+    add(json!({"id": "zd2", "account": "B", "day": "2026-03-20", "at": "2026-03-20T20:00:00Z", "kind": "dividend", "instrument": "Z", "cash": cash(&mut r)}));
+    add(json!({"id": "zd3", "account": "B", "day": "2026-03-27", "kind": "dividend", "instrument": "Z", "cash": cash(&mut r)}));
+    add(json!({"id": "wx", "account": "A", "day": "2026-01-01", "at": "2026-01-01T15:00:00Z", "kind": "deposit", "cash": cash(&mut r), "cash_currency": "USD"}));
     add(json!({"id": "a1", "account": "A", "day": "2026-07-01", "kind": "buy", "instrument": "S", "qty": q(&mut r), "cash": format!("-{}", cash(&mut r))}));
     add(json!({"id": "a2", "account": "B", "day": "2026-07-02", "at": "2026-07-02T15:00:00Z", "kind": "sell", "instrument": "S", "qty": "-3", "cash": cash(&mut r)}));
     add(json!({"id": "a3", "account": "A", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "buy", "instrument": "S", "qty": "2", "cash": "-30"}));
@@ -162,7 +173,7 @@ fn universe(seed: u64) -> Value {
         "today": "2026-12-31",
         "accounts": [{"id": "A", "kind": "margin"}, {"id": "B"}, {"id": "C", "coin_minimum": "1.00 CAD"}, {"id": "N"}],
         "instruments": [
-            {"id": "S"}, {"id": "T"}, {"id": "U"}, {"id": "X"}, {"id": "Y"}, {"id": "K", "kind": "crypto"},
+            {"id": "S"}, {"id": "T"}, {"id": "U"}, {"id": "X"}, {"id": "Y"}, {"id": "Z"}, {"id": "K", "kind": "crypto"},
             {"id": "O", "kind": "option", "underlying": "T", "expiry": "2027-06-18", "strike": "20", "right": "call", "multiplier": "100"},
             {"id": "O2", "kind": "option", "underlying": "U", "expiry": "2026-03-20", "strike": "20", "right": "call", "multiplier": "100"},
             {"id": "O3", "kind": "option", "underlying": "T", "expiry": "2027-09-17", "strike": "25", "right": "call", "multiplier": "100"},
@@ -175,7 +186,7 @@ fn universe(seed: u64) -> Value {
     })
 }
 
-const BASE: &[&str] = &["s1", "s2", "s3", "s4o", "s4i", "s5o", "t1", "o1", "o2", "u1", "u2", "w1", "k1", "k2", "x0", "y0"];
+const BASE: &[&str] = &["s1", "s2", "s3", "s4o", "s4i", "s5o", "t1", "o1", "o2", "u1", "u2", "w1", "k1", "k2", "x0", "y0", "z1", "z2", "z3"];
 
 fn steps() -> Vec<Step> {
     use Extra as E;
@@ -183,6 +194,11 @@ fn steps() -> Vec<Step> {
     let st = |records: Vec<&'static str>, on, path, extra| Step { records, on, path, extra };
     vec![
         st(vec!["a1"], "S", Continued, E::None),
+        // rows the walk passes over continue their family wherever they are placed (#527)
+        st(vec!["zd1"], "Z", Continued, E::None),
+        st(vec!["zd2"], "Z", Continued, E::None),
+        st(vec!["zd3"], "Z", Continued, E::None),
+        st(vec!["wx"], "Z", None, E::None),
         st(vec!["a2"], "S", Continued, E::None),
         st(vec![], "S", None, E::TradeOn("a1")),
         st(vec!["a8"], "S", Whole("a record of the family revised in the same change"), E::Revise("s3")),

@@ -386,6 +386,23 @@ pub struct Figures<'a> {
     pub matched: &'a Matched,
 }
 
+/// The first day whose past holdings a change to the record can move (#527): a
+/// past day is worked out from the rows dated on or before it (`Engine::past`),
+/// so a change made of rows alone moves the days from the earliest date any row
+/// it removes, adds or links states (its trade date, its settlement date); a
+/// change to anything else every past day reads (an account, an instrument, a
+/// trade, a group, the journal, an adjustment) moves them all.
+fn first_day_touched(ledger: &Ledger, delta: &crate::input::LedgerDelta) -> Date {
+    if !delta.accounts.is_empty() || !delta.instruments.is_empty() || !delta.trades.is_empty() || !delta.groups.is_empty() || !delta.journal.is_empty() || !delta.adjustments.is_empty() {
+        return Date::MIN;
+    }
+    let days = |t: &bagholder_core::transaction::Transaction| [Some(t.trade_date), t.settle_date];
+    let gone = delta.records.keys().flat_map(|r| ledger.transactions.of_record(*r));
+    let come = delta.records.values().flatten().flat_map(|(_, txs)| txs.iter());
+    let linked = delta.links.iter().flat_map(|(a, b)| [a, b]).filter_map(|id| ledger.transactions.get(id));
+    gone.chain(come).chain(linked).flat_map(days).flatten().min().unwrap_or(Date::MAX)
+}
+
 impl Engine {
     pub fn build(inputs: Inputs) -> Engine {
         let families = Families::build(&inputs.ledger, &inputs.facts.adjustments);
@@ -685,7 +702,7 @@ impl Engine {
         // the trades and notes move every day's; rates and closes the days from
         // the first they changed on
         let stale: Option<Date> = match &change {
-            Change::Ledger(_) => Some(Date::MIN),
+            Change::Ledger(delta) => Some(first_day_touched(&self.inputs.ledger, delta)),
             Change::Rates(r) => {
                 let was = &self.inputs.facts.rates;
                 if r.covered != was.covered || r.series != was.series || r.holidays != was.holidays {
@@ -1106,10 +1123,15 @@ impl Engine {
                         return false;
                     }
                     // 2: after everything the family walked, and not a close the
-                    // look-ahead from a stated open at that instant would take first
+                    // look-ahead from a stated open at that instant would take first;
+                    // a record whose every leg the walk passes over (no instrument, or
+                    // a distribution no adjustment names) is placed anywhere: it moves
+                    // no lot, so the match after it is the match before it with its
+                    // cash (#527)
                     let Some(last) = &k.last else { return false };
                     let key = crate::ledger::order_key_of(t, &legs, &info.source_key);
-                    if key <= *last || earliest.as_ref().is_some_and(|e| e <= last) {
+                    let passed_over = legs.iter().all(|l| self.walk_passes_over(l));
+                    if !passed_over && (key <= *last || earliest.as_ref().is_some_and(|e| e <= last)) {
                         return false;
                     }
                     let same_instant = (key.0, key.1, key.2) == (last.0, last.1, last.2);
@@ -1165,6 +1187,15 @@ impl Engine {
         }
         added.retain(|f, _| !blocked.contains(f));
         added
+    }
+
+    /// Whether the match walks past `t` moving nothing but cash: a row naming no
+    /// instrument, or a distribution no adjustment names (a return of capital is
+    /// an adjustment, and moves the lots). Its place in the walk then decides
+    /// nothing (`ledger::Matcher::apply`).
+    fn walk_passes_over(&self, t: &bagholder_core::transaction::Transaction) -> bool {
+        use bagholder_core::transaction::Kind;
+        t.instrument.is_none() || (t.kind == Kind::Dividend && self.inputs.facts.adjustments.get(&t.id).is_none())
     }
 
     /// A family's match continued from its kept state for `rows`, its share of
