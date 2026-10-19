@@ -21,6 +21,7 @@ mod entries;
 mod figures;
 mod following;
 mod pull_broker;
+mod outside_debts_check;
 mod read_sources;
 mod events;
 mod exit_with;
@@ -412,6 +413,10 @@ fn main() {
     // the readers of market data and facts, run once (docs/plans/stage-3a-sources.md)
     if args.first().map(String::as_str) == Some("read-sources") {
         std::process::exit(read_sources::cli_read(&args[1..]));
+    }
+    // the one capture the person supplies for the debts held outside (brief 68)
+    if args.first().map(String::as_str) == Some("outside-debts-check") {
+        std::process::exit(outside_debts_check::cli(&args[1..]));
     }
     // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md)
     if args.first().map(String::as_str) == Some("pull-broker") {

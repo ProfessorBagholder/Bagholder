@@ -990,7 +990,7 @@ impl Source for Generated {
     fn net_worth(&mut self) -> Answer<Option<Value>> {
         // the made-up person holds nothing outside Wealthsimple
         self.asked += 1;
-        json::parse(r#"{"externalFinancialEntities":[]}"#).map(Some).map_err(|e| Failure::Mismatch(e.to_string()))
+        json::parse(r#"{"id":"identity-generated","netWorth":{"externalFinancialEntities":[]}}"#).map(Some).map_err(|e| Failure::Mismatch(e.to_string()))
     }
 
     fn buying_power(&mut self, account: &str) -> Answer<Value> {

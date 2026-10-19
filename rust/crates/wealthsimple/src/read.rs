@@ -213,14 +213,32 @@ pub fn buying_power(node: &Value, account: &str) -> Read<Result<Dec, String>> {
 /// What is owed on a credit card now (`creditCardAccount.balance.current`: the
 /// posted purchases less payments; `pending` is apart), of the card account
 /// asked for.
-/// The accounts held outside Wealthsimple that its net worth feature states, from
-/// its `netWorth` node: each one's kind (its type, `StudentLoanExternalFinancialEntity`
+/// What `ownershipType` says of an outside account, as Wealthsimple's own web
+/// app sets it (`individual`, `joint`, `joint_with_spouse`): each is the
+/// person's own debt where the account is theirs, held alone or jointly.
+pub const OWNERSHIPS: [&str; 3] = ["individual", "joint", "joint_with_spouse"];
+
+/// The person's own accounts held outside Wealthsimple that its net worth feature
+/// states, from the reply's `identity` node. One of another identity (a household
+/// member's, shown to the household) is not the person's and is left out. Each
+/// one's kind (its type, `StudentLoanExternalFinancialEntity`
 /// read as `StudentLoan`), name, institution, the last four digits of its number
 /// where stated, its balance and when that balance was stated. Read strictly: a
 /// field of another shape is a named mismatch, never a quiet zero.
 pub fn outside_accounts(node: &Value) -> Read<Vec<bagholder_book::debts::OutsideDebt>> {
+    let identity = Node::root(node);
+    let me = identity.text("id")?;
     let mut out = Vec::new();
-    for e in Node::root(node).list("externalFinancialEntities")? {
+    for e in identity.obj("netWorth")?.list("externalFinancialEntities")? {
+        let ownership = e.text("ownershipType")?;
+        if !OWNERSHIPS.contains(&ownership) {
+            return Err(e.field("ownershipType")?.mismatch(format!("{ownership:?} is not an ownership Wealthsimple states")));
+        }
+        e.obj("visibility")?.bool("household")?;
+        // a household member's account, shown to the household, is not the person's
+        if e.text("identityId")? != me {
+            continue;
+        }
         let typename = e.text("__typename")?;
         let kind = typename.strip_suffix("ExternalFinancialEntity").ok_or_else(|| e.field("__typename").map(|f| f.mismatch(format!("{typename} is not an outside account's type"))).unwrap_or_else(|m| m))?;
         let balance = e.obj("balance")?;
@@ -266,29 +284,35 @@ mod tests {
     #[test]
     fn the_outside_accounts_are_read_as_stated() {
         let got = outside_accounts(&node(
-            r#"{"externalFinancialEntities": [
-                {"__typename": "StudentLoanExternalFinancialEntity", "id": "efe-1", "displayName": "Student loan", "institutionName": "Omicron Trust", "accountNumberLast4": null, "balance": {"amount": "-12500.40", "currency": "CAD"}, "balanceAsOf": "2026-10-01T12:00:00Z"},
-                {"__typename": "CreditCardExternalFinancialEntity", "id": "efe-2", "displayName": "Visa", "institutionName": "Zeta Bank", "accountNumberLast4": "4821", "balance": {"amount": "830.00", "currency": "CAD"}, "balanceAsOf": null},
-                {"__typename": "ChequingExternalFinancialEntity", "id": "efe-3", "displayName": "Chequing", "institutionName": null, "accountNumberLast4": null, "balance": {"amount": "200", "currency": "CAD"}, "balanceAsOf": null}
-            ]}"#,
+            r#"{"id": "me", "netWorth": {"externalFinancialEntities": [
+                {"__typename": "StudentLoanExternalFinancialEntity", "id": "efe-1", "identityId": "me", "ownershipType": "individual", "visibility": {"household": false}, "displayName": "Student loan", "institutionName": "Omicron Trust", "accountNumberLast4": null, "balance": {"amount": "-12500.40", "currency": "CAD"}, "balanceAsOf": "2026-10-01T12:00:00Z"},
+                {"__typename": "CreditCardExternalFinancialEntity", "id": "efe-2", "identityId": "me", "ownershipType": "joint_with_spouse", "visibility": {"household": true}, "displayName": "Visa", "institutionName": "Zeta Bank", "accountNumberLast4": "4821", "balance": {"amount": "830.00", "currency": "CAD"}, "balanceAsOf": null},
+                {"__typename": "ChequingExternalFinancialEntity", "id": "efe-3", "identityId": "me", "ownershipType": "joint", "visibility": {"household": false}, "displayName": "Chequing", "institutionName": null, "accountNumberLast4": null, "balance": {"amount": "200", "currency": "CAD"}, "balanceAsOf": null},
+                {"__typename": "MortgageExternalFinancialEntity", "id": "efe-4", "identityId": "spouse", "ownershipType": "individual", "visibility": {"household": true}, "displayName": "Their mortgage", "institutionName": "Omicron Trust", "accountNumberLast4": null, "balance": {"amount": "400000", "currency": "CAD"}, "balanceAsOf": null}
+            ]}}"#,
         ))
         .unwrap();
         assert_eq!(got.iter().map(|d| (d.kind.as_str(), d.balance.to_string())).collect::<Vec<_>>(), [("StudentLoan", "12500.4".to_string()), ("CreditCard", "830".to_string()), ("Chequing", "200".to_string())]);
         assert_eq!(got[1].last4.as_deref(), Some("4821"));
         assert!(got[0].as_of.is_some() && got[1].as_of.is_none());
         assert_eq!(got[2].institution, "", "an account entered by hand may name no institution");
+        assert!(got.iter().all(|d| d.entity_id != "efe-4"), "a household member's mortgage is not the person's");
+        assert_eq!(got[1].entity_id, "efe-2", "a joint debt is the person's");
     }
 
     /// A field of another shape is a named mismatch, never a quiet zero.
     #[test]
     fn a_reply_of_another_shape_is_a_named_mismatch() {
+        let mine = r#""identityId": "me", "ownershipType": "individual", "visibility": {"household": false}"#;
         for (bad, why) in [
-            (r#"{"__typename": "Mortgage", "id": "x", "balance": {"amount": "1", "currency": "CAD"}}"#, "a type that is not an outside account's"),
-            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "balance": {"amount": 1, "currency": "CAD"}}"#, "an amount as a number"),
-            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "balance": {"amount": "1", "currency": "dollars"}}"#, "a currency that is not one"),
-            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "balance": {"amount": "1", "currency": "CAD"}, "balanceAsOf": "yesterday"}"#, "an instant that is not one"),
+            (format!(r#"{{"__typename": "Mortgage", "id": "x", {mine}, "balance": {{"amount": "1", "currency": "CAD"}}}}"#), "a type that is not an outside account's"),
+            (format!(r#"{{"__typename": "MortgageExternalFinancialEntity", "id": "x", {mine}, "balance": {{"amount": 1, "currency": "CAD"}}}}"#), "an amount as a number"),
+            (format!(r#"{{"__typename": "MortgageExternalFinancialEntity", "id": "x", {mine}, "balance": {{"amount": "1", "currency": "dollars"}}}}"#), "a currency that is not one"),
+            (format!(r#"{{"__typename": "MortgageExternalFinancialEntity", "id": "x", {mine}, "balance": {{"amount": "1", "currency": "CAD"}}, "balanceAsOf": "yesterday"}}"#), "an instant that is not one"),
+            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "identityId": "me", "ownershipType": "shared", "visibility": {"household": false}, "balance": {"amount": "1", "currency": "CAD"}}"#.to_string(), "an ownership Wealthsimple does not state"),
+            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "identityId": "me", "ownershipType": "individual", "balance": {"amount": "1", "currency": "CAD"}}"#.to_string(), "no visibility"),
         ] {
-            assert!(outside_accounts(&node(&format!(r#"{{"externalFinancialEntities": [{bad}]}}"#))).is_err(), "{why}");
+            assert!(outside_accounts(&node(&format!(r#"{{"id": "me", "netWorth": {{"externalFinancialEntities": [{bad}]}}}}"#))).is_err(), "{why}");
         }
     }
 }

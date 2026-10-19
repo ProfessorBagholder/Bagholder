@@ -45,6 +45,8 @@ pub const PERSONAL: &[&str] = &[
     "p2pMessage",
     "redactedExternalAccountNumber",
     "institutionName",
+    "displayName",
+    "accountNumberLast4",
     "aftOriginatorName",
     "counterPartyName",
     "spendMerchant",

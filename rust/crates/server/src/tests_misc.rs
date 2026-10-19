@@ -711,12 +711,13 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 /// there; every other line the app says goes to its log (`app::log`). Command-line
 /// tools (`src/bin`, and the server's own subcommands) print their output, which is
 /// what they are for.
-const TERMINAL: [(&str, usize, &str); 10] = [
+const TERMINAL: [(&str, usize, &str); 11] = [
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
     ("server/src/main.rs", 5, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read; a command started for work that has already ended (`BAGHOLDER_EXIT_WITH`), before any log is open"),
     ("server/src/mcp.rs", 2, "the `mcp` subcommand's failure to start or to serve: its standard output is the protocol, so its client reads what went wrong from standard error"),
     ("server/src/read_sources.rs", 8, "the `read-sources` and `health` subcommands' own output"),
+    ("server/src/outside_debts_check.rs", 3, "a command the person runs once: its usage, its counts, and why it failed"),
     ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),
     ("server/src/legacy_import.rs", 3, "the `import-book` subcommand's own output"),
     ("server/src/compare.rs", 6, "the `compare` subcommand's own output"),

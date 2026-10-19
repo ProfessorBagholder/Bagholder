@@ -33,9 +33,9 @@ pub trait Source {
     fn transfer(&mut self, id: &str) -> Answer<Option<Value>>;
     /// A credit card account (`creditCardAccount`): its balance.
     fn card(&mut self, account: &str) -> Answer<Value>;
-    /// The net worth feature's `netWorth` node: the accounts held outside
-    /// Wealthsimple that the person linked or entered there; none from a
-    /// capture taken before it was read.
+    /// The `identity` node of the net worth feature's reply: the person's id and
+    /// the accounts held outside Wealthsimple linked or entered there; none from
+    /// a capture taken before it was read.
     fn net_worth(&mut self) -> Answer<Option<Value>>;
     /// The position nodes of an account as of a day.
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value>;

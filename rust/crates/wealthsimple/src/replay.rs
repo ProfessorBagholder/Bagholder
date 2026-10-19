@@ -26,7 +26,7 @@ pub struct Replay {
     transfers: BTreeMap<String, Value>,
     cards: BTreeMap<String, Value>,
     buying_power: BTreeMap<String, Value>,
-    /// The net worth feature's `netWorth` node, where the capture holds one.
+    /// The net worth feature's `identity` node, where the capture holds one.
     net_worth: Option<Value>,
     positions: BTreeMap<(String, String), Value>,
     /// The balances replies' accounts, each as Wealthsimple sent it.
@@ -144,8 +144,8 @@ impl Replay {
                         }
                     }
                 }
-            } else if let Some(n) = data.obj("identity").ok().and_then(|i| i.obj("netWorth").ok()) {
-                r.net_worth = Some(n.value().clone());
+            } else if let Some(i) = data.obj("identity").ok().filter(|i| i.obj("netWorth").is_ok()) {
+                r.net_worth = Some(i.value().clone());
             } else if let Ok(i) = data.obj("identity") {
                 for e in i.obj("accounts").and_then(|a| a.list("edges")).map_err(bad)? {
                     // the accounts list's nodes (a reply asking only for ids is not one)

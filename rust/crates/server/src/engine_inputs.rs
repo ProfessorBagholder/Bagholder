@@ -250,7 +250,7 @@ pub fn broker_account(s: &bagholder_book::statements::Stated) -> Option<bagholde
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bagholder_book::statements::UnitsLine;
     use bagholder_core::account::{AccountRef, AccountStatus};
@@ -261,7 +261,7 @@ mod tests {
     /// pre-authorized debit, stored as a pull stores a row (`{"activity": row}`).
     /// The recorded replies name each payee by stand-in, so the debts here are
     /// made to those names.
-    fn with_payments() -> (tempfile::TempDir, Book, bagholder_core::ConnectionId) {
+    pub(crate) fn with_payments() -> (tempfile::TempDir, Book, bagholder_core::ConnectionId) {
         use bagholder_broker::BrokerAdapter;
         let dir = tempfile::tempdir().unwrap();
         let now: bagholder_core::jiff::Timestamp = "2025-11-19T20:00:00Z".parse().unwrap();

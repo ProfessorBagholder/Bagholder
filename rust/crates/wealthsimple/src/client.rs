@@ -257,7 +257,8 @@ impl Source for Client<'_> {
         let identity = self.identity()?;
         let op = "FetchIdentityNetWorthAccounts";
         let data = self.graphql(op, obj(vec![("identityId", text(&identity))]))?;
-        Ok(Some(Node::root(&data).obj("identity").and_then(|i| i.obj("netWorth")).map_err(|m| mismatch(op, m))?.value().clone()))
+        // the identity whole: its id says which outside accounts are the person's own
+        Ok(Some(Node::root(&data).obj("identity").map_err(|m| mismatch(op, m))?.value().clone()))
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         let op = "FetchHoldingsExportPositionsAsOfDate";
