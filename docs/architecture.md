@@ -172,7 +172,7 @@ The part that moves money is built the way order systems are built.
 **Access.**
 - The server answers only its own machine unless the person turns on remote access. *Not built: remote access with a sign-in (the owner's decision of 2026-10-04: not now).* Every request is checked for its Host and Origin, and every write carries a token that proves it came from the app's own page (*not built: the token is the same on every install; an issue holds it*), so another website open in the same browser cannot reach it.
 - Remote access (from another device) goes through a secure tunnel or reverse proxy the person already trusts; the app does not manage certificates itself.
-- AI agents reach the app through its MCP tools only (§14; *not built*).
+- AI agents reach the app through its MCP tools only (§14; built for reading, on the same machine).
 - **Broker credentials** (*not built: today a file in the data folder*) live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a copied or moved book never carries them.
 
 **Notifications** are events from the book, execution and sources, each identified by what it is (a fill, a filing's content, a release's words), so one event is told once, through the operating system's channel or the browser's.
@@ -196,7 +196,7 @@ One rule, end to end: **work is done because something changed or something is n
 
 ## 14. AI agents
 
-*Not built. The filings server (`disclosures-mcp`) is the one MCP server that exists, on its own; the rest of this section is the design for when agents are taken up, a feature the owner has not asked for yet (`docs/decisions.md`, 2026-09-26).*
+*Built: a read-only connection for agents on the same machine (`bagholder mcp`; `docs/plans/agents-read-the-trade-history.md`, `SPEC.md` §Agents; `docs/decisions.md`, 2026-10-18). It is a stdio program that reads the running server's own `GET` routes through a client that can name no other, so its answers are the page's: the trades with their journal, one trade's executions, the holdings, and the filter lists. The filings server (`disclosures-mcp`) is still on its own. The rest of this section is the design for what agents are given beyond reading: writes, market data, remote agents.*
 
 The person's AI assistants (Claude, or any other that speaks the Model Context Protocol) reach Bagholder through its MCP tools, and only through them: they ask about the book, the figures and the market around a holding, and keep the journal and the watchlist.
 

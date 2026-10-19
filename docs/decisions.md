@@ -4,6 +4,8 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 ## 2026-10-18
 
+- **Agents reach Bagholder from the same machine only, for now.** "Same machine only for now." The read-only connection is a program the agent's client starts on the machine Bagholder runs on; remote agents come with remote access, when that is taken up. (Owner, 2026-10-18, relayed through the reviewer, brief 54.) Held by: review only.
+- **AI agents read the person's trade history through a read-only connection.** "Building a read-only connection for other agents to access the trade history is the way to go." The person's agents read the trades with their listing and venue, the executions, the journal and the holdings; nothing an agent holds through it can write. It is a feature taken up after the migration (2026-09-26), built from `docs/plans/agents-read-the-trade-history.md`. (Owner, 2026-10-18, relayed through the reviewer.) Held by: the plan's read-only tests (the adapter's request type admits `GET` routes only; the route test over every tool).
 - **A pull request is merged once the reviewer clears it and every check of its head is green**, with no further ask of the owner. The owner's own call on a merge still stands whenever they make one, and a release is still the owner's word alone. (Owner, 2026-10-18, a standing OK asked and given in the CTO session.) Held by: review only.
 
 ## 2026-10-09

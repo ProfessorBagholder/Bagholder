@@ -42,12 +42,12 @@ pub fn routes() -> Routed {
     routed
 }
 
-async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswer> {
+pub(crate) async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswer> {
     Ok(Json(blocking(move || crate::status::answer(&state.app)).await?))
 }
 
 /// `GET /api/figures/detail`: a trade's or a holding's fills, by its id.
-async fn figures_detail(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> Api<crate::wire::figures::Detail> {
+pub(crate) async fn figures_detail(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> Api<crate::wire::figures::Detail> {
     let app = state.app;
     let id = q.id.unwrap_or_default();
     let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::detail(e, &id))).flatten()).await?;
@@ -61,15 +61,15 @@ async fn figures_details(State(state): State<AppState>) -> Api<crate::wire::figu
     Ok(Json(crate::wire::figures::Details { details: found.ok_or_else(|| ApiError::Conflict("the figures are not open".into()))? }))
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, Serialize, TS)]
 pub struct ViewQuery {
     /// The subscription's key: `book`, `dashboard`, `positions`, `trades`,
     /// `cashflow`, `exposure`, `markets`, `trade:<id>`.
     #[serde(default, deserialize_with = "trimmed")]
-    key: Option<String>,
+    pub(crate) key: Option<String>,
     /// Its parameters, as the JSON a subscription is asked with (`views::Params`).
     #[serde(default, deserialize_with = "trimmed")]
-    params: Option<String>,
+    pub(crate) params: Option<String>,
 }
 
 /// A document of the figures, as a subscription is first sent it.
@@ -80,7 +80,7 @@ pub struct ViewAnswer(serde_json::Value);
 /// `GET /api/view`: one screen's document once, exactly as a page subscribing to
 /// it is first sent it. A key or a parameter the figures do not know is refused,
 /// naming it.
-async fn view(State(state): State<AppState>, Params(q): Params<ViewQuery>) -> Api<ViewAnswer> {
+pub(crate) async fn view(State(state): State<AppState>, Params(q): Params<ViewQuery>) -> Api<ViewAnswer> {
     let app = state.app;
     let built = blocking(move || -> Result<serde_json::Value, ApiError> {
         let key = q.key.ok_or_else(|| ApiError::BadRequest("key required".into()))?;
@@ -140,10 +140,10 @@ async fn figures_trades(State(state): State<AppState>, Params(q): Params<TradesQ
     Ok(Json(built))
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, Serialize, TS)]
 pub struct TradeQuery {
     #[serde(default, deserialize_with = "trimmed")]
-    id: Option<String>,
+    pub(crate) id: Option<String>,
 }
 
 /// `POST /api/data/clear`: the kinds of data ticked.

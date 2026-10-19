@@ -849,6 +849,11 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `disclosures-66`
 - `disclosures-67`
 - `disclosures-68`
+- `agents-1`
+- `agents-2`
+- `agents-3`
+- `agents-4`
+- `agents-5`
 - `filters-1`
 - `filters-2`
 - `filters-3`
