@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each carries the owner's own words and where they were said; a decision proposed by a brief or a session and not yet confirmed by the owner is marked "unconfirmed" and binds nothing until the owner confirms it. Each names the test that fails if it is broken, quoting what it asserts, or says "review only" where no test can hold it.
 
+## 2026-10-18
+
+- **A pull request is merged once the reviewer clears it and every check of its head is green**, with no further ask of the owner. The owner's own call on a merge still stands whenever they make one, and a release is still the owner's word alone. (Owner, 2026-10-18, a standing OK asked and given in the CTO session.) Held by: review only.
+
 ## 2026-10-09
 
 - **Where the way top engineers build an app of this kind settles how something must work, it is built that way: nothing is left "undecided", put to the owner as a choice, or built narrowly around the symptom; anywhere this is not enforced is a failing.** A real choice between ways that all meet the standard is the owner's; nothing else is. ("It shouldn't be 'undecided' when I have said over and over again how things must be designed properly in line with how top human engineers produce similar apps. There should not be any ambiguity as to this point, anywhere this is not enforced is a failing."; "This is not about the error specifically… it's more of a broad concept you keep failing to adhere to.") Held by: review only.
