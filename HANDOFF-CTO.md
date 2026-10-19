@@ -34,7 +34,7 @@ The Architect now runs on the same home server as a peer session named **Archite
 ### In CI now: merge on green (the Architect has cleared all three)
 - **#540** (#524, fund-of-funds sectors), head `733239f6`.
 - **#541** (#529, failures said as failures), head `a92a22f7`.
-- **#543** (#528, chips never squeezed), head `62fa5441`.
+- **#543** (#528, chips never squeezed): merged.
 - `scratchpad/merge-when-green.sh <pr…>` merges each one once all runs on its head succeed; background jobs were running it for all three. If a session restarts, check each PR (`gh pr view N --json state`) and rerun the script for any still open.
 - A failed run is never rerun: read the log, fix locally, push a new head, tell the Architect.
 
@@ -57,7 +57,7 @@ Opening a PR starts its one CI run. Then send the Architect the head and run id.
 8. Older backlog as before: #509, #508, #512, the #414–#486 audit batch, Dependabot #488–#502.
 
 ### The release line
-- **v2.5.7** is the latest release we know of. Two "Release archives" runs from tag pushes appeared today, and this session didn't start them; check `gh release list` before assuming.
+- **v2.5.7** is the latest release. The "Release archives" runs seen on 2026-10-18 (01:15, 01:16 and 01:35 UTC) are `release.yml` running on pushes to master. No tag was pushed and no release was made (the Architect checked).
 - Release steps are unchanged (`CLAUDE.md`, Releases).
 
 ## 3. How the owner wants to be worked with
