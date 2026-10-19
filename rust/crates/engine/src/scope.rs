@@ -789,7 +789,8 @@ fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -
         return None;
     }
     let each: Vec<(crate::input::Debt, Fig<Money>)> = debts.into_iter().map(|d| {
-        let cad = live_to_cad(rates, clock, Money::new(d.balance.amount.abs(), d.balance.currency));
+        // as stated: owed positive, a debt in credit negative, which lowers what is owed
+        let cad = live_to_cad(rates, clock, d.balance);
         (d, cad)
     }).collect();
     Some((fig_sum(&each.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>()), each))

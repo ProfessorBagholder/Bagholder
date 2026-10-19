@@ -64,6 +64,20 @@ fn what_is_owed_is_stated_under_every_account_and_under_no_narrower_scope() {
 }
 
 #[test]
+fn a_debt_in_credit_lowers_what_is_owed() {
+    let (_, mut e) = with_a_loan();
+    let mut d = e.inputs().facts.debts.clone();
+    d.owed.push(Debt { id: "card-1".into(), name: "Card".into(), institution: "Zeta Bank".into(), balance: Money::new(d_("-150"), Currency::CAD), as_of: None });
+    e.apply(Change::Debts(d));
+    let (total, _) = e.scope(&Filters::default()).portfolio.owed.unwrap();
+    assert_eq!(total.unwrap(), Money::new(d_("8850"), Currency::CAD), "9000 owed less 150 in credit");
+}
+
+fn d_(s: &str) -> Dec {
+    Dec::parse(s).unwrap()
+}
+
+#[test]
 fn with_no_debt_nothing_is_owed() {
     let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
     let case: Value = serde_json::from_str(&text).unwrap();

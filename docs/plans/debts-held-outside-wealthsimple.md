@@ -119,7 +119,10 @@ Hover shows each debt's balance with its as-of date, always (brief 67, 4). Wealt
   - the Repayments segment, legend and hover;
   - the question and both answers sent.
   - Cashflow, Portfolio and menu specs: 42 passed. Page unit tests: 176 passed.
-- **Not run here:** your own session. Its replies, and the count of payments rules 2 to 4 settle, need your Wealthsimple sign-in, which isn't on this server.
+- **Your own capture** (2026-10-19, `outside-debts-check`, read-only, anonymised into `wealthsimple/tests/replies/wealthsimple-networth`):
+  - 9 outside accounts, all yours: 6 debts and 3 assets;
+  - every balance stated positive, so a debt's balance is read as stated (owed positive, one in credit negative, lowering what is owed) in place of the earlier absolute value;
+  - of 252 bill payments and pre-authorized debits, the rules match 62 to a debt, 29 wait on one question about a single payee, and 161 are no debt.
 
 ## Right to refuse
 

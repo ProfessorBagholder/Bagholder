@@ -253,8 +253,9 @@ pub fn outside_accounts(node: &Value) -> Read<Vec<bagholder_book::debts::Outside
             name: e.opt_text("displayName")?.unwrap_or("").to_string(),
             institution: e.opt_text("institutionName")?.unwrap_or("").to_string(),
             last4: e.opt_text("accountNumberLast4")?.map(String::from),
-            // what is owed, whichever sign the feature states a debt with
-            balance: balance.dec_text("amount")?.abs(),
+            // as stated: a debt's balance owed is positive (the person's own
+            // capture, 2026-10-19: every debt positive); one in credit is negative
+            balance: balance.dec_text("amount")?,
             currency: Currency::parse(currency).map_err(|err| balance.field("currency").map(|f| f.mismatch(err.to_string())).unwrap_or_else(|m| m))?,
             as_of,
         });
@@ -292,12 +293,26 @@ mod tests {
             ]}}"#,
         ))
         .unwrap();
-        assert_eq!(got.iter().map(|d| (d.kind.as_str(), d.balance.to_string())).collect::<Vec<_>>(), [("StudentLoan", "12500.4".to_string()), ("CreditCard", "830".to_string()), ("Chequing", "200".to_string())]);
+        assert_eq!(got.iter().map(|d| (d.kind.as_str(), d.balance.to_string())).collect::<Vec<_>>(), [("StudentLoan", "-12500.4".to_string()), ("CreditCard", "830".to_string()), ("Chequing", "200".to_string())], "each as stated");
         assert_eq!(got[1].last4.as_deref(), Some("4821"));
         assert!(got[0].as_of.is_some() && got[1].as_of.is_none());
         assert_eq!(got[2].institution, "", "an account entered by hand may name no institution");
         assert!(got.iter().all(|d| d.entity_id != "efe-4"), "a household member's mortgage is not the person's");
         assert_eq!(got[1].entity_id, "efe-2", "a joint debt is the person's");
+    }
+
+    /// The person's own reply (2026-10-19, anonymised): every outside account is
+    /// read, each debt's balance owed stated positive.
+    #[test]
+    fn the_persons_own_reply_reads_with_every_debt_owed_positive() {
+        let reply = node(include_str!("../tests/replies/wealthsimple-networth/FetchIdentityNetWorthAccounts-1.json"));
+        let identity = Node::root(&reply).obj("data").and_then(|d| d.obj("identity")).unwrap().value().clone();
+        let got = outside_accounts(&identity).unwrap();
+        assert_eq!(got.len(), 9, "every account is the person's own");
+        let debts: Vec<_> = got.iter().filter(|d| crate::repayments::LIABILITY_TYPES.contains(&d.kind.as_str())).collect();
+        assert_eq!(debts.len(), 6);
+        assert!(debts.iter().all(|d| d.balance.is_positive()), "a debt owed is stated positive");
+        assert!(got.iter().all(|d| d.as_of.is_some()));
     }
 
     /// A field of another shape is a named mismatch, never a quiet zero.

@@ -18,7 +18,8 @@ pub struct OutsideDebt {
     pub name: String,
     pub institution: String,
     pub last4: Option<String>,
-    /// What is owed, positive, in `currency`.
+    /// Its balance as the feature states it, in `currency`: a debt's balance owed
+    /// is positive, one in credit negative.
     pub balance: Dec,
     pub currency: Currency,
     pub as_of: Option<jiff::Timestamp>,

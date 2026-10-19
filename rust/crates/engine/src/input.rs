@@ -638,7 +638,8 @@ pub struct Facts {
 }
 
 /// A debt held outside the broker, as the broker's net worth feature states it:
-/// what is owed, in its currency, as of when it was last stated.
+/// its balance in its currency (owed positive, in credit negative), as of when it
+/// was last stated.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Debt {
     pub id: String,
