@@ -328,6 +328,9 @@ pub struct Portfolio {
     pub unrealized_pct: Fig<Option<f64>>,
     pub nav: Option<Fig<Dec>>,
     pub nav_accounts: usize,
+    /// What is owed outside the accounts, under every account and only then:
+    /// none with no debt or under a narrower scope.
+    pub owed: Option<Owed>,
     pub has_margin: bool,
     /// None under a past range: no broker statement says what was borrowed then.
     pub margin_used: Option<Fig<Dec>>,
@@ -342,6 +345,31 @@ pub struct Portfolio {
     pub allocation: Vec<Slice>,
     /// The day the holdings are as of, under dates that end before today
     /// (`SPEC.md` §5); none for the holdings now.
+    pub as_of: Option<String>,
+}
+
+/// What is owed outside the accounts, in CAD: the total, the net value less it,
+/// and each debt with when it was stated.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Owed {
+    pub total: Fig<Dec>,
+    /// The net value less what is owed; none where no net value is stated.
+    pub net: Option<Fig<Dec>>,
+    pub debts: Vec<OwedDebt>,
+}
+
+/// One debt held outside, as the broker's net worth feature states it.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = id)]
+#[serde(rename_all = "camelCase")]
+pub struct OwedDebt {
+    pub id: String,
+    pub name: String,
+    pub institution: String,
+    /// What is owed, in CAD.
+    pub amount: Fig<Dec>,
+    /// When it was stated, as an instant; none where the broker did not say.
     pub as_of: Option<String>,
 }
 
@@ -397,7 +425,9 @@ pub struct CashflowMonth {
     pub count: usize,
     /// Interest charged, shown positive.
     pub interest: Fig<Dec>,
-    /// Distributions less interest charged.
+    /// Repayments of debts held outside, shown positive.
+    pub repayments: Fig<Dec>,
+    /// Distributions less interest charged less repayments.
     pub net: Fig<Dec>,
 }
 

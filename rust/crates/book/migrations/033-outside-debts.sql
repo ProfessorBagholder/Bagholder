@@ -15,15 +15,6 @@ CREATE TABLE outside_debts (
     PRIMARY KEY (connection_id, read_at, entity_id)
 ) STRICT;
 
--- The broker's bill-pay payees, as its newest read states them: whether each
--- company is a card issuer.
-CREATE TABLE bill_payees (
-    connection_id TEXT NOT NULL REFERENCES broker_connections(id),
-    company TEXT NOT NULL,
-    is_credit_card INTEGER NOT NULL CHECK (is_credit_card IN (0, 1)),
-    PRIMARY KEY (connection_id, company)
-) STRICT;
-
 -- The person's answer for a payee no rule settled: the outside debt its payments
 -- repay, or none (not a debt). Kept by the payee, so later payments follow it.
 CREATE TABLE repayment_answers (

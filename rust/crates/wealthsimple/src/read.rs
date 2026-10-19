@@ -213,6 +213,37 @@ pub fn buying_power(node: &Value, account: &str) -> Read<Result<Dec, String>> {
 /// What is owed on a credit card now (`creditCardAccount.balance.current`: the
 /// posted purchases less payments; `pending` is apart), of the card account
 /// asked for.
+/// The accounts held outside Wealthsimple that its net worth feature states, from
+/// its `netWorth` node: each one's kind (its type, `StudentLoanExternalFinancialEntity`
+/// read as `StudentLoan`), name, institution, the last four digits of its number
+/// where stated, its balance and when that balance was stated. Read strictly: a
+/// field of another shape is a named mismatch, never a quiet zero.
+pub fn outside_accounts(node: &Value) -> Read<Vec<bagholder_book::debts::OutsideDebt>> {
+    let mut out = Vec::new();
+    for e in Node::root(node).list("externalFinancialEntities")? {
+        let typename = e.text("__typename")?;
+        let kind = typename.strip_suffix("ExternalFinancialEntity").ok_or_else(|| e.field("__typename").map(|f| f.mismatch(format!("{typename} is not an outside account's type"))).unwrap_or_else(|m| m))?;
+        let balance = e.obj("balance")?;
+        let currency = balance.text("currency")?;
+        let as_of = match e.opt_text("balanceAsOf")? {
+            None => None,
+            Some(t) => Some(t.parse::<jiff::Timestamp>().map_err(|err| e.field("balanceAsOf").map(|f| f.mismatch(format!("not an instant: {err}"))).unwrap_or_else(|m| m))?),
+        };
+        out.push(bagholder_book::debts::OutsideDebt {
+            entity_id: e.text("id")?.to_string(),
+            kind: kind.to_string(),
+            name: e.opt_text("displayName")?.unwrap_or("").to_string(),
+            institution: e.opt_text("institutionName")?.unwrap_or("").to_string(),
+            last4: e.opt_text("accountNumberLast4")?.map(String::from),
+            // what is owed, whichever sign the feature states a debt with
+            balance: balance.dec_text("amount")?.abs(),
+            currency: Currency::parse(currency).map_err(|err| balance.field("currency").map(|f| f.mismatch(err.to_string())).unwrap_or_else(|m| m))?,
+            as_of,
+        });
+    }
+    Ok(out)
+}
+
 pub fn card_balance(node: &Value, account: &str) -> Read<Dec> {
     let n = Node::root(node);
     let id = n.text("id")?;
@@ -220,4 +251,44 @@ pub fn card_balance(node: &Value, account: &str) -> Read<Dec> {
         return Err(n.field("id")?.mismatch(format!("the card account {id}, not {account}, which was asked")));
     }
     n.obj("balance")?.dec_text("current")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(text: &str) -> Value {
+        bagholder_core::json::parse(text).unwrap()
+    }
+
+    /// Each outside account as the net worth feature states it: its kind from its
+    /// type, a debt's balance owed whatever sign it carries, and when it was stated.
+    #[test]
+    fn the_outside_accounts_are_read_as_stated() {
+        let got = outside_accounts(&node(
+            r#"{"externalFinancialEntities": [
+                {"__typename": "StudentLoanExternalFinancialEntity", "id": "efe-1", "displayName": "Student loan", "institutionName": "Omicron Trust", "accountNumberLast4": null, "balance": {"amount": "-12500.40", "currency": "CAD"}, "balanceAsOf": "2026-10-01T12:00:00Z"},
+                {"__typename": "CreditCardExternalFinancialEntity", "id": "efe-2", "displayName": "Visa", "institutionName": "Zeta Bank", "accountNumberLast4": "4821", "balance": {"amount": "830.00", "currency": "CAD"}, "balanceAsOf": null},
+                {"__typename": "ChequingExternalFinancialEntity", "id": "efe-3", "displayName": "Chequing", "institutionName": null, "accountNumberLast4": null, "balance": {"amount": "200", "currency": "CAD"}, "balanceAsOf": null}
+            ]}"#,
+        ))
+        .unwrap();
+        assert_eq!(got.iter().map(|d| (d.kind.as_str(), d.balance.to_string())).collect::<Vec<_>>(), [("StudentLoan", "12500.4".to_string()), ("CreditCard", "830".to_string()), ("Chequing", "200".to_string())]);
+        assert_eq!(got[1].last4.as_deref(), Some("4821"));
+        assert!(got[0].as_of.is_some() && got[1].as_of.is_none());
+        assert_eq!(got[2].institution, "", "an account entered by hand may name no institution");
+    }
+
+    /// A field of another shape is a named mismatch, never a quiet zero.
+    #[test]
+    fn a_reply_of_another_shape_is_a_named_mismatch() {
+        for (bad, why) in [
+            (r#"{"__typename": "Mortgage", "id": "x", "balance": {"amount": "1", "currency": "CAD"}}"#, "a type that is not an outside account's"),
+            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "balance": {"amount": 1, "currency": "CAD"}}"#, "an amount as a number"),
+            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "balance": {"amount": "1", "currency": "dollars"}}"#, "a currency that is not one"),
+            (r#"{"__typename": "MortgageExternalFinancialEntity", "id": "x", "balance": {"amount": "1", "currency": "CAD"}, "balanceAsOf": "yesterday"}"#, "an instant that is not one"),
+        ] {
+            assert!(outside_accounts(&node(&format!(r#"{{"externalFinancialEntities": [{bad}]}}"#))).is_err(), "{why}");
+        }
+    }
 }

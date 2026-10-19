@@ -131,12 +131,6 @@ CREATE TABLE bank_holidays (
     source TEXT NOT NULL,
     received_at TEXT NOT NULL
 ) STRICT;
-CREATE TABLE bill_payees (
-    connection_id TEXT NOT NULL REFERENCES broker_connections(id),
-    company TEXT NOT NULL,
-    is_credit_card INTEGER NOT NULL CHECK (is_credit_card IN (0, 1)),
-    PRIMARY KEY (connection_id, company)
-) STRICT;
 CREATE TABLE bracket_events (
     bracket_id TEXT NOT NULL REFERENCES brackets(id),
     seq INTEGER NOT NULL,

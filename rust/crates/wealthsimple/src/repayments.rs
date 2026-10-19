@@ -1,9 +1,8 @@
 //! Which outgoing payments repay a debt held outside Wealthsimple
 //! (`docs/plans/debts-held-outside-wealthsimple.md`, "Matching a payment to a
 //! liability"). A payment is matched to the outside account it went to: by the
-//! person's own answer, by the account number's last four digits, by the card
-//! issuer a bill payment names, or by the institution a pre-authorized debit
-//! names. Where none of those names exactly one debt, the payment is unsettled
+//! person's own answer, by the account number's last four digits, or by the
+//! institution the payment names. Where none of those names exactly one debt, the payment is unsettled
 //! and the person is asked, once per payee. No amount is matched and no payee is
 //! named here.
 
@@ -35,13 +34,6 @@ pub struct Liability {
     pub kind: String,
     pub institution: String,
     pub last4: Option<String>,
-}
-
-/// A bill-pay payee, as Wealthsimple's funding methods state it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Payee {
-    pub company: String,
-    pub is_credit_card: bool,
 }
 
 /// What an outgoing payment states about where it went.
@@ -100,7 +92,6 @@ pub enum Matched {
 pub enum Rule {
     Answer,
     AccountNumber,
-    CardIssuer,
     Institution,
 }
 
@@ -138,7 +129,7 @@ pub fn normalise(name: &str) -> String {
 }
 
 /// The debt an outgoing payment repays, by the first rule that names exactly one.
-pub fn match_payment(payment: &Payment, debts: &[Liability], payees: &[Payee], answers: &Answers) -> Matched {
+pub fn match_payment(payment: &Payment, debts: &[Liability], answers: &Answers) -> Matched {
     if let Some(answer) = answers.get(&payment.payee_key()) {
         return match answer {
             Some(id) if debts.iter().any(|d| &d.id == id) => Matched::Debt { liability: id.clone(), by: Rule::Answer },
@@ -155,16 +146,13 @@ pub fn match_payment(payment: &Payment, debts: &[Liability], payees: &[Payee], a
                     return Matched::Debt { liability: id, by: Rule::AccountNumber };
                 }
             }
-            let issuer = payees.iter().any(|p| p.is_credit_card && same_institution(&p.company, company));
-            let at_issuer: Vec<&Liability> = debts.iter().filter(|d| same_institution(&d.institution, company)).collect();
-            if issuer {
-                let cards: Vec<&Liability> = at_issuer.iter().copied().filter(|d| d.kind == "CreditCard").collect();
-                if let Some(id) = one(cards) {
-                    return Matched::Debt { liability: id, by: Rule::CardIssuer };
-                }
+            // the company it was paid to is the institution of exactly one debt
+            let at: Vec<&Liability> = debts.iter().filter(|d| same_institution(&d.institution, company)).collect();
+            if let Some(id) = one(at.clone()) {
+                return Matched::Debt { liability: id, by: Rule::Institution };
             }
-            if issuer || !at_issuer.is_empty() {
-                return Matched::Unsettled { candidates: unsettled(&at_issuer, debts) };
+            if !at.is_empty() {
+                return Matched::Unsettled { candidates: unsettled(&at, debts) };
             }
             Matched::NotOne
         }
@@ -231,21 +219,21 @@ mod tests {
 
     #[test]
     fn a_bill_payment_is_matched_by_its_account_numbers_last_four_digits() {
-        assert_eq!(match_payment(&bill("Zeta Bank Visa", "****4821"), &debts(), &[], &Answers::new()), Matched::Debt { liability: "card-a".into(), by: Rule::AccountNumber });
+        assert_eq!(match_payment(&bill("Zeta Bank Visa", "****4821"), &debts(), &Answers::new()), Matched::Debt { liability: "card-a".into(), by: Rule::AccountNumber });
         assert_eq!(last4("xxxx-xxxx-xxxx-1177").as_deref(), Some("1177"));
         assert_eq!(last4("***12"), None, "fewer than four digits name nothing");
     }
 
     #[test]
-    fn a_bill_payment_to_a_card_issuer_with_one_card_there_is_that_card() {
-        let payees = [Payee { company: "KAPPA CARD SERVICES INC.".into(), is_credit_card: true }];
-        assert_eq!(match_payment(&bill("Kappa Card Services Inc.", "****0000"), &debts(), &payees, &Answers::new()), Matched::Debt { liability: "card-c".into(), by: Rule::CardIssuer });
+    fn a_bill_payment_to_the_one_debt_at_its_company_is_that_debt() {
+        assert_eq!(match_payment(&bill("KAPPA CARD SERVICES INC.", "****0000"), &debts(), &Answers::new()), Matched::Debt { liability: "card-c".into(), by: Rule::Institution });
+        assert!(matches!(match_payment(&bill("Zeta Bank", "****0000"), &debts(), &Answers::new()), Matched::Unsettled { .. }), "two debts there: asked");
     }
 
     #[test]
     fn a_debit_is_matched_by_the_institution_it_names_whatever_the_legal_form_case_or_accents() {
         for originator in ["OMICRON TRUST", "Omicron Trust Inc.", "omicron trust ltd", "Omicron Trust Corporation", "Omicron Trust Ltée", "ÓMICRON TRUST, LLC"] {
-            assert_eq!(match_payment(&debit(originator, Some("residential_mortgage")), &debts(), &[], &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution }, "{originator}");
+            assert_eq!(match_payment(&debit(originator, Some("residential_mortgage")), &debts(), &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution }, "{originator}");
         }
     }
 
@@ -254,7 +242,7 @@ mod tests {
         // substring traps: one name inside another, a shared first word, a dropped "Bank of Canada"
         let debts = vec![debt("mortgage-b", "Mortgage", "Omicron Trust", None), debt("loc-z", "LineOfCredit", "Zeta Bank of Canada", None)];
         for originator in ["Omicron", "Omicron Trust Company Holdings", "Omicron Trustees", "Zeta Bank", "Zeta"] {
-            assert_eq!(match_payment(&debit(originator, Some("misc_payments")), &debts, &[], &Answers::new()), Matched::NotOne, "{originator}");
+            assert_eq!(match_payment(&debit(originator, Some("misc_payments")), &debts, &Answers::new()), Matched::NotOne, "{originator}");
         }
         assert_eq!(normalise("Zeta Bank of Canada"), "zeta bank of canada", "part of the name, kept");
     }
@@ -262,10 +250,10 @@ mod tests {
     #[test]
     fn a_debit_stating_another_purpose_is_never_a_repayment_by_name() {
         let insurance = debit("Omicron Trust", Some("life_insurance"));
-        assert_eq!(match_payment(&insurance, &debts(), &[], &Answers::new()), Matched::NotOne, "an insurance premium pulled by the lender");
+        assert_eq!(match_payment(&insurance, &debts(), &Answers::new()), Matched::NotOne, "an insurance premium pulled by the lender");
         let loan = debit("Omicron Trust", Some("loans"));
-        assert_eq!(match_payment(&loan, &debts(), &[], &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution });
-        assert_eq!(match_payment(&debit("Omicron Trust", None), &debts(), &[], &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution }, "no purpose stated");
+        assert_eq!(match_payment(&loan, &debts(), &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution });
+        assert_eq!(match_payment(&debit("Omicron Trust", None), &debts(), &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution }, "no purpose stated");
     }
 
     #[test]
@@ -297,30 +285,30 @@ mod tests {
     #[test]
     fn two_debts_at_one_institution_are_asked_and_the_answer_settles_later_payments() {
         let p = debit("ZETA BANK", Some("misc_payments"));
-        let mut candidates = match match_payment(&p, &debts(), &[], &Answers::new()) {
+        let mut candidates = match match_payment(&p, &debts(), &Answers::new()) {
             Matched::Unsettled { candidates } => candidates,
             other => panic!("{other:?}"),
         };
         candidates.sort();
         assert_eq!(candidates, ["card-a", "loc-a"]);
         let answers: Answers = [(p.payee_key(), Some("loc-a".to_string()))].into();
-        assert_eq!(match_payment(&debit("Zeta Bank Inc.", Some("misc_payments")), &debts(), &[], &answers), Matched::Debt { liability: "loc-a".into(), by: Rule::Answer }, "the same payee, written another way");
+        assert_eq!(match_payment(&debit("Zeta Bank Inc.", Some("misc_payments")), &debts(), &answers), Matched::Debt { liability: "loc-a".into(), by: Rule::Answer }, "the same payee, written another way");
         let none: Answers = [(p.payee_key(), None)].into();
-        assert_eq!(match_payment(&p, &debts(), &[], &none), Matched::NotDebt);
+        assert_eq!(match_payment(&p, &debts(), &none), Matched::NotDebt);
     }
 
     #[test]
     fn a_loan_debit_with_no_outside_debt_entered_is_asked_and_anything_else_is_not_a_debt() {
-        assert!(matches!(match_payment(&debit("Unlisted Lender", Some("term_loans")), &debts(), &[], &Answers::new()), Matched::Unsettled { .. }));
-        assert_eq!(match_payment(&debit("City Hydro", Some("hydro_bill_payment")), &debts(), &[], &Answers::new()), Matched::NotOne, "a utility");
-        assert_eq!(match_payment(&bill("Rho Telecom", "****9999"), &debts(), &[Payee { company: "Rho Telecom".into(), is_credit_card: false }], &Answers::new()), Matched::NotOne);
+        assert!(matches!(match_payment(&debit("Unlisted Lender", Some("term_loans")), &debts(), &Answers::new()), Matched::Unsettled { .. }));
+        assert_eq!(match_payment(&debit("City Hydro", Some("hydro_bill_payment")), &debts(), &Answers::new()), Matched::NotOne, "a utility");
+        assert_eq!(match_payment(&bill("Rho Telecom", "****9999"), &debts(), &Answers::new()), Matched::NotOne, "a bill to no debt's institution");
     }
 
     #[test]
     fn an_answer_naming_a_debt_since_removed_is_asked_again() {
         let p = debit("Sigma Lending", Some("loans"));
         let answers: Answers = [(p.payee_key(), Some("gone".to_string()))].into();
-        assert!(matches!(match_payment(&p, &debts(), &[], &answers), Matched::Unsettled { .. }));
+        assert!(matches!(match_payment(&p, &debts(), &answers), Matched::Unsettled { .. }));
     }
 
 }

@@ -92,6 +92,7 @@ mod tests {
             ("GradeBucket", key::<GradeBucket>()),
             ("QueueRow", key::<QueueRow>()),
             ("Slice", key::<Slice>()),
+            ("OwedDebt", key::<crate::wire::figures::OwedDebt>()),
             ("Account", key::<Account>()),
             ("CashflowTile", key::<CashflowTile>()),
             ("CashflowMonth", key::<CashflowMonth>()),

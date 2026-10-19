@@ -1,7 +1,7 @@
 <script lang="ts">
   import { roll } from './actions/roll'
   import type { PositionsDoc, ExposureDoc, Slice } from './model'
-  import { money0, signedMoney, pct, pctPlain, px, cls, color, waiting } from './fmt'
+  import { money0, signedMoney, pct, pctPlain, px, cls, color, waiting, stampDay, localDay } from './fmt'
   import { waits } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
@@ -10,6 +10,9 @@
 
   let { model, exposure }: { model: PositionsDoc; exposure: ExposureDoc } = $props()
   const pf = $derived(model.portfolio)
+  let owedTip = $state(false)
+  // the day a debt's balance was stated, in the viewer's zone
+  const asOfDay = (iso: string) => stampDay(localDay(new Date(iso)))
 
   // --- tiles (portfolioTilesHtml) ---
   // a share under a tile: its word where it waits, a dash where there is none
@@ -19,12 +22,14 @@
     const n = pf.positionCount || 0
     const positions = n + (n === 1 ? ' position' : ' positions')
     const unavailable = pf.availableMarginUnavailable || []
-    const out: { label: string; value: string; sub: string; vcls: string }[] = [
+    const out: { label: string; value: string; sub: string; vcls: string; owed?: boolean }[] = [
       {
         label: 'Net asset value',
         value: pf.nav == null ? '—' : money0(pf.nav),
-        sub: pf.nav == null ? '—' : pf.navAccounts + (pf.navAccounts === 1 ? ' account, ' : ' accounts, ') + positions,
+        // what is owed outside, and the net after it, while any is owed under every account (brief 67)
+        sub: pf.owed ? money0(pf.owed.total) + ' owed · ' + (pf.owed.net == null ? '—' : money0(pf.owed.net)) + ' net' : pf.nav == null ? '—' : pf.navAccounts + (pf.navAccounts === 1 ? ' account, ' : ' accounts, ') + positions,
         vcls: '',
+        owed: !!pf.owed,
       },
       { label: 'Cost basis', value: money0(pf.costBasis.total), sub: 'Total book value', vcls: '' },
     ]
@@ -108,7 +113,22 @@
   <!-- tiles -->
   <div style="display:grid;grid-template-columns:repeat({pf.hasMargin ? 6 : 5},minmax(0,1fr));gap:14px">
     {#each tiles as t (t.label)}
-      <div class="card elev-sm kpi"><div class="lbl">{t.label}</div><div class="v {t.vcls}" use:roll={t.value}></div><div class="s">{t.sub}</div></div>
+      {#if t.owed && pf.owed}
+        <!-- each debt with when it was stated, on hover: an outside balance is as fresh as its last update -->
+        <div class="card elev-sm kpi" style="position:relative" role="presentation" onmouseenter={() => (owedTip = true)} onmouseleave={() => (owedTip = false)}>
+          <div class="lbl">{t.label}</div><div class="v {t.vcls}" use:roll={t.value}></div><div class="s">{t.sub}</div>
+          {#if owedTip}
+            <div class="tip" style="left:0;top:100%;margin-top:6px;transform:none;z-index:5">
+              {#each pf.owed.debts as debt (debt.id)}
+                <div class="tv" style="display:flex;justify-content:space-between;gap:16px"><span style="font-weight:400;color:var(--ink60)">{debt.name}{debt.institution ? ' · ' + debt.institution : ''}</span><span>{money0(debt.amount)}</span></div>
+                <div class="tl" style="margin-bottom:4px">{debt.asOf ? 'As of ' + asOfDay(debt.asOf) : 'As of an unstated date'}</div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <div class="card elev-sm kpi"><div class="lbl">{t.label}</div><div class="v {t.vcls}" use:roll={t.value}></div><div class="s">{t.sub}</div></div>
+      {/if}
     {/each}
   </div>
 

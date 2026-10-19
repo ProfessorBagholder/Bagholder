@@ -987,6 +987,12 @@ impl Source for Generated {
             .collect())
     }
 
+    fn net_worth(&mut self) -> Answer<Option<Value>> {
+        // the made-up person holds nothing outside Wealthsimple
+        self.asked += 1;
+        json::parse(r#"{"externalFinancialEntities":[]}"#).map(Some).map_err(|e| Failure::Mismatch(e.to_string()))
+    }
+
     fn buying_power(&mut self, account: &str) -> Answer<Value> {
         self.asked += 1;
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;

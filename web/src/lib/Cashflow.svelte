@@ -47,7 +47,7 @@
 
   const c = $derived(model.cashflow)
   const ms = $derived(c.months || [])
-  const peak = $derived(Math.max(...ms.map((x) => at(x.value) + at(x.interest)), 0))
+  const peak = $derived(Math.max(...ms.map((x) => at(x.value) + at(x.interest) + at(x.repayments)), 0))
   const head = $derived(Math.max(100, Math.ceil(peak / 100) * 100))
   const axis = $derived.by(() => {
     const want = Math.min(6, ms.length)
@@ -86,12 +86,17 @@
   let cfH = $state<number | null>(null)
   let pieH = $state<number>(-1)
 
-  // one bar a month: its margin interest at the bottom and its distributions on
-  // top of it, each its own height, so neither ever covers the other
-  function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; count: number }) {
+  // the repayments' colour: the negative side's, lighter, so it reads as money out
+  // and apart from the margin interest beside it
+  const REPAID = 'rgba(var(--neg-rgb),.5)'
+  // one bar a month: its repayments of outside debts at the bottom, its margin
+  // interest on them and its distributions on top, each its own height, so none
+  // ever covers another
+  function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; repayments: Fig<Dec>; count: number }) {
+    const hr = (at(b.repayments) / head) * 94
     const hi = (at(b.interest) / head) * 94
     const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
-    const parts = [...(hi > 0 ? [{ h: hi, at: 0, color: 'var(--neg)' }] : []), ...(hd > 0 ? [{ h: hd, at: hi, color: 'var(--accent-bar)' }] : [])]
+    const parts = [...(hr > 0 ? [{ h: hr, at: 0, color: REPAID }] : []), ...(hi > 0 ? [{ h: hi, at: hr, color: 'var(--neg)' }] : []), ...(hd > 0 ? [{ h: hd, at: hr + hi, color: 'var(--accent-bar)' }] : [])]
     return parts.map((p, k) => ({ ...p, radius: k === parts.length - 1 ? '2px 2px 0 0' : '0' }))
   }
 </script>
@@ -112,7 +117,7 @@
 
   <div class="card elev-sm" style="padding:16px 18px 12px">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px"><h5>Cashflow</h5>
-      <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:var(--ink60)"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--accent-bar)"></span>Distributions</span><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--neg)"></span>Margin interest</span></div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:var(--ink60)"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--accent-bar)"></span>Distributions</span><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:var(--neg)"></span>Margin interest</span>{#if ms.some((m) => at(m.repayments) > 0)}<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:2px;background:{REPAID}"></span>Repayments</span>{/if}</div>
     </div>
     <div style="display:flex;gap:10px;flex:1;min-height:232px;margin-top:14px">
       <div style="position:relative;width:58px;flex:none;font-size:10px;color:var(--ink60)" class="tab">
@@ -126,12 +131,14 @@
           {@const n = ms.length}
           {@const x = ((cfH + 0.5) / n * 100).toFixed(2) + '%'}
           {@const intr = b.interest}
+          {@const repaid = b.repayments}
           {@const net = b.net}
           <div class="xline" style="left:{x}"></div>
           <div class="tip" style="left:{x};transform:translateX({cfH > n * 0.7 ? '-100%' : '-8px'})">
             <div class="tl" style="margin-bottom:2px">{monthLong(b.key)}</div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--accent-300)"><span style="font-weight:400;color:var(--ink60)">Distributions</span><span>{money0(b.value)}</span></div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Margin interest</span><span>{waits(intr) ? waiting(intr) : sign(intr) === 0 ? money0(intr) : '−' + money0(intr)}</span></div>
+            {#if waits(repaid) || sign(repaid) !== 0 || ms.some((m) => at(m.repayments) > 0)}<div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Repayments</span><span>{waits(repaid) ? waiting(repaid) : sign(repaid) === 0 ? money0(repaid) : '−' + money0(repaid)}</span></div>{/if}
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:{color(net)}"><span style="font-weight:400;color:var(--ink60)">Net cashflow</span><span>{signedMoney(net, '', 0)}</span></div>
           </div>
         {/if}

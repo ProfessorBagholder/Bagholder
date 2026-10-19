@@ -31,6 +31,7 @@ fn doc(name: &str) -> &'static str {
         "Securities" => include_str!("../graphql/Securities.graphql"),
         "FetchInstitutionalTransfer" => include_str!("../graphql/FetchInstitutionalTransfer.graphql"),
         "FetchCreditCardAccount" => include_str!("../graphql/FetchCreditCardAccount.graphql"),
+        "FetchIdentityNetWorthAccounts" => include_str!("../graphql/FetchIdentityNetWorthAccounts.graphql"),
         "FetchAccountCurrentMarginBuyingPowerV2" => include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql"),
         "FetchMonthlyStatementWithTransactions" => include_str!("../graphql/FetchMonthlyStatementWithTransactions.graphql"),
         "FetchTradingBalanceBuyingPower" => include_str!("../graphql/FetchTradingBalanceBuyingPower.graphql"),
@@ -251,6 +252,12 @@ impl Source for Client<'_> {
     fn card(&mut self, account: &str) -> Answer<Value> {
         let data = self.graphql("FetchCreditCardAccount", obj(vec![("id", text(account))]))?;
         Ok(Node::root(&data).obj("creditCardAccount").map_err(|m| mismatch("FetchCreditCardAccount", m))?.value().clone())
+    }
+    fn net_worth(&mut self) -> Answer<Option<Value>> {
+        let identity = self.identity()?;
+        let op = "FetchIdentityNetWorthAccounts";
+        let data = self.graphql(op, obj(vec![("identityId", text(&identity))]))?;
+        Ok(Some(Node::root(&data).obj("identity").and_then(|i| i.obj("netWorth")).map_err(|m| mismatch(op, m))?.value().clone()))
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         let op = "FetchHoldingsExportPositionsAsOfDate";

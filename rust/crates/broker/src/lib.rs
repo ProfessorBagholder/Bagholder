@@ -233,6 +233,12 @@ pub trait BrokerAdapter {
     /// What each margin account can borrow now, in CAD, or why the broker cannot say.
     fn buying_power(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>>;
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
+    /// The person's accounts held outside the broker that the broker's own net
+    /// worth feature states (`docs/plans/debts-held-outside-wealthsimple.md`):
+    /// none from a broker that states none.
+    fn outside_accounts(&mut self) -> Answer<Option<Vec<bagholder_book::debts::OutsideDebt>>> {
+        Ok(None)
+    }
     /// The broker's description of each instrument it states a holding in that
     /// no row names (seen on `day`), read together: each one's, or why not.
     fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)>;

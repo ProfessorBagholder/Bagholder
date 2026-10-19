@@ -168,7 +168,28 @@ export type Slice = { label: string, value: Fig<Dec>, share: number,
  */
 id: string | null, };
 
-export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, hasMargin: boolean, 
+export type OwedDebt = { id: string, name: string, institution: string, 
+/**
+ * What is owed, in CAD.
+ */
+amount: Fig<Dec>, 
+/**
+ * When it was stated, as an instant; none where the broker did not say.
+ */
+asOf: string | null, };
+
+export type Owed = { total: Fig<Dec>, 
+/**
+ * The net value less what is owed; none where no net value is stated.
+ */
+net: Fig<Dec> | null, debts: Array<OwedDebt>, };
+
+export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, 
+/**
+ * What is owed outside the accounts, under every account and only then:
+ * none with no debt or under a narrower scope.
+ */
+owed: Owed | null, hasMargin: boolean, 
 /**
  * None under a past range: no broker statement says what was borrowed then.
  */
@@ -215,7 +236,11 @@ value: Fig<Dec>, count: number,
  */
 interest: Fig<Dec>, 
 /**
- * Distributions less interest charged.
+ * Repayments of debts held outside, shown positive.
+ */
+repayments: Fig<Dec>, 
+/**
+ * Distributions less interest charged less repayments.
  */
 net: Fig<Dec>, };
 

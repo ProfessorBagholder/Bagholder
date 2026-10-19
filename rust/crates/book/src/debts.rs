@@ -1,6 +1,6 @@
 //! Debts held outside the broker (`docs/plans/debts-held-outside-wealthsimple.md`,
 //! migration 33): each outside account the broker's net worth feature states,
-//! kept read by read; the broker's bill-pay payees; the person's answers for the
+//! kept read by read; the person's answers for the
 //! payees no rule settled; and the withdrawals whose payee a match reads.
 
 use rusqlite::params;
@@ -70,24 +70,6 @@ impl Book {
             Ok(OutsideDebt { entity_id, kind, name, institution, last4, balance: text::dec(t, "balance", &balance)?, currency: text::currency(t, "currency", &currency)?, as_of: text::opt_instant(t, "as_of", as_of)? })
         })
         .collect()
-    }
-
-    /// Keep the broker's bill-pay payees as its newest read states them.
-    pub fn keep_bill_payees(&self, connection: ConnectionId, payees: &[(String, bool)]) -> Result<()> {
-        let tx = self.conn().unchecked_transaction()?;
-        tx.execute("DELETE FROM bill_payees WHERE connection_id = ?", [connection.to_string()])?;
-        for (company, card) in payees {
-            tx.execute("INSERT OR REPLACE INTO bill_payees (connection_id, company, is_credit_card) VALUES (?, ?, ?)", params![connection.to_string(), company, *card as i64])?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Every bill-pay payee: its company, and whether it issues credit cards.
-    pub fn bill_payees(&self) -> Result<Vec<(String, bool)>> {
-        let mut stmt = self.conn().prepare("SELECT company, is_credit_card FROM bill_payees ORDER BY company")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? == 1)))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// The person's answer for a payee: the debt its payments repay, or none.

@@ -778,5 +778,12 @@ fn store_balances(
             Err(f) => failures.push(("buying power".into(), f)),
         }
     }
+    // what the broker's net worth feature states is held outside it: a debt's
+    // balance, read with the statements it sits beside
+    match adapter.outside_accounts() {
+        Ok(Some(outside)) => book.keep_outside_debts(connection, now, &outside)?,
+        Ok(None) => {}
+        Err(f) => failures.push(("outside accounts".into(), f)),
+    }
     Ok(stored.into_iter().collect())
 }
