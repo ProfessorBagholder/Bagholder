@@ -22,51 +22,77 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-18, end of the home-server CTO session's first day)
+## 2. Where things stand (2026-10-20, written by the home-server CTO session before a compaction)
 
-The Architect now runs on the same home server as a peer session named **Architect** (SendMessage `to: "Architect"`, or reply to its `from=` address). Messages go both ways. Its verdicts are still recorded as briefs on `architecture-briefs` (latest: brief 59).
+The Architect is a peer session on this server: reply to its `from=` address (`uds:/run/user/1005/cc-socks/132593.sock`). **Message it only when a plan or PR head is ready for review, or when a decision needs the owner.** No acknowledgements and no status: those go in the PR (the owner's rule, 2026-10-20). Verdicts are briefs on `architecture-briefs` (latest: brief 74). **master is protected:** PRs only, no force-push. Merge = the Architect's "cleared" plus every run on the head green: `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/merge-when-green.sh <pr>`, run in the background. A macOS or Windows job that is "not acquired by Runner" is a GitHub capacity cancel: re-run it (#568). Any other failure: read the log and fix it.
 
-**Merging:** the owner's standing OK (`docs/decisions.md`, 2026-10-18). Merge a PR once the Architect says "cleared" and **every** workflow run on its current head has succeeded. Releases stay the owner's word alone.
+**Releases:** v2.7.0 is the latest (2026-10-19). The version follows CLAUDE.md's rule without asking. Releases are the owner's word.
 
-### Merged today
-- #521, #525 (with plan #522), #523 (#516 closed), #539 (#527 closed), #544 (the merge decision).
+### Merged 2026-10-20
+#563 (brief 71 A1, unescape), #564 (C13, refresh-token lock), #565 (B6, chart currencies), #567 (C14, capture cookie host).
 
-### In CI now: merge on green (the Architect has cleared all three)
-- **#540** (#524, fund-of-funds sectors), head `733239f6`.
-- **#541** (#529, failures said as failures), head `a92a22f7`.
-- **#543** (#528, chips never squeezed): merged.
-- `scratchpad/merge-when-green.sh <pr…>` merges each one once all runs on its head succeed; background jobs were running it for all three. If a session restarts, check each PR (`gh pr view N --json state`) and rerun the script for any still open.
-- A failed run is never rerun: read the log, fix locally, push a new head, tell the Architect.
+### Open, cleared, merging on green
+- **#572** (plan: agents anywhere, brief 72, cleared at 3790653c). Its rust job failed once on `server/tests/start_failures.rs` `an_earlier_store_that_cannot_be_carried_beside_a_book_…` ("the server stopped before it listened"). It was re-run, and the merge script is waiting. If it fails again, investigate; that test is deleted by the removal anyway.
+- **#573** (plan: remove the earlier app, cleared at 7510824c after brief 74's four changes). The merge script is running.
 
-### Pushed as branches, no PR yet: open each PR once the runs above finish
-Opening a PR starts its one CI run. Then send the Architect the head and run id.
-- `holdings-tie-order` `27d2ba80` (#533): `TIES` per table in `web/src/lib/sort.svelte.ts`, `then` required. Accepted by the Architect.
-- `counted-once-made` `d8a3d21b` (#530): three e2e sites wait for their request, plus the scan `src/no_counted_before_made.test.ts`. Accepted.
-- `reading-only-once-sent` `18cc02cb` (#534): `client::while_leaving` hook at the net door. **Two changes required before the PR** (the Architect's review):
-  1. Restore the hook with a drop guard, so a panic in `work` can't leave it set on a pooled thread.
-  2. Check which thread each live reader the pass uses sends from: SEC, SEDAR+ via the browser helper / `Net::send`, the local model on loopback. Say it in the PR, and hold each one you can with a loopback stand-in (a sent read names, a refused one doesn't).
+### In progress (background agents in their own worktrees; neither pushed yet)
+1. **Demo into the book.** Worktree `scratchpad/demo`, branch `demo-into-the-book`. The e2e sample data is written straight into the book through a made-up Wealthsimple and the real pull (`Generated::from_records`, a `bagholder demo <home>` command), replacing `store/src/bin/demo_book.rs` and the old-file parts of `demo_facts.rs`, with e2e green. When the agent reports: review it, push, open the PR, send it to the Architect.
+2. **Move-out from its arrival** (Part 1 of plan #573). Worktree `scratchpad/mv`, branch `move-out-from-the-arrival`.
+   - The cause, found on the owner's book: a managed RESP (closed) sold everything on 2025-06-13. On 2025-06-16 its cash moved to the self-directed RESP. The DESTINATION row (`opposingAccountId` = the managed RESP, read in full) booked the arrival only, and the managed RESP's feed has no leaving row.
+   - The fix: an arriving row books the mirrored leaving leg in the person's own opposing account when nothing records it leaving.
+   - Tests: the owner's shape, both rows present (no double count), a units move, and a foreign account.
+   - Then the PR goes to the Architect. After the merge, **the owner syncs once** and re-runs the count; it must show 0 `live` imported rows:
+     `sqlite3 ~/.bagholder-rust/book.db "SELECT state, COUNT(*) FROM source_records WHERE source='bagholder-import' GROUP BY state"`
+     Before: 1 live, 5,573 superseded, 288 removed.
+3. **Part 2 of #573,** after 1 and 2. One PR:
+   - the book upkeep step that deletes all imported rows once none is live, with the person's data re-pointed and kept, and units and cash unchanged;
+   - the deletion of every reader and writer of `bagholder.db`: carry, legacy_import, legacy_orders, compare, store crate, market refresh/quotes old code, sources `carry_filings`, book import, `explain-move` if made;
+   - the exact-identifier source scan;
+   - the files-opened test.
 
-### Next, in order
-1. The three PRs above.
-2. **#537:** plan for matching from a flat point inside a history (checkpoints). Start from brief 58's two points: measure the kept-state cost, and list everything that reads across a flat point.
-3. **#538:** measure how `backdated-trade`'s 195 ms request splits, then make the smaller change. Deferring figures out of the request is a last resort and needs its own plan.
-4. **#542:** Bloomberg's "Consumer, Non-cyclical" folds a healthcare fund into Staples. Look the fund through instead.
-5. **Plan #535** (agents read the trade history, read-only MCP), approved by brief 54: build after the bug list. Its decisions are already in the PR.
-6. **Brief 48:** Node 26 for the page build, not before 2026-10-28.
-7. A CI speed proposal (macOS runs the whole Rust suite, 18 min): raise it with the owner only if they ask about speed again.
-8. **Debts held outside Wealthsimple** (the owner's ask, 2026-10-11; designed and settled in brief 23 on `architecture-briefs`, never queued until now):
-   - A: repayments to outside loans, mortgages and credit cards stacked in each month's Cashflow bar beside margin interest, by brief 23's repayment rule;
-   - B: the Net asset value tile's second line `$x owed · $y net`, from the linked and manual liabilities in Wealthsimple's net worth feature, plus the Wealthsimple credit card. No new tile.
-   Read every brief in `briefs/README.md` for asks recorded there; the queue above missed this one.
-9. Older backlog as before: #509, #508, #512, the #414–#486 audit batch, Dependabot #488–#502.
+   The deletion map is in this session's transcript (the agent report "deletion map"). Re-survey if it's lost.
 
-### The release line
-- **v2.6.0** is the latest release (2026-10-19): notifications through the browser (#555), agents reading the trade history (#535), and everything since 2.5.7. The real push was tested in Firefox only; Safari on `127.0.0.1` still needs a check on a Mac.
-- Release steps are unchanged (`CLAUDE.md`, Releases).
+### Waiting on the owner
+- **networth-try** (branch, head f199f825): the Net worth tab (assets and debts by day, filters, Holdings / Uninvested cash / Chequing rows) and the Allocation donut's Cash slice. The owner tested parts and said "looks much better". There's **no go yet** for the full process: fold it into a PR, the layout test, e2e (debts.spec's Portfolio-owed tests are stale), spec, Architect, CI, then merge **#561** (cleared, head 8c135884, held for this go), then release. Also needed from the owner: the card check (hover the rightmost day in Assets & debts against the tiles).
+- **The recorded-reply guard (#558)** is PAUSED by the owner's question: "why are any numbers committed at all". I answered that no real numbers are needed and offered fully made-up replies. They haven't decided, so build nothing. A local-only branch `guard-recorded-figures` in `scratchpad/g558` has outside-figure stand-ins plus real order ids replaced. **Not pushed;** discard or reuse once the owner decides.
+
+### Queue after the above (the Architect's order)
+1. **The brief 72 build** (agents anywhere), from the merged plan `docs/plans/agents-from-anywhere.md`. Add: the panel names Cloudflare and Google beside the reachability check's DNS.
+2. **#569:**
+   - capacity timing for brokers, price-changed, feed-step, backdated-fill and backdated-record;
+   - agent-trades-page reported-only (#554);
+   - the test that every row is timed or reported-only with a reason;
+   - the runner-spread margin with its source runs, and "at the edge" rows, each needing an issue.
+3. **#570:** feed-step at 99% of its cadence; profile it.
+4. **Repayment ask** (owner via the Architect): when a payment's candidates are all debts, count it as a repayment and don't ask. Drop the answered or now-settled asks. Tests: three debts at one lender → counted with no question; no name or debt-purpose match → not counted.
+5. **Brief 71's rest:** C15 (Clear/Disconnect leave sign-in data), A3, A4, the deletions. D18 is superseded by the removal.
+6. **Brief 70** (filings model: `-ngl`, child tied to the server, regulators' own names, Qwen3.5-2B, measured with the kit).
+7. Issues: #562, #566 (chart reason names the missing field), #568, #509, #508, #512; Dependabot #488–#502.
+
+### Worktrees in the scratchpad (`/tmp/claude-1005/-home-md-dev/367843df-f342-4e65-bda4-58c0ce3c5aae/scratchpad/`)
+Each has its own `target-*` dir. Remove a worktree after its PR merges (`git worktree remove`):
+- fix (networth-try)
+- a1, c13, b6, c14 (merged)
+- d18 (closed #571)
+- p72 (#572)
+- rm (#573 plan; Part 2 later)
+- demo, mv (agents)
+- g558 (paused)
+- ho (this handoff)
 
 ## 3. How the owner wants to be worked with
 
 Each rule below cost the owner real anger, often more than once. Treat them as hard rules.
+
+### Added 2026-10-19 and 2026-10-20 (also in the session's memory files)
+- **When the owner flags something:**
+  1. Play back your understanding and the intended fix first.
+  2. Then the quickest working fix on a test branch, with ONE copy-paste command for them to try it.
+  3. Only after their green light: the full process (tests, PR, Architect, CI, merge, release).
+- **Say exactly what is and isn't in every proposal or handoff.** Never a silent "later". Never promise something and then not deliver it, and check each promised item against the result (a settled screenshot) before handing over.
+- **Answer the question asked.** Don't rush into changes before things are decided: "answer the question instead of rushing to make changes before things are decided".
+- **Never commit real figures from the owner's account.** The repo is public. Commands given to the owner print no ids, names or amounts.
+- **Nothing of the earlier (Python) app is kept** (2026-10-20). A migration converts once and leaves nothing of the old format behind.
 
 ### Talking to the owner
 
