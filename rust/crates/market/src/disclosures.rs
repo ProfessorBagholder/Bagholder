@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use bagholder_core::ListingKey;
-use bagholder_store::feeds::{FiledDocument, Filer, Regulator};
+use crate::stored::feeds::{FiledDocument, Filer, Regulator};
 
 /// How long a listing's filers stand before they are settled again, and the SEC's
 /// list is read again: the SEC's list and SEDAR+'s answer change when an issuer
@@ -140,7 +140,7 @@ pub trait Regulators {
     /// A filer's documents, newest first.
     fn documents(&self, filer: &Filer, limit: usize) -> Fetched<Vec<FiledDocument>>;
     /// The TSX's interlisted list as published now: the day it is as of, and its pairs.
-    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)>;
+    fn interlisted(&self) -> Fetched<(String, Vec<crate::stored::feeds::Interlisted>)>;
 }
 
 /// The regulators themselves.
@@ -172,7 +172,7 @@ impl Regulators for Live {
         }
     }
 
-    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+    fn interlisted(&self) -> Fetched<(String, Vec<crate::stored::feeds::Interlisted>)> {
         crate::interlisted::fetch().map_err(fetch_failed)
     }
 }
@@ -195,7 +195,7 @@ pub fn issuer_name(listing: &ListingKey) -> Fetched<Result<String, String>> {
         "XTSE" | "XTSX" => Ok(crate::search::tsx_issuer_name(listing).map_err(failed)?.ok_or_else(|| format!("The TSX's directory names no single company holding {}.", listing.symbol()))),
         _ => {
             let form = bagholder_sources::venue::tmx_form(listing.symbol(), listing.venue()).ok_or_else(|| SourceError::Other(format!("no TMX form for {listing}")))?;
-            let q = crate::tmx::fetch_tmx_quote(&form).map_err(failed)?;
+            let q = crate::tmx::fetch_tmx_listing(&form).map_err(failed)?;
             Ok(q.map(|q| q.name).filter(|n| !n.trim().is_empty()).ok_or_else(|| format!("TMX Money names no company for {}.", listing.symbol())))
         }
     }

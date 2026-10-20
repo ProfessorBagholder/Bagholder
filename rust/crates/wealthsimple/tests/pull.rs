@@ -197,7 +197,7 @@ struct Imported;
 
 impl Mapping for Imported {
     fn source(&self) -> SourceName {
-        SourceName::named("bagholder-import")
+        SourceName::named("earlier-copy")
     }
     fn version(&self) -> u32 {
         1
@@ -237,7 +237,7 @@ fn an_imported_row_the_broker_no_longer_lists_leaves_the_book_on_the_first_full_
     let now = "2025-11-19T20:00:00Z";
     let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
     let c = connection(&book, now);
-    book.add_account(c, &[AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")], &bagholder_book::import::wealthsimple_account_type("TFSA"), AccountStatus::Open, None, at(now)).unwrap();
+    book.add_account(c, &[AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")], &bagholder_wealthsimple::account_types::account_type("TFSA"), AccountStatus::Open, None, at(now)).unwrap();
     let listed = Node::root(&Replay::read(&dir()).unwrap().rows[0]).text("canonicalId").unwrap().to_string();
     for (key, payload) in [("old-listed", r#"{"cash":"10","day":"2025-11-03"}"#), ("old-pending", r#"{"cash":"20","day":"2025-11-12"}"#)] {
         let broker_id = if key == "old-listed" { listed.clone() } else { "credit-transaction-anon-1".to_string() };
@@ -245,8 +245,8 @@ fn an_imported_row_the_broker_no_longer_lists_leaves_the_book_on_the_first_full_
     }
     let (first, _) = once(&book, &dir(), now);
     assert_eq!((first.superseded, first.removed.len()), (1, 1));
-    assert_eq!(state(&book, "bagholder-import", "old-listed"), RecordState::Superseded);
-    assert_eq!(state(&book, "bagholder-import", "old-pending"), RecordState::Removed);
+    assert_eq!(state(&book, "earlier-copy", "old-listed"), RecordState::Superseded);
+    assert_eq!(state(&book, "earlier-copy", "old-pending"), RecordState::Removed);
 }
 
 #[test]

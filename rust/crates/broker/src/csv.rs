@@ -19,7 +19,6 @@
 
 use std::collections::BTreeMap;
 
-use bagholder_book::import::mapping::{rule, Cash, Qty};
 use bagholder_book::mapping::{Draft, MapContext, Mapped, Mapping};
 use bagholder_book::person::Named;
 use bagholder_core::account::AccountRef;
@@ -28,6 +27,8 @@ use bagholder_core::record::Problem;
 use bagholder_core::transaction::Kind;
 use bagholder_core::{Broker, Currency, Dec, Leg, Money, SourceName};
 use serde::{Deserialize, Serialize};
+
+use crate::activity_types::{booking, CashSign, Units};
 
 pub const SOURCE: &str = "csv";
 
@@ -448,22 +449,22 @@ fn activities(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         paid_on: None,
         problems: vec![],
     };
-    let Some(r) = rule(ty, sub, cash, &direction) else {
+    let Some(r) = booking(ty, sub, cash, &direction) else {
         out.problems.push(Problem::new("unclassified", format!("a row of activity type {ty:?} and sub-type {sub:?}, which is not placed")));
         return Ok(out);
     };
     out.kind = r.kind;
-    out.quantity = match (r.quantity, quantity) {
-        (Qty::None, _) | (_, None) => None,
-        (Qty::In, Some(q)) => Some(q.abs()),
-        (Qty::Out, Some(q)) => Some(q.abs().neg()),
-        (Qty::AsSigned, Some(q)) => Some(q),
+    out.quantity = match (r.units, quantity) {
+        (Units::None, _) | (_, None) => None,
+        (Units::In, Some(q)) => Some(q.abs()),
+        (Units::Out, Some(q)) => Some(q.abs().neg()),
+        (Units::AsSigned, Some(q)) => Some(q),
     };
     out.cash = match (r.cash, cash) {
-        (Cash::None, _) | (_, None) => None,
-        (Cash::AsSigned, Some(c)) => Some(c),
-        (Cash::Paid, Some(c)) => Some(c.abs().neg()),
-        (Cash::Received, Some(c)) => Some(c.abs()),
+        (CashSign::None, _) | (_, None) => None,
+        (CashSign::AsSigned, Some(c)) => Some(c),
+        (CashSign::Paid, Some(c)) => Some(c.abs().neg()),
+        (CashSign::Received, Some(c)) => Some(c.abs()),
     };
     if let Some(kind) = r.instrument {
         match cell(cells, "symbol") {
@@ -471,7 +472,7 @@ fn activities(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
             None => out.problems.push(Problem::new("instrument-not-named", format!("a {} that names no symbol", r.kind))),
         }
     }
-    if out.instrument.is_some() && !matches!(r.quantity, Qty::None) && out.quantity.is_none_or(|q| q.is_zero()) {
+    if out.instrument.is_some() && !matches!(r.units, Units::None) && out.quantity.is_none_or(|q| q.is_zero()) {
         out.problems.push(Problem::new("quantity-not-stated", format!("a {} with no quantity", r.kind)));
         out.quantity = None;
     }

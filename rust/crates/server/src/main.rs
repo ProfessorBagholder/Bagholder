@@ -8,8 +8,6 @@
 mod app;
 mod capacity;
 mod logfile;
-mod carry;
-mod compare;
 #[cfg(feature = "demo")]
 mod demo;
 #[cfg(feature = "demo")]
@@ -33,8 +31,6 @@ mod webpush;
 mod feeds;
 mod filings;
 mod http;
-mod legacy_import;
-mod legacy_orders;
 mod market_context;
 mod mcp;
 mod login;
@@ -155,13 +151,6 @@ pub(crate) fn open_figures(a: &std::sync::Arc<app::App>) {
 
 /// What follows the figure path's opening, wherever it opens.
 fn figures_opened(a: &std::sync::Arc<app::App>, f: figures::Figures) {
-    // the earlier store, carried once into the book and the market cache; nothing
-    // opens it after this. Said until the next start, as a step that runs once.
-    if let Err(e) = carry::from_old_store(a, &f, bagholder_core::jiff::Timestamp::now()) {
-        log(&format!("bagholder: {e}"));
-        let mut st = a.state.lock().unwrap();
-        st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
-    }
     // what the last pull's statements said, until the next pull
     match f.book().and_then(|b| b.setting(status::STATEMENTS_SAID).map_err(|e| e.to_string())) {
         Ok(said) => a.state.lock().unwrap().statement_error = said.unwrap_or_default(),
@@ -181,7 +170,7 @@ fn figures_opened(a: &std::sync::Arc<app::App>, f: figures::Figures) {
     // under now that the cache names each ticker's filers; one that fails tells nothing
     // twice (a scope with no mark sets one without telling) and is tried at the next start
     if let Ok(cache) = feeds::conn(a) {
-        let carried = a.figures.get().ok_or_else(|| "the book is not open".to_string()).and_then(|f| f.book()).and_then(|b| carry::carry_told_by_listing(&b, &cache, bagholder_core::jiff::Timestamp::now()));
+        let carried = a.figures.get().ok_or_else(|| "the book is not open".to_string()).and_then(|f| f.book()).and_then(|b| notify::carry_told_by_listing(&b, &cache, bagholder_core::jiff::Timestamp::now()));
         match carried {
             Ok(Some((events, marks))) => log(&format!("bagholder: {events} told events and {marks} marks carried to the scopes each listing and filer is kept under")),
             Ok(None) => {}
@@ -231,11 +220,6 @@ fn serve() -> i32 {
             return 1;
         }
     };
-    // a first start with nothing of its own takes the Python app's database, which the start then imports
-    let adopted = match legacy_import::python_home(|k| std::env::var_os(k)) {
-        Some(python) => legacy_import::adopt_python_database(&home, &python),
-        None => Ok(None),
-    };
     // The runtime the HTTP server and the page streams run on. Everything else --
     // SQLite, the market and Wealthsimple clients, the background loops -- is
     // synchronous and runs on threads of its own or on the runtime's blocking pool.
@@ -255,33 +239,16 @@ fn serve() -> i32 {
     }
     // what earlier versions made to post notifications themselves goes (brief 65)
     notify::remove_native_leftovers(&a.home);
-    // a step here that reads the stored data never stops the server: a service
-    // manager would only start it again into the same failure, with no page and no
-    // update button. Each failure is said in the header until the next start (#516).
-    let failed = |e: String| {
-        log(&format!("bagholder: {e}"));
-        let Ok(mut st) = a.state.lock();
-        st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
-    };
     // an update the supervisor rolled back is said in the header by the server it started
     update::recall_failure(&a);
     // the local model keeps its file in this app's data folder, and is off until told so
     if let Err(e) = bagholder_market::localmodel::serve_from(&a.home) {
         log(&format!("bagholder: the local model is off: {}", e));
     }
-    match adopted {
-        Ok(from) => {
-            if let Some(from) = from {
-                log(&format!("bagholder: a copy of the Python app's database {} is this app's first", from.display()));
-            }
-            // the figure path: one this build cannot open is said by what failed,
-            // nothing is opened in its place, and it is opened again when the
-            // header is next read (`open_figures`)
-            open_figures(&a);
-        }
-        // no book is made beside a database not yet carried, so the next start tries again
-        Err(e) => failed(format!("The Python app's database could not be taken: {e}")),
-    }
+    // the figure path: one this build cannot open is said by what failed,
+    // nothing is opened in its place, and it is opened again when the
+    // header is next read (`open_figures`)
+    open_figures(&a);
     // the market cache's first borrow brings it to this build's schema; one that
     // cannot be opened is said under the cache's own name, and the next borrow
     // that succeeds takes it away
@@ -422,15 +389,6 @@ fn main() {
             eprintln!("bagholder: {e}");
             std::process::exit(1);
         }
-    }
-    // the book this build will move onto (docs/plans/stage-1-foundation.md), made
-    // from a database kept today; nothing the app runs calls it yet
-    if args.first().map(String::as_str) == Some("import-book") {
-        std::process::exit(legacy_import::cli(&args[1..]));
-    }
-    // the new engine beside the old model on the same data (docs/plans/stage-2-engine.md)
-    if args.first().map(String::as_str) == Some("compare-figures") {
-        std::process::exit(compare::cli(&args[1..]));
     }
     // the readers of market data and facts, run once (docs/plans/stage-3a-sources.md)
     if args.first().map(String::as_str) == Some("read-sources") {

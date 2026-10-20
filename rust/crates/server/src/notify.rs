@@ -357,7 +357,7 @@ pub fn kind_on(book: &Book, kind: &str) -> Result<bool> {
 pub fn set_settings(book: &Book, patch: &NotifySettingsPatch) -> Result<NotifySettings> {
     let mut cur = settings(book)?;
     patch.apply(&mut cur);
-    book.set_setting(SETTINGS_KEY, Some(&bagholder_store::tables::json_text(&serde_json::to_value(cur).unwrap())), bagholder_core::jiff::Timestamp::now()).map_err(sql)?;
+    book.set_setting(SETTINGS_KEY, Some(&bagholder_market::stored::meta::json_text(&serde_json::to_value(cur).unwrap())), bagholder_core::jiff::Timestamp::now()).map_err(sql)?;
     Ok(cur)
 }
 
@@ -365,7 +365,7 @@ pub fn set_settings(book: &Book, patch: &NotifySettingsPatch) -> Result<NotifySe
 #[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationsDoc {
-    pub rows: Vec<bagholder_store::feeds::Notification>,
+    pub rows: Vec<bagholder_market::stored::feeds::Notification>,
     pub unread: i64,
 }
 
@@ -373,7 +373,7 @@ pub struct NotificationsDoc {
 /// start (`main.rs`, `keep_key`), empty until then: reading the status never writes.
 pub fn status(app: &App, book: &Book) -> Result<NotifyStatus> {
     let push = PushStatus { key: push_key(app), subscriptions: book.push_subscriptions().map_err(sql)?.len() as i64 };
-    Ok(NotifyStatus { settings: settings(book)?, push, unread: bagholder_store::feeds::unread_notifications(book.notices())? })
+    Ok(NotifyStatus { settings: settings(book)?, push, unread: bagholder_market::stored::feeds::unread_notifications(book.notices())? })
 }
 
 /// `GET /api/notifications`: the settings, kinds, the list and the unread
@@ -383,7 +383,7 @@ pub struct NotificationsAnswer {
     pub ok: bool,
     pub settings: NotifyStatus,
     pub kinds: Vec<String>,
-    pub rows: Vec<bagholder_store::feeds::Notification>,
+    pub rows: Vec<bagholder_market::stored::feeds::Notification>,
     pub unread: i64,
 }
 
@@ -579,7 +579,7 @@ pub fn default_ident(i: &serde_json::Value) -> String {
 #[derive(Default)]
 pub struct NotifyState {
     bell: (Mutex<u64>, Condvar),
-    worker: OnceLock<Mutex<std::sync::mpsc::Sender<bagholder_store::feeds::Notification>>>,
+    worker: OnceLock<Mutex<std::sync::mpsc::Sender<bagholder_market::stored::feeds::Notification>>>,
     /// The pages with the notifications' stream open: while one is, it shows each
     /// row, and nothing goes through a push service.
     pub pages: std::sync::atomic::AtomicUsize,
@@ -604,7 +604,7 @@ impl NotifyState {
 
 /// One notification, if its kind is on and this key has not
 /// been told before. The store refusing the read or the row is an error.
-pub fn emit(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+pub fn emit(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_market::stored::feeds::NotificationExtra>) -> Result<Option<bagholder_market::stored::feeds::Notification>> {
     let row = record(book, kind, key, title, body, extra)?;
     if let Some(row) = &row {
         announce(app, row);
@@ -614,7 +614,7 @@ pub fn emit(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, bod
 
 /// `emit`'s row kept and nothing more: for a notice told in one transaction with
 /// what marks it told, and announced (`announce`) once that commits.
-pub fn record(book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+pub fn record(book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_market::stored::feeds::NotificationExtra>) -> Result<Option<bagholder_market::stored::feeds::Notification>> {
     if !KINDS.contains(&kind) || !kind_on(book, kind)? {
         return Ok(None);
     }
@@ -624,7 +624,7 @@ pub fn record(book: &Book, kind: &str, key: &str, title: &str, body: &str, extra
 /// `emit` from work that answers nobody (a pass, a loop, an order's watch):
 /// a notice that could not be recorded is said in the header until the next
 /// one is.
-pub fn tell(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Option<bagholder_store::feeds::Notification> {
+pub fn tell(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_market::stored::feeds::NotificationExtra>) -> Option<bagholder_market::stored::feeds::Notification> {
     let told = book(app).and_then(|b| emit(app, &b, kind, key, title, body, extra));
     match told {
         Ok(row) => {
@@ -641,7 +641,7 @@ pub fn tell(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str, extr
 /// The header's entry for the notices: recording them, and reading them for the bell.
 pub(crate) const NOTICES: &str = "notifications";
 
-pub fn test_notification(app: &Arc<App>, book: &Book) -> Result<Option<bagholder_store::feeds::Notification>> {
+pub fn test_notification(app: &Arc<App>, book: &Book) -> Result<Option<bagholder_market::stored::feeds::Notification>> {
     let stamp = {
         let now = crate::app::now_unix();
         let micros = ((now.fract()) * 1_000_000.0) as i64;
@@ -650,7 +650,7 @@ pub fn test_notification(app: &Arc<App>, book: &Book) -> Result<Option<bagholder
     post(app, book, "test", &format!("test:{}", stamp), APP_NAME, "Notifications reach you here.", None)
 }
 
-fn post(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+fn post(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_market::stored::feeds::NotificationExtra>) -> Result<Option<bagholder_market::stored::feeds::Notification>> {
     let row = store_row(book, kind, key, title, body, extra)?;
     if let Some(row) = &row {
         announce(app, row);
@@ -659,9 +659,9 @@ fn post(app: &Arc<App>, book: &Book, kind: &str, key: &str, title: &str, body: &
 }
 
 /// A notice's row, kept once under its key.
-fn store_row(book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Result<Option<bagholder_store::feeds::Notification>> {
+fn store_row(book: &Book, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_market::stored::feeds::NotificationExtra>) -> Result<Option<bagholder_market::stored::feeds::Notification>> {
     // unseen until the page that is open shows it, or a push reaches a browser
-    bagholder_store::feeds::add_notification(book.notices(), kind, key, title, body, extra.as_ref(), false, &now_iso())
+    bagholder_market::stored::feeds::add_notification(book.notices(), kind, key, title, body, extra.as_ref(), false, &now_iso())
 }
 
 /// A page open: held by its stream (`GET /api/events`) for as long as the stream
@@ -684,16 +684,16 @@ impl Drop for PageOpen {
 
 /// A kept notice shown: to every open page's stream, whose page shows it through
 /// its service worker; with no page open, to every subscribed browser by Web Push.
-pub fn announce(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
+pub fn announce(app: &Arc<App>, row: &bagholder_market::stored::feeds::Notification) {
     app.notify.wake_streams();
     if app.notify.pages.load(std::sync::atomic::Ordering::SeqCst) == 0 {
         enqueue(app.clone(), row.clone());
     }
 }
 
-fn enqueue(app: Arc<App>, row: bagholder_store::feeds::Notification) {
+fn enqueue(app: Arc<App>, row: bagholder_market::stored::feeds::Notification) {
     let tx = app.notify.worker.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<bagholder_store::feeds::Notification>();
+        let (tx, rx) = std::sync::mpsc::channel::<bagholder_market::stored::feeds::Notification>();
         // the app holds the sender and the thread only a weak hold on the app: when
         // the app goes, the sender goes with it and the thread ends
         let weak = Arc::downgrade(&app);
@@ -752,7 +752,7 @@ pub fn vapid(book: &Book) -> Result<crate::webpush::Keys> {
 
 /// What Web Push carries of a row: the row itself, or, where that does not fit in
 /// one push once encrypted, its id alone, for the service worker to fetch.
-pub fn push_payload(row: &bagholder_store::feeds::Notification) -> Vec<u8> {
+pub fn push_payload(row: &bagholder_market::stored::feeds::Notification) -> Vec<u8> {
     // the id alone is what the service worker fetches the row by: a row that does
     // not fit, or that could not be written, still arrives as itself
     let by_id = format!("{{\"id\":{}}}", row.id).into_bytes();
@@ -805,7 +805,7 @@ impl NotifyState {
 /// One row sent to one subscription (RFC 8030 §5, RFC 8291, RFC 8292). A push
 /// service that asks to be asked later (429, 5xx with `Retry-After`) is asked
 /// once more after the time it states.
-pub fn push_one(app: &Arc<App>, key: &crate::webpush::Keys, endpoint: &str, p256dh: &str, auth: &str, row: &bagholder_store::feeds::Notification) -> Pushed {
+pub fn push_one(app: &Arc<App>, key: &crate::webpush::Keys, endpoint: &str, p256dh: &str, auth: &str, row: &bagholder_market::stored::feeds::Notification) -> Pushed {
     let sealed = crate::webpush::unb64url(p256dh)
         .and_then(|k| crate::webpush::unb64url(auth).map(|a| (k, a)))
         .and_then(|(k, a)| crate::webpush::encrypt(&push_payload(row), &k, &a));
@@ -848,7 +848,7 @@ pub fn push_one(app: &Arc<App>, key: &crate::webpush::Keys, endpoint: &str, p256
 /// A row sent to every subscribed browser: marked seen once one has it, a
 /// subscription its push service says is gone dropped, and a failure said in the
 /// header once confirmed, standing until a send succeeds.
-pub fn push_all(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
+pub fn push_all(app: &Arc<App>, row: &bagholder_market::stored::feeds::Notification) {
     let b = match book(app) {
         Ok(b) => b,
         Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {e}")),
@@ -871,7 +871,7 @@ pub fn push_all(app: &Arc<App>, row: &bagholder_store::feeds::Notification) {
         }
     }
     if reached {
-        if let Err(e) = bagholder_store::feeds::mark_notifications_seen(b.notices(), &[row.id], &now_iso()) {
+        if let Err(e) = bagholder_market::stored::feeds::mark_notifications_seen(b.notices(), &[row.id], &now_iso()) {
             log(&format!("bagholder notify: a pushed notification could not be marked shown: {e}"));
         }
     }
@@ -915,7 +915,7 @@ pub fn remove_native_leftovers(home: &Path) {
 pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut write: W) {
     // a read that fails is said in the header until one succeeds: the stream reads
     // on, and never takes a failed read for no new rows without saying so
-    let read = |f: &dyn Fn(&rusqlite::Connection) -> Result<Vec<bagholder_store::feeds::Notification>>| -> Vec<bagholder_store::feeds::Notification> {
+    let read = |f: &dyn Fn(&rusqlite::Connection) -> Result<Vec<bagholder_market::stored::feeds::Notification>>| -> Vec<bagholder_market::stored::feeds::Notification> {
         match book(app).and_then(|b| f(b.notices())) {
             Ok(rows) => {
                 crate::feeds::feed_answered(app, NOTICES);
@@ -929,7 +929,7 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
     };
     let mut last = match after {
         Some(a) => a,
-        None => match book(app).and_then(|b| bagholder_store::feeds::latest_notification_id(b.notices())) {
+        None => match book(app).and_then(|b| bagholder_market::stored::feeds::latest_notification_id(b.notices())) {
             Ok(id) => id,
             Err(e) => {
                 crate::feeds::feed_failed(app, NOTICES, format!("The notifications could not be read: {e}"));
@@ -941,7 +941,7 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
         return;
     }
     while !app.stopping() {
-        let rows = read(&|c| bagholder_store::feeds::list_notifications(c, last, "", false, 50, false));
+        let rows = read(&|c| bagholder_market::stored::feeds::list_notifications(c, last, "", false, 50, false));
         if rows.is_empty() {
             let (m, c) = &app.notify.bell;
             let g = m.lock().unwrap();
@@ -951,7 +951,7 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
             if app.stopping() {
                 return;
             }
-            let rows = read(&|c| bagholder_store::feeds::list_notifications(c, last, "", false, 50, false));
+            let rows = read(&|c| bagholder_market::stored::feeds::list_notifications(c, last, "", false, 50, false));
             if rows.is_empty() {
                 if !write(": ping\n\n") {
                     return;
@@ -961,7 +961,7 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
             for r in rows {
                 let id = r.id;
                 last = last.max(id);
-                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&serde_json::to_value(&r).unwrap()))) {
+                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_market::stored::meta::json_text(&serde_json::to_value(&r).unwrap()))) {
                     return;
                 }
             }
@@ -970,11 +970,114 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
         for r in rows {
             let id = r.id;
             last = last.max(id);
-            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&serde_json::to_value(&r).unwrap()))) {
+            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_market::stored::meta::json_text(&serde_json::to_value(&r).unwrap()))) {
                 return;
             }
         }
     }
+}
+
+/// The book's setting that says its told marks were carried to the scopes a
+/// listing and a filer are kept under (plan `market-data-keyed-by-listing`,
+/// Approach, 3), and how many.
+pub const TOLD_BY_LISTING: &str = "carried.told-by-listing";
+
+/// What a stream's mark says it has shown up to: the moment before its `|`.
+fn mark_moment(value: &str) -> &str {
+    value.split_once('|').map_or(value, |(m, _)| m)
+}
+
+/// The scopes an earlier build kept what was told under, by a ticker, and those
+/// the same marks belong under now: `news:<SYM>@<venue words>` is its listing's
+/// `news:<ListingKey>`; `filings:<SYM>:<source>` is each filer the market cache
+/// carried that ticker's filings to (`filings_carried`), `filings:<source>:<filer>`.
+/// A scope already in the new form, or one whose listing names no venue a key is
+/// made from, has none: it is left to lapse, and the stream it was is a new scope
+/// whose first sweep sets its mark without telling (`notify::fresh_in`).
+fn told_scopes(cache: &rusqlite::Connection, scope: &str) -> std::result::Result<Vec<String>, String> {
+    use bagholder_market::stored::feeds::Regulator;
+    if let Some(rest) = scope.strip_prefix("news:") {
+        if rest.parse::<bagholder_core::ListingKey>().is_ok() {
+            return Ok(vec![]);
+        }
+        let Some((sym, ex)) = rest.rsplit_once('@') else { return Ok(vec![]) };
+        // a scope whose venue words name no venue a key is made from is left to lapse
+        return Ok(bagholder_core::ListingKey::on(sym, ex).map_or_else(|_| vec![], |k| vec![format!("news:{k}")]));
+    }
+    if let Some(rest) = scope.strip_prefix("filings:") {
+        let parts: Vec<&str> = rest.split(':').collect();
+        let is_source = |s: &str| Regulator::parse(s).is_some();
+        let [sym, source] = parts.as_slice() else { return Ok(vec![]) };
+        if is_source(sym) || !is_source(source) {
+            return Ok(vec![]);
+        }
+        let mut stmt = cache.prepare("SELECT filer FROM filings_carried WHERE symbol = ? AND source = ? ORDER BY filer").map_err(|e| e.to_string())?;
+        let filers = stmt.query_map([sym, source], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
+        return Ok(filers.into_iter().map(|f| format!("filings:{source}:{f}")).collect());
+    }
+    Ok(vec![])
+}
+
+/// Whether a told scope is of an earlier build's form: a news scope by a ticker
+/// and venue words, or a filings scope by a ticker and a source.
+fn earlier_form(scope: &str) -> bool {
+    use bagholder_market::stored::feeds::Regulator;
+    if let Some(rest) = scope.strip_prefix("news:") {
+        return rest.parse::<bagholder_core::ListingKey>().is_err();
+    }
+    match scope.strip_prefix("filings:").map(|r| r.split(':').collect::<Vec<_>>()) {
+        Some(parts) => parts.len() == 2 && Regulator::parse(parts[0]).is_none() && Regulator::parse(parts[1]).is_some(),
+        None => false,
+    }
+}
+
+/// Carry the book's told marks to the scopes a listing and a filer are kept
+/// under, once, after the market cache's migration 6 has named each ticker's
+/// filers: each event told under an old scope is told under each new one, and
+/// each stream's mark is the later of the old and the new, so nothing is told
+/// twice and a filing that arrives after the old mark is still told. The old
+/// scopes are removed. What came, as (events, marks); `None` when carried before.
+pub fn carry_told_by_listing(book: &Book, cache: &rusqlite::Connection, now: bagholder_core::jiff::Timestamp) -> std::result::Result<Option<(usize, usize)>, String> {
+    if book.setting(TOLD_BY_LISTING).map_err(|e| e.to_string())?.is_some() {
+        return Ok(None);
+    }
+    let c = book.notices();
+    let seen = bagholder_book::notices::SEEN;
+    let carried = bagholder_sqlite::atomically(c, || -> rusqlite::Result<(usize, usize)> {
+        let as_sql = |e: String| rusqlite::Error::ToSqlConversionFailure(e.into());
+        let mut scopes: Vec<String> = c.prepare("SELECT DISTINCT scope FROM told WHERE scope LIKE 'news:%' OR scope LIKE 'filings:%'")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let marked: Vec<(String, String)> = c
+            .prepare("SELECT key, value FROM settings WHERE key LIKE ? || 'news:%' OR key LIKE ? || 'filings:%'")?
+            .query_map([seen, seen], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        scopes.extend(marked.iter().map(|(k, _)| k[seen.len()..].to_string()));
+        scopes.sort();
+        scopes.dedup();
+        let (mut events, mut marks) = (0usize, 0usize);
+        for old in scopes {
+            let new = told_scopes(cache, &old).map_err(as_sql)?;
+            for n in &new {
+                events += c.execute("INSERT OR IGNORE INTO told (scope, event, at) SELECT ?1, event, at FROM told WHERE scope = ?2", [n, &old])?;
+                if let Some((_, v)) = marked.iter().find(|(k, _)| k[seen.len()..] == old) {
+                    let key = format!("{seen}{n}");
+                    let held: Option<String> = c.query_row("SELECT value FROM settings WHERE key = ?", [&key], |r| r.get(0)).ok();
+                    if held.as_deref().is_none_or(|h| mark_moment(h) < mark_moment(v)) {
+                        book.set_setting(&key, Some(v), now).map_err(sql)?;
+                        marks += 1;
+                    }
+                }
+            }
+            // a scope of the earlier form is gone once carried, or when it names nothing a scope is kept under now
+            if earlier_form(&old) {
+                c.execute("DELETE FROM told WHERE scope = ?", [&old])?;
+                book.set_setting(&format!("{seen}{old}"), None, now).map_err(sql)?;
+            }
+        }
+        book.set_setting(TOLD_BY_LISTING, Some(&format!("{events} events, {marks} marks")), now).map_err(sql)?;
+        Ok((events, marks))
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(Some(carried))
 }
 
 #[cfg(test)]
@@ -983,7 +1086,7 @@ mod tests {
     use super::*;
     use crate::app::f;
     use serde_json::{json, Value};
-    use bagholder_store::feeds as st;
+    use bagholder_market::stored::feeds as st;
     use std::path::PathBuf;
     use std::sync::MutexGuard;
 
@@ -1035,7 +1138,7 @@ mod tests {
     }
 
     /// A notification row, as the tests read it: its own JSON.
-    fn v(r: &bagholder_store::feeds::Notification) -> Value {
+    fn v(r: &bagholder_market::stored::feeds::Notification) -> Value {
         serde_json::to_value(r).unwrap()
     }
 
@@ -1047,7 +1150,7 @@ mod tests {
         x["id"].as_i64().unwrap()
     }
 
-    fn idn(r: &bagholder_store::feeds::Notification) -> i64 {
+    fn idn(r: &bagholder_market::stored::feeds::Notification) -> i64 {
         r.id
     }
 
@@ -1187,7 +1290,7 @@ mod tests {
         assert_eq!(filings_notice(&app, "NBIS", &[filing_row("", "144", "")]).1, "Notice of proposed sale (144) · SEC EDGAR");
         assert_eq!(filings_notice(&app, "NBIS", &[filing_row("", "40-F", "")]).1, "40-F · SEC EDGAR",
                    "a form the app has no words for keeps its code");
-        let many: Vec<bagholder_store::feeds::Filing> = (0..4).map(|i| filing_row(&format!("sec:{}", i), "4", &format!("Insider report {}", i))).collect();
+        let many: Vec<bagholder_market::stored::feeds::Filing> = (0..4).map(|i| filing_row(&format!("sec:{}", i), "4", &format!("Insider report {}", i))).collect();
         assert_eq!(filings_notice(&app, "NBIS", &many), ("4 new disclosures · NBIS".to_string(), "Insider report 0, Insider report 1, Insider report 2 and more · SEC EDGAR".to_string()));
     }
 
@@ -1225,17 +1328,17 @@ mod tests {
         }
 
         /// A release as a wire hands it over.
-        fn wire_release(id: &str, head: &str, url: &str, when: &str) -> bagholder_store::feeds::NewsItem {
-            bagholder_store::feeds::NewsItem {
+        fn wire_release(id: &str, head: &str, url: &str, when: &str) -> bagholder_market::stored::feeds::NewsItem {
+            bagholder_market::stored::feeds::NewsItem {
                 id: id.into(), headline: head.into(), source: "Business Wire".into(), url: url.into(), published_at: when.into(),
-                summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::of_id(id).unwrap_or(bagholder_store::feeds::Feed::Tmx),
+                summary: String::new(), kind: bagholder_market::stored::feeds::NewsKind::Release, via: bagholder_market::stored::feeds::Feed::of_id(id).unwrap_or(bagholder_market::stored::feeds::Feed::Tmx),
             }
         }
 
         /// A filed document, every field given, as a notice reads it.
-        fn filing_full(id: &str, source: bagholder_store::feeds::Regulator, date: &str, form: &str, subject: &str, summary: &str, url: &str) -> bagholder_store::feeds::Filing {
-            bagholder_store::feeds::Filing {
-                doc: bagholder_store::feeds::FiledDocument {
+        fn filing_full(id: &str, source: bagholder_market::stored::feeds::Regulator, date: &str, form: &str, subject: &str, summary: &str, url: &str) -> bagholder_market::stored::feeds::Filing {
+            bagholder_market::stored::feeds::Filing {
+                doc: bagholder_market::stored::feeds::FiledDocument {
                     id: id.into(), source, category: String::new(), profile_no: String::new(), issuer: String::new(),
                     form: form.into(), title: String::new(), date: date.into(), date_text: String::new(), size: String::new(), url: url.into(),
                 },
@@ -1245,16 +1348,16 @@ mod tests {
         }
 
         /// A filed document (SEC) with only its id, form code and subject given.
-        fn filing_row(id: &str, form: &str, subject: &str) -> bagholder_store::feeds::Filing {
-            filing_full(id, bagholder_store::feeds::Regulator::Sec, "", form, subject, "", "")
+        fn filing_row(id: &str, form: &str, subject: &str) -> bagholder_market::stored::feeds::Filing {
+            filing_full(id, bagholder_market::stored::feeds::Regulator::Sec, "", form, subject, "", "")
         }
 
         /// A news item, every field given, as a notice reads it.
-        fn news_item(id: &str, headline: &str, summary: &str, url: &str, published_at: &str) -> bagholder_store::feeds::NewsItem {
-            bagholder_store::feeds::NewsItem {
+        fn news_item(id: &str, headline: &str, summary: &str, url: &str, published_at: &str) -> bagholder_market::stored::feeds::NewsItem {
+            bagholder_market::stored::feeds::NewsItem {
                 id: id.into(), headline: headline.into(), source: String::new(), url: url.into(), published_at: published_at.into(),
-                summary: summary.into(), kind: bagholder_store::feeds::NewsKind::Release,
-                via: bagholder_store::feeds::Feed::of_id(id).unwrap_or(bagholder_store::feeds::Feed::Tmx),
+                summary: summary.into(), kind: bagholder_market::stored::feeds::NewsKind::Release,
+                via: bagholder_market::stored::feeds::Feed::of_id(id).unwrap_or(bagholder_market::stored::feeds::Feed::Tmx),
             }
         }
 
@@ -1304,16 +1407,16 @@ mod tests {
         let (_g, app, c) = setup();
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         declared_in_book(&app, "RDDY", &[("2026-08-31", "2026-09-04", "0.15"), ("2026-07-31", "2026-08-06", "0.20")], Some(12));
-        let first = bagholder_store::feeds::NewsItem {
+        let first = bagholder_market::stored::feeds::NewsItem {
             id: "tmx:7".into(), headline: "Harvest High Income Shares ETFs Announces August 2026 Distributions".into(),
             source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
-            published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::Tmx,
+            published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_market::stored::feeds::NewsKind::Release, via: bagholder_market::stored::feeds::Feed::Tmx,
         };
         crate::feeds::note_wire_releases(&app, "RDDY", "TSX", &[first.clone()], &["tmx:7".to_string()]).unwrap();   // the first read is history
-        let second = bagholder_store::feeds::NewsItem {
+        let second = bagholder_market::stored::feeds::NewsItem {
             id: "tmx:8".into(), headline: "Harvest ETFs Announces September 2026 Distributions".into(),
             source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
-            published_at: "2026-09-15T14:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::Tmx,
+            published_at: "2026-09-15T14:00:00Z".into(), summary: String::new(), kind: bagholder_market::stored::feeds::NewsKind::Release, via: bagholder_market::stored::feeds::Feed::Tmx,
         };
         crate::feeds::note_wire_releases(&app, "RDDY", "TSX", &[first, second], &["tmx:8".to_string()]).unwrap();
         let rows = posted(&app);
@@ -1355,7 +1458,7 @@ mod tests {
     #[test]
     fn test_a_disclosure_notice_carries_the_sentence_the_document_yielded() {
         let (_g, app, _c) = setup();
-        let rows = vec![filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "Other Correspondence",
+        let rows = vec![filing_full("sedar:1", bagholder_market::stored::feeds::Regulator::Sedar, "2026-09-08T16:22", "Other Correspondence",
                                "GAB0590 Avis Acceptation WKSI",
                                "The company announces the acceptance of its prospectus by the Autorité des marchés financiers.", "")];
         let (title, body) = crate::feeds::filings_notice(&app, "QNC", &rows);
@@ -1365,7 +1468,7 @@ mod tests {
             vec!["GAB0590 Avis Acceptation WKSI · SEDAR+",
                  "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."]
         );
-        let same = vec![filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "Other Correspondence",
+        let same = vec![filing_full("sedar:1", bagholder_market::stored::feeds::Regulator::Sedar, "2026-09-08T16:22", "Other Correspondence",
                                "GAB0590 Avis Acceptation WKSI", "GAB0590 Avis Acceptation WKSI", "")];
         assert_eq!(crate::feeds::filings_notice(&app, "QNC", &same).1, "GAB0590 Avis Acceptation WKSI · SEDAR+",
                    "a summary that only repeats the line above it is not a second line");
@@ -1390,7 +1493,7 @@ mod tests {
         assert_eq!(crate::feeds::notice_moment(&[news_item("tmx:1", "", "", "", "2026-08-24T11:00:00Z"),
                                           news_item("tmx:2", "", "", "", "2026-08-31T07:00:00Z")]),
                    "2026-08-31T07:00:00Z", "the newest of them");
-        assert_eq!(crate::feeds::notice_moment(&[filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "", "", "", "")]), "2026-09-08T16:22");
+        assert_eq!(crate::feeds::notice_moment(&[filing_full("sedar:1", bagholder_market::stored::feeds::Regulator::Sedar, "2026-09-08T16:22", "", "", "", "")]), "2026-09-08T16:22");
         assert_eq!(crate::feeds::notice_moment(&[news_item("x", "", "", "", "")]), "");
     }
 
@@ -1398,9 +1501,9 @@ mod tests {
     fn test_a_disclosure_notice_opens_the_document_it_is_about() {
         use crate::feeds::NoticeLink;
         let (_g, _app, _c) = setup();
-        assert_eq!(crate::feeds::notice_link(&[filing_full("sedar:9", bagholder_store::feeds::Regulator::Sedar, "2026-09-15T09:00", "", "", "", "https://www.sedarplus.ca/x?drmKey=9")]),
+        assert_eq!(crate::feeds::notice_link(&[filing_full("sedar:9", bagholder_market::stored::feeds::Regulator::Sedar, "2026-09-15T09:00", "", "", "", "https://www.sedarplus.ca/x?drmKey=9")]),
                    NoticeLink { url: "https://www.sedarplus.ca/x?drmKey=9".into(), doc: "sedar:9".into(), source: "SEDAR+".into() });
-        assert_eq!(crate::feeds::notice_link(&[filing_full("sec:4", bagholder_store::feeds::Regulator::Sec, "2026-09-15T09:00", "", "", "", "https://www.sec.gov/x/4.htm")]),
+        assert_eq!(crate::feeds::notice_link(&[filing_full("sec:4", bagholder_market::stored::feeds::Regulator::Sec, "2026-09-15T09:00", "", "", "", "https://www.sec.gov/x/4.htm")]),
                    NoticeLink { url: "https://www.sec.gov/x/4.htm".into(), doc: "sec:4".into(), source: "SEC".into() }, "the SEC serves its own documents");
         assert_eq!(crate::feeds::notice_link(&[news_item("tmx:1", "", "", "https://money.tmx.com/en/quote/QNC/news/1", "2026-09-15T13:00:00Z")]),
                    NoticeLink { url: "https://money.tmx.com/en/quote/QNC/news/1".into(), ..NoticeLink::default() });
@@ -1411,7 +1514,7 @@ mod tests {
     fn test_a_document_a_regulator_refuses_is_a_page_not_a_json_error() {
         // The document route opens in a tab of its own: a refusal has to read as words.
         let (_g, app, _c) = setup();
-        let page = crate::feeds::document_error_page(&app, bagholder_store::feeds::Regulator::Sedar, "sedar:drm:x", "could not open the profile's documents to download from");
+        let page = crate::feeds::document_error_page(&app, bagholder_market::stored::feeds::Regulator::Sedar, "sedar:drm:x", "could not open the profile's documents to download from");
         assert!(page.contains("<!doctype html>"));
         assert!(page.contains("would not serve this document just now"));
         assert!(page.contains("could not open the profile&#x27;s documents to download from"));
@@ -1433,7 +1536,7 @@ mod tests {
         let head = "Harvest ETFs Announces September 2026 Distributions";
         let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
         let first = wire_release("tmx:1", head, "u1", "2026-09-14T11:30:00Z");
-        let note = |rows: &[bagholder_store::feeds::NewsItem], new: &[&str]| {
+        let note = |rows: &[bagholder_market::stored::feeds::NewsItem], new: &[&str]| {
             crate::feeds::note_wire_releases(&app, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>()).unwrap()
         };
         note(&[older.clone()], &["tmx:0"]);                       // the listing's first read: history
@@ -1454,10 +1557,10 @@ mod tests {
         // same releases returning under other ids on later passes are recognised rather than rung.
         let (_g, app, c) = setup();
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
-        let old: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
+        let old: Vec<bagholder_market::stored::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
         crate::feeds::note_wire_releases(&app, "RDDY", "TSX", &old, &old.iter().map(|r| r.id.clone()).collect::<Vec<_>>()).unwrap();
         // every one of them comes back under another source's ids, dated later, as a search's results shift
-        let again: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("gnews:{}", i), &format!("Release number {}", i), "u", &format!("2026-09-{:02}T07:00:00Z", 10 + i))).collect();
+        let again: Vec<bagholder_market::stored::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("gnews:{}", i), &format!("Release number {}", i), "u", &format!("2026-09-{:02}T07:00:00Z", 10 + i))).collect();
         crate::feeds::note_wire_releases(&app, "RDDY", "TSX", &again, &again.iter().map(|r| r.id.clone()).collect::<Vec<_>>()).unwrap();
         assert!(posted(&app).is_empty(), "history stays history, whatever id it returns under");
     }
@@ -1491,7 +1594,7 @@ mod tests {
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
         let first = wire_release("tmx:1", "Harvest ETFs Announces September 2026 Distributions", "u1", "2026-09-14T11:30:00Z");
-        let note = |rows: &[bagholder_store::feeds::NewsItem], new: &[&str]| {
+        let note = |rows: &[bagholder_market::stored::feeds::NewsItem], new: &[&str]| {
             crate::feeds::note_wire_releases_said(&app, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>())
         };
         note(&[older.clone()], &["tmx:0"]); // the listing's first read: history
@@ -1767,4 +1870,68 @@ mod tests {
         out
     }
 
+    /// The told marks of an earlier build go to the scopes each listing and filer
+    /// is kept under: every event told under an old scope is told under each new
+    /// one, each stream's mark is the later of the two, the old scopes go, and a
+    /// second start carries nothing. Over every venue a news scope may name.
+    #[test]
+    fn told_marks_are_carried_to_each_listing_and_filer_once() {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let at: bagholder_core::jiff::Timestamp = "2026-10-01T12:00:00Z".parse().unwrap();
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        let book = f.book().unwrap();
+        let cache = rusqlite::Connection::open_in_memory().unwrap();
+        for m in &bagholder_sources::cache::MIGRATIONS {
+            cache.execute_batch(m.sql).unwrap();
+        }
+        // a ticker whose filings were carried to two filers, and one carried to none
+        cache.execute_batch("INSERT INTO filings_carried VALUES ('ZQ', 'SEDAR+', '000000001'), ('ZQ', 'SEC', '111'), ('ZQ', 'SEC', '222');").unwrap();
+        let seen = bagholder_book::notices::SEEN;
+        let tell = |scope: &str, event: &str| {
+            book.notices().execute("INSERT INTO told (scope, event, at) VALUES (?, ?, '2026-09-01')", [scope, event]).unwrap();
+        };
+        let words: Vec<&str> = bagholder_core::listing::VENUE_WORDS.iter().map(|(_, w)| w[0]).collect();
+        for w in &words {
+            tell(&format!("news:ZQ@{w}"), "e-news");
+            book.set_setting(&format!("{seen}news:ZQ@{w}"), Some("2026-09-02T00:00:00Z|a"), at).unwrap();
+        }
+        tell("filings:ZQ:SEC", "e-sec");
+        book.set_setting(&format!("{seen}filings:ZQ:SEC"), Some("2026-09-03T00:00:00Z|x"), at).unwrap();
+        tell("filings:NONE:SEDAR+", "e-none");
+        // a new scope already further on keeps its own mark
+        book.set_setting(&format!("{seen}filings:SEC:222"), Some("2026-09-09T00:00:00Z|y"), at).unwrap();
+
+        let (events, _) = carry_told_by_listing(&book, &cache, at).unwrap().expect("carried");
+        assert!(events > 0);
+        let told = |scope: &str| -> Vec<String> {
+            book.notices().prepare("SELECT event FROM told WHERE scope = ? ORDER BY event").unwrap().query_map([scope], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        for w in &words {
+            let key = bagholder_core::ListingKey::on("ZQ", w).unwrap();
+            assert_eq!(told(&format!("news:{key}")), vec!["e-news".to_string()], "{w}");
+            assert_eq!(book.setting(&format!("{seen}news:{key}")).unwrap().as_deref(), Some("2026-09-02T00:00:00Z|a"), "{w}");
+            assert!(told(&format!("news:ZQ@{w}")).is_empty() || bagholder_core::ListingKey::on("ZQ", w).unwrap().to_string() == format!("ZQ@{w}"), "the old scope goes: {w}");
+        }
+        assert_eq!(told("filings:SEC:111"), vec!["e-sec".to_string()]);
+        assert_eq!(told("filings:SEC:222"), vec!["e-sec".to_string()]);
+        assert!(told("filings:SEDAR+:000000001").is_empty(), "nothing was told of that source under the ticker");
+        assert_eq!(book.setting(&format!("{seen}filings:SEC:111")).unwrap().as_deref(), Some("2026-09-03T00:00:00Z|x"));
+        assert_eq!(book.setting(&format!("{seen}filings:SEC:222")).unwrap().as_deref(), Some("2026-09-09T00:00:00Z|y"), "the later mark stands");
+        assert!(told("filings:ZQ:SEC").is_empty() && told("filings:NONE:SEDAR+").is_empty(), "the old scopes go");
+        assert_eq!(book.setting(&format!("{seen}filings:ZQ:SEC")).unwrap(), None);
+        assert_eq!(carry_told_by_listing(&book, &cache, at).unwrap(), None, "once");
+    }
+
+    /// A notification whose stored extra does not parse is an error of the read,
+    /// never a notification with nothing beside it.
+    #[test]
+    fn a_notification_whose_stored_extra_does_not_parse_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let (book, _) = Book::open_in(dir.path(), crate::app::APP_VERSION, "2026-09-26T12:00:00Z".parse().unwrap()).unwrap();
+        let c = book.notices();
+        let n = st::add_notification(c, "fills", "k", "t", "b", None, false, "2026-09-26T12:00:00Z").unwrap().unwrap();
+        c.execute("UPDATE notifications SET extra = '{' WHERE id = ?", [n.id]).unwrap();
+        assert!(st::list_notifications(c, 0, "", false, 10, false).unwrap_err().to_string().contains("extra"));
+    }
 }

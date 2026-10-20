@@ -1,24 +1,21 @@
 //! What the derived model was built from, as keys that are equal exactly when
-//! nothing the model reads has changed.
+//! nothing the model reads from the market cache has changed.
 //!
-//! The keys are spelled from the store's generation counters
-//! (`bagholder_store::gens`): one statement, and exact -- a counter moves only
-//! when rows really differ, never because something was read again and found the
-//! same. Two keys for the page: everything; and everything but the quotes
-//! (prices move every minute and nothing else does, so a tick leaves the match,
-//! the closed trades, the cashflow and the equity curve standing). The model's
-//! own cache reads the counters one by one (`model_cache`).
+//! The keys are spelled from the market cache's generation counters
+//! (`bagholder_market::stored::gens`): one statement, and exact -- a counter moves
+//! only when rows really differ, never because something was read again and found
+//! the same. Two keys for the page: everything; and everything but the quotes,
+//! which no counter counts (the cache's quotes reach the page as figures), so a
+//! price tick leaves both standing.
 
 use rusqlite::{Connection, Result};
 
-use bagholder_store::gens;
+use bagholder_market::stored::gens;
 
 /// `(everything, everything but the quotes)`, in one pass.
 pub fn versions(conn: &Connection) -> Result<(String, String)> {
-    let g = gens::all(conn)?;
-    let names = gens::names();
-    let core: Vec<&str> = names.iter().copied().filter(|n| *n != "quotes").collect();
-    Ok((gens::key(&g, &names), gens::key(&g, &core)))
+    let key = gens::key(&gens::all(conn)?, &gens::names());
+    Ok((key.clone(), key))
 }
 
 pub fn data_version(conn: &Connection) -> Result<String> {
@@ -31,4 +28,3 @@ pub fn data_version(conn: &Connection) -> Result<String> {
 pub fn core_version(conn: &Connection) -> Result<String> {
     Ok(versions(conn)?.1)
 }
-

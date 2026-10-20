@@ -319,7 +319,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
                 let currency = Currency::parse(n.text("currency").map_err(mismatch)?).map_err(|e| Failure::Mismatch(e.to_string()))?;
                 self.cards.insert(id.clone(), currency);
             }
-            let kind = match bagholder_book::import::wealthsimple_account_type(n.text("unifiedAccountType").map_err(mismatch)?) {
+            let kind = match crate::account_types::account_type(n.text("unifiedAccountType").map_err(mismatch)?) {
                 bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Spending, .. } => Some(crate::statement::CASH),
                 bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::CreditCard | bagholder_core::account::AccountKind::LineOfCredit, .. } => None,
                 _ => Some(crate::statement::BROKERAGE),

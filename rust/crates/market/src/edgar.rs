@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
-use bagholder_store::feeds::{FiledDocument, Regulator};
+use crate::stored::feeds::{FiledDocument, Regulator};
 
 pub const SOURCE: &str = "SEC";
 pub const TICKERS_URL: &str = "https://www.sec.gov/files/company_tickers_exchange.json";

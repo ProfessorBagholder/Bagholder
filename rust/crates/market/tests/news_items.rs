@@ -7,7 +7,7 @@
 //! and read the diff.
 
 use bagholder_market::news::{self, Clock, Net, NetError, Readers, WireAnswer};
-use bagholder_store::feeds::Feed;
+use bagholder_market::stored::feeds::Feed;
 use serde_json::{json, Map, Value};
 use std::sync::Mutex;
 
@@ -142,7 +142,7 @@ fn answers() -> Value {
     out.insert("tmx_releases".into(), cell(&news::parse_tmx_news(&tmx_releases(), "PNG", false)));
     out.insert("tmx_media".into(), cell(&news::parse_tmx_news(&tmx_media(), "PNG", true)));
     out.insert("nasdaq".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_news()).unwrap(), now, "SHOP", None)));
-    out.insert("nasdaq_press".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_press()).unwrap(), now, "SHOP", Some(bagholder_store::feeds::NewsKind::Release))));
+    out.insert("nasdaq_press".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_press()).unwrap(), now, "SHOP", Some(bagholder_market::stored::feeds::NewsKind::Release))));
     out.insert("nasdaq_market".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_news()).unwrap(), now, "", None)));
     out.insert("yahoo".into(), cell(&news::parse_yahoo_news(&yahoo_news(), "PNG.V", "PNG", "Kraken Robotics Inc.")));
     out.insert("sa".into(), cell(&news::parse_sa_news(sa_news(), "PNG:CA")));
@@ -150,10 +150,10 @@ fn answers() -> Value {
 
     // what a wire answers for a listing
     let d = tempfile::tempdir().unwrap();
-    let conn = bagholder_store::connect(d.path()).unwrap();
-    bagholder_store::relabel::ensure(&conn).unwrap();
-    // the market cache's per-listing tables, as its migration 6 makes them
-    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    // the market cache as its migrations make it
+    let file = d.path().join("market.db");
+    bagholder_sources::cache::MarketCache::open(&file, "test", "2026-09-22T15:00:00Z".parse().unwrap()).unwrap();
+    let conn = bagholder_sqlite::open_db(&file).unwrap();
     let clock = Clock::at(now);
     let both = tmx_post(false);
     let one = tmx_post(true);
@@ -171,7 +171,7 @@ fn answers() -> Value {
     let on_new = |_: &rusqlite::Connection, sym: &str, ex: &str, rows: &[_], ids: &[String]| {
         told.lock().unwrap().push(json!({"symbol": sym, "exchange": ex, "rows": cell(rows), "new": ids}));
     };
-    let stored = |conn: &rusqlite::Connection| cell(&bagholder_store::feeds::news_for(conn, &bagholder_core::ListingKey::on("PNG", "TSX-V").unwrap()).unwrap());
+    let stored = |conn: &rusqlite::Connection| cell(&bagholder_market::stored::feeds::news_for(conn, &bagholder_core::ListingKey::on("PNG", "TSX-V").unwrap()).unwrap());
     let pass = |conn: &rusqlite::Connection, readers: &Readers, clock: &Clock| {
         let (src, rows) = news::read_listing(conn, readers, "PNG", "TSX-V", "CAD", "Kraken Robotics Inc.", false, clock, Some(&on_new)).unwrap();
         json!({"source": src, "rows": rows.as_ref().map(|r| cell(r)), "stored": stored(conn)})

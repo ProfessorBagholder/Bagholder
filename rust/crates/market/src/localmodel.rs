@@ -165,7 +165,7 @@ fn state() -> &'static Mutex<State> {
 /// kept in its `models` folder. Called by the server as it starts, once; a test
 /// run is refused the person's own folder.
 pub fn serve_from(home: &std::path::Path) -> Result<(), String> {
-    let home = bagholder_store::guard_home(home)?;
+    let home = bagholder_sqlite::guard_home(home)?;
     state().lock().unwrap().folder = Some(home.join("models"));
     Ok(())
 }

@@ -19,7 +19,7 @@ use bagholder_engine::engine::{Entity, Moved};
 use bagholder_model::context::{Held, MarketBase, Traded};
 use bagholder_model::input::{TileRef, WatchRow};
 use bagholder_sources::venue;
-use bagholder_store::{gens, rows};
+use bagholder_market::stored::{gens, rows};
 
 use crate::app::App;
 use crate::figures::{Figures, Since};

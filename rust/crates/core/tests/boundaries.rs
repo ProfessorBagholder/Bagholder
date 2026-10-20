@@ -4,9 +4,8 @@
 //! - each crate depends only on what its column allows;
 //! - none reads the machine's clock: every time is given to it, or, for the
 //!   network, asked of the clock it is handed, the machine's read in one file;
-//! - no float appears outside the two places allowed one: `Dec::to_f64`, the one
-//!   way a decimal leaves for statistics, and the import's reading of the earlier
-//!   database, which stored money as floats.
+//! - no float appears outside the places allowed one: `Dec::to_f64`, the one
+//!   way a decimal leaves for statistics, and the engine's statistics.
 //!
 //! Types hold the rest: `Dec` has no constructor from a float (a `compile_fail`
 //! doctest), and the engine will depend on this crate alone, not on `rust_decimal`.
@@ -57,7 +56,7 @@ const CRATES: [Rules; 8] = [
         name: "bagholder-book",
         dir: "book",
         allowed: &["bagholder-core", "bagholder-sqlite", "rusqlite", "serde", "serde_json", "uuid", "jiff"],
-        floats_in: &["src/import/old.rs"],
+        floats_in: &[],
         clock: ClockRule::Given,
     },
     // the engine (docs/plans/stage-2-engine.md): the vocabulary alone, which
@@ -225,8 +224,8 @@ fn the_checker_catches_each_kind_of_violation() {
     assert!(violations(engine, on_core, &[]).is_empty());
     let on_decimal = "[dependencies]\nbagholder-core = { path = \"../core\" }\nrust_decimal = \"1\"\n";
     assert_eq!(violations(engine, on_decimal, &[]), vec!["bagholder-engine depends on rust_decimal"]);
-    let on_store = "[dependencies]\nbagholder-store = { path = \"../store\" }\n";
-    assert_eq!(violations(engine, on_store, &[]), vec!["bagholder-engine depends on bagholder-store"]);
+    let on_readers = "[dependencies]\nbagholder-market = { path = \"../market\" }\n";
+    assert_eq!(violations(engine, on_readers, &[]), vec!["bagholder-engine depends on bagholder-market"]);
     let stat = vec![("src/stat/returns.rs".to_string(), "fn r(a: f64) -> f64".to_string())];
     assert!(violations(engine, on_core, &stat).is_empty());
     let figure = vec![("src/trades.rs".to_string(), "let pnl: f64 = 0.0;".to_string())];

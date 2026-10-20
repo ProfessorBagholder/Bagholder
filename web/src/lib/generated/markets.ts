@@ -1,4 +1,4 @@
-// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not
+// Generated from rust/crates/market/src/stored/feeds.rs and the server's market documents. Do not
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.
 
 import type { Dec } from '../dec'

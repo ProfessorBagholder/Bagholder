@@ -25,8 +25,8 @@ async fn list(State(state): State<AppState>) -> Api<notify::NotificationsAnswer>
             ok: true,
             settings: notify::status(&app, book)?,
             kinds: notify::KINDS.iter().map(|k| k.to_string()).collect(),
-            rows: bagholder_store::feeds::list_notifications(book.notices(), 0, "", false, 50, true)?,
-            unread: bagholder_store::feeds::unread_notifications(book.notices())?,
+            rows: bagholder_market::stored::feeds::list_notifications(book.notices(), 0, "", false, 50, true)?,
+            unread: bagholder_market::stored::feeds::unread_notifications(book.notices())?,
         })
     })
     .await
@@ -52,15 +52,15 @@ async fn test(State(state): State<AppState>) -> Api<notify::NotifyTestAnswer> {
 }
 
 async fn read(State(state): State<AppState>, Body(which): Body<notify::NotificationIds>) -> Api<notify::NotificationsReadAnswer> {
-    with_notices(&state, move |book| Ok(notify::NotificationsReadAnswer { ok: true, read: bagholder_store::feeds::mark_notifications_read(book.notices(), which.ids.as_deref(), &app::now_iso())? })).await
+    with_notices(&state, move |book| Ok(notify::NotificationsReadAnswer { ok: true, read: bagholder_market::stored::feeds::mark_notifications_read(book.notices(), which.ids.as_deref(), &app::now_iso())? })).await
 }
 
 async fn seen(State(state): State<AppState>, Body(which): Body<notify::NotificationIds>) -> Api<notify::NotificationsSeenAnswer> {
-    with_notices(&state, move |book| Ok(notify::NotificationsSeenAnswer { ok: true, seen: bagholder_store::feeds::mark_notifications_seen(book.notices(), &which.ids.unwrap_or_default(), &app::now_iso())? })).await
+    with_notices(&state, move |book| Ok(notify::NotificationsSeenAnswer { ok: true, seen: bagholder_market::stored::feeds::mark_notifications_seen(book.notices(), &which.ids.unwrap_or_default(), &app::now_iso())? })).await
 }
 
 async fn clear(State(state): State<AppState>) -> Api<notify::NotificationsClearAnswer> {
-    with_notices(&state, |book| Ok(notify::NotificationsClearAnswer { ok: true, cleared: bagholder_store::feeds::clear_notifications(book.notices())? })).await
+    with_notices(&state, |book| Ok(notify::NotificationsClearAnswer { ok: true, cleared: bagholder_market::stored::feeds::clear_notifications(book.notices())? })).await
 }
 
 /// `POST /api/push/subscribe`: a browser's push subscription kept, as the page's

@@ -36,7 +36,7 @@ pub struct State {
     /// Why the last pass of the figures failed; cleared by the next pass that succeeds.
     pub figures_error: String,
     /// What a step at start that reads the stored data could not do (the book or
-    /// the market cache not opened, the earlier store not carried), one sentence
+    /// the market cache not opened, the key notifications are pushed with not made), one sentence
     /// each: the server stays up with its page and its update button, and this is
     /// said until the next start (#516).
     pub start_error: String,
@@ -374,7 +374,7 @@ impl App {
     /// bus (`events::Source::Store`).
     pub fn cache(&self) -> rusqlite::Result<bagholder_sqlite::pool::Pooled<'_>> {
         // every connection passes here: a test never opens the live data folder
-        bagholder_store::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
+        bagholder_sqlite::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
         self.cache.get()
     }
 
@@ -400,7 +400,7 @@ impl App {
     /// request's lifetime (a background fetch on a thread of its own): still a
     /// connection this pool hands out, so its commits are heard the same way.
     pub fn cache_pool(&self) -> rusqlite::Result<Arc<bagholder_sqlite::pool::Pool>> {
-        bagholder_store::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
+        bagholder_sqlite::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
         Ok(self.cache.clone())
     }
 

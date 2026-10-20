@@ -13,7 +13,6 @@ bagholder-diff = { path = "../diff" }
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 bagholder-model = { path = "../model" }
 bagholder-diff-derive = { path = "../diff-derive" }
-bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }
 bagholder-net = { path = "../net" }
 bagholder-ws = { path = "../ws" }
@@ -81,7 +80,7 @@ bagholder-engine = { path = "../engine", features = ["oracles"] }
 bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 # the stand-in Wealthsimple server, for the sync's own tests
 bagholder-ws = { path = "../ws", features = ["standin"] }
-# a database of its own for the model cache tests, as the store's tests have
+# a data folder of its own for each test
 tempfile = "3"
 
 [lints]

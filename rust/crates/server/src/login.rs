@@ -1130,7 +1130,7 @@ impl StartLoginAnswer {
 /// Open the login window, or bring forward the
 /// one the app already has up.
 pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
-    if let Err(e) = bagholder_store::guard_home(&app.home) {
+    if let Err(e) = bagholder_sqlite::guard_home(&app.home) {
         return StartLoginAnswer::err(e);
     }
     log("bagholder login: connect requested");

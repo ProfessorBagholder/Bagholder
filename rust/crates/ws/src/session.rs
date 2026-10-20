@@ -268,7 +268,7 @@ fn set_mode(_path: &Path, _mode: u32) -> std::io::Result<()> {
 fn atomic_write(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         // the session, client id and user agent: never a test's to write
-        bagholder_store::guard_home(dir).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        bagholder_sqlite::guard_home(dir).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         std::fs::create_dir_all(dir)?;
         set_mode(dir, 0o700)?;
     }

@@ -1,12 +1,10 @@
 //! The engine's inputs read from the book (`docs/plans/stage-2-engine.md`, "The
 //! entry point"): its ledger and the facts it keeps. The market's part comes from
-//! wherever the market data lives (the comparison tool reads the old store for
-//! it; stage 3's market cache replaces that).
+//! the market cache.
 
 use std::collections::BTreeMap;
 
 use bagholder_book::Book;
-use bagholder_core::names::SourceName;
 use bagholder_core::Currency;
 use bagholder_book::changes::Changes;
 use bagholder_core::journal::JournalSubject;
@@ -193,11 +191,6 @@ pub fn debts(book: &Book) -> Result<bagholder_engine::input::Debts, String> {
     Ok(bagholder_engine::input::Debts { owed, repayments, asked: asked.into_values().collect() })
 }
 
-/// The source name a stand-in fact read from the old store carries.
-pub fn old_store_source() -> SourceName {
-    SourceName::named("bagholder-old-store")
-}
-
 /// What each broker states about each account (`docs/plans/stage-3b-wealthsimple.md`,
 /// "The book's new tables"), read from the book: each day's value and net
 /// deposits (in CAD), the newest cash and when it was stated, the newest units
@@ -280,7 +273,7 @@ pub(crate) mod tests {
             }
             let account = row.text("accountId").unwrap();
             if book.account_by_ref(&AccountRef::new(ws.clone(), account)).unwrap().is_none() {
-                book.add_account(conn, &[AccountRef::new(ws.clone(), account)], &bagholder_book::import::wealthsimple_account_type("CASH"), AccountStatus::Open, None, now).unwrap();
+                book.add_account(conn, &[AccountRef::new(ws.clone(), account)], &bagholder_wealthsimple::account_types::account_type("CASH"), AccountStatus::Open, None, now).unwrap();
             }
             let payload = bagholder_core::json::Value::Object(std::collections::BTreeMap::from([("activity".to_string(), row.value().clone())])).canonical();
             let key = row.text("canonicalId").unwrap();
@@ -351,9 +344,9 @@ pub(crate) mod tests {
         let (book, _) = Book::open_in(dir.path(), "test", now).unwrap();
         let ws = Broker::named("wealthsimple");
         let conn = book.add_connection(&ws, "Wealthsimple", now).unwrap();
-        let a = book.add_account(conn, &[AccountRef::new(ws.clone(), "crypto-1")], &bagholder_book::import::wealthsimple_account_type("CRYPTO"), AccountStatus::Open, None, now).unwrap();
+        let a = book.add_account(conn, &[AccountRef::new(ws.clone(), "crypto-1")], &bagholder_wealthsimple::account_types::account_type("CRYPTO"), AccountStatus::Open, None, now).unwrap();
         let draft = bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(ws), "sec-z-x")], kind: InstrumentKind::Crypto, currency: Currency::CAD, name: None, option: None, standing: None };
-        let i = book.instrument_stated(&draft, &SourceName::named("wealthsimple"), now).unwrap().unwrap();
+        let i = book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), now).unwrap().unwrap();
         let read = book.broker_read(conn, "units", now).unwrap();
         let q = Dec::parse("0.0000005").unwrap();
         book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: None }], &read, now).unwrap();

@@ -1,6 +1,6 @@
 //! News: every per-symbol source parsed into rows, merged and kept per listing.
 use bagholder_market::news;
-use bagholder_store::feeds::{Feed, NewsItem, NewsKind, StoredNews};
+use bagholder_market::stored::feeds::{Feed, NewsItem, NewsKind, StoredNews};
 use serde_json::{json, Value};
 
 const SEP11_1530: i64 = 1789140600;
@@ -88,10 +88,10 @@ struct Db {
 
 fn db() -> Db {
     let dir = tempfile::tempdir().unwrap();
-    let conn = bagholder_store::connect(dir.path()).unwrap();
-    bagholder_store::relabel::ensure(&conn).unwrap();
-    // the market cache's per-listing tables, as its migration 6 makes them
-    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    // the market cache as its migrations make it
+    let file = dir.path().join("market.db");
+    bagholder_sources::cache::MarketCache::open(&file, "test", "2026-09-22T15:00:00Z".parse().unwrap()).unwrap();
+    let conn = bagholder_sqlite::open_db(&file).unwrap();
     Db { dir, conn }
 }
 
@@ -161,7 +161,7 @@ fn test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue() 
     assert_eq!((rows[0].kind, rows[0].url.as_str()), (NewsKind::Release, "https://money.tmx.com/en/quote/QIMC:CNX/news/7"));
     // the record names the wrong venue: the lookup resolves the form that answers, as it does for a quote
     // (the form TMX's resolver verified, remembered as a miss would be, so nothing is asked of the network)
-    bagholder_store::tables::set_meta(&d.conn, "tmx_form:QIMC", "none@2026-09-16").unwrap();
+    bagholder_market::stored::meta::set_meta(&d.conn, "tmx_form:QIMC", "none@2026-09-16").unwrap();
     asked.lock().unwrap().clear();
     let (_, found) = news::fetch_symbol(&net, "QIMC", "TSX-V", &clock);
     assert_eq!((asked.lock().unwrap().clone(), ids(&found.unwrap().rows)), (vec!["QIMC".to_string(), "QIMC".into()], Vec::<String>::new()),
@@ -426,7 +426,7 @@ fn wire_of(answer: Option<Vec<NewsItem>>) -> impl Fn(&str, &str, &Clock) -> (Fee
 }
 
 fn stored(conn: &Connection, sym: &str, ex: &str) -> Vec<StoredNews> {
-    bagholder_store::feeds::news_for(conn, &key(sym, ex)).unwrap()
+    bagholder_market::stored::feeds::news_for(conn, &key(sym, ex)).unwrap()
 }
 
 fn key(sym: &str, ex: &str) -> bagholder_core::ListingKey {
@@ -595,8 +595,8 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
     let stamp = Clock::at(now).stamp();
-    bagholder_store::feeds::replace_news(&d.conn, &key("CH", "TSX-V"), "TSX-V", &[row("tmx:1", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
-    bagholder_store::feeds::replace_news(&d.conn, &key("HG", "CSE"), "CSE", &[row("tmx:2", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
+    bagholder_market::stored::feeds::replace_news(&d.conn, &key("CH", "TSX-V"), "TSX-V", &[row("tmx:1", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
+    bagholder_market::stored::feeds::replace_news(&d.conn, &key("HG", "CSE"), "CSE", &[row("tmx:2", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
     let listings = vec![listing("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), listing("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.")];
     let syms = |ls: Vec<news::Listing>| ls.into_iter().map(|l| l.symbol).collect::<Vec<_>>();
     assert_eq!(syms(news::stale(&d.conn, &listings, now + 60, 15).unwrap()), ["CH", "HG"], "the wire is fresh, the other sources never read");
@@ -604,8 +604,8 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
     let (started, landed) = (Mutex::new(Vec::<String>::new()), Mutex::new(Vec::<(String, bool)>::new()));
     let wire = wire_of(Some(vec![]));
     let empty = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };
-    let path = d.dir.path().to_path_buf();
-    let open = move || bagholder_store::connect(&path).ok();
+    let path = d.dir.path().join("market.db");
+    let open = move || bagholder_sqlite::open_db(&path).ok();
     let on_start = |due: &[news::Listing]| started.lock().unwrap().extend(due.iter().map(|l| l.symbol.clone()));
     let on_done = |l: &news::Listing, ok: bool| landed.lock().unwrap().push((l.symbol.clone(), ok));
     let n = news::refresh(&open, &Readers { wire: &wire, extra: &empty }, &listings, &Clock::at(now + 60), None, Some(&on_start), Some(&on_done), news::LISTINGS_AT_ONCE).unwrap();
@@ -642,8 +642,8 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
     let others = |_: Feed, ask: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { if ask.symbol == "BROKEN" { Err(down()) } else { Ok(Some(vec![])) } };
     let readers = Readers { wire: &fake, extra: &others };
     let listings = vec![listing("SHOP", "TSX", "CAD", ""), listing("NVDA", "NASDAQ", "USD", ""), listing("BROKEN", "TSX", "CAD", "")];
-    let path = d.dir.path().to_path_buf();
-    let open = move || bagholder_store::connect(&path).ok();
+    let path = d.dir.path().join("market.db");
+    let open = move || bagholder_sqlite::open_db(&path).ok();
     assert_eq!(news::refresh(&open, &readers, &listings, &Clock::at(now), None, None, None, news::LISTINGS_AT_ONCE).unwrap(), 2,
                "a listing no source answers for leaves nothing behind and is asked again next time");
     let mut c = calls.lock().unwrap().clone();
@@ -655,11 +655,11 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
     answers.lock().unwrap().insert("SHOP".into(), vec![row("tmx:2", "Two", "2026-09-11T16:00:00Z", "CNW", "story")]);
     let later = at(2026, 9, 11, 16, 0);
     news::refresh(&open, &readers, &listings, &Clock::at(later), None, None, None, news::LISTINGS_AT_ONCE).unwrap();
-    let rows: Vec<[String; 3]> = bagholder_store::rows::news(&d.conn).unwrap().iter().map(|r| [r.id.clone(), r.symbol.clone(), r.wire.clone()]).collect();
+    let rows: Vec<[String; 3]> = bagholder_market::stored::rows::news(&d.conn).unwrap().iter().map(|r| [r.id.clone(), r.symbol.clone(), r.wire.clone()]).collect();
     assert_eq!(rows, vec![["tmx:2".to_string(), "SHOP".into(), "CNW".into()], ["nasdaq:9".to_string(), "NVDA".into(), "Zacks".into()]],
                "newest first; a listing's rows are replaced by its wire's latest");
-    bagholder_store::feeds::forget_news(&d.conn, &key("SHOP", "TSX")).unwrap();
-    assert_eq!(bagholder_store::rows::news(&d.conn).unwrap().iter().map(|r| r.id.clone()).collect::<Vec<_>>(), vec!["nasdaq:9"]);
+    bagholder_market::stored::feeds::forget_news(&d.conn, &key("SHOP", "TSX")).unwrap();
+    assert_eq!(bagholder_market::stored::rows::news(&d.conn).unwrap().iter().map(|r| r.id.clone()).collect::<Vec<_>>(), vec!["nasdaq:9"]);
     assert_eq!(news::stale(&d.conn, &[listing("SHOP", "TSX", "CAD", "")], later, 15).unwrap(), vec![listing("SHOP", "TSX", "CAD", "")], "forgotten means stale");
 }
 

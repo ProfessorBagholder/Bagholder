@@ -12,7 +12,6 @@ pub mod clear;
 pub mod debts;
 pub mod facts;
 pub mod identity;
-pub mod import;
 pub mod links;
 pub mod mapping;
 pub mod names;
@@ -25,6 +24,7 @@ pub mod schema;
 pub mod settings;
 pub mod statements;
 pub mod trades;
+pub mod upkeep;
 pub mod watched;
 pub mod zones;
 
