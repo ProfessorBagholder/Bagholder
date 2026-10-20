@@ -53,6 +53,13 @@ fn session_file(refresh_token: &str) -> (tempfile::TempDir, SessionFile) {
     (dir, SessionFile { path })
 }
 
+/// A folder whose session file is not read, for its lock alone.
+fn lock_only() -> (tempfile::TempDir, SessionFile) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    (dir, SessionFile { path })
+}
+
 fn held(refresh_token: &str) -> Tokens {
     Tokens { access: "old-access".into(), refresh: refresh_token.into(), client_id: "the-client".into(), identity: "identity-1".into(), expires_at: None, device: None }
 }
@@ -172,15 +179,15 @@ fn a_captured_sign_in_is_written_only_once_wealthsimple_has_answered_with_new_to
     let write = |t: &Tokens| file.save(&json::parse(&before).unwrap(), t);
     // refused at first sight: the saved sign-in stays, and the reason is the refusal
     let q = queue(&[(400, INVALID_GRANT)]);
-    assert_eq!(take_over(&net(&q), &held("captured-refused"), write), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
+    assert_eq!(take_over(&net(&q), &lock_only().1, &held("captured-refused"), write), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
     assert_eq!(std::fs::read_to_string(&file.path).unwrap(), before, "nothing written for a refused capture");
     // no answer: nothing written either
     let q = queue(&[(0, "the connection dropped")]);
-    assert!(matches!(take_over(&net(&q), &held("captured-unanswered"), write), Err(Failure::Unreachable(_))));
+    assert!(matches!(take_over(&net(&q), &lock_only().1, &held("captured-unanswered"), write), Err(Failure::Unreachable(_))));
     assert_eq!(std::fs::read_to_string(&file.path).unwrap(), before);
     // answered: written, with Wealthsimple's tokens
     let q = queue(&[(200, NEW_TOKENS)]);
-    let got = take_over(&net(&q), &held("captured-good"), write).unwrap();
+    let got = take_over(&net(&q), &lock_only().1, &held("captured-good"), write).unwrap();
     assert_eq!(got.refresh, "new-refresh");
     assert!(std::fs::read_to_string(&file.path).unwrap().contains("new-refresh"));
 }
@@ -204,13 +211,13 @@ fn a_second_token_posted_meanwhile_hides_nothing_known_of_the_first() {
     let q = queue(&[(0, "the connection dropped"), (0, "the connection dropped"), (400, INVALID_GRANT)]);
     let n = net(&q);
     assert!(matches!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Unreachable(_))));
-    assert!(matches!(take_over(&n, &held("per-token-b"), |_| Ok(())), Err(Failure::Unreachable(_))));
+    assert!(matches!(take_over(&n, &lock_only().1, &held("per-token-b"), |_| Ok(())), Err(Failure::Unreachable(_))));
     // the first refused now: its answer was lost, not refused at first sight
     assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(LOST_REFRESH.into())));
     // another token refused after it: the first is still never posted again
     let q = queue(&[(400, INVALID_GRANT)]);
     let n = net(&q);
-    assert_eq!(take_over(&n, &held("per-token-c"), |_| Ok(())), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
+    assert_eq!(take_over(&n, &lock_only().1, &held("per-token-c"), |_| Ok(())), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
     assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
     assert_eq!(q.asked.lock().unwrap().len(), 1, "the refused first token was not posted again");
 }
@@ -245,4 +252,26 @@ fn a_read_only_client_never_renews_the_sign_in() {
     assert_eq!(q.asked.lock().unwrap().len(), 1, "the read alone, no token request");
     assert!(q.asked.lock().unwrap().iter().all(|u| u.contains("graphql")), "{:?}", q.asked.lock().unwrap());
     assert_eq!(std::fs::read(&path).unwrap(), before, "session.json untouched");
+}
+
+/// Two processes on one data folder take turns with its sign-in: a refresh waits
+/// while another holds the session's lock, then adopts the tokens that one wrote
+/// and posts nothing, so no refresh token is posted twice (brief 71, C13).
+#[test]
+fn a_refresh_waits_for_another_process_and_adopts_its_tokens() {
+    let (_dir, file) = session_file("spent");
+    // another process's hold: a lock of its own on the file, which the refresh's must wait for
+    let other = file.hold().unwrap();
+    let q = queue(&[]);
+    let n = net(&q);
+    let path = file.path.clone();
+    let waiting = std::thread::spawn(move || refresh(&n, &SessionFile { path }, &held("spent")));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!waiting.is_finished(), "the refresh waits for the other process");
+    // the other process's refresh: Wealthsimple's new tokens written, then its lock let go
+    std::fs::write(&file.path, r#"{"access_token":"new-access","refresh_token":"rotated","client_id":"the-client","identity_canonical_id":"identity-1","expires_at":"2026-09-24T14:00:00Z","wssdi":"kept"}"#).unwrap();
+    drop(other);
+    let got = waiting.join().unwrap().unwrap();
+    assert_eq!(got.refresh, "rotated", "the other process's tokens adopted");
+    assert!(q.asked.lock().unwrap().is_empty(), "nothing posted: the spent token is never posted again");
 }

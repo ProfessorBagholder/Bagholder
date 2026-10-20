@@ -583,7 +583,7 @@ pub fn take_capture(app: &Arc<App>, capture: &Capture) -> Taken {
         adopt(&mut taken, t.clone());
         save_session(app, &taken).map_err(bagholder_broker::Failure::Refused)
     };
-    match bagholder_wealthsimple::session::take_over(&app.net, &held, keep) {
+    match bagholder_wealthsimple::session::take_over(&app.net, &crate::broker_reads::session_file(app), &held, keep) {
         Ok(fresh) => adopt(&mut sess, fresh),
         Err(f) => return refused_capture(app, f.into()),
     }
