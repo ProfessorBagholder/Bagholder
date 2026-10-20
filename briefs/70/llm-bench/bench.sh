@@ -3,13 +3,14 @@
 # filing texts on any machine; GPU on and GPU off. Everything it downloads lives in
 # a temporary folder under $TMPDIR that is deleted when it ends, whatever way it ends. It starts
 # one llama-server at a time on 127.0.0.1:18080 and stops it before the next.
-# Usage: ./bench.sh            (writes results-<host>.md in the current folder)
+# Usage: <path>/bench.sh       (writes results-<host>.md beside this script)
 set -euo pipefail
 BUILD=b11750
 NGLS="${NGLS:-99 0}"   # GPU on, then off; NGLS=0 on a machine with no usable GPU
 REPS="${REPS:-2}"
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT="$PWD/results-$(hostname -s)${OUT_SUFFIX:-}.md"
+# beside the script, so it is run by its path and no session ever cd-s into the clone
+OUT="$HERE/results-$(hostname -s)${OUT_SUFFIX:-}.md"
 # under $TMPDIR, which a sandboxed session may write to (macOS mktemp ignores TMPDIR otherwise)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/llm-bench.XXXXXX")
 SERVER=""

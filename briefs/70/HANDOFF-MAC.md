@@ -19,10 +19,10 @@ Don't change the owner's settings, add exclusions, or switch permission modes fo
 
 ```bash
 git clone -q --depth 1 --branch architecture-briefs https://github.com/ProfessorBagholder/Bagholder.git "$TMPDIR/bh-bench"
-cd "$TMPDIR/bh-bench/briefs/70/llm-bench" && ./bench.sh
+"$TMPDIR/bh-bench/briefs/70/llm-bench/bench.sh"
 ```
 
-It writes `results-<hostname>.md` in that folder: about 20–40 minutes on Apple Silicon. Keep the machine awake and plugged in.
+Run it by its path, as above, and never `cd` into the clone: a session's folder follows its shell, and the sandbox then protects the clone, so it can't be deleted afterwards. It writes `results-<hostname>.md` beside the script, in `$TMPDIR/bh-bench/briefs/70/llm-bench/`: about 20–40 minutes on Apple Silicon. Keep the machine awake and plugged in.
 
 ## When it's done
 
