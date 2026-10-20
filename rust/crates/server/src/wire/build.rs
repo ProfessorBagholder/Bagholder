@@ -566,14 +566,7 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         unrealized_pct: pf.unrealized_pct.clone().into_wire(),
         nav: pf.net_value.as_ref().map(fig_money),
         nav_accounts: pf.net_value_accounts,
-        owed: pf.owed.as_ref().map(|(total, each)| crate::wire::figures::Owed {
-            total: fig_money(total),
-            net: pf.net_value.as_ref().map(|v| match (v, total) {
-                (Ok(v), Ok(t)) => v.amount.checked_sub(t.amount).map(|n| Fig::Stated(Dec(n))).unwrap_or(Fig::Waits { gaps: vec!["arithmetic".into()] }),
-                (Err(g), _) | (_, Err(g)) => Fig::Waits { gaps: g.words().into_iter().map(String::from).collect() },
-            }),
-            debts: each.iter().map(|(d, cad)| crate::wire::figures::OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) }).collect(),
-        }),
+        net_worth: net_worth(pf),
         has_margin: pf.has_margin,
         margin_used: pf.margin_used.as_ref().map(fig_money),
         margin_used_pct: pf.margin_used_pct.clone().into_wire(),
@@ -701,6 +694,38 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
         })
         .collect();
     Cashflow { tiles, months, holdings, income, income_total, rows, asked }
+}
+
+/// Net worth from the portfolio: the broker's accounts at their value after
+/// margin, the assets and debts held outside, and what they come to.
+fn net_worth(pf: &bagholder_engine::scope::Portfolio) -> Option<crate::wire::figures::NetWorth> {
+    use crate::wire::figures::{NetWorth, OwedDebt};
+    let liabilities: Vec<(bagholder_engine::input::Debt, bagholder_engine::gap::Fig<Money>)> = pf.owed.as_ref().map(|(_, each)| each.clone()).unwrap_or_default();
+    if liabilities.is_empty() && pf.outside_assets.is_empty() {
+        return None;
+    }
+    let row = |d: &bagholder_engine::input::Debt, cad: &bagholder_engine::gap::Fig<Money>| OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) };
+    let mut assets: Vec<OwedDebt> = Vec::new();
+    let mut held: Vec<bagholder_engine::gap::Fig<Money>> = Vec::new();
+    if let Some(v) = &pf.net_value {
+        assets.push(OwedDebt { id: "broker".into(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: None });
+        held.push(v.clone());
+    }
+    for (d, cad) in &pf.outside_assets {
+        assets.push(row(d, cad));
+        held.push(cad.clone());
+    }
+    let sum = |xs: &[bagholder_engine::gap::Fig<Money>]| -> bagholder_engine::gap::Fig<Money> {
+        let mut t = Money::zero(bagholder_core::Currency::CAD);
+        for x in xs {
+            t = t.add_to_fit(x.clone()?)?;
+        }
+        Ok(t)
+    };
+    let owed: Vec<bagholder_engine::gap::Fig<Money>> = liabilities.iter().map(|(_, m)| m.clone()).collect();
+    let (assets_total, liabilities_total) = (sum(&held), sum(&owed));
+    let net = (|| -> bagholder_engine::gap::Fig<Money> { Ok(assets_total.clone()?.add_to_fit(liabilities_total.clone()?.neg())?) })();
+    Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&assets_total), liabilities_total: fig_money(&liabilities_total), assets, liabilities: liabilities.iter().map(|(d, m)| row(d, m)).collect() })
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or

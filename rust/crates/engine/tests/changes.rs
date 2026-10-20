@@ -199,6 +199,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
             owed: vec![bagholder_engine::input::Debt { id: "loan-1".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: Money::new(d("9000"), Currency::CAD), as_of: None }],
             repayments: BTreeMap::from([(b.tx["w1"].clone(), "loan-1".to_string())]),
             asked: vec![],
+            assets: vec![],
         }),
         Change::Quote(x, Some(quote)),
         // U has paid and has no declared record: its quote's ex-date is its Ex-Div

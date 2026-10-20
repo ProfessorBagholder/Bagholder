@@ -178,11 +178,11 @@ amount: Fig<Dec>,
  */
 asOf: string | null, };
 
-export type Owed = { total: Fig<Dec>, 
+export type NetWorth = { netWorth: Fig<Dec>, assetsTotal: Fig<Dec>, liabilitiesTotal: Fig<Dec>, 
 /**
- * The net value less what is owed; none where no net value is stated.
+ * The broker's own accounts first (their value after margin), then each outside asset.
  */
-net: Fig<Dec> | null, debts: Array<OwedDebt>, };
+assets: Array<OwedDebt>, liabilities: Array<OwedDebt>, };
 
 export type AskedPayee = { key: string, payee: string, 
 /**
@@ -192,10 +192,10 @@ count: number, candidates: Array<OwedDebt>, };
 
 export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, 
 /**
- * What is owed outside the accounts, under every account and only then:
- * none with no debt or under a narrower scope.
+ * Net worth, under every account and only then: none with nothing held or
+ * owed outside or under a narrower scope.
  */
-owed: Owed | null, hasMargin: boolean, 
+netWorth: NetWorth | null, hasMargin: boolean, 
 /**
  * None under a past range: no broker statement says what was borrowed then.
  */

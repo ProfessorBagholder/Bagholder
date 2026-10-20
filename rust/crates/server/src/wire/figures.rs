@@ -328,9 +328,9 @@ pub struct Portfolio {
     pub unrealized_pct: Fig<Option<f64>>,
     pub nav: Option<Fig<Dec>>,
     pub nav_accounts: usize,
-    /// What is owed outside the accounts, under every account and only then:
-    /// none with no debt or under a narrower scope.
-    pub owed: Option<Owed>,
+    /// Net worth, under every account and only then: none with nothing held or
+    /// owed outside or under a narrower scope.
+    pub net_worth: Option<NetWorth>,
     pub has_margin: bool,
     /// None under a past range: no broker statement says what was borrowed then.
     pub margin_used: Option<Fig<Dec>>,
@@ -348,15 +348,17 @@ pub struct Portfolio {
     pub as_of: Option<String>,
 }
 
-/// What is owed outside the accounts, in CAD: the total, the net value less it,
-/// and each debt with when it was stated.
+/// Net worth: everything held less everything owed, inside the broker and
+/// out, in CAD, as the broker's net worth feature counts it.
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
-pub struct Owed {
-    pub total: Fig<Dec>,
-    /// The net value less what is owed; none where no net value is stated.
-    pub net: Option<Fig<Dec>>,
-    pub debts: Vec<OwedDebt>,
+pub struct NetWorth {
+    pub net_worth: Fig<Dec>,
+    pub assets_total: Fig<Dec>,
+    pub liabilities_total: Fig<Dec>,
+    /// The broker's own accounts first (their value after margin), then each outside asset.
+    pub assets: Vec<OwedDebt>,
+    pub liabilities: Vec<OwedDebt>,
 }
 
 /// One debt held outside, as the broker's net worth feature states it.

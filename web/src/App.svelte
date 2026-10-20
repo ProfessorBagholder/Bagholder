@@ -15,6 +15,7 @@
   import { activeCount, chips, clearField } from './lib/filters.svelte'
   import Dashboard from './lib/Dashboard.svelte'
   import Cashflow from './lib/Cashflow.svelte'
+  import NetWorth from './lib/NetWorth.svelte'
   import Portfolio from './lib/Portfolio.svelte'
   import Trades from './lib/Trades.svelte'
   import TradeDetail from './lib/TradeDetail.svelte'
@@ -171,7 +172,7 @@
   use(() => (!route.heat && route.tab === 'dashboard' ? 'dashboard' : null), dashboard, filtered)
   // the Markets tab's holdings are those now, its prices today's; the Portfolio's follow
   // the dates, as of the last day of dates that end before today
-  use(() => (!route.heat && (route.tab === 'portfolio' || route.tab === 'markets') ? 'positions' : null), positions, () => (route.tab === 'markets' ? { ...filtered(), now: true } : filtered()))
+  use(() => (!route.heat && (route.tab === 'portfolio' || route.tab === 'markets' || route.tab === 'networth') ? 'positions' : null), positions, () => (route.tab === 'markets' ? { ...filtered(), now: true } : filtered()))
   use(() => (!route.heat && route.tab === 'portfolio' && !route.sub ? 'exposure' : null), exposure, filtered)
   use(() => (route.heat || route.tab === 'markets' ? 'markets' : null), markets, filtered)
   const tradesParams = () => ({ ...filtered(), sort: $state.snapshot(sort.trades), limit: limits.trades })
@@ -248,6 +249,7 @@
     if (detailTab) return !!shown
     if (route.tab === 'dashboard') return !!dashboard.data
     if (route.tab === 'cashflow') return !!cashflow.data
+    if (route.tab === 'networth') return !!positions.data
     if (route.tab === 'portfolio') return !!positions.data && !!exposure.data
     if (route.tab === 'trades') return !!trades.data
     return !!markets.data && !!positions.data
@@ -537,6 +539,8 @@
       <Dashboard model={dashboard.data} />
     {:else if route.tab === 'cashflow' && cashflow.data}
       <Cashflow model={cashflow.data} />
+    {:else if route.tab === 'networth' && positions.data}
+      <NetWorth model={positions.data} />
     {:else if route.tab === 'portfolio'}
       {#if sel}{#key sel.id}<TradeDetail trade={sel} asOf={(trade.data?.id === route.sub ? trade.data?.asOf : null) ?? positions.data?.portfolio.asOf ?? null} />{/key}{:else if positions.data && exposure.data}<Portfolio model={positions.data} exposure={exposure.data} />{/if}
     {:else if route.tab === 'trades'}

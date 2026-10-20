@@ -412,6 +412,9 @@ pub struct Portfolio {
     /// already. Stated only while the scope covers every account (an outside
     /// debt belongs to none, brief 67) and some debt exists.
     pub owed: Option<(Fig<Money>, Vec<(crate::input::Debt, Fig<Money>)>)>,
+    /// What is held outside the broker that is not a debt, each in CAD, under
+    /// every account only: net worth's other assets.
+    pub outside_assets: Vec<(crate::input::Debt, Fig<Money>)>,
     pub cash: Fig<Money>,
     pub cash_pct: Fig<Option<Ratio>>,
     pub day_change: Option<Partial>,
@@ -881,8 +884,10 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     }
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
     let owed = owed(f, inputs, &accounts);
+    let outside_assets = if f.accounts.is_empty() { inputs.facts.debts.assets.iter().map(|d| (d.clone(), live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance))).collect() } else { Vec::new() };
     Portfolio {
         owed,
+        outside_assets,
         unrealized_pct: ratio_of(&unrealized.total, &cost_basis.total),
         margin_used_pct: ratio_of(&margin_used, &accounts_market.total),
         cash_pct: match &net_value {
@@ -956,6 +961,7 @@ pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate:
     p.available_margin = None;
     // no statement describes a past day's debts
     p.owed = None;
+    p.outside_assets = Vec::new();
     p.margin_unavailable = Vec::new();
     p.past = Some(past);
     p

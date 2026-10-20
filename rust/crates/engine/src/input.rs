@@ -654,6 +654,9 @@ pub struct Debt {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Debts {
     pub owed: Vec<Debt>,
+    /// What is held outside the broker that is not a debt (a home, a car, an
+    /// account at another institution), as its net worth feature states it.
+    pub assets: Vec<Debt>,
     pub repayments: BTreeMap<TransactionId, String>,
     /// The payees whose payments may repay a debt and nothing says which: the
     /// person is asked, once a payee.
