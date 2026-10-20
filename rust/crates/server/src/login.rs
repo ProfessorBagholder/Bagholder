@@ -103,6 +103,8 @@ struct CdpTarget {
     #[serde(rename = "type")]
     kind: String,
     web_socket_debugger_url: String,
+    /// The page it shows, whose cookies `document.cookie` reads.
+    url: String,
 }
 
 /// `/json/list`'s targets a debug port answers, each with a socket to reach
@@ -475,32 +477,36 @@ pub fn json_with_access_token(raw: &str) -> Option<Value> {
     None
 }
 
-fn cookies_from_document_cookie(text: &str) -> Vec<Value> {
+/// The cookies `document.cookie` lists on a page of `host`: each is that host's.
+fn cookies_from_document_cookie(text: &str, host: &str) -> Vec<Value> {
     text.split(';')
         .map(|p| p.trim())
         .filter(|p| !p.is_empty() && p.contains('='))
         .map(|p| {
             let (n, v) = p.split_once('=').unwrap();
-            json!({"name": n.trim(), "value": v})
+            json!({"name": n.trim(), "value": v, "domain": host})
         })
         .collect()
 }
 
 /// The login the cookies carry, `None` while none carries an access token;
-/// one carrying a token in a form that cannot be read is an error.
+/// one carrying a token in a form that cannot be read is an error. Only
+/// Wealthsimple's own cookies are read, by name: its OAuth cookie and its
+/// device cookie, each set for Wealthsimple's host. A cookie another site set,
+/// whatever it holds, is never taken for the login.
 pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Result<Option<crate::session::Capture>, String> {
     let mut oauth: Option<Value> = None;
     let mut wssdi = String::new();
     for c in cookies {
-        if !c.is_object() {
+        if !c.is_object() || !bagholder_wealthsimple::hosts::is_wealthsimples(&f(c, "domain")) {
             continue;
         }
         let (name, value) = (f(c, "name"), f(c, "value"));
         if name == DEVICE_COOKIE && !value.is_empty() {
             wssdi = value.clone();
         }
-        if let Some(parsed) = json_with_access_token(&value) {
-            if name == OAUTH_COOKIE || oauth.is_none() {
+        if name == OAUTH_COOKIE {
+            if let Some(parsed) = json_with_access_token(&value) {
                 oauth = Some(parsed);
             }
         }
@@ -520,7 +526,7 @@ fn cookie_list(msg: Option<Value>) -> Vec<Value> {
 /// The login a window's target carries: `None` from a target not reached or
 /// carrying none yet (the window is looked at again), an error where one
 /// carries a login that cannot be read.
-fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Result<Option<crate::session::Capture>, String> {
+fn cookies_from_target(app: &Arc<App>, ws_url: &str, page: &str) -> Result<Option<crate::session::Capture>, String> {
     let Ok(mut ws) = Ws::connect(ws_url, CAPTURE_CALL) else { return Ok(None) };
     let with_ua = |mut capture: crate::session::Capture, ua: &str| {
         if !ua.is_empty() {
@@ -544,17 +550,23 @@ fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Result<Option<crate::ses
         ws.close();
         return Ok(Some(with_ua(b, &ua)));
     }
+    // the page's own cookies, only on a page of Wealthsimple's: those are its host's
+    let host = bagholder_wealthsimple::hosts::host_of(page);
+    if !bagholder_wealthsimple::hosts::is_wealthsimples(host) {
+        ws.close();
+        return Ok(None);
+    }
     let ev = ws.call("Runtime.evaluate", Some(json!({"expression": "document.cookie", "returnByValue": true})), CAPTURE_CALL);
     let val = ev.and_then(|e| e.get("result").and_then(|r| r.get("result")).map(|r| f(r, "value"))).unwrap_or_default();
     ws.close();
-    Ok(tokens_from_cookie_list(app, &cookies_from_document_cookie(&val))?.map(|b| with_ua(b, &ua)))
+    Ok(tokens_from_cookie_list(app, &cookies_from_document_cookie(&val, host))?.map(|b| with_ua(b, &ua)))
 }
 
 fn try_capture(app: &Arc<App>, port: u16) -> Result<Option<crate::session::Capture>, String> {
     let targets = cdp_list(port, Duration::from_secs(1));
     let (pages, others): (Vec<CdpTarget>, Vec<CdpTarget>) = targets.into_iter().filter(|t| !t.web_socket_debugger_url.is_empty()).partition(|t| t.kind == "page");
     for t in pages.into_iter().chain(others) {
-        if let Some(body) = cookies_from_target(app, &t.web_socket_debugger_url)? {
+        if let Some(body) = cookies_from_target(app, &t.web_socket_debugger_url, &t.url)? {
             if !body.access_token.is_empty() {
                 return Ok(Some(body));
             }
@@ -1245,7 +1257,7 @@ mod tests {
     use crate::tests_common::{app, guard};
 
     fn cookie(name: &str, value: &str) -> Value {
-        json!({"name": name, "value": value})
+        json!({"name": name, "value": value, "domain": format!(".{}", bagholder_wealthsimple::hosts::cookie_domain())})
     }
 
     /// A listener on 127.0.0.1 answering every request with `body` as JSON.
@@ -1321,8 +1333,9 @@ mod tests {
 
     #[test]
     fn test_cookies_from_document_cookie_splits_on_semicolons() {
-        assert_eq!(cookies_from_document_cookie(" a=1; b=2 ; c"), vec![json!({"name": "a", "value": "1"}), json!({"name": "b", "value": "2"})]);
-        assert!(cookies_from_document_cookie("").is_empty());
+        let h = &format!("my.{}", bagholder_wealthsimple::hosts::cookie_domain());
+        assert_eq!(cookies_from_document_cookie(" a=1; b=2 ; c", h), vec![json!({"name": "a", "value": "1", "domain": h}), json!({"name": "b", "value": "2", "domain": h})]);
+        assert!(cookies_from_document_cookie("", h).is_empty());
     }
 
     #[test]
@@ -1346,11 +1359,39 @@ mod tests {
         assert_eq!((capture.access_token.as_str(), capture.refresh_token.as_str(), capture.client_id.as_str(), capture.wssdi.as_str()), ("a1", "r1", "c1", "device-1"), "the named OAuth cookie wins over the first one found");
     }
 
+    /// Only Wealthsimple's own OAuth cookie is the login: another cookie of its
+    /// carrying a token, or its cookie's name on another site, is never taken
+    /// (brief 71, C14).
     #[test]
-    fn test_tokens_from_cookie_list_falls_back_to_the_first_cookie_carrying_a_token() {
+    fn test_only_wealthsimples_own_oauth_cookie_is_taken_for_the_login() {
         let _g = guard();
-        let cookies = vec![cookie("other", r#"{"access_token": "a0"}"#)];
-        assert_eq!(tokens_from_cookie_list(&app(), &cookies).unwrap().unwrap().access_token, "a0");
+        let on = |domain: &str, name: &str, token: &str| json!({"name": name, "value": format!(r#"{{"access_token": "{token}"}}"#), "domain": domain});
+        // Wealthsimple's domain as the one place names it, a stand-in's when one is set
+        let take = |cookies: &[Value]| tokens_from_cookie_list(&app(), cookies).unwrap();
+        let check = |own: &str| {
+            let sub = format!("my.{own}");
+            assert!(take(&[cookie("other", r#"{"access_token": "a0"}"#)]).is_none(), "another cookie of Wealthsimple's carrying a token");
+            for foreign in ["evil.example".to_string(), format!(".not{own}"), format!("{own}.evil.example"), String::new()] {
+                assert!(take(&[on(&foreign, OAUTH_COOKIE, "stolen")]).is_none(), "the cookie's name set by {foreign:?}");
+            }
+            assert_eq!(take(&[on("evil.example", OAUTH_COOKIE, "stolen"), on(&sub, OAUTH_COOKIE, "ours")]).unwrap().access_token, "ours", "Wealthsimple's, whichever comes first");
+            assert_eq!(take(&[on(own, OAUTH_COOKIE, "ours")]).unwrap().access_token, "ours", "set for the domain itself");
+            let device = [on(&sub, OAUTH_COOKIE, "ours"), json!({"name": DEVICE_COOKIE, "value": "theirs", "domain": "evil.example"})];
+            assert_eq!(take(&device).unwrap().wssdi, "", "a device cookie another site set is not Wealthsimple's");
+        };
+        let was = std::env::var(bagholder_wealthsimple::hosts::BASE_VAR).ok();
+        std::env::remove_var(bagholder_wealthsimple::hosts::BASE_VAR);
+        let real = bagholder_wealthsimple::hosts::cookie_domain();
+        check(&real);
+        // a stand-in's own cookies are its login, and the real host's are not then
+        std::env::set_var(bagholder_wealthsimple::hosts::BASE_VAR, "http://127.0.0.1:9");
+        assert_eq!(take(&[on("127.0.0.1", OAUTH_COOKIE, "stand-in")]).unwrap().access_token, "stand-in");
+        assert!(take(&[on(&format!("my.{real}"), OAUTH_COOKIE, "real")]).is_none(), "the real host's cookie, past a stand-in");
+        match was {
+            Some(v) => std::env::set_var(bagholder_wealthsimple::hosts::BASE_VAR, v),
+            None => std::env::remove_var(bagholder_wealthsimple::hosts::BASE_VAR),
+        }
+        assert_eq!((bagholder_wealthsimple::hosts::host_of("https://user@example.org:443/x"), bagholder_wealthsimple::hosts::host_of("about:blank")), ("example.org", ""));
     }
 
     #[test]

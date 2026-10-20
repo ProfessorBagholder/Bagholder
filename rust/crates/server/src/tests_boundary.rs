@@ -311,7 +311,7 @@ fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     // the one function per address that honours the stand-in's variable: each names
     // its real address as a constant of its own, which nothing else can read
-    const ALLOWED: [(&str, &[&str]); 2] = [("wealthsimple/src/hosts.rs", &["web", "token_url"]), ("ws/src/session.rs", &["graphql_url", "web_origin", "oauth_url"])];
+    const ALLOWED: [(&str, &[&str]); 2] = [("wealthsimple/src/hosts.rs", &["web", "token_url", "cookie_domain"]), ("ws/src/session.rs", &["graphql_url", "web_origin", "oauth_url"])];
     fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();

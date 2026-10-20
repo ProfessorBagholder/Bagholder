@@ -1441,21 +1441,20 @@ pub fn universe_shown(app: Arc<App>, doc: String, key: String) {
 // ---------------------------------------------------------------------------
 
 /// The Bank of Canada's rates a chart in another currency than its bars converts
-/// with: CAD per US dollar by day, as the book holds them -- the rates the figures
-/// use, read from the engine's inputs once the figures are built, from the book
-/// before. Read only when a chart's bars need converting.
+/// with: every currency it publishes, CAD per unit by day, as the book holds them
+/// -- the rates the figures use, read from the engine's inputs once the figures
+/// are built, from the book before. Read only when a chart's bars need converting.
 pub fn bank_rates(app: &Arc<App>) -> history::Rates {
     let weak = Arc::downgrade(app);
     Arc::new(move || {
         let app = weak.upgrade().ok_or("the app has stopped")?;
         let f = app.figures.get().ok_or("the book is not open yet")?;
-        let usd = bagholder_core::Currency::USD;
-        let as_text = |rates: Option<&std::collections::BTreeMap<bagholder_core::jiff::civil::Date, bagholder_core::Dec>>| -> std::collections::BTreeMap<String, f64> {
-            rates.map(|r| r.iter().map(|(d, v)| (d.to_string(), v.to_f64())).collect()).unwrap_or_default()
+        let as_text = |rates: &std::collections::BTreeMap<bagholder_core::Currency, std::collections::BTreeMap<bagholder_core::jiff::civil::Date, bagholder_core::Dec>>| -> history::Fx {
+            rates.iter().map(|(c, r)| (c.as_str().to_string(), r.iter().map(|(d, v)| (d.to_string(), v.to_f64())).collect())).collect()
         };
-        match f.read(|e| as_text(e.inputs().facts.rates.by_currency.get(&usd))) {
+        match f.read(|e| as_text(&e.inputs().facts.rates.by_currency)) {
             Some(r) => Ok(r),
-            None => Ok(as_text(f.book()?.rates().map_err(|e| e.to_string())?.get(&usd))),
+            None => Ok(as_text(&f.book()?.rates().map_err(|e| e.to_string())?)),
         }
     })
 }
@@ -2008,9 +2007,13 @@ mod tests {
         let usd = bagholder_core::Currency::USD;
         let (a, b): (bagholder_core::jiff::civil::Date, bagholder_core::jiff::civil::Date) = ("2025-11-17".parse().unwrap(), "2025-11-18".parse().unwrap());
         f.book().unwrap().store_rates(usd, &[(a, bagholder_core::Dec::parse("1.4012").unwrap()), (b, bagholder_core::Dec::parse("1.4050").unwrap())], (a, b), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
+        // another currency the Bank publishes reaches a chart too, not US dollars alone
+        f.book().unwrap().store_rates(bagholder_core::Currency::parse("EUR").unwrap(), &[(b, bagholder_core::Dec::parse("1.6200").unwrap())], (b, b), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
         f.rebuild(t).unwrap();
-        let rates = bank_rates(&app)().unwrap();
+        let all = bank_rates(&app)().unwrap();
+        let rates = &all["USD"];
         assert_eq!((rates.get("2025-11-17").copied(), rates.get("2025-11-18").copied()), (Some(1.4012), Some(1.405)));
+        assert_eq!(all["EUR"].get("2025-11-18").copied(), Some(1.62));
         let bar = |date: &str| bagholder_store::bars::DayBar { date: date.into(), px: bagholder_store::bars::Ohlcv { open: None, high: None, low: None, close: 10.0, volume: None } };
         let got = history::in_position_currency(&bank_rates(&app), &[bar("2025-11-18"), bar("2025-11-19")], "USD", "CAD").unwrap();
         assert_eq!(got.iter().map(|b| (b.date.as_str(), (b.px.close * 1000.0).round() / 1000.0)).collect::<Vec<_>>(), vec![("2025-11-18", 14.05), ("2025-11-19", 14.05)], "each day at its rate, or the last before it");

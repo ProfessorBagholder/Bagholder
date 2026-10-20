@@ -410,8 +410,9 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
         let bars = crate::history::fetch_coinbase_candles(&product, 86400, now - 4 * 86400, now)?;
         let quoted = product.rsplit('-').next().unwrap_or("").to_string();
         // the earlier quote readers keep to the earlier store's rates, where they write
-        let fx = bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)?;
-        let bars = crate::history::in_position_currency_with(&bars, &quoted, &ccy, &fx);
+        let usd = bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)?;
+        let fx: crate::history::Fx = [("USD".to_string(), usd)].into_iter().collect();
+        let Ok(bars) = crate::history::in_position_currency_with(&bars, &quoted, &ccy, &fx) else { continue };
         let done: Vec<&bagholder_store::bars::TimeBar> = bars
             .iter()
             .filter(|b| {

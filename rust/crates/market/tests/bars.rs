@@ -98,11 +98,12 @@ fn tmx_minutes() -> Value {
     ]}})
 }
 
-fn fx() -> BTreeMap<String, f64> {
-    [("2026-02-24", 1.36), ("2026-02-25", 1.37), ("2026-03-02", 1.38), ("2026-03-05", 1.4), ("2026-03-06", 1.41), ("2026-03-09", 1.42), ("2026-09-01", 1.39)]
+fn fx() -> history::Fx {
+    let usd: BTreeMap<String, f64> = [("2026-02-24", 1.36), ("2026-02-25", 1.37), ("2026-03-02", 1.38), ("2026-03-05", 1.4), ("2026-03-06", 1.41), ("2026-03-09", 1.42), ("2026-09-01", 1.39)]
         .into_iter()
         .map(|(d, r)| (d.to_string(), r))
-        .collect()
+        .collect();
+    [("USD".to_string(), usd)].into_iter().collect()
 }
 
 fn answers() -> Value {
@@ -133,11 +134,12 @@ fn answers() -> Value {
         "session4h": of(history::aggregate_session(&minutes, 240)),
         "yahooSession1h": of(history::aggregate_session(&y_hourly, 60)),
         "clock4h": of(history::aggregate_hourly(&candles, 14400)),
-        "candlesInCad": of(history::in_position_currency_with(&candles, "USD", "CAD", &fx)),
-        "daysInCad": of(history::in_position_currency_with(&daily, "usd", "", &fx)),
-        "yahooInCad": of(history::in_position_currency_with(&y_hourly, "USD", "CAD", &fx)),
-        "sameCurrency": of(history::in_position_currency_with(&daily, "CAD", "cad", &fx)),
-        "noRate": of(history::in_position_currency_with(&daily, "EUR", "CAD", &fx)),
+        "candlesInCad": of(history::in_position_currency_with(&candles, "USD", "CAD", &fx).unwrap()),
+        // a listing stating no currency is a named failure, never taken to be CAD
+        "noCurrency": history::in_position_currency_with(&daily, "usd", "", &fx).unwrap_err(),
+        "yahooInCad": of(history::in_position_currency_with(&y_hourly, "USD", "CAD", &fx).unwrap()),
+        "sameCurrency": of(history::in_position_currency_with(&daily, "CAD", "cad", &fx).unwrap()),
+        "noRate": of(history::in_position_currency_with(&daily, "EUR", "CAD", &fx).unwrap()),
         "stored": {
             "days": stored_days,
             "hours": stored_hours,

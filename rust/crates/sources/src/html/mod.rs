@@ -61,9 +61,11 @@ fn charref(t: &str, at: usize) -> Option<(String, usize)> {
         return Some((codepoint(num), next));
     }
     // a name: up to 32 characters, none of them tab, newline, form feed,
-    // space, `<`, `&`, `#` or `;`, and then an optional semicolon
+    // space, `<`, `&`, `#` or `;`, and then an optional semicolon. No entity's
+    // name holds a character beyond ASCII, so one ends the name, which is then
+    // never cut inside a character
     let mut end = at;
-    while end < b.len() && end - at < 32 && !matches!(b[end], b'\t' | b'\n' | 0x0c | b' ' | b'<' | b'&' | b'#' | b';') {
+    while end < b.len() && end - at < 32 && b[end].is_ascii() && !matches!(b[end], b'\t' | b'\n' | 0x0c | b' ' | b'<' | b'&' | b'#' | b';') {
         end += 1;
     }
     if end == at {

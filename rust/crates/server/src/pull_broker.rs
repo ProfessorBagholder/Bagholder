@@ -50,6 +50,9 @@ fn run(home: &std::path::Path, capture: Option<&std::path::Path>, now: Timestamp
             pull_with(home, &mut adapter, now)
         }
         None => {
+            // the folder's own: a second process refreshing its sign-in beside the app
+            // could post a refresh token the app just spent, and lose the sign-in
+            crate::app::hold_home(home)?;
             let net = bagholder_net::Net::new(std::sync::Arc::new(bagholder_net::SystemClock), std::sync::Arc::new(bagholder_net::Limiter::new()));
             let file = bagholder_wealthsimple::session::SessionFile { path: home.join("session.json") };
             let mut adapter = Wealthsimple::new(bagholder_wealthsimple::client::Client::new(&net, file));
@@ -84,4 +87,22 @@ fn pull_with<S: Source>(home: &std::path::Path, adapter: &mut Wealthsimple<S>, n
         writeln!(out, "failed: {part}: {f}").expect("writing to a String cannot fail");
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pull over the network takes the data folder as the app does: beside an
+    /// app using the folder it is refused, before any sign-in is read or
+    /// refreshed (brief 71, C13).
+    #[test]
+    fn a_pull_beside_the_app_on_its_folder_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        // the app's hold on the folder: a lock of its own on the folder's lock file
+        let app = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(home.path().join(crate::app::HOME_LOCK_FILE)).unwrap();
+        app.try_lock().unwrap();
+        let e = run(home.path(), None, "2026-10-20T12:00:00Z".parse().unwrap()).unwrap_err();
+        assert!(e.contains("another Bagholder is using the data folder"), "{e}");
+    }
 }
