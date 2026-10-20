@@ -367,6 +367,9 @@ pub struct NetWorth {
 #[serde(rename_all = "camelCase")]
 pub struct OwedDebt {
     pub id: String,
+    /// What kind of thing it is, as the broker types it (`LineOfCredit`,
+    /// `RealEstate`); empty for the broker's own accounts.
+    pub kind: String,
     pub name: String,
     pub institution: String,
     /// What is owed, in CAD.

@@ -784,7 +784,7 @@ fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -
         }
         for (c, v) in &b.cash {
             if v.is_negative() {
-                debts.push(crate::input::Debt { id: a.account.id.to_string(), name: a.account.name(), institution: String::new(), balance: Money::new(v.abs(), *c), as_of: b.as_of });
+                debts.push(crate::input::Debt { id: a.account.id.to_string(), kind: "CreditCard".into(), name: a.account.name(), institution: String::new(), balance: Money::new(v.abs(), *c), as_of: b.as_of });
             }
         }
     }

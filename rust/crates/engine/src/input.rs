@@ -643,6 +643,8 @@ pub struct Facts {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Debt {
     pub id: String,
+    /// What kind of thing it is, as the broker types it (`LineOfCredit`, `RealEstate`).
+    pub kind: String,
     pub name: String,
     pub institution: String,
     pub balance: Money,

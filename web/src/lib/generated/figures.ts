@@ -168,7 +168,12 @@ export type Slice = { label: string, value: Fig<Dec>, share: number,
  */
 id: string | null, };
 
-export type OwedDebt = { id: string, name: string, institution: string, 
+export type OwedDebt = { id: string, 
+/**
+ * What kind of thing it is, as the broker types it (`LineOfCredit`,
+ * `RealEstate`); empty for the broker's own accounts.
+ */
+kind: string, name: string, institution: string, 
 /**
  * What is owed, in CAD.
  */

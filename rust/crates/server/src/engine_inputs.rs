@@ -186,7 +186,7 @@ pub fn debts(book: &Book) -> Result<bagholder_engine::input::Debts, String> {
             Matched::NotDebt | Matched::NotOne => {}
         }
     }
-    let stated = |d: bagholder_book::debts::OutsideDebt| bagholder_engine::input::Debt { id: d.entity_id, name: d.name, institution: d.institution, balance: bagholder_core::Money::new(d.balance, d.currency), as_of: d.as_of };
+    let stated = |d: bagholder_book::debts::OutsideDebt| bagholder_engine::input::Debt { id: d.entity_id, kind: d.kind, name: d.name, institution: d.institution, balance: bagholder_core::Money::new(d.balance, d.currency), as_of: d.as_of };
     let owed = owed.into_iter().map(stated).collect();
     let assets = held.into_iter().map(stated).collect();
     Ok(bagholder_engine::input::Debts { owed, assets, repayments, asked: asked.into_values().collect() })

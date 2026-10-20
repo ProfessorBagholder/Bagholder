@@ -27,7 +27,7 @@ fn with_a_loan() -> (Built, bagholder_engine::Engine) {
     let a = b.ids.account("A");
     e.apply(Change::Broker(a, Some(BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1100"))]), net_value_now: Some(Money::new(d("3100"), Currency::CAD)), ..BrokerAccount::default() })));
     e.apply(Change::Debts(Debts {
-        owed: vec![Debt { id: "loan-1".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: Money::new(d("9000"), Currency::CAD), as_of: Some("2026-04-01T00:00:00Z".parse().unwrap()) }],
+        owed: vec![Debt { id: "loan-1".into(), kind: "PersonalLoan".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: Money::new(d("9000"), Currency::CAD), as_of: Some("2026-04-01T00:00:00Z".parse().unwrap()) }],
         repayments: BTreeMap::from([(b.tx["w1"].clone(), "loan-1".to_string())]),
             asked: vec![],
             assets: vec![],
@@ -68,7 +68,7 @@ fn what_is_owed_is_stated_under_every_account_and_under_no_narrower_scope() {
 fn a_debt_in_credit_lowers_what_is_owed() {
     let (_, mut e) = with_a_loan();
     let mut d = e.inputs().facts.debts.clone();
-    d.owed.push(Debt { id: "card-1".into(), name: "Card".into(), institution: "Zeta Bank".into(), balance: Money::new(d_("-150"), Currency::CAD), as_of: None });
+    d.owed.push(Debt { id: "card-1".into(), kind: "PersonalLoan".into(), name: "Card".into(), institution: "Zeta Bank".into(), balance: Money::new(d_("-150"), Currency::CAD), as_of: None });
     e.apply(Change::Debts(d));
     let (total, _) = e.scope(&Filters::default()).portfolio.owed.unwrap();
     assert_eq!(total.unwrap(), Money::new(d_("8850"), Currency::CAD), "9000 owed less 150 in credit");

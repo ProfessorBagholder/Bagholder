@@ -689,7 +689,7 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
                 .candidates
                 .iter()
                 .filter_map(|id| debts.owed.iter().find(|d| &d.id == id))
-                .map(|d| crate::wire::figures::OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(&bagholder_engine::fx::live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance)), as_of: d.as_of.map(|t| t.to_string()) })
+                .map(|d| crate::wire::figures::OwedDebt { id: d.id.clone(), kind: d.kind.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(&bagholder_engine::fx::live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance)), as_of: d.as_of.map(|t| t.to_string()) })
                 .collect(),
         })
         .collect();
@@ -704,13 +704,13 @@ fn net_worth(inputs: &bagholder_engine::input::Inputs, pf: &bagholder_engine::sc
     if liabilities.is_empty() && pf.outside_assets.is_empty() {
         return None;
     }
-    let row = |d: &bagholder_engine::input::Debt, cad: &bagholder_engine::gap::Fig<Money>| OwedDebt { id: d.id.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) };
+    let row = |d: &bagholder_engine::input::Debt, cad: &bagholder_engine::gap::Fig<Money>| OwedDebt { id: d.id.clone(), kind: d.kind.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) };
     let mut assets: Vec<OwedDebt> = Vec::new();
     let mut held: Vec<bagholder_engine::gap::Fig<Money>> = Vec::new();
     if let Some(v) = &pf.net_value {
         // when the broker last stated its accounts' value
         let read = inputs.market.brokers.values().filter_map(|b| b.as_of).max();
-        assets.push(OwedDebt { id: "broker".into(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: read.map(|t| t.to_string()) });
+        assets.push(OwedDebt { id: "broker".into(), kind: String::new(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: read.map(|t| t.to_string()) });
         held.push(v.clone());
     }
     for (d, cad) in &pf.outside_assets {
