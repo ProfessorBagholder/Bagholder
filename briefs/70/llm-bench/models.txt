@@ -1,0 +1,8 @@
+# label  url  sha256 (from the Hugging Face API, 2026-10-20; "-" skips the check)
+# today's model, as a GGUF on the same engine
+gemma-2-2b-q4km https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787
+gemma-3-1b-q4km https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf 8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135
+qwen3.5-0.8b-q4_0 https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_0.gguf 57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf
+lfm2.5-1.2b-q4_0 https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_0.gguf 2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f
+gemma-3-270m-q4_0 https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q4_0.gguf e479ea2962bdcdc7e6321b91148b9ac2f516f649e0921412561d4936aadef158
+qwen3.5-2b-q4_0 https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_0.gguf cd70221bebaee0503e0f6717e174250cd7825aa88438b3aabec9ad55731d9bb1
