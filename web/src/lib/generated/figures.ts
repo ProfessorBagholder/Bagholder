@@ -197,7 +197,17 @@ history: Array<Point>,
  * (the investments before margin, margin a debt): the days whose debts are
  * known, oldest first, each day in both.
  */
-assetsHistory: Array<Point>, debtsHistory: Array<Point>, };
+assetsHistory: Array<Point>, debtsHistory: Array<Point>, 
+/**
+ * Under a range ending before today: its last day, whose totals these are;
+ * no item's own balance is stated for a past day, so no item is listed.
+ */
+pastDay: string | null, 
+/**
+ * Under a holding's filter: the holdings' value alone, with no debt and no
+ * net worth by day.
+ */
+holdings: boolean, };
 
 export type AskedPayee = { key: string, payee: string, 
 /**

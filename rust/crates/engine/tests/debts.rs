@@ -130,6 +130,11 @@ fn each_days_debts_are_the_outside_debts_and_the_margin_borrowed_at_its_close() 
     // (a buy of 900, a sale of 150, a dividend of 5), that at the day's rate
     let usd = bagholder_engine::fx::to_cad(&e.inputs().facts.rates, &e.inputs().clock, Money::new(d("745"), Currency::USD), day("2026-04-19")).unwrap();
     assert_eq!(days[1].debts, Some(cad("11100").add_to_fit(usd).unwrap()), "the outside debts and the margin borrowed");
+    // under one account: what it was stated to be worth each day, and its own
+    // borrowing; nothing held or owed outside, which is no account's
     let a = b.ids.account("A");
-    assert!(e.scope(&Filters { accounts: BTreeSet::from([a]), ..Filters::default() }).portfolio.net_worth_history.is_empty(), "under every account only");
+    let one = e.scope(&Filters { accounts: BTreeSet::from([a]), ..Filters::default() }).portfolio.net_worth_history;
+    assert_eq!(one.iter().map(|n| (n.day.to_string(), n.net)).collect::<Vec<_>>(), [("2026-04-17".to_string(), cad("3000"))], "the account's stated value by day");
+    assert_eq!(one[0].debts, Some(cad("2100").add_to_fit(bagholder_engine::fx::to_cad(&e.inputs().facts.rates, &e.inputs().clock, Money::new(d("745"), Currency::USD), day("2026-04-17")).unwrap()).unwrap()), "its margin alone, no outside debt");
+    assert!(e.scope(&Filters { instruments: BTreeSet::from([b.ids.instrument("U")]), ..Filters::default() }).portfolio.net_worth_history.is_empty(), "a holding has no net worth by day");
 }

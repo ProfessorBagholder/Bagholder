@@ -523,7 +523,7 @@ impl Positions {
                 }
             })
             .collect();
-        PositionsDoc { portfolio: build::portfolio_totals(cx.engine, &pf), positions }
+        PositionsDoc { portfolio: build::portfolio_totals(cx.engine, &pf, &self.filters), positions }
     }
 }
 

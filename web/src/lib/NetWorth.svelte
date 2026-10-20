@@ -112,7 +112,7 @@
 <div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">
   {#if !nw}
     <div class="card elev-sm" style="padding:24px 18px">
-      <div class="muted empty" style="font-size:12px">Nothing held or owed outside Wealthsimple yet. Link or add accounts in Wealthsimple's Net worth, and they show here at the next balances read.</div>
+      <div class="muted empty" style="font-size:12px">Nothing held or owed in the selection.</div>
     </div>
   {:else}
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px">
@@ -120,6 +120,9 @@
       <div class="card elev-sm kpi"><div class="lbl">Assets</div><div class="v" use:roll={money0(nw.assetsTotal)}></div><div class="s">{nw.assets.length === 1 ? '1 asset' : nw.assets.length + ' assets'}</div></div>
       <div class="card elev-sm kpi"><div class="lbl">Liabilities</div><div class="v" use:roll={money0(nw.liabilitiesTotal)}></div><div class="s">{nw.liabilities.length === 1 ? '1 debt' : nw.liabilities.length + ' debts'}</div></div>
     </div>
+    {#if nw.pastDay}
+      <div class="muted" style="font-size:12px">Totals as of {stampDay(nw.pastDay)}, the range's last day. Each item's own balance is known only for today, so the lists are empty.</div>
+    {/if}
     <!-- net worth over time: the Dashboard's equity curve card -->
     <div class="card elev-sm" style="padding:16px 18px 12px">
       <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px">
@@ -137,7 +140,7 @@
         </div>
       </div>
       {#if !g}
-        <div class="empty muted" style="padding:40px 0">{split && (nw.history ?? []).length > 1 ? 'What the debts came to by day is not read yet. It is read from Wealthsimple with the balances, once a day.' : 'No history yet. It is read from Wealthsimple with the balances, once a day.'}</div>
+        <div class="empty muted" style="padding:40px 0">{nw.holdings ? 'A holding’s value by day is not kept, so there is no history under a holding filter. Filter by account to see one over time.' : split && (nw.history ?? []).length > 1 ? 'What the debts came to by day is not read yet. It is read from Wealthsimple with the balances, once a day.' : 'No history in the selection yet. It is read from Wealthsimple with the balances, once a day.'}</div>
       {:else}
         <div style="display:flex;gap:10px">
           <div class="tab" style="position:relative;width:56px;height:260px;flex:none;font-size:10px;color:var(--ink55)">

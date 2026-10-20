@@ -366,6 +366,12 @@ pub struct NetWorth {
     /// known, oldest first, each day in both.
     pub assets_history: Vec<Point>,
     pub debts_history: Vec<Point>,
+    /// Under a range ending before today: its last day, whose totals these are;
+    /// no item's own balance is stated for a past day, so no item is listed.
+    pub past_day: Option<String>,
+    /// Under a holding's filter: the holdings' value alone, with no debt and no
+    /// net worth by day.
+    pub holdings: bool,
 }
 
 /// One debt held outside, as the broker's net worth feature states it.
