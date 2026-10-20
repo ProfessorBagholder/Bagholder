@@ -141,8 +141,8 @@ pub fn bar_currency(source_kind: &str, key: &str, rec: &Listing) -> String {
             return q.to_string();
         }
     }
-    let c = rec.currency.clone();
-    if c.is_empty() { "CAD".into() } else { c.to_uppercase() }
+    // a listing stating no currency states none: never taken to be CAD
+    rec.currency.trim().to_uppercase()
 }
 
 /// The published rate for a day, or the most
@@ -159,45 +159,69 @@ fn rate_on_or_before(fx: &BTreeMap<String, f64>, day: &str, days: i64) -> Option
     None
 }
 
-/// Where a chart's conversion reads the Bank of Canada's rates: CAD per US
-/// dollar by day (`YYYY-MM-DD`), as the book holds them -- the rates the figures
-/// convert with. Asked only when a chart's bars are in another currency than
-/// its listing; a rate that cannot be read is the read's failure.
-pub type Rates = std::sync::Arc<dyn Fn() -> Result<BTreeMap<String, f64>, String> + Send + Sync>;
+/// The Bank of Canada's rates as the book holds them: for each currency it
+/// publishes (`USD`, `EUR`, ...), CAD per unit by day (`YYYY-MM-DD`). CAD itself is
+/// one CAD, and is not listed.
+pub type Fx = BTreeMap<String, BTreeMap<String, f64>>;
+
+/// Where a chart's conversion reads the Bank of Canada's rates: every currency
+/// it publishes, as the book holds them -- the rates the figures convert with.
+/// Asked only when a chart's bars are in another currency than its listing; a
+/// rate that cannot be read is the read's failure.
+pub type Rates = std::sync::Arc<dyn Fn() -> Result<Fx, String> + Send + Sync>;
+
+/// A currency as stated, or a named failure for one that states none.
+fn stated(currency: &str, of: &str) -> Result<String, String> {
+    let c = currency.trim().to_uppercase();
+    if c.is_empty() {
+        return Err(format!("{of} states no currency, so its bars cannot be put in another"));
+    }
+    Ok(c)
+}
 
 /// Bars in the position's currency, with the rates `rates` reads.
 ///
-/// USD bars become CAD at the Bank of Canada rate of the bar's own day, or the
-/// last day before it the Bank published one. A bar whose day has no published
-/// rate within a week is dropped, never guessed; anything else cannot be
-/// converted and yields nothing at all.
+/// Bars in one currency become another's at the Bank of Canada's rates of the
+/// bar's own day, or the last day before it the Bank published one, through
+/// each currency's rate against CAD. A bar whose day has no published rate
+/// within a week for either currency is dropped, never guessed. A listing or
+/// bars stating no currency are a named failure.
 pub fn in_position_currency<B: Bar + Clone>(rates: &Rates, bars: &[B], quoted_in: &str, currency: &str) -> rusqlite::Result<Vec<B>> {
-    let quote = quoted_in.to_uppercase();
-    let ccy = { let c = currency; if c.is_empty() { "CAD".to_string() } else { c.to_uppercase() } };
+    let failed = |e: String| rusqlite::Error::ToSqlConversionFailure(e.into());
+    let quote = stated(quoted_in, "the bars").map_err(failed)?;
+    let ccy = stated(currency, "the listing").map_err(failed)?;
     if quote == ccy {
         return Ok(bars.to_vec());
     }
-    if !(quote == "USD" && ccy == "CAD") {
-        return Ok(vec![]);
-    }
-    let fx = rates().map_err(|e| rusqlite::Error::ToSqlConversionFailure(format!("the Bank of Canada's rates could not be read: {e}").into()))?;
-    Ok(in_position_currency_with(bars, quoted_in, currency, &fx))
+    let fx = rates().map_err(|e| failed(format!("the Bank of Canada's rates could not be read: {e}")))?;
+    Ok(converted(bars, &quote, &ccy, &fx))
 }
 
 /// The same, with the rates the caller has already read.
-pub fn in_position_currency_with<B: Bar + Clone>(bars: &[B], quoted_in: &str, currency: &str, fx: &BTreeMap<String, f64>) -> Vec<B> {
-    let quote = quoted_in.to_uppercase();
-    let ccy = { let c = currency; if c.is_empty() { "CAD".to_string() } else { c.to_uppercase() } };
+pub fn in_position_currency_with<B: Bar + Clone>(bars: &[B], quoted_in: &str, currency: &str, fx: &Fx) -> Result<Vec<B>, String> {
+    let quote = stated(quoted_in, "the bars")?;
+    let ccy = stated(currency, "the listing")?;
     if quote == ccy {
-        return bars.to_vec();
+        return Ok(bars.to_vec());
     }
-    if !(quote == "USD" && ccy == "CAD") {
-        return vec![];
+    Ok(converted(bars, &quote, &ccy, fx))
+}
+
+/// CAD per unit of `currency` on `day`, or the last day within a week before it.
+fn cad_per(fx: &Fx, currency: &str, day: &str) -> Option<f64> {
+    if currency == "CAD" {
+        return Some(1.0);
     }
+    rate_on_or_before(fx.get(currency)?, day, 7)
+}
+
+fn converted<B: Bar + Clone>(bars: &[B], quote: &str, ccy: &str, fx: &Fx) -> Vec<B> {
     let mut out = Vec::new();
     for b in bars {
         let day = b.day();
-        let rate = match rate_on_or_before(fx, &day, 7) { Some(r) => r, None => continue };
+        // through CAD: what one unit of the bars' currency is worth in the listing's
+        let (Some(from), Some(to)) = (cad_per(fx, quote, &day), cad_per(fx, ccy, &day)) else { continue };
+        let rate = from / to;
         let mut nb = b.clone();
         let px = nb.px_mut();
         if let Some(v) = px.open.as_mut() { *v *= rate; }

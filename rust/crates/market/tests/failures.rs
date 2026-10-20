@@ -143,7 +143,7 @@ fn a_chart_in_another_currency_converts_at_the_rates_it_is_given() {
     use bagholder_store::bars::{DayBar, Ohlcv};
     let bar = |date: &str, close: f64| DayBar { date: date.into(), px: Ohlcv { open: None, high: None, low: None, close, volume: None } };
     // a Friday's rate, and none for the weekend
-    let rates: history::Rates = std::sync::Arc::new(|| Ok([("2026-09-18".to_string(), 1.38), ("2026-09-21".to_string(), 1.39)].into_iter().collect()));
+    let rates: history::Rates = std::sync::Arc::new(|| Ok([("USD".to_string(), [("2026-09-18".to_string(), 1.38), ("2026-09-21".to_string(), 1.39)].into_iter().collect())].into_iter().collect()));
     let bars = [bar("2026-09-18", 10.0), bar("2026-09-20", 10.0), bar("2026-09-21", 10.0), bar("2026-08-01", 10.0)];
     let got = history::in_position_currency(&rates, &bars, "USD", "CAD").unwrap();
     let closes: Vec<(String, f64)> = got.iter().map(|b| (b.date.clone(), (b.px.close * 100.0).round() / 100.0)).collect();
@@ -209,4 +209,39 @@ fn the_secs_list_read_before_a_days_sleep_is_read_again_after_it() {
     assert_eq!(edgar::ticker_map().unwrap()["ZQSL"][0].0, 7, "kept within the day");
     bagholder_market::sleep_through(std::time::Duration::from_secs_f64(d::FILERS_RECHECK_HOURS * 3600.0));
     assert!(matches!(edgar::ticker_map(), Err(d::SourceError::Offline)), "asked again once a day has passed on the wall clock");
+}
+
+/// Every pair of the Bank of Canada's currencies, and CAD, converts through each
+/// one's rate against CAD: a bar in one is the other's at the cross rate, and
+/// back again it is what it was. A currency the Bank does not publish converts
+/// nothing, and a listing stating no currency is a named failure, never CAD
+/// (brief 71, B6).
+#[test]
+fn bars_convert_between_every_pair_of_the_banks_currencies() {
+    use bagholder_store::bars::{DayBar, Ohlcv};
+    let bar = |close: f64| DayBar { date: "2026-09-18".into(), px: Ohlcv { open: Some(close), high: Some(close * 1.1), low: Some(close * 0.9), close, volume: None } };
+    let codes: Vec<&str> = bagholder_sources::adapters::boc::DAILY_AT_LAUNCH.iter().copied().chain(["CAD"]).collect();
+    // made-up rates, each currency its own: CAD per unit
+    let rate = |i: usize| 0.01 + (i as f64) * 0.37;
+    let fx: history::Fx = bagholder_sources::adapters::boc::DAILY_AT_LAUNCH.iter().enumerate().map(|(i, c)| (c.to_string(), [("2026-09-18".to_string(), rate(i))].into_iter().collect())).collect();
+    let cad = |c: &str| bagholder_sources::adapters::boc::DAILY_AT_LAUNCH.iter().position(|x| *x == c).map(rate).unwrap_or(1.0);
+    for from in &codes {
+        for to in &codes {
+            let got = history::in_position_currency_with(&[bar(100.0)], from, to, &fx).unwrap();
+            assert_eq!(got.len(), 1, "{from} to {to}");
+            let want = 100.0 * cad(from) / cad(to);
+            assert!((got[0].px.close - want).abs() < 1e-9 * want.max(1.0), "{from} to {to}: {} not {want}", got[0].px.close);
+            assert!((got[0].px.high.unwrap() - want * 1.1).abs() < 1e-9 * want.max(1.0), "{from} to {to}: the high");
+            let back = history::in_position_currency_with(&got, to, from, &fx).unwrap();
+            assert!((back[0].px.close - 100.0).abs() < 1e-9, "{from} to {to} and back: {}", back[0].px.close);
+        }
+    }
+    // a currency nobody publishes: nothing converted, in either direction
+    assert!(history::in_position_currency_with(&[bar(100.0)], "XYZ", "CAD", &fx).unwrap().is_empty());
+    assert!(history::in_position_currency_with(&[bar(100.0)], "USD", "XYZ", &fx).unwrap().is_empty());
+    // no currency stated: a named failure, through the reader too
+    let e = history::in_position_currency_with(&[bar(100.0)], "USD", " ", &fx).unwrap_err();
+    assert!(e.contains("states no currency"), "{e}");
+    let e = history::in_position_currency(&no_rates(), &[bar(100.0)], "", "CAD").unwrap_err();
+    assert!(e.to_string().contains("states no currency"), "{e}");
 }
