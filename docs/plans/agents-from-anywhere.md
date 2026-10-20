@@ -1,6 +1,6 @@
 # Plan: agents anywhere read the trade history through one agents-only address
 
-Brief 72 (`architecture-briefs`, `briefs/72-agents-from-anywhere.md`, edb25c98, amended 5b36b5db §2.5). This plan covers the listener, the three ways in, approval, the storage of grants and keys, the tunnels, and the tests, each test named against the rule it holds. The plan comes before any code.
+Brief 72 (`architecture-briefs`, `briefs/72-agents-from-anywhere.md`, edb25c98, amended 5b36b5db §2.5). Amended with brief 73's seven changes (4dcf3e05), each marked "(brief 73, n)" where it lands. This plan covers the listener, the three ways in, approval, the storage of grants and keys, the tunnels, and the tests, each test named against the rule it holds. The plan comes before any code.
 
 Paths are relative to `rust/crates` unless they start with `web/` or `docs/`. Facts about the code were read from `master` at the commit this PR is based on.
 
@@ -49,6 +49,11 @@ The one step that needs the owner is the last one: a real connection from each a
   - No forwarded header (`Forwarded`, `X-Forwarded-*`) is trusted for anything but the log, and then only from loopback.
   - Methods are only those each route declares (below). Everything else gets 405.
   - CORS is off: no `Access-Control-Allow-*` header is ever sent. Cloud agents call from their servers, not from a browser.
+- **Everything reachable before sign-in is bounded, globally** (brief 73, 1). Every peer is loopback (the tunnel's connector) and no forwarded header is trusted, so no limit can be per caller. Each bound is a named constant, and each is held by a test:
+  - **pending requests:** at most 5 at once. A sixth `/oauth/authorize` gets 429 until one ends: approved, denied or expired.
+  - **registered clients never approved:** at most 20. Registering a 21st drops the oldest unapproved one.
+  - **pre-sign-in calls:** at most 60 a minute in total, across `/oauth/register`, `/oauth/authorize`, `/oauth/authorize/status`, `/oauth/token`, the `.well-known` documents and `/agents/check/*`. It's a bucket computed when a call arrives, as §4.1's rate is. Over it, the answer is 429 with `Retry-After`.
+  - **request bodies:** 16 KiB on `/oauth/register` and `/oauth/token`; none accepted on the `GET` routes.
 - **What it serves,** as the complete route table with nothing else on it:
 
 | Route | Method | Answers |
@@ -57,7 +62,7 @@ The one step that needs the owner is the last one: a real connection from each a
 | `/.well-known/oauth-authorization-server` | GET | RFC 8414 metadata |
 | `/oauth/register` | POST | Dynamic Client Registration (RFC 7591), limited (§2.1) |
 | `/oauth/authorize` | GET | the public approval page (§3) |
-| `/oauth/authorize/status` | GET | whether the request was approved on the computer (polled by that page only) |
+| `/oauth/authorize/status?request={id}` | GET | whether that request was approved on the computer, by its 128-bit id only (brief 73, 5) |
 | `/oauth/token` | POST | code and refresh-token exchange |
 | `/mcp` | POST, GET | MCP Streamable HTTP, OAuth bearer |
 | `/mcp/key` | POST, GET | MCP Streamable HTTP, key bearer, no OAuth metadata |
@@ -71,7 +76,7 @@ The one step that needs the owner is the last one: a real connection from each a
 
   §6 names the tests.
 - **The tools are shared, not copied.** The tool bodies move from `mcp.rs` into `agents/tools.rs`, used by both `bagholder mcp` (stdio) and the listener (HTTP). `THEIR_WORDS` and `answered()` go with them, and each answer is the page's own for the same filters (`SPEC.md` agents-3).
-- **`rmcp` gains `transport-streamable-http-server`** (with `server-side-http`, as that version names it), pinned like today. The archive's size is measured before and after, as #535 did, and the figure goes in the build PR. If the feature pulls in a second HTTP stack beside our axum and hyper, the build PR serves Streamable HTTP with a small handler on axum instead, held by the MCP inspector's checks (§6). Whichever one is chosen, the PR gives its reason and the figures.
+- **`rmcp` gains `transport-streamable-http-server`** (with `server-side-http`, as that version names it), pinned like today. The archive's size is measured before and after, as #535 did, and the figure goes in the build PR. If the feature pulls in a second HTTP stack beside our axum and hyper, the build PR serves Streamable HTTP with a small handler on axum instead, held by the conformance suite (§6). Whichever one is chosen, the PR gives its reason and the figures.
 
 ## 2. The three ways in
 
@@ -84,11 +89,16 @@ This follows the MCP authorization specification ([2026-07-28](https://modelcont
   - `client_id_metadata_document_supported: true`;
   - the registration endpoint.
 - **Clients:**
-  - Client ID Metadata Documents first: the `client_id` is an `https` URL, which Bagholder fetches once per authorization through `bagholder-net`, with a size limit.
+  - Client ID Metadata Documents first: the `client_id` is an `https` URL, which Bagholder fetches once per authorization. A stranger supplies that URL, so the fetch is guarded against server-side request forgery (brief 73, 2; the specification's "consider Server-Side Request Forgery (SSRF) risks", [authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)):
+    - `https` only, and no redirect is followed;
+    - the name is resolved once. Every answer must be a public unicast address: loopback, private (RFC 1918), link-local, CGNAT `100.64.0.0/10` (which includes Tailscale's addresses), unique-local `fc00::/7`, IPv4-mapped forms of those, multicast and unspecified are each refused;
+    - it connects only to the address that was checked, so a second DNS answer can't switch it, and sends the original name for TLS and `Host`;
+    - 8 KiB at most, a 5-second limit, and one fetch per authorization.
   - Dynamic Client Registration is for clients that need it (Claude.ai offers both). A registered client is stored with its exact redirect URIs. Unapproved registrations expire with their request (§3) and are never listed as agents.
 - **PKCE:** S256 only. `plain` and a missing `code_challenge` are refused with `invalid_request`.
 - **Resource binding (RFC 8707):** `resource` must be `https://{host}/mcp`. A token is bound to it, and a token for another resource is refused with 401 `invalid_token`.
 - **Redirect URIs:** matched exactly, character for character, against the registered or metadata-declared list. There is no prefix or pattern matching. Each redirect URI's hostname is shown on both approval screens.
+- **No loopback redirect URI** (brief 73, 3): `localhost`, any name ending `.localhost`, `127.0.0.0/8` and `[::1]` are refused, both at registration and at authorization. Cloud agents never redirect to this machine, and local agents use `bagholder mcp` over stdio. The specification's "Localhost Redirect URI Risks" is the reason.
 - **Tokens:**
   - **Access tokens:** opaque, 32 random bytes, valid for 1 hour.
   - **Refresh tokens:** opaque, 32 random bytes, rotated on every use. A refresh token used a second time ends the whole grant (OAuth 2.0 Security BCP, RFC 9700 §4.14.2), so a stolen one is only good until its owner next refreshes.
@@ -112,13 +122,16 @@ This follows the MCP authorization specification ([2026-07-28](https://modelcont
 
 The address is public, and the person approving may be on their phone, so nothing reachable through the tunnel grants anything by itself:
 1. **The agent opens `/oauth/authorize`** on the public address. Bagholder records a pending request with:
-   - the client's name and redirect hostname;
-   - a six-character code (letters only, no lookalikes);
+   - a request id of 128 random bits (brief 73, 5). It's used only by the public page to ask `/oauth/authorize/status?request={id}`. It's never shown, never accepted in place of the code, and the status route answers for that id alone;
+   - a six-character code (letters only, no lookalikes), shown to the person on both pages, separate from the id;
+   - who is asking (brief 73, 4). For a Client ID Metadata Document client, that's **the `client_id`'s host** ("claude.ai"), with the name from its document beside it. For a client registered dynamically, its redirect host, with its name marked **"name given by the agent, not checked"**;
    - when it was made.
-2. **The public page** shows the agent's name, the redirect hostname, the code, and "Approve this in Bagholder on your computer." It has no button that grants anything. It checks `/oauth/authorize/status` while open, and redirects with the code once the request is approved on the computer.
+2. **The public page** shows who is asking (as above), the code, and "Approve this in Bagholder on your computer." It has no button that grants anything. It checks `/oauth/authorize/status` while open, and redirects with the code once the request is approved on the computer.
 3. **The person's own page,** on the main loopback listener (which the tunnel can't reach), shows the same request:
    - a notice in the header, as other things that wait on the person do;
    - the same panel in the menu's new **Agents** submenu.
+
+   It shows who is asking as above, and says: "Allow only if you just started connecting this agent, and its page shows code ABCDEF." A request the person didn't start is the one attack left once everything else holds, and these words are the defence (brief 73, 4).
 
    **Allow** and **Deny** are writes on the main listener (`POST /api/agents/requests/{id}/allow` and `/deny`), behind its existing gate: loopback, the exact Host, and `X-Bagholder`.
 4. **Allow completes the grant.** Deny, or no answer within 10 minutes, ends the request. Expiry is checked when the request is next touched, by either page or the token endpoint. No timer runs (§5).
@@ -169,11 +182,26 @@ Each provider has a walkthrough. A step already done on this machine is shown do
 | Tailscale | [official installer](https://tailscale.com/download) | `tailscale up` (the app's own sign-in); then turning on HTTPS certificates and the `funnel` node attribute, from the URL `tailscale funnel` prints when they're missing | `tailscale funnel --https=443 127.0.0.1:{agents.port}`, in the foreground, never `--bg`, which would persist past Bagholder | `tailscale status --json` → `Self.DNSName` |
 | Cloudflare | [cloudflared download](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) | `cloudflared tunnel login`; `cloudflared tunnel create bagholder-agents`; `cloudflared tunnel route dns bagholder-agents {name}` | `cloudflared tunnel run --url http://127.0.0.1:{agents.port} bagholder-agents` | the name the person entered for the DNS route |
 | ngrok | [ngrok download](https://ngrok.com/download) | `ngrok config add-authtoken {token}` (copied from their dashboard) | `ngrok http --url={dev domain} 127.0.0.1:{agents.port}` | the dev domain shown in their dashboard, entered once |
-| zrok | [zrok install](https://docs.zrok.io/docs/guides/install/) | `zrok enable {token}`; `zrok reserve public 127.0.0.1:{agents.port} --unique-name {name}` | `zrok share reserved {name}` | `https://{name}.share.zrok.io` |
+| zrok (v2) | [zrok install](https://docs.zrok.io/docs/guides/install/) | `zrok enable {token}`; then a reserved name in a namespace, as zrok v2 does it: v2 removed `zrok reserve` and `zrok share reserved` ("Namespaces and reserved names replace these concepts", zrok `CHANGELOG.md` at v2.0.8, L115). The exact v2 commands are pinned to a release in the build PR | the v2 share of the reserved name, proxy backend, target `127.0.0.1:{agents.port}` | the reserved name's public address |
 | Own proxy | — | — | — (the proxy is theirs) | entered by hand |
 
 - **Ports:** Funnel accepts only 443, 8443 and 10000 ([funnel CLI](https://tailscale.com/kb/1311/tailscale-funnel)). Bagholder uses 443 unless the person's Funnel already serves something there, in which case it asks to use 8443.
 - **Commands run with fixed arguments,** never through a shell. The binary is found by the provider's documented install location, or on `PATH`, and is shown to the person before its first start.
+
+### 4.3a What each tunnel sends, and what a kill leaves (brief 73, 6)
+
+Sourced from each provider's docs, or from its code at a pinned release: tailscale v1.104.2 (e26db7a5), cloudflared 2026.10.2 (002a5cca), zrok v1.1.13 (9ff06047) and v2.0.8 (7d46bbfd), ngrok-go v2.2.1 (fc6166b9). The ngrok agent itself is closed source.
+
+| Tunnel | `Host` the listener receives | What the gate checks | When the tunnel process is killed (not stopped cleanly) | From this machine, the public name goes |
+| --- | --- | --- | --- | --- |
+| Tailscale Funnel, foreground | the public name, unchanged: `r.Out.Host = r.In.Host` (`ipn/ipnlocal/serve.go` L995). It also sets `X-Forwarded-Host`, and `Tailscale-Funnel-Request: ?1` on Funnel requests only (L1089, L1110-1111). No flag changes Host (`cmd/tailscale/cli/serve_v2.go` L241-253) | the public name | **Gone at once, nothing left.** A foreground config is stored under the CLI's IPN-bus session and deleted when that watch ends (`serve_v2.go` L491-510; `ipn/serve.go` L70-76: "ungraceful shutdowns of either the client or the LocalBackend does not expose ports"; `local.go` L3923 `defer b.DeleteForegroundSession`). The watch runs on the request's context, which a killed CLI's closed socket cancels (`localapi.go` L915-917). Ingress after that gets a TCP reset (`serve.go` L475-477) | **a local shortcut:** MagicDNS answers the node's own name with its tailnet address (`node_backend.go` L813-815, L1198-1217), never the Funnel relay |
+| Cloudflare Tunnel | the public name, passed from the edge (`connection/quic_connection.go` L364-372). `httpHostHeader` (default `""`) would rewrite it ([origin parameters](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/)); Bagholder never sets it | the public name | the tunnel and its DNS record stay, and visitors get Cloudflare error 1033 ([1033](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/)) until `cloudflared` runs again. Nothing restarts it | the public path: a proxied record answers with Cloudflare's anycast addresses ([proxy status](https://developers.cloudflare.com/dns/proxy-status/)) |
+| ngrok | the public domain: the agent preserves it (ngrok-go `httpinspect.go` L38-40, `pr.Out.Host = pr.In.Host`). `--host-header` is deprecated in favour of a traffic policy ([CLI](https://ngrok.com/docs/agent/cli/)); Bagholder sets neither | the public domain | the endpoint goes offline and visitors get ERR_NGROK_3200, "The endpoint is offline" ([3200](https://ngrok.com/docs/errors/err_ngrok_3200/)). The domain stays reserved, and nothing restarts it | the public path: the agent has no DNS integration. No doc says so outright |
+| zrok | the public name: neither the frontend nor the share's proxy sets `req.Host` (`endpoints/publicProxy/http.go` L131-143; `endpoints/proxy/backend.go` L90-103, `NewSingleHostReverseProxy`, which "does not rewrite the Host header"). The same in v2.0.8 | the public name | the reserved name stays, and visitors get zrok's 502 "bad gateway!" page (`publicProxy/http.go` L116-118) until the share runs again | the public path, by public DNS to zrok's frontend. No doc found |
+| Own reverse proxy | whatever the person's proxy sends: the panel asks for the name it sends, defaulting to the public name | the name entered | the person's own proxy, not Bagholder's child | depends on their network: it may resolve to a private address inside it |
+
+- **No forwarded header is used to pass the gate,** for any provider. `X-Forwarded-Host` is only logged.
+- **For Tailscale, the kill behaviour is why foreground mode is required:** `--bg` stores the config at the top level, where it persists (`ipn/serve.go` L954-963). `tunnel-guard` never passes `--bg`, and a test checks the command line it builds.
 
 ### 4.4 Starting it, and knowing it works
 
@@ -185,7 +213,15 @@ Each provider has a walkthrough. A step already done on this machine is shown do
 
   `every_copy_the_repository_starts_on_another_folder_ends_with_its_starter` extends to this spawn.
 - **Its output is read as it arrives,** never polled. A child that exits is said in the panel with its last lines.
-- **Before the address shows as ready,** Bagholder makes a one-time random value and fetches `https://{address}/agents/check/{value}` from outside, through `bagholder-net`. The listener answers that path only while the check is open. Only a match shows "Ready". A mismatch or failure is said with what was fetched.
+- **Before the address shows as ready,** Bagholder makes a one-time random value and fetches `https://{address}/agents/check/{value}`. The listener answers that path only while the check is open. The fetch has to take the public path, not a shortcut on this machine or its network (brief 73, 7):
+  - the name is resolved through public DNS over HTTPS (Cloudflare's `1.1.1.1` and Google's `8.8.8.8`, both asked), never the system resolver, which on a tailnet answers `*.ts.net` with the tailnet address ([Tailscale forum](https://forum.tailscale.com/t/funnel-not-available-not-set/4092));
+  - the answer must be a public address (the same check as above);
+  - Bagholder connects to that address, sending the public name for TLS and `Host`.
+
+  - For Tailscale, the connection to the public answer must also arrive with `Tailscale-Funnel-Request: ?1`, which only the Funnel path sets (`serve.go` L1110-1111). A check that arrives without it went the tailnet way, and doesn't count. No Tailscale doc says a node can reach its own Funnel through the public ingress, so if it can't, the panel says "confirm from your agent".
+  - For Cloudflare, ngrok and zrok, public DNS answers with the provider's edge, so connecting there is the public path by construction.
+
+  Only a match through that path shows **Ready**. Where it can't be done (public DNS not reachable, or a person's own proxy whose public name answers with a private address from inside their network), the panel says **"Reachable from this computer; confirm from your agent"**, never "Ready". A mismatch or failure is said with what was fetched.
 - **Copy buttons, one per agent,** each with that agent's exact steps:
   - Claude.ai's custom connector;
   - ChatGPT's connector, which Dots uses;
@@ -237,7 +273,22 @@ Each provider has a walkthrough. A step already done on this machine is shown do
 - a refresh token used twice → the grant ends, and its access token is refused next;
 - a Client ID Metadata Document whose `client_id` doesn't match its URL → refused.
 
+**Bounds before sign-in** (brief 73, 1):
+- a sixth pending request gets 429;
+- a 21st unapproved registration drops the oldest;
+- the 61st pre-sign-in call in a minute gets 429 with `Retry-After`;
+- a body over 16 KiB on `/oauth/register` and `/oauth/token` gets 413.
+
+**Client ID Metadata Document fetch** (brief 73, 2):
+- a `client_id` that resolves into each refused range (loopback, RFC 1918, link-local, `100.64.0.0/10`, `fc00::/7`, IPv4-mapped loopback) is refused, with nothing fetched (a stand-in resolver; no listener at that address is ever connected to);
+- an `http` URL is refused;
+- a document that redirects is refused;
+- one over 8 KiB is refused.
+
+**Redirects** (brief 73, 3): `http://localhost/cb`, `http://foo.localhost/cb`, `http://127.0.0.2/cb` and `http://[::1]/cb` are refused at registration and at authorization.
+
 **Approval:**
+- `the_status_route_answers_only_for_its_request_id`: the six-letter code, another request's id and a random id each get 404 (brief 73, 5);
 - `the_public_page_alone_grants_nothing`: every path on the agents listener, given the request's code, never yields an authorization code.
 - `a_request_allowed_on_the_computer_completes`;
 - `a_denied_request_does_not`;
@@ -266,13 +317,23 @@ Each provider has a walkthrough. A step already done on this machine is shown do
 - refusals are logged.
 
 **Conformance:**
-- the MCP inspector's checks run against `/mcp` and `/mcp/key` in CI;
+- `@modelcontextprotocol/conformance` in server mode, pinned to an exact version that covers 2026-07-28 ([conformance](https://github.com/modelcontextprotocol/conformance)), runs against `/mcp` and `/mcp/key` in CI. It's an alpha today, so the job is reported-only until it's stable;
 - the OpenAPI description is validated, and each described route is called with the described arguments.
 
 **Clear:** Clear data's Agents kind empties every agent table, and the every-table test names them.
 
+**Tunnel commands and Host** (brief 73, 6):
+- the Tailscale command `tunnel-guard` builds never contains `--bg`;
+- the gate refuses a request whose `Host` is the target (`127.0.0.1:{port}`) and passes one with the public name, for each provider's recorded request shape;
+- a check request from Tailscale without `Tailscale-Funnel-Request` doesn't count as Ready.
+
+**Reachability** (brief 73, 7):
+- with the system resolver answering a private address and public DNS answering a public one, the check connects to the public one;
+- with public DNS unreachable, the panel says "Reachable from this computer; confirm from your agent", never "Ready".
+
 **The page (e2e):** `web/e2e/agents.spec.ts`:
 - the Agents panel lists the tunnels side by side, with Tailscale marked recommended and nothing preselected;
+- a dynamically registered client's name shows marked "name given by the agent, not checked", and a metadata-document client shows its `client_id` host (brief 73, 4);
 - a pending request shows its code with Allow and Deny;
 - a key is shown once.
 
