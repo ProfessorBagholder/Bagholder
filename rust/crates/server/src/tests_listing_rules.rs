@@ -119,12 +119,9 @@ fn test_every_market_cache_table_is_keyed_by_its_listing_its_filer_or_its_instru
 
 /// The meta keys a source keeps under its own name for one listing, an earlier
 /// store's, or no listing's, with the reason each may stand.
-const META_ALLOWED: [(&str, &str); 6] = [
+const META_ALLOWED: [(&str, &str); 3] = [
     ("yahoo_miss", "Yahoo's own form for one listing, which names its venue (`ENB.TO`)"),
     ("coinbase_product", "a coin pair, which is one coin's market"),
-    ("coinbase_prev", "a coin pair, which is one coin's market"),
-    ("coingecko_id", "a coin's id at the source"),
-    ("tmx_form", "an earlier store's, removed by migration 6 and by a clear"),
     ("sedar_profile", "an earlier store's, read once by migration 6 to attribute its filings"),
 ];
 

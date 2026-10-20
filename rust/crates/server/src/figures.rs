@@ -1755,7 +1755,7 @@ mod tests {
         let hit = |text: &str| text.lines().filter(|l| !l.trim_start().starts_with("//")).any(|l| forbidden.iter().any(|f| l.contains(f)));
         assert!(hit("let z = TimeZone::system();"), "the scan finds what it looks for");
         let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let mut files: Vec<PathBuf> = ["server/src/figures.rs", "server/src/due.rs", "server/src/engine_inputs.rs", "server/src/read_sources.rs", "server/src/compare.rs"].iter().map(|f| crates.join(f)).collect();
+        let mut files: Vec<PathBuf> = ["server/src/figures.rs", "server/src/due.rs", "server/src/engine_inputs.rs", "server/src/read_sources.rs"].iter().map(|f| crates.join(f)).collect();
         let mut dirs: Vec<PathBuf> = ["engine/src", "sources/src", "book/src", "broker/src", "wealthsimple/src"].iter().map(|d| crates.join(d)).collect();
         while let Some(d) = dirs.pop() {
             for e in std::fs::read_dir(&d).unwrap().flatten() {
