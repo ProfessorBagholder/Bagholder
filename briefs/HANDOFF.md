@@ -14,7 +14,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 
 ## 2. How the owner wants to be worked with (hard rules, each learned the hard way)
 
-- **No play-by-play.** Only decisions and OKs go to the owner. When the CTO sends work and nothing needs the owner, reply in one line ("#564 cleared.") and nothing more. The owner caught repeated progress summaries and a broken promise to stop them.
+- **No play-by-play, not even one line.** Only decisions and OKs go to the owner. When a CTO exchange needs nothing from the owner, end the turn with no text at all: no "Nothing in it needs you", no "#564 cleared." The owner flagged repeated one-liners as play-by-play on 2026-10-20, after earlier summaries and a broken promise to stop.
 - **Never put a solvable question to the owner.** Settle engineering choices yourself, with sources.
 - **The standing merge OK** (decisions.md, #544): a PR merges once you clear it and every check on its head is green. Version numbers follow `CLAUDE.md`'s semver rule without asking ("I really don't care. Do whatever makes sense."). A release is still the owner's word.
 - **Bagholder is a web application.** Design every feature as a top web app would. No native helpers, no "app name or icon". Notifications are the browser's (brief 65).
