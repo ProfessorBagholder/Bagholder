@@ -35,6 +35,20 @@ pub struct Withdrawal {
     pub payload: String,
 }
 
+/// The kinds of outside entity that are debts, as Wealthsimple's net worth
+/// feature types them (brief 23, the bundle's type map).
+pub const LIABILITY_TYPES: [&str; 9] = ["CreditCard", "LineOfCredit", "Heloc", "Mortgage", "AutoLoan", "InstallmentLoan", "PersonalLoan", "StudentLoan", "OtherLiability"];
+
+/// A day's net worth as the broker's net worth feature states it, and what the
+/// debts held outside came to that day (owed positive), where that was read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetWorthDay {
+    pub day: jiff::civil::Date,
+    pub amount: Dec,
+    pub owed: Option<Dec>,
+    pub currency: Currency,
+}
+
 impl Book {
     /// Keep what one read of the net worth feature states: every outside account,
     /// under the read's moment. An earlier read stays as it was.
@@ -62,24 +76,24 @@ impl Book {
     }
 
     /// Keep net worth by day as one read states it, in place of the last.
-    pub fn keep_net_worth_days(&self, days: &[(jiff::civil::Date, Dec, Currency)], at: jiff::Timestamp) -> Result<()> {
+    pub fn keep_net_worth_days(&self, days: &[NetWorthDay], at: jiff::Timestamp) -> Result<()> {
         let tx = self.conn().unchecked_transaction()?;
         tx.execute("DELETE FROM net_worth_days", [])?;
-        for (d, v, c) in days {
-            tx.execute("INSERT INTO net_worth_days (day, amount, currency, read_at) VALUES (?, ?, ?, ?)", params![text::day(*d), v.to_string(), c.as_str(), text::at(at)])?;
+        for d in days {
+            tx.execute("INSERT INTO net_worth_days (day, amount, owed, currency, read_at) VALUES (?, ?, ?, ?, ?)", params![text::day(d.day), d.amount.to_string(), d.owed.map(|o| o.to_string()), d.currency.as_str(), text::at(at)])?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Net worth by day, oldest first, and when it was last read.
-    pub fn net_worth_days(&self) -> Result<Vec<(jiff::civil::Date, Dec, Currency)>> {
-        let mut stmt = self.conn().prepare("SELECT day, amount, currency FROM net_worth_days ORDER BY day")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    /// Net worth by day, oldest first.
+    pub fn net_worth_days(&self) -> Result<Vec<NetWorthDay>> {
+        let mut stmt = self.conn().prepare("SELECT day, amount, owed, currency FROM net_worth_days ORDER BY day")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?;
         let t = "net_worth_days";
         rows.map(|row| {
-            let (d, v, c) = row?;
-            Ok((text::date(t, "day", &d)?, text::dec(t, "amount", &v)?, text::currency(t, "currency", &c)?))
+            let (d, v, o, c) = row?;
+            Ok(NetWorthDay { day: text::date(t, "day", &d)?, amount: text::dec(t, "amount", &v)?, owed: o.map(|o| text::dec(t, "owed", &o)).transpose()?, currency: text::currency(t, "currency", &c)? })
         })
         .collect()
     }

@@ -24,27 +24,37 @@
     [KIND[r.kind] ?? r.kind, r.institution].filter((x) => x && x !== r.name).join(' · ')
 
   // ---- net worth over time: the Dashboard's equity curve, its geometry and hover ----
+  // `net`: net worth alone; `split`: everything held and everything owed, two lines on one scale
+  let mode = $state<'net' | 'split'>('net')
   function niceMax(peak: number): number {
     if (!(peak > 0)) return 1
     const step = Math.pow(10, Math.max(0, String(Math.round(peak / 3)).length - 2))
     return Math.max(step * 3, Math.ceil(peak / (step * 3)) * step * 3)
   }
-  function eqGeom(series: EquityPoint[]) {
-    const vals = series.map((p) => plot(p.v))
-    const hi = niceMax(Math.max.apply(null, vals.concat([0])))
-    const low = Math.min.apply(null, vals.concat([0]))
+  function eqGeom(lines: EquityPoint[][]) {
+    const vals = lines.map((l) => l.map((p) => plot(p.v)))
+    const all = vals.flat().concat([0])
+    const hi = niceMax(Math.max.apply(null, all))
+    const low = Math.min.apply(null, all)
     const lo = low < 0 ? -niceMax(-low) : 0
     const W = 880, H = 260, pad = 8, top = 6
-    const n = Math.max(1, vals.length - 1)
     const y = (v: number) => H - pad - ((v - lo) / (hi - lo)) * (H - pad - top)
-    const pts = vals.map((v, i) => [(i / n) * W, y(v)] as [number, number])
-    const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ')
     const base = y(0).toFixed(1)
     const ticks = [0, 1, 2, 3].map((i) => hi - ((hi - lo) * i) / 3)
-    return { ticks, path, area: path + ' L' + W + ' ' + base + ' L0 ' + base + ' Z', pts, up: vals.length ? vals[vals.length - 1] >= 0 : true }
+    const drawn = vals.map((vs) => {
+      const n = Math.max(1, vs.length - 1)
+      const pts = vs.map((v, i) => [(i / n) * W, y(v)] as [number, number])
+      const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ')
+      return { pts, path, area: path + ' L' + W + ' ' + base + ' L0 ' + base + ' Z' }
+    })
+    const first = vals[0] ?? []
+    return { ticks, lines: drawn, up: first.length ? first[first.length - 1] >= 0 : true }
   }
-  const eqSeries = $derived(nw?.history ?? [])
-  const g = $derived(eqSeries.length > 1 ? eqGeom(eqSeries) : null)
+  const split = $derived(mode === 'split')
+  // the days drawn: each line's points, the first line's days the hover's
+  const eqLines = $derived(split ? [nw?.assetsHistory ?? [], nw?.debtsHistory ?? []] : [nw?.history ?? []])
+  const eqSeries = $derived(eqLines[0])
+  const g = $derived(eqSeries.length > 1 ? eqGeom(eqLines) : null)
   const eqTick = (v: number) => (v < 0 ? '−$' : '$') + Math.abs(Math.round(v)).toLocaleString('en-US')
   const eqAxis = $derived.by(() => {
     const s = eqSeries
@@ -54,19 +64,28 @@
     for (let i = 0; i < want; i++) out.push(stamp(s[Math.round((i * (s.length - 1)) / Math.max(1, want - 1))].d))
     return [...new Set(out)]
   })
+  // net worth by day, for the split view's hover
+  const netOn = $derived(new Map((nw?.history ?? []).map((p) => [p.d, p.v])))
   let eqPlot = $state<HTMLElement>()
-  let eqHover = $state<{ x: string; y: string; tv: string; tl: string; tx: string; up: boolean } | null>(null)
+  let eqHover = $state<{ x: string; ys: string[]; rows: { label: string; v: string; cls: string }[]; tl: string; tx: string } | null>(null)
   function onEqMove(e: MouseEvent) {
     const s = eqSeries
     if (!s.length || !eqPlot || !g) return
     const r = eqPlot.getBoundingClientRect()
     const i = Math.max(0, Math.min(s.length - 1, Math.round(((e.clientX - r.left) / r.width) * (s.length - 1))))
     const frac = i / Math.max(1, s.length - 1)
+    const sign = (v: EquityPoint['v']) => (abs(v) === v ? 'pos' : 'neg')
+    const net = netOn.get(s[i].d)
     eqHover = {
       x: (frac * 100).toFixed(2) + '%',
-      y: ((g.pts[i][1] / 260) * 100).toFixed(2) + '%',
-      tv: money0(s[i].v),
-      up: abs(s[i].v) === s[i].v,
+      ys: g.lines.map((l) => ((l.pts[i][1] / 260) * 100).toFixed(2) + '%'),
+      rows: split
+        ? [
+            { label: 'Assets', v: money0(s[i].v), cls: 'pos' },
+            { label: 'Debts', v: money0(eqLines[1][i].v), cls: 'neg' },
+            ...(net !== undefined ? [{ label: 'Net worth', v: money0(net), cls: '' }] : []),
+          ]
+        : [{ label: '', v: money0(s[i].v), cls: sign(s[i].v) }],
       tl: stampDay(s[i].d),
       tx: i < s.length * 0.1 ? '0%' : i > s.length * 0.9 ? '-100%' : '-50%',
     }
@@ -86,6 +105,8 @@
       ;(svg.style as unknown as { webkitMaskImage: string }).webkitMaskImage = ''
     }
   }
+  // each line's colour: net worth by its sign, assets green and debts red
+  const lineColor = (i: number) => (split ? (i === 0 ? 'pos' : 'neg') : g?.up ? 'pos' : 'neg')
 </script>
 
 <div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">
@@ -101,9 +122,22 @@
     </div>
     <!-- net worth over time: the Dashboard's equity curve card -->
     <div class="card elev-sm" style="padding:16px 18px 12px">
-      <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Net worth over time</h5></div>
+      <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px">
+        <h5>Net worth over time</h5>
+        {#if split}
+          <span style="font-size:11px;color:var(--ink55);display:flex;gap:10px;align-items:center">
+            <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--pos);margin-right:4px"></span>Assets</span>
+            <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--neg);margin-right:4px"></span>Debts</span>
+          </span>
+        {/if}
+        <div style="display:flex;gap:4px;margin-left:auto">
+          {#each [['net', 'Net worth'], ['split', 'Assets & debts']] as const as m (m[0])}
+            <button class="pill" class:on={mode === m[0]} style="padding:2px 8px;font-size:11px;width:auto" onclick={() => (mode = m[0])}>{m[1]}</button>
+          {/each}
+        </div>
+      </div>
       {#if !g}
-        <div class="empty muted" style="padding:40px 0">No history yet. It is read from Wealthsimple with the balances, once a day.</div>
+        <div class="empty muted" style="padding:40px 0">{split && (nw.history ?? []).length > 1 ? 'What the debts came to by day is not read yet. It is read from Wealthsimple with the balances, once a day.' : 'No history yet. It is read from Wealthsimple with the balances, once a day.'}</div>
       {:else}
         <div style="display:flex;gap:10px">
           <div class="tab" style="position:relative;width:56px;height:260px;flex:none;font-size:10px;color:var(--ink55)">
@@ -113,12 +147,25 @@
           </div>
           <div bind:this={eqPlot} style="position:relative;flex:1;min-width:0" role="presentation" onmousemove={onEqMove} onmouseleave={onEqLeave}>
             <div class="xline" hidden={!eqHover} style="left:{eqHover?.x ?? '0'}"></div>
-            <div style="position:absolute;width:7px;height:7px;margin:-4px 0 0 -3px;border-radius:50%;background:var(--{eqHover?.up === false ? 'neg' : 'pos'});box-shadow:0 0 0 2px var(--surface);pointer-events:none" hidden={!eqHover} style:left={eqHover?.x} style:top={eqHover?.y}></div>
-            <div class="tip" hidden={!eqHover} style="left:{eqHover?.x ?? '0'};transform:translateX({eqHover?.tx ?? '-50%'})"><div class="tv {eqHover?.up === false ? 'neg' : 'pos'}">{eqHover?.tv ?? ''}</div><div class="tl">{eqHover?.tl ?? ''}</div></div>
+            {#each g.lines as _, i (i)}
+              <div style="position:absolute;width:7px;height:7px;margin:-4px 0 0 -3px;border-radius:50%;background:var(--{lineColor(i)});box-shadow:0 0 0 2px var(--surface);pointer-events:none" hidden={!eqHover} style:left={eqHover?.x} style:top={eqHover?.ys[i]}></div>
+            {/each}
+            <div class="tip" hidden={!eqHover} style="left:{eqHover?.x ?? '0'};transform:translateX({eqHover?.tx ?? '-50%'})">
+              {#each eqHover?.rows ?? [] as row (row.label)}
+                <div class="tv {row.cls}">{#if row.label}<span style="font-weight:400;color:var(--ink55);margin-right:6px">{row.label}</span>{/if}{row.v}</div>
+              {/each}
+              <div class="tl">{eqHover?.tl ?? ''}</div>
+            </div>
             <svg viewBox="0 0 880 260" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
-              <defs><linearGradient id="bhNw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--{g.up ? 'pos' : 'neg'});stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--{g.up ? 'pos' : 'neg'});stop-opacity:0" /></linearGradient></defs>
+              <defs>
+                {#each g.lines as _, i (i)}
+                  <linearGradient id="bhNw{i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--{lineColor(i)});stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--{lineColor(i)});stop-opacity:0" /></linearGradient>
+                {/each}
+              </defs>
               <line x1="0" y1="6" x2="880" y2="6" style="stroke:var(--grid)" /><line x1="0" y1="88" x2="880" y2="88" style="stroke:var(--grid)" /><line x1="0" y1="170" x2="880" y2="170" style="stroke:var(--grid)" /><line x1="0" y1="252" x2="880" y2="252" style="stroke:var(--hair)" />
-              <path d={g.area} fill="url(#bhNw)" /><path d={g.path} fill="none" style="stroke:var(--{g.up ? 'pos' : 'neg'})" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+              {#each g.lines as l, i (i)}
+                <path d={l.area} fill="url(#bhNw{i})" /><path d={l.path} fill="none" style="stroke:var(--{lineColor(i)})" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+              {/each}
             </svg>
           </div>
         </div>

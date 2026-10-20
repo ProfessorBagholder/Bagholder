@@ -361,6 +361,11 @@ pub struct NetWorth {
     pub liabilities: Vec<OwedDebt>,
     /// Net worth by day, oldest first, as Wealthsimple's net worth feature states it.
     pub history: Vec<Point>,
+    /// Everything held and everything owed by day, each counted as today's are
+    /// (the investments before margin, margin a debt): the days whose debts are
+    /// known, oldest first, each day in both.
+    pub assets_history: Vec<Point>,
+    pub debts_history: Vec<Point>,
 }
 
 /// One debt held outside, as the broker's net worth feature states it.

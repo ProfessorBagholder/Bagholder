@@ -8,9 +8,7 @@
 
 use std::collections::BTreeMap;
 
-/// The kinds of outside entity that are debts, as Wealthsimple's net worth
-/// feature types them (brief 23, the bundle's type map).
-pub const LIABILITY_TYPES: [&str; 9] = ["CreditCard", "LineOfCredit", "Heloc", "Mortgage", "AutoLoan", "InstallmentLoan", "PersonalLoan", "StudentLoan", "OtherLiability"];
+pub use bagholder_book::debts::LIABILITY_TYPES;
 
 /// The purposes a pre-authorized debit states (`aftTransactionCategory`), as
 /// Wealthsimple writes Payments Canada Standard 007's transaction codes: those

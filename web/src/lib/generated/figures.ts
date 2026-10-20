@@ -191,7 +191,13 @@ assets: Array<OwedDebt>, liabilities: Array<OwedDebt>,
 /**
  * Net worth by day, oldest first, as Wealthsimple's net worth feature states it.
  */
-history: Array<Point>, };
+history: Array<Point>, 
+/**
+ * Everything held and everything owed by day, each counted as today's are
+ * (the investments before margin, margin a debt): the days whose debts are
+ * known, oldest first, each day in both.
+ */
+assetsHistory: Array<Point>, debtsHistory: Array<Point>, };
 
 export type AskedPayee = { key: string, payee: string, 
 /**

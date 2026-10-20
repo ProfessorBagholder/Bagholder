@@ -949,7 +949,7 @@ mod tests {
         f.debts_changed().unwrap();
         let days = |f: &Figures| f.read(|e| e.scope(&Default::default()).portfolio.net_worth_history.len()).unwrap();
         assert_eq!(days(&f), 0);
-        let day = |d: &str, v: &str| (d.parse().unwrap(), bagholder_core::Dec::parse(v).unwrap(), bagholder_core::Currency::CAD);
+        let day = |d: &str, v: &str| bagholder_book::debts::NetWorthDay { day: d.parse().unwrap(), amount: bagholder_core::Dec::parse(v).unwrap(), owed: Some(bagholder_core::Dec::parse("7600").unwrap()), currency: bagholder_core::Currency::CAD };
         book.keep_net_worth_days(&[day("2025-11-17", "1000"), day("2025-11-18", "1100")], now).unwrap();
         let moved = f.debts_changed().unwrap();
         assert!(!moved.is_empty(), "a new read of net worth by day moves nothing, so the page never reads it");

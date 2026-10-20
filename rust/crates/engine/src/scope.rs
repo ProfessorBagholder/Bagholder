@@ -417,7 +417,7 @@ pub struct Portfolio {
     pub outside_assets: Vec<(crate::input::Debt, Fig<Money>)>,
     /// Net worth by day as the broker's net worth feature states it, under every
     /// account only; part of the figures so a new read of it moves the portfolio.
-    pub net_worth_history: Vec<(Date, Money)>,
+    pub net_worth_history: Vec<NetWorthDay>,
     pub cash: Fig<Money>,
     pub cash_pct: Fig<Option<Ratio>>,
     pub day_change: Option<Partial>,
@@ -766,6 +766,67 @@ fn open_accounts_in_scope<'a>(f: &Filters, inputs: &'a Inputs) -> Vec<&'a crate:
     inputs.ledger.accounts.values().filter(|a| a.account.status == AccountStatus::Open).filter(|a| f.accounts.is_empty() || f.accounts.contains(&a.account.id)).collect()
 }
 
+/// A day's net worth, and what was owed at its close where that is known.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetWorthDay {
+    pub day: Date,
+    pub net: Money,
+    /// Every debt, in CAD: what is owed outside as stated that day, and what the
+    /// broker's accounts owed at its close (a margin account's borrowing, a card's
+    /// balance where the card states no value of its own), as today's figures
+    /// count them. None when a part of it is not known for the day.
+    pub debts: Option<Money>,
+}
+
+/// Net worth by day, each day's debts counted as today's are (`owed`): the
+/// outside debts as stated by day, and the accounts' cash below zero at each
+/// day's close, worked out from their transactions.
+fn net_worth_days(inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -> Vec<NetWorthDay> {
+    let debts = &inputs.facts.debts;
+    if debts.history.is_empty() {
+        return Vec::new();
+    }
+    let outside: BTreeMap<Date, Money> = debts.owed_history.iter().cloned().collect();
+    // the accounts whose cash below zero is a debt
+    let owing: BTreeSet<AccountId> = accounts
+        .iter()
+        .filter(|a| {
+            let card = matches!(a.account.account_type, AccountType::Known { kind: AccountKind::CreditCard, .. });
+            is_margin(a) || (card && inputs.market.brokers.get(&a.account.id).is_some_and(|b| b.net_value_now.is_none()))
+        })
+        .map(|a| a.account.id)
+        .collect();
+    let mut moves: Vec<(Date, AccountId, Money)> = inputs.ledger.transactions.iter().filter(|t| owing.contains(&t.account)).filter_map(|t| t.cash.map(|c| (t.trade_date, t.account, c))).collect();
+    moves.sort_by_key(|m| m.0);
+    let mut held: BTreeMap<(AccountId, Currency), Dec> = BTreeMap::new();
+    let mut next = 0;
+    let mut out = Vec::with_capacity(debts.history.len());
+    for (day, net) in &debts.history {
+        while next < moves.len() && moves[next].0 <= *day {
+            let (_, a, m) = moves[next];
+            let e = held.entry((a, m.currency)).or_insert(Dec::ZERO);
+            *e = e.checked_add(m.amount).unwrap_or(*e);
+            next += 1;
+        }
+        let owed = (|| -> Option<Money> {
+            // an outside debt known today and not stated for the day leaves the day unknown
+            let mut total = match outside.get(day) {
+                Some(m) => *m,
+                None if debts.owed.is_empty() => Money::zero(Currency::CAD),
+                None => return None,
+            };
+            for ((_, c), v) in &held {
+                if v.is_negative() {
+                    total = total.add_to_fit(crate::fx::to_cad(&inputs.facts.rates, &inputs.clock, Money::new(v.abs(), *c), *day).ok()?).ok()?;
+                }
+            }
+            Some(total)
+        })();
+        out.push(NetWorthDay { day: *day, net: *net, debts: owed });
+    }
+    out
+}
+
 pub(crate) fn is_margin(a: &crate::input::AccountInfo) -> bool {
     matches!(a.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. })
 }
@@ -888,7 +949,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
     let owed = owed(f, inputs, &accounts);
     let outside_assets = if f.accounts.is_empty() { inputs.facts.debts.assets.iter().map(|d| (d.clone(), live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance))).collect() } else { Vec::new() };
-    let net_worth_history = if f.accounts.is_empty() { inputs.facts.debts.history.clone() } else { Vec::new() };
+    let net_worth_history = if f.accounts.is_empty() { net_worth_days(inputs, &accounts) } else { Vec::new() };
     Portfolio {
         owed,
         outside_assets,

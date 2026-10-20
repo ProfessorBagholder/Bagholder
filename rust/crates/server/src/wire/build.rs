@@ -740,8 +740,13 @@ fn net_worth(inputs: &bagholder_engine::input::Inputs, pf: &bagholder_engine::sc
     let owed: Vec<bagholder_engine::gap::Fig<Money>> = liabilities.iter().map(|(_, m)| m.clone()).collect();
     let (assets_total, liabilities_total) = (sum(&held), sum(&owed));
     let net = (|| -> bagholder_engine::gap::Fig<Money> { Ok(assets_total.clone()?.add_to_fit(liabilities_total.clone()?.neg())?) })();
-    let history = pf.net_worth_history.iter().map(|(d, m)| crate::wire::figures::Point { d: d.to_string(), v: Dec(m.amount) }).collect();
-    Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&assets_total), liabilities_total: fig_money(&liabilities_total), assets, liabilities: liabilities.iter().map(|(d, m)| row(d, m)).collect(), history })
+    let point = |d: &bagholder_core::jiff::civil::Date, v: bagholder_core::Dec| crate::wire::figures::Point { d: d.to_string(), v: Dec(v) };
+    let history = pf.net_worth_history.iter().map(|n| point(&n.day, n.net.amount)).collect();
+    // a day's assets: its net worth and its debts, which net worth is less by
+    let split: Vec<(bagholder_core::jiff::civil::Date, bagholder_core::Dec, bagholder_core::Dec)> = pf.net_worth_history.iter().filter_map(|n| n.debts.and_then(|o| Some((n.day, n.net.amount.checked_add(o.amount).ok()?, o.amount)))).collect();
+    let assets_history = split.iter().map(|(d, a, _)| point(d, *a)).collect();
+    let debts_history = split.iter().map(|(d, _, o)| point(d, *o)).collect();
+    Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&assets_total), liabilities_total: fig_money(&liabilities_total), assets, liabilities: liabilities.iter().map(|(d, m)| row(d, m)).collect(), history, assets_history, debts_history })
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or
