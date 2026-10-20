@@ -181,3 +181,157 @@ fn a_past_range_ends_at_its_last_day() {
     assert_eq!(pf.net_worth_history.iter().map(|n| n.day.to_string()).collect::<Vec<_>>(), ["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]);
     let _ = pf;
 }
+
+/// A small generator for made-up books: the same seed, the same books.
+struct Gen(u64);
+
+impl Gen {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    /// An amount of cents in `-span..span`, as text.
+    fn amount(&mut self, span: i64) -> String {
+        let cents = (self.next() as i64 % (2 * span)) - span;
+        Dec::new(cents, 2).unwrap().to_text()
+    }
+    fn coin(&mut self) -> bool {
+        self.next() % 2 == 0
+    }
+}
+
+fn sum(xs: &[Dec]) -> Dec {
+    xs.iter().fold(Dec::ZERO, |t, x| t.checked_add(*x).unwrap())
+}
+
+/// Yesterday meets today: on a book where nothing moves between yesterday and
+/// today and no price or rate changes, yesterday's point and today's (the tiles)
+/// are the same, assets and debts both. Each generated book has a margin account
+/// holding a stock, with cash in two currencies; a cash account holding it too; a
+/// chequing account, a line of credit and a credit card, each stating a value or
+/// not, the card's balance owed or in credit; any account's cash may be below
+/// zero; every balance carried from before the first transaction. Today's net is
+/// also each account's holdings and cash, worked out here on its own.
+#[test]
+fn yesterday_meets_today_when_nothing_moves() {
+    let mut g = Gen(7);
+    for n in 0..64 {
+        let price = format!("{}.{:02}", 1 + g.next() % 300, g.next() % 100);
+        let (qm, qc) = (1 + g.next() % 500, 1 + g.next() % 500);
+        let ids = ["M", "C", "S", "L", "K"];
+        // each account's cash now per currency, and whether its value is stated
+        let mut cash: BTreeMap<&str, Vec<(&str, String)>> = BTreeMap::new();
+        cash.insert("M", vec![("CAD", g.amount(5_000_000)), ("USD", g.amount(500_000))]);
+        for a in &ids[1..] {
+            cash.insert(a, vec![("CAD", g.amount(500_000))]);
+        }
+        let stated: BTreeMap<&str, bool> = ids.iter().map(|a| (*a, matches!(*a, "M" | "C") || g.coin())).collect();
+        let usd = Dec::parse("1.40").unwrap();
+        let p = Dec::parse(&price).unwrap();
+        let held = |a: &str| -> Dec {
+            match a {
+                "M" => p.checked_mul(Dec::from_int(qm as i64)).unwrap(),
+                "C" => p.checked_mul(Dec::from_int(qc as i64)).unwrap(),
+                _ => Dec::ZERO,
+            }
+        };
+        let in_cad = |c: &str, v: &str| -> Dec {
+            let v = Dec::parse(v).unwrap();
+            if c == "USD" { v.checked_mul(usd).unwrap() } else { v }
+        };
+        let value = |a: &str| sum(&[held(a), sum(&cash[a].iter().map(|(c, v)| in_cad(c, v)).collect::<Vec<_>>())]);
+        let mut brokers = serde_json::Map::new();
+        for a in ids {
+            let mut b = json!({"cash": cash[a].iter().map(|(c, v)| (c.to_string(), json!(v))).collect::<serde_json::Map<_, _>>(), "as_of": "2026-10-20T15:00:00Z"});
+            if stated[a] {
+                b["net_value"] = json!({"2026-10-19": value(a).to_text()});
+                b["now"] = json!(value(a).to_text());
+            }
+            if a == "M" {
+                b["buying_power"] = json!("0");
+            }
+            brokers.insert(a.to_string(), b);
+        }
+        // the moves that brought each account there, all before yesterday
+        let mut transactions = vec![
+            json!({"id": "b1", "account": "M", "day": "2026-09-02", "at": "2026-09-02T15:00:00Z", "kind": "buy", "instrument": "G", "qty": qm.to_string(), "cash": format!("-{}", held("M").to_text())}),
+            json!({"id": "b2", "account": "C", "day": "2026-09-03", "at": "2026-09-03T15:00:00Z", "kind": "buy", "instrument": "G", "qty": qc.to_string(), "cash": format!("-{}", held("C").to_text())}),
+        ];
+        for (i, a) in ids.iter().enumerate() {
+            for k in 0..(g.next() % 4) {
+                let day = format!("2026-10-{:02}", 1 + g.next() % 17);
+                let kind = if g.coin() { "deposit" } else { "withdrawal" };
+                transactions.push(json!({"id": format!("t{i}-{k}"), "account": a, "day": day, "at": format!("{day}T15:00:00Z"), "kind": kind, "cash": g.amount(200_000)}));
+            }
+        }
+        let c = json!({
+            "name": "yesterday meets today",
+            "today": "2026-10-20",
+            "now": "2026-10-20T22:00:00Z",
+            "accounts": [{"id": "M", "kind": "margin"}, {"id": "C"}, {"id": "S", "kind": "spending"}, {"id": "L", "kind": "line-of-credit"}, {"id": "K", "kind": "credit-card"}],
+            "instruments": [{"id": "G"}],
+            "quotes": {"G": {"price": price}},
+            "rates": {"USD": {"2026-10-19": "1.40", "2026-10-20": "1.40"}},
+            "brokers": brokers,
+            "transactions": transactions,
+        });
+        let mut b = build(&c);
+        let e = engine(&mut b);
+        let pf = e.scope(&Filters::default()).portfolio;
+        let days = &pf.net_worth_history;
+        let (yesterday, today) = (&days[days.len() - 2], &days[days.len() - 1]);
+        assert_eq!(yesterday.day, day("2026-10-19"), "book {n}");
+        assert_eq!(yesterday.assets, today.assets, "book {n}: assets");
+        assert_eq!(yesterday.debts, today.debts, "book {n}: debts");
+        let net = sum(&ids.iter().map(|a| value(a)).collect::<Vec<_>>());
+        assert_eq!(today.net().unwrap().amount, net, "book {n}: each account's holdings and cash");
+    }
+}
+
+/// A card's balance owed by day is its statements', from a balance carried in
+/// from before the first transaction read: worked back from what the broker
+/// states now, never summed up from nothing. Each generated card opens owing a
+/// balance no transaction holds, then is charged and paid on some days; another
+/// account, stated from the first day, makes every day a point.
+#[test]
+fn a_cards_balance_owed_by_day_is_its_statements() {
+    let mut g = Gen(11);
+    for n in 0..32 {
+        let opening = Dec::parse(&g.amount(1_000_000)).unwrap();
+        // the card's statements: its balance at each day's close
+        let mut balance = opening;
+        let mut statements: BTreeMap<Date, Dec> = BTreeMap::new();
+        let mut transactions = Vec::new();
+        let mut d = day("2026-10-01");
+        while d < day("2026-10-20") {
+            if g.next() % 3 == 0 {
+                let m = g.amount(100_000);
+                balance = balance.checked_add(Dec::parse(&m).unwrap()).unwrap();
+                let kind = if m.starts_with('-') { "withdrawal" } else { "deposit" };
+                transactions.push(json!({"id": format!("k{d}"), "account": "K", "day": d.to_string(), "at": format!("{d}T15:00:00Z"), "kind": kind, "cash": m}));
+            }
+            statements.insert(d, balance);
+            d = d.tomorrow().unwrap();
+        }
+        let c = json!({
+            "name": "a card's balance by day",
+            "today": "2026-10-20",
+            "now": "2026-10-20T22:00:00Z",
+            "accounts": [{"id": "A"}, {"id": "K", "kind": "credit-card"}],
+            "instruments": [],
+            "brokers": {
+                "A": {"cash": {"CAD": "100"}, "net_value": {"2026-10-01": "100"}, "now": "100", "as_of": "2026-10-20T15:00:00Z"},
+                "K": {"cash": {"CAD": balance.to_text()}, "as_of": "2026-10-20T15:00:00Z"}
+            },
+            "transactions": transactions,
+        });
+        let mut b = build(&c);
+        let e = engine(&mut b);
+        let days = e.scope(&Filters::default()).portfolio.net_worth_history;
+        for nw in &days[..days.len() - 1] {
+            assert_eq!(nw.debts.clone().unwrap().amount, statements[&nw.day].neg(), "book {n}, {}", nw.day);
+            assert_eq!(nw.assets.clone().unwrap().amount, Dec::from_int(100), "book {n}, {}: the card holds nothing", nw.day);
+        }
+        assert_eq!(days.last().unwrap().debts.clone().unwrap().amount, balance.neg(), "book {n}: today");
+    }
+}

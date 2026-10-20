@@ -112,7 +112,7 @@ impl Pair {
     /// instrument's history costs.
     fn ops(self) -> &'static [Op] {
         match self {
-            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::AgentTrades],
+            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::AgentTrades],
             // a change dated today, and one dated in the middle of the history: a
             // record that states no venue reads as on the one before it, so a
             // back-dated one re-forms the names after it (brief 44, 2)
@@ -163,6 +163,10 @@ pub enum Op {
     Brokers,
     PriceChanged,
     FeedStep,
+    /// Net worth by day worked out once (`bagholder_engine::scope::net_worth_days`):
+    /// every day from the first anything is stated to today, as every build of
+    /// the Portfolio works it out, which a change to the figures brings.
+    NetWorthDays,
     /// A trade entered by hand on the holding, dated in the middle of its history.
     BackdatedTrade,
     /// One of the broker's buys of the holding, from the middle of its history,
@@ -184,7 +188,7 @@ pub enum Op {
 }
 
 impl Op {
-    pub const ALL: [Op; 12] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades];
+    pub const ALL: [Op; 13] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -193,6 +197,7 @@ impl Op {
             Op::Brokers => "brokers",
             Op::PriceChanged => "price-changed",
             Op::FeedStep => "feed-step",
+            Op::NetWorthDays => "net-worth-days",
             Op::BackdatedTrade => "backdated-trade",
             Op::BackdatedFill => "backdated-fill",
             Op::BackdatedRecord => "backdated-record",
@@ -799,6 +804,15 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             f.price_changed(instrument)?;
             Ok(since(&m, priced))
         }
+        Op::NetWorthDays => {
+            // today's point first, which the days before it end on, as the
+            // Portfolio works it out; then the days alone
+            let all = bagholder_engine::scope::Filters::default();
+            let now = f.read(|e| e.scope(&all).portfolio.net_worth_now).flatten().ok_or("the figures were not built")?;
+            let m = mark();
+            let days = f.read(|e| bagholder_engine::scope::net_worth_days(&all, e.inputs(), &now).len()).ok_or("the figures were not built")?;
+            Ok(Measured { rows: Some(days as u64), ..since(&m, priced) })
+        }
         Op::FeedStep => {
             let mut feed = crate::events::Feed::open(app.clone());
             let want = |k: &str| (k.to_string(), crate::events::Want { params: serde_json::json!({}), have: None });
@@ -1047,6 +1061,9 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         Op::Brokers => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::PriceChanged => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         Op::FeedStep => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / signals a pass sends"),
+        // a part of every price change's figures: the Portfolio, net worth by day
+        // with it, is built again on each, so it has the price change's share
+        Op::NetWorthDays => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         // an agent's read: nobody waits on it as on a screen, so no budget
         Op::AgentTrades => (f64::INFINITY, "reported, not budgeted (an agent's read)"),
     }
@@ -1464,7 +1481,8 @@ mod tests {
                 let paths_a = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
                 let b = probe(op, pair, min.1, four.path()).unwrap();
                 let paths_b = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
-                assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
+                // a step and net worth by day work on what the figures hold, reading no storage
+                assert!(a.steps > 0 || matches!(op, Op::FeedStep | Op::NetWorthDays), "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
                 // steps and allocations: what the process reads from storage at
                 // these small sizes is what this run's page cache holds, judged by
