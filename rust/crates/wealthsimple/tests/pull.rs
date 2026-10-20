@@ -384,3 +384,74 @@ fn a_capture_reply_missing_its_list_is_refused_with_its_file() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains("positions@acct@2026-09-16.json"), "{err}");
 }
+
+/// A managed account sold to cash on one day and closed, its cash moved to a
+/// self-directed account three days later, Wealthsimple stating the move
+/// arriving and nothing in the managed account's feed leaving it (the owner's
+/// shape, 2025-06; every figure here made up): after the pull, the managed
+/// account's cash from the sale has left it, and the self-directed one holds it.
+#[test]
+fn a_move_whose_leaving_row_the_broker_never_lists_leaves_the_other_account_after_the_pull() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple");
+    let replies = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(&fixtures).unwrap() {
+        let p = e.unwrap().path();
+        std::fs::copy(&p, replies.path().join(p.file_name().unwrap())).unwrap();
+    }
+    // the accounts list: the managed account closed, the self-directed one open
+    let mut accounts = bagholder_core::json::parse(&std::fs::read_to_string(dir().join("edited-accounts-one.json")).unwrap()).unwrap();
+    let template = edges(&mut accounts)[0].clone();
+    edges(&mut accounts).clear();
+    for (id, ty, status) in [("anon-resp-1", "MANAGED_RESP_FAMILY", "closed"), ("anon-resp-2", "SELF_DIRECTED_RESP_FAMILY", "open")] {
+        let mut a = template.clone();
+        if let Value::Object(e) = &mut a {
+            if let Some(Value::Object(n)) = e.get_mut("node") {
+                n.insert("id".into(), Value::String(id.into()));
+                n.insert("unifiedAccountType".into(), Value::String(ty.into()));
+                n.insert("status".into(), Value::String(status.into()));
+                n.insert("nickname".into(), Value::Null);
+                n.insert("custodianAccounts".into(), Value::Array(vec![]));
+                n.insert("accountFeatures".into(), Value::Array(vec![]));
+            }
+        }
+        edges(&mut accounts).push(a);
+    }
+    std::fs::write(replies.path().join("edited-accounts-resp.json"), accounts.canonical()).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let amount = "4321.10";
+    let (report, _) = once_with(&book, replies.path(), now, |rows| {
+        // the move's leaving row, not listed
+        rows.retain(|r| Node::root(r).text("canonicalId").ok() != Some("anon-asset-3"));
+        let set = |r: &mut Value, fields: &[(&str, &str)]| {
+            if let Value::Object(o) = r {
+                for (k, v) in fields {
+                    o.insert(k.to_string(), Value::String(v.to_string()));
+                }
+            }
+        };
+        let arrival = rows.iter_mut().find(|r| Node::root(r).text("canonicalId").ok() == Some("anon-asset-6")).unwrap();
+        set(arrival, &[("amount", amount)]);
+        // the sale to cash, three days before
+        let mut sale = rows.iter().find(|r| Node::root(r).text("type").ok() == Some("MANAGED_BUY")).unwrap().clone();
+        set(&mut sale, &[("type", "MANAGED_SELL"), ("canonicalId", "anon-made-up-sale-1"), ("externalCanonicalId", "anon-made-up-order-1"), ("occurredAt", "2025-06-13T15:00:00.000000+00:00"), ("amount", amount)]);
+        rows.push(sale);
+    });
+    assert!(!report.failures.iter().any(|(p, _)| p.starts_with("activity")), "{:?}", report.failures);
+    let account = |key: &str| book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), key)).unwrap().unwrap();
+    let (managed, self_directed) = (account("anon-resp-1"), account("anon-resp-2"));
+    let txs = book.transactions_as_named().unwrap();
+    let days = |t: &&bagholder_core::transaction::Transaction| t.trade_date >= "2025-06-13".parse().unwrap() && t.trade_date <= "2025-06-16".parse().unwrap();
+    let cad = Currency::parse("CAD").unwrap();
+    // the managed account: the sale's cash in, the move's out, nothing else of it
+    let moved: Vec<_> = txs.iter().filter(|t| t.account == managed && matches!(t.kind, Kind::Sell | Kind::TransferOut)).filter(days).collect();
+    assert_eq!(moved.iter().map(|t| t.kind).collect::<Vec<_>>().len(), 2, "{moved:?}");
+    assert_eq!(moved.iter().filter(|t| t.kind == Kind::TransferOut).count(), 1, "booked leaving once");
+    let net = moved.iter().filter_map(|t| t.cash).filter(|c| c.currency == cad).fold(Dec::ZERO, |a, c| a.checked_add(c.amount).unwrap());
+    assert_eq!(net, Dec::ZERO, "the sale's cash left the managed account");
+    // the self-directed account: the cash arrived, once
+    let arrived: Vec<_> = txs.iter().filter(|t| t.account == self_directed && t.kind == Kind::TransferIn).filter(days).collect();
+    assert_eq!(arrived.len(), 1, "{arrived:?}");
+    assert_eq!(arrived[0].cash, Some(Money::new(Dec::parse(amount).unwrap(), cad)));
+}
