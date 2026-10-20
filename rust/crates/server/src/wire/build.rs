@@ -696,13 +696,20 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
     Cashflow { tiles, months, holdings, income, income_total, rows, asked }
 }
 
-/// Net worth from the portfolio: the broker's accounts at their value after
-/// margin, the assets and debts held outside, and what they come to.
+/// Net worth from the portfolio: the broker's accounts at their value before
+/// margin, the margin borrowed as a debt, the assets and debts held outside, and
+/// what they come to.
 fn net_worth(inputs: &bagholder_engine::input::Inputs, pf: &bagholder_engine::scope::Portfolio) -> Option<crate::wire::figures::NetWorth> {
     use crate::wire::figures::{NetWorth, OwedDebt};
-    let liabilities: Vec<(bagholder_engine::input::Debt, bagholder_engine::gap::Fig<Money>)> = pf.owed.as_ref().map(|(_, each)| each.clone()).unwrap_or_default();
+    let mut liabilities: Vec<(bagholder_engine::input::Debt, bagholder_engine::gap::Fig<Money>)> = pf.owed.as_ref().map(|(_, each)| each.clone()).unwrap_or_default();
     if liabilities.is_empty() && pf.outside_assets.is_empty() {
         return None;
+    }
+    // what is borrowed on margin: a debt, shown as one, and added back to the
+    // investments it was taken out of, so net worth counts it once
+    let margin = pf.margin_used.clone().filter(|m| m.as_ref().map_or(true, |m| !m.amount.is_zero()));
+    if let Some(m) = &margin {
+        liabilities.insert(0, (bagholder_engine::input::Debt { id: "margin".into(), kind: "Margin".into(), name: "Margin".into(), institution: "Wealthsimple".into(), balance: Money::zero(bagholder_core::Currency::CAD), as_of: None }, m.clone()));
     }
     let row = |d: &bagholder_engine::input::Debt, cad: &bagholder_engine::gap::Fig<Money>| OwedDebt { id: d.id.clone(), kind: d.kind.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) };
     let mut assets: Vec<OwedDebt> = Vec::new();
@@ -710,8 +717,14 @@ fn net_worth(inputs: &bagholder_engine::input::Inputs, pf: &bagholder_engine::sc
     if let Some(v) = &pf.net_value {
         // when the broker last stated its accounts' value
         let read = inputs.market.brokers.values().filter_map(|b| b.as_of).max();
-        assets.push(OwedDebt { id: "broker".into(), kind: String::new(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: read.map(|t| t.to_string()) });
-        held.push(v.clone());
+        let before_margin = (|| -> bagholder_engine::gap::Fig<Money> {
+            match &margin {
+                Some(m) => Ok(v.clone()?.add_to_fit(m.clone()?)?),
+                None => v.clone(),
+            }
+        })();
+        assets.push(OwedDebt { id: "broker".into(), kind: String::new(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(&before_margin), as_of: read.map(|t| t.to_string()) });
+        held.push(before_margin);
     }
     for (d, cad) in &pf.outside_assets {
         assets.push(row(d, cad));
