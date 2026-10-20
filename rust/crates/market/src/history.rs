@@ -69,14 +69,21 @@ impl std::fmt::Display for Failed {
 /// pair in the position's own currency, then the USD market and pair, which
 /// are converted at the Bank of Canada rate. Nothing for an option contract
 /// itself -- the chart maps it to its underlying first.
+///
+/// A listing stating no kind, or a coin stating no currency, has none: neither is
+/// taken to be shares or CAD, which could chart another listing's bars, and the
+/// chart says it has no source for them.
 pub fn history_candidates(rec: &Listing) -> Vec<(String, String)> {
-    let kind = { let k = rec.kind.clone(); if k.is_empty() { "Shares".to_string() } else { k } };
+    let kind = rec.kind.trim();
     let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
-    let ccy = { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
-    if sym.is_empty() {
+    let ccy = rec.currency.trim().to_uppercase();
+    if sym.is_empty() || kind.is_empty() {
         return vec![];
     }
     if kind == "Crypto" {
+        if ccy.is_empty() {
+            return vec![];
+        }
         let mut out = vec![
             ("coinbase".to_string(), format!("{}-{}", sym, ccy)),
             ("yahoo".to_string(), format!("{}-{}", sym, ccy)),

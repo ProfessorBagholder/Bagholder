@@ -244,4 +244,8 @@ fn bars_convert_between_every_pair_of_the_banks_currencies() {
     assert!(e.contains("states no currency"), "{e}");
     let e = history::in_position_currency(&no_rates(), &[bar(100.0)], "", "CAD").unwrap_err();
     assert!(e.to_string().contains("states no currency"), "{e}");
+    // nor is a source chosen for it as though it were CAD, or shares
+    assert_eq!(history::history_candidates(&bagholder_model::input::Listing::new("BTC", "", "", "Crypto")), vec![], "a coin stating no currency");
+    assert_eq!(history::history_candidates(&bagholder_model::input::Listing::new("SHOP", "TSX", "CAD", "")), vec![], "a listing stating no kind");
+    assert!(!history::history_candidates(&bagholder_model::input::Listing::new("BTC", "", "CAD", "Crypto")).is_empty(), "a coin stating its currency has its sources");
 }
