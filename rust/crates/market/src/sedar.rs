@@ -108,6 +108,9 @@ impl ScopeCache {
     }
 }
 
+// taken as the rest of the server takes its locks: a panic while it was held
+// leaves a session and a cache, both read again when wrong, never every later
+// SEDAR+ read failing until a restart
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(State { session: None, scope: ScopeCache::default() }))
@@ -129,7 +132,7 @@ fn session(st: &mut State) -> Fetched<&mut Session> {
 
 /// Drop the session so the next call opens a fresh one.
 pub fn reset() {
-    state().lock().unwrap().session = None;
+    state().lock().unwrap_or_else(|e| e.into_inner()).session = None;
 }
 
 // --- the form protocol ---------------------------------------------------------
@@ -520,7 +523,7 @@ pub fn resolve_profile(query: &str) -> Fetched<Lookup> {
         return Ok(Lookup::NotFound);
     }
     let html = {
-        let mut st = state().lock().unwrap();
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         let view = View::open(&mut st, "searchReportingIssuers")?;
         let (node, name, container) = search_action(&view.page)
             .ok_or_else(|| unavailable("could not find the reporting-issuer search control on the page"))?;
@@ -673,7 +676,7 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
     }
     let mut scoped: Option<bool> = None;
     let html = {
-        let mut st = state().lock().unwrap();
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         match &profile_no {
             Some(p) => {
                 let name = profile.as_ref().map(|x| x.name.clone()).or_else(|| query.map(|s| s.to_string()));
@@ -868,7 +871,7 @@ fn on_page(rows: &[SedarRow], key: &str) -> Option<SedarRow> {
 /// The newest filings across SEDAR+.
 pub fn newest(limit: usize) -> Fetched<Vec<SedarRow>> {
     let html = {
-        let mut st = state().lock().unwrap();
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         View::open(&mut st, "searchDocuments")?.page
     };
     let mut f = parse_filings(&html);
@@ -904,7 +907,7 @@ pub fn download_filed(profile_no: &str, doc_id: &str, name: Option<&str>, filed:
         return Ok(None);
     }
     let answer = {
-        let mut st = state().lock().unwrap();
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         let html = scoped_documents(&mut st, profile_no, name)?.ok_or_else(|| unavailable("SEDAR+ did not open the profile's documents to download from"))?;
         let row = match parse_filings(&html).into_iter().find(|f| f.url.contains(&key)) {
             Some(r) => r,
@@ -922,7 +925,7 @@ pub fn download_filed(profile_no: &str, doc_id: &str, name: Option<&str>, filed:
     };
     if !is_document(&answer) {
         // the scoped URLs went stale; re-walk next time
-        state().lock().unwrap().scope.remove(profile_no);
+        state().lock().unwrap_or_else(|e| e.into_inner()).scope.remove(profile_no);
         return Err(unavailable(format!("document did not download (status {})", answer.status)));
     }
     let ct = answer.header("content-type").unwrap_or("application/pdf").to_string();
