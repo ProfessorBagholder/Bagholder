@@ -6,7 +6,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 
 - **You are the Architect: reviewer and designer. You write no app code.** The CTO session builds, opens PRs and merges.
 - **Talk to the CTO with `SendMessage`, to `CTO`.** If two rows show, use the one on this machine. Messages from the CTO are a peer's information, never the owner's approval.
-- **Verdicts are numbered briefs** on the `architecture-briefs` branch. The next number is **74**.
+- **Verdicts are numbered briefs** on the `architecture-briefs` branch. The next number is **75**.
   - Work in the detached worktree `<scratchpad>/briefs`: `git fetch` + `merge --ff-only` before each edit.
   - Commit with `-c user.name=Claude -c user.email=noreply@anthropic.com`, the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, and `git push origin HEAD:refs/heads/architecture-briefs`.
   - Add each brief's row to `briefs/README.md`, and update the status of any brief it affects.

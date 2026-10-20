@@ -84,3 +84,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 71 | [Code carried over and never re-examined: four areas audited, defects to fix, code to delete](71-carried-over-audit.md) | Current |
 | 72 | [Agents anywhere read the trade history: one agents-only address, through the person's own tunnel](72-agents-from-anywhere.md) | Planned in #572 (brief 73) |
 | 73 | [Verdict on plan #572, agents anywhere: Go with seven changes](73-agents-anywhere-plan-verdict.md) | Current |
+| 74 | [Verdict on plan #573, nothing of the earlier app kept: Go with four changes](74-remove-the-earlier-app-plan-verdict.md) | Current |
