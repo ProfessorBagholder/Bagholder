@@ -566,7 +566,7 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         unrealized_pct: pf.unrealized_pct.clone().into_wire(),
         nav: pf.net_value.as_ref().map(fig_money),
         nav_accounts: pf.net_value_accounts,
-        net_worth: net_worth(pf),
+        net_worth: net_worth(inputs, pf),
         has_margin: pf.has_margin,
         margin_used: pf.margin_used.as_ref().map(fig_money),
         margin_used_pct: pf.margin_used_pct.clone().into_wire(),
@@ -698,7 +698,7 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
 
 /// Net worth from the portfolio: the broker's accounts at their value after
 /// margin, the assets and debts held outside, and what they come to.
-fn net_worth(pf: &bagholder_engine::scope::Portfolio) -> Option<crate::wire::figures::NetWorth> {
+fn net_worth(inputs: &bagholder_engine::input::Inputs, pf: &bagholder_engine::scope::Portfolio) -> Option<crate::wire::figures::NetWorth> {
     use crate::wire::figures::{NetWorth, OwedDebt};
     let liabilities: Vec<(bagholder_engine::input::Debt, bagholder_engine::gap::Fig<Money>)> = pf.owed.as_ref().map(|(_, each)| each.clone()).unwrap_or_default();
     if liabilities.is_empty() && pf.outside_assets.is_empty() {
@@ -708,7 +708,9 @@ fn net_worth(pf: &bagholder_engine::scope::Portfolio) -> Option<crate::wire::fig
     let mut assets: Vec<OwedDebt> = Vec::new();
     let mut held: Vec<bagholder_engine::gap::Fig<Money>> = Vec::new();
     if let Some(v) = &pf.net_value {
-        assets.push(OwedDebt { id: "broker".into(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: None });
+        // when the broker last stated its accounts' value
+        let read = inputs.market.brokers.values().filter_map(|b| b.as_of).max();
+        assets.push(OwedDebt { id: "broker".into(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: read.map(|t| t.to_string()) });
         held.push(v.clone());
     }
     for (d, cad) in &pf.outside_assets {
