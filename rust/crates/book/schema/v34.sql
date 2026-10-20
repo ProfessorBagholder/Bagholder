@@ -350,7 +350,6 @@ CREATE TABLE names_due (
 CREATE TABLE net_worth_days (
     day TEXT PRIMARY KEY NOT NULL,
     amount TEXT NOT NULL,
-    owed TEXT,
     currency TEXT NOT NULL,
     read_at TEXT NOT NULL
 ) STRICT;
