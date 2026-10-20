@@ -390,23 +390,10 @@ fn serve() -> i32 {
 #[global_allocator]
 static ALLOCATOR: capacity::Counting = capacity::Counting;
 
-/// The developer's subcommands, each built only with the feature of its name
-/// (`Cargo.toml`), never in a release build.
-const DEV_SUBCOMMANDS: [&str; 2] = ["demo", "pull-broker"];
-
-/// A developer's subcommand, where this build carries it.
-fn dev_subcommand(name: &str) -> Option<fn(&[String]) -> i32> {
-    match name {
-        // the made-up book, pulled from a made-up Wealthsimple, with its facts and
-        // prices: for the browser tests and screenshots
-        #[cfg(feature = "demo")]
-        "demo" => Some(demo::cli),
-        // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md)
-        #[cfg(feature = "pull-broker")]
-        "pull-broker" => Some(pull_broker::cli),
-        _ => None,
-    }
-}
+/// What a first word that is no command this build runs is told, the same for
+/// every word: the app starts only with no argument, never on a word it does not
+/// know (and a developer's command a build lacks is no different from a typo).
+const NOT_A_COMMAND: &str = "bagholder: not a command this build runs; start the app with no argument, or `--version`";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -440,16 +427,18 @@ fn main() {
     if args.first().map(String::as_str) == Some("outside-debts-check") {
         std::process::exit(outside_debts_check::cli(&args[1..]));
     }
-    // a developer's subcommand: run where this build has it, else refused by name,
-    // never taken for a start of the server
-    if let Some(name) = args.first().map(String::as_str).filter(|n| DEV_SUBCOMMANDS.contains(n)) {
-        match dev_subcommand(name) {
-            Some(cli) => std::process::exit(cli(&args[1..])),
-            None => {
-                eprintln!("bagholder {name}: a developer's command this build does not carry (build with `--features {name}`)");
-                std::process::exit(2);
-            }
-        }
+    // the made-up book, pulled from a made-up Wealthsimple, with its facts and
+    // prices: for the browser tests and screenshots (a developer's command, built
+    // only with the `demo` feature)
+    #[cfg(feature = "demo")]
+    if args.first().map(String::as_str) == Some("demo") {
+        std::process::exit(demo::cli(&args[1..]));
+    }
+    // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md; a
+    // developer's command, built only with the `pull-broker` feature)
+    #[cfg(feature = "pull-broker")]
+    if args.first().map(String::as_str) == Some("pull-broker") {
+        std::process::exit(pull_broker::cli(&args[1..]));
     }
     // the server held to its cost budget at the owner's size (docs/architecture.md §16)
     if args.first().map(String::as_str) == Some("capacity") {
@@ -467,6 +456,11 @@ fn main() {
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));
+    }
+    // the app starts with no argument; any other first word is refused, one way
+    if !args.is_empty() {
+        eprintln!("{NOT_A_COMMAND}");
+        std::process::exit(2);
     }
     // a setting that does not read stops the start, naming it: never a guess at what it meant
     if let Err(e) = bagholder_net::switch::check() {
@@ -495,19 +489,6 @@ mod tests {
     /// The repository root, with this workspace in rust/.
     fn root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
-    }
-
-    /// A developer's subcommand is carried only by a build with its feature, and a
-    /// build without it (every release build) has none of it to run.
-    #[test]
-    fn test_a_developers_subcommand_is_carried_only_with_its_feature() {
-        assert_eq!(super::dev_subcommand("demo").is_some(), cfg!(feature = "demo"));
-        assert_eq!(super::dev_subcommand("pull-broker").is_some(), cfg!(feature = "pull-broker"));
-        for name in super::DEV_SUBCOMMANDS {
-            let manifest = std::fs::read_to_string(root().join("rust/crates/server/Cargo.toml")).unwrap();
-            assert!(manifest.contains(&format!("\n{name} = ")), "{name} is a feature of its own");
-        }
-        assert!(super::dev_subcommand("serve").is_none());
     }
 
     /// Every build of what ships (the release archives, the image, the capacity run

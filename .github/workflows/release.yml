@@ -81,14 +81,17 @@ jobs:
       - name: Build
         working-directory: rust
         run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
-      # the archive's server carries no developer's subcommand (`bagholder demo`,
-      # `pull-broker`: features no release enables), by its usage or its symbols
+      # the archive's server carries no developer's subcommand (features no release
+      # enables), not even its name, by its words or its symbols
       - name: No developer's subcommand in the release
         if: runner.os != 'Windows'
         working-directory: rust
         run: |
           bin=target/release/bagholder
-          strings -a "$bin" | grep -aE 'usage: bagholder (demo|pull-broker)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' && { echo "$bin carries a developer's subcommand"; exit 1; } || true
+          # a path (a build's own folders, which the binary records, whatever they are
+          # named) is left out: the commands' own words and symbols are looked for
+          hits=$(strings -a "$bin" | grep -av '[/\\]' | grep -aE '(^|[^A-Za-z0-9_])(demo|pull-broker)([^A-Za-z0-9_]|$)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' || true)
+          if [ -n "$hits" ]; then echo "$bin carries a developer's subcommand:"; echo "$hits" | sed -n 1,20p; exit 1; fi
       - name: Package
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: |

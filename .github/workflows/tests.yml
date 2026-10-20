@@ -64,23 +64,25 @@ jobs:
           CI: "true"
           RUSTFLAGS: "-D warnings"
         run: |
-          cargo test --locked -p bagholder-server --features demo,pull-broker --bin bagholder -- demo:: test_a_developers_subcommand
+          cargo test --locked -p bagholder-server --features demo,pull-broker --bin bagholder -- demo::
+          cargo test --locked -p bagholder-server --features demo,pull-broker --test commands
           cargo test --locked -p bagholder-wealthsimple --features demo --test generated
           cargo clippy --locked -p bagholder-server -p bagholder-wealthsimple --features bagholder-server/demo,bagholder-server/pull-broker --bins --lib
         working-directory: rust
       # bagholder-no-dev-commands: the server as every release builds it (no feature)
-      # carries no developer's subcommand, by its usage or its symbols (release.yml
-      # checks the release binary the same way)
+      # carries no developer's subcommand, not even its name, by its words or its
+      # symbols (release.yml checks the release binary the same way); a word it does
+      # not know is refused one way (`crates/server/tests/commands.rs`, in the suite)
       - name: The server built without features carries no developer's subcommand
         env:
           RUSTFLAGS: "-D warnings"
         run: |
           cargo build --locked --bin bagholder
           bin=target/debug/bagholder
-          strings -a "$bin" | grep -aE 'usage: bagholder (demo|pull-broker)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' && { echo "$bin carries a developer's subcommand"; exit 1; } || true
-          # and asked for anyway, it is refused by name, never taken for a start of the server
-          if out=$(target/debug/bagholder demo "$RUNNER_TEMP/no-book" 2>&1); then echo "bagholder demo ran: $out"; exit 1; fi
-          echo "$out" | grep -q "does not carry" || { echo "an unbuilt subcommand is not refused by name: $out"; exit 1; }
+          # a path (a build's own folders, which the binary records, whatever they are
+          # named) is left out: the commands' own words and symbols are looked for
+          hits=$(strings -a "$bin" | grep -av '[/\\]' | grep -aE '(^|[^A-Za-z0-9_])(demo|pull-broker)([^A-Za-z0-9_]|$)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' || true)
+          if [ -n "$hits" ]; then echo "$bin carries a developer's subcommand:"; echo "$hits" | sed -n 1,20p; exit 1; fi
         working-directory: rust
       # no failure discarded outside tests: the workspace's clippy lints (Cargo.toml),
       # the tests' own code left out, where dropping a result is the test's business
