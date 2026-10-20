@@ -62,6 +62,16 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 name = "bagholder"
 path = "src/main.rs"
 
+# A developer's subcommands, never in a release build (release.yml, the Dockerfile
+# and capacity.yml build without them; tests.yml holds the release archive's binary
+# to carrying neither):
+[features]
+# `bagholder demo <folder>`: the made-up book the browser tests and screenshots run on
+demo = ["bagholder-wealthsimple/demo"]
+# `bagholder pull-broker <folder> [--replay <capture>]`: Wealthsimple pulled into a
+# book from the command line, live or from a capture
+pull-broker = []
+
 [dev-dependencies]
 # the book's test oracles (its names held to their fold), in tests only
 bagholder-book = { path = "../book", features = ["oracles"] }

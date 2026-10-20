@@ -10,6 +10,9 @@ mod capacity;
 mod logfile;
 mod carry;
 mod compare;
+#[cfg(feature = "demo")]
+mod demo;
+#[cfg(feature = "demo")]
 mod demo_facts;
 mod docs;
 mod broker_reads;
@@ -20,6 +23,7 @@ mod csv_import;
 mod entries;
 mod figures;
 mod following;
+#[cfg(feature = "pull-broker")]
 mod pull_broker;
 mod outside_debts_check;
 mod read_sources;
@@ -386,6 +390,11 @@ fn serve() -> i32 {
 #[global_allocator]
 static ALLOCATOR: capacity::Counting = capacity::Counting;
 
+/// What a first word that is no command this build runs is told, the same for
+/// every word: the app starts only with no argument, never on a word it does not
+/// know (and a developer's command a build lacks is no different from a typo).
+const NOT_A_COMMAND: &str = "bagholder: not a command this build runs; start the app with no argument, or `--version`";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -418,13 +427,18 @@ fn main() {
     if args.first().map(String::as_str) == Some("outside-debts-check") {
         std::process::exit(outside_debts_check::cli(&args[1..]));
     }
-    // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md)
+    // the made-up book, pulled from a made-up Wealthsimple, with its facts and
+    // prices: for the browser tests and screenshots (a developer's command, built
+    // only with the `demo` feature)
+    #[cfg(feature = "demo")]
+    if args.first().map(String::as_str) == Some("demo") {
+        std::process::exit(demo::cli(&args[1..]));
+    }
+    // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md; a
+    // developer's command, built only with the `pull-broker` feature)
+    #[cfg(feature = "pull-broker")]
     if args.first().map(String::as_str) == Some("pull-broker") {
         std::process::exit(pull_broker::cli(&args[1..]));
-    }
-    // the made-up book's facts and prices, for the browser tests and screenshots
-    if args.first().map(String::as_str) == Some("demo-facts") {
-        std::process::exit(demo_facts::cli(&args[1..]));
     }
     // the server held to its cost budget at the owner's size (docs/architecture.md §16)
     if args.first().map(String::as_str) == Some("capacity") {
@@ -442,6 +456,11 @@ fn main() {
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));
+    }
+    // the app starts with no argument; any other first word is refused, one way
+    if !args.is_empty() {
+        eprintln!("{NOT_A_COMMAND}");
+        std::process::exit(2);
     }
     // a setting that does not read stops the start, naming it: never a guess at what it meant
     if let Err(e) = bagholder_net::switch::check() {
@@ -470,6 +489,24 @@ mod tests {
     /// The repository root, with this workspace in rust/.
     fn root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
+    }
+
+    /// Every build of what ships (the release archives, the image, the capacity run
+    /// on the release build) enables no feature, so none carries a developer's
+    /// subcommand; the suite holds the binary itself to that (`tests.yml`).
+    #[test]
+    fn test_no_shipped_build_enables_a_feature() {
+        let mut builds = 0;
+        for f in [".github/workflows/release.yml", ".github/workflows/capacity.yml", "rust/Dockerfile"] {
+            let text = std::fs::read_to_string(root().join(f)).unwrap();
+            for l in text.lines().filter(|l| l.contains("cargo build")) {
+                builds += 1;
+                assert!(!l.contains("--features") && !l.contains("--all-features") && !l.contains(" -F "), "{f} builds with a feature: {l}");
+            }
+        }
+        assert!(builds >= 3, "the release, the capacity run and the image each build: {builds}");
+        let tests = std::fs::read_to_string(root().join(".github/workflows/tests.yml")).unwrap();
+        assert!(tests.contains("bagholder-no-dev-commands"), "the suite checks the built binary carries no developer's subcommand");
     }
 
     /// Where the Rust build keeps its data: ~/.bagholder-rust, or wherever BAGHOLDER_HOME says.

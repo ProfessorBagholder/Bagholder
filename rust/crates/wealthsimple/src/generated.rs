@@ -135,6 +135,12 @@ struct Listing {
     price: i64,
     /// A contract's underlying and terms.
     contract: Option<(String, jiff::civil::Date, i64)>,
+    /// A contract that is a put (else a call).
+    put: bool,
+    /// The name and venue (exchange, MIC) Wealthsimple states, where they are
+    /// stated rather than generated.
+    name: Option<String>,
+    venue: Option<(String, String)>,
     /// What Wealthsimple states of a share's id: `TRADING`, or `CORPORATE_ACTION`
     /// for one retired by a corporate action, the listing trading on under a
     /// successor id of the same symbol and venue.
@@ -173,8 +179,15 @@ enum Role {
 struct Acct {
     id: String,
     custodian: String,
-    ty: &'static str,
+    ty: String,
     role: Role,
+    /// Stated rather than generated (`Generated::from_records`): the account's
+    /// name and currency, each day's worth and net deposits in CAD cents, and
+    /// what a margin account can borrow in CAD cents.
+    nickname: Option<String>,
+    currency: Cur,
+    days: Option<Vec<(jiff::civil::Date, i64, i64)>>,
+    buying_power: Option<i64>,
     /// Cash in cents, per currency; a card's is what it owes, negative.
     cash: BTreeMap<Cur, i64>,
     /// Units held, per listing id, in the listing's scale.
@@ -202,6 +215,96 @@ enum Plan {
     Interest { account: usize },
     CardPurchase { account: usize, cents: i64 },
     CardPayment { card: usize, from: usize },
+    /// A purchase or sale at its own stated cash, never funded first: a book
+    /// stated whole (`Generated::from_records`).
+    #[cfg(feature = "demo")]
+    BuyAt { account: usize, listing: usize, units: i64, cents: i64 },
+    #[cfg(feature = "demo")]
+    SellAt { account: usize, listing: usize, units: i64, cents: i64 },
+    #[cfg(feature = "demo")]
+    DividendOf { account: usize, listing: usize, units: i64, cents: i64 },
+    #[cfg(feature = "demo")]
+    StakingOf { account: usize, listing: usize, units: i64 },
+    #[cfg(feature = "demo")]
+    Charge { account: usize, cur: Cur, cents: i64 },
+}
+
+/// An account stated whole, for `Generated::from_records`.
+#[cfg(feature = "demo")]
+#[derive(Clone, Debug)]
+pub struct AccountRecord {
+    pub id: String,
+    pub nickname: String,
+    /// Wealthsimple's `unifiedAccountType`.
+    pub ty: String,
+    /// `CAD` or `USD`.
+    pub currency: String,
+    pub opened: jiff::civil::Date,
+    /// Each day its daily history states: the day, its worth and its net
+    /// deposits, in CAD cents. The last is what it is worth now.
+    pub days: Vec<(jiff::civil::Date, i64, i64)>,
+    /// What a margin account can borrow, in CAD cents; else its cash.
+    pub buying_power: Option<i64>,
+}
+
+/// What a listing stated whole is.
+#[cfg(feature = "demo")]
+#[derive(Clone, Debug)]
+pub enum ListingSort {
+    /// Shares, on an exchange (its name and MIC).
+    Share { exchange: String, mic: String },
+    Coin,
+    /// An option contract on the listing of id `underlying`, its strike in cents.
+    Contract { underlying: String, expiry: jiff::civil::Date, strike: i64, put: bool },
+}
+
+/// A listing stated whole, for `Generated::from_records`.
+#[cfg(feature = "demo")]
+#[derive(Clone, Debug)]
+pub struct ListingRecord {
+    pub id: String,
+    pub symbol: String,
+    pub name: String,
+    /// `CAD` or `USD`.
+    pub currency: String,
+    pub sort: ListingSort,
+    /// A unit's price now in cents (a coin's per whole coin; a contract's
+    /// premium per share): what a holding of it is stated to be worth.
+    pub price: i64,
+}
+
+/// One piece of activity stated whole, by account and listing id. Units are
+/// whole for shares and contracts and millionths for a coin; cash in cents.
+#[cfg(feature = "demo")]
+#[derive(Clone, Debug)]
+pub enum Record {
+    Buy { account: String, listing: String, units: i64, cents: i64 },
+    Sell { account: String, listing: String, units: i64, cents: i64 },
+    /// Paid on `units` held, as Wealthsimple states them on the row.
+    Dividend { account: String, listing: String, units: i64, cents: i64 },
+    Staking { account: String, listing: String, units: i64 },
+    /// CAD into the account.
+    Deposit { account: String, cents: i64 },
+    /// Margin interest charged, in `currency` (`CAD` or `USD`).
+    InterestCharge { account: String, currency: String, cents: i64 },
+}
+
+#[cfg(feature = "demo")]
+fn cur_of(code: &str) -> Cur {
+    match code {
+        "CAD" => Cur::Cad,
+        "USD" => Cur::Usd,
+        other => panic!("a made-up Wealthsimple holds CAD and USD, not {other}"),
+    }
+}
+
+fn role_of(ty: &str) -> Role {
+    match ty {
+        "SELF_DIRECTED_CRYPTO" => Role::Crypto,
+        "CASH" => Role::Spending,
+        "CREDIT_CARD" => Role::Card,
+        _ => Role::Invest,
+    }
 }
 
 /// The made-up Wealthsimple.
@@ -331,13 +434,8 @@ impl Generated {
         let accounts: Vec<Acct> = (0..size.accounts)
             .map(|i| {
                 let ty = TYPES[i % TYPES.len()];
-                let role = match ty {
-                    "SELF_DIRECTED_CRYPTO" => Role::Crypto,
-                    "CASH" => Role::Spending,
-                    "CREDIT_CARD" => Role::Card,
-                    _ => Role::Invest,
-                };
-                Acct { id: format!("gen-account-{i}"), custodian: format!("gen-custodian-{i}"), ty, role, cash: BTreeMap::new(), held: BTreeMap::new(), timeline: BTreeMap::new(), deposits: Vec::new(), opened: start }
+                let role = role_of(ty);
+                Acct { id: format!("gen-account-{i}"), custodian: format!("gen-custodian-{i}"), ty: ty.to_string(), role, nickname: None, currency: Cur::Cad, days: None, buying_power: None, cash: BTreeMap::new(), held: BTreeMap::new(), timeline: BTreeMap::new(), deposits: Vec::new(), opened: start }
             })
             .collect();
         // listings: shares on both sides of the border, and coins
@@ -348,7 +446,7 @@ impl Generated {
             let symbol = name(i);
             let id = if coin { format!("sec-z-{}-{}", symbol.to_lowercase(), r.hex()) } else { format!("sec-s-{}", r.hex()) };
             let price = if coin { r.range(5, 60_000) * 100 } else { r.range(200, 40_000) };
-            listings.push(Listing { id, symbol, sort: if coin { Sort::Coin } else { Sort::Share }, cur, price, contract: None, status: "TRADING" });
+            listings.push(Listing { id, symbol, sort: if coin { Sort::Coin } else { Sort::Share }, cur, price, contract: None, put: false, name: None, venue: None, status: "TRADING" });
         }
         // about one share in sixteen retired by a corporate action and trading on
         // under a successor id (the owner's book: 11 of 173 ids stated), so a book
@@ -363,6 +461,63 @@ impl Generated {
         let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0 };
         let plans = g.plan(&mut r, size, start);
         g.run(&mut r, plans);
+        g
+    }
+
+    #[cfg(feature = "demo")]
+    /// A made-up Wealthsimple stated whole rather than generated: these
+    /// accounts, listings and activity, each purchase, sale and payment at its
+    /// own cash and nothing funded but what `records` deposits. Each account's
+    /// daily history is the days it states; its worth now the last of them.
+    /// `records` is in the order it happens; a day's rows keep their order.
+    pub fn from_records(today: jiff::civil::Date, accounts: &[AccountRecord], listings: &[ListingRecord], records: &[(jiff::civil::Date, Record)]) -> Generated {
+        let accounts: Vec<Acct> = accounts
+            .iter()
+            .enumerate()
+            .map(|(i, a)| Acct {
+                id: a.id.clone(),
+                custodian: format!("{}-custodian-{i}", a.id),
+                ty: a.ty.clone(),
+                role: role_of(&a.ty),
+                nickname: Some(a.nickname.clone()),
+                currency: cur_of(&a.currency),
+                days: Some(a.days.clone()),
+                buying_power: a.buying_power,
+                cash: BTreeMap::new(),
+                held: BTreeMap::new(),
+                timeline: BTreeMap::new(),
+                deposits: Vec::new(),
+                opened: a.opened,
+            })
+            .collect();
+        let listings: Vec<Listing> = listings
+            .iter()
+            .map(|l| {
+                let (sort, contract, put, venue) = match &l.sort {
+                    ListingSort::Share { exchange, mic } => (Sort::Share, None, false, Some((exchange.clone(), mic.clone()))),
+                    ListingSort::Coin => (Sort::Coin, None, false, None),
+                    ListingSort::Contract { underlying, expiry, strike, put } => (Sort::Contract, Some((underlying.clone(), *expiry, *strike)), *put, None),
+                };
+                Listing { id: l.id.clone(), symbol: l.symbol.clone(), sort, cur: cur_of(&l.currency), price: l.price, contract, put, name: Some(l.name.clone()), venue, status: "TRADING" }
+            })
+            .collect();
+        let account = |id: &str| accounts.iter().position(|a| a.id == id).unwrap_or_else(|| panic!("no account {id} among the records"));
+        let listing = |id: &str| listings.iter().position(|l| l.id == id).unwrap_or_else(|| panic!("no listing {id} among the records"));
+        let mut plans: BTreeMap<jiff::civil::Date, Vec<Plan>> = BTreeMap::new();
+        for (day, r) in records {
+            let p = match r {
+                Record::Buy { account: a, listing: l, units, cents } => Plan::BuyAt { account: account(a), listing: listing(l), units: *units, cents: *cents },
+                Record::Sell { account: a, listing: l, units, cents } => Plan::SellAt { account: account(a), listing: listing(l), units: *units, cents: *cents },
+                Record::Dividend { account: a, listing: l, units, cents } => Plan::DividendOf { account: account(a), listing: listing(l), units: *units, cents: *cents },
+                Record::Staking { account: a, listing: l, units } => Plan::StakingOf { account: account(a), listing: listing(l), units: *units },
+                Record::Deposit { account: a, cents } => Plan::Deposit { account: account(a), cents: *cents },
+                Record::InterestCharge { account: a, currency, cents } => Plan::Charge { account: account(a), cur: cur_of(currency), cents: *cents },
+            };
+            plans.entry(*day).or_default().push(p);
+        }
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0 };
+        // nothing stated whole is drawn
+        g.run(&mut Rng(0), plans);
         g
     }
 
@@ -396,7 +551,7 @@ impl Generated {
                     let expiry = day(opened + r.range(7, 90));
                     let u = self.listings[under].clone();
                     let strike = (u.price / 100 + r.range(-3, 3)).max(1) * 100;
-                    self.listings.push(Listing { id: format!("sec-o-{}", r.hex()), symbol: u.symbol.clone(), sort: Sort::Contract, cur: Cur::Usd, price: r.range(5, 900), contract: Some((u.id.clone(), expiry, strike)), status: "TRADING" });
+                    self.listings.push(Listing { id: format!("sec-o-{}", r.hex()), symbol: u.symbol.clone(), sort: Sort::Contract, cur: Cur::Usd, price: r.range(5, 900), contract: Some((u.id.clone(), expiry, strike)), put: false, name: None, venue: None, status: "TRADING" });
                     let contract = self.listings.len() - 1;
                     out.entry(day(opened)).or_default().push(Plan::Buy { account, listing: contract, units: r.range(1, 5) });
                     let exp = (expiry - day(0)).get_days() as i64;
@@ -554,7 +709,7 @@ impl Generated {
         if let Some((_, expiry, strike)) = &l.contract {
             fields.push((&["expiryDate"], text(expiry.to_string())));
             fields.push((&["strikePrice"], text(money(*strike))));
-            fields.push((&["contractType"], text("call")));
+            fields.push((&["contractType"], text(if l.put { "put" } else { "call" })));
         }
         set(row, &fields)
     }
@@ -592,7 +747,7 @@ impl Generated {
                     (&["fxAdjustedAmount"], text(money(want))),
                     (&["fxRate"], text("0.740740")),
                     (&["source_account", "id"], text(&self.accounts[a].id)),
-                    (&["source_account", "unifiedAccountType"], text(self.accounts[a].ty)),
+                    (&["source_account", "unifiedAccountType"], text(&self.accounts[a].ty)),
                 ],
             );
             self.conversions.insert(detail_id, detail);
@@ -762,6 +917,56 @@ impl Generated {
                 self.push(row);
                 self.move_cash(account, Cur::Cad, -cents, day);
             }
+            #[cfg(feature = "demo")]
+            Plan::BuyAt { account, listing, units, cents } | Plan::SellAt { account, listing, units, cents } => {
+                let buy = matches!(p, Plan::BuyAt { .. });
+                let l = self.listings[listing].clone();
+                *n += 1;
+                let id = self.next_id(if buy { "buy" } else { "sell" });
+                let (ty, sub) = match (l.sort, buy) {
+                    (Sort::Share, true) => ("DIY_BUY", "LIMIT_ORDER"),
+                    (Sort::Coin, true) => ("CRYPTO_BUY", "MARKET_ORDER"),
+                    (Sort::Contract, true) => ("OPTIONS_BUY", "LIMIT_ORDER"),
+                    (Sort::Share, false) => ("DIY_SELL", "LIMIT_ORDER"),
+                    (Sort::Coin, false) => ("CRYPTO_SELL", "MARKET_ORDER"),
+                    (Sort::Contract, false) => ("OPTIONS_SELL", "LIMIT_ORDER"),
+                };
+                let row = self.row(ty, sub, account, at(day, *n), &id);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+                self.push(row);
+                self.move_cash(account, l.cur, if buy { -cents } else { cents }, day);
+                self.move_units(account, listing, if buy { units } else { -units }, day);
+            }
+            #[cfg(feature = "demo")]
+            Plan::DividendOf { account, listing, units, cents } => {
+                let l = self.listings[listing].clone();
+                *n += 1;
+                let id = self.next_id("dividend");
+                let row = self.row("DIVIDEND", "DIY_DIVIDEND", account, at(day, *n), &id);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale())))]);
+                self.push(row);
+                self.move_cash(account, l.cur, cents, day);
+            }
+            #[cfg(feature = "demo")]
+            Plan::StakingOf { account, listing, units } => {
+                *n += 1;
+                let id = self.next_id("staking");
+                let row = self.row("CRYPTO_STAKING_REWARD", "", account, at(day, *n), &id);
+                let row = set(self.with_security(row, listing), &[(&["assetQuantity"], text(units_text(units, 6)))]);
+                self.push(row);
+                self.move_units(account, listing, units, day);
+            }
+            #[cfg(feature = "demo")]
+            Plan::Charge { account, cur, cents } => {
+                *n += 1;
+                let id = self.next_id("charge");
+                let row = set(
+                    self.row("INTEREST_CHARGE", "MARGIN_INTEREST", account, at(day, *n), &id),
+                    &[(&["amount"], text(money(cents))), (&["currency"], text(cur.code())), (&["amountSign"], text("negative")), (&["securityId"], text(cur.cash_id())), (&["security", "id"], text(cur.cash_id())), (&["security", "stock", "symbol"], text(cur.code())), (&["assetSymbol"], text(cur.code()))],
+                );
+                self.push(row);
+                self.move_cash(account, cur, -cents, day);
+            }
             Plan::CardPayment { card, from } => {
                 let owed = -self.cash(card, Cur::Cad);
                 if owed <= 0 {
@@ -827,9 +1032,14 @@ impl Generated {
             Sort::Coin => ("coin", "CRYPTOCURRENCY"),
             Sort::Contract => ("contract", "OPTION"),
         };
-        let mut fields: Vec<(&[&str], Value)> = vec![(&["id"], text(&l.id)), (&["currency"], text(l.cur.code())), (&["securityType"], text(ty)), (&["stock", "symbol"], text(&l.symbol)), (&["stock", "name"], text(format!("{} Generated Listing", l.symbol)))];
+        let name = l.name.clone().unwrap_or_else(|| format!("{} Generated Listing", l.symbol));
+        let mut fields: Vec<(&[&str], Value)> = vec![(&["id"], text(&l.id)), (&["currency"], text(l.cur.code())), (&["securityType"], text(ty)), (&["stock", "symbol"], text(&l.symbol)), (&["stock", "name"], text(name))];
         if l.sort == Sort::Share {
-            let (exchange, mic) = if l.cur == Cur::Cad { ("TSX", "XTSE") } else { ("NASDAQ", "XNAS") };
+            let (exchange, mic) = match &l.venue {
+                Some((e, m)) => (e.clone(), m.clone()),
+                None if l.cur == Cur::Cad => ("TSX".into(), "XTSE".into()),
+                None => ("NASDAQ".into(), "XNAS".into()),
+            };
             fields.push((&["stock", "primaryExchange"], text(exchange)));
             fields.push((&["stock", "primaryMic"], text(mic)));
             fields.push((&["status"], text(l.status)));
@@ -837,9 +1047,10 @@ impl Generated {
         if let Some((under, expiry, strike)) = &l.contract {
             fields.push((&["optionDetails", "expiryDate"], text(expiry.to_string())));
             fields.push((&["optionDetails", "strikePrice"], text(money(*strike))));
-            fields.push((&["optionDetails", "optionType"], text("CALL")));
+            let (right, letter) = if l.put { ("PUT", 'P') } else { ("CALL", 'C') };
+            fields.push((&["optionDetails", "optionType"], text(right)));
             fields.push((&["optionDetails", "multiplier"], Value::Number("100".into())));
-            fields.push((&["optionDetails", "osiSymbol"], text(format!("{:<6}{}C{:08}", l.symbol, expiry.strftime("%y%m%d"), strike * 10))));
+            fields.push((&["optionDetails", "osiSymbol"], text(format!("{:<6}{}{letter}{:08}", l.symbol, expiry.strftime("%y%m%d"), strike * 10))));
             fields.push((&["optionDetails", "underlyingSecurity", "id"], text(under)));
         }
         set(self.templates.securities[sort].clone(), &fields)
@@ -864,6 +1075,8 @@ impl Generated {
             self.templates.position.clone(),
             &[
                 (&["quantity"], text(units)),
+                // a contract sold to open is held short, its units below nothing
+                (&["direction"], text(if q < 0 { "SHORT" } else { "LONG" })),
                 (&["bookValue"], m(value)),
                 (&["marketBookValue"], m(value)),
                 (&["totalValue"], m(value)),
@@ -903,14 +1116,18 @@ impl Source for Generated {
             .iter()
             .enumerate()
             .map(|(i, a)| {
-                let worth = self.worth(i, self.today);
+                // what it is worth now: the last day it states, else its holdings at their price
+                let worth = match a.days.as_ref().and_then(|d| d.last()) {
+                    Some((_, value, _)) => *value,
+                    None => self.worth(i, self.today),
+                };
                 set(
                     self.templates.account.clone(),
                     &[
                         (&["id"], text(&a.id)),
-                        (&["unifiedAccountType"], text(a.ty)),
-                        (&["nickname"], text(format!("Generated {i}"))),
-                        (&["currency"], text("CAD")),
+                        (&["unifiedAccountType"], text(&a.ty)),
+                        (&["nickname"], text(a.nickname.clone().unwrap_or_else(|| format!("Generated {i}")))),
+                        (&["currency"], text(a.currency.code())),
                         (&["createdAt"], text(format!("{}T12:00:00.000000Z", a.opened))),
                         (&["custodianAccounts"], Value::Array(vec![Value::Object([("branch".to_string(), text("TR")), ("custodian".to_string(), text("so")), ("id".to_string(), text(&a.custodian)), ("status".to_string(), text("open")), ("updatedAt".to_string(), text("2024-01-01T00:00:00.000000Z"))].into())])),
                         (&["accountOwners"], Value::Array(vec![])),
@@ -1002,7 +1219,7 @@ impl Source for Generated {
     fn buying_power(&mut self, account: &str) -> Answer<Value> {
         self.asked += 1;
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
-        let cad = self.cash(a, Cur::Cad) + self.cash(a, Cur::Usd) * 135 / 100;
+        let cad = self.accounts[a].buying_power.unwrap_or_else(|| self.cash(a, Cur::Cad) + self.cash(a, Cur::Usd) * 135 / 100);
         let reply = format!(r#"{{"id":"{account}","financials":{{"current":{{"id":"c","marginV3":{{"trading":{{"buyingPower":{{"__typename":"BuyingPowerMetricAvailable","total":{{"amount":"{}","currency":"CAD"}}}},"__typename":"MarginTrading"}},"__typename":"MarginV3"}},"__typename":"Current"}},"__typename":"Financials"}},"__typename":"Account"}}"#, money(cad));
         json::parse(&reply).map_err(|e| Failure::Mismatch(e.to_string()))
     }
@@ -1011,12 +1228,20 @@ impl Source for Generated {
         self.asked += 1;
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
         let acct = &self.accounts[a];
+        let m = |cents: i64| Value::Object([("amount".to_string(), text(money(cents))), ("cents".to_string(), Value::Number(cents.to_string())), ("currency".to_string(), text("CAD"))].into());
+        // the days stated, where they are
+        if let Some(days) = &acct.days {
+            return Ok(days
+                .iter()
+                .filter(|(d, _, _)| from.is_none_or(|f| *d >= f) && *d <= self.today)
+                .map(|(d, value, deposits)| set(self.templates.history.clone(), &[(&["date"], text(d.to_string())), (&["netDepositsV2"], m(*deposits)), (&["netLiquidationValueV2"], m(*value))]))
+                .collect());
+        }
         let mut day = from.unwrap_or(acct.opened).max(acct.opened);
         let mut out = Vec::new();
         while day <= self.today {
             let deposits: i64 = acct.deposits.iter().filter(|(d, _)| *d <= day).map(|(_, c)| c).sum();
             let worth = self.worth(a, day);
-            let m = |cents: i64| Value::Object([("amount".to_string(), text(money(cents))), ("cents".to_string(), Value::Number(cents.to_string())), ("currency".to_string(), text("CAD"))].into());
             out.push(set(self.templates.history.clone(), &[(&["date"], text(day.to_string())), (&["netDepositsV2"], m(deposits)), (&["netLiquidationValueV2"], m(worth))]));
             day = day.tomorrow().map_err(|e| Failure::Mismatch(e.to_string()))?;
         }

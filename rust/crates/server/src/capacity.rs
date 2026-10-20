@@ -14,8 +14,9 @@
 //!   (on a book of the depth pair, its deep listing built with `<rows>`), printed as one
 //!   line; `run` starts it.
 //!
-//! A subcommand of the server, as `demo-facts` and `pull-broker` are: what it
-//! measures is the server's own code, which only this binary holds.
+//! A subcommand of the server, as `demo` and `pull-broker` are (those two only in
+//! a build with their features): what it measures is the server's own code, which
+//! only this binary holds.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::{Path, PathBuf};
