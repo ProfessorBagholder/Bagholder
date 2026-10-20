@@ -34,13 +34,15 @@
       <div class="card elev-sm kpi"><div class="lbl">Assets</div><div class="v" use:roll={money0(nw.assetsTotal)}></div><div class="s">{nw.assets.length === 1 ? '1 asset' : nw.assets.length + ' assets'}</div></div>
       <div class="card elev-sm kpi"><div class="lbl">Liabilities</div><div class="v" use:roll={money0(nw.liabilitiesTotal)}></div><div class="s">{nw.liabilities.length === 1 ? '1 debt' : nw.liabilities.length + ' debts'}</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start">
+    <!-- the two cards one height, each list scrolling inside its card, as the app's paired cards do -->
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;height:380px">
       {#each [['Assets', 'Asset', 'Value', nw.assets], ['Liabilities', 'Debt', 'Balance', nw.liabilities]] as const as [title, what, amount, rows] (title)}
-        <div class="card elev-sm" style="padding:16px 18px">
-          <h5 style="margin-bottom:6px">{title}</h5>
+        <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
+          <h5 style="margin-bottom:4px">{title}</h5>
           {#if rows.length}
+            <div class="scroll" style="flex:1;min-height:0">
             <table class="table" style="font-size:12px;table-layout:fixed;width:100%">
-              <thead><tr><th style="text-align:left">{what}</th><th style="text-align:right;width:30%">{amount}</th></tr></thead>
+              <thead><tr><th style="text-align:left;position:sticky;top:0;z-index:1">{what}</th><th style="text-align:right;width:30%;position:sticky;top:0;z-index:1">{amount}</th></tr></thead>
               <tbody>
                 {#each rows as r (r.id)}
                   <tr class="tab">
@@ -50,6 +52,7 @@
                 {/each}
               </tbody>
             </table>
+            </div>
           {:else}
             <div class="muted empty" style="font-size:12px">None.</div>
           {/if}
