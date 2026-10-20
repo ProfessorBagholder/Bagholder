@@ -68,7 +68,8 @@ pub fn read_tokens(v: &Value) -> Read<Tokens> {
 /// sight (brief 19, change 9).
 pub const LOST_REFRESH: &str = "The sign-in lapsed: Wealthsimple's answer to a refresh was lost on the way. Connect Wealthsimple again.";
 
-/// Refreshes run one at a time, in the process.
+/// Refreshes run one at a time, in the process; across processes, the session
+/// file's lock (`SessionFile::hold`).
 static REFRESH: Mutex<()> = Mutex::new(());
 /// Every refresh token Wealthsimple refused: none is posted again. Each is a token the
 /// app held, so the set grows only by sign-ins that lapsed.
@@ -84,6 +85,20 @@ pub struct SessionFile {
 }
 
 impl SessionFile {
+    /// The session's lock, held across reading a refresh token, posting it and
+    /// writing what replaced it: two processes on one data folder (the app and
+    /// `bagholder pull-broker`, say) rotate it one after the other, the second
+    /// adopting the first's tokens instead of posting a token already spent,
+    /// which Wealthsimple answers by revoking the sign-in (RFC 9700 §4.14.2). A
+    /// file of its own beside the session, as the session is replaced whole.
+    pub fn hold(&self) -> Result<std::fs::File, Failure> {
+        let name = self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "session.json".into());
+        let path = self.path.with_file_name(format!("{name}.lock"));
+        let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| Failure::Refused(format!("the sign-in's lock {} could not be opened: {e}", path.display())))?;
+        f.lock().map_err(|e| Failure::Refused(format!("the sign-in's lock {} could not be taken: {e}", path.display())))?;
+        Ok(f)
+    }
+
     pub fn load(&self) -> Result<Option<(Value, Tokens)>, Failure> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
@@ -127,6 +142,7 @@ impl SessionFile {
 /// rotated it; otherwise Wealthsimple's answer to the refresh token, saved.
 pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, Failure> {
     let _one_at_a_time = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    let _across_processes = file.hold()?;
     let (previous, on_disk) = file.load()?.ok_or_else(|| Failure::Lapsed("no saved sign-in".into()))?;
     if on_disk.refresh != held.refresh {
         // rotated by another caller while this one waited: adopt it, post nothing
@@ -142,8 +158,9 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
 /// sign-in, still under the lock. Nothing is written before Wealthsimple has answered
 /// with new tokens: a refusal or no answer leaves the saved sign-in as it was
 /// (`docs/plans/stage-money.md`, part C).
-pub fn take_over(net: &Net, captured: &Tokens, keep: impl FnOnce(&Tokens) -> Result<(), Failure>) -> Result<Tokens, Failure> {
+pub fn take_over(net: &Net, file: &SessionFile, captured: &Tokens, keep: impl FnOnce(&Tokens) -> Result<(), Failure>) -> Result<Tokens, Failure> {
     let _one_at_a_time = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    let _across_processes = file.hold()?;
     let fresh = post_refresh(net, captured)?;
     keep(&fresh)?;
     Ok(fresh)
