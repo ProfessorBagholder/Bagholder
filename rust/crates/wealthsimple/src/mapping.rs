@@ -1015,7 +1015,7 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
 /// it leaving: no row of the move's group in it, no move of its feed leaving
 /// it for this account (or for none named) that is done or under way, and no
 /// transaction of the book's moving out the same cash or units there on those
-/// days.
+/// days, other than an import's (which the pull replaces with this leg).
 fn leaving(root: &Node, row: &Row, out: &mut Mapped) -> Result<(), Failed> {
     if !matches!(row.sub, Some("DESTINATION" | "TRANSFER_IN")) {
         return Ok(());
@@ -1041,11 +1041,13 @@ fn leaving(root: &Node, row: &Row, out: &mut Mapped) -> Result<(), Failed> {
             return Ok(());
         }
     }
-    // the book's own transactions moving it out there on the move's days
+    // the book's own transactions moving it out there on the move's days (an
+    // import's are what Wealthsimple's own rows replace: not its record of it)
     let mut booked_out: Vec<(String, Dec)> = Vec::new();
     if let Ok(list) = root.list("book") {
         for b in list {
-            if b.text("account")? == other {
+            let imported = b.field("imported").is_ok_and(|f| matches!(f.value(), Value::Bool(true)));
+            if b.text("account")? == other && !imported {
                 booked_out.push((b.text("security")?.to_string(), b.dec_text("quantity")?));
             }
         }

@@ -39,6 +39,8 @@
 //!                   book's own transactions moved in those accounts on those
 //!                   days, as the pull saw it, so the positions' change is read
 //!                   net of it (brief 07 §4). The one part not from Wealthsimple.
+//!                   `"imported": true` marks a move of a record of another
+//!                   source (an import), which Wealthsimple's own rows replace
 //! }
 //! ```
 //!
@@ -101,6 +103,9 @@ pub struct BookMove {
     pub day: String,
     /// Decimal text, signed: into the account is positive.
     pub quantity: String,
+    /// From a record of another source than Wealthsimple's (an import): one
+    /// Wealthsimple's own rows replace, no record of the move of its own.
+    pub imported: bool,
 }
 
 impl Record {
@@ -167,6 +172,9 @@ impl Record {
                     o.insert("security".to_string(), Value::String(b.security.clone()));
                     o.insert("day".to_string(), Value::String(b.day.clone()));
                     o.insert("quantity".to_string(), Value::String(b.quantity.clone()));
+                    if b.imported {
+                        o.insert("imported".to_string(), Value::Bool(true));
+                    }
                     Value::Object(o)
                 })
                 .collect();

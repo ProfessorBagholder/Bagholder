@@ -91,11 +91,11 @@ pub fn record_all(r: &mut Ws) -> Vec<(Value, Value, Mapped)> {
         for d in &m.legs {
             if let (Some(i), Some(q)) = (&d.instrument, d.quantity) {
                 if let Some(rf) = i.refs.iter().find(|x| matches!(x.scheme, RefScheme::BrokerSecurity(_))) {
-                    moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Instrument(rf.clone()), quantity: q });
+                    moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Instrument(rf.clone()), quantity: q, imported: false });
                 }
             }
             if let Some(c) = d.cash {
-                moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Cash(c.currency), quantity: c.amount });
+                moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Cash(c.currency), quantity: c.amount, imported: false });
             }
         }
         out.push((row.clone(), payload, m));

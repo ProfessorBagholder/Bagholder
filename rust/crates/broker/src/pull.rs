@@ -64,8 +64,8 @@ pub type Result<T> = std::result::Result<T, bagholder_book::BookError>;
 
 /// The book's own moves, from its transactions, keyed by the broker's ids.
 struct Index {
-    /// (account key, day) → what moved
-    by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec)>>,
+    /// (account key, day) → what moved, and whether from a record of another source
+    by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec, bool)>>,
 }
 
 impl BookMoves for Index {
@@ -74,8 +74,8 @@ impl BookMoves for Index {
         for a in accounts {
             for d in days {
                 if let Some(list) = self.by.get(&(a.clone(), *d)) {
-                    for (what, q) in list {
-                        out.push(Moved { account: a.clone(), day: *d, what: what.clone(), quantity: *q });
+                    for (what, q, imported) in list {
+                        out.push(Moved { account: a.clone(), day: *d, what: what.clone(), quantity: *q, imported: *imported });
                     }
                 }
             }
@@ -142,9 +142,16 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // a row stored before it was final is read again, from its day
     // (from its first day where one's day is not known)
     let mut unsettled: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
+    // a record put together before the adapter read a part it reads now:
+    // added to once, below
+    let mut stale: Vec<(RecordId, json::Value)> = Vec::new();
     for r in book.live_records(&adapter.mapping().source())? {
         if let Some((_, _, payload)) = book.revisions(r)?.pop() {
-            if let Some((account, day)) = json::parse(&payload).ok().and_then(|v| adapter.unsettled(&v)) {
+            let parsed = json::parse(&payload).ok();
+            if let Some(v) = parsed.as_ref().filter(|v| adapter.refreshes(v)) {
+                stale.push((r, v.clone()));
+            }
+            if let Some((account, day)) = parsed.and_then(|v| adapter.unsettled(&v)) {
                 let e = unsettled.entry(account).or_insert(day);
                 *e = match (*e, day) {
                     (Some(a), Some(b)) => Some(a.min(b)),
@@ -239,6 +246,34 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             done += 1;
         }
     }
+    // the records put together before the adapter read a part it reads now,
+    // that part added and derived again: once, as a record holding it is not
+    // stale again
+    let mut refreshed: Vec<RecordId> = Vec::new();
+    if !stale.is_empty() {
+        let mut index = index(book, adapter, &source, &broker)?;
+        for (r, v) in &stale {
+            let key = book.record(*r)?.source_key;
+            match adapter.refresh(v, &mut index) {
+                Some(Ok(payload)) => {
+                    let text = payload.canonical();
+                    let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &text, refs: vec![(scheme.clone(), key.clone())] };
+                    let stored = book.store(adapter.mapping(), &incoming, now)?;
+                    match stored.outcome {
+                        bagholder_book::records::Outcome::New => report.records_new += 1,
+                        bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
+                        bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
+                    }
+                    supersede_copies(book, adapter, stored.record, &payload, &mut report, now)?;
+                    if adapter.reads_positions(&payload) {
+                        refreshed.push(stored.record);
+                    }
+                }
+                Some(Err(f)) => report.failed(format!("record:{key}"), f),
+                None => {}
+            }
+        }
+    }
     let listed: BTreeSet<&str> = rows.iter().map(|r| r.key.as_str()).collect();
     let mut keys_all: BTreeMap<AccountId, Vec<&str>> = BTreeMap::new();
     for a in &stated {
@@ -255,7 +290,8 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // the two sides of each move of holdings: the rows' own accounts and
     // instant join them, and a leg joins the other side's leg of the same
     // instrument and the opposite quantity
-    report.transfers_linked += link_moves(book, &stored_second)?;
+    let linked: Vec<RecordId> = stored_second.iter().map(|(id, _)| *id).chain(refreshed).collect();
+    report.transfers_linked += link_moves(book, &linked)?;
 
     // statements: cash now, units as of the last day read in full, and each
     // day's value after the last one stored. One book account can be several of
@@ -558,7 +594,51 @@ fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookM
         bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
         bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
     }
+    supersede_copies(book, adapter, stored.record, &payload, report, now)?;
     Ok(Some(stored.record))
+}
+
+/// A record whose row books a leg in another account than its own (a move
+/// whose other side the broker states by its arrival alone, booked leaving
+/// the other account too): the records of other sources (an import) that hold
+/// nothing but such legs, each one of these legs again (its account, kind,
+/// what it moved, the same day or the next or the one before), are superseded
+/// by it, as an imported record of the row's own id is.
+fn supersede_copies(book: &Book, adapter: &dyn BrokerAdapter, record: RecordId, payload: &json::Value, report: &mut Report, now: jiff::Timestamp) -> Result<()> {
+    let Some((key, _)) = adapter.placed(payload) else { return Ok(()) };
+    let Some(own) = book.account_by_ref(&AccountRef::new(adapter.broker(), key))? else { return Ok(()) };
+    // most records book nothing elsewhere: the book's transactions read only for one that does
+    if book.transactions_of(record)?.iter().all(|t| t.account == own) {
+        return Ok(());
+    }
+    let all = book.transactions_as_named()?;
+    let elsewhere: Vec<&Transaction> = all.iter().filter(|t| t.id.record == record && t.account != own).collect();
+    if elsewhere.is_empty() {
+        return Ok(());
+    }
+    let like = |a: &Transaction, b: &Transaction| {
+        a.account == b.account && a.kind == b.kind && a.cash == b.cash && a.instrument == b.instrument && a.quantity == b.quantity && (a.trade_date - b.trade_date).get_days().abs() <= 1
+    };
+    let source = adapter.mapping().source();
+    let candidates: BTreeSet<RecordId> = all.iter().filter(|t| t.id.record != record && elsewhere.iter().any(|e| like(e, t))).map(|t| t.id.record).collect();
+    let mut copies = Vec::new();
+    for r in candidates {
+        let rec = book.record(r)?;
+        if rec.state != RecordState::Live || rec.source == source {
+            continue;
+        }
+        let theirs: Vec<&Transaction> = all.iter().filter(|t| t.id.record == r).collect();
+        if theirs.iter().all(|t| elsewhere.iter().any(|e| like(e, t))) {
+            copies.push(r);
+        }
+    }
+    // one copy a leg: more is not which
+    if copies.is_empty() || copies.len() > elsewhere.len() {
+        return Ok(());
+    }
+    report.superseded += copies.len();
+    book.supersede(&copies, &[record], "the broker's own row, booking the move leaving this account", now)?;
+    Ok(())
 }
 
 /// The book's own moves, by the broker's account and instrument ids, leaving
@@ -581,13 +661,22 @@ fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::Sour
         }
     }
     let mut instrument_ref: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::instrument::Reference>> = BTreeMap::new();
-    let mut by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec)>> = BTreeMap::new();
+    let mut by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec, bool)>> = BTreeMap::new();
+    let mut imported: BTreeMap<RecordId, bool> = BTreeMap::new();
     // each move under the broker's own id for what it moved
     for t in book.transactions_as_named()? {
         if skip.contains(&t.id.record) || t.kind == Kind::Unclassified {
             continue;
         }
         let Some(a) = account_key.get(&t.account) else { continue };
+        let other = match imported.get(&t.id.record) {
+            Some(o) => *o,
+            None => {
+                let o = &book.record(t.id.record)?.source != source;
+                imported.insert(t.id.record, o);
+                o
+            }
+        };
         let key = (a.clone(), t.trade_date);
         if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
             let r = match instrument_ref.get(&i) {
@@ -599,20 +688,20 @@ fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::Sour
                 }
             };
             if let Some(r) = r {
-                by.entry(key.clone()).or_default().push((MovedWhat::Instrument(r), q));
+                by.entry(key.clone()).or_default().push((MovedWhat::Instrument(r), q, other));
             }
         }
         if let Some(c) = t.cash {
-            by.entry(key).or_default().push((MovedWhat::Cash(c.currency), c.amount));
+            by.entry(key).or_default().push((MovedWhat::Cash(c.currency), c.amount, other));
         }
     }
     Ok(Index { by })
 }
 
 /// Link the out and in legs of each move of holdings stored in this pull.
-fn link_moves(book: &Book, stored: &[(RecordId, &Row)]) -> Result<usize> {
+fn link_moves(book: &Book, stored: &[RecordId]) -> Result<usize> {
     let mut linked = 0;
-    let txs: Vec<(RecordId, Vec<Transaction>)> = stored.iter().map(|(id, _)| Ok((*id, book.transactions_of(*id)?))).collect::<Result<_>>()?;
+    let txs: Vec<(RecordId, Vec<Transaction>)> = stored.iter().map(|id| Ok((*id, book.transactions_of(*id)?))).collect::<Result<_>>()?;
     let outs: Vec<&Transaction> = txs.iter().flat_map(|(_, t)| t.iter()).filter(|t| t.kind == Kind::TransferOut && t.instrument.is_some()).collect();
     let ins: Vec<&Transaction> = txs.iter().flat_map(|(_, t)| t.iter()).filter(|t| t.kind == Kind::TransferIn && t.instrument.is_some()).collect();
     for o in &outs {

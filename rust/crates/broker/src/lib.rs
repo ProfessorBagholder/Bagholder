@@ -117,6 +117,10 @@ pub struct Moved {
     pub day: jiff::civil::Date,
     pub what: MovedWhat,
     pub quantity: Dec,
+    /// From a record of another source than the broker's own (an import): one
+    /// the broker's own rows replace, so it is no record of the broker's of the
+    /// move.
+    pub imported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -224,6 +228,21 @@ pub trait BrokerAdapter {
     /// A stored record's account and day: whether a read of that account
     /// from a day covers it.
     fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
+    /// Whether `refresh` has something to add to a stored record: asked of
+    /// every stored record, so it reads nothing.
+    fn refreshes(&self, payload: &Value) -> bool {
+        let _ = payload;
+        false
+    }
+    /// A stored record put together before the adapter read a part it reads
+    /// now: the record with that part added, its other parts as stored, read
+    /// once by the pull after the accounts and their activity. None where the
+    /// record lacks nothing (or what it lacks cannot be read: it is asked
+    /// again on the next pull).
+    fn refresh(&mut self, payload: &Value, book: &mut dyn BookMoves) -> Option<Answer<Value>> {
+        let _ = (payload, book);
+        None
+    }
     /// The day the broker files an instant under.
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
     /// Each account's cash per currency now: an account left out is one the

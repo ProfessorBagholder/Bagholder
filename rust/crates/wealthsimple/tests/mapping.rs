@@ -643,7 +643,13 @@ fn a_move_arriving_from_an_account_whose_feed_states_nothing_leaving_books_it_le
     });
     let m = map_payload(&booked);
     assert_eq!(m.legs.len(), 1, "{:?}", m.legs);
-    assert!(legs_in(&m, "anon-resp-1").is_empty());
+    assert!(legs_in(&m, "anon-resp-1").is_empty());    // an import's of it is not Wealthsimple's record of it: the pull replaces it with this leg
+    let mut imported = payload.clone();
+    edit(&mut imported, "book", |b| {
+        let Value::Array(list) = b else { panic!() };
+        list.push(json::parse(r#"{"account":"anon-resp-1","security":"sec-c-cad","day":"2025-06-16","quantity":"-4321.10","imported":true}"#).unwrap());
+    });
+    assert_eq!(legs_in(&map_payload(&imported), "anon-resp-1").len(), 1);
 }
 
 /// A move whose both rows Wealthsimple states books one leg in each account,

@@ -90,6 +90,16 @@ fn around(day: &str) -> Vec<String> {
     [d.yesterday().ok(), Some(d), d.tomorrow().ok()].into_iter().flatten().map(|d| d.to_string()).collect()
 }
 
+/// The moves of account `o`, the other account of a move arriving from it, over
+/// the days of the move's group (`siblings`, or its own `day`) and a day either
+/// side; None where that account's feed over them is not read.
+pub fn opposing(o: &str, siblings: &[Value], day: &str, replies: &mut dyn Replies) -> Option<Opposing> {
+    let (first, last) = span(siblings, day);
+    let (from, to) = (shift(&first, -1).unwrap_or(first), shift(&last, 1).unwrap_or(last));
+    let rows = replies.opposing(o, &from, &to)?;
+    Some(Opposing { account: o.to_string(), rows: rows.into_iter().filter(|x| Node::root(x).text("accountId").ok() == Some(o) && is_move(&Node::root(x))).collect() })
+}
+
 /// What the row needs, from the row alone. `day` is the day the row is filed
 /// under.
 pub fn needs(row: &Value, day: &str) -> Read<Needs> {
@@ -239,9 +249,7 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
     }
     // the other account's moves over the move's days, a day either side
     if let Some(o) = &needs.opposing {
-        let (first, last) = span(&r.siblings, day);
-        let (from, to) = (shift(&first, -1).unwrap_or(first), shift(&last, 1).unwrap_or(last));
-        r.opposing = replies.opposing(o, &from, &to).map(|rows| Opposing { account: o.clone(), rows: rows.into_iter().filter(|x| Node::root(x).text("accountId").ok() == Some(o.as_str()) && is_move(&Node::root(x))).collect() });
+        r.opposing = opposing(o, &r.siblings, day, replies);
     }
     for (account, d) in &positions {
         if let Some(nodes) = replies.positions(account, d) {
