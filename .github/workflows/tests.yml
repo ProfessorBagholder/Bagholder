@@ -50,6 +50,10 @@ jobs:
       - name: The lock file is current
         run: cargo metadata --locked --format-version 1 > /dev/null
         working-directory: rust
+      # a start is traced to show it opens no store but the book and the market
+      # cache (`server/tests/start_failures.rs`)
+      - name: strace
+        run: sudo apt-get update && sudo apt-get install -y strace
       # a warning fails the build: the workspace is kept warning-free
       - name: The Rust suite
         env:
