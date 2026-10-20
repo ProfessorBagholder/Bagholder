@@ -145,11 +145,17 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // a record put together before the adapter read a part it reads now:
     // added to once, below
     let mut stale: Vec<(RecordId, json::Value)> = Vec::new();
+    // the stored records holding another account's rows over some days, by
+    // that account: a row of it recorded now is added to them (`amend`)
+    let mut watching: Watching = BTreeMap::new();
     for r in book.live_records(&adapter.mapping().source())? {
         if let Some((_, _, payload)) = book.revisions(r)?.pop() {
             let parsed = json::parse(&payload).ok();
             if let Some(v) = parsed.as_ref().filter(|v| adapter.refreshes(v)) {
                 stale.push((r, v.clone()));
+            }
+            if let Some(a) = parsed.as_ref().and_then(|v| adapter.watches(v)) {
+                watching.entry(a).or_default().push(r);
             }
             if let Some((account, day)) = parsed.and_then(|v| adapter.unsettled(&v)) {
                 let e = unsettled.entry(account).or_insert(day);
@@ -232,7 +238,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     let mut empty = Index { by: BTreeMap::new() };
     for row in &first {
         step(Step::Recording { done, of: recording });
-        store_row(book, adapter, &mut empty, connection, row, &scheme, &mut report, now)?;
+        store_row(book, adapter, &mut empty, connection, row, &scheme, &watching, &mut report, now)?;
         done += 1;
     }
     let mut stored_second: Vec<(RecordId, &Row)> = Vec::new();
@@ -240,7 +246,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         let mut index = index(book, adapter, &source, &broker)?;
         for row in &second {
             step(Step::Recording { done, of: recording });
-            if let Some(id) = store_row(book, adapter, &mut index, connection, row, &scheme, &mut report, now)? {
+            if let Some(id) = store_row(book, adapter, &mut index, connection, row, &scheme, &watching, &mut report, now)? {
                 stored_second.push((id, row));
             }
             done += 1;
@@ -563,9 +569,15 @@ fn unlisted(
     Ok(out)
 }
 
-/// Store one row's record, replacing the imported record of the same broker id.
+/// The stored records holding another account's rows over some days, by that
+/// account's key.
+type Watching = BTreeMap<String, Vec<RecordId>>;
+
+/// Store one row's record, replacing the imported record of the same broker id,
+/// and adding the row to each stored record holding its account's rows over
+/// its day: one write, so no reader sees the book between the two.
 #[allow(clippy::too_many_arguments)]
-fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookMoves, connection: ConnectionId, row: &Row, scheme: &str, report: &mut Report, now: jiff::Timestamp) -> Result<Option<RecordId>> {
+fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookMoves, connection: ConnectionId, row: &Row, scheme: &str, watching: &Watching, report: &mut Report, now: jiff::Timestamp) -> Result<Option<RecordId>> {
     let payload = match adapter.record(row, moves) {
         Ok(p) => p,
         Err(f) => {
@@ -583,19 +595,42 @@ fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookM
             replaces.push(r);
         }
     }
-    let stored = if replaces.is_empty() {
-        book.store(adapter.mapping(), &incoming, now)?
-    } else {
-        report.superseded += replaces.len();
-        book.store_superseding(adapter.mapping(), &incoming, &replaces, "the broker's own row", now)?
-    };
-    match stored.outcome {
-        bagholder_book::records::Outcome::New => report.records_new += 1,
-        bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
-        bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
-    }
-    supersede_copies(book, adapter, stored.record, &payload, report, now)?;
-    Ok(Some(stored.record))
+    book.atomically(|| {
+        let stored = if replaces.is_empty() {
+            book.store(adapter.mapping(), &incoming, now)?
+        } else {
+            report.superseded += replaces.len();
+            book.store_superseding(adapter.mapping(), &incoming, &replaces, "the broker's own row", now)?
+        };
+        match stored.outcome {
+            bagholder_book::records::Outcome::New => report.records_new += 1,
+            bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
+            bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
+        }
+        supersede_copies(book, adapter, stored.record, &payload, report, now)?;
+        // the stored records holding this account's rows over the row's day:
+        // the row added, and each derived again (a move's arrival that booked
+        // it leaving here, now that its own row is read, books it no more)
+        for r in watching.get(&row.account).into_iter().flatten() {
+            if *r == stored.record {
+                continue;
+            }
+            let rec = book.record(*r)?;
+            if rec.state != RecordState::Live {
+                continue;
+            }
+            let Some((_, _, held)) = book.revisions(*r)?.pop() else { continue };
+            let Ok(held) = json::parse(&held) else { continue };
+            if let Some(amended) = adapter.amend(&held, row) {
+                let text = amended.canonical();
+                let incoming = Incoming { connection: Some(connection), source_key: &rec.source_key, payload: &text, refs: vec![(scheme.to_string(), rec.source_key.clone())] };
+                if let bagholder_book::records::Outcome::Revised(_) = book.store(adapter.mapping(), &incoming, now)?.outcome {
+                    report.records_revised += 1;
+                }
+            }
+        }
+        Ok(Some(stored.record))
+    })
 }
 
 /// A record whose row books a leg in another account than its own (a move

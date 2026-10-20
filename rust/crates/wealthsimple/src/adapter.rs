@@ -474,6 +474,42 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         }
         Ok(record?.to_value())
     }
+    fn watches(&self, payload: &Value) -> Option<String> {
+        Node::root(payload).obj("opposing").ok()?.text("account").ok().map(str::to_string)
+    }
+    fn amend(&self, payload: &Value, row: &Row) -> Option<Value> {
+        let root = Node::root(payload);
+        let held = root.obj("opposing").ok()?;
+        let r = Node::root(&row.value);
+        if held.text("account").ok()? != row.account || r.text("accountId").ok()? != row.account || !assemble::is_move(&r) {
+            return None;
+        }
+        // within the days its rows were read over
+        let day = self.day_of(root.obj("activity").ok()?.value())?.to_string();
+        let siblings: Vec<Value> = match root.list("siblings") {
+            Ok(l) => l.into_iter().map(|n| n.value().clone()).collect(),
+            // a move read with no group (one of cash) has no siblings part
+            Err(_) => vec![],
+        };
+        let (first, last) = assemble::days_read(&siblings, &day);
+        let on = self.day_of(&row.value)?.to_string();
+        if on < first || on > last {
+            return None;
+        }
+        let id = r.text("canonicalId").ok()?;
+        let mut rows: Vec<Value> = held.list("rows").ok()?.into_iter().map(|n| n.value().clone()).collect();
+        match rows.iter().position(|x| Node::root(x).text("canonicalId").ok() == Some(id)) {
+            Some(i) if rows[i] == row.value => return None,
+            Some(i) => rows[i] = row.value.clone(),
+            None => rows.push(row.value.clone()),
+        }
+        let Value::Object(mut out) = payload.clone() else { return None };
+        let record = crate::record::Record { opposing: Some(crate::record::Opposing { account: row.account.clone(), rows }), ..crate::record::Record::of(Value::Null) };
+        if let Value::Object(part) = record.to_value() {
+            out.extend(part.into_iter().filter(|(k, _)| k == "opposing"));
+        }
+        Some(Value::Object(out))
+    }
     fn refreshes(&self, payload: &Value) -> bool {
         self.lacks_opposing(payload).is_some_and(|o| self.stated.contains(o) || self.read_from.contains_key(o))
     }

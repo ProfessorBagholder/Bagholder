@@ -243,6 +243,20 @@ pub trait BrokerAdapter {
         let _ = (payload, book);
         None
     }
+    /// The other account whose rows a stored record holds over some days, as
+    /// they were when it was put together: a row of it recorded later is
+    /// given to `amend`.
+    fn watches(&self, payload: &Value) -> Option<String> {
+        let _ = payload;
+        None
+    }
+    /// A stored record that holds `row`'s account's rows over some days, with
+    /// `row` added where it falls in them and is not held as it is now; None
+    /// where nothing changes. The record is derived again from it.
+    fn amend(&self, payload: &Value, row: &Row) -> Option<Value> {
+        let _ = (payload, row);
+        None
+    }
     /// The day the broker files an instant under.
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
     /// Each account's cash per currency now: an account left out is one the

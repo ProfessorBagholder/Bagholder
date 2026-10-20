@@ -94,10 +94,16 @@ fn around(day: &str) -> Vec<String> {
 /// the days of the move's group (`siblings`, or its own `day`) and a day either
 /// side; None where that account's feed over them is not read.
 pub fn opposing(o: &str, siblings: &[Value], day: &str, replies: &mut dyn Replies) -> Option<Opposing> {
-    let (first, last) = span(siblings, day);
-    let (from, to) = (shift(&first, -1).unwrap_or(first), shift(&last, 1).unwrap_or(last));
+    let (from, to) = days_read(siblings, day);
     let rows = replies.opposing(o, &from, &to)?;
     Some(Opposing { account: o.to_string(), rows: rows.into_iter().filter(|x| Node::root(x).text("accountId").ok() == Some(o) && is_move(&Node::root(x))).collect() })
+}
+
+/// The first and last days a move's other account's rows are read over: its
+/// group's days (`siblings`, or its own `day`) and a day either side.
+pub fn days_read(siblings: &[Value], day: &str) -> (String, String) {
+    let (first, last) = span(siblings, day);
+    (shift(&first, -1).unwrap_or(first), shift(&last, 1).unwrap_or(last))
 }
 
 /// What the row needs, from the row alone. `day` is the day the row is filed
