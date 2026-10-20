@@ -1,7 +1,7 @@
 #!/bin/bash
 # The filings-model benchmark (brief 70). Runs the same engine build, models and
 # filing texts on any machine; GPU on and GPU off. Everything it downloads lives in
-# a temporary folder that is deleted when it ends, whatever way it ends. It starts
+# a temporary folder under $TMPDIR that is deleted when it ends, whatever way it ends. It starts
 # one llama-server at a time on 127.0.0.1:18080 and stops it before the next.
 # Usage: ./bench.sh            (writes results-<host>.md in the current folder)
 set -euo pipefail
@@ -10,7 +10,8 @@ NGLS="${NGLS:-99 0}"   # GPU on, then off; NGLS=0 on a machine with no usable GP
 REPS="${REPS:-2}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT="$PWD/results-$(hostname -s)${OUT_SUFFIX:-}.md"
-WORK=$(mktemp -d)
+# under $TMPDIR, which a sandboxed session may write to (macOS mktemp ignores TMPDIR otherwise)
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/llm-bench.XXXXXX")
 SERVER=""
 cleanup() { [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null; wait 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
