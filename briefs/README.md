@@ -81,3 +81,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 68 | [#557 as built: not yet; ownership of debts, and the balance sign from a real reply](68-outside-debts-as-built.md) | Applied in #557 (capture taken; figures replaced at 381d5cdc) |
 | 69 | [#559, a SEDAR+ document past the first page: two changes](69-sedar-document-paging.md) | Built in #559; released in v2.7.0 |
 | 70 | [Filings made readable, fast, on any device: regulators' data first, then one call to Qwen3.5-2B on the GPU](70-filings-readable-fast.md) | Current; kit and results in [70/](70/) |
+| 71 | [Code carried over and never re-examined: four areas audited, defects to fix, code to delete](71-carried-over-audit.md) | Current |
