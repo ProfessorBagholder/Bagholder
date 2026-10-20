@@ -93,6 +93,8 @@ mod tests {
             ("QueueRow", key::<QueueRow>()),
             ("Slice", key::<Slice>()),
             ("OwedDebt", key::<crate::wire::figures::OwedDebt>()),
+            ("UnstatedDays", key::<crate::wire::figures::UnstatedDays>()),
+            ("NetWorthPoint", key::<crate::wire::figures::NetWorthPoint>()),
             ("AskedPayee", key::<crate::wire::figures::AskedPayee>()),
             ("Account", key::<Account>()),
             ("CashflowTile", key::<CashflowTile>()),

@@ -987,7 +987,7 @@ impl Source for Generated {
             .collect())
     }
 
-    fn net_worth_history(&mut self, _accounts: &[String], _outside: &[String]) -> Answer<Option<Vec<Value>>> {
+    fn net_worth_history(&mut self, _accounts: &[String], _outside: &[String], _start: jiff::civil::Date, _end: jiff::civil::Date) -> Answer<Option<Vec<Value>>> {
         // the made-up person holds nothing outside: no history of it to read
         self.asked += 1;
         Ok(None)

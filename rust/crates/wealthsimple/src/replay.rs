@@ -224,7 +224,7 @@ impl Source for Replay {
         self.asked.push("balances".into());
         Ok(self.balances.clone())
     }
-    fn net_worth_history(&mut self, _accounts: &[String], _outside: &[String]) -> Answer<Option<Vec<Value>>> {
+    fn net_worth_history(&mut self, _accounts: &[String], _outside: &[String], _start: jiff::civil::Date, _end: jiff::civil::Date) -> Answer<Option<Vec<Value>>> {
         // no capture holds it yet: not read
         Ok(None)
     }

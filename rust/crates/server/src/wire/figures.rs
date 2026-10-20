@@ -362,19 +362,41 @@ pub struct NetWorth {
     /// The broker's own accounts first (their value after margin), then each outside asset.
     pub assets: Vec<OwedDebt>,
     pub liabilities: Vec<OwedDebt>,
-    /// Net worth by day, oldest first, as Wealthsimple's net worth feature states it.
-    pub history: Vec<Point>,
-    /// Everything held and everything owed by day, each counted as today's are
-    /// (the investments before margin, margin a debt): the days whose debts are
-    /// known, oldest first, each day in both.
-    pub assets_history: Vec<Point>,
-    pub debts_history: Vec<Point>,
+    /// Net worth by day, oldest first, every day from the first anything in scope
+    /// is stated to today, whose point is the tiles' figures: each day's latest
+    /// statement of each account and each thing held or owed outside.
+    pub history: Vec<NetWorthPoint>,
+    /// The days that cannot be stated yet, in runs of consecutive days waiting on
+    /// the same things, oldest first: in no series above, and said under the chart.
+    pub unstated: Vec<UnstatedDays>,
     /// Under a range ending before today: its last day, whose totals these are;
     /// no item's own balance is stated for a past day, so no item is listed.
     pub past_day: Option<String>,
     /// Under a holding's filter: the holdings' value alone, with no debt and no
     /// net worth by day.
     pub holdings: bool,
+}
+
+/// One day's net worth (`v`), everything held (`a`) and everything owed (`o`),
+/// each counted as today's are (the investments before margin, margin a debt).
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = d)]
+pub struct NetWorthPoint {
+    pub d: String,
+    pub v: Dec,
+    pub a: Dec,
+    pub o: Dec,
+}
+
+/// A run of consecutive days whose net worth cannot be stated, and what each
+/// waits on, as the gap words `SPEC.md` lists.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = from)]
+#[serde(rename_all = "camelCase")]
+pub struct UnstatedDays {
+    pub from: String,
+    pub to: String,
+    pub gaps: Vec<String>,
 }
 
 /// One debt held outside, as the broker's net worth feature states it.

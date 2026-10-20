@@ -1,11 +1,12 @@
 <script lang="ts">
-  // Net worth: everything held less everything owed, inside Wealthsimple and out,
-  // as Wealthsimple's own net worth feature counts it. The investments are the
-  // Wealthsimple accounts at their value after margin; the rest is what the person
-  // linked or entered in that feature.
+  // Net worth: everything held less everything owed, inside Wealthsimple and out.
+  // The investments are the Wealthsimple accounts at their value after margin; the
+  // rest is what the person linked or entered in Wealthsimple's net worth feature.
+  // By day, every day from the first anything is stated to today: each account's
+  // and each outside item's latest statement on or before the day, today the tiles.
   import { roll } from './actions/roll'
   import type { PositionsDoc, EquityPoint } from './model'
-  import { money0, stamp, stampDay } from './fmt'
+  import { money0, stamp, stampDay, waiting } from './fmt'
   import { abs, plot } from './dec'
 
   let { model }: { model: PositionsDoc } = $props()
@@ -51,8 +52,12 @@
     return { ticks, lines: drawn, up: first.length ? first[first.length - 1] >= 0 : true }
   }
   const split = $derived(mode === 'split')
-  // the days drawn: each line's points, the first line's days the hover's
-  const eqLines = $derived(split ? [nw?.assetsHistory ?? [], nw?.debtsHistory ?? []] : [nw?.history ?? []])
+  // the days drawn: each line's points, the first line's days the hover's; every
+  // day carries its net worth, assets and debts, so the lines share their days
+  const days = $derived(nw?.history ?? [])
+  const eqLines = $derived<EquityPoint[][]>(
+    split ? [days.map((p) => ({ d: p.d, v: p.a })), days.map((p) => ({ d: p.d, v: p.o }))] : [days.map((p) => ({ d: p.d, v: p.v }))],
+  )
   const eqSeries = $derived(eqLines[0])
   const g = $derived(eqSeries.length > 1 ? eqGeom(eqLines) : null)
   const eqTick = (v: number) => (v < 0 ? '−$' : '$') + Math.abs(Math.round(v)).toLocaleString('en-US')
@@ -64,8 +69,6 @@
     for (let i = 0; i < want; i++) out.push(stamp(s[Math.round((i * (s.length - 1)) / Math.max(1, want - 1))].d))
     return [...new Set(out)]
   })
-  // net worth by day, for the split view's hover
-  const netOn = $derived(new Map((nw?.history ?? []).map((p) => [p.d, p.v])))
   let eqPlot = $state<HTMLElement>()
   let eqHover = $state<{ x: string; ys: string[]; rows: { label: string; v: string; cls: string }[]; tl: string; tx: string } | null>(null)
   function onEqMove(e: MouseEvent) {
@@ -75,7 +78,6 @@
     const i = Math.max(0, Math.min(s.length - 1, Math.round(((e.clientX - r.left) / r.width) * (s.length - 1))))
     const frac = i / Math.max(1, s.length - 1)
     const sign = (v: EquityPoint['v']) => (abs(v) === v ? 'pos' : 'neg')
-    const net = netOn.get(s[i].d)
     eqHover = {
       x: (frac * 100).toFixed(2) + '%',
       ys: g.lines.map((l) => ((l.pts[i][1] / 260) * 100).toFixed(2) + '%'),
@@ -83,7 +85,7 @@
         ? [
             { label: 'Assets', v: money0(s[i].v), cls: 'pos' },
             { label: 'Debts', v: money0(eqLines[1][i].v), cls: 'neg' },
-            ...(net !== undefined ? [{ label: 'Net worth', v: money0(net), cls: '' }] : []),
+            { label: 'Net worth', v: money0(days[i].v), cls: '' },
           ]
         : [{ label: '', v: money0(s[i].v), cls: sign(s[i].v) }],
       tl: stampDay(s[i].d),
@@ -140,7 +142,7 @@
         </div>
       </div>
       {#if !g}
-        <div class="empty muted" style="padding:40px 0">{nw.holdings ? 'A holding’s value by day is not kept, so there is no history under a holding filter. Filter by account to see one over time.' : split && (nw.history ?? []).length > 1 ? 'What the debts came to by day is not read yet. It is read from Wealthsimple with the balances, once a day.' : 'No history in the selection yet. It is read from Wealthsimple with the balances, once a day.'}</div>
+        <div class="empty muted" style="padding:40px 0">{nw.holdings ? 'A holding’s value by day is not kept, so there is no history under a holding filter. Filter by account to see one over time.' : 'No history in the selection yet. It is read from Wealthsimple with the balances.'}</div>
       {:else}
         <div style="display:flex;gap:10px">
           <div class="tab" style="position:relative;width:56px;height:260px;flex:none;font-size:10px;color:var(--ink55)">
@@ -176,12 +178,19 @@
           {#each eqAxis as a (a)}<span>{a}</span>{/each}
         </div>
       {/if}
+      {#if nw.unstated.length}
+        <!-- a day that cannot be stated is not drawn, and is said: its days and what it waits on -->
+        <div class="muted unstated" style="font-size:11px;margin-top:8px">
+          Not drawn:
+          {#each nw.unstated as u, i (u.from)}{i ? '; ' : ' '}{u.from === u.to ? stampDay(u.from) : stampDay(u.from) + ' to ' + stampDay(u.to)}, waiting on the {waiting({ gaps: u.gaps }).replace(/^— /, '') || 'figures'}{/each}.
+        </div>
+      {/if}
     </div>
     <!-- the two cards one height, each list scrolling inside its card, as the app's paired cards do -->
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;height:380px">
-      {#each [['Assets', 'Asset', 'Value', nw.assets], ['Liabilities', 'Debt', 'Balance', nw.liabilities]] as const as [title, what, amount, rows] (title)}
+      {#each [['Assets', 'Asset', 'Value', nw.assets], ['Liabilities', 'Debt', 'Balance', nw.liabilities]] as const as [heading, what, amount, rows] (heading)}
         <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
-          <h5 style="margin-bottom:4px">{title}</h5>
+          <h5 style="margin-bottom:4px">{heading}</h5>
           {#if rows.length}
             <div class="scroll" style="flex:1;min-height:0">
             <table class="table" style="font-size:12px;table-layout:fixed;width:100%">

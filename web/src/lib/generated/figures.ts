@@ -183,21 +183,26 @@ amount: Fig<Dec>,
  */
 asOf: string | null, };
 
+export type UnstatedDays = { from: string, to: string, gaps: Array<string>, };
+
+export type NetWorthPoint = { d: string, v: Dec, a: Dec, o: Dec, };
+
 export type NetWorth = { netWorth: Fig<Dec>, assetsTotal: Fig<Dec>, liabilitiesTotal: Fig<Dec>, 
 /**
  * The broker's own accounts first (their value after margin), then each outside asset.
  */
 assets: Array<OwedDebt>, liabilities: Array<OwedDebt>, 
 /**
- * Net worth by day, oldest first, as Wealthsimple's net worth feature states it.
+ * Net worth by day, oldest first, every day from the first anything in scope
+ * is stated to today, whose point is the tiles' figures: each day's latest
+ * statement of each account and each thing held or owed outside.
  */
-history: Array<Point>, 
+history: Array<NetWorthPoint>, 
 /**
- * Everything held and everything owed by day, each counted as today's are
- * (the investments before margin, margin a debt): the days whose debts are
- * known, oldest first, each day in both.
+ * The days that cannot be stated yet, in runs of consecutive days waiting on
+ * the same things, oldest first: in no series above, and said under the chart.
  */
-assetsHistory: Array<Point>, debtsHistory: Array<Point>, 
+unstated: Array<UnstatedDays>, 
 /**
  * Under a range ending before today: its last day, whose totals these are;
  * no item's own balance is stated for a past day, so no item is listed.

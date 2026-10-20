@@ -39,13 +39,13 @@ pub struct Withdrawal {
 /// feature types them (brief 23, the bundle's type map).
 pub const LIABILITY_TYPES: [&str; 9] = ["CreditCard", "LineOfCredit", "Heloc", "Mortgage", "AutoLoan", "InstallmentLoan", "PersonalLoan", "StudentLoan", "OtherLiability"];
 
-/// A day's net worth as the broker's net worth feature states it, and what the
-/// debts held outside came to that day (owed positive), where that was read.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NetWorthDay {
+/// One outside account's balance on one day, as the broker's net worth feature
+/// states it of that account alone: owed positive for a debt, the value for an
+/// asset, as `OutsideDebt::balance` is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutsideDay {
     pub day: jiff::civil::Date,
     pub amount: Dec,
-    pub owed: Option<Dec>,
     pub currency: Currency,
 }
 
@@ -75,40 +75,38 @@ impl Book {
         Ok(())
     }
 
-    /// Keep net worth by day as one read states it, in place of the last.
-    pub fn keep_net_worth_days(&self, days: &[NetWorthDay], at: jiff::Timestamp) -> Result<()> {
+    /// Keep what one read states of an outside account's balance by day over
+    /// `from..=to`: the days held for it in that span are replaced, those outside
+    /// it kept (an earlier read of a longer span, stated weekly, beside a newer
+    /// one of a short span, stated daily).
+    pub fn keep_outside_days(&self, entity: &str, from: jiff::civil::Date, to: jiff::civil::Date, days: &[OutsideDay], at: jiff::Timestamp) -> Result<()> {
         let tx = self.conn().unchecked_transaction()?;
-        tx.execute("DELETE FROM net_worth_days", [])?;
-        for d in days {
-            tx.execute("INSERT INTO net_worth_days (day, amount, owed, currency, read_at) VALUES (?, ?, ?, ?, ?)", params![text::day(d.day), d.amount.to_string(), d.owed.map(|o| o.to_string()), d.currency.as_str(), text::at(at)])?;
+        tx.execute("DELETE FROM outside_days WHERE entity_id = ? AND day >= ? AND day <= ?", params![entity, text::day(from), text::day(to)])?;
+        for d in days.iter().filter(|d| from <= d.day && d.day <= to) {
+            tx.execute("INSERT INTO outside_days (entity_id, day, amount, currency, read_at) VALUES (?, ?, ?, ?, ?)", params![entity, text::day(d.day), d.amount.to_string(), d.currency.as_str(), text::at(at)])?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Net worth by day, oldest first.
-    pub fn net_worth_days(&self) -> Result<Vec<NetWorthDay>> {
-        let mut stmt = self.conn().prepare("SELECT day, amount, owed, currency FROM net_worth_days ORDER BY day")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?;
-        let t = "net_worth_days";
-        rows.map(|row| {
-            let (d, v, o, c) = row?;
-            Ok(NetWorthDay { day: text::date(t, "day", &d)?, amount: text::dec(t, "amount", &v)?, owed: o.map(|o| text::dec(t, "owed", &o)).transpose()?, currency: text::currency(t, "currency", &c)? })
-        })
-        .collect()
-    }
-
-    /// When net worth by day was last read, if ever.
-    pub fn net_worth_read_at(&self) -> Result<Option<jiff::Timestamp>> {
-        let at: Option<String> = self.conn().query_row("SELECT MAX(read_at) FROM net_worth_days", [], |r| r.get(0))?;
-        text::opt_instant("net_worth_days", "read_at", at)
+    /// Each outside account's balance by day, oldest first, by its id.
+    pub fn outside_days(&self) -> Result<std::collections::BTreeMap<String, Vec<OutsideDay>>> {
+        let mut stmt = self.conn().prepare("SELECT entity_id, day, amount, currency FROM outside_days ORDER BY entity_id, day")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+        let t = "outside_days";
+        let mut out: std::collections::BTreeMap<String, Vec<OutsideDay>> = std::collections::BTreeMap::new();
+        for row in rows {
+            let (e, d, v, c) = row?;
+            out.entry(e).or_default().push(OutsideDay { day: text::date(t, "day", &d)?, amount: text::dec(t, "amount", &v)?, currency: text::currency(t, "currency", &c)? });
+        }
+        Ok(out)
     }
 
     /// What a fingerprint of the outside debts and the answers about them reads
     /// now: it moves with every read kept and every answer given.
     pub fn debts_print(&self) -> Result<String> {
         Ok(self.conn().query_row(
-            "SELECT COALESCE((SELECT MAX(read_at) FROM outside_debts), '') || '|' || (SELECT COUNT(*) FROM repayment_answers) || '|' || COALESCE((SELECT MAX(answered_at) FROM repayment_answers), '') || '|' || COALESCE((SELECT MAX(read_at) FROM net_worth_days), '')",
+            "SELECT COALESCE((SELECT MAX(read_at) FROM outside_debts), '') || '|' || (SELECT COUNT(*) FROM repayment_answers) || '|' || COALESCE((SELECT MAX(answered_at) FROM repayment_answers), '') || '|' || COALESCE((SELECT MAX(read_at) FROM outside_days), '')",
             [],
             |r| r.get::<_, String>(0),
         )?)

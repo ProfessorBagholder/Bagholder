@@ -722,12 +722,22 @@ fn net_worth(engine: &Engine, pf: &bagholder_engine::scope::Portfolio, filters: 
         }
         Ok(t)
     };
-    let point = |d: &bagholder_core::jiff::civil::Date, v: bagholder_core::Dec| crate::wire::figures::Point { d: d.to_string(), v: Dec(v) };
-    let history: Vec<crate::wire::figures::Point> = pf.net_worth_history.iter().map(|n| point(&n.day, n.net.amount)).collect();
-    // a day's assets: its net worth and its debts, which net worth is less by
-    let split: Vec<(bagholder_core::jiff::civil::Date, bagholder_core::Dec, bagholder_core::Dec)> = pf.net_worth_history.iter().filter_map(|n| n.debts.and_then(|o| Some((n.day, n.net.amount.checked_add(o.amount).ok()?, o.amount)))).collect();
-    let assets_history = split.iter().map(|(d, a, _)| point(d, *a)).collect();
-    let debts_history = split.iter().map(|(d, _, o)| point(d, *o)).collect();
+    // each day stated in both views, or in a run of days waiting on the same things
+    let mut history = Vec::new();
+    let mut unstated: Vec<crate::wire::figures::UnstatedDays> = Vec::new();
+    for n in &pf.net_worth_history {
+        match (&n.assets, &n.debts, n.net()) {
+            (Ok(a), Ok(o), Ok(net)) => history.push(crate::wire::figures::NetWorthPoint { d: n.day.to_string(), v: Dec(net.amount), a: Dec(a.amount), o: Dec(o.amount) }),
+            (_, _, net) => {
+                let gaps: Vec<String> = net.err().map(|g| g.words().into_iter().map(String::from).collect()).unwrap_or_else(|| vec!["arithmetic".into()]);
+                let next = n.day.yesterday().ok();
+                match unstated.last_mut() {
+                    Some(run) if run.gaps == gaps && next.is_some_and(|y| y.to_string() == run.to) => run.to = n.day.to_string(),
+                    _ => unstated.push(crate::wire::figures::UnstatedDays { from: n.day.to_string(), to: n.day.to_string(), gaps }),
+                }
+            }
+        }
+    }
     let row = |d: &bagholder_engine::input::Debt, cad: &Fig<Money>| OwedDebt { id: d.id.clone(), kind: d.kind.clone(), name: d.name.clone(), institution: d.institution.clone(), amount: fig_money(cad), as_of: d.as_of.map(|t| t.to_string()) };
 
     if bagholder_engine::scope::holdings_filtered(filters) {
@@ -747,7 +757,7 @@ fn net_worth(engine: &Engine, pf: &bagholder_engine::scope::Portfolio, filters: 
         }
         let total = sum(&values);
         let zero: Fig<Money> = Ok(Money::zero(bagholder_core::Currency::CAD));
-        return Some(NetWorth { net_worth: fig_money(&total), assets_total: fig_money(&total), liabilities_total: fig_money(&zero), assets, liabilities: Vec::new(), history: Vec::new(), assets_history: Vec::new(), debts_history: Vec::new(), past_day: None, holdings: true });
+        return Some(NetWorth { net_worth: fig_money(&total), assets_total: fig_money(&total), liabilities_total: fig_money(&zero), assets, liabilities: Vec::new(), history: Vec::new(), unstated: Vec::new(), past_day: None, holdings: true });
     }
 
     let mut liabilities: Vec<(bagholder_engine::input::Debt, Fig<Money>)> = pf.owed.as_ref().map(|(_, each)| each.clone()).unwrap_or_default();
@@ -758,7 +768,6 @@ fn net_worth(engine: &Engine, pf: &bagholder_engine::scope::Portfolio, filters: 
         liabilities.insert(0, (bagholder_engine::input::Debt { id: "margin".into(), kind: "Margin".into(), name: "Margin".into(), institution: "Wealthsimple".into(), balance: Money::zero(bagholder_core::Currency::CAD), as_of: None }, m.clone()));
     }
     let mut assets: Vec<OwedDebt> = Vec::new();
-    let mut held: Vec<Fig<Money>> = Vec::new();
     // the broker's part, each row a figure the Portfolio shows: the holdings at
     // their market value, the cash waiting to be invested, and a chequing
     // account's balance, which is cash and no investment
@@ -767,37 +776,28 @@ fn net_worth(engine: &Engine, pf: &bagholder_engine::scope::Portfolio, filters: 
     let worth = |v: &Fig<Money>| v.as_ref().map_or(true, |m| !m.amount.is_zero());
     if !pf.positions.is_empty() && worth(&holdings) {
         assets.push(wealthsimple("holdings", "", "Holdings", &holdings));
-        held.push(holdings);
     }
     if worth(&pf.invested_cash) {
         assets.push(wealthsimple("cash", "", "Uninvested cash", &pf.invested_cash));
-        held.push(pf.invested_cash.clone());
     }
     if worth(&pf.chequing_cash) {
         assets.push(wealthsimple("chequing", "Chequing", "Chequing", &pf.chequing_cash));
-        held.push(pf.chequing_cash.clone());
     }
     for (d, cad) in &pf.outside_assets {
         assets.push(row(d, cad));
-        held.push(cad.clone());
     }
-    if assets.is_empty() && liabilities.is_empty() && history.is_empty() {
+    if assets.is_empty() && liabilities.is_empty() && pf.net_worth_history.len() < 2 {
         return None;
     }
-    if pf.past.is_some() {
-        // a past day: its totals from net worth by day, its last in the range
-        let last = pf.net_worth_history.last()?;
-        let net: Fig<Money> = Ok(last.net);
-        let (a, o): (Fig<Money>, Fig<Money>) = match last.debts {
-            Some(o) => (last.net.add_to_fit(o).map_err(Into::into), Ok(o)),
-            None => (Err(bagholder_engine::gap::Gaps::none()), Err(bagholder_engine::gap::Gaps::none())),
-        };
-        return Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&a), liabilities_total: fig_money(&o), assets: Vec::new(), liabilities: Vec::new(), history, assets_history, debts_history, past_day: Some(last.day.to_string()), holdings: false });
-    }
-    let owed: Vec<Fig<Money>> = liabilities.iter().map(|(_, m)| m.clone()).collect();
-    let (assets_total, liabilities_total) = (sum(&held), sum(&owed));
-    let net = (|| -> Fig<Money> { Ok(assets_total.clone()?.add_to_fit(liabilities_total.clone()?.neg())?) })();
-    Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&assets_total), liabilities_total: fig_money(&liabilities_total), assets, liabilities: liabilities.iter().map(|(d, m)| row(d, m)).collect(), history, assets_history, debts_history, past_day: None, holdings: false })
+    // the totals: today's point, the figures the items above come to; under a
+    // range ending before today, its last day's, as no item's own balance is
+    // stated for a past day
+    let now = pf.net_worth_now.as_ref()?;
+    let (assets, liabilities, past_day) = match &pf.past {
+        Some(_) => (Vec::new(), Vec::new(), Some(now.day.to_string())),
+        None => (assets, liabilities.iter().map(|(d, m)| row(d, m)).collect(), None),
+    };
+    Some(NetWorth { net_worth: fig_money(&now.net()), assets_total: fig_money(&now.assets), liabilities_total: fig_money(&now.debts), assets, liabilities, history, unstated, past_day, holdings: false })
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or

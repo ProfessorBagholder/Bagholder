@@ -30,7 +30,7 @@ fn with_a_loan() -> (Built, bagholder_engine::Engine) {
         owed: vec![Debt { id: "loan-1".into(), kind: "PersonalLoan".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: Money::new(d("9000"), Currency::CAD), as_of: Some("2026-04-01T00:00:00Z".parse().unwrap()) }],
         repayments: BTreeMap::from([(b.tx["w1"].clone(), "loan-1".to_string())]),
             asked: vec![],
-            assets: vec![], history: vec![], owed_history: vec![],
+            assets: vec![], history: BTreeMap::new(),
     }));
     (b, e)
 }
@@ -47,7 +47,7 @@ fn a_repayment_is_its_months_own_part_of_the_bar() {
 #[test]
 fn a_withdrawal_no_match_named_is_no_repayment() {
     let (_, mut e) = with_a_loan();
-    e.apply(Change::Debts(Debts { owed: vec![], assets: vec![], history: vec![], owed_history: vec![], repayments: BTreeMap::new(), asked: vec![] }));
+    e.apply(Change::Debts(Debts { owed: vec![], assets: vec![], history: BTreeMap::new(), repayments: BTreeMap::new(), asked: vec![] }));
     assert!(e.scope(&Filters::default()).cashflow.months.iter().all(|m| m.repayments.total.clone().unwrap().amount.is_zero()));
 }
 
@@ -101,9 +101,10 @@ fn with_no_debt_nothing_is_owed() {
     assert!(engine(&mut b).scope(&Filters::default()).portfolio.owed.is_none());
 }
 
-/// Each day's debts are counted as today's are: what is owed outside as stated
-/// that day, and what a margin account had borrowed at that day's close, worked
-/// out from its transactions; net worth stays as stated.
+/// Each day's debts are counted as today's are: what is owed outside as last
+/// stated on or before that day, and what a margin account had borrowed at that
+/// day's close, worked out from its transactions; the margin is held too, so a
+/// day's net worth is the accounts' stated value less what is owed outside.
 #[test]
 fn each_days_debts_are_the_outside_debts_and_the_margin_borrowed_at_its_close() {
     let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
@@ -117,25 +118,30 @@ fn each_days_debts_are_the_outside_debts_and_the_margin_borrowed_at_its_close() 
     e.apply(Change::Debts(Debts {
         owed: vec![Debt { id: "loan-1".into(), kind: "PersonalLoan".into(), name: "Car loan".into(), institution: "Omicron Trust".into(), balance: cad("9000"), as_of: None }],
         assets: vec![],
-        history: vec![(day("2026-01-01"), cad("1000")), (day("2026-04-19"), cad("2000"))],
-        owed_history: vec![(day("2026-01-01"), cad("9500")), (day("2026-04-19"), cad("9000"))],
+        history: BTreeMap::from([("loan-1".to_string(), BTreeMap::from([(day("2026-01-01"), cad("9500")), (day("2026-04-19"), cad("9000"))]))]),
         repayments: BTreeMap::new(),
         asked: vec![],
     }));
     let days = e.scope(&Filters::default()).portfolio.net_worth_history;
-    assert_eq!(days.iter().map(|n| n.net).collect::<Vec<_>>(), [cad("1000"), cad("2000")], "net worth as stated");
-    assert_eq!(days[0].debts, Some(cad("9500")), "before any transaction: the outside debts alone");
+    let on = |s: &str| days.iter().find(|n| n.day == day(s)).unwrap().clone();
+    assert_eq!(days.first().unwrap().day, day("2026-01-01"), "from the debt's first statement");
+    assert_eq!(on("2026-01-01").debts.unwrap(), cad("9500"), "before any transaction: the outside debt alone");
     // by its close the account is below zero in each currency: 2,100 CAD (a deposit of
     // 5,000, a buy of 1,500, a sale of 600, withdrawals of 200 and 6,000) and 745 USD
     // (a buy of 900, a sale of 150, a dividend of 5), that at the day's rate
-    let usd = bagholder_engine::fx::to_cad(&e.inputs().facts.rates, &e.inputs().clock, Money::new(d("745"), Currency::USD), day("2026-04-19")).unwrap();
-    assert_eq!(days[1].debts, Some(cad("11100").add_to_fit(usd).unwrap()), "the outside debts and the margin borrowed");
+    let usd = |s: &str| bagholder_engine::fx::to_cad(&e.inputs().facts.rates, &e.inputs().clock, Money::new(d("745"), Currency::USD), day(s)).unwrap();
+    let margin = cad("2100").add_to_fit(usd("2026-04-19")).unwrap();
+    assert_eq!(on("2026-04-19").debts.unwrap(), cad("9000").add_to_fit(margin).unwrap(), "the outside debt and the margin borrowed");
+    let before = cad("2100").add_to_fit(usd("2026-04-18")).unwrap();
+    assert_eq!(on("2026-04-18").debts.unwrap(), cad("9500").add_to_fit(before).unwrap(), "the debt's earlier statement held until its next");
+    assert_eq!(on("2026-04-19").net().unwrap(), cad("3000").add_to_fit(cad("-9000")).unwrap(), "the account's stated value less the outside debt");
     // under one account: what it was stated to be worth each day, and its own
     // borrowing; nothing held or owed outside, which is no account's
     let a = b.ids.account("A");
     let one = e.scope(&Filters { accounts: BTreeSet::from([a]), ..Filters::default() }).portfolio.net_worth_history;
-    assert_eq!(one.iter().map(|n| (n.day.to_string(), n.net)).collect::<Vec<_>>(), [("2026-04-17".to_string(), cad("3000"))], "the account's stated value by day");
-    assert_eq!(one[0].debts, Some(cad("2100").add_to_fit(bagholder_engine::fx::to_cad(&e.inputs().facts.rates, &e.inputs().clock, Money::new(d("745"), Currency::USD), day("2026-04-17")).unwrap()).unwrap()), "its margin alone, no outside debt");
+    assert_eq!(one[0].day, day("2026-04-17"), "from the account's first stated day");
+    assert_eq!(one[0].net().unwrap(), cad("3000"), "the account's stated value");
+    assert_eq!(one[0].debts.clone().unwrap(), cad("2100").add_to_fit(usd("2026-04-17")).unwrap(), "its margin alone, no outside debt");
     assert!(e.scope(&Filters { instruments: BTreeSet::from([b.ids.instrument("U")]), ..Filters::default() }).portfolio.net_worth_history.is_empty(), "a holding has no net worth by day");
 }
 

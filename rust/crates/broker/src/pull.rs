@@ -717,57 +717,62 @@ fn store_net_values(book: &Book, connection: ConnectionId, stated: &[AccountStat
 /// Each account's cash and, for a margin account, what it can borrow, stored as
 /// statements; one book account that is several of the broker's is theirs added
 /// up. What each stored statement was for.
-/// Net worth by day over every account and outside account, and what the outside
-/// debts alone came to each day (a second answer, of those debts alone). The
-/// debts' last day must be what is stated of them now, or what they came to is
-/// left unread and said. Err(None): the broker states no such history.
-fn net_worth_by_day(adapter: &mut dyn BrokerAdapter, accounts: &[String], entities: &[String], outside: &[bagholder_book::debts::OutsideDebt]) -> std::result::Result<(Vec<bagholder_book::debts::NetWorthDay>, Option<Failure>), Option<Failure>> {
-    use bagholder_book::debts::{NetWorthDay, LIABILITY_TYPES};
-    let days = adapter.net_worth_days(accounts, entities).map_err(Some)?.ok_or(None)?;
-    // an answer of no days is no read: said, and asked again at the next
-    if days.is_empty() {
-        return Err(Some(Failure::Mismatch("Wealthsimple's answer held no days".into())));
-    }
-    let debts: Vec<&bagholder_book::debts::OutsideDebt> = outside.iter().filter(|d| LIABILITY_TYPES.contains(&d.kind.as_str())).collect();
-    let mut owed: BTreeMap<jiff::civil::Date, bagholder_core::Dec> = BTreeMap::new();
-    let mut trouble = None;
-    if debts.is_empty() {
-        owed = days.iter().map(|d| (d.0, bagholder_core::Dec::ZERO)).collect();
-    } else {
-        let ids: Vec<String> = debts.iter().map(|d| d.entity_id.clone()).collect();
-        match adapter.net_worth_days(&[], &ids) {
-            Ok(Some(by_day)) if !by_day.is_empty() => match owed_by_day(by_day, &debts) {
-                Ok(o) => owed = o,
-                Err(f) => trouble = Some(f),
-            },
-            Ok(_) => trouble = Some(Failure::Mismatch("Wealthsimple's answer for the outside debts held no days".into())),
-            Err(f) => trouble = Some(f),
-        }
-    }
-    let out = days.into_iter().map(|(day, amount, currency)| NetWorthDay { day, amount, owed: owed.get(&day).copied(), currency }).collect();
-    // the net worth is kept; what the debts came to is said, and read again tomorrow
-    Ok((out, trouble))
+/// The first day the net worth page's "All" range asks for.
+pub const ALL_FROM: jiff::civil::Date = jiff::civil::date(2014, 1, 1);
+
+/// The ranges the net worth page asks besides "All", shortest first: one week,
+/// one month, three months, six months and a year back from today. A short range
+/// is answered a value a day; "All" is answered a value a week in its old years.
+pub fn page_ranges() -> [jiff::Span; 5] {
+    [jiff::Span::new().weeks(1), jiff::Span::new().months(1), jiff::Span::new().months(3), jiff::Span::new().months(6), jiff::Span::new().years(1)]
 }
 
-/// What the outside debts came to each day, owed positive, from their share of
-/// net worth by day (below zero for what is owed): its last day must be what is
-/// stated of them now, within a dollar or a fiftieth, as their balances move
-/// during the day.
-fn owed_by_day(by_day: Vec<(jiff::civil::Date, bagholder_core::Dec, bagholder_core::Currency)>, debts: &[&bagholder_book::debts::OutsideDebt]) -> std::result::Result<BTreeMap<jiff::civil::Date, bagholder_core::Dec>, Failure> {
-    use bagholder_core::Dec;
-    let Some(&(_, last, _)) = by_day.last() else { return Err(Failure::Mismatch("Wealthsimple's answer for the outside debts held no days".into())) };
-    let flip = last.is_negative();
-    let ends = if flip { last.neg() } else { last };
-    let stated = debts.iter().try_fold(Dec::ZERO, |t, d| t.checked_add(d.balance).ok());
-    let close = stated.is_some_and(|s| {
-        let off = ends.checked_sub(s).map(|x| x.abs()).unwrap_or(s);
-        off <= Dec::ONE || off.checked_mul(Dec::from_int(50)).is_ok_and(|o| o <= s.abs())
-    });
-    if !close {
-        return Err(Failure::Mismatch("the outside debts' history does not end at what is stated of them today".into()));
+/// The range a read of an outside account's days asks, ending today: "All" for
+/// one with none held yet; else the shortest range of the page's that reaches
+/// back to its last day held, so every day since is stated daily.
+pub fn outside_ranges(last_held: Option<jiff::civil::Date>, today: jiff::civil::Date) -> Vec<(jiff::civil::Date, jiff::civil::Date)> {
+    let back = |span: jiff::Span| today.checked_sub(span).unwrap_or(ALL_FROM).max(ALL_FROM);
+    match last_held {
+        // the whole history once, then the last six months a value a day
+        None => vec![(ALL_FROM, today), (back(page_ranges()[3]), today)],
+        Some(last) => {
+            let start = page_ranges().into_iter().map(back).find(|s| *s <= last).unwrap_or_else(|| back(page_ranges()[4]));
+            vec![(start, today)]
+        }
     }
-    Ok(by_day.into_iter().map(|(d, v, _)| (d, if flip { v.neg() } else { v })).collect())
 }
+
+/// Each outside account's balance by day, read once a day: each account's
+/// ranges (`outside_ranges`) asked of that account alone and kept span by span.
+/// Whether every one was read.
+fn store_outside_days(book: &Book, adapter: &mut dyn BrokerAdapter, outside: &[bagholder_book::debts::OutsideDebt], today: jiff::civil::Date, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<bool> {
+    let held = book.outside_days()?;
+    let mut whole = true;
+    let mut days = 0;
+    for e in outside {
+        let last = held.get(&e.entity_id).and_then(|d| d.last()).map(|d| d.day);
+        for (from, to) in outside_ranges(last, today) {
+            match adapter.outside_days(e, from, to) {
+                Ok(Some(stated)) => {
+                    days += stated.len();
+                    book.keep_outside_days(&e.entity_id, from, to, &stated, now)?;
+                }
+                // a broker that states no such history
+                Ok(None) => return Ok(false),
+                Err(f) => {
+                    failures.push((format!("the balance by day of {}", e.name), f));
+                    whole = false;
+                    break;
+                }
+            }
+        }
+    }
+    bagholder_core::log::line(&format!("bagholder: outside balances by day read: {} accounts, {days} days", outside.len()));
+    Ok(whole)
+}
+
+/// The part of a connection's reads that is the outside accounts' balances by day.
+const OUTSIDE_DAYS: &str = "outside-days";
 
 fn store_balances(
     book: &Book,
@@ -835,22 +840,15 @@ fn store_balances(
     match adapter.outside_accounts() {
         Ok(Some(outside)) => {
             book.keep_outside_debts(connection, now, &outside)?;
-            // net worth by day, read once a day: a day's value is the broker's as of its close
-            let read_today = book.net_worth_read_at()?.is_some_and(|t| now.duration_since(t) < jiff::SignedDuration::from_hours(20));
-            if !read_today {
-                let accounts: Vec<String> = keys_of.values().flatten().cloned().collect();
-                let entities: Vec<String> = outside.iter().map(|d| d.entity_id.clone()).collect();
-                match net_worth_by_day(adapter, &accounts, &entities, &outside) {
-                    Ok((days, trouble)) => {
-                        book.keep_net_worth_days(&days, now)?;
-                        if let Some(f) = trouble {
-                            failures.push(("the outside debts by day".into(), f));
-                        }
-                        let owed = days.iter().filter(|d| d.owed.is_some()).count();
-                        bagholder_core::log::line(&format!("bagholder: net worth by day read: {} days, {} to {}, the outside debts on {owed}", days.len(), days[0].day, days[days.len() - 1].day));
-                    }
-                    Err(Some(f)) => failures.push(("net worth by day".into(), f)),
-                    Err(None) => {}
+            // each outside account's balance by day, read once a day
+            let read_today = book.last_read(connection, OUTSIDE_DAYS)?.is_some_and(|t| now.duration_since(t) < jiff::SignedDuration::from_hours(20));
+            if !read_today && !outside.is_empty() {
+                let today = match book.zone()? {
+                    Some(z) => now.to_zoned(z.zone).date(),
+                    None => now.to_zoned(jiff::tz::TimeZone::UTC).date(),
+                };
+                if store_outside_days(book, adapter, &outside, today, now, failures)? {
+                    book.broker_read(connection, OUTSIDE_DAYS, now)?;
                 }
             }
         }
@@ -863,32 +861,21 @@ fn store_balances(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bagholder_core::{Currency, Dec};
 
-    fn debt(balance: &str) -> bagholder_book::debts::OutsideDebt {
-        bagholder_book::debts::OutsideDebt { entity_id: "loc".into(), kind: "LineOfCredit".into(), name: "Line of credit".into(), institution: "Bank".into(), last4: None, balance: Dec::parse(balance).unwrap(), currency: Currency::CAD, as_of: None }
+    fn day(s: &str) -> jiff::civil::Date {
+        s.parse().unwrap()
     }
 
-    fn days(values: &[(&str, &str)]) -> Vec<(jiff::civil::Date, Dec, Currency)> {
-        values.iter().map(|(d, v)| (d.parse().unwrap(), Dec::parse(v).unwrap(), Currency::CAD)).collect()
-    }
-
-    /// The debts' share of net worth is below zero; what they came to is owed
-    /// positive, kept when the last day is what is stated of them now.
+    /// An outside account with no day held is read whole, then its last six
+    /// months a value a day; after, the shortest of the page's ranges that
+    /// reaches back to its last day held, a year at the most.
     #[test]
-    fn the_outside_debts_by_day_are_owed_positive_and_end_at_what_is_stated() {
-        let (a, b) = (debt("7000"), debt("600"));
-        let got = owed_by_day(days(&[("2026-10-01", "-7400"), ("2026-10-02", "-7590")]), &[&a, &b]).unwrap();
-        assert_eq!(got.values().map(|v| v.to_string()).collect::<Vec<_>>(), ["7400", "7590"]);
-    }
-
-    /// An answer that does not end at what is stated (the whole net worth, say,
-    /// were the debts not asked alone) is no read of them.
-    #[test]
-    fn an_answer_that_ends_elsewhere_is_not_the_debts() {
-        let a = debt("7600");
-        assert!(owed_by_day(days(&[("2026-10-02", "250000")]), &[&a]).is_err());
-        assert!(owed_by_day(days(&[("2026-10-02", "-9000")]), &[&a]).is_err());
-        assert!(owed_by_day(Vec::new(), &[&a]).is_err());
+    fn an_outside_accounts_days_are_asked_as_the_page_asks_its_ranges() {
+        let today = day("2026-10-20");
+        assert_eq!(outside_ranges(None, today), [(day("2014-01-01"), today), (day("2026-04-20"), today)]);
+        assert_eq!(outside_ranges(Some(day("2026-10-19")), today), [(day("2026-10-13"), today)], "a week");
+        assert_eq!(outside_ranges(Some(day("2026-10-01")), today), [(day("2026-09-20"), today)], "a month");
+        assert_eq!(outside_ranges(Some(day("2026-06-01")), today), [(day("2026-04-20"), today)], "six months");
+        assert_eq!(outside_ranges(Some(day("2023-01-01")), today), [(day("2025-10-20"), today)], "a year at the most");
     }
 }

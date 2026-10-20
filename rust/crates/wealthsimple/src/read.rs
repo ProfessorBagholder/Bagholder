@@ -279,6 +279,24 @@ pub fn net_worth_days(nodes: &[Value]) -> Read<Vec<(jiff::civil::Date, Dec, Curr
     Ok(out)
 }
 
+/// One outside account's balance by day, from the `historicalDaily` nodes of net
+/// worth over that account alone, stated as its balance is (`OutsideDebt::balance`:
+/// a debt's owed positive). Net worth states a debt as what it takes away, below
+/// zero, so the days are turned to the balance's sign: the latest day not at zero
+/// takes the sign of the balance stated now, or, with a balance of zero, is what
+/// was held (positive) for an asset and what was owed (negative) for a debt.
+pub fn outside_days(nodes: &[Value], entity: &bagholder_book::debts::OutsideDebt) -> Read<Vec<bagholder_book::debts::OutsideDay>> {
+    let days = net_worth_days(nodes)?;
+    let last = days.iter().rev().map(|(_, v, _)| *v).find(|v| !v.is_zero());
+    let debt = bagholder_book::debts::LIABILITY_TYPES.contains(&entity.kind.as_str());
+    let flip = match last {
+        None => false,
+        Some(l) if !entity.balance.is_zero() => l.is_negative() != entity.balance.is_negative(),
+        Some(l) => debt && l.is_negative(),
+    };
+    Ok(days.into_iter().map(|(day, v, currency)| bagholder_book::debts::OutsideDay { day, amount: if flip { v.neg() } else { v }, currency }).collect())
+}
+
 pub fn card_balance(node: &Value, account: &str) -> Read<Dec> {
     let n = Node::root(node);
     let id = n.text("id")?;
@@ -304,6 +322,24 @@ mod tests {
         let got = net_worth_days(&nodes).unwrap();
         assert_eq!(got.iter().map(|(d, _, _)| d.to_string()).collect::<Vec<_>>(), ["2026-10-01", "2026-10-02"]);
         assert_eq!(got[1].1.round(2, bagholder_core::dec::Rounding::HalfEven).to_string(), "1500.12");
+    }
+
+    fn entity(kind: &str, balance: &str) -> bagholder_book::debts::OutsideDebt {
+        bagholder_book::debts::OutsideDebt { entity_id: "e".into(), kind: kind.into(), name: "n".into(), institution: String::new(), last4: None, balance: Dec::parse(balance).unwrap(), currency: Currency::CAD, as_of: None }
+    }
+
+    /// An outside account's days take the sign its balance is stated in: a debt
+    /// that net worth states below zero is owed positive; an asset stays as
+    /// stated; a debt in credit now keeps its days' sign where they agree.
+    #[test]
+    fn an_outside_accounts_days_are_stated_as_its_balance_is() {
+        let nodes = |a: &str, b: &str| [node(&format!(r#"{{"date": "2026-10-01", "balance": {{"amount": "{a}", "currency": "CAD"}}}}"#)), node(&format!(r#"{{"date": "2026-10-02", "balance": {{"amount": "{b}", "currency": "CAD"}}}}"#))];
+        let amounts = |n: &[Value], e: &bagholder_book::debts::OutsideDebt| outside_days(n, e).unwrap().iter().map(|x| x.amount.to_string()).collect::<Vec<_>>();
+        assert_eq!(amounts(&nodes("-700", "-750"), &entity("LineOfCredit", "750")), ["700", "750"], "a debt, below zero in net worth");
+        assert_eq!(amounts(&nodes("700", "750"), &entity("LineOfCredit", "750")), ["700", "750"], "a debt already stated owed positive");
+        assert_eq!(amounts(&nodes("-700", "0"), &entity("Mortgage", "0")), ["700", "0"], "a debt paid off: its last day not at zero says the sign");
+        assert_eq!(amounts(&nodes("300000", "310000"), &entity("RealEstate", "310000")), ["300000", "310000"], "an asset");
+        assert_eq!(amounts(&nodes("40", "25"), &entity("CreditCard", "-25")), ["-40", "-25"], "a card in credit now");
     }
 
     /// Each outside account as the net worth feature states it: its kind from its
