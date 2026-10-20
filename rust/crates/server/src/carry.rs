@@ -156,11 +156,15 @@ pub fn carry_following(book: &Book, old: &Connection, now: Timestamp) -> Result<
 /// earlier store and cleared there, so a folder no longer watched is not taken
 /// again at the next start.
 pub fn carry_watch_folder(f: &Figures, old: &Connection, now: Timestamp) -> Result<(), String> {
+    // once: a folder let go after it was taken stays let go, recorded in the book,
+    // never in the earlier store
+    let book = f.book()?;
+    if book.setting(CARRIED_WATCH_FOLDER).map_err(err)?.is_some() {
+        return Ok(());
+    }
     let folder = bagholder_store::csvimport::watch_folder(old).map_err(err)?;
     crate::csv_import::adopt(f, &folder, now)?;
-    if !folder.is_empty() {
-        bagholder_store::tables::set_meta(old, bagholder_store::csvimport::WATCH_META, "").map_err(err)?;
-    }
+    book.set_setting(CARRIED_WATCH_FOLDER, Some(&now.to_string()), now).map_err(err)?;
     Ok(())
 }
 
@@ -285,38 +289,89 @@ pub fn from_old_store(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<(),
         return Ok(());
     }
     let book = f.book()?;
-    {
-        // the earlier store brought to its own schema and repairs, as its pool did,
-        // for the carries that read it through its own code
-        let old = bagholder_store::open_db(&path).map_err(|e| format!("the earlier store could not be opened: {e}"))?;
-        bagholder_store::relabel::ensure(&old).map_err(|e| format!("the earlier store could not be prepared: {e}"))?;
-        match crate::legacy_import::retire_old_figures(&app.home, &old, &book, now) {
-            Ok(Some(snapshot)) => log(&format!("bagholder: the earlier store's figure tables are the book's now; the file as it was is kept at {}", snapshot.display())),
-            Ok(None) => {}
-            Err(e) => log(&format!("bagholder: {e}")),
+    let has = |key: &str| book.setting(key).map(|v| v.is_some()).map_err(|e| e.to_string());
+    let done = |key: &str| book.set_setting(key, Some(&now.to_string()), now).map_err(|e| e.to_string());
+    // every carry the book says is done: the earlier store is not opened at all
+    if has(CARRIED_FIGURES)? && has(CARRIED_ORDERS)? && has(CARRIED_WATCH_FOLDER)? && book.following_carried().map_err(err)? && book.notices_carried().map_err(err)? && market_carried(&cache)? {
+        return Ok(());
+    }
+    // the earlier store is a source of record, kept as it was received: the carries
+    // read a copy, brought to its own schema there, and what is done is recorded in
+    // the book, never in it (brief 71, D18)
+    let copy = app.home.join(format!("carry-source-{}.db", now.as_millisecond()));
+    // copied as files, never opened where it is: SQLite would leave its own files
+    // beside it, even to read it. Its log, where it has one, comes along, and the
+    // copy is brought up to date from it when opened.
+    std::fs::copy(&path, &copy).map_err(|e| format!("the earlier store could not be read: {e}"))?;
+    let wal = |p: &Path| std::path::PathBuf::from(format!("{}-wal", p.display()));
+    if wal(&path).exists() {
+        std::fs::copy(wal(&path), wal(&copy)).map_err(|e| format!("the earlier store could not be read: {e}"))?;
+    }
+    let carried = (|| -> Result<(), String> {
+        let old = bagholder_store::open_db(&copy).map_err(|e| format!("the earlier store could not be read: {e}"))?;
+        bagholder_store::schema::init_schema(&old).map_err(|e| format!("the earlier store could not be read: {e}"))?;
+        // a carry an earlier build did, marking the file, is done too
+        if !has(CARRIED_FIGURES)? {
+            if bagholder_store::schema::figures_moved(&old).map_err(err)? {
+                done(CARRIED_FIGURES)?;
+            } else {
+                match crate::legacy_import::figures_are_the_books(&old, &book) {
+                    Ok(()) => {
+                        done(CARRIED_FIGURES)?;
+                        log("bagholder: the earlier store's figures are the book's now; the file is kept as it was");
+                    }
+                    Err(e) => log(&format!("bagholder: {e}")),
+                }
+            }
         }
         // the earlier orders and brackets, once: a live one is followed from the first check
-        let c = crate::legacy_orders::carry_orders(&app.home, &old, &book, now)?;
-        if let Some(snapshot) = &c.snapshot {
-            log(&format!(
-                "bagholder: {} orders and {} brackets carried into the book ({} placed in Wealthsimple's own app left to its feed); the file as it was is kept at {}",
-                c.orders,
-                c.brackets,
-                c.left_to_the_feed,
-                snapshot.display()
-            ));
+        if !has(CARRIED_ORDERS)? {
+            let c = crate::legacy_orders::carry_orders(&old, &book)?;
+            if c.orders + c.brackets > 0 {
+                log(&format!("bagholder: {} orders and {} brackets carried into the book ({} placed in Wealthsimple's own app left to its feed)", c.orders, c.brackets, c.left_to_the_feed));
+            }
+            done(CARRIED_ORDERS)?;
         }
         crate::feeds::went(app, "following", carry_following(&book, &old, now).map_err(|e| format!("The watchlist could not be carried into the book: {e}")));
         crate::feeds::went(app, "watch-folder", carry_watch_folder(f, &old, now).map_err(|e| format!("The folder watched before could not be watched again: {e}")));
+        drop(old);
+        if let Some(n) = book.carry_notices(&copy, now).map_err(|e| format!("the earlier store's notifications could not be carried into the book: {e}"))? {
+            log(&format!("bagholder: {} notifications, {} marks of what was told and {} notification settings carried into the book", n.notifications, n.told, n.settings));
+        }
+        if let Some(m) = carry_market(Some(&copy), &cache, now)? {
+            let rows: Vec<String> = m.rows.iter().map(|(t, n)| format!("{n} {t}")).collect();
+            log(&format!("bagholder: the earlier store's market data carried into the market cache: {} rows ({}), {} keys", m.rows.iter().map(|(_, n)| n).sum::<i64>(), rows.join(", "), m.keys));
+        }
+        Ok(())
+    })();
+    for x in ["", "-wal", "-shm", "-journal"] {
+        let p = std::path::PathBuf::from(format!("{}{x}", copy.display()));
+        if p.exists() {
+            if let Err(e) = std::fs::remove_file(&p) {
+                log(&format!("bagholder: the earlier store's copy {} could not be removed: {e}", p.display()));
+            }
+        }
     }
-    if let Some(n) = book.carry_notices(&path, now).map_err(|e| format!("the earlier store's notifications could not be carried into the book: {e}"))? {
-        log(&format!("bagholder: {} notifications, {} marks of what was told and {} notification settings carried into the book", n.notifications, n.told, n.settings));
+    carried
+}
+
+/// The book's settings that say a carry from the earlier store is done.
+pub const CARRIED_FIGURES: &str = "carried.old_figures";
+pub const CARRIED_ORDERS: &str = "carried.old_orders";
+pub const CARRIED_WATCH_FOLDER: &str = "carried.old_watch_folder";
+
+/// Whether the market cache says the earlier store's market data was carried.
+fn market_carried(cache: &Path) -> Result<bool, String> {
+    if !cache.exists() {
+        return Ok(false);
     }
-    if let Some(m) = carry_market(Some(&path), &cache, now)? {
-        let rows: Vec<String> = m.rows.iter().map(|(t, n)| format!("{n} {t}")).collect();
-        log(&format!("bagholder: the earlier store's market data carried into the market cache: {} rows ({}), {} keys", m.rows.iter().map(|(_, n)| n).sum::<i64>(), rows.join(", "), m.keys));
+    let c = Connection::open_with_flags(cache, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(err)?;
+    let has_meta: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'", [], |r| r.get(0)).map_err(err)?;
+    if has_meta == 0 {
+        return Ok(false);
     }
-    Ok(())
+    let done: Option<String> = rusqlite::OptionalExtension::optional(c.query_row("SELECT value FROM meta WHERE key = ?", [CARRIED], |r| r.get(0))).map_err(err)?;
+    Ok(done.is_some())
 }
 
 /// The book's setting that says its told marks were carried to the scopes a
@@ -561,6 +616,65 @@ mod tests {
     /// After the carry nothing writes the earlier store: with its file made
     /// read-only, a news pass, a disclosures pass, a notification and a chart read
     /// all go through, and the file is as it was.
+    /// The earlier store's files, byte for byte.
+    fn old_bytes(home: &Path) -> Vec<(String, Vec<u8>)> {
+        ["", "-wal", "-shm"].iter().map(|x| home.join(format!("{OLD_FILE}{x}"))).filter(|p| p.exists()).map(|p| (p.display().to_string(), std::fs::read(&p).unwrap())).collect()
+    }
+
+    /// The earlier store is a source of record: no start writes it, the first
+    /// included, and every carry is recorded in the book, so a second start
+    /// carries nothing and does not open it at all (brief 71, D18).
+    #[test]
+    fn no_start_writes_the_earlier_store_and_nothing_is_carried_twice() {
+        let (home, app, f) = home_with_an_earlier_store();
+        let before = old_bytes(home.path());
+        // read from a copy: SQLite leaves files of its own beside any database it opens
+        let activities = |p: &Path| -> Vec<String> {
+            let dir = tempfile::tempdir().unwrap();
+            let copy = dir.path().join("read.db");
+            std::fs::copy(p, &copy).unwrap();
+            let c = open(&copy);
+            let mut q = c.prepare("SELECT * FROM activities ORDER BY rowid").unwrap();
+            let n = q.column_count();
+            let out: Vec<String> = q.query_map([], |r| Ok(format!("{:?}", (0..n).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect::<Vec<_>>()))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+            out
+        };
+        let rows = activities(&home.path().join(OLD_FILE));
+        from_old_store(&app, &f, now()).unwrap();
+        assert_eq!(old_bytes(home.path()), before, "the first start leaves the file as it was");
+        assert_eq!(activities(&home.path().join(OLD_FILE)), rows, "its activity rows as they were");
+        let book = f.book().unwrap();
+        for key in [CARRIED_FIGURES, CARRIED_ORDERS, CARRIED_WATCH_FOLDER] {
+            assert!(book.setting(key).unwrap().is_some(), "{key} recorded in the book");
+        }
+        let left: Vec<String> = std::fs::read_dir(home.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("carry-source-")).collect();
+        assert!(left.is_empty(), "the copy read from is removed: {left:?}");
+        let notices: i64 = book.conn_for_tests().query_row("SELECT COUNT(*) FROM notifications", [], |r| r.get(0)).unwrap();
+        // the next start: the file is not even opened, nothing carried again
+        std::fs::rename(home.path().join(OLD_FILE), home.path().join("moved-away.db")).unwrap();
+        std::fs::write(home.path().join(OLD_FILE), b"not a database").unwrap();
+        from_old_store(&app, &f, now()).unwrap();
+        let again: i64 = book.conn_for_tests().query_row("SELECT COUNT(*) FROM notifications", [], |r| r.get(0)).unwrap();
+        assert_eq!(again, notices, "nothing carried twice");
+    }
+
+    /// An earlier build carried and marked the file: its carries count as done,
+    /// and the start writes nothing more to it.
+    #[test]
+    fn a_file_an_earlier_build_carried_counts_as_carried_and_is_not_written() {
+        let (home, app, f) = home_with_an_earlier_store();
+        {
+            let old = bagholder_store::open_db(&home.path().join(OLD_FILE)).unwrap();
+            bagholder_store::schema::drop_figure_tables(&old, "2026-09-26T12:00:00Z").unwrap();
+            bagholder_store::schema::drop_order_tables(&old, "2026-09-26T12:00:00Z").unwrap();
+        }
+        let before = old_bytes(home.path());
+        from_old_store(&app, &f, now()).unwrap();
+        assert_eq!(old_bytes(home.path()), before, "the file as the earlier build left it");
+        let book = f.book().unwrap();
+        assert!(book.setting(CARRIED_FIGURES).unwrap().is_some() && book.setting(CARRIED_ORDERS).unwrap().is_some(), "done, as the file says");
+    }
+
     #[test]
     #[cfg(unix)]
     fn after_the_carry_nothing_writes_the_earlier_store() {

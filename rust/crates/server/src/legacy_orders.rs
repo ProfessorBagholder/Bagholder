@@ -2,12 +2,11 @@
 //! (`docs/plans/stage-4-execution.md`, "Migration"): each enters with an `imported`
 //! first event that states where it stood and keeps the old row as it was, so an
 //! order still working at Wealthsimple and a bracket still guarding a position are
-//! followed from the first check after the upgrade. The file is snapshotted first,
-//! and the old tables are dropped once the book holds every row; a row the import
-//! cannot read stops it, naming the row, and the old tables stay.
+//! followed from the first check after the upgrade. The earlier file is only read;
+//! the carry is recorded in the book once it holds every row, and a row the
+//! import cannot read stops it, naming the row (brief 71, D18).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
@@ -21,7 +20,6 @@ use bagholder_store::orders::{Bracket as OldBracket, BracketStatus, Order as Old
 /// What the import carried.
 #[derive(Debug, Default, PartialEq)]
 pub struct Carried {
-    pub snapshot: Option<PathBuf>,
     pub orders: usize,
     pub brackets: usize,
     /// Orders Wealthsimple reported from its own app: not the app's, so not carried
@@ -189,10 +187,10 @@ fn bracket_of(b: &OldBracket, exits: &[&OldOrder]) -> Result<(BracketPlace, Brac
     Ok((place, first, created, changed(&b.updated_at, created, id)?))
 }
 
-/// Carry the earlier store's orders and brackets into the book once, then drop its
-/// order tables, the file snapshotted beside the book's own snapshots first. Nothing
-/// when they were carried already.
-pub fn carry_orders(home: &Path, conn: &Connection, book: &Book, at: jiff::Timestamp) -> Result<Carried, String> {
+/// Carry the earlier store's orders and brackets into the book: nothing when an
+/// earlier build carried them already, marking the file. The caller records the
+/// carry in the book; the file is only read.
+pub fn carry_orders(conn: &Connection, book: &Book) -> Result<Carried, String> {
     let e = |e: rusqlite::Error| e.to_string();
     if bagholder_store::schema::orders_moved(conn).map_err(e)? {
         return Ok(Carried::default());
@@ -200,13 +198,6 @@ pub fn carry_orders(home: &Path, conn: &Connection, book: &Book, at: jiff::Times
     let orders = bagholder_store::orders::typed::list_orders(conn, i64::MAX).map_err(e)?;
     let brackets = bagholder_store::orders::typed::list_brackets(conn, &[]).map_err(e)?;
     let mut carried = Carried::default();
-    if !orders.is_empty() || !brackets.is_empty() {
-        let dir = home.join("snapshots");
-        std::fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
-        let snapshot = dir.join(format!("bagholder-before-the-orders-{}.db", at.as_millisecond()));
-        bagholder_book::import::copy_database(&home.join("bagholder.db"), &snapshot).map_err(|e| e.to_string())?;
-        carried.snapshot = Some(snapshot);
-    }
     // which bracket each order belongs to: an entry by its id, an exit by its parent's
     let mut bracket_of_entry: HashMap<&str, &str> = HashMap::new();
     for b in &brackets {
@@ -240,7 +231,7 @@ pub fn carry_orders(home: &Path, conn: &Connection, book: &Book, at: jiff::Times
     book.import_orders(&new_brackets, &new_orders).map_err(|e| format!("the earlier orders could not be carried into the book: {e}; the old tables are kept"))?;
     carried.brackets = new_brackets.len();
     carried.orders = new_orders.len();
-    bagholder_store::schema::drop_order_tables(conn, &at.to_string()).map_err(e)?;
+    // the earlier store is kept as it was: the caller records the carry in the book
     Ok(carried)
 }
 
@@ -274,9 +265,8 @@ mod tests {
         let b: OldBracket = serde_json::from_value(serde_json::json!({"id": "bracket-1", "orderId": "order-e", "createdAt": t, "accountId": "acct", "securityId": "sec", "symbol": "SHOP", "currency": "USD", "quantity": 10, "slKind": "stop", "slPrice": 95, "slOrderId": "order-s", "slMode": "native", "tpPrice": 110, "status": "armed", "attempts": 0, "armedAt": t})).unwrap();
         typed::insert_bracket(&conn, &b, t).unwrap();
 
-        let carried = carry_orders(home.path(), &conn, &book, at()).unwrap();
+        let carried = carry_orders(&conn, &book).unwrap();
         assert_eq!((carried.orders, carried.brackets, carried.left_to_the_feed), (3, 1, 1));
-        assert!(carried.snapshot.as_ref().is_some_and(|p| p.exists()), "the file as it was is kept");
         let sb = book.bracket("bracket-1").unwrap().unwrap();
         assert_eq!((sb.bracket.phase, sb.bracket.exit.clone(), sb.bracket.stop.map(|s| s.level)), (Phase::Guarding, Some((ExitRole::Stop, "order-s".to_string())), Some(Dec::parse("95").unwrap())));
         let s = book.order("order-s").unwrap().unwrap();
@@ -286,12 +276,16 @@ mod tests {
         let in_flight: Vec<String> = book.orders_in_flight().unwrap().into_iter().map(|o| o.request.id).collect();
         assert_eq!(in_flight, ["order-s", "order-x"], "followed from the first check");
         assert!(book.states_disagreeing().unwrap().is_empty());
-        // gone from the old file, and not made again at the next start
-        assert!(bagholder_store::schema::orders_moved(&conn).unwrap());
-        bagholder_store::schema::init_schema(&conn).unwrap();
+        // the old file is only read: its tables stay, nothing is marked in it
+        assert!(!bagholder_store::schema::orders_moved(&conn).unwrap());
         let tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('orders','brackets')", [], |r| r.get(0)).unwrap();
-        assert_eq!(tables, 0);
-        assert_eq!(carry_orders(home.path(), &conn, &book, at()).unwrap(), Carried::default(), "once");
+        assert_eq!(tables, 2);
+        // carried again, nothing is carried twice
+        let again = carry_orders(&conn, &book).unwrap();
+        assert_eq!((again.orders, again.brackets), (0, 0), "once");
+        // an earlier build's carry, marked in the file, is done
+        bagholder_store::schema::drop_order_tables(&conn, &at().to_string()).unwrap();
+        assert_eq!(carry_orders(&conn, &book).unwrap(), Carried::default());
     }
 
     #[test]
@@ -302,7 +296,7 @@ mod tests {
         let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, at()).unwrap();
         let bad = old_order(serde_json::json!({"id": "order-1", "createdAt": "2026-09-20T14:00:00Z", "accountId": "acct", "securityId": "sec", "symbol": "SHOP", "currency": "USD", "side": "BUY", "type": "LIMIT", "quantity": 1, "limitPrice": 1, "status": "", "source": "bagholder"}));
         typed::insert_order(&conn, &bad, "2026-09-20T14:00:00Z").unwrap();
-        let e = carry_orders(home.path(), &conn, &book, at()).unwrap_err();
+        let e = carry_orders(&conn, &book).unwrap_err();
         assert!(e.contains("order-1: an order with no status"), "{e}");
         assert!(!bagholder_store::schema::orders_moved(&conn).unwrap());
         assert!(book.order("order-1").unwrap().is_none(), "nothing half carried");
