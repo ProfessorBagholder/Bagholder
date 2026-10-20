@@ -35,9 +35,5 @@ tempfile = "3"
 # the market cache's per-listing tables (its migration 6), which the readers here write
 bagholder-sources = { path = "../sources" }
 
-[[bin]]
-name = "demo-book"
-path = "src/bin/demo_book.rs"
-
 [lints]
 workspace = true

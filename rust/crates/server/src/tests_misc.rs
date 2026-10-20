@@ -721,7 +721,7 @@ const TERMINAL: [(&str, usize, &str); 11] = [
     ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),
     ("server/src/legacy_import.rs", 3, "the `import-book` subcommand's own output"),
     ("server/src/compare.rs", 6, "the `compare` subcommand's own output"),
-    ("server/src/demo_facts.rs", 3, "the `demo-facts` subcommand's own output"),
+    ("server/src/demo.rs", 3, "the `demo` subcommand's own output"),
     ("server/src/capacity.rs", 3, "the `capacity` subcommand's own output: the table row by row as it is measured, then the verdict"),
 ];
 

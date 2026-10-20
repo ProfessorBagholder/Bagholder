@@ -4,15 +4,17 @@ import { execFileSync, spawn } from 'node:child_process'
 import { appendFileSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { onAnswered, standIn } from './wealthsimple.mjs'
 
 const web = join(dirname(fileURLToPath(import.meta.url)), '..')
 const rust = join(web, '..', 'rust')
 const exe = process.platform === 'win32' ? '.exe' : ''
+// where cargo builds: its own CARGO_TARGET_DIR where one is set, else the workspace's
+const target = process.env.CARGO_TARGET_DIR ? resolve(rust, process.env.CARGO_TARGET_DIR) : join(rust, 'target')
 
-execFileSync('cargo', ['build', '--quiet', '--bin', 'bagholder', '--bin', 'demo-book'], { cwd: rust, stdio: 'inherit' })
+execFileSync('cargo', ['build', '--quiet', '--bin', 'bagholder'], { cwd: rust, stdio: 'inherit' })
 const signedIn = process.argv.includes('--signed-in')
 const port = process.argv.find((a) => a.startsWith('--port='))?.slice('--port='.length) || process.env.E2E_PORT || '8791'
 // where a signed-in server names every request it makes (`BAGHOLDER_LOG_REQUESTS`)
@@ -35,9 +37,8 @@ for (const name of readdirSync(tmpdir())) {
 }
 // named for the port and the process that owns it
 const home = mkdtempSync(join(tmpdir(), `bagholder-e2e-${port}-${process.pid}-`))
-execFileSync(join(rust, 'target', 'debug', 'demo-book' + exe), ['--home', home], { stdio: 'inherit' })
-// the book the engine reads, carried from it, with the made-up facts and prices beside it
-execFileSync(join(rust, 'target', 'debug', 'bagholder' + exe), ['demo-facts', home], { stdio: 'inherit' })
+// the made-up book, pulled from a made-up Wealthsimple, with its facts and prices beside it
+execFileSync(join(target, 'debug', 'bagholder' + exe), ['demo', home], { stdio: 'inherit' })
 
 // `--signed-in`: a saved Wealthsimple sign-in, and Wealthsimple stood in on loopback
 // answering its search alone (`wealthsimple.mjs`): what the order path asks of it,
@@ -56,7 +57,7 @@ if (signedIn) {
 }
 
 const logFd = requestLog ? openSync(requestLog, 'w') : null
-const server = spawn(join(rust, 'target', 'debug', 'bagholder' + exe), [], {
+const server = spawn(join(target, 'debug', 'bagholder' + exe), [], {
   stdio: ['inherit', 'inherit', logFd ?? 'inherit'],
   env: {
     ...process.env,

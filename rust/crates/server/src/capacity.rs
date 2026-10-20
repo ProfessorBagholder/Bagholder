@@ -14,7 +14,7 @@
 //!   (on a book of the depth pair, its deep listing built with `<rows>`), printed as one
 //!   line; `run` starts it.
 //!
-//! A subcommand of the server, as `demo-facts` and `pull-broker` are: what it
+//! A subcommand of the server, as `demo` and `pull-broker` are: what it
 //! measures is the server's own code, which only this binary holds.
 
 use std::alloc::{GlobalAlloc, Layout, System};

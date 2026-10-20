@@ -7,7 +7,7 @@ use bagholder_book::Book;
 use bagholder_broker::pull::pull;
 use bagholder_core::Broker;
 use bagholder_wealthsimple::adapter::Wealthsimple;
-use bagholder_wealthsimple::generated::{Generated, Size};
+use bagholder_wealthsimple::generated::{AccountRecord, Generated, ListingRecord, ListingSort, Record, Size};
 
 const SIZE: Size = Size { accounts: 14, instruments: 24, trades: 80, months: 8, seed: 7, deep: 0 };
 
@@ -39,3 +39,52 @@ fn every_row_is_read_with_no_problem_and_the_pull_fails_nothing() {
     assert!(problems.is_empty(), "{} problems, the first: {:?}", problems.len(), problems.iter().take(5).collect::<Vec<_>>());
 }
 
+
+/// A made-up Wealthsimple stated whole (`Generated::from_records`): every row
+/// the records state, at its own cash and units, read with no problem; a put
+/// stated as one; a contract sold to open held short; each day's value as stated.
+#[test]
+fn a_book_stated_whole_is_pulled_as_stated() {
+    let day = |s: &str| s.parse::<jiff::civil::Date>().unwrap();
+    let accounts = vec![AccountRecord {
+        id: "acct-a".into(),
+        nickname: "Margin".into(),
+        ty: "SELF_DIRECTED_NON_REGISTERED_MARGIN".into(),
+        currency: "CAD".into(),
+        opened: day("2026-01-02"),
+        days: vec![(day("2026-01-02"), 0, 0), (day("2026-10-07"), 1_234_500, 1_000_000)],
+        buying_power: Some(4_125_080),
+    }];
+    let share = |id: &str, symbol: &str, cur: &str, venue: (&str, &str), price| ListingRecord { id: id.into(), symbol: symbol.into(), name: format!("{symbol} Made Up"), currency: cur.into(), sort: ListingSort::Share { exchange: venue.0.into(), mic: venue.1.into() }, price };
+    let contract = |id: &str, put, price| ListingRecord { id: id.into(), symbol: "ZQU".into(), name: String::new(), currency: "USD".into(), sort: ListingSort::Contract { underlying: "sec-zqu".into(), expiry: day("2026-12-18"), strike: 5_000, put }, price };
+    let listings = vec![share("sec-zqu", "ZQU", "USD", ("NYSE", "XNYS"), 5_150), share("sec-zqc", "ZQC", "CAD", ("TSX", "XTSE"), 2_000), contract("sec-zqu-put", true, 120), contract("sec-zqu-call", false, 90)];
+    let (a, rec) = ("acct-a".to_string(), |d: &str, r| (day(d), r));
+    let records = vec![
+        rec("2026-02-02", Record::Deposit { account: a.clone(), cents: 2_000_000 }),
+        rec("2026-02-03", Record::Buy { account: a.clone(), listing: "sec-zqc".into(), units: 100, cents: 190_000 }),
+        rec("2026-02-04", Record::Buy { account: a.clone(), listing: "sec-zqu".into(), units: 100, cents: 500_000 }),
+        rec("2026-03-02", Record::Dividend { account: a.clone(), listing: "sec-zqc".into(), units: 100, cents: 1_550 }),
+        rec("2026-04-01", Record::Buy { account: a.clone(), listing: "sec-zqu-put".into(), units: 2, cents: 30_000 }),
+        rec("2026-05-01", Record::Sell { account: a.clone(), listing: "sec-zqu-put".into(), units: 2, cents: 24_000 }),
+        rec("2026-09-01", Record::Sell { account: a.clone(), listing: "sec-zqu-call".into(), units: 1, cents: 9_000 }),
+        rec("2026-09-01", Record::InterestCharge { account: a.clone(), currency: "USD".into(), cents: 6_410 }),
+    ];
+    let home = tempfile::tempdir().unwrap();
+    let now: jiff::Timestamp = "2026-10-08T20:00:00Z".parse().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
+    let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
+    let mut ws = Wealthsimple::new(Generated::from_records(today(), &accounts, &listings, &records));
+    assert_eq!(ws.source.rows().len(), records.len(), "one row a record, nothing funded besides");
+    let report = pull(&book, &mut ws, connection, today(), now, &mut |_| {}).unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(book.problems().unwrap().is_empty(), "{:?}", book.problems().unwrap());
+    let cash: Vec<String> = book.transactions().unwrap().iter().filter_map(|t| t.cash).map(|c| format!("{} {}", c.amount.to_text(), c.currency)).collect();
+    assert_eq!(cash, ["20000 CAD", "-1900 CAD", "-5000 USD", "15.5 CAD", "-300 USD", "240 USD", "90 USD", "-64.1 USD"]);
+    let paid_on: Vec<String> = book.transactions().unwrap().iter().filter_map(|t| t.paid_on).map(|q| q.to_text()).collect();
+    assert_eq!(paid_on, ["100"]);
+    let rights: Vec<String> = book.instruments().unwrap().iter().filter_map(|i| book.option_terms(i.id).unwrap()).map(|t| format!("{:?}", t.right)).collect();
+    assert_eq!(rights.len(), 2);
+    assert!(rights.iter().any(|r| r.contains("Put")) && rights.iter().any(|r| r.contains("Call")), "{rights:?}");
+    let account = book.accounts().unwrap()[0].id;
+    assert_eq!(book.last_account_day(account).unwrap(), Some(day("2026-10-07")));
+}

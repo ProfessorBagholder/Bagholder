@@ -10,6 +10,7 @@ mod capacity;
 mod logfile;
 mod carry;
 mod compare;
+mod demo;
 mod demo_facts;
 mod docs;
 mod broker_reads;
@@ -422,9 +423,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("pull-broker") {
         std::process::exit(pull_broker::cli(&args[1..]));
     }
-    // the made-up book's facts and prices, for the browser tests and screenshots
-    if args.first().map(String::as_str) == Some("demo-facts") {
-        std::process::exit(demo_facts::cli(&args[1..]));
+    // the made-up book, pulled from a made-up Wealthsimple, with its facts and
+    // prices: for the browser tests and screenshots
+    if args.first().map(String::as_str) == Some("demo") {
+        std::process::exit(demo::cli(&args[1..]));
     }
     // the server held to its cost budget at the owner's size (docs/architecture.md §16)
     if args.first().map(String::as_str) == Some("capacity") {
