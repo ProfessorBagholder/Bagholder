@@ -67,7 +67,9 @@
 
   // --- Allocation donut (portfolioSlices) ---
   // the server folds past ten holdings into `Other (n)`
-  const allocItems = $derived<DonutItem[]>((pf.allocation || []).map((x, i) => ({ label: x.label, v: x.value, share: x.share, color: 'var(--pie-' + ((i % 11) + 1) + ')' })))
+  // the cash waiting to be invested is a slice of its own, last and in a neutral colour
+  const allocItems = $derived<DonutItem[]>((pf.allocation || []).map((x, i) => ({ label: x.label, v: x.value, share: x.share, color: x.id === 'cash' ? 'var(--pie-cash)' : 'var(--pie-' + ((i % 11) + 1) + ')' })))
+  const allocHasCash = $derived((pf.allocation || []).some((x) => x.id === 'cash'))
 
   // --- Sectors / Regions donuts (exposureSlices) ---
   // the server folds the long tail into `Other (n)`, puts what is not classified last,
@@ -118,7 +120,7 @@
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px"><h5>Allocation</h5></div>
       {#if allocItems.length}
         <div style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">
-          <Donut items={allocItems} total={pf.marketValue.total} centreLabel="Market value" side="l" />
+          <Donut items={allocItems} total={pf.allocationTotal} centreLabel={allocHasCash ? 'Holdings + cash' : 'Market value'} side="l" />
         </div>
       {:else}
         <div class="muted empty" style="flex:1;font-size:12px">No open positions in scope.</div>

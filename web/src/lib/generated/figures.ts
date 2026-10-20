@@ -230,6 +230,11 @@ marginUsed: Fig<Dec> | null, marginUsedPct: Fig<number | null>, availableMargin:
  */
 availableMarginUnavailable: Array<string>, cash: Fig<Dec>, cashPct: Fig<number | null>, dayChange: Partial | null, dayChangePct: Fig<number | null>, allocation: Array<Slice>, 
 /**
+ * What the allocation's slices come to: the holdings' market value and the
+ * cash waiting to be invested beside them.
+ */
+allocationTotal: Fig<Dec>, 
+/**
  * The day the holdings are as of, under dates that end before today
  * (`SPEC.md` §5); none for the holdings now.
  */

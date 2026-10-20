@@ -419,6 +419,15 @@ pub struct Portfolio {
     /// account only; part of the figures so a new read of it moves the portfolio.
     pub net_worth_history: Vec<NetWorthDay>,
     pub cash: Fig<Money>,
+    /// The cash in the investment accounts in scope, each currency's positive
+    /// balance in CAD: what waits to be invested, beside the holdings. Not a
+    /// chequing account's, which is no investment, nor a card's.
+    pub invested_cash: Fig<Money>,
+    /// The cash in the chequing (spending) accounts in scope.
+    pub chequing_cash: Fig<Money>,
+    /// The allocation's cash slice: the invested cash and its share of the
+    /// holdings and it, where there is any and the scope is not a holding's.
+    pub allocation_cash: Option<(Money, Fig<Ratio>)>,
     pub cash_pct: Fig<Option<Ratio>>,
     pub day_change: Option<Partial>,
     pub day_change_pct: Fig<Option<Ratio>>,
@@ -931,6 +940,8 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let navs = current_navs(inputs, &accounts);
     let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
+    let mut invested_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
+    let mut chequing_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut available = Vec::new();
     let mut unavailable = Vec::new();
     let mut unread = Vec::new();
@@ -946,6 +957,25 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
             };
             if let Ok(total) = slot {
                 *slot = total.checked_add(v.abs()).map_err(Gaps::from);
+            }
+            // a positive balance: a chequing account's is cash to spend, an
+            // investment account's waits to be invested, a card's is neither
+            if v.is_positive() {
+                let kind = match &a.account.account_type {
+                    AccountType::Known { kind, .. } => Some(*kind),
+                    _ => None,
+                };
+                let to = match kind {
+                    Some(AccountKind::Spending) => Some(&mut chequing_by),
+                    Some(AccountKind::CreditCard) | Some(AccountKind::LineOfCredit) => None,
+                    _ => Some(&mut invested_by),
+                };
+                if let Some(to) = to {
+                    let e = to.entry(*c).or_insert(Ok(Dec::ZERO));
+                    if let Ok(total) = e {
+                        *e = total.checked_add(*v).map_err(Gaps::from);
+                    }
+                }
             }
         }
         if is_margin(a) {
@@ -972,6 +1002,8 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     };
     let margin_used = to_cad_sum(&used);
     let cash = to_cad_sum(&cash_by);
+    let invested_cash = to_cad_sum(&invested_by);
+    let chequing_cash = to_cad_sum(&chequing_by);
     let net_value = (!navs.is_empty()).then(|| fig_sum(&navs));
     let quoted: Vec<(usize, Money)> = idx.iter().filter_map(|i| positions[*i].day_change_cad.as_ref().ok().and_then(|d| d.map(|m| (*i, m)))).collect();
     let day_change = (!quoted.is_empty()).then(|| Partial { total: money_sum(quoted.iter().map(|(_, m)| *m)), left_out: idx.len() - quoted.len() });
@@ -990,11 +1022,18 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         .filter_map(|i| positions[*i].market_cad.as_ref().ok().filter(|m| m.amount.is_positive()).map(|m| Allocation { position: *i, value: *m, share: Ok(0.0) }))
         .collect();
     allocation.sort_by(|a, b| b.value.amount.cmp(&a.value.amount));
-    let allocated = money_sum(allocation.iter().map(|a| a.value));
+    // the cash waiting to be invested is part of what the accounts hold: a slice
+    // of its own, unless the scope is a holding's
+    let allocation_cash = match &invested_cash {
+        Ok(c) if c.amount.is_positive() && !holdings_filtered(f) => Some(*c),
+        _ => None,
+    };
+    let allocated = money_sum(allocation.iter().map(|a| a.value).chain(allocation_cash));
     for a in allocation.iter_mut() {
         // every value is positive, so their sum is never zero
         a.share = allocated.clone().map(|t| money_ratio(a.value, t).unwrap_or(0.0));
     }
+    let allocation_cash = allocation_cash.map(|c| (c, allocated.clone().map(|t| money_ratio(c, t).unwrap_or(0.0))));
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
     let owed = owed(f, inputs, &accounts);
     let outside_assets = if f.accounts.is_empty() && !holdings_filtered(f) { inputs.facts.debts.assets.iter().map(|d| (d.clone(), live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance))).collect() } else { Vec::new() };
@@ -1029,6 +1068,9 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         day_change,
         day_change_pct,
         allocation,
+        invested_cash,
+        chequing_cash,
+        allocation_cash,
         past: None,
     }
 }
@@ -1057,14 +1099,38 @@ pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate:
         }
     }
     let mut cash = Ok(Money::zero(Currency::CAD));
-    for ((_, c), v) in by {
-        cash = crate::gap::both(cash, v, |total, v| {
+    let (mut invested, mut chequing) = (Ok(Money::zero(Currency::CAD)), Ok(Money::zero(Currency::CAD)));
+    for ((a, c), v) in by {
+        let kind = match inputs.ledger.accounts.get(&a).map(|i| &i.account.account_type) {
+            Some(AccountType::Known { kind, .. }) => Some(*kind),
+            _ => None,
+        };
+        let add = |total: Money, v: Dec| -> Fig<Money> {
             if !v.is_positive() {
                 return Ok(total);
             }
             Ok(total.add_to_fit(crate::fx::to_cad(&inputs.facts.rates, &inputs.clock, Money::new(v, c), day)?)?)
-        });
+        };
+        cash = crate::gap::both(cash, v.clone(), add);
+        // as now: a chequing account's cash is to spend, an investment account's waits to be invested
+        match kind {
+            Some(AccountKind::Spending) => chequing = crate::gap::both(chequing, v, add),
+            Some(AccountKind::CreditCard) | Some(AccountKind::LineOfCredit) => {}
+            _ => invested = crate::gap::both(invested, v, add),
+        }
     }
+    // the allocation's shares again, over that day's holdings and the cash waiting then
+    let slice = match &invested {
+        Ok(c) if c.amount.is_positive() && !holdings_filtered(f) => Some(*c),
+        _ => None,
+    };
+    let allocated = money_sum(p.allocation.iter().map(|a| a.value).chain(slice));
+    for a in p.allocation.iter_mut() {
+        a.share = allocated.clone().map(|t| money_ratio(a.value, t).unwrap_or(0.0));
+    }
+    p.allocation_cash = slice.map(|c| (c, allocated.clone().map(|t| money_ratio(c, t).unwrap_or(0.0))));
+    p.invested_cash = invested;
+    p.chequing_cash = chequing;
     p.cash_pct = match &p.net_value {
         Some(n) => ratio_of(&cash, n),
         None => Ok(None),

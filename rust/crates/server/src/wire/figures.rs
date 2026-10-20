@@ -343,6 +343,9 @@ pub struct Portfolio {
     pub day_change: Option<Partial>,
     pub day_change_pct: Fig<Option<f64>>,
     pub allocation: Vec<Slice>,
+    /// What the allocation's slices come to: the holdings' market value and the
+    /// cash waiting to be invested beside them.
+    pub allocation_total: Fig<Dec>,
     /// The day the holdings are as of, under dates that end before today
     /// (`SPEC.md` §5); none for the holdings now.
     pub as_of: Option<String>,

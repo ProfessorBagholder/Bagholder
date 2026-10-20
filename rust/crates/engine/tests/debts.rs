@@ -138,3 +138,27 @@ fn each_days_debts_are_the_outside_debts_and_the_margin_borrowed_at_its_close() 
     assert_eq!(one[0].debts, Some(cad("2100").add_to_fit(bagholder_engine::fx::to_cad(&e.inputs().facts.rates, &e.inputs().clock, Money::new(d("745"), Currency::USD), day("2026-04-17")).unwrap()).unwrap()), "its margin alone, no outside debt");
     assert!(e.scope(&Filters { instruments: BTreeSet::from([b.ids.instrument("U")]), ..Filters::default() }).portfolio.net_worth_history.is_empty(), "a holding has no net worth by day");
 }
+
+/// Cash is split by what it is for: an investment account's waits to be
+/// invested and is the allocation's last slice, its shares and the holdings'
+/// making the whole; a chequing account's is cash to spend, in no slice.
+#[test]
+fn cash_waiting_to_be_invested_is_a_slice_and_chequing_cash_is_not() {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
+    let mut case: Value = serde_json::from_str(&text).unwrap();
+    case["accounts"].as_array_mut().unwrap().push(serde_json::json!({"id": "D", "kind": "spending"}));
+    let mut b = build(&case);
+    let mut e = engine(&mut b);
+    let (a, dd) = (b.ids.account("A"), b.ids.account("D"));
+    e.apply(Change::Broker(a, Some(BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1000"))]), net_value_now: Some(Money::new(d("3100"), Currency::CAD)), ..BrokerAccount::default() })));
+    e.apply(Change::Broker(dd, Some(BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("500"))]), ..BrokerAccount::default() })));
+    let pf = e.scope(&Filters::default()).portfolio;
+    assert_eq!(pf.invested_cash.clone().unwrap(), Money::new(d("1000"), Currency::CAD), "the margin account's cash");
+    assert_eq!(pf.chequing_cash.clone().unwrap(), Money::new(d("500"), Currency::CAD), "the chequing account's");
+    let (cash, share) = pf.allocation_cash.clone().expect("a cash slice");
+    assert_eq!(cash, Money::new(d("1000"), Currency::CAD), "the invested cash alone, no chequing");
+    let total: f64 = pf.allocation.iter().map(|x| x.share.clone().unwrap()).sum::<f64>() + share.unwrap();
+    assert!((total - 1.0).abs() < 1e-9, "the slices make the whole: {total}");
+    let holding = Filters { instruments: BTreeSet::from([b.ids.instrument("X")]), ..Filters::default() };
+    assert!(e.scope(&holding).portfolio.allocation_cash.is_none(), "no cash slice under a holding's filter");
+}

@@ -554,10 +554,18 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         pf.allocation.iter().map(|a| {
             let p = &pf.held(figs.positions)[a.position];
             (shown(inputs, p.instrument).symbol, a.value, a.share.clone().unwrap_or(0.0), Some(position_id(p)))
-        }).collect(),
+        })
+        // the cash waiting to be invested: its own slice, always last
+        .chain(pf.allocation_cash.iter().map(|(c, share)| ("Cash".to_string(), *c, share.clone().unwrap_or(0.0), Some("cash".to_string()))))
+        .collect(),
         10,
-        None,
+        pf.allocation_cash.is_some().then_some("Cash"),
     );
+    // what the slices come to: the holdings' value, and the cash beside them
+    let allocation_total = match &pf.allocation_cash {
+        Some((c, _)) => pf.market_value.total.clone().and_then(|m| Ok(m.add_to_fit(*c)?)),
+        None => pf.market_value.total.clone(),
+    };
     Portfolio {
         position_count: pf.positions.len(),
         market_value: partial(&pf.market_value),
@@ -567,6 +575,7 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
         nav: pf.net_value.as_ref().map(fig_money),
         nav_accounts: pf.net_value_accounts,
         net_worth: net_worth(engine, pf, filters),
+        allocation_total: fig_money(&allocation_total),
         has_margin: pf.has_margin,
         margin_used: pf.margin_used.as_ref().map(fig_money),
         margin_used_pct: pf.margin_used_pct.clone().into_wire(),
@@ -750,17 +759,23 @@ fn net_worth(engine: &Engine, pf: &bagholder_engine::scope::Portfolio, filters: 
     }
     let mut assets: Vec<OwedDebt> = Vec::new();
     let mut held: Vec<Fig<Money>> = Vec::new();
-    if let Some(v) = &pf.net_value {
-        // when the broker last stated its accounts' value
-        let read = inputs.market.brokers.values().filter_map(|b| b.as_of).max();
-        let before_margin = (|| -> Fig<Money> {
-            match &margin {
-                Some(m) => Ok(v.clone()?.add_to_fit(m.clone()?)?),
-                None => v.clone(),
-            }
-        })();
-        assets.push(OwedDebt { id: "broker".into(), kind: String::new(), name: "Investments".into(), institution: "Wealthsimple".into(), amount: fig_money(&before_margin), as_of: read.map(|t| t.to_string()) });
-        held.push(before_margin);
+    // the broker's part, each row a figure the Portfolio shows: the holdings at
+    // their market value, the cash waiting to be invested, and a chequing
+    // account's balance, which is cash and no investment
+    let wealthsimple = |id: &str, kind: &str, name: &str, v: &Fig<Money>| OwedDebt { id: id.into(), kind: kind.into(), name: name.into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: None };
+    let holdings = pf.market_value.total.clone();
+    let worth = |v: &Fig<Money>| v.as_ref().map_or(true, |m| !m.amount.is_zero());
+    if !pf.positions.is_empty() && worth(&holdings) {
+        assets.push(wealthsimple("holdings", "", "Holdings", &holdings));
+        held.push(holdings);
+    }
+    if worth(&pf.invested_cash) {
+        assets.push(wealthsimple("cash", "", "Uninvested cash", &pf.invested_cash));
+        held.push(pf.invested_cash.clone());
+    }
+    if worth(&pf.chequing_cash) {
+        assets.push(wealthsimple("chequing", "Chequing", "Chequing", &pf.chequing_cash));
+        held.push(pf.chequing_cash.clone());
     }
     for (d, cad) in &pf.outside_assets {
         assets.push(row(d, cad));
