@@ -239,6 +239,13 @@ pub trait BrokerAdapter {
     fn outside_accounts(&mut self) -> Answer<Option<Vec<bagholder_book::debts::OutsideDebt>>> {
         Ok(None)
     }
+    /// Net worth by day over the broker's accounts `accounts` and the outside
+    /// accounts `outside`, as its net worth feature states it: none from a
+    /// broker that states none.
+    fn net_worth_days(&mut self, accounts: &[String], outside: &[String]) -> Answer<Option<Vec<(jiff::civil::Date, bagholder_core::Dec, bagholder_core::Currency)>>> {
+        let _ = (accounts, outside);
+        Ok(None)
+    }
     /// The broker's description of each instrument it states a holding in that
     /// no row names (seen on `day`), read together: each one's, or why not.
     fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)>;

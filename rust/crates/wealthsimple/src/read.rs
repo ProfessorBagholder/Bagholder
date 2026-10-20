@@ -263,6 +263,20 @@ pub fn outside_accounts(node: &Value) -> Read<Vec<bagholder_book::debts::Outside
     Ok(out)
 }
 
+/// Net worth by day from `historicalDaily`'s nodes: the day and its balance,
+/// read strictly.
+pub fn net_worth_days(nodes: &[Value]) -> Read<Vec<(jiff::civil::Date, Dec, Currency)>> {
+    let mut out = Vec::new();
+    for v in nodes {
+        let n = Node::root(v);
+        let b = n.obj("balance")?;
+        let c = b.text("currency")?;
+        out.push((n.day("date")?, b.dec_text("amount")?, Currency::parse(c).map_err(|err| b.field("currency").map(|f| f.mismatch(err.to_string())).unwrap_or_else(|m| m))?));
+    }
+    out.sort_by_key(|x| x.0);
+    Ok(out)
+}
+
 pub fn card_balance(node: &Value, account: &str) -> Read<Dec> {
     let n = Node::root(node);
     let id = n.text("id")?;

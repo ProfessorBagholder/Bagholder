@@ -189,7 +189,8 @@ pub fn debts(book: &Book) -> Result<bagholder_engine::input::Debts, String> {
     let stated = |d: bagholder_book::debts::OutsideDebt| bagholder_engine::input::Debt { id: d.entity_id, kind: d.kind, name: d.name, institution: d.institution, balance: bagholder_core::Money::new(d.balance, d.currency), as_of: d.as_of };
     let owed = owed.into_iter().map(stated).collect();
     let assets = held.into_iter().map(stated).collect();
-    Ok(bagholder_engine::input::Debts { owed, assets, repayments, asked: asked.into_values().collect() })
+    let history = book.net_worth_days().map_err(err)?.into_iter().map(|(d, v, c)| (d, bagholder_core::Money::new(v, c))).collect();
+    Ok(bagholder_engine::input::Debts { owed, assets, history, repayments, asked: asked.into_values().collect() })
 }
 
 /// The source name a stand-in fact read from the old store carries.

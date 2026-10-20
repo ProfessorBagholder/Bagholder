@@ -359,6 +359,8 @@ pub struct NetWorth {
     /// The broker's own accounts first (their value after margin), then each outside asset.
     pub assets: Vec<OwedDebt>,
     pub liabilities: Vec<OwedDebt>,
+    /// Net worth by day, oldest first, as Wealthsimple's net worth feature states it.
+    pub history: Vec<Point>,
 }
 
 /// One debt held outside, as the broker's net worth feature states it.

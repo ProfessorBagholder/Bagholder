@@ -781,7 +781,20 @@ fn store_balances(
     // what the broker's net worth feature states is held outside it: a debt's
     // balance, read with the statements it sits beside
     match adapter.outside_accounts() {
-        Ok(Some(outside)) => book.keep_outside_debts(connection, now, &outside)?,
+        Ok(Some(outside)) => {
+            book.keep_outside_debts(connection, now, &outside)?;
+            // net worth by day, read once a day: a day's value is the broker's as of its close
+            let read_today = book.net_worth_read_at()?.is_some_and(|t| now.duration_since(t) < jiff::SignedDuration::from_hours(20));
+            if !read_today {
+                let accounts: Vec<String> = keys_of.values().flatten().cloned().collect();
+                let entities: Vec<String> = outside.iter().map(|d| d.entity_id.clone()).collect();
+                match adapter.net_worth_days(&accounts, &entities) {
+                    Ok(Some(days)) => book.keep_net_worth_days(&days, now)?,
+                    Ok(None) => {}
+                    Err(f) => failures.push(("net worth by day".into(), f)),
+                }
+            }
+        }
         Ok(None) => {}
         Err(f) => failures.push(("outside accounts".into(), f)),
     }

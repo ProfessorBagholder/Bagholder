@@ -61,11 +61,40 @@ impl Book {
         Ok(())
     }
 
+    /// Keep net worth by day as one read states it, in place of the last.
+    pub fn keep_net_worth_days(&self, days: &[(jiff::civil::Date, Dec, Currency)], at: jiff::Timestamp) -> Result<()> {
+        let tx = self.conn().unchecked_transaction()?;
+        tx.execute("DELETE FROM net_worth_days", [])?;
+        for (d, v, c) in days {
+            tx.execute("INSERT INTO net_worth_days (day, amount, currency, read_at) VALUES (?, ?, ?, ?)", params![text::day(*d), v.to_string(), c.as_str(), text::at(at)])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Net worth by day, oldest first, and when it was last read.
+    pub fn net_worth_days(&self) -> Result<Vec<(jiff::civil::Date, Dec, Currency)>> {
+        let mut stmt = self.conn().prepare("SELECT day, amount, currency FROM net_worth_days ORDER BY day")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let t = "net_worth_days";
+        rows.map(|row| {
+            let (d, v, c) = row?;
+            Ok((text::date(t, "day", &d)?, text::dec(t, "amount", &v)?, text::currency(t, "currency", &c)?))
+        })
+        .collect()
+    }
+
+    /// When net worth by day was last read, if ever.
+    pub fn net_worth_read_at(&self) -> Result<Option<jiff::Timestamp>> {
+        let at: Option<String> = self.conn().query_row("SELECT MAX(read_at) FROM net_worth_days", [], |r| r.get(0))?;
+        text::opt_instant("net_worth_days", "read_at", at)
+    }
+
     /// What a fingerprint of the outside debts and the answers about them reads
     /// now: it moves with every read kept and every answer given.
     pub fn debts_print(&self) -> Result<String> {
         Ok(self.conn().query_row(
-            "SELECT COALESCE((SELECT MAX(read_at) FROM outside_debts), '') || '|' || (SELECT COUNT(*) FROM repayment_answers) || '|' || COALESCE((SELECT MAX(answered_at) FROM repayment_answers), '')",
+            "SELECT COALESCE((SELECT MAX(read_at) FROM outside_debts), '') || '|' || (SELECT COUNT(*) FROM repayment_answers) || '|' || COALESCE((SELECT MAX(answered_at) FROM repayment_answers), '') || '|' || COALESCE((SELECT MAX(read_at) FROM net_worth_days), '')",
             [],
             |r| r.get::<_, String>(0),
         )?)

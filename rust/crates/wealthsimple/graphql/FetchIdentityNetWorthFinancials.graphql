@@ -1,0 +1,21 @@
+# A selection of the fields Wealthsimple's own FetchIdentityNetWorthFinancials asks (web app release 0.3.688170, brief 23 on architecture-briefs): net worth by day, over the accounts and outside accounts named.
+query FetchIdentityNetWorthFinancials($identityId: ID!, $accountIds: [ID!]!, $externalFinancialEntityIds: [ID!]!, $currency: Currency!, $startDate: Date!, $endDate: Date, $first: Int, $accountScope: AccountScope!) {
+  identity(id: $identityId) {
+    id
+    netWorth {
+      financials(accountScope: $accountScope, filter: {accounts: $accountIds, externalFinancialEntities: $externalFinancialEntityIds}) {
+        historicalDaily(currency: $currency, startDate: $startDate, endDate: $endDate, first: $first) {
+          edges {
+            node {
+              date
+              balance {
+                amount
+                currency
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

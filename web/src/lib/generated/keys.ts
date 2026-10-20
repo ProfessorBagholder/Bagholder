@@ -21,6 +21,7 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
   'positions': {
     'portfolio.netWorth.assets': 'id',
     'portfolio.netWorth.liabilities': 'id',
+    'portfolio.netWorth.history': 'd',
     'portfolio.allocation': 'label',
     'positions': 'id',
   },

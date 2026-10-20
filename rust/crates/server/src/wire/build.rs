@@ -740,7 +740,8 @@ fn net_worth(inputs: &bagholder_engine::input::Inputs, pf: &bagholder_engine::sc
     let owed: Vec<bagholder_engine::gap::Fig<Money>> = liabilities.iter().map(|(_, m)| m.clone()).collect();
     let (assets_total, liabilities_total) = (sum(&held), sum(&owed));
     let net = (|| -> bagholder_engine::gap::Fig<Money> { Ok(assets_total.clone()?.add_to_fit(liabilities_total.clone()?.neg())?) })();
-    Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&assets_total), liabilities_total: fig_money(&liabilities_total), assets, liabilities: liabilities.iter().map(|(d, m)| row(d, m)).collect() })
+    let history = inputs.facts.debts.history.iter().map(|(d, m)| crate::wire::figures::Point { d: d.to_string(), v: Dec(m.amount) }).collect();
+    Some(NetWorth { net_worth: fig_money(&net), assets_total: fig_money(&assets_total), liabilities_total: fig_money(&liabilities_total), assets, liabilities: liabilities.iter().map(|(d, m)| row(d, m)).collect(), history })
 }
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or

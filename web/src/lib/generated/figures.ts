@@ -187,7 +187,11 @@ export type NetWorth = { netWorth: Fig<Dec>, assetsTotal: Fig<Dec>, liabilitiesT
 /**
  * The broker's own accounts first (their value after margin), then each outside asset.
  */
-assets: Array<OwedDebt>, liabilities: Array<OwedDebt>, };
+assets: Array<OwedDebt>, liabilities: Array<OwedDebt>, 
+/**
+ * Net worth by day, oldest first, as Wealthsimple's net worth feature states it.
+ */
+history: Array<Point>, };
 
 export type AskedPayee = { key: string, payee: string, 
 /**

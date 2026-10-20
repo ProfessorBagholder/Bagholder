@@ -659,6 +659,8 @@ pub struct Debts {
     /// What is held outside the broker that is not a debt (a home, a car, an
     /// account at another institution), as its net worth feature states it.
     pub assets: Vec<Debt>,
+    /// Net worth by day, as the broker's net worth feature states it, oldest first.
+    pub history: Vec<(Date, Money)>,
     pub repayments: BTreeMap<TransactionId, String>,
     /// The payees whose payments may repay a debt and nothing says which: the
     /// person is asked, once a payee.

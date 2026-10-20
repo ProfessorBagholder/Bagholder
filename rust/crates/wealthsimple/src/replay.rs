@@ -224,6 +224,10 @@ impl Source for Replay {
         self.asked.push("balances".into());
         Ok(self.balances.clone())
     }
+    fn net_worth_history(&mut self, _accounts: &[String], _outside: &[String]) -> Answer<Option<Vec<Value>>> {
+        // no capture holds it yet: not read
+        Ok(None)
+    }
     fn net_worth(&mut self) -> Answer<Option<Value>> {
         // a capture taken before the net worth feature was read holds none: not read, not none owed
         self.asked.push("net worth".into());
