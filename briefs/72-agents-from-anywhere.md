@@ -102,7 +102,19 @@ Ruled out:
 - Every agent saves the address when connected, so an address that changes breaks every agent.
 
 **In Settings,** "Agents anywhere":
-- **Bagholder detects which of these tools are installed** and offers them, Tailscale first, as the one no one in between can read.
+- **The person chooses; Bagholder never picks for them.** Most people have no tunnel yet, and a tool found on the machine says nothing about what they want for this. So Settings shows every supported tunnel side by side:
+  - the account it needs;
+  - the cost;
+  - whether the address stays fixed;
+  - who can read the traffic.
+
+  Tailscale is marked as recommended because no one in between can read the traffic, but the choice is the person's.
+- **Then it walks them through the one they chose, from nothing:**
+  - installing it from its maker's official installer or download, linked from the step itself;
+  - signing in to that provider;
+  - only then, starting it.
+
+  What's already done on the machine is checked only to skip that step, never to choose for them.
 - **Bagholder starts the chosen tunnel itself, as its own child process,** pointed at the agents-only listener alone, and reads back the public address.
   - The child's lifetime is tied to the server's (`BAGHOLDER_EXIT_WITH`, #555), so the server stopping leaves no tunnel process running (no leftover processes).
   - A second start is refused while one runs.
