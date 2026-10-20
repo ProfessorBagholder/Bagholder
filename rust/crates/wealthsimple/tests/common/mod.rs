@@ -65,6 +65,12 @@ pub fn map_row(r: &mut Ws, row: &Value) -> Mapped {
 /// themselves, their moves kept as the book's, then the rows read against
 /// positions, net of those moves.
 pub fn map_all(r: &mut Ws) -> Vec<(Value, Mapped)> {
+    record_all(r).into_iter().map(|(row, _, m)| (row, m)).collect()
+}
+
+/// Every row recorded and mapped as `map_all` does: each row, its record, and
+/// its mapping.
+pub fn record_all(r: &mut Ws) -> Vec<(Value, Value, Mapped)> {
     let rows = r.source.rows.clone();
     // the rows read as a pull reads them, for a move's siblings
     let accounts: std::collections::BTreeSet<String> = rows.iter().map(|x| Node::root(x).text("accountId").unwrap().to_string()).collect();
@@ -74,24 +80,29 @@ pub fn map_all(r: &mut Ws) -> Vec<(Value, Mapped)> {
     let mut moves = Moves::default();
     let mut out = Vec::new();
     let reads = |row: &Value| row_of(row, day_of(row)).unwrap().reads_positions;
+    let record = |r: &mut Ws, row: &Value, moves: &mut Moves| {
+        let payload = r.record(&row_of(row, day_of(row)).unwrap(), moves).unwrap();
+        let m = map_payload(&payload);
+        (payload, m)
+    };
     for row in rows.iter().filter(|x| !reads(x)) {
-        let m = map_row(r, row);
+        let (payload, m) = record(r, row, &mut Moves::default());
         let account = Node::root(row).text("accountId").unwrap().to_string();
         for d in &m.legs {
             if let (Some(i), Some(q)) = (&d.instrument, d.quantity) {
                 if let Some(rf) = i.refs.iter().find(|x| matches!(x.scheme, RefScheme::BrokerSecurity(_))) {
-                    moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Instrument(rf.clone()), quantity: q });
+                    moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Instrument(rf.clone()), quantity: q, imported: false });
                 }
             }
             if let Some(c) = d.cash {
-                moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Cash(c.currency), quantity: c.amount });
+                moves.0.push(Moved { account: account.clone(), day: d.trade_date, what: MovedWhat::Cash(c.currency), quantity: c.amount, imported: false });
             }
         }
-        out.push((row.clone(), m));
+        out.push((row.clone(), payload, m));
     }
     for row in rows.iter().filter(|x| reads(x)) {
-        let m = map_row_with(r, row, &mut moves);
-        out.push((row.clone(), m));
+        let (payload, m) = record(r, row, &mut moves);
+        out.push((row.clone(), payload, m));
     }
     out
 }

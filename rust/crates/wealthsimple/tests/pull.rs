@@ -192,7 +192,8 @@ fn a_pending_row_posted_again_under_another_id_leaves_the_book() {
     assert_eq!((third.records_new, third.removed.len()), (0, 0));
 }
 
-/// An imported record: one cash leg, known by the broker's id of its row.
+/// An imported record: one cash leg (a deposit into the account, unless the
+/// payload names its account and kind), known by the broker's id of its row.
 struct Imported;
 
 impl Mapping for Imported {
@@ -205,14 +206,20 @@ impl Mapping for Imported {
     fn map(&self, _ctx: &MapContext, payload: &str) -> Mapped {
         let v = bagholder_core::json::parse(payload).unwrap();
         let (day, cash) = (Node::root(&v).text("day").unwrap().to_string(), Node::root(&v).text("cash").unwrap().to_string());
+        // the account and kind where the payload names them
+        let account = Node::root(&v).text("account").unwrap_or("anon-tfsa-1").to_string();
+        let kind = match Node::root(&v).text("kind").ok() {
+            Some("TransferOut") => Kind::TransferOut,
+            _ => Kind::Deposit,
+        };
         Mapped {
             legs: vec![Draft {
                 leg: Leg::named("cash"),
-                account: AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1"),
+                account: AccountRef::new(Broker::named("wealthsimple"), account),
                 occurred_at: None,
                 trade_date: day.parse().unwrap(),
                 settle_date: None,
-                kind: Kind::Deposit,
+                kind,
                 effect: None,
                 instrument: None,
                 quantity: None,
@@ -383,4 +390,207 @@ fn a_capture_reply_missing_its_list_is_refused_with_its_file() {
     let err = Replay::read(d.path()).err().expect("a reply without its accounts list is refused");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains("positions@acct@2026-09-16.json"), "{err}");
+}
+
+/// The recorded replies with an accounts list of two RESPs: anon-resp-1 a
+/// managed one, closed, and anon-resp-2 a self-directed one, open.
+fn resp_replies() -> tempfile::TempDir {
+    resp_replies_with("closed")
+}
+
+/// As `resp_replies`, the managed account's status `managed`.
+fn resp_replies_with(managed: &str) -> tempfile::TempDir {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple");
+    let replies = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(&fixtures).unwrap() {
+        let p = e.unwrap().path();
+        std::fs::copy(&p, replies.path().join(p.file_name().unwrap())).unwrap();
+    }
+    let mut accounts = bagholder_core::json::parse(&std::fs::read_to_string(dir().join("edited-accounts-one.json")).unwrap()).unwrap();
+    let template = edges(&mut accounts)[0].clone();
+    edges(&mut accounts).clear();
+    for (id, ty, status) in [("anon-resp-1", "MANAGED_RESP_FAMILY", managed), ("anon-resp-2", "SELF_DIRECTED_RESP_FAMILY", "open")] {
+        let mut a = template.clone();
+        if let Value::Object(e) = &mut a {
+            if let Some(Value::Object(n)) = e.get_mut("node") {
+                n.insert("id".into(), Value::String(id.into()));
+                n.insert("unifiedAccountType".into(), Value::String(ty.into()));
+                n.insert("status".into(), Value::String(status.into()));
+                n.insert("nickname".into(), Value::Null);
+                n.insert("custodianAccounts".into(), Value::Array(vec![]));
+                n.insert("accountFeatures".into(), Value::Array(vec![]));
+            }
+        }
+        edges(&mut accounts).push(a);
+    }
+    std::fs::write(replies.path().join("edited-accounts-resp.json"), accounts.canonical()).unwrap();
+    replies
+}
+
+/// The move made up, in cash, every figure here made up.
+const MOVED: &str = "4321.10";
+
+/// The feed as Wealthsimple states the owner's move (2025-06): the managed
+/// account sold to cash on the 13th, its cash arriving in the self-directed
+/// one on the 16th, and no row leaving the managed account.
+fn resp_rows(rows: &mut Vec<Value>) {
+    rows.retain(|r| Node::root(r).text("canonicalId").ok() != Some("anon-asset-3"));
+    let set = |r: &mut Value, fields: &[(&str, &str)]| {
+        if let Value::Object(o) = r {
+            for (k, v) in fields {
+                o.insert(k.to_string(), Value::String(v.to_string()));
+            }
+        }
+    };
+    let arrival = rows.iter_mut().find(|r| Node::root(r).text("canonicalId").ok() == Some("anon-asset-6")).unwrap();
+    set(arrival, &[("amount", MOVED)]);
+    let mut sale = rows.iter().find(|r| Node::root(r).text("type").ok() == Some("MANAGED_BUY")).unwrap().clone();
+    set(&mut sale, &[("type", "MANAGED_SELL"), ("canonicalId", "anon-made-up-sale-1"), ("externalCanonicalId", "anon-made-up-order-1"), ("occurredAt", "2025-06-13T15:00:00.000000+00:00"), ("amount", MOVED)]);
+    rows.push(sale);
+}
+
+fn resp_account(book: &Book, key: &str) -> bagholder_core::AccountId {
+    book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), key)).unwrap().unwrap()
+}
+
+/// The managed account's moves of the sale and the move over those days, and
+/// the self-directed account's arrivals: the cash nets to nothing in the one,
+/// and arrived once in the other.
+fn assert_moved_once(book: &Book) {
+    let (managed, self_directed) = (resp_account(book, "anon-resp-1"), resp_account(book, "anon-resp-2"));
+    let txs = book.transactions_as_named().unwrap();
+    let days = |t: &&bagholder_core::transaction::Transaction| t.trade_date >= "2025-06-13".parse().unwrap() && t.trade_date <= "2025-06-16".parse().unwrap();
+    let cad = Currency::parse("CAD").unwrap();
+    let moved: Vec<_> = txs.iter().filter(|t| t.account == managed && matches!(t.kind, Kind::Sell | Kind::TransferOut)).filter(days).collect();
+    assert_eq!(moved.len(), 2, "{moved:?}");
+    assert_eq!(moved.iter().filter(|t| t.kind == Kind::TransferOut).count(), 1, "booked leaving once");
+    let net = moved.iter().filter_map(|t| t.cash).filter(|c| c.currency == cad).fold(Dec::ZERO, |a, c| a.checked_add(c.amount).unwrap());
+    assert_eq!(net, Dec::ZERO, "the sale's cash left the managed account");
+    let arrived: Vec<_> = txs.iter().filter(|t| t.account == self_directed && t.kind == Kind::TransferIn).filter(days).collect();
+    assert_eq!(arrived.len(), 1, "{arrived:?}");
+    assert_eq!(arrived[0].cash, Some(Money::new(Dec::parse(MOVED).unwrap(), cad)));
+}
+
+/// A managed account sold to cash on one day and closed, its cash moved to a
+/// self-directed account three days later, Wealthsimple stating the move
+/// arriving and nothing in the managed account's feed leaving it (the owner's
+/// shape, 2025-06; every figure here made up): after the pull, the managed
+/// account's cash from the sale has left it, and the self-directed one holds it.
+#[test]
+fn a_move_whose_leaving_row_the_broker_never_lists_leaves_the_other_account_after_the_pull() {
+    let replies = resp_replies();
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let (report, _) = once_with(&book, replies.path(), now, resp_rows);
+    assert!(!report.failures.iter().any(|(p, _)| p.starts_with("activity")), "{:?}", report.failures);
+    assert_moved_once(&book);
+}
+
+/// The earlier app's import of the move leaving the managed account, the only
+/// record of it before: the leg Wealthsimple's arrival books in its place
+/// replaces it, so the cash leaves once.
+#[test]
+fn a_move_leaving_booked_from_its_arrival_supersedes_the_import_of_it() {
+    let replies = resp_replies();
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let c = connection(&book, now);
+    book.add_account(c, &[AccountRef::new(Broker::named("wealthsimple"), "anon-resp-1")], &bagholder_book::import::wealthsimple_account_type("MANAGED_RESP_FAMILY"), AccountStatus::Closed, None, at(now)).unwrap();
+    let payload = format!(r#"{{"account":"anon-resp-1","kind":"TransferOut","cash":"-{MOVED}","day":"2025-06-16"}}"#);
+    book.store(&Imported, &Incoming { connection: Some(c), source_key: "old-leaving", payload: &payload, refs: vec![("broker-record:wealthsimple".into(), "anon-made-up-leaving-1".into())] }, at(now)).unwrap();
+    let (report, _) = once_with(&book, replies.path(), now, resp_rows);
+    assert!(!report.failures.iter().any(|(p, _)| p.starts_with("activity") || p.starts_with("record")), "{:?}", report.failures);
+    assert_eq!(state(&book, "bagholder-import", "old-leaving"), RecordState::Superseded);
+    assert_moved_once(&book);
+}
+
+/// A record of the move stored before the other account's feed was read with
+/// it books no leaving: the next pull reads that feed over the move's days,
+/// adds it, and books the leaving; the pull after reads nothing more for it.
+#[test]
+fn a_move_arriving_stored_before_its_other_account_s_feed_was_read_with_it_is_read_again_once() {
+    let replies = resp_replies();
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    once_with(&book, replies.path(), "2025-11-19T20:00:00Z", resp_rows);
+    // the record as the earlier assembly stored it: no other account's feed
+    let c = connection(&book, "2025-11-19T20:00:00Z");
+    let source = SourceName::named("wealthsimple");
+    let r = book.record_by_key(Some(c), &source, "anon-asset-6").unwrap().unwrap();
+    let (_, _, payload) = book.revisions(r).unwrap().pop().unwrap();
+    let mut v = bagholder_core::json::parse(&payload).unwrap();
+    if let Value::Object(o) = &mut v {
+        assert!(o.remove("opposing").is_some(), "read with it now");
+    }
+    let old = v.canonical();
+    book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &Incoming { connection: Some(c), source_key: "anon-asset-6", payload: &old, refs: vec![] }, at("2025-11-19T20:30:00Z")).unwrap();
+    let managed = resp_account(&book, "anon-resp-1");
+    let leaving = |book: &Book| book.transactions_of(r).unwrap().into_iter().filter(|t| t.account == managed).count();
+    assert_eq!(leaving(&book), 0, "the earlier assembly books no leaving");
+    // the next pull: the managed account, closed and read in full, read again over the move's days
+    let (second, asked) = once_with(&book, replies.path(), "2025-11-20T20:00:00Z", resp_rows);
+    assert!(second.failures.iter().all(|(p, _)| !p.starts_with("record")), "{:?}", second.failures);
+    assert!(asked.contains(&"activity anon-resp-1".to_string()), "{asked:?}");
+    assert_eq!(leaving(&book), 1);
+    assert_moved_once(&book);
+    // and the pull after: nothing more read for it
+    let (_, asked) = once_with(&book, replies.path(), "2025-11-21T20:00:00Z", resp_rows);
+    assert!(!asked.contains(&"activity anon-resp-1".to_string()), "{asked:?}");
+    assert_eq!(leaving(&book), 1);
+}
+
+/// Each account's cash, every currency added up, over all the book counts.
+fn cash_by_account(book: &Book) -> std::collections::BTreeMap<bagholder_core::AccountId, Dec> {
+    let mut out = std::collections::BTreeMap::new();
+    for t in book.transactions_as_named().unwrap() {
+        if let Some(c) = t.cash {
+            let e = out.entry(t.account).or_insert(Dec::ZERO);
+            *e = e.checked_add(c.amount).unwrap();
+        }
+    }
+    out
+}
+
+/// A move still under way: the first pull, the day it arrives, reads its
+/// arrival alone, and books it leaving the other account from it; the next
+/// reads the other account's own row of it leaving, which then books it, and
+/// the arrival books it no more, in the same write. The cash leaves once
+/// throughout, and the same cash either side of the second pull.
+#[test]
+fn a_move_whose_leaving_row_arrives_a_pull_later_is_booked_leaving_from_that_row_alone() {
+    let replies = resp_replies_with("open");
+    let home = tempfile::tempdir().unwrap();
+    let first = "2025-06-16T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(first)).unwrap();
+    // the first pull: Wealthsimple lists the arrival, not yet the leaving row
+    once_with(&book, replies.path(), first, resp_rows);
+    let c = connection(&book, first);
+    let source = SourceName::named("wealthsimple");
+    let arrival = book.record_by_key(Some(c), &source, "anon-asset-6").unwrap().unwrap();
+    let managed = resp_account(&book, "anon-resp-1");
+    let inferred = |book: &Book| book.transactions_of(arrival).unwrap().into_iter().filter(|t| t.account == managed).count();
+    assert_eq!(inferred(&book), 1, "booked leaving from its arrival");
+    assert!(book.record_by_key(Some(c), &source, "anon-asset-3").unwrap().is_none());
+    assert_moved_once(&book);
+    let before = cash_by_account(&book);
+    // the next pull: the leaving row listed
+    let (report, asked) = once_with(&book, replies.path(), "2025-06-17T20:00:00Z", |rows| {
+        resp_rows(rows);
+        let mut leaving = Replay::read(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple")).unwrap().rows.into_iter().find(|r| Node::root(r).text("canonicalId").ok() == Some("anon-asset-3")).unwrap();
+        if let Value::Object(o) = &mut leaving {
+            o.insert("amount".into(), Value::String(MOVED.into()));
+        }
+        rows.push(leaving);
+    });
+    assert!(report.failures.iter().all(|(p, _)| !p.starts_with("record") && !p.starts_with("activity")), "{:?}", report.failures);
+    assert!(asked.contains(&"activity anon-resp-1".to_string()), "{asked:?}");
+    let own = book.record_by_key(Some(c), &source, "anon-asset-3").unwrap().expect("the leaving row's record");
+    let out: Vec<_> = book.transactions_of(own).unwrap().into_iter().filter(|t| t.account == managed && t.kind == Kind::TransferOut).collect();
+    assert_eq!(out.len(), 1, "booked leaving from its own row");
+    assert_eq!(out[0].cash, Some(Money::new(Dec::parse(&format!("-{MOVED}")).unwrap(), Currency::parse("CAD").unwrap())));
+    assert_eq!(inferred(&book), 0, "and from the arrival no more");
+    assert_moved_once(&book);
+    assert_eq!(cash_by_account(&book), before, "the same cash either side");
 }

@@ -29,10 +29,18 @@
 //!                   read against positions while it was under way
 //!   "positions":    [{ "account", "day", "nodes": positions as of that day }],
 //!                   around an event or a move of holdings
+//!   "opposing":     { "account", "rows" }: for a move arriving from another of
+//!                   the person's accounts, that account's moves between
+//!                   accounts filed from the day before the move's days to the
+//!                   day after, its feed read over them: whether it records the
+//!                   move leaving it. Absent where that account is not the
+//!                   person's or its feed over those days was not read
 //!   "book":         [{ "account", "security", "day", "quantity" }]: what the
 //!                   book's own transactions moved in those accounts on those
 //!                   days, as the pull saw it, so the positions' change is read
 //!                   net of it (brief 07 §4). The one part not from Wealthsimple.
+//!                   `"imported": true` marks a move of a record of another
+//!                   source (an import), which Wealthsimple's own rows replace
 //! }
 //! ```
 //!
@@ -58,6 +66,17 @@ pub struct Record {
     pub siblings: Vec<Value>,
     pub positions: Vec<Positions>,
     pub book: Vec<BookMove>,
+    /// For a move arriving from another of the person's accounts, that
+    /// account's moves over the move's days.
+    pub opposing: Option<Opposing>,
+}
+
+/// The other account of a move arriving from it, and its moves between
+/// accounts over the move's days, as its feed states them.
+#[derive(Clone, Debug)]
+pub struct Opposing {
+    pub account: String,
+    pub rows: Vec<Value>,
 }
 
 /// Positions as of one day in one account, as Wealthsimple stated them.
@@ -84,12 +103,15 @@ pub struct BookMove {
     pub day: String,
     /// Decimal text, signed: into the account is positive.
     pub quantity: String,
+    /// From a record of another source than Wealthsimple's (an import): one
+    /// Wealthsimple's own rows replace, no record of the move of its own.
+    pub imported: bool,
 }
 
 impl Record {
     /// A row with nothing read beside it yet.
     pub fn of(activity: Value) -> Record {
-        Record { activity, securities: BTreeMap::new(), order: None, entitlements: None, conversion: None, transfer: None, deposits: vec![], withheld: vec![], stated_moves: vec![], siblings: vec![], positions: vec![], book: vec![] }
+        Record { activity, securities: BTreeMap::new(), order: None, entitlements: None, conversion: None, transfer: None, deposits: vec![], withheld: vec![], stated_moves: vec![], siblings: vec![], positions: vec![], book: vec![], opposing: None }
     }
 
     /// The payload the book stores.
@@ -150,10 +172,19 @@ impl Record {
                     o.insert("security".to_string(), Value::String(b.security.clone()));
                     o.insert("day".to_string(), Value::String(b.day.clone()));
                     o.insert("quantity".to_string(), Value::String(b.quantity.clone()));
+                    if b.imported {
+                        o.insert("imported".to_string(), Value::Bool(true));
+                    }
                     Value::Object(o)
                 })
                 .collect();
             m.insert("book".to_string(), Value::Array(items));
+        }
+        if let Some(o) = &self.opposing {
+            let mut x = BTreeMap::new();
+            x.insert("account".to_string(), Value::String(o.account.clone()));
+            x.insert("rows".to_string(), Value::Array(o.rows.clone()));
+            m.insert("opposing".to_string(), Value::Object(x));
         }
         Value::Object(m)
     }
