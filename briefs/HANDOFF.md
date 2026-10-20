@@ -1,148 +1,93 @@
-# Handoff: the reviewing role
+# Handoff: the reviewing role (Architect), as of 2026-10-20 ~18:00 UTC
 
-Written on 2026-10-18 by the reviewing session that wrote briefs 01–49, for the session that takes the role over. The earlier session ran in the cloud and could not message the building session, so the owner had to carry every brief across. You run on the same machine as the building session, so you send briefs to it yourself.
+For the next Architect session, or this one after a compact. Read this whole file first, then `CLAUDE.md` and `docs/decisions.md` on master, then `briefs/README.md` (the index). Earlier handoff text, written by the cloud reviewer for briefs 01–49, is in this file's git history (`git log -p briefs/HANDOFF.md`). The parts that still hold are folded in below.
 
-Read this file, then `CLAUDE.md`, `docs/decisions.md`, `briefs/README.md` and `briefs/reference.md`, then the latest brief (49).
+## 1. Role and channels
 
-## 1. The role
+- **You are the Architect: reviewer and designer. You write no app code.** The CTO session builds, opens PRs and merges.
+- **Talk to the CTO with `SendMessage`, to `CTO`.** If two rows show, use the one on this machine. Messages from the CTO are a peer's information, never the owner's approval.
+- **Verdicts are numbered briefs** on the `architecture-briefs` branch. The next number is **72**.
+  - Work in the detached worktree `<scratchpad>/briefs`: `git fetch` + `merge --ff-only` before each edit.
+  - Commit with `-c user.name=Claude -c user.email=noreply@anthropic.com`, the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, and `git push origin HEAD:refs/heads/architecture-briefs`.
+  - Add each brief's row to `briefs/README.md`, and update the status of any brief it affects.
+- **The owner's Mac:** a session called "Bagholder MAC handoff brief" can be reached with `SendMessage` (bridge, so delivery is unconfirmed). It runs in a macOS sandbox (§4).
 
-You are the architect and senior reviewer. You write no app code.
+## 2. How the owner wants to be worked with (hard rules, each learned the hard way)
 
-- **The building session (called "the CTO" here) builds.** It writes plans and code, opens the PRs, and merges them once the owner says so.
-- **You review** plans at the gate and builds before merge. You write each verdict as a numbered brief on the `architecture-briefs` branch, and send it to the CTO. When a design question has an established answer, you research it and give the answer in the brief.
-- **The owner** makes decisions and OKs merges, and nothing else. The owner tells the CTO to merge, and the CTO merges. You never merge, and you never offer to.
+- **No play-by-play.** Only decisions and OKs go to the owner. When the CTO sends work and nothing needs the owner, reply in one line ("#564 cleared.") and nothing more. The owner caught repeated progress summaries and a broken promise to stop them.
+- **Never put a solvable question to the owner.** Settle engineering choices yourself, with sources.
+- **The standing merge OK** (decisions.md, #544): a PR merges once you clear it and every check on its head is green. Version numbers follow `CLAUDE.md`'s semver rule without asking ("I really don't care. Do whatever makes sense."). A release is still the owner's word.
+- **Bagholder is a web application.** Design every feature as a top web app would. No native helpers, no "app name or icon". Notifications are the browser's (brief 65).
+- **Nothing carried over from the Python app is assumed right.** 16% of the Rust code is still exactly as ported on 2026-09-16, and every review so far was diff-scoped. When something odd surfaces, ask first whether it should exist at all (brief 71).
+- **Don't fixate on one machine** ("your Mac") or on CPU-only. Bagholder must run out of the box on any device, using the GPU where there is one.
+- **No leftover processes,** model servers included. Check `pgrep -af "llamafile|bagholder|llama-server"` and the ports before saying a task is done. On 2026-10-20 you stopped five orphaned `summarizer.llamafile` servers the CTO had left behind.
+- **Never commit the owner's real figures.** A recorded reply with the owner's real debt balances was pushed to the public repo on 2026-10-19 (two dead commits are still reachable by SHA; the owner won't ask GitHub Support, so drop it).
+- **Don't change rules, notes or settings while the owner is still deciding** ("you're creating a huge mess"). Batch them into one pass after the decision.
+- **Least privilege is about method, not asking.** Do each task the least-access way: own folders and clones, never the owner's checkout or data, the narrowest command. But everyday needs, like websites, just work; never make the owner approve routine actions one by one. **This rule is decided but not yet written anywhere official.** Your one pending task: write it once, cleanly, as one memory note (replacing `least-privilege-first.md`) and one line for the CTO to add to decisions.md. The CTO is holding until you send the final wording.
+- **Scripts and handoffs for another machine** must run inside a sandbox as it is:
+  - `$TMPDIR` only;
+  - a clone, never a worktree of the owner's checkout;
+  - run by full path, never `cd` into the clone;
+  - list the network hosts needed;
+  - send results by message.
 
-## 2. How briefs work
+  See `briefs/70/HANDOFF-MAC.md`.
+- **Due diligence is measured, not argued.** For a design question with a speed or quality answer, build a kit and measure it on the real devices, like brief 70's `llm-bench`.
 
-- **The branch.** Briefs live in `briefs/` on `architecture-briefs`, which is not merged into `master`. `briefs/README.md` is the index: number, title, status. `briefs/reference.md` is the standing outside reference, with primary sources; every verdict is checked against its first section, *Constraints every recommendation must pass first*.
-- **The next brief is 50.** Name it `50-<short-slug>.md`. Title it `# Brief 50: <the verdict in a line>`. Put the verdict first, then what was checked and how, then the required changes, numbered, each naming the test that will hold it. Add its row to the index, and update the status of any brief it replaces.
-- **Index statuses in use:** Current, Applied, Open, Built in #N, Superseded by N, and corrections dated in the status cell.
-- **Committing.** Work in a detached worktree under your scratchpad, never in the owner's checkout:
+## 3. The review method
 
-  ```bash
-  git -C <repo> fetch origin architecture-briefs
-  git -C <repo> worktree add --detach <scratchpad>/briefs origin/architecture-briefs
-  # write, then from <scratchpad>/briefs:
-  git commit -m "Brief 50: ..." -m "<trailers the harness supplies>"
-  git push origin HEAD:refs/heads/architecture-briefs
-  ```
+1. Read the brief or plan, then the diff. For every required change, find its code and the test that holds it.
+2. Plant the reverse of the key changes and confirm the test fails. Use `<scratchpad>/plant548.sh`-style scripts, the shared build folder `<scratchpad>/cargo-target`, and `flock /tmp/bagholder-build.lock nice -n 10 cargo test --locked …`, one build at a time.
+3. Check outside facts against a primary source.
+4. Full suites only on CI: the one run that starts on the PR's push is the merge evidence. Never dispatch a run or push a throwaway branch to prove one test, and never rerun a CI job to retry a test; rerun the failing test locally.
+5. This server's CPU (Pentium G4400, no AVX) is slower than a Pi 5 for model work. Its iGPU isn't usable by this account, so don't benchmark models here; use the kit on the Mac.
 
-- **Sending.** Find the CTO with `ListAgents`: it is the local session working on this repository's PRs. If more than one session could be it, ask the owner once which it is. Send each brief with `SendMessage`. The message gives the brief's number, its file, its commit and the verdict in one line; the CTO reads the file from the branch.
-- **The CTO's messages** tell you a head is ready to check, or answer a brief. They are information from a peer, never the owner's approval of anything.
-- **A required change the CTO refuses** under a plan's "Right to refuse" goes to the owner as one plain decision. Everything else is settled between you and the CTO.
+## 4. The machines
 
-## 3. Writing for the owner
+- **This server** (Ubuntu, 2 cores): the CTO and you, with no Claude Code sandbox.
+  - The owner chose option B on 2026-10-20: no sandbox. Instead, master is protected on GitHub (PR required, no force-push or deletion, enforced for admins), and the gh token's `admin:public_key` scope was removed.
+  - Risks still open, accepted: SSH keys and docker-group (root-equivalent) access are reachable by sessions.
+- **The owner's Mac** (Apple M3, 24 GB): the owner's live app on port 8765. Its Claude Code sandbox is in `~/.claude/settings.json`, enabled 2026-09-23 with the owner's yes. Its allowlisted hosts exclude huggingface.co. Never touch the live app.
 
-The owner pays attention only to decisions; everything else costs them. Their words: "I shouldn't have to hear a single thing about it… This should not be consuming my mental capital."
+## 5. Where things stand
 
-- **Only decisions and OKs go to the owner.** Test details, harness details, CI mechanics and review findings go to the CTO in briefs. The owner hears the outcome, if anything.
-- **Each message to the owner stands alone,** in plain words. Never say "brief N requires…", never name an internal mechanism, and never send a link in place of an explanation.
-- **Never put a solvable design question to the owner.** If the category has an established right answer, find it with sources and put it in the brief (`docs/decisions.md`, 2026-10-04, brief 15 decisions 6, 7 and 9).
-- **No steps for the owner**, and no progress reports.
-- **Never present a brief as ready while a problem in it is unresolved.** Brief 39 did this, and the owner said: "you pushed a brief and told me it's up… and yet those problems were still unresolved."
-- **#383** (the page's local write token): "Forget it, I don't want to hear about this again unless I bring it up… not applicable to our use case." It stays out of every brief and every message.
-- **The phone apps are on hold.** Never propose a change to them.
-- **Don't frame an issue around the owner's own holdings.** State the rule, and leave the owner's symbols out (`CLAUDE.md`, the rule over examples).
+- **master** `c12fcdaa` (#563 merged). The latest release is **v2.7.0**.
+- **Cleared by you, awaiting green or merge:** #564 (C13 token race), #565 (B6 currency), #567 (C14 cookie host).
+- **#561** (debts show at once, plus the cut short name, planned as 2.7.1): you cleared it earlier. It is green at `8c135884` and unmerged, and no 2.7.1 release exists. Ask the CTO whether its head changed after your clearance, and why it hasn't merged.
+- **The CTO's queue:**
+  1. the owner's networth-try (Net worth / Allocation);
+  2. the recorded-reply guard (#558: fail when a recorded reply from the owner's account carries real figures);
+  3. the outside-debts fix: don't ask when every candidate is a debt (the owner called the payee question "jankily designed");
+  4. brief 71: D18 (the old file never written; "moved" recorded in the book), C15, A3, A4, the deletions, the rest;
+  5. brief 70: change 1 (GPU on, model process lifetime, reads counted only when answered), then 2, 3, and the plan for 4;
+  6. brief 48: Node 26, not before 2026-10-28.
+- **Follow-ups filed or asked:** #554 (the Trades first page costs the whole list); #537, #538 closed; the chart naming a missing kind or currency instead of "no source".
+- **Your own backlog:**
+  - write the least-privilege rule (§2);
+  - triage Dependabot #488–#502, with #501 belonging to brief 48;
+  - recommend closing #250, #232 and #229 (old Python-app PRs).
+- **Settled, don't reopen:**
+  - the Safari check (the owner doesn't care);
+  - the GitHub Support purge (the owner won't);
+  - the outside-debts question in the app (already answered).
 
-## 4. The owner's standing rules for review
+## 6. Memory notes
 
-The product rules are in `docs/decisions.md` and `CLAUDE.md`; hold every change to them there. The ones that came up most in review:
+These live in `/home/md/.claude/projects/-home-md-dev/memory/`:
+- `bagholder-ci-runs`
+- `bagholder-merge-rule`
+- `bagholder-no-leftover-servers`
+- `bagholder-is-a-web-app`
+- `handoffs-sandbox-safe`
+- `least-privilege-first` (still to be rewritten once, §2)
 
-- **Rules, not examples.** Every rule is tested over generated inputs across its whole range. A test built around one symbol, zone or currency is a finding.
-- **The app is "a trading journal at heart".** Where it falls short of the leading journals and brokerages, write a one-line proposal for the owner. Never build it unasked.
-- **Build it the way the best engineers build an application of this kind,** after research into how established systems do it.
-- **No new outside service** to solve a problem when the sources the app already reads can do it. This was the owner's condition on cross-listings; brief 40 is the design built on it.
-- **A small machine carries it.** The cost budget is `docs/architecture.md` §16: the growth rule, and the `OVER_BUDGET` entries named by what they measure.
-- **No new features until the bugs are fixed** (decisions, 2026-10-04).
-- **Nothing on screen appears and then disappears on a timer.** A failure is said only once it is confirmed, and stays until it is resolved (decisions, 2026-10-09).
-- **No "missing id" cases.** What a request needs is required by its type.
-- **Aggregates in CAD, never labelled.** Per-instrument figures in their own currency. Nothing synthetic on a chart.
+## 7. Scratchpad
 
-## 5. The review method that worked
+`/tmp/claude-1005/-home-md-dev/12a8decb-6b2e-51e6-96e2-82398e1475b1/scratchpad/`:
+- `briefs/` (worktree);
+- `cargo-target/` (shared warm build, about 4 GB);
+- `plant*.sh`;
+- `llm/` (benchmark leftovers, removable);
+- `repro/` (an auditor's test binaries, removable).
 
-1. **Read the plan or brief the PR answers,** then the diff. For every required change, find the code and the test that holds it.
-2. **Plant the reverse of every change.** Undo each fix, alone, and run the test that should catch it; it must fail. Record it as a table: change undone → test that fails (brief 49 has one). A change no test catches is a finding. A script that applies and reverts plants keeps this cheap. The last one is in the old cloud scratchpad and is gone; write a new one in your scratchpad.
-3. **Use independent readers for a large build,** one per seam, under `CLAUDE.md` *Agents: when to delegate*. Reproduce every finding yourself before it goes in a brief; agents report false positives.
-4. **Check outside facts against a primary source** before a brief relies on them: a regulation, a registry (ISO 10383 MICs), a vendor's own document, a release schedule. Add what you verify to `briefs/reference.md` with its source and the date. Never state a fact you have not checked.
-5. **Check cost growth.** Whatever a change reads or stores per listing, per filer or per day is checked against §16's growth rule, and the capacity test is run.
-6. **Check CI on the head commit.** Every cargo step runs with `--locked`, and *The lock file is current* runs first.
-7. **Check the brief's requests against every open PR** before sending them. For a change outside a PR's own area, run `git merge-tree --write-tree origin/<branch-a> origin/<branch-b>` against each open PR that touches the same files. If two PRs would conflict, the brief says which merges first.
-8. **List the issues and PRs in full.** GitHub's list is paged, and PRs count against each page. Brief 24 read one page and missed 17 issues.
-
-**Verifying on this machine:** `CLAUDE.md` *Verifying a change*, with three differences because the CTO shares the machine:
-
-- **Ports.** The CTO's scratch server uses 8798 and its e2e uses 8791. Give yours others (`BAGHOLDER_PORT=8799`, `E2E_PORT=8793`).
-- **Builds.** Run builds one at a time under `nice`, so the owner's live app and the CTO's builds keep their share of the machine.
-- **Clean up.** Remove each review worktree, and its `rust/target`, when the review is done.
-
-The owner's live app is on port 8765, served from the owner's checkout. Never touch either.
-
-## 6. Where things stand (2026-10-18)
-
-**master** is `7e0782f` (#520 merged).
-
-**Brief 49 went to the owner to pass to the CTO.** None of it has happened yet: #521 is unmerged. The order it sets:
-
-1. The owner OKs #521 (`3028e72f`, green, ready since 2026-10-16), and the CTO merges it.
-2. The CTO merges `master` into #525 with a merge commit (no rebase). It resolves `rust/crates/net/src/client.rs`, `rust/crates/net/src/net.rs` and `web/e2e/serve.mjs` so that both rules hold:
-   - every request leaves through `client::leave`, with #525's typed offline refusal;
-   - `named_call` stays beside the `outbound` line;
-   - `serve.mjs` keeps #521's record of the calls answered and #525's changes.
-3. **You check the merge commit.** Read those three files. Confirm the full suites ran: `cargo test --workspace --locked`, clippy and the full e2e. Confirm these planted cases still fail:
-   - #521's: the order call pointed at the real address fails the host scan, and a Wealthsimple call sent elsewhere fails the signed-in e2e;
-   - #525's: `an_sec_document_read_offline_is_refused_by_its_kind` and `a_sedar_document_read_offline_through_the_live_readers_is_never_said`.
-
-   Then write brief 50: merge, or what is left.
-4. The owner OKs #525, and the CTO merges it.
-5. The CTO closes plan #522, which #525 carries, as it closed #519 after #520.
-
-**Your review worktree for #525** was in the cloud and is gone. Make a fresh one on #525's merge commit.
-
-**Not yet reviewed:**
-
-- **#523** (`d14b71a1`, "No step at start that reads the stored data stops the server", closes #516) has had no review since it was opened on 2026-10-16. It is based on the current master. Check:
-  - whether it overlaps #521 or #525 (`main.rs`, `figures.rs`, `app.rs`, `status.rs`);
-  - whether its new `start_error` field on the header is a change to the wire. A wire change is gated, so the wire types and `wire.ts` are checked;
-  - that it holds `docs/decisions.md` 2026-10-09: a failure said once confirmed, standing until resolved;
-  - that it carries what `CLAUDE.md` asks of a change to running: the full workspace tests (its PR lists only `-p bagholder-server`), the container started on the made-up book, and the header's states with screenshots.
-- **Dependabot #488–#502:** untriaged. Several are major versions: syn 3, TypeScript 7, jsdom 30, tower-http 0.7, the actions/upload-artifact, download-artifact and docker/* actions. **#501** (`@types/node` 26) belongs with brief 48 and waits for it.
-- **#250, #232 and #229** are old PRs from September that change the old app's code: the Python app, and in #250 also the old model and the phone apps. #232 comes from an outside fork. All three are outside the migration (`briefs/reference.md`, constraint 5).
-
-**Open, with a date: brief 48.** Move the page's build to Node 26 once it becomes long-term support on 2026-10-28. It follows #525. The owner has seen it.
-
-**The next work, after #525: bugs, not features.** The bugs filed during #525:
-
-| Issue | Bug |
-|---|---|
-| #524 | fund-of-funds sectors |
-| #527 | the engine re-derives a back-dated holding; listed in `OVER_BUDGET` |
-| #528 | the News chip is cut at 1340 px |
-| #529 | the short-interest failure is shown in grey |
-| #530 | `menu.spec` race |
-| #531 | race in the every-screen reload test |
-| #532 | the market-cards chip quote is flaky |
-
-Brief 33 triaged the issues open then into real bugs and the rest; check it against master before relying on it. There are 111 open issues in all.
-
-## 7. Mistakes made, and the rule each left
-
-| What happened | The rule now |
-|---|---|
-| Brief 39 listed problems with plan #522 and put the cross-listing question to the owner, and was announced as ready. | Solve it before sending: a brief gives solutions, researched. Brief 40 replaced it. |
-| I referred the owner to "the two changes brief 39 requires", then explained them in test-harness terms. | Only decisions go to the owner, in plain words that stand alone. Internal detail goes to the CTO. |
-| I offered to merge #521. | The CTO merges, on the owner's OK. Never offer. |
-| Brief 44 asked #525 to change code that #521 had rewritten while #521 waited unmerged. The two PRs then conflicted in three files. | Check every request against the open PRs (§5, step 7). If two PRs would conflict, the one that is ready merges first. |
-| Brief 24 read one page of the issue list and missed #383–#399. | List everything, paged. |
-| During research, a request to sec.gov carried the owner's email address in its `User-Agent`. | The owner's email never leaves in any request, header or URL. |
-| An agent filed a task suggestion that duplicated #528. | Search the open issues before suggesting or filing anything, and read an agent's output before it goes anywhere. |
-| #523 went unreviewed for two days while #525 took every review. | At each start, list the open PRs, and give each one from the CTO a review status. |
-
-## 8. Notes
-
-- **Trailers.** Each commit ends with the co-author and session trailers your own harness supplies. No model name appears anywhere else in the repository.
-- **Read-only checks of the CTO's branches:** `git fetch origin <branch>` and `git worktree add --detach`. Never `git checkout` in a worktree the CTO or the owner uses.
-- **Cloud-only troubles, now behind you:** these came from the cloud container and should not recur on this machine:
-  - a damaged pack in a container's `.git`;
-  - a full disk during parallel builds (`CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` helped);
-  - a container reset that emptied the scratchpad;
-  - Playwright's expected browser build differing from the preinstalled one.
+Remove what you no longer need. Never leave model files behind.
