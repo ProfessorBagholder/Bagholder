@@ -57,6 +57,31 @@ jobs:
           RUSTFLAGS: "-D warnings"
         run: cargo test --workspace --locked
         working-directory: rust
+      # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
+      # feature no release build enables: their own tests, built with them
+      - name: The developer's subcommands
+        env:
+          CI: "true"
+          RUSTFLAGS: "-D warnings"
+        run: |
+          cargo test --locked -p bagholder-server --features demo,pull-broker --bin bagholder -- demo:: test_a_developers_subcommand
+          cargo test --locked -p bagholder-wealthsimple --features demo --test generated
+          cargo clippy --locked -p bagholder-server -p bagholder-wealthsimple --features bagholder-server/demo,bagholder-server/pull-broker --bins --lib
+        working-directory: rust
+      # bagholder-no-dev-commands: the server as every release builds it (no feature)
+      # carries no developer's subcommand, by its usage or its symbols (release.yml
+      # checks the release binary the same way)
+      - name: The server built without features carries no developer's subcommand
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: |
+          cargo build --locked --bin bagholder
+          bin=target/debug/bagholder
+          strings -a "$bin" | grep -aE 'usage: bagholder (demo|pull-broker)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' && { echo "$bin carries a developer's subcommand"; exit 1; } || true
+          # and asked for anyway, it is refused by name, never taken for a start of the server
+          if out=$(target/debug/bagholder demo "$RUNNER_TEMP/no-book" 2>&1); then echo "bagholder demo ran: $out"; exit 1; fi
+          echo "$out" | grep -q "does not carry" || { echo "an unbuilt subcommand is not refused by name: $out"; exit 1; }
+        working-directory: rust
       # no failure discarded outside tests: the workspace's clippy lints (Cargo.toml),
       # the tests' own code left out, where dropping a result is the test's business
       - name: No discarded failure
@@ -157,7 +182,7 @@ jobs:
       - name: The made-up book
         working-directory: rust
         run: |
-          cargo build --locked --bin bagholder
+          cargo build --locked --bin bagholder --features demo
           target/debug/bagholder demo "$RUNNER_TEMP/book"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: The image builds
@@ -254,7 +279,7 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: web
       - name: The server and the made-up book
-        run: cargo build --locked --bin bagholder
+        run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
       - name: The browser tests
         run: npm run e2e

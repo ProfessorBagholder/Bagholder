@@ -6,6 +6,7 @@
 //! beside it (`demo_facts`). Four accounts, shares on both sides of the border,
 //! covered calls, long options, dividends, crypto with staking, and two and a half
 //! years of daily equity. Nothing in it is anyone's; every value is made up here.
+//! A developer's command: built only with the `demo` feature, never in a release.
 
 use std::collections::BTreeMap;
 use std::path::Path;

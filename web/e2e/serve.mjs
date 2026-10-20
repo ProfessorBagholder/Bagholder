@@ -14,7 +14,8 @@ const exe = process.platform === 'win32' ? '.exe' : ''
 // where cargo builds: its own CARGO_TARGET_DIR where one is set, else the workspace's
 const target = process.env.CARGO_TARGET_DIR ? resolve(rust, process.env.CARGO_TARGET_DIR) : join(rust, 'target')
 
-execFileSync('cargo', ['build', '--quiet', '--bin', 'bagholder'], { cwd: rust, stdio: 'inherit' })
+// with the made-up book (`bagholder demo`), a developer's subcommand no release build carries
+execFileSync('cargo', ['build', '--quiet', '--bin', 'bagholder', '--features', 'demo'], { cwd: rust, stdio: 'inherit' })
 const signedIn = process.argv.includes('--signed-in')
 const port = process.argv.find((a) => a.startsWith('--port='))?.slice('--port='.length) || process.env.E2E_PORT || '8791'
 // where a signed-in server names every request it makes (`BAGHOLDER_LOG_REQUESTS`)

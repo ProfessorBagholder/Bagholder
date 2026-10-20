@@ -81,6 +81,14 @@ jobs:
       - name: Build
         working-directory: rust
         run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
+      # the archive's server carries no developer's subcommand (`bagholder demo`,
+      # `pull-broker`: features no release enables), by its usage or its symbols
+      - name: No developer's subcommand in the release
+        if: runner.os != 'Windows'
+        working-directory: rust
+        run: |
+          bin=target/release/bagholder
+          strings -a "$bin" | grep -aE 'usage: bagholder (demo|pull-broker)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' && { echo "$bin carries a developer's subcommand"; exit 1; } || true
       - name: Package
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: |

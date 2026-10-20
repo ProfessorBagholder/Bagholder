@@ -217,14 +217,20 @@ enum Plan {
     CardPayment { card: usize, from: usize },
     /// A purchase or sale at its own stated cash, never funded first: a book
     /// stated whole (`Generated::from_records`).
+    #[cfg(feature = "demo")]
     BuyAt { account: usize, listing: usize, units: i64, cents: i64 },
+    #[cfg(feature = "demo")]
     SellAt { account: usize, listing: usize, units: i64, cents: i64 },
+    #[cfg(feature = "demo")]
     DividendOf { account: usize, listing: usize, units: i64, cents: i64 },
+    #[cfg(feature = "demo")]
     StakingOf { account: usize, listing: usize, units: i64 },
+    #[cfg(feature = "demo")]
     Charge { account: usize, cur: Cur, cents: i64 },
 }
 
 /// An account stated whole, for `Generated::from_records`.
+#[cfg(feature = "demo")]
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
     pub id: String,
@@ -242,6 +248,7 @@ pub struct AccountRecord {
 }
 
 /// What a listing stated whole is.
+#[cfg(feature = "demo")]
 #[derive(Clone, Debug)]
 pub enum ListingSort {
     /// Shares, on an exchange (its name and MIC).
@@ -252,6 +259,7 @@ pub enum ListingSort {
 }
 
 /// A listing stated whole, for `Generated::from_records`.
+#[cfg(feature = "demo")]
 #[derive(Clone, Debug)]
 pub struct ListingRecord {
     pub id: String,
@@ -267,6 +275,7 @@ pub struct ListingRecord {
 
 /// One piece of activity stated whole, by account and listing id. Units are
 /// whole for shares and contracts and millionths for a coin; cash in cents.
+#[cfg(feature = "demo")]
 #[derive(Clone, Debug)]
 pub enum Record {
     Buy { account: String, listing: String, units: i64, cents: i64 },
@@ -280,6 +289,7 @@ pub enum Record {
     InterestCharge { account: String, currency: String, cents: i64 },
 }
 
+#[cfg(feature = "demo")]
 fn cur_of(code: &str) -> Cur {
     match code {
         "CAD" => Cur::Cad,
@@ -454,6 +464,7 @@ impl Generated {
         g
     }
 
+    #[cfg(feature = "demo")]
     /// A made-up Wealthsimple stated whole rather than generated: these
     /// accounts, listings and activity, each purchase, sale and payment at its
     /// own cash and nothing funded but what `records` deposits. Each account's
@@ -906,6 +917,7 @@ impl Generated {
                 self.push(row);
                 self.move_cash(account, Cur::Cad, -cents, day);
             }
+            #[cfg(feature = "demo")]
             Plan::BuyAt { account, listing, units, cents } | Plan::SellAt { account, listing, units, cents } => {
                 let buy = matches!(p, Plan::BuyAt { .. });
                 let l = self.listings[listing].clone();
@@ -925,6 +937,7 @@ impl Generated {
                 self.move_cash(account, l.cur, if buy { -cents } else { cents }, day);
                 self.move_units(account, listing, if buy { units } else { -units }, day);
             }
+            #[cfg(feature = "demo")]
             Plan::DividendOf { account, listing, units, cents } => {
                 let l = self.listings[listing].clone();
                 *n += 1;
@@ -934,6 +947,7 @@ impl Generated {
                 self.push(row);
                 self.move_cash(account, l.cur, cents, day);
             }
+            #[cfg(feature = "demo")]
             Plan::StakingOf { account, listing, units } => {
                 *n += 1;
                 let id = self.next_id("staking");
@@ -942,6 +956,7 @@ impl Generated {
                 self.push(row);
                 self.move_units(account, listing, units, day);
             }
+            #[cfg(feature = "demo")]
             Plan::Charge { account, cur, cents } => {
                 *n += 1;
                 let id = self.next_id("charge");

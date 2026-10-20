@@ -7,7 +7,9 @@ use bagholder_book::Book;
 use bagholder_broker::pull::pull;
 use bagholder_core::Broker;
 use bagholder_wealthsimple::adapter::Wealthsimple;
-use bagholder_wealthsimple::generated::{AccountRecord, Generated, ListingRecord, ListingSort, Record, Size};
+#[cfg(feature = "demo")]
+use bagholder_wealthsimple::generated::{AccountRecord, ListingRecord, ListingSort, Record};
+use bagholder_wealthsimple::generated::{Generated, Size};
 
 const SIZE: Size = Size { accounts: 14, instruments: 24, trades: 80, months: 8, seed: 7, deep: 0 };
 
@@ -43,6 +45,8 @@ fn every_row_is_read_with_no_problem_and_the_pull_fails_nothing() {
 /// A made-up Wealthsimple stated whole (`Generated::from_records`): every row
 /// the records state, at its own cash and units, read with no problem; a put
 /// stated as one; a contract sold to open held short; each day's value as stated.
+/// Built only with the `demo` feature (`cargo test --features demo`), as it is.
+#[cfg(feature = "demo")]
 #[test]
 fn a_book_stated_whole_is_pulled_as_stated() {
     let day = |s: &str| s.parse::<jiff::civil::Date>().unwrap();

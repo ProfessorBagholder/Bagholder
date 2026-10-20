@@ -18,4 +18,4 @@ database and relabels option rows stored under Wealthsimple's own labels.
 The made-up book for the browser tests and the README screenshots is written by
 the server straight into a book, never into this store's database:
 
-    cargo run -p bagholder-server --bin bagholder -- demo /tmp/bh-demo        # a data folder holding no book yet
+    cargo run -p bagholder-server --bin bagholder --features demo -- demo /tmp/bh-demo   # a data folder holding no book yet
