@@ -789,7 +789,12 @@ fn store_balances(
                 let accounts: Vec<String> = keys_of.values().flatten().cloned().collect();
                 let entities: Vec<String> = outside.iter().map(|d| d.entity_id.clone()).collect();
                 match adapter.net_worth_days(&accounts, &entities) {
-                    Ok(Some(days)) => book.keep_net_worth_days(&days, now)?,
+                    // an answer of no days is no read: said, and asked again at the next
+                    Ok(Some(days)) if days.is_empty() => failures.push(("net worth by day".into(), Failure::Mismatch("Wealthsimple's answer held no days".into()))),
+                    Ok(Some(days)) => {
+                        book.keep_net_worth_days(&days, now)?;
+                        bagholder_core::log::line(&format!("bagholder: net worth by day read: {} days, {} to {}", days.len(), days[0].0, days[days.len() - 1].0));
+                    }
                     Ok(None) => {}
                     Err(f) => failures.push(("net worth by day".into(), f)),
                 }

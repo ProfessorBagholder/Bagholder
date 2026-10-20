@@ -271,7 +271,9 @@ pub fn net_worth_days(nodes: &[Value]) -> Read<Vec<(jiff::civil::Date, Dec, Curr
         let n = Node::root(v);
         let b = n.obj("balance")?;
         let c = b.text("currency")?;
-        out.push((n.day("date")?, b.dec_text("amount")?, Currency::parse(c).map_err(|err| b.field("currency").map(|f| f.mismatch(err.to_string())).unwrap_or_else(|m| m))?));
+        // the amount comes to some thirty places (a sum of converted values):
+        // rounded once to fit, it is the same amount
+        out.push((n.day("date")?, b.dec_text_to_fit("amount")?, Currency::parse(c).map_err(|err| b.field("currency").map(|f| f.mismatch(err.to_string())).unwrap_or_else(|m| m))?));
     }
     out.sort_by_key(|x| x.0);
     Ok(out)
@@ -292,6 +294,16 @@ mod tests {
 
     fn node(text: &str) -> Value {
         bagholder_core::json::parse(text).unwrap()
+    }
+
+    /// Net worth by day, oldest first, each amount to however many places it is
+    /// written: Wealthsimple writes some thirty.
+    #[test]
+    fn net_worth_by_day_is_read_oldest_first_whatever_its_places() {
+        let nodes = [node(r#"{"date": "2026-10-02", "balance": {"amount": "1500.123456789012345678901234567890", "currency": "CAD"}}"#), node(r#"{"date": "2026-10-01", "balance": {"amount": "1400.5", "currency": "CAD"}}"#)];
+        let got = net_worth_days(&nodes).unwrap();
+        assert_eq!(got.iter().map(|(d, _, _)| d.to_string()).collect::<Vec<_>>(), ["2026-10-01", "2026-10-02"]);
+        assert_eq!(got[1].1.round(2, bagholder_core::dec::Rounding::HalfEven).to_string(), "1500.12");
     }
 
     /// Each outside account as the net worth feature states it: its kind from its
