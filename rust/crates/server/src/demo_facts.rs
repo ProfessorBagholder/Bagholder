@@ -1,26 +1,22 @@
-//! `bagholder demo-facts <data folder>`: the made-up book (`store/src/bin/demo_book.rs`)
-//! carried into a book, with the facts and prices its engine reads written beside
-//! it (`docs/plans/stage-3c-switch.md`, open question 1): the Bank's rates for the
-//! book's span, each account's stated value and cash, a quote for each listing,
-//! each payer's declared record and schedule, and the benchmarks' trackers. So
-//! the browser tests and the screenshots, which run offline, have figures to
-//! show. Nothing in it is anyone's; every value is made up here.
+//! The facts and prices the made-up book's engine reads, written beside it by
+//! `bagholder demo` (`demo.rs`; `docs/plans/stage-3c-switch.md`, open question 1):
+//! the Bank's rates for the book's span, a quote and daily bars for each listing,
+//! each share's short interest, made-up filings, each payer's declared record and
+//! schedule, and the benchmarks' trackers. So the browser tests and the
+//! screenshots, which run offline, have figures to show. Nothing in it is
+//! anyone's; every value is made up here.
 
 use std::path::Path;
 
-use bagholder_book::statements::AccountDay;
 use bagholder_book::Book;
-use bagholder_core::account::AccountRef;
 use bagholder_core::jiff::civil::{Date, Weekday};
 use bagholder_core::jiff::{SignedDuration, Timestamp};
 use bagholder_core::transaction::Kind;
-use bagholder_core::{Broker, Currency, Dec, InstrumentId, Money, SourceName};
+use bagholder_core::{Currency, Dec, InstrumentId, Money, SourceName};
 use bagholder_sources::cache::{MarketCache, StoredQuote};
 use bagholder_sources::contract::Benchmark;
 
-/// The demo's today and the moment it was read, as `demo_book.rs` states them.
-const TODAY: &str = "2026-09-08";
-const SYNCED: &str = "2026-09-08T20:05:00Z";
+use crate::demo::{SYNCED, TODAY};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -85,17 +81,13 @@ fn demo_bars(fills: &[(Date, f64)], today: Date) -> Vec<bagholder_store::bars::D
     out
 }
 
+/// Write the facts and prices beside the made-up book in `home`, once its
+/// Wealthsimple has been pulled into it. What it wrote, in a line.
 pub fn write(home: &Path) -> Result<String, String> {
     let at: Timestamp = SYNCED.parse().map_err(err)?;
     let today: Date = TODAY.parse().map_err(err)?;
-    if !home.join(bagholder_book::BOOK_FILE).exists() {
-        crate::legacy_import::import(&home.join(crate::figures::OLD_FILE), home, at)?;
-    }
     let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(err)?;
     let (cache, _) = MarketCache::open(&home.join(crate::figures::CACHE_FILE), crate::app::APP_VERSION, at).map_err(err)?;
-    // the zone the browser tests' pages run in, as a page states it: the figures are
-    // built from the first start, before any page has opened
-    book.state_zone("America/Toronto", at).map_err(err)?;
     let bank = SourceName::named("bank-of-canada");
     let demo = SourceName::named("demo");
 
@@ -109,56 +101,6 @@ pub fn write(home: &Path) -> Result<String, String> {
         let rates: Vec<(Date, Dec)> = days(span_from, rates_to).filter(|d| weekday(*d)).map(|d| (d, wave(1.37, 0.018, d, 45.0, 4))).collect();
         book.store_rates(*c, &rates, (span_from, rates_to), &bank, at).map_err(err)?;
         book.store_rate_series(&[bagholder_book::facts::RateSeries { currency: *c, source: bank.clone(), first_day: span_from, last_day: rates_to, ended: false }], at).map_err(err)?;
-    }
-
-    // each contract's size, as the made-up contracts state it
-    drop(book);
-    rusqlite::Connection::open(home.join(bagholder_book::BOOK_FILE))
-        .and_then(|c| c.execute("UPDATE option_terms SET multiplier = '100', source = 'demo' WHERE multiplier IS NULL", []))
-        .map_err(err)?;
-    let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(err)?;
-
-    // each account's value and net deposits, a share of the book's, and its cash
-    let old = rusqlite::Connection::open(home.join(crate::figures::OLD_FILE)).map_err(err)?;
-    let nav: Vec<(String, f64, f64)> = old
-        .prepare("SELECT date, equity, net_deposits FROM nav_history WHERE equity IS NOT NULL ORDER BY date")
-        .map_err(err)?
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?, r.get::<_, Option<f64>>(2)?.unwrap_or(0.0))))
-        .map_err(err)?
-        .collect::<Result<_, _>>()
-        .map_err(err)?;
-    let ws = Broker::named("wealthsimple");
-    let connection = book.connections().map_err(err)?.into_iter().find(|c| c.broker == ws).map(|c| c.id).ok_or("the demo book has no Wealthsimple connection")?;
-    let shares = [("acct-tfsa", 0.38), ("acct-rrsp", 0.41), ("acct-trading", 0.08), ("acct-crypto", 0.13)];
-    // the made-up broker states the cash its own made-up rows come to, so the
-    // book agrees with it (the broker check says nothing on the demo)
-    let transactions = book.transactions().map_err(err)?;
-    for (ws_id, share) in shares {
-        let Some(account) = book.account_by_ref(&AccountRef::new(ws.clone(), ws_id)).map_err(err)? else { continue };
-        let read = book.broker_read(connection, &format!("history:{ws_id}"), at).map_err(err)?;
-        let cad = |v: f64| Money::new(Dec::parse(&format!("{:.2}", v * share)).expect("a value to the cent"), Currency::CAD);
-        let account_days: Vec<AccountDay> = nav.iter().filter_map(|(d, v, dep)| Some(AccountDay { day: d.parse().ok()?, net_value: cad(*v), net_deposits: cad(*dep) })).collect();
-        book.store_account_days(account, &account_days, &read).map_err(err)?;
-        // what it is worth now, as the broker states it with the accounts: made up as its latest day's
-        if let Some(last) = account_days.last() {
-            let read = book.broker_read(connection, "accounts", at).map_err(err)?;
-            book.store_net_value(account, at, last.net_value, &read).map_err(err)?;
-        }
-        let mut cash: std::collections::BTreeMap<Currency, Dec> = std::collections::BTreeMap::new();
-        for t in transactions.iter().filter(|t| t.account == account) {
-            if let Some(c) = t.cash {
-                let total = cash.entry(c.currency).or_insert(Dec::ZERO);
-                *total = total.checked_add(c.amount).map_err(err)?;
-            }
-        }
-        let read = book.broker_read(connection, &format!("balances:{ws_id}"), at).map_err(err)?;
-        book.store_cash(account, at, &cash, &read).map_err(err)?;
-        book.note_activity_read(account, at, true).map_err(err)?;
-        // what the margin account can borrow, made up as the rest
-        if ws_id == "acct-trading" {
-            let read = book.broker_read(connection, "buying-power", at).map_err(err)?;
-            book.store_buying_power(account, at, &Ok(Money::new(Dec::parse("41250.80").map_err(err)?, Currency::CAD)), &read).map_err(err)?;
-        }
     }
 
     // each listing's daily bars, under its own key, from its own fills, and its
@@ -319,21 +261,4 @@ pub fn write(home: &Path) -> Result<String, String> {
     }
 
     Ok(format!("demo facts: {} currencies, {} daily bars, {} quotes, {} short readings, {} filings, {} payers\n", currencies.len(), bars_written, quoted, shorted, filed, paid.len()))
-}
-
-pub fn cli(args: &[String]) -> i32 {
-    let [home] = args else {
-        eprintln!("usage: bagholder demo-facts <data folder holding the demo's bagholder.db>");
-        return 2;
-    };
-    match write(Path::new(home)) {
-        Ok(report) => {
-            print!("{report}");
-            0
-        }
-        Err(e) => {
-            eprintln!("the demo's facts could not be written: {e}");
-            1
-        }
-    }
 }

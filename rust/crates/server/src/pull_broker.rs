@@ -2,6 +2,7 @@
 //! (`docs/plans/stage-3b-wealthsimple.md`, "The pull"): Wealthsimple pulled into
 //! the book, over the network with the folder's saved sign-in, or from a capture
 //! of its replies. The pull and the records are the same either way.
+//! A developer's command: built only with the `pull-broker` feature, never in a release.
 
 use std::path::PathBuf;
 

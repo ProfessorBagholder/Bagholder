@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { openWithStatus, ready, figures, waits, waiting, pctPlain, money, px } from './helpers'
 
-// SPEC.md "### Order ticket". The made-up book (e2e/serve.mjs -> demo_book.rs) already
+// SPEC.md "### Order ticket". The made-up book (e2e/serve.mjs -> `bagholder demo`, server/src/demo.rs) already
 // holds NVDA and AAPL as open positions in the USD margin account ("Trading"; NVDA in the
 // RRSP too), TD as an open position in the CAD "TFSA", and UBER as a fully-closed trade in
 // "Trading" with no open position -- real book data, not synthesised, so a Buy/Sell icon's

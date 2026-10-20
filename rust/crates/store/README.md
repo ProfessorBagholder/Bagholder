@@ -15,7 +15,7 @@ database and relabels option rows stored under Wealthsimple's own labels.
 
 ## Demo book
 
-`demo-book` writes a made-up book for the README screenshots:
+The made-up book for the browser tests and the README screenshots is written by
+the server straight into a book, never into this store's database:
 
-    cargo run -p bagholder-store --bin demo-book -- --home /tmp/bh-demo        # a desktop data directory
-    cargo run -p bagholder-store --bin demo-book -- --pull /tmp/bh-demo-phone  # last-pull.json + journal.json for the apps
+    cargo run -p bagholder-server --bin bagholder --features demo -- demo /tmp/bh-demo   # a data folder holding no book yet
