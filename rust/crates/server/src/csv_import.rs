@@ -884,30 +884,76 @@ pub fn watching(f: &Figures) -> bool {
     f.book().ok().and_then(|b| b.setting(WATCH_FOLDER).ok().flatten()).is_some_and(|p| !p.is_empty())
 }
 
-/// The folder an earlier version watched, watched again, once: the book has
-/// never had a folder set and the old store names one.
-pub fn adopt(f: &Figures, old_folder: &str, now: bagholder_core::jiff::Timestamp) -> Result<(), String> {
-    let book = f.book()?;
-    if old_folder.is_empty() || book.setting(WATCH_FOLDER).map_err(|e| e.to_string())?.is_some() {
-        return Ok(());
-    }
-    match watch(f, &WatchRequest { path: old_folder.to_string(), account: String::new() }, now) {
-        Ok(()) => Ok(()),
-        // the folder is gone: kept as the one watched, so its failure is said
-        Err(Refused::Entry(why)) => {
-            book.set_setting(WATCH_FOLDER, Some(old_folder), now).map_err(|e| e.to_string())?;
-            book.set_setting(WATCH_ERROR, Some(&why), now).map_err(|e| e.to_string())
-        }
-        Err(Refused::Failed(why)) => Err(why),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bagholder_book::import::{ImportMapping, ImportedRow, OldActivity};
     use bagholder_core::record::RecordState;
     use bagholder_core::Dec;
+
+    /// A source other than the file, standing for the broker's: each record one
+    /// row, `{"account", "day", "kind", "cash", "currency"}` and, for a fill,
+    /// `"symbol"`, `"quantity"` and `"price"`, its share known by its symbol within
+    /// the connection.
+    struct Fed;
+
+    impl bagholder_book::mapping::Mapping for Fed {
+        fn source(&self) -> bagholder_core::SourceName {
+            bagholder_core::SourceName::named("feed")
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+            let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+            let text = |k: &str| v[k].as_str().map(str::to_string);
+            let currency = bagholder_core::Currency::parse(&text("currency").unwrap()).unwrap();
+            let money = |k: &str| text(k).map(|a| bagholder_core::Money::new(Dec::parse(&a).unwrap(), currency));
+            let day: bagholder_core::jiff::civil::Date = text("day").unwrap().parse().unwrap();
+            let instrument = text("symbol").map(|symbol| bagholder_book::mapping::InstrumentDraft {
+                refs: vec![bagholder_core::instrument::Reference::connection_symbol(ctx.connection.unwrap(), &symbol, currency)],
+                kind: InstrumentKind::Security,
+                currency,
+                name: Some(bagholder_book::mapping::NameDraft { symbol, venue_mic: None, venue_name: None, name: None, seen: day }),
+                option: None,
+                standing: None,
+            });
+            let leg = bagholder_book::mapping::Draft {
+                leg: bagholder_core::Leg::named("row"),
+                account: bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), text("account").unwrap()),
+                occurred_at: None,
+                trade_date: day,
+                settle_date: None,
+                kind: Kind::parse(&text("kind").unwrap()).unwrap(),
+                effect: None,
+                instrument,
+                quantity: text("quantity").map(|q| Dec::parse(&q).unwrap()),
+                price: money("price"),
+                cash: money("cash"),
+                fee: None,
+                fx_rate: None,
+                paid_on: None,
+                value: None,
+            };
+            bagholder_book::mapping::Mapped { legs: vec![leg], ..bagholder_book::mapping::Mapped::default() }
+        }
+    }
+
+    /// The fed record `key` with `payload`.
+    fn fed(f: &Figures, key: &str, payload: serde_json::Value) -> RecordId {
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap()[0].id;
+        let text = payload.to_string();
+        let record = book.store(&Fed, &Incoming { connection: Some(conn), source_key: key, payload: &text, refs: vec![] }, now()).unwrap().record;
+        f.record_changed(now()).unwrap();
+        record
+    }
+
+    /// A deposit of `cash` CAD on `day` in the pulled book's TFSA, fed.
+    fn fed_deposit(f: &Figures, key: &str, day: &str, cash: &str) -> RecordId {
+        fed(f, key, serde_json::json!({"account": "anon-tfsa-1", "day": day, "kind": "deposit", "cash": cash, "currency": "CAD"}))
+    }
 
     fn figures() -> (tempfile::TempDir, Figures) {
         let home = tempfile::tempdir().unwrap();
@@ -996,24 +1042,11 @@ mod tests {
         assert_eq!(units_held(&f, fill.account, &fill.symbol), before);
     }
 
-    /// A movement of cash alone the broker reported: a deposit, as a row of an
-    /// earlier import stands for the broker's own. Its account, record, day and cash.
+    /// A movement of cash alone the broker reported: a deposit, fed. Its account,
+    /// record, day and cash.
     fn feed_cash(f: &Figures) -> (AccountId, RecordId, bagholder_core::jiff::civil::Date, bagholder_core::Money) {
         let book = f.book().unwrap();
-        let conn = book.connections().unwrap()[0].id;
-        let row = OldActivity {
-            id: "deposit-1".into(),
-            transaction_date: Some("2025-11-04".into()),
-            account_id: Some("anon-tfsa-1".into()),
-            activity_type: Some("Deposit".into()),
-            currency: Some("CAD".into()),
-            net_cash_amount: Some("250".into()),
-            source: Some("csv".into()),
-            ..OldActivity::default()
-        };
-        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
-        let record = book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: "deposit-1", payload: &payload, refs: vec![] }, now()).unwrap().record;
-        f.record_changed(now()).unwrap();
+        let record = fed_deposit(f, "deposit-1", "2025-11-04", "250");
         let account = book.account_by_ref(&bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
         (account, record, "2025-11-04".parse().unwrap(), bagholder_core::Money::new(Dec::parse("250").unwrap(), bagholder_core::Currency::CAD))
     }
@@ -1089,23 +1122,8 @@ mod tests {
                 let cash = bagholder_core::Money::new(Dec::parse(amounts[next(2) as usize]).unwrap(), bagholder_core::Currency::CAD);
                 match next(4) {
                     0 => {
-                        // the broker's row, as an earlier database's import states it
-                        let book = f.book().unwrap();
-                        let conn = book.connections().unwrap()[0].id;
-                        let key = format!("deposit-{seed}-{step}");
-                        let row = OldActivity {
-                            id: key.clone(),
-                            transaction_date: Some(day.into()),
-                            account_id: Some("anon-tfsa-1".into()),
-                            activity_type: Some("Deposit".into()),
-                            currency: Some("CAD".into()),
-                            net_cash_amount: Some(cash.amount.to_text()),
-                            source: Some("csv".into()),
-                            ..OldActivity::default()
-                        };
-                        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
-                        broker.push(book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: &key, payload: &payload, refs: vec![] }, now()).unwrap().record);
-                        f.record_changed(now()).unwrap();
+                        // the broker's row, fed
+                        broker.push(fed_deposit(&f, &format!("deposit-{seed}-{step}"), day, &cash.amount.to_text()));
                         link(&f, now()).unwrap();
                     }
                     1 => {
@@ -1129,27 +1147,6 @@ mod tests {
         }
     }
 
-    /// The broker's deposit row `key` of `cash` on `day`, as an earlier
-    /// database's import states it.
-    fn broker_deposit(f: &Figures, key: &str, day: &str, cash: &str) -> RecordId {
-        let book = f.book().unwrap();
-        let conn = book.connections().unwrap()[0].id;
-        let row = OldActivity {
-            id: key.into(),
-            transaction_date: Some(day.into()),
-            account_id: Some("anon-tfsa-1".into()),
-            activity_type: Some("Deposit".into()),
-            currency: Some("CAD".into()),
-            net_cash_amount: Some(cash.into()),
-            source: Some("csv".into()),
-            ..OldActivity::default()
-        };
-        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
-        let r = book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: key, payload: &payload, refs: vec![] }, now()).unwrap().record;
-        f.record_changed(now()).unwrap();
-        r
-    }
-
     /// A file's row with two broker rows it could be links nothing; once one of
     /// them is removed, the next pass links it to the other, though the removal
     /// stored nothing (brief 26, 5b).
@@ -1158,8 +1155,8 @@ mod tests {
         let (_h, f) = figures();
         let account = f.book().unwrap().account_by_ref(&bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
         let day = "2025-11-06";
-        let one = broker_deposit(&f, "dup-1", day, "77.77");
-        let two = broker_deposit(&f, "dup-2", day, "77.77");
+        let one = fed_deposit(&f, "dup-1", day, "77.77");
+        let two = fed_deposit(&f, "dup-2", day, "77.77");
         link(&f, now()).unwrap();
         let cash = bagholder_core::Money::new(Dec::parse("77.77").unwrap(), bagholder_core::Currency::CAD);
         let r = import(&f, "f.csv", &cash_file(day.parse().unwrap(), cash), Some(account), now()).unwrap();
@@ -1181,29 +1178,10 @@ mod tests {
         assert_eq!(units_held(&f, fill.account, &fill.symbol), before.checked_add(fill.units).unwrap(), "the second fill the file states is its own");
     }
 
-    /// A row of an earlier database's import, a fill of `symbol` in the account:
-    /// a record from a source other than the file, standing for the broker's.
-    fn imported_fill(f: &Figures, key: &str, account: &str, symbol: &str) -> RecordId {
-        let book = f.book().unwrap();
-        let conn = book.connections().unwrap()[0].id;
-        let row = OldActivity {
-            id: key.into(),
-            transaction_date: Some("2025-11-03".into()),
-            account_id: Some(account.into()),
-            activity_type: Some("Trade".into()),
-            activity_sub_type: Some("BUY".into()),
-            symbol: Some(symbol.into()),
-            currency: Some("USD".into()),
-            quantity: Some("5".into()),
-            unit_price: Some("20".into()),
-            net_cash_amount: Some("-100".into()),
-            source: Some("csv".into()),
-            ..OldActivity::default()
-        };
-        let payload = serde_json::to_string(&ImportedRow { row, security: None, underlying: None }).unwrap();
-        let stored = book.store(&ImportMapping, &Incoming { connection: Some(conn), source_key: key, payload: &payload, refs: vec![] }, now()).unwrap();
-        f.record_changed(now()).unwrap();
-        stored.record
+    /// A fed fill of `symbol` in the account: a record from a source other than
+    /// the file, standing for the broker's.
+    fn fed_fill(f: &Figures, key: &str, account: &str, symbol: &str) -> RecordId {
+        fed(f, key, serde_json::json!({"account": account, "day": "2025-11-03", "kind": "buy", "symbol": symbol, "currency": "USD", "quantity": "5", "price": "20", "cash": "-100"}))
     }
 
     #[test]
@@ -1330,8 +1308,8 @@ mod tests {
     fn a_row_with_more_than_one_broker_row_it_could_be_links_nothing_and_says_so() {
         let (_h, f) = figures();
         let account = broker_fill(&f).broker_account;
-        imported_fill(&f, "a", &account, "ZZQQ");
-        imported_fill(&f, "b", &account, "ZZQQ");
+        fed_fill(&f, "a", &account, "ZZQQ");
+        fed_fill(&f, "b", &account, "ZZQQ");
         let r = import(&f, "mine.csv", &simple_row(&account), None, now()).unwrap();
         assert_eq!((r.added, r.linked), (1, 0), "{r:?}");
         assert_eq!(r.ambiguous, vec![RowNote { line: 2, message: "the same fill as 2 of the broker's rows: not linked".into() }]);
@@ -1347,8 +1325,8 @@ mod tests {
     fn after_a_start_the_first_pass_looks_at_every_file_row() {
         let (h, f) = figures();
         let account = broker_fill(&f).broker_account;
-        imported_fill(&f, "a", &account, "ZZQQ");
-        let second = imported_fill(&f, "b", &account, "ZZQQ");
+        fed_fill(&f, "a", &account, "ZZQQ");
+        let second = fed_fill(&f, "b", &account, "ZZQQ");
         let r = import(&f, "mine.csv", &simple_row(&account), None, now()).unwrap();
         assert_eq!(r.ambiguous_rows, 1, "{r:?}");
         // the competitor goes while nothing applies it
@@ -1366,7 +1344,7 @@ mod tests {
         let r = import(&f, "mine.csv", &simple_row(&account), None, now()).unwrap();
         assert_eq!((r.added, r.linked), (1, 0));
         let row = csv_records(&f)[0];
-        let broker = imported_fill(&f, "a", &account, "ZZQQ");
+        let broker = fed_fill(&f, "a", &account, "ZZQQ");
         let linking = link(&f, now()).unwrap();
         assert_eq!(linking.linked, vec![(row, broker)]);
         assert_eq!(f.book().unwrap().record(row).unwrap().state, RecordState::Superseded);

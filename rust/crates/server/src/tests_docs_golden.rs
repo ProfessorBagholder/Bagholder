@@ -12,7 +12,7 @@
 use serde_json::{json, Value};
 
 use bagholder_model::patch::{self, Diff};
-use bagholder_store::feeds::{
+use bagholder_market::stored::feeds::{
     FiledDocument, Filing, Gauge, GaugePoint, GaugeReading, Regulator, ShortMarket, Shorts, StoredGauge, StoredShorts,
 };
 
@@ -134,7 +134,7 @@ fn test_an_order_row_added_changed_and_removed() {
 
 // --- notifications: a row inserted, then marked read ----------------------
 
-use bagholder_store::feeds::Notification;
+use bagholder_market::stored::feeds::Notification;
 
 fn notice_row(id: i64, read_at: &str) -> Notification {
     Notification { id, at: "2026-09-15T14:00:00Z".into(), kind: "fills".into(), key: "order:1:filled".into(), title: "Order filled · QNC".into(), body: "Bought 5 at 1.75".into(), extra: Default::default(), seen_at: String::new(), read_at: read_at.into() }

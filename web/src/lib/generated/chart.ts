@@ -1,4 +1,4 @@
-// Generated from rust/crates/store/src/bars.rs and the server's chart history. Do not
+// Generated from rust/crates/market/src/stored/bars.rs and the server's chart history. Do not
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.
 
 import type { OkOr } from './common'

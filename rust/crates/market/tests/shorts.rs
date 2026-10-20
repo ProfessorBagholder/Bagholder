@@ -3,7 +3,7 @@
 
 use bagholder_net::Failure;
 use bagholder_market::shorts::{self, CaPositionRow, CaVolumeRow, Position, UsVolumeRow};
-use bagholder_store::feeds::{ShortMarket, VolumeSpan};
+use bagholder_market::stored::feeds::{ShortMarket, VolumeSpan};
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -238,7 +238,7 @@ fn test_a_date_not_yet_published_is_passed_over_and_none_answering_is_the_failur
 }
 
 /// `for_listing` for a Canadian listing on fixed files.
-fn ca_listing(c: &rusqlite::Connection, sym: &str, exchange: &str, trend: bool) -> bagholder_store::feeds::Shorts {
+fn ca_listing(c: &rusqlite::Connection, sym: &str, exchange: &str, trend: bool) -> bagholder_market::stored::feeds::Shorts {
     let position = shorts::ca_position_with(sym, exchange, TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))).unwrap();
     let volume = shorts::ca_volume_with(sym, exchange, || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| Ok(None)).unwrap();
     shorts::finish(c, position, volume, sym, exchange, trend, ShortMarket::Ca, |_| Ok(vec![]), |_| Ok(None)).unwrap()
@@ -275,7 +275,7 @@ fn test_nothing_is_read_for_an_instrument_no_one_reports() {
 #[test]
 fn test_days_to_cover_uses_the_volume_of_the_listings_own_market() {
     let c = conn();
-    let us = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: Some(56990026.0), average_volume: Some(5864237.0), ..Default::default() };
+    let us = bagholder_market::stored::feeds::Shorts { market: ShortMarket::Us, shares: Some(56990026.0), average_volume: Some(5864237.0), ..Default::default() };
     assert_eq!(shorts::average_volume(&c, &us).unwrap(), Some(5864237.0));
     assert_eq!(shorts::days_to_cover(&c, &us).unwrap(), Some(9.7));
 }
@@ -286,7 +286,7 @@ fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
     // a day outside the period, and one of another benchmark's, are not counted
     closed(&c, "TSX", &["2026-08-14", "2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"].map(String::from));
     closed(&c, "SP500", &["2026-08-24".to_string()]);
-    let ca = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(2667164.0), total_volume: Some(5000000.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
+    let ca = bagholder_market::stored::feeds::Shorts { market: ShortMarket::Ca, shares: Some(2667164.0), total_volume: Some(5000000.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = shorts::tsx_trading_days(&c, "2026-08-16", "2026-08-31").unwrap();
     assert_eq!(days, 5);
     approx(shorts::average_volume(&c, &ca).unwrap().unwrap(), 5000000.0 / days as f64);
@@ -297,11 +297,11 @@ fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
 #[test]
 fn test_no_position_or_no_volume_leaves_days_to_cover_unsaid() {
     let c = conn();
-    let a = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: None, average_volume: Some(10.0), ..Default::default() };
+    let a = bagholder_market::stored::feeds::Shorts { market: ShortMarket::Us, shares: None, average_volume: Some(10.0), ..Default::default() };
     assert_eq!(shorts::days_to_cover(&c, &a).unwrap(), None);
-    let b = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: Some(10.0), average_volume: None, ..Default::default() };
+    let b = bagholder_market::stored::feeds::Shorts { market: ShortMarket::Us, shares: Some(10.0), average_volume: None, ..Default::default() };
     assert_eq!(shorts::days_to_cover(&c, &b).unwrap(), None);
-    let d = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, total_volume: None, volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
+    let d = bagholder_market::stored::feeds::Shorts { market: ShortMarket::Ca, total_volume: None, volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     assert_eq!(shorts::average_volume(&c, &d).unwrap(), None);
 }
 
@@ -486,7 +486,7 @@ fn test_a_float_that_is_published_is_still_what_a_fund_is_measured_against() {
 
 // --- SearchedListingTest -------------------------------------------------------
 
-fn searched(exchange: &str, name: &str) -> (bagholder_store::feeds::Shorts, Vec<String>) {
+fn searched(exchange: &str, name: &str) -> (bagholder_market::stored::feeds::Shorts, Vec<String>) {
     let _g = serial();
     let c = conn();
     let mut rows = HashMap::new();
@@ -689,7 +689,7 @@ fn test_a_listing_the_report_carries_is_read_from_the_report() {
 fn test_days_to_cover_follows_from_what_the_exchange_says_was_traded() {
     let c = conn();
     closed(&c, "TSX", &(17..28).map(|d| format!("2026-08-{:02}", d)).collect::<Vec<_>>());
-    let rec = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(17873.0), total_volume: Some(1519546.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
+    let rec = bagholder_market::stored::feeds::Shorts { market: ShortMarket::Ca, shares: Some(17873.0), total_volume: Some(1519546.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = shorts::tsx_trading_days(&c, "2026-08-16", "2026-08-31").unwrap();
     assert!(days > 0);
     approx(shorts::average_volume(&c, &rec).unwrap().unwrap(), 1519546.0 / days as f64);

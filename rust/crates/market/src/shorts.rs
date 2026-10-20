@@ -28,7 +28,7 @@ use bagholder_model::dates;
 use bagholder_model::lenient;
 use bagholder_model::textrules::{csv_records, parse_float, splitlines};
 use bagholder_model::value::s as vs;
-use bagholder_store::feeds::{ShortMarket, ShortPoint, Shorts, VolumeSpan};
+use crate::stored::feeds::{ShortMarket, ShortPoint, Shorts, VolumeSpan};
 
 pub const US_POSITION_URL: &str = "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest";
 pub const US_VOLUME_URL: &str = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol{}.txt";
@@ -476,7 +476,7 @@ pub fn ca_traded(symbol: &str, exchange: &str, span: &str) -> Result<Option<f64>
         return Ok(None);
     }
     let Some(code) = crate::quotes::tmx_quote_symbol(symbol, exchange) else { return Ok(None) };
-    let ask = |form: &str| -> Result<Option<Vec<bagholder_store::bars::DayBar>>, FetchError> {
+    let ask = |form: &str| -> Result<Option<Vec<crate::stored::bars::DayBar>>, FetchError> {
         let data = post_json(crate::tmx::TMX_URL, &json!({
             "operationName": "getTimeSeriesData",
             "variables": {"symbol": form, "freq": "day", "interval": 1, "start": start, "end": end},

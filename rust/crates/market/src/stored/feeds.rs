@@ -1,6 +1,7 @@
 //! What the app reads about an instrument beside its price: exposure records,
-//! the watchlist, news, filings, short selling, the published gauges, and the
-//! notifications the app raises.
+//! news, filings, short selling, the published gauges and the universes, kept in
+//! the market cache; and the notifications the app raises and what each stream
+//! has told, kept in the book (`bagholder_book::notices`, on its connection).
 //!
 //! Each of these is replaced per source rather than wholesale, so one feed
 //! that is down does not empty what another put there. What has been read out
@@ -9,7 +10,6 @@
 use bagholder_core::ListingKey;
 use rusqlite::{params, Connection, Result, Row};
 use std::collections::{HashMap, HashSet};
-use serde::Serialize;
 use serde_json::Value;
 
 use bagholder_model::value::FSum;
@@ -160,86 +160,6 @@ pub fn replace_exposure(conn: &Connection, key: &str, rec: &ExposureRecord, now:
 }
 
 // --------------------------------------------------------------------------
-// watchlist
-// --------------------------------------------------------------------------
-
-/// One row of the watchlist, as the page shows it. Not the model's own
-/// `WatchRow` (a stripped-down view the derived model carries for pricing):
-/// this is the stored row itself, with the id and the timestamp it was
-/// followed at.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, ts_rs::TS)]
-pub struct WatchedListing {
-    pub symbol: String,
-    pub exchange: String,
-    pub name: String,
-    pub currency: String,
-    #[serde(rename = "securityId")]
-    pub security_id: String,
-    #[serde(rename = "addedAt")]
-    pub added_at: String,
-}
-
-fn watch_from_row(r: &Row) -> Result<WatchedListing> {
-    Ok(WatchedListing {
-        symbol: text(r, "symbol")?,
-        exchange: text(r, "exchange")?,
-        name: text(r, "name")?,
-        currency: text(r, "currency")?,
-        security_id: text(r, "security_id")?,
-        added_at: text(r, "added_at")?,
-    })
-}
-
-pub fn list_watchlist(conn: &Connection) -> Result<Vec<WatchedListing>> {
-    let mut stmt = conn.prepare("SELECT * FROM watchlist ORDER BY added_at, symbol")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        out.push(watch_from_row(r)?);
-    }
-    Ok(out)
-}
-
-/// `add_watch`: following a listing already followed keeps its place and
-/// fills in what was blank.
-pub fn add_watch(
-    conn: &Connection,
-    symbol: &str,
-    exchange: &str,
-    name: &str,
-    currency: &str,
-    security_id: &str,
-    now: &str,
-) -> Result<Option<WatchedListing>> {
-    let sym = up(symbol);
-    let ex = up(exchange);
-    if sym.is_empty() {
-        return Ok(None);
-    }
-    conn.execute(
-        "INSERT OR IGNORE INTO watchlist (symbol, exchange, name, currency, security_id, added_at) VALUES (?, ?, ?, ?, ?, ?)",
-        rusqlite::params![sym, ex, name, currency.to_uppercase(), security_id, now],
-    )?;
-    conn.execute(
-        "UPDATE watchlist SET name = CASE WHEN COALESCE(name, '') = '' THEN ? ELSE name END, \
-         currency = CASE WHEN COALESCE(currency, '') = '' THEN ? ELSE currency END, \
-         security_id = CASE WHEN COALESCE(security_id, '') = '' THEN ? ELSE security_id END WHERE symbol = ? AND exchange = ?",
-        rusqlite::params![name, currency.to_uppercase(), security_id, sym, ex],
-    )?;
-    let mut stmt = conn.prepare("SELECT * FROM watchlist WHERE symbol = ? AND exchange = ?")?;
-    let mut rows = stmt.query(rusqlite::params![sym, ex])?;
-    match rows.next()? { Some(r) => Ok(Some(watch_from_row(r)?)), None => Ok(None) }
-}
-
-pub fn remove_watch(conn: &Connection, symbol: &str, exchange: &str) -> Result<bool> {
-    let n = conn.execute(
-        "DELETE FROM watchlist WHERE symbol = ? AND exchange = ?",
-        rusqlite::params![up(symbol), up(exchange)],
-    )?;
-    Ok(n > 0)
-}
-
-// --------------------------------------------------------------------------
 // news
 // --------------------------------------------------------------------------
 
@@ -380,10 +300,10 @@ impl StoredNews {
 /// row is stored under the feed it was read from (`via`); `exchange` is the venue
 /// in the words the listing was read under, kept for display.
 pub fn replace_news(conn: &Connection, listing: &ListingKey, exchange: &str, rows: &[NewsItem], now: &str) -> Result<()> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         let key = listing.to_string();
         let ex = up(exchange);
-        let changed = crate::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE listing = ?", rusqlite::params![key], || {
+        let changed = super::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE listing = ?", rusqlite::params![key], || {
         conn.execute("DELETE FROM news WHERE listing = ?", rusqlite::params![key])?;
         for r in rows {
             if r.id.is_empty() {
@@ -471,7 +391,7 @@ pub fn news_fetched_at(conn: &Connection) -> Result<HashMap<String, String>> {
 }
 
 pub fn forget_news(conn: &Connection, listing: &ListingKey) -> Result<()> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         let key = listing.to_string();
         conn.execute("DELETE FROM news WHERE listing = ?", rusqlite::params![key])?;
         let tail = format!(":{key}");
@@ -779,7 +699,7 @@ pub fn set_filing_reads(conn: &Connection, source: Regulator, doc_id: &str, read
 /// a filed document changes, and throwing the reading away with it meant every
 /// document was read again from nothing on each refresh.
 pub fn replace_filings(conn: &Connection, filer: &Filer, items: &[FiledDocument], now: &str) -> Result<usize> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64>, reads: Option<i64> }
         let mut kept: Vec<(String, Kept)> = Vec::new();
         {
@@ -854,7 +774,7 @@ pub fn listing_filers(conn: &Connection, listing: &ListingKey) -> Result<Vec<(Fi
 /// What a listing's filer under `source` was settled as, in place of what it was:
 /// the filers found (none where none could be), or why none could be settled.
 pub fn settle_listing_filers(conn: &Connection, listing: &ListingKey, source: Regulator, found: Result<&[(String, SettledBy)], &str>, now: &str) -> Result<()> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         let key = listing.to_string();
         conn.execute("DELETE FROM listing_filers WHERE listing = ? AND source = ?", rusqlite::params![key, source.as_str()])?;
         conn.execute("DELETE FROM listing_filer_misses WHERE listing = ? AND source = ?", rusqlite::params![key, source.as_str()])?;
@@ -950,7 +870,7 @@ pub struct Interlisted {
 /// The TSX's interlisted list as read, in place of the last list, with the day
 /// it states it is as of.
 pub fn replace_interlisted(conn: &Connection, rows: &[Interlisted], as_of: &str, now: &str) -> Result<()> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         conn.execute("DELETE FROM interlisted", [])?;
         for r in rows {
             conn.execute(
@@ -958,14 +878,14 @@ pub fn replace_interlisted(conn: &Connection, rows: &[Interlisted], as_of: &str,
                 rusqlite::params![r.listing.to_string(), r.us_listing.to_string(), r.name, as_of, now],
             )?;
         }
-        crate::tables::set_meta(conn, "interlisted:read_at", now)?;
+        super::meta::set_meta(conn, "interlisted:read_at", now)?;
         Ok(())
     })
 }
 
 /// When the interlisted list was last read; empty when never.
 pub fn interlisted_read_at(conn: &Connection) -> Result<String> {
-    crate::tables::get_meta(conn, "interlisted:read_at", "")
+    super::meta::get_meta(conn, "interlisted:read_at", "")
 }
 
 /// The listing the TSX's interlisted list pairs a listing with, either way round.
@@ -1156,7 +1076,7 @@ fn short_row(r: &Row) -> Result<Option<StoredShorts>> {
 /// A run of reports already stored is not dropped by a later read that did not
 /// ask for one.
 pub fn save_shorts(conn: &Connection, listing: &ListingKey, rec: &Shorts, now: &str, version: i64) -> Result<()> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         let key = listing.to_string();
         let ex = up(&rec.exchange);
         let series: Vec<ShortPoint> = match &rec.series {
@@ -1286,7 +1206,7 @@ struct GaugeRest {
 /// `save_gauge`: one published index's reading. What the publisher gives
 /// beyond the score travels in the payload.
 pub fn save_gauge(conn: &Connection, name: &str, rec: &Gauge, now: &str, version: i64) -> Result<()> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         let key = name.trim().to_lowercase();
         let rest = GaugeRest { previous: rec.previous.clone(), parts: rec.parts.clone(), series: rec.series.clone() };
         conn.execute(
@@ -1367,7 +1287,7 @@ pub fn events_told(conn: &Connection, scope: &str, events: &[String]) -> Result<
 /// `mark_told`: record that the stream has met these, whether or not they
 /// were worth telling about.
 pub fn mark_told(conn: &Connection, scope: &str, events: &[String], now: &str) -> Result<usize> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         let rows: Vec<&String> = events.iter().filter(|e| !e.is_empty()).collect();
         if rows.is_empty() {
             return Ok(0);
@@ -1469,7 +1389,7 @@ pub fn add_notification(
     let extra = extra.cloned().unwrap_or_default();
     let n = conn.execute(
         "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![now, kind, key, title, body, crate::tables::json_text(&serde_json::to_value(&extra).unwrap()), if seen { Some(now) } else { None }],
+        rusqlite::params![now, kind, key, title, body, super::meta::json_text(&serde_json::to_value(&extra).unwrap()), if seen { Some(now) } else { None }],
     )?;
     if n == 0 {
         return Ok(None);
@@ -1518,7 +1438,7 @@ pub fn list_notifications(
 /// `mark_notifications_seen`: a page has shown these, so no page shows
 /// them again.
 pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Result<usize> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         if ids.is_empty() {
             return Ok(0);
         }
@@ -1539,8 +1459,8 @@ pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Res
 
 /// `replace_universe`.
 pub fn replace_universe(conn: &Connection, key: &str, rows: &[bagholder_model::input::UniverseRow], now: &str) -> Result<()> {
-    crate::atomically(conn, || {
-        let changed = crate::gens::replace_if_changed(conn, "SELECT symbol, name, value, percent_change, sector, country FROM universes WHERE key = ?", rusqlite::params![key], || {
+    bagholder_sqlite::atomically(conn, || {
+        let changed = super::gens::replace_if_changed(conn, "SELECT symbol, name, value, percent_change, sector, country FROM universes WHERE key = ?", rusqlite::params![key], || {
         conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
         for r in rows.iter().filter(|r| !r.symbol.is_empty()) {
             conn.execute(
@@ -1580,39 +1500,6 @@ pub fn all_shorts(conn: &Connection) -> Result<Vec<StoredShorts>> {
     Ok(out)
 }
 
-/// `sold_since`: the shares sold in an account since a moment, from the
-/// activity feed -- by security id when there is one, else by symbol.
-pub fn sold_since(conn: &Connection, account_id: &str, security_id: &str, since_iso: &str, symbol: &str) -> Result<f64> {
-    let q: Option<f64> = if !security_id.is_empty() {
-        conn.query_row(
-            "SELECT SUM(quantity) FROM activities WHERE account_id = ? AND security_id = ? AND activity_type = 'Trade' AND activity_sub_type = 'SELL' AND occurred_at > ?",
-            rusqlite::params![account_id, security_id, since_iso],
-            |r| r.get(0),
-        )?
-    } else {
-        conn.query_row(
-            "SELECT SUM(quantity) FROM activities WHERE account_id = ? AND symbol = ? AND activity_type = 'Trade' AND activity_sub_type = 'SELL' AND occurred_at > ?",
-            rusqlite::params![account_id, symbol, since_iso],
-            |r| r.get(0),
-        )?
-    };
-    Ok(q.unwrap_or(0.0))
-}
-
-/// `position_quantity`: Wealthsimple's own balance for one security in
-/// one account, as last read. Nothing when it is not known.
-pub fn position_quantity(conn: &Connection, account_id: &str, security_id: &str) -> Result<Option<f64>> {
-    conn.query_row(
-        "SELECT SUM(quantity) FROM balances WHERE account_id = ? AND security_id = ?",
-        rusqlite::params![account_id, security_id],
-        |r| r.get(0),
-    )
-}
-
-pub fn balances_count(conn: &Connection) -> Result<i64> {
-    conn.query_row("SELECT COUNT(*) FROM balances", [], |r| r.get(0))
-}
-
 pub fn latest_notification_id(conn: &Connection) -> Result<i64> {
     let m: Option<i64> = conn.query_row("SELECT MAX(id) FROM notifications", [], |r| r.get(0))?;
     Ok(m.unwrap_or(0))
@@ -1625,7 +1512,7 @@ pub fn unread_notifications(conn: &Connection) -> Result<i64> {
 
 /// `mark_notifications_read`: every unread one when no ids are given.
 pub fn mark_notifications_read(conn: &Connection, ids: Option<&[i64]>, now: &str) -> Result<usize> {
-    crate::atomically(conn, || {
+    bagholder_sqlite::atomically(conn, || {
         match ids {
             None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
             Some(ids) if ids.is_empty() => Ok(0),

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use bagholder_market::{history, refresh, shorts};
+use bagholder_market::{history, shorts};
 use bagholder_model::input::Listing;
 use bagholder_market::shorts::{CaPositionRow, CaVolumeRow};
 
@@ -18,8 +18,9 @@ fn offline() {
 fn db() -> rusqlite::Connection {
     offline();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    bagholder_store::schema::init_schema(&conn).unwrap();
-    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    for m in &bagholder_sources::cache::MIGRATIONS {
+        conn.execute_batch(m.sql).unwrap();
+    }
     conn
 }
 
@@ -84,21 +85,6 @@ fn a_bar_store_that_cannot_be_read_is_not_a_chart_with_nothing_due() {
     assert!(history::intraday_ready(&conn, &rec, "1h", &today, &today, now).is_err());
 }
 
-/// The earlier store's series top-up: each part that failed is returned, the
-/// others still run.
-#[test]
-fn a_market_series_top_up_returns_what_failed() {
-    let conn = db();
-    let err = refresh::refresh_all(&conn, &[]).unwrap_err();
-    for source in ["Bank of Canada", "FRED", "Stooq", "TMX Money"] {
-        assert!(err.contains(source), "{source} is not said in: {err}");
-    }
-    conn.execute_batch("DROP TABLE fx_rates;").unwrap();
-    let err = refresh::refresh_fx(&conn).unwrap_err();
-    assert!(err.contains("could not be stored"), "{err}");
-    assert!(refresh::series_stale(&conn, "2026-09-16").is_err(), "a store that cannot be read is not a stale series");
-}
-
 /// Short interest from a regulator that did not answer is that regulator's
 /// failure, never a record with no position.
 #[test]
@@ -132,7 +118,7 @@ fn short_interest_whose_store_cannot_be_read_is_the_failure() {
 fn a_coinbase_market_lookup_that_failed_is_not_remembered_as_a_miss() {
     let conn = db();
     assert!(history::coinbase_market(&conn, "BTC-CAD", "2026-09-16").is_err());
-    assert_eq!(bagholder_store::tables::get_meta(&conn, "coinbase_product:BTC-CAD", "").unwrap(), "");
+    assert_eq!(bagholder_market::stored::meta::get_meta(&conn, "coinbase_product:BTC-CAD", "").unwrap(), "");
 }
 
 /// A chart in another currency than its bars converts at the Bank's rate the
@@ -140,7 +126,7 @@ fn a_coinbase_market_lookup_that_failed_is_not_remembered_as_a_miss() {
 /// rates that cannot be read are the read's failure, never bars left unconverted.
 #[test]
 fn a_chart_in_another_currency_converts_at_the_rates_it_is_given() {
-    use bagholder_store::bars::{DayBar, Ohlcv};
+    use bagholder_market::stored::bars::{DayBar, Ohlcv};
     let bar = |date: &str, close: f64| DayBar { date: date.into(), px: Ohlcv { open: None, high: None, low: None, close, volume: None } };
     // a Friday's rate, and none for the weekend
     let rates: history::Rates = std::sync::Arc::new(|| Ok([("USD".to_string(), [("2026-09-18".to_string(), 1.38), ("2026-09-21".to_string(), 1.39)].into_iter().collect())].into_iter().collect()));
@@ -161,8 +147,8 @@ fn a_chart_in_another_currency_converts_at_the_rates_it_is_given() {
 #[test]
 fn an_sec_document_read_offline_is_refused_by_its_kind() {
     offline();
-    let row = bagholder_store::feeds::FiledDocument {
-        id: "sec:0000000000-26-000001-0".into(), source: bagholder_store::feeds::Regulator::Sec, category: String::new(), profile_no: String::new(), issuer: String::new(),
+    let row = bagholder_market::stored::feeds::FiledDocument {
+        id: "sec:0000000000-26-000001-0".into(), source: bagholder_market::stored::feeds::Regulator::Sec, category: String::new(), profile_no: String::new(), issuer: String::new(),
         form: "10-K".into(), title: String::new(), date: String::new(), date_text: String::new(), size: String::new(),
         url: "https://www.sec.gov/Archives/edgar/data/1/000000000026000001/doc.htm".into(),
     };
@@ -187,8 +173,8 @@ fn a_canadian_filer_asked_offline_is_refused_by_its_kind() {
     assert!(matches!(bagholder_market::sedar::fetch_profile("000000001", 5), Err(SourceError::Offline)));
     // a document of the profile, downloaded and read for its content (brief 46, 4)
     assert!(matches!(bagholder_market::sedar::download_bytes("000000001", "sedar:1", Some("Zqoff Corp")), Err(SourceError::Offline)));
-    let row = bagholder_store::feeds::FiledDocument {
-        id: "sedar:1".into(), source: bagholder_store::feeds::Regulator::Sedar, category: String::new(), profile_no: "000000001".into(), issuer: "Zqoff Corp".into(),
+    let row = bagholder_market::stored::feeds::FiledDocument {
+        id: "sedar:1".into(), source: bagholder_market::stored::feeds::Regulator::Sedar, category: String::new(), profile_no: "000000001".into(), issuer: "Zqoff Corp".into(),
         form: "Interim MD&A".into(), title: String::new(), date: String::new(), date_text: String::new(), size: String::new(),
         url: "https://www.sedarplus.ca/x?drmKey=1".into(),
     };
@@ -218,7 +204,7 @@ fn the_secs_list_read_before_a_days_sleep_is_read_again_after_it() {
 /// (brief 71, B6).
 #[test]
 fn bars_convert_between_every_pair_of_the_banks_currencies() {
-    use bagholder_store::bars::{DayBar, Ohlcv};
+    use bagholder_market::stored::bars::{DayBar, Ohlcv};
     let bar = |close: f64| DayBar { date: "2026-09-18".into(), px: Ohlcv { open: Some(close), high: Some(close * 1.1), low: Some(close * 0.9), close, volume: None } };
     let codes: Vec<&str> = bagholder_sources::adapters::boc::DAILY_AT_LAUNCH.iter().copied().chain(["CAD"]).collect();
     // made-up rates, each currency its own: CAD per unit

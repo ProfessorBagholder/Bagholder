@@ -122,26 +122,6 @@ fn a_kind_or_currency_other_than_the_instrument_s_is_refused() {
 }
 
 #[test]
-fn the_earlier_store_s_rows_are_carried_once_all_or_none() {
-    let f = Fixture::new();
-    let rows = vec![(listing("AAA", "XTSE"), at("2026-09-01T12:00:00Z")), (listing("BBB", "XNAS"), at("2026-09-02T12:00:00Z"))];
-    let tiles = vec![directory("SPX", "Index", InstrumentKind::Index, "^GSPC")];
-    // one bad row refuses the whole carry
-    let bad = vec![rows[0].clone(), (ListingDraft { currency: Currency::USD, ..listing("AAA", "XTSE") }, t0())];
-    assert!(f.book.carry_following(&bad, Some(&tiles), t0()).is_err());
-    assert!(!f.book.following_carried().unwrap());
-    assert!(f.book.watched().unwrap().is_empty() && f.book.tiles().unwrap().is_none() && f.book.instruments().unwrap().is_empty());
-    f.book.carry_following(&rows, Some(&tiles), t0()).unwrap();
-    assert!(f.book.following_carried().unwrap());
-    let w = f.book.watched().unwrap();
-    assert_eq!(w.iter().map(|w| w.added_at).collect::<Vec<_>>(), vec![rows[1].1, rows[0].1]);
-    // carried once: a second carry is nothing
-    f.book.carry_following(&[(listing("CCC", "XTSE"), t0())], None, t0()).unwrap();
-    assert_eq!(f.book.watched().unwrap().len(), 2);
-    assert_eq!(f.book.tiles().unwrap().map(|t| t.len()), Some(1));
-}
-
-#[test]
 fn clearing_what_is_followed_takes_the_instruments_nothing_else_names() {
     let f = Fixture::new();
     f.account(&["acc-1"]);

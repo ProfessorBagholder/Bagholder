@@ -1147,7 +1147,7 @@ fn an_order_placed_in_wealthsimples_app_is_shown_from_the_feed_and_read_back_onc
     o::refresh_orders(&w.app);
     let e = w.app.orders.elsewhere.lock().unwrap()[0].clone();
     assert_eq!((e.state, e.filled, e.average, e.ended_at.is_some()), (OrderState::Filled, d("3"), Some(d("1.75")), true));
-    let told = bagholder_store::feeds::list_notifications(crate::notify::book(&w.app).unwrap().notices(), 0, "", false, 100, true).unwrap();
+    let told = bagholder_market::stored::feeds::list_notifications(crate::notify::book(&w.app).unwrap().notices(), 0, "", false, 100, true).unwrap();
     assert!(told.iter().any(|n| n.key == "order:order-ws-placed:filled" && n.title == "Order filled · QNC"), "{:?}", told.iter().map(|n| &n.key).collect::<Vec<_>>());
     o::refresh_orders(&w.app);
     assert_eq!(w.fake.0.lock().unwrap().reads, ["order-ws-placed"], "read back once");
@@ -1892,7 +1892,7 @@ fn a_stop_cancelled_at_wealthsimple_without_the_app_asking_is_told_and_the_stop_
     let after = w.bracket_of(&b);
     // a problem told, not an outcome (brief 15, `docs/plans/stage-money.md` part A)
     assert_eq!((after.phase, after.off_broker), (Phase::Guarding, true));
-    let told = bagholder_store::feeds::list_notifications(crate::notify::book(&w.app).unwrap().notices(), 0, "", false, 100, true).unwrap().into_iter().any(|n| n.title.starts_with("Stop cancelled at Wealthsimple"));
+    let told = bagholder_market::stored::feeds::list_notifications(crate::notify::book(&w.app).unwrap().notices(), 0, "", false, 100, true).unwrap().into_iter().any(|n| n.title.starts_with("Stop cancelled at Wealthsimple"));
     assert!(told, "the person is told");
     let card = o::orders_doc(&w.app).brackets.into_iter().find(|x| x.id == b).unwrap();
     assert!(card.legs[0].note.starts_with("Watching · "), "{:?}", card.legs[0].note);

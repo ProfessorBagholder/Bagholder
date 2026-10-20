@@ -26,7 +26,7 @@ fn a_superseding_record_takes_the_trade_and_its_note() {
     let provisional = Spelled { source: "fills", version: 1 };
     let broker = Spelled::v(1);
     let fill = f.store(&provisional, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-150", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(fill.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(fill.record), t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &note("breakout"), t0()).unwrap();
 
     // the broker's own row arrives and replaces the provisional fill, in one call
@@ -51,7 +51,7 @@ fn with_several_candidates_the_earliest_takes_the_trade() {
     let provisional = Spelled { source: "fills", version: 1 };
     let broker = Spelled::v(1);
     let fill = f.store(&provisional, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-150", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(fill.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(fill.record), t0()).unwrap();
     // the order filled in two parts, each its own broker row; the later one arrives first
     let late = f.store(&broker, "ws-2", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "40", "-60", "2026-01-02T15:00:09Z")]));
     let early = f.store(&broker, "ws-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "60", "-90", "2026-01-02T15:00:02Z")]));
@@ -69,7 +69,7 @@ fn a_chain_ends_on_its_last_record() {
     let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
     let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
     let c = f.store(&m, "c", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(a.record), t0()).unwrap();
     f.book.supersede(&[a.record], &[b.record], "b replaces a", t0()).unwrap();
     f.book.supersede(&[b.record], &[c.record], "c replaces b", t0()).unwrap();
     assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(c.record)));
@@ -84,7 +84,7 @@ fn a_trade_with_no_counterpart_is_orphaned_and_its_note_kept() {
     f.account(&["a1"]);
     let m = Spelled::v(1);
     let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(a.record), t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &note("keep me"), t0()).unwrap();
     // replaced by a record for another instrument
     let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000002", "XYZ"), "1", "-1", "2026-01-02T15:00:00Z")]));
@@ -122,7 +122,7 @@ fn what_the_person_entered_gives_way_to_a_sourced_record() {
     let mine = f.book.store(&person, &Incoming { connection: None, source_key: "cost-basis-1", payload: &text, refs: vec![] }, t0()).unwrap();
     assert_eq!(f.book.record(mine.record).unwrap().source, SourceName::person());
     assert_eq!(f.book.record(mine.record).unwrap().connection, None);
-    let trade = f.book.open_trade(&f.opens(mine.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(mine.record), t0()).unwrap();
     // later, the broker's statement states it
     let stated = json!({"legs": [{"leg": "trade", "account": "a1", "kind": "transfer-in", "instrument": share("CA0000000001", "QNC"), "quantity": "50", "price": "2.12", "date": "2025-03-01"}]}).to_string();
     let sourced = f.book.store_superseding(&Spelled::v(1), &f.incoming("statement-1", &stated), &[mine.record], "the statement states the cost", t0()).unwrap();
@@ -159,7 +159,7 @@ fn an_opening_moves_only_to_an_opening_of_the_same_kind() {
     let m = Spelled::v(1);
     // a buy to open, replaced by records holding a buy to close first and a buy to open after
     let opened = f.store(&m, "open", &legs(vec![option_leg("a1", "buy", "open", "1", "-100", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(opened.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(opened.record), t0()).unwrap();
     let closing = f.store(&m, "close", &legs(vec![option_leg("a1", "buy", "close", "1", "-90", "2026-01-02T14:00:00Z")]));
     let reopening = f.store(&m, "reopen", &legs(vec![option_leg("a1", "buy", "open", "1", "-100", "2026-01-02T15:00:01Z")]));
     f.book.supersede(&[opened.record], &[closing.record, reopening.record], "split", t0()).unwrap();
@@ -193,7 +193,7 @@ fn candidates_at_the_same_instant_are_taken_in_record_order() {
     f.account(&["a1"]);
     let m = Spelled::v(1);
     let fill = f.store(&Spelled { source: "fills", version: 1 }, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "2", "-2", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(fill.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(fill.record), t0()).unwrap();
     let x = f.store(&m, "x", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:05Z")]));
     let y = f.store(&m, "y", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:05Z")]));
     f.book.supersede(&[fill.record], &[x.record, y.record], "two rows", t0()).unwrap();
@@ -224,7 +224,7 @@ fn a_trade_is_orphaned_or_moved_only_on_the_anchor_the_engine_saw() {
     let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
     let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
     let later = f.store(&m, "later", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-05T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(a.record), t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &note("long story"), t0()).unwrap();
     let seen = f.opens(a.record);
     f.book.supersede(&[a.record], &[b.record], "the broker's own row", t0()).unwrap();
@@ -250,7 +250,7 @@ fn trades_orphaned_together_are_each_orphaned_only_on_the_anchor_the_engine_saw(
     let m = Spelled::v(1);
     // what the log takes for one trade orphaned on its own
     let one = f.store(&m, "one", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-30T15:00:00Z")]));
-    let lone = f.book.open_trade(&f.opens(one.record), None, t0()).unwrap();
+    let lone = f.book.open_trade(&f.opens(one.record), t0()).unwrap();
     let before = f.book.changes_upto().unwrap();
     assert!(f.book.orphan_unclaimed(lone, &f.opens(one.record)).unwrap());
     let per_trade = f.book.changes_upto().unwrap() - before;
@@ -260,7 +260,7 @@ fn trades_orphaned_together_are_each_orphaned_only_on_the_anchor_the_engine_saw(
         for k in 0..n {
             let at = format!("2026-02-{:02}T15:{:02}:{:02}Z", 1 + k % 27, (k / 60) % 60, k % 60);
             let a = f.store(&m, &format!("o{n}-{k}"), &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", &at)]));
-            let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
+            let trade = f.book.open_trade(&f.opens(a.record), t0()).unwrap();
             f.book.set_journal(JournalSubject::Trade(trade), &note("kept"), t0()).unwrap();
             let seen = f.opens(a.record);
             // every fifth moved by another writer since the engine saw it
@@ -301,7 +301,7 @@ fn a_trade_moves_to_the_opening_of_the_round_trip_it_is_a_fill_of() {
     let first = f.store(&m, "first", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let second = f.store(&m, "second", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "5", "-50", "2026-01-03T15:00:00Z")]));
     let other = f.store(&m, "other", &legs(vec![buy("a1", share("CA0000000002", "XYZ"), "5", "-50", "2026-01-03T15:00:00Z")]));
-    let trade = f.book.open_trade(&f.opens(second.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(second.record), t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &note("long story"), t0()).unwrap();
     // an opening of another instrument is refused
     let xyz_as_qnc = bagholder_core::journal::Opening { transaction: f.opens(other.record).transaction, instrument: f.opens(first.record).instrument };
@@ -310,7 +310,7 @@ fn a_trade_moves_to_the_opening_of_the_round_trip_it_is_a_fill_of() {
     assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(first.record)));
     assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "long story");
     // an opening another trade holds is not taken
-    let held = f.book.open_trade(&f.opens(second.record), None, t0()).unwrap();
+    let held = f.book.open_trade(&f.opens(second.record), t0()).unwrap();
     assert!(!f.book.move_trade(held, &f.opens(second.record), &f.opens(first.record)).unwrap());
     assert_eq!(f.book.trade(held).unwrap().anchor, Anchor::Opening(f.opens(second.record)));
 }

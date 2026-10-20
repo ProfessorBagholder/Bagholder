@@ -75,7 +75,7 @@ fn book_of(keys: &[&str]) -> (Fixture, AccountId) {
 /// watch on the listing under its new id, and the broker's statement of 600
 /// held under it.
 fn add_the_rest(f: &Fixture, a: AccountId) -> TradeId {
-    let trade = f.book.open_trade(&f.opens(record(f, "buy")), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(record(f, "buy")), t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &JournalEntry { thesis: "held through the new id".into(), grade: None, tags: vec![] }, t0()).unwrap();
     let draft = ListingDraft {
         found: None,

@@ -2,7 +2,6 @@
 // `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.
 
 import type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'
-import type { LegacyNote } from './book'
 import type { Status } from './status'
 
 export type JournalEntry = { thesis: string, 

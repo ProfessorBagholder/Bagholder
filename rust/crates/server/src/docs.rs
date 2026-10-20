@@ -168,8 +168,8 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         "notifications" => {
             let book = crate::notify::book(app).ok()?;
             Some(Doc::Notifications(NotificationsDoc {
-                rows: bagholder_store::feeds::list_notifications(book.notices(), 0, "", false, 50, true).ok()?,
-                unread: bagholder_store::feeds::unread_notifications(book.notices()).ok()?,
+                rows: bagholder_market::stored::feeds::list_notifications(book.notices(), 0, "", false, 50, true).ok()?,
+                unread: bagholder_market::stored::feeds::unread_notifications(book.notices()).ok()?,
             }))
         }
         // `filings:<symbol=…&exchange=…>`: one listing's disclosures; a key that

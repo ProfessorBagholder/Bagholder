@@ -6,7 +6,7 @@
 //! and read the diff.
 
 use bagholder_market::{fear, universes};
-use bagholder_store::feeds as sf;
+use bagholder_market::stored::feeds as sf;
 use serde_json::{json, Map, Value};
 
 fn norm(v: Value) -> Value {
@@ -75,7 +75,9 @@ fn answers() -> Value {
     out.insert("crypto_empty".into(), cell(&fear::parse_crypto(&json!({"data": [{"value": null}]}))));
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    bagholder_store::schema::init_schema(&conn).unwrap();
+    for m in &bagholder_sources::cache::MIGRATIONS {
+        conn.execute_batch(m.sql).unwrap();
+    }
     const NOW: &str = "2026-09-22T15:00:00Z";
     sf::save_gauge(&conn, "Stocks", stocks.as_ref().unwrap(), NOW, 1).unwrap();
     sf::save_gauge(&conn, "crypto", coin.as_ref().unwrap(), NOW, 1).unwrap();
@@ -113,14 +115,14 @@ fn answers() -> Value {
     ];
     out.insert("canada_tiles".into(), cell(&ca));
     sf::replace_universe(&conn, "ca", &ca, NOW).unwrap();
-    let read: Vec<(String, Vec<Value>)> = bagholder_store::rows::universes(&conn)
+    let read: Vec<(String, Vec<Value>)> = bagholder_market::stored::rows::universes(&conn)
         .unwrap()
         .0
         .into_iter()
         .map(|(k, rows)| (k, rows.iter().map(|r| json!({"symbol": r.symbol, "name": r.name, "value": r.value, "percentChange": r.percent_change, "sector": r.sector, "country": r.country})).collect()))
         .collect();
     out.insert("stored_universes".into(), cell(&read));
-    out.insert("snapshot_universes".into(), cell(&bagholder_store::feeds::stored_universes(&conn).unwrap()));
+    out.insert("snapshot_universes".into(), cell(&bagholder_market::stored::feeds::stored_universes(&conn).unwrap()));
     Value::Object(out)
 }
 

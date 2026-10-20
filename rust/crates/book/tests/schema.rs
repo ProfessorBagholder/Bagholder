@@ -66,7 +66,7 @@ fn the_header_and_the_record_of_migrations_agree() {
 #[test]
 fn an_earlier_apps_database_is_not_opened_as_a_book() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("bagholder.db");
+    let path = dir.path().join("earlier.db");
     rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TABLE activities (id TEXT); INSERT INTO activities VALUES ('a');").unwrap();
     let before = std::fs::read(&path).unwrap();
     assert!(matches!(Book::open(&path, "test", t0()), Err(bagholder_book::BookError::Migrate(migrate::MigrateError::Foreign { .. }))));

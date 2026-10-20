@@ -48,7 +48,7 @@ fn wave(base: f64, swing: f64, d: Date, period: f64, places: u32) -> Dec {
 /// A listing's made-up daily bars: closes that pass through the prices it was
 /// traded at on the days it was traded, with a small fixed ripple between them,
 /// from a month before its first fill through `today`, weekdays only.
-fn demo_bars(fills: &[(Date, f64)], today: Date) -> Vec<bagholder_store::bars::DayBar> {
+fn demo_bars(fills: &[(Date, f64)], today: Date) -> Vec<bagholder_market::stored::bars::DayBar> {
     let mut anchors: Vec<(Date, f64)> = fills.to_vec();
     anchors.sort_by(|x, y| x.0.cmp(&y.0));
     anchors.dedup_by_key(|x| x.0);
@@ -72,9 +72,9 @@ fn demo_bars(fills: &[(Date, f64)], today: Date) -> Vec<bagholder_store::bars::D
         let traded = anchors.iter().any(|x| x.0 == day);
         let ripple = if traded { 0.0 } else { 0.012 * (n(day) * 0.9).sin() + 0.007 * (n(day) * 0.23).cos() };
         let close = round(at(day) * (1.0 + ripple));
-        out.push(bagholder_store::bars::DayBar {
+        out.push(bagholder_market::stored::bars::DayBar {
             date: day.to_string(),
-            px: bagholder_store::bars::Ohlcv { open: Some(prev), high: Some(round(prev.max(close) * 1.004)), low: Some(round(prev.min(close) * 0.996)), close, volume: Some(100000.0 + (n(day) % 17.0) * 5000.0) },
+            px: bagholder_market::stored::bars::Ohlcv { open: Some(prev), high: Some(round(prev.max(close) * 1.004)), low: Some(round(prev.min(close) * 0.996)), close, volume: Some(100000.0 + (n(day) % 17.0) * 5000.0) },
         });
         prev = close;
     }
@@ -129,8 +129,8 @@ pub fn write(home: &Path) -> Result<String, String> {
         if bars.is_empty() {
             continue;
         }
-        bars_written += bagholder_store::market::upsert_price_history(&market, &key, &bars, "demo").map_err(err)?;
-        bagholder_store::market::mark_history_fetched(&market, &key, &bars[0].date, SYNCED).map_err(err)?;
+        bars_written += bagholder_market::stored::charts::upsert_price_history(&market, &key, &bars, "demo").map_err(err)?;
+        bagholder_market::stored::charts::mark_history_fetched(&market, &key, &bars[0].date, SYNCED).map_err(err)?;
         let last = bars[bars.len() - 1].px.close;
         let prev = bars.len().checked_sub(2).map(|k| bars[k].px.close);
         let price = Dec::parse(&format!("{last:.2}")).map_err(err)?;
@@ -144,7 +144,7 @@ pub fn write(home: &Path) -> Result<String, String> {
 
     // each share's short interest, under its own listing: two listings of one ticker
     // (TD on the TSX and on the NYSE) each read as its own, a position of its own size
-    use bagholder_store::feeds::{self as sf, FiledDocument, Filer, Regulator, SettledBy, ShortMarket, Shorts, VolumeSpan};
+    use bagholder_market::stored::feeds::{self as sf, FiledDocument, Filer, Regulator, SettledBy, ShortMarket, Shorts, VolumeSpan};
     let mut shorted = 0;
     for (n, i) in book.instruments().map_err(err)?.iter().enumerate() {
         if i.kind != bagholder_core::instrument::InstrumentKind::Security {

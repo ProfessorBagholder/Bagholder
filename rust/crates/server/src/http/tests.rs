@@ -246,7 +246,7 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let _g = guard();
     let conn = crate::notify::book(app_ref()).unwrap();
     crate::notify::set_settings(&conn, &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
-    bagholder_store::feeds::clear_notifications(conn.notices()).unwrap();
+    bagholder_market::stored::feeds::clear_notifications(conn.notices()).unwrap();
     let mut feed = crate::events::Feed::open(app());
     assert!(app().events.watch(&app(), feed.id(), [("notifications".to_string(), crate::events::Want { params: json!({}), have: None })].into_iter().collect()));
     let first = feed.step(&crate::status::status);

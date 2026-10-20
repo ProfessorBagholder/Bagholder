@@ -1,5 +1,5 @@
 //! Short names that are part of the vocabulary: a broker (`wealthsimple`), a
-//! source of records (`wealthsimple`, `bagholder-import`, `csv`, `person`).
+//! source of records (`wealthsimple`, `csv`, `person`, `bagholder-fill`).
 //! Lower-case letters, digits and hyphens, so they read the same in the book, in
 //! a reference's scheme and in a message.
 
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn names_are_slugs() {
-        assert_eq!(SourceName::parse("bagholder-import").unwrap().as_str(), "bagholder-import");
+        assert_eq!(SourceName::parse("fund-company").unwrap().as_str(), "fund-company");
         for bad in ["", "Wealthsimple", "ws_1", "-x", "x-", "a b", &"x".repeat(41)] {
             assert!(Broker::parse(bad).is_err(), "{bad:?}");
         }

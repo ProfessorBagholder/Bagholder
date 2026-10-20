@@ -434,7 +434,7 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
                     } else if let Some((opening, instrument)) = buys.get(r.below(buys.len().max(1) as u64) as usize).cloned() {
                         let id = b.ids.trade(&format!("t-{seed}-{step}"));
                         rank += 1;
-                        let t = bagholder_core::journal::Trade { id, anchor: bagholder_core::journal::Anchor::Opening(bagholder_core::journal::Opening { transaction: opening, instrument }), legacy_key: None };
+                        let t = bagholder_core::journal::Trade { id, anchor: bagholder_core::journal::Anchor::Opening(bagholder_core::journal::Opening { transaction: opening, instrument }) };
                         k.trades.insert(id, (rank_of(rank), t.clone()));
                         d.trades.insert(id, Some((rank_of(rank), t)));
                     } else {

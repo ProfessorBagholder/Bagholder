@@ -37,7 +37,7 @@ fn migration_two_anchors_every_trade_on_its_transaction_and_instrument() {
          INSERT INTO source_records(id, connection_id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('01900000-0000-7000-8000-000000000004', '01900000-0000-7000-8000-000000000001', 's', 'k', 'live', 1, 'x', 'x');
          INSERT INTO transactions(record_id, leg, mapping_version, account_id, trade_date, kind, instrument_id, quantity, cash, cash_currency) VALUES ('01900000-0000-7000-8000-000000000004', 'trade', 1, '01900000-0000-7000-8000-000000000002', '2026-01-02', 'buy', '01900000-0000-7000-8000-000000000003', '10', '-100', 'CAD');
          INSERT INTO trades(id, anchor_record, anchor_leg, created_at) VALUES ('01900000-0000-7000-8000-000000000005', '01900000-0000-7000-8000-000000000004', 'trade', 'x');
-         INSERT INTO trades(id, orphaned_reason, legacy_key, created_at) VALUES ('01900000-0000-7000-8000-000000000006', 'gone', 'rt:old', 'x');",
+         INSERT INTO trades(id, orphaned_reason, created_at) VALUES ('01900000-0000-7000-8000-000000000006', 'gone', 'x');",
     )
     .unwrap();
     drop(conn);
@@ -60,12 +60,12 @@ fn an_anchor_is_a_transaction_and_the_instrument_it_opened() {
     f.account(&["a1"]);
     let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let opening = f.opens(r.record);
-    let t = f.book.open_trade(&opening, None, t0()).unwrap();
-    assert_eq!(f.book.open_trade(&opening, None, t0()).unwrap(), t, "the same opening is the same trade");
+    let t = f.book.open_trade(&opening, t0()).unwrap();
+    assert_eq!(f.book.open_trade(&opening, t0()).unwrap(), t, "the same opening is the same trade");
     // the transaction opens nothing of another instrument
     let other = f.store(&Spelled::v(1), "other", &legs(vec![buy("a1", share("CA0000000002", "XYZ"), "1", "-1", "2026-01-02T16:00:00Z")]));
     let wrong = Opening { transaction: opening.transaction.clone(), instrument: f.opens(other.record).instrument };
-    assert!(f.book.open_trade(&wrong, None, t0()).is_err());
+    assert!(f.book.open_trade(&wrong, t0()).is_err());
 }
 
 #[test]
@@ -258,10 +258,10 @@ fn a_spin_offs_second_child_and_an_events_marker_open_trades_the_adjustment_name
         ]}]}),
     );
     let d_instrument = f.book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::Isin, "CA0000000003")).unwrap().unwrap();
-    f.book.open_trade(&Opening { transaction: applies.clone(), instrument: d_instrument }, None, t0()).unwrap();
+    f.book.open_trade(&Opening { transaction: applies.clone(), instrument: d_instrument }, t0()).unwrap();
     // an instrument no adjustment on the event names is still refused
     let parent = f.book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::Isin, "CA0000000001")).unwrap().unwrap();
-    assert!(f.book.open_trade(&Opening { transaction: applies, instrument: parent }, None, t0()).is_err());
+    assert!(f.book.open_trade(&Opening { transaction: applies, instrument: parent }, t0()).is_err());
 }
 
 fn event_leg(leg: &str) -> serde_json::Value {

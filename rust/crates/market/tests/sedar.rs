@@ -237,7 +237,7 @@ fn test_a_failed_walk_is_not_cached() {
 #[test]
 fn test_a_named_document_is_titled_by_its_name() {
     use bagholder_market::sedar::enrichment;
-    use bagholder_store::feeds::{FiledDocument, Regulator};
+    use bagholder_market::stored::feeds::{FiledDocument, Regulator};
     fn doc(form: &str) -> FiledDocument {
         FiledDocument {
             id: String::new(), source: Regulator::Sedar, category: String::new(), profile_no: String::new(),

@@ -325,7 +325,7 @@ fn a_continued_match_equals_a_whole_one_and_is_taken_where_the_guards_allow() {
                 Extra::TradeOn(fill) => {
                     let id = b.ids.trade(&format!("on-{fill}"));
                     rank += 1;
-                    let t = bagholder_core::journal::Trade { id, anchor: bagholder_core::journal::Anchor::Opening(bagholder_core::journal::Opening { transaction: b.tx[fill].clone(), instrument: b.ids.instrument(step.on) }), legacy_key: None };
+                    let t = bagholder_core::journal::Trade { id, anchor: bagholder_core::journal::Anchor::Opening(bagholder_core::journal::Opening { transaction: b.tx[fill].clone(), instrument: b.ids.instrument(step.on) }) };
                     trades.put(common::rank(rank), t.clone());
                     d.trades.insert(id, Some((common::rank(rank), t)));
                 }

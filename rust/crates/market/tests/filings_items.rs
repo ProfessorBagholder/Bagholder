@@ -11,7 +11,7 @@
 use bagholder_core::ListingKey;
 use bagholder_market::disclosures::{self as d, Fetched, Regulators, SourceError};
 use bagholder_market::{edgar, sedar};
-use bagholder_store::feeds::{self as sf, FiledDocument, Filer, Regulator};
+use bagholder_market::stored::feeds::{self as sf, FiledDocument, Filer, Regulator};
 use serde_json::{json, Map, Value};
 
 fn norm(v: Value) -> Value {
@@ -75,7 +75,7 @@ impl Regulators for Regs {
             Regulator::Sedar => self.sedar.documents.clone(),
         }
     }
-    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_market::stored::feeds::Interlisted>)> {
         Ok(("2026-10-01".into(), vec![]))
     }
 }
@@ -129,8 +129,9 @@ fn answers() -> Value {
 
     // the store: both sources, a reading, a refresh that keeps it, a source dropping a row
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    bagholder_store::schema::init_schema(&conn).unwrap();
-    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    for m in &bagholder_sources::cache::MIGRATIONS {
+        conn.execute_batch(m.sql).unwrap();
+    }
     const NOW: &str = "2026-09-22T15:00:00Z";
     const LATER: &str = "2026-09-23T15:00:00Z";
     let sedar_filer = Filer { source: Regulator::Sedar, id: "000012345".into() };

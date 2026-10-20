@@ -7,7 +7,7 @@
 //! and read the diff.
 
 use bagholder_market::shorts::{self, CaPositionRow, Position};
-use bagholder_store::feeds::ShortMarket;
+use bagholder_market::stored::feeds::ShortMarket;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
@@ -172,20 +172,20 @@ fn answers() -> Value {
 
     // --- store round trip ---------------------------------------------------
     let store_conn = conn();
-    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap(), &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
-    let read_back = bagholder_store::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap()).unwrap().unwrap();
+    bagholder_market::stored::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap(), &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
+    let read_back = bagholder_market::stored::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("GME", "NYSE").unwrap()).unwrap().unwrap();
     out.insert("store_shorts_for_after_save".into(), cell(&read_back));
 
-    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
+    bagholder_market::stored::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
     // a second save whose record carries no "series" keeps the series
     // already stored, rather than clearing it
     let mut ca_rec_no_series = out_ca_trend.clone();
     ca_rec_no_series.series = None;
-    bagholder_store::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
-    let qnc_after_reserve = bagholder_store::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap()).unwrap().unwrap();
+    bagholder_market::stored::feeds::save_shorts(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
+    let qnc_after_reserve = bagholder_market::stored::feeds::shorts_for(&store_conn, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap()).unwrap().unwrap();
     out.insert("store_series_kept_when_a_later_save_omits_it".into(), cell(&qnc_after_reserve));
 
-    let mut all = bagholder_store::feeds::all_shorts(&store_conn).unwrap();
+    let mut all = bagholder_market::stored::feeds::all_shorts(&store_conn).unwrap();
     all.sort_by(|a, b| a.shorts.symbol.cmp(&b.shorts.symbol));
     out.insert("store_all_shorts".into(), cell(&all));
 

@@ -1,6 +1,6 @@
 //! Filing sources: matching, categories and routing.
 use bagholder_market::disclosures as d;
-use bagholder_store::feeds::{FiledDocument, Regulator};
+use bagholder_market::stored::feeds::{FiledDocument, Regulator};
 
 fn doc(source: Regulator, form: &str, category: &str) -> FiledDocument {
     FiledDocument {

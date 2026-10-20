@@ -5,7 +5,8 @@ edition.workspace = true
 
 [dependencies]
 bagholder-model = { path = "../model" }
-bagholder-store = { path = "../store" }
+# the guard that keeps a test out of the person's own data folder
+bagholder-sqlite = { path = "../sqlite" }
 bagholder-net = { path = "../net" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

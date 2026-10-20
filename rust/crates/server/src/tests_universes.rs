@@ -25,7 +25,7 @@ fn stored(app: &Arc<App>, source: Source, age: f64) {
     let c = app.cache().unwrap();
     for key in source.keys() {
         let row = UniverseRow { symbol: format!("{}0", key.to_uppercase()), name: "Held".into(), value: 1.0, percent_change: None, sector: "Energy".into(), country: String::new() };
-        bagholder_store::feeds::replace_universe(&c, key, &[row], &at).unwrap();
+        bagholder_market::stored::feeds::replace_universe(&c, key, &[row], &at).unwrap();
     }
 }
 
@@ -66,7 +66,7 @@ fn test_a_shown_universe_with_no_rows_is_read_from_its_own_source_only() {
         // the read is counted as it starts and stored as it ends: wait for the end
         let stored = || {
             let c = app.cache().unwrap();
-            source.keys().iter().all(|k| bagholder_store::feeds::universe_read_at(&c, k).unwrap().is_some())
+            source.keys().iter().all(|k| bagholder_market::stored::feeds::universe_read_at(&c, k).unwrap().is_some())
         };
         until("the read, stored for every universe its source carries", || reads(&app) == vec![source] && stored());
         settle();
@@ -84,7 +84,7 @@ fn test_a_shown_universe_whose_rows_are_stale_is_read_again() {
         // the read is counted as it starts and stored as it ends: wait for the end
         let fresh = || {
             let c = app.cache().unwrap();
-            let at = bagholder_store::feeds::universe_read_at(&c, source.keys()[0]).unwrap().unwrap();
+            let at = bagholder_market::stored::feeds::universe_read_at(&c, source.keys()[0]).unwrap().unwrap();
             now_unix() - crate::app::parse_instant(&at).unwrap() < 60.0
         };
         until("the read, stored", || reads(&app) == vec![source] && fresh());
@@ -130,7 +130,7 @@ fn test_a_failed_read_is_said_in_the_document_and_not_asked_again_within_the_hal
     let _again = page_showing(&app, &["universe:us", "universe:intl"]);
     settle();
     assert_eq!(reads(&app), vec![Source::Screener], "one attempt per half hour");
-    assert!(app.cache().map(|c| bagholder_store::feeds::universe_read_at(&c, "us").unwrap().is_none()).unwrap());
+    assert!(app.cache().map(|c| bagholder_market::stored::feeds::universe_read_at(&c, "us").unwrap().is_none()).unwrap());
 }
 
 #[test]

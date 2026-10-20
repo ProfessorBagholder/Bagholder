@@ -25,7 +25,7 @@ use bagholder_model::unichars::is_space;
 pub use bagholder_sources::html::unescape;
 use bagholder_model::value::{field_s, s as py_s};
 use bagholder_model::venues::{tmx_form, tmx_symbol};
-use bagholder_store::feeds::{self as sf, Feed, NewsItem, NewsKind};
+use crate::stored::feeds::{self as sf, Feed, NewsItem, NewsKind};
 
 /// TMX's quote page has two news tabs on one query: "Press Releases", the
 /// companies' own wire items, and "In The Media", publishers' stories about
@@ -1549,7 +1549,7 @@ fn stamp_key(source: Feed, listing: &bagholder_core::ListingKey) -> String {
 }
 
 fn meta(conn: &Connection, key: &str) -> rusqlite::Result<String> {
-    bagholder_store::tables::get_meta(conn, key, "")
+    crate::stored::meta::get_meta(conn, key, "")
 }
 
 fn due(conn: &Connection, source: Feed, listing: &bagholder_core::ListingKey, now: i64) -> rusqlite::Result<bool> {
@@ -1750,7 +1750,7 @@ pub fn read_listing(
     let stamp = clock.stamp();
     sf::replace_news(conn, &key, exchange, &rows, &stamp)?;
     for k in &extra_answered {
-        bagholder_store::tables::set_meta(conn, &stamp_key(*k, &key), &stamp)?;
+        crate::stored::meta::set_meta(conn, &stamp_key(*k, &key), &stamp)?;
     }
     if let Some(f) = on_new {
         let mut new_ids: Vec<String> = rows

@@ -2,7 +2,7 @@
 //! and the network client read them the same way): its accounts, an account's
 //! positions as of a day, and its value and net deposits per day.
 
-use bagholder_book::import::wealthsimple_account_type;
+use crate::account_types::account_type;
 use bagholder_broker::{AccountStated, DayValue, Units};
 use bagholder_core::instrument::{RefScheme, Reference};
 use bagholder_core::json::Value;
@@ -94,7 +94,7 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
         out.push(AccountStated {
             key: n.text("id")?.to_string(),
             net_value,
-            account_type: wealthsimple_account_type(n.text("unifiedAccountType")?),
+            account_type: account_type(n.text("unifiedAccountType")?),
             open,
             nickname: n.opt_text("nickname")?.map(str::to_string),
             linked_to,

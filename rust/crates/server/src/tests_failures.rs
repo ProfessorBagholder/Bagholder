@@ -70,7 +70,7 @@ fn test_a_read_that_fails_is_the_answer_of_the_request_never_an_empty_list() {
     assert!(crate::feeds::filings_stored(&app, &qnc).unwrap().filings.is_empty());
     let c = app.cache().unwrap();
     // its filer settled, so its filings are read
-    bagholder_store::feeds::settle_listing_filers(&c, &qnc, bagholder_store::feeds::Regulator::Sedar, Ok(&[("000012345".to_string(), bagholder_store::feeds::SettledBy::SedarName)]), "2026-09-15T00:00:00Z").unwrap();
+    bagholder_market::stored::feeds::settle_listing_filers(&c, &qnc, bagholder_market::stored::feeds::Regulator::Sedar, Ok(&[("000012345".to_string(), bagholder_market::stored::feeds::SettledBy::SedarName)]), "2026-09-15T00:00:00Z").unwrap();
     c.execute("ALTER TABLE filings RENAME TO filings_away", []).unwrap();
     let e = crate::feeds::filings_stored(&app, &qnc).unwrap_err();
     assert!(e.contains("filings"), "{e}");
@@ -139,7 +139,7 @@ fn test_notification_settings_stored_unreadable_are_an_error_never_every_kind_of
 fn test_an_update_check_that_cannot_be_read_is_said_and_refuses_an_update_until_it_can() {
     let (_home, app) = fresh();
     let c = app.cache().unwrap();
-    bagholder_store::tables::set_meta(&c, "update_check", "{ nope").unwrap();
+    bagholder_market::stored::meta::set_meta(&c, "update_check", "{ nope").unwrap();
     // said once the next reading finds it too (`feeds::feed_failed`)
     assert!(!error(&app).contains("The update check could not be read"), "one reading is not said");
     let said = error(&app);
@@ -148,7 +148,7 @@ fn test_an_update_check_that_cannot_be_read_is_said_and_refuses_an_update_until_
         let answer = crate::update::start_update(&app);
         assert!(!answer.ok && answer.error.as_deref().is_some_and(|e| e.contains("could not be read")), "{:?}", answer.error);
     }
-    bagholder_store::tables::set_meta(&c, "update_check", "").unwrap();
+    bagholder_market::stored::meta::set_meta(&c, "update_check", "").unwrap();
     assert_eq!(error(&app), "");
 }
 
@@ -183,40 +183,10 @@ fn test_a_rollback_that_cannot_put_the_previous_version_back_is_said_and_keeps_i
 }
 
 #[test]
-fn test_the_folder_an_earlier_version_watched_is_taken_once_and_not_again_once_let_go() {
-    let (home, app) = fresh();
-    let folder = home.path().join("drop");
-    std::fs::create_dir(&folder).unwrap();
-    let old = bagholder_store::connect(home.path()).unwrap();
-    bagholder_store::schema::init_schema(&old).unwrap();
-    bagholder_store::csvimport::set_watch_folder(&old, &folder.to_string_lossy()).unwrap();
-    let f = app.figures.get().unwrap();
-    crate::carry::carry_watch_folder(f, &old, Timestamp::now()).unwrap();
-    assert!(crate::csv_import::watching(f), "the folder watched before is watched again");
-    crate::csv_import::unwatch(f, Timestamp::now()).unwrap();
-    // the next start
-    crate::carry::carry_watch_folder(f, &old, Timestamp::now()).unwrap();
-    assert!(!crate::csv_import::watching(f), "a folder let go stays let go");
-    assert_eq!(error(&app), "");
-}
-
-#[test]
-fn test_a_folder_watched_before_that_cannot_be_read_is_a_failure_until_it_can_be() {
-    let (home, app) = fresh();
-    let old = bagholder_store::connect(home.path()).unwrap();
-    bagholder_store::schema::init_schema(&old).unwrap();
-    old.execute("ALTER TABLE meta RENAME TO meta_away", []).unwrap();
-    let f = app.figures.get().unwrap();
-    assert!(crate::carry::carry_watch_folder(f, &old, Timestamp::now()).is_err());
-    old.execute("ALTER TABLE meta_away RENAME TO meta", []).unwrap();
-    crate::carry::carry_watch_folder(f, &old, Timestamp::now()).unwrap();
-}
-
-#[test]
 fn test_a_distribution_notice_whose_record_cannot_be_read_says_why_until_one_can() {
     let (_home, app) = fresh();
     *app.feeds.record_fails.lock().unwrap() = Some("TMX Money could not be reached".into());
-    use bagholder_store::feeds::{Feed, NewsItem, NewsKind};
+    use bagholder_market::stored::feeds::{Feed, NewsItem, NewsKind};
     let item = |id: &str| NewsItem { id: id.into(), headline: "Announces Monthly Distribution".into(), source: String::new(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: NewsKind::Release, via: Feed::Tmx };
     crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:1")]);
     assert!(!error(&app).contains("declared distributions"), "one failure is not said");

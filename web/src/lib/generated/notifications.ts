@@ -1,4 +1,4 @@
-// Generated from rust/crates/store/src/feeds.rs and the server's notify module. Do not
+// Generated from rust/crates/market/src/stored/feeds.rs and the server's notify module. Do not
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_notifications_types`.
 
 import type { NotifyStatus } from './status'

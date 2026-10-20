@@ -17,7 +17,7 @@ use crate::tmx::TMX_URL;
 use bagholder_core::ListingKey;
 use bagholder_model::input::{Keyed, Listing};
 use bagholder_model::value::field_s;
-use bagholder_store::bars::{day_of_epoch, Bar, ChartBars, DayBar, Ohlcv, SourceBar, TimeBar};
+use crate::stored::bars::{day_of_epoch, Bar, ChartBars, DayBar, Ohlcv, SourceBar, TimeBar};
 
 /// A source covers a span when its first bar is
 /// within this of the span's start.
@@ -116,7 +116,7 @@ pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Keyed) -> rusqlite:
     if cands.is_empty() {
         return Ok(cands);
     }
-    let v = bagholder_store::tables::get_meta(conn, &bars_meta_key(rec), "")?;
+    let v = crate::stored::meta::get_meta(conn, &bars_meta_key(rec), "")?;
     if let Some((s, k)) = v.split_once('|') {
         let win = (s.to_string(), k.to_string());
         if cands.contains(&win) {
@@ -130,13 +130,13 @@ pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Keyed) -> rusqlite:
 
 /// The source and form that last answered for a listing's bars, where one has.
 pub fn bars_winner(conn: &rusqlite::Connection, rec: &Keyed) -> rusqlite::Result<Option<(String, String)>> {
-    let v = bagholder_store::tables::get_meta(conn, &bars_meta_key(rec), "")?;
+    let v = crate::stored::meta::get_meta(conn, &bars_meta_key(rec), "")?;
     Ok(v.split_once('|').map(|(s, k)| (s.to_string(), k.to_string())))
 }
 
 /// Remember the source and form that answered for a listing's bars, asked first next time.
 pub fn remember_winner(conn: &rusqlite::Connection, rec: &Keyed, source: &str, key: &str) -> rusqlite::Result<()> {
-    bagholder_store::tables::set_meta(conn, &bars_meta_key(rec), &format!("{}|{}", source, key))
+    crate::stored::meta::set_meta(conn, &bars_meta_key(rec), &format!("{}|{}", source, key))
 }
 
 /// The currency a candidate's bars are quoted in -- a
@@ -266,7 +266,7 @@ pub fn coinbase_market(conn: &rusqlite::Connection, pair: &str, today: &str) -> 
         return Ok(String::new());
     }
     let meta_key = format!("coinbase_product:{}", pair);
-    let v = bagholder_store::tables::get_meta(conn, &meta_key, "")?;
+    let v = crate::stored::meta::get_meta(conn, &meta_key, "")?;
     if let Some(rest) = v.strip_prefix('@') {
         return Ok(rest.to_string());
     }
@@ -280,10 +280,10 @@ pub fn coinbase_market(conn: &rusqlite::Connection, pair: &str, today: &str) -> 
     let d = serde_json::from_str::<Value>(if t.is_empty() { "{}" } else { &t })
         .map_err(|e| FetchError::Transport(format!("Coinbase's product answer does not read: {e}")))?;
     if field_s(&d, "id").to_uppercase() == pair {
-        bagholder_store::tables::set_meta(conn, &meta_key, &format!("@{}", pair))?;
+        crate::stored::meta::set_meta(conn, &meta_key, &format!("@{}", pair))?;
         return Ok(pair);
     }
-    bagholder_store::tables::set_meta(conn, &meta_key, &format!("none@{}", today))?;
+    crate::stored::meta::set_meta(conn, &meta_key, &format!("none@{}", today))?;
     Ok(String::new())
 }
 
@@ -352,7 +352,7 @@ fn iso_instant(ts: i64) -> String {
 /// record.
 pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end_ts: i64, interval: &str, today: &str) -> Result<Vec<SourceBar>, Failed> {
     let miss_key = format!("yahoo_miss:{}", symbol);
-    if bagholder_store::tables::get_meta(conn, &miss_key, "")? == today {
+    if crate::stored::meta::get_meta(conn, &miss_key, "")? == today {
         return Ok(vec![]);
     }
     let url = YAHOO_CHART_RANGE_URL
@@ -363,7 +363,7 @@ pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end
     match crate::quotes::yahoo_get_result(&url) {
         Ok(text) => Ok(crate::quotes::parse_yahoo_chart(&text)),
         Err(e) if e.code() == Some(404) => {
-            bagholder_store::tables::set_meta(conn, &miss_key, today)?;
+            crate::stored::meta::set_meta(conn, &miss_key, today)?;
             Ok(vec![])
         }
         Err(e) => Err(Failed::Source(e)),
@@ -546,7 +546,7 @@ pub fn daily_due(conn: &rusqlite::Connection, rec: &Keyed, start: &str, end: &st
     if start.len() != 10 || end.len() != 10 || intraday_missed_recently(conn, &sym, "1d", now_unix)? {
         return Ok(false);
     }
-    let last = bagholder_store::market::history_fetch(conn, &sym)?;
+    let last = crate::stored::charts::history_fetch(conn, &sym)?;
     let covered = last.as_ref().map_or(false, |l| l.start <= start);
     let fresh = last
         .as_ref()
@@ -560,20 +560,20 @@ pub fn daily_due(conn: &rusqlite::Connection, rec: &Keyed, start: &str, end: &st
 fn fill_daily(conn: &rusqlite::Connection, rates: &Rates, rec: &Keyed, start: &str, today: &str, now_stamp: &str) -> rusqlite::Result<()> {
     let sym = rec.key.clone();
     let start: String = start.chars().take(10).collect();
-    let last_start = bagholder_store::market::history_fetch(conn, &sym)?.map(|l| l.start).unwrap_or_default();
+    let last_start = crate::stored::charts::history_fetch(conn, &sym)?.map(|l| l.start).unwrap_or_default();
     // a span already read from an earlier day is read again from that day, so the stamp stays true
     let fetch_from = if !last_start.is_empty() && last_start < start { last_start } else { start };
     let (bars, source) = fetch_history(conn, rates, rec, &fetch_from, today, today)?;
     if bars.is_empty() {
         return record_intraday_miss(conn, &sym, "1d", now_stamp);
     }
-    bagholder_store::market::upsert_price_history(conn, &sym, &bars, &source)?;
+    crate::stored::charts::upsert_price_history(conn, &sym, &bars, &source)?;
     // the stamp says what is covered: when the bars begin well after the day
     // asked for, only from their first day, so an earlier span asks again
     let got_from = bars[0].date.clone();
     let slack = bagholder_model::dates::shift_date(&fetch_from, COVERAGE_SLACK_DAYS);
     let covered_from = if got_from <= slack { fetch_from } else { got_from };
-    bagholder_store::market::mark_history_fetched(conn, &sym, &covered_from, now_stamp)
+    crate::stored::charts::mark_history_fetched(conn, &sym, &covered_from, now_stamp)
 }
 
 /// The stored bars for a span, fetching first when it was never fetched or the
@@ -605,7 +605,7 @@ pub fn stored_daily(conn: &rusqlite::Connection, rec: &Keyed, start: &str, end: 
     if start.len() != 10 || end.len() != 10 {
         return Ok(vec![]);
     }
-    bagholder_store::market::price_history(conn, &sym, &start, &end)
+    crate::stored::charts::price_history(conn, &sym, &start, &end)
 }
 
 fn daily_pending_set() -> &'static std::sync::Mutex<Vec<ListingKey>> {
@@ -623,7 +623,7 @@ pub fn daily_pending(rec: &Keyed) -> bool {
 /// once; `done` is called when it ends, with whether the store could be read
 /// and written, so whoever showed the stored bars meanwhile is told to look
 /// again and a failure is said.
-pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rates: Rates, rec: Keyed, start: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_sqlite::pool::Pool>, rates: Rates, rec: Keyed, start: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
     let sym = rec.key.clone();
     {
         let mut p = daily_pending_set().lock().unwrap_or_else(|e| e.into_inner());
@@ -971,11 +971,11 @@ fn miss_key(listing: &ListingKey, tf: &str) -> String {
 }
 
 pub fn record_intraday_miss(conn: &rusqlite::Connection, listing: &ListingKey, tf: &str, now_stamp: &str) -> rusqlite::Result<()> {
-    bagholder_store::tables::set_meta(conn, &miss_key(listing, tf), now_stamp)
+    crate::stored::meta::set_meta(conn, &miss_key(listing, tf), now_stamp)
 }
 
 pub fn intraday_missed_recently(conn: &rusqlite::Connection, listing: &ListingKey, tf: &str, now_unix: f64) -> rusqlite::Result<bool> {
-    let v = bagholder_store::tables::get_meta(conn, &miss_key(listing, tf), "")?;
+    let v = crate::stored::meta::get_meta(conn, &miss_key(listing, tf), "")?;
     if v.is_empty() {
         return Ok(false);
     }
@@ -993,7 +993,7 @@ pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Keyed, start: &str,
     for tf in available_timeframes(rec, start, today) {
         if !INTRADAY.contains(&tf)
             || !intraday_missed_recently(conn, &sym, tf, now_unix)?
-            || !bagholder_store::market::price_bars(conn, &sym, tf, 0, 1 << 40)?.is_empty()
+            || !crate::stored::charts::price_bars(conn, &sym, tf, 0, 1 << 40)?.is_empty()
         {
             out.push(tf);
         }
@@ -1015,7 +1015,7 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Keyed, tf: &str, start:
     let start10: String = start.chars().take(10).collect();
     let start_day = if start10 > reach { start10 } else { reach };
     let start_ts = epoch_of_day(&start_day);
-    let last = bagholder_store::market::bar_fetch(conn, &sym, tf)?;
+    let last = crate::stored::charts::bar_fetch(conn, &sym, tf)?;
     Ok(last.and_then(|l| l.start_ts).map(|s| s <= start_ts).unwrap_or(false))
 }
 
@@ -1031,7 +1031,7 @@ pub fn intraday_pending(rec: &Keyed) -> bool {
 /// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once; `done` is called when
 /// it ends, with whether the store could be read and written.
-pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rates: Rates, rec: Keyed, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_sqlite::pool::Pool>, rates: Rates, rec: Keyed, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
     let sym = rec.key.clone();
     {
         let mut p = INTRADAY_PENDING.lock().unwrap();
@@ -1209,7 +1209,7 @@ pub fn ensure_intraday(
     let start_ts = epoch_of_day(&start_day);
     let now_i = now_unix as i64;
     let end_ts = (epoch_of_day(&end.chars().take(10).collect::<String>()) + 86400).min(now_i);
-    let last = bagholder_store::market::bar_fetch(conn, &sym, tf)?;
+    let last = crate::stored::charts::bar_fetch(conn, &sym, tf)?;
     let last_start = last.as_ref().and_then(|l| l.start_ts);
     let covered = last.is_some() && last_start.map(|s| s <= start_ts).unwrap_or(false);
     let fresh = last.is_some()
@@ -1221,7 +1221,7 @@ pub fn ensure_intraday(
     let fetch_from = if !covered {
         Some(start_ts)
     } else if needs_recent && !fresh {
-        let newest = bagholder_store::market::last_bar_time(conn, &sym, tf)?;
+        let newest = crate::stored::charts::last_bar_time(conn, &sym, tf)?;
         Some(start_ts.max(newest.unwrap_or(start_ts) - 2 * 86400))
     } else {
         None
@@ -1235,14 +1235,14 @@ pub fn ensure_intraday(
                 record_intraday_miss(conn, &sym, k, now_stamp)?;
                 continue;
             }
-            bagholder_store::market::upsert_price_bars(conn, &sym, k, bars, &source)?;
+            crate::stored::charts::upsert_price_bars(conn, &sym, k, bars, &source)?;
             let first = bars[0].time;
             let covered_from = if first <= from + COVERAGE_SLACK_DAYS * 86400 { from } else { first };
             let stamp_from = last_start.map_or(covered_from, |s| covered_from.min(s));
-            bagholder_store::market::mark_bars_fetched(conn, &sym, k, stamp_from, now_stamp)?;
+            crate::stored::charts::mark_bars_fetched(conn, &sym, k, stamp_from, now_stamp)?;
         }
     }
-    bagholder_store::market::price_bars(conn, &sym, tf, start_ts, end_ts)
+    crate::stored::charts::price_bars(conn, &sym, tf, start_ts, end_ts)
 }
 
 fn age_hours(fetched_at: Option<&str>, now_unix: f64) -> Option<f64> {
@@ -1254,9 +1254,9 @@ fn age_hours(fetched_at: Option<&str>, now_unix: f64) -> Option<f64> {
 /// as missed -- and one that is asked again on every pass for that reason is asked
 /// without end: a miss is a read, and the next is due when any other would be.
 fn archive_read_age_hours(conn: &rusqlite::Connection, sym: &ListingKey, now_unix: f64) -> rusqlite::Result<Option<f64>> {
-    let last = bagholder_store::market::bar_fetch(conn, sym, "1h")?;
+    let last = crate::stored::charts::bar_fetch(conn, sym, "1h")?;
     let fetched = age_hours(last.as_ref().map(|l| l.fetched_at.as_str()), now_unix);
-    let missed = crate::quotes::instant_secs_public(&bagholder_store::tables::get_meta(conn, &miss_key(sym, "1h"), "")?)
+    let missed = crate::quotes::instant_secs_public(&crate::stored::meta::get_meta(conn, &miss_key(sym, "1h"), "")?)
         .map(|then| (now_unix - then) / 3600.0);
     Ok(match (fetched, missed) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -1335,7 +1335,7 @@ pub fn archive_daily(conn: &rusqlite::Connection, rates: &Rates, recs: &[Keyed],
         if !short {
             continue;
         }
-        let last = bagholder_store::market::history_fetch(conn, &sym)?;
+        let last = crate::stored::charts::history_fetch(conn, &sym)?;
         if last.is_none() {
             todo.push((0, sym, rec.clone()));
         } else if age_hours(last.as_ref().map(|l| l.fetched_at.as_str()), now_unix).map(|a| a > ARCHIVE_TOPUP_HOURS).unwrap_or(true) {

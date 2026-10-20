@@ -13,8 +13,6 @@ use crate::ids::{GroupId, InstrumentId, TradeId, TransactionId};
 pub struct Trade {
     pub id: TradeId,
     pub anchor: Anchor,
-    /// The key an earlier version of the app knew it by, where it was imported.
-    pub legacy_key: Option<String>,
 }
 
 impl Trade {

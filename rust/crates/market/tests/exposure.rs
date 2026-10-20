@@ -32,7 +32,7 @@ const NINEPOINT_HTML: &str = r####"<div><table><tr><td>Facts</td></tr><tr><td>Ti
 
 use bagholder_market::exposure::{self, hooks, Breakdown, Ctx, Holding, Listed, ShareClass, TmxSector};
 use bagholder_model::securities::Security;
-use bagholder_store::feeds::{ExposureRecord, Weights};
+use bagholder_market::stored::feeds::{ExposureRecord, Weights};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -167,14 +167,14 @@ fn db() -> Connection {
     hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(None))));
     hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|_| None)));
     let conn = Connection::open_in_memory().unwrap();
-    bagholder_store::schema::init_schema(&conn).unwrap();
-    // the market cache's per-listing tables, as its migration 6 makes them
-    conn.execute_batch(bagholder_sources::cache::MIGRATIONS[5].sql).unwrap();
+    for m in &bagholder_sources::cache::MIGRATIONS {
+        conn.execute_batch(m.sql).unwrap();
+    }
     conn
 }
 
 fn ctx(conn: &Connection) -> Ctx<'_> {
-    let pool = std::sync::Arc::new(bagholder_store::pool::Pool::new(&std::env::temp_dir().join("bh-exposure-test-none.db")));
+    let pool = std::sync::Arc::new(bagholder_sqlite::pool::Pool::new(&std::env::temp_dir().join("bh-exposure-test-none.db")));
     Ctx { conn, pool, today: "2026-09-16".into() }
 }
 
@@ -286,7 +286,7 @@ fn test_a_fund_held_by_a_fund_is_looked_through() {
     close(weight_of(&rec.countries, "Canada"), 0.5);
     close(weight_of(&rec.countries, "United States"), 0.5);
     assert_eq!(rec.coverage, 1.0);
-    let inner = bagholder_store::feeds::exposure_record(&conn, "fund:INNER@XTSE").unwrap().unwrap();
+    let inner = bagholder_market::stored::feeds::exposure_record(&conn, "fund:INNER@XTSE").unwrap().unwrap();
     assert_eq!(inner.record.coverage, 1.0, "the inner fund's record is kept for the next fund that holds it");
 }
 
@@ -379,7 +379,7 @@ fn test_a_fund_no_source_covers_is_stored_as_unclassified() {
     let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
     let rec = exposure::refresh_security(&ctx(&conn), &sec).unwrap();
     assert_eq!((rec.sectors.0.clone(), rec.countries.0.clone(), rec.coverage), (vec![], vec![], 0.0));
-    assert_eq!(bagholder_store::feeds::exposure_record(&conn, "sec-s-1").unwrap().unwrap().record.coverage, 0.0);
+    assert_eq!(bagholder_market::stored::feeds::exposure_record(&conn, "sec-s-1").unwrap().unwrap().record.coverage, 0.0);
 }
 
 /// A source that failed is not a source that answered with nothing: the read
@@ -391,7 +391,7 @@ fn test_a_fund_whose_source_failed_is_not_stored_as_unclassified() {
     let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
     let err = exposure::refresh_security(&ctx(&conn), &sec).unwrap_err();
     assert!(err.to_string().contains("Yahoo Finance could not be reached"), "{err}");
-    assert_eq!(bagholder_store::feeds::exposure_record(&conn, "sec-s-1").unwrap(), None);
+    assert_eq!(bagholder_market::stored::feeds::exposure_record(&conn, "sec-s-1").unwrap(), None);
 }
 
 /// A store that refuses the record's write fails the read: nothing is said to

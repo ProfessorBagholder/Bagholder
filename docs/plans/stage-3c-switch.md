@@ -172,11 +172,17 @@ The CSV importer becomes a broker adapter without execution (§10) in `crates/br
 
 ### 7. Clear data
 
+> Historical (2026-10-20): the earlier store this section names is gone; nothing of the earlier app is kept (`docs/decisions.md`, 2026-10-20; `docs/plans/remove-the-earlier-app.md`).
+
+
 The menu's Clear data opens a dialog with a checkbox for each kind of data the app stores, and Clear all, which ticks every box. The kinds, each owning its tables: the broker's records (records pulled, statements, the pull's state), your entries (Add trade, CSV imports, opening balances, allocations), the journal (notes, grades, tags, groups), market data (the market cache), orders and brackets (the old store's until stage 4), the watchlist, tiles and notification settings (the old store's until stage 5), and the Wealthsimple login (`session.json`). Every table in the book, the cache and the old store belongs to exactly one kind, in one list in the server.
 
 `POST /api/data/clear` takes the kinds ticked. It refuses while a pull runs, and while a bracket is live, naming it: deleting its record would leave its stop resting at Wealthsimple with nothing watching it, so it is cancelled in the Orders panel first. Otherwise it empties each ticked kind's tables in one transaction per store, deletes `session.json` when the login is ticked, snapshots nothing (no backups feature), and rebuilds the engine; the stream sends the new state. After Clear all nothing is left. Disconnect stays as it is.
 
 ### 8. What goes
+
+> Historical (2026-10-20): the earlier store this section names is gone; nothing of the earlier app is kept (`docs/decisions.md`, 2026-10-20; `docs/plans/remove-the-earlier-app.md`).
+
 
 - `bagholder-model`: everything but what the market context reads until stage 5 (`markets`, `symbols_of`, `venues`, and the context's wire types, moved to `server/src/wire/context.rs`); `base`, `view`, `fifo`, `fx`, `lenient`, `patch`'s JSON path and the old cases runner go.
 - `bagholder-store`: the figure tables and their code (`activities`, `accounts`, `balances`, `margin`, `nav_history`, `securities`, `fx_rates`, `distributions`, `quotes`, `benchmark_prices`, `merge`, `relabel`, `csvimport`, `gens` for figures), each table dropped by an old-store migration; the context's, orders' and notifications' tables stay until their stages.

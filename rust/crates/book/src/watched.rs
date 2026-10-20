@@ -15,8 +15,6 @@ use crate::{new_uuid, Book, BookError, Result};
 /// Whether the tile row was ever chosen: never chosen is the default row, chosen
 /// empty is empty.
 const TILES_CHOSEN: &str = "tiles.chosen";
-/// Whether the earlier store's watchlist and tiles were carried into the book.
-const CARRIED: &str = "following.carried";
 
 /// What an instrument is called, as the person picked it where no record names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,39 +215,6 @@ impl Book {
             }
             self.set_setting(TILES_CHOSEN, Some("true"), at)?;
             Ok(ids.into_iter().map(|(_, read)| read).collect())
-        })
-    }
-
-    // ------------------------------------------------------------------
-    // the earlier store's rows
-    // ------------------------------------------------------------------
-
-    /// Whether the earlier store's watchlist and tiles were carried in.
-    pub fn following_carried(&self) -> Result<bool> {
-        Ok(self.setting(CARRIED)?.is_some())
-    }
-
-    /// Carry the earlier store's watchlist (each with when it was added) and its
-    /// tile row (none when it was never chosen) into the book, once, as one
-    /// transaction: all of it or none.
-    pub fn carry_following(&self, watched: &[(ListingDraft, jiff::Timestamp)], tiles: Option<&[ListingDraft]>, at: jiff::Timestamp) -> Result<()> {
-        self.atomically(|| {
-            if self.following_carried()? {
-                return Ok(());
-            }
-            for (d, added) in watched {
-                let id = self.listing(d, at)?;
-                self.conn().execute("INSERT OR IGNORE INTO watched(instrument_id, added_at) VALUES (?, ?)", params![id.to_string(), at_text(*added)])?;
-            }
-            if let Some(t) = tiles {
-                self.set_tiles(t, at)?;
-            }
-            self.conn().execute(
-                "INSERT INTO settings(key, value, source, set_at) VALUES (?1, 'true', 'bagholder', ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, source = excluded.source, set_at = excluded.set_at",
-                params![CARRIED, at_text(at)],
-            )?;
-            Ok(())
         })
     }
 }
