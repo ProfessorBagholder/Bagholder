@@ -1,5 +1,7 @@
 # Plan: nothing of the earlier app is kept, and every holding still adds up
 
+Amended with brief 74's four changes (8cf981ac), each marked "(brief 74, n)".
+
 ## For the owner to decide
 
 Nothing open. The owner decided on 2026-10-20:
@@ -24,7 +26,7 @@ The two manual LIRA withdrawals the owner named (2025-06-26 and 2026-01-12) are 
 
 **What Wealthsimple states.** The sync reads closed accounts. It records Wealthsimple's closed status, and reads a closed account's activity in full once (`broker/src/pull.rs:125, :162`). Wealthsimple's mapping of a holding move (`wealthsimple/src/mapping.rs`, `transfer`, from L857) already books both sides of a move from one row when the units each account held that day are known: `mirrored` pairs a rise in one account with the same fall in the other, using `opposingAccountId` and the holdings by day. Statement rows carry cash only (`broker::StatementRow`), so the statements can't supply a units move.
 
-**Step 1, a check on the owner's book that names the cause.** A command, `bagholder explain-move <day>`, prints the shape of that day's move rows and nothing that identifies the person:
+**Step 1, a check on the owner's book that names the cause.** A command, `bagholder explain-move <day>`, runs once and is deleted in Part 2 (brief 74, 4). It prints the shape of that day's move rows and nothing that identifies the person:
 - the kinds of rows;
 - whether `opposingAccountId` is present;
 - whether the opposing account is in the book, and its status and kind;
@@ -50,16 +52,27 @@ The book must hold both legs, the closed RESP at zero after the move, and the se
 
 ## Part 2: the earlier app's data and code removed
 
-**The data.** One book migration:
+**The data.** One book upkeep step (brief 74, 2). It isn't a schema migration: it changes no table, it runs only when its condition holds, and once done it's recorded in the book's settings (`upkeep.earlier-app-rows-removed`), as the book's other repairs are recorded. The step:
 - deletes every `bagholder-import` record, its revisions, refs, problems, holds, order links and `link_records`, and the transactions derived from them;
 - deletes the `links` left with no records;
 - clears `trades.legacy_key`.
 
 It runs only when no `bagholder-import` record is `live`. A book where one still is keeps them and says which, in words, until a sync supersedes it, so nothing that counts is ever dropped. On the owner's book it runs after Part 1's sync.
 
+**The person's own data survives it** (brief 74, 1). Before deleting anything, the step checks that none of these depends on an imported record or a transaction derived from one, and refuses, naming each one, if any does:
+- every trade's anchor: the round trip a journal entry is written on;
+- the journal itself: thesis, grade and tags;
+- the orders and brackets carried from the earlier app;
+- the notifications and what was told;
+- the watchlist and tiles.
+
+An anchor that points at an imported row is re-pointed first, to the row that superseded it, through the existing `links` (`supersede`). Only then does the step run.
+
 **Held by:**
-- every account's units and cash after the migration equal what they were before, on a book holding superseded and removed imported rows (`book/tests`);
-- the migration refuses while a `live` imported row exists.
+- every account's units and cash after the step equal what they were before, on a book holding superseded and removed imported rows (`book/tests`);
+- the step refuses while a `live` imported row exists;
+- the person's data survives (brief 74, 1): on a book where journal entries, trade anchors, carried orders and brackets, notifications and the watchlist sit on trades built from imported rows that were superseded, every one of them is equal, field for field, after the step. A book where one can't be re-pointed is refused, named, and left as it was;
+- once done, it's recorded and never runs again.
 
 **The code, all of it.** Every reader and writer of `bagholder.db`, every carry, and every old-format type, from the deletion map of 2026-10-20:
 - **server:**
@@ -97,7 +110,7 @@ It runs only when no `bagholder-import` record is `live`. A book where one still
   - the 2026-09-25 Clear entry loses its old-file clause.
 
 **Held by:**
-- a source scan that fails on `bagholder.db`, `OLD_FILE`, `bagholder-import`, `legacy_`, `carry_`, `relabel` or `OldActivity` anywhere in `rust/`, `web/` and `.github/`, apart from this plan and the docs marked historical;
+- a source scan for exact identifiers, not stems (brief 74, 3): `"bagholder.db"`, `OLD_FILE`, `"bagholder-import"`, `IMPORT_SOURCE`, `ImportMapping`, `ImportedRow`, `OldActivity`, `OldSecurity`, `legacy_import`, `legacy_orders`, `from_old_store`, `carry_notices`, `carry_following`, `carry_market`, `carry_watch_folder`, `clear_old_store`, `relabel::`, `bagholder_store`, `explain_move`. It fails on any of them in `rust/`, `web/` or `.github/`, apart from this plan and the docs marked historical;
 - the start never opening any file but `book.db` and the cache: a test lists the files a start opens.
 
 **The old file itself** stays where it is, untouched, and Bagholder never opens it. The owner may delete it whenever they like.
