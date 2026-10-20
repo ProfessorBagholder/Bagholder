@@ -489,20 +489,6 @@ fn cookies_from_document_cookie(text: &str, host: &str) -> Vec<Value> {
         .collect()
 }
 
-/// Whether a cookie's domain, or a page's host, is Wealthsimple's own.
-fn wealthsimple_host(domain: &str) -> bool {
-    let d = domain.trim().trim_start_matches('.').to_ascii_lowercase();
-    d == "wealthsimple.com" || d.ends_with(".wealthsimple.com")
-}
-
-/// The host of a page's address, where it has one.
-fn host_of(url: &str) -> &str {
-    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or("");
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
-    host.split(':').next().unwrap_or("")
-}
-
 /// The login the cookies carry, `None` while none carries an access token;
 /// one carrying a token in a form that cannot be read is an error. Only
 /// Wealthsimple's own cookies are read, by name: its OAuth cookie and its
@@ -512,7 +498,7 @@ pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Result<Opt
     let mut oauth: Option<Value> = None;
     let mut wssdi = String::new();
     for c in cookies {
-        if !c.is_object() || !wealthsimple_host(&f(c, "domain")) {
+        if !c.is_object() || !bagholder_wealthsimple::hosts::is_wealthsimples(&f(c, "domain")) {
             continue;
         }
         let (name, value) = (f(c, "name"), f(c, "value"));
@@ -565,8 +551,8 @@ fn cookies_from_target(app: &Arc<App>, ws_url: &str, page: &str) -> Result<Optio
         return Ok(Some(with_ua(b, &ua)));
     }
     // the page's own cookies, only on a page of Wealthsimple's: those are its host's
-    let host = host_of(page);
-    if !wealthsimple_host(host) {
+    let host = bagholder_wealthsimple::hosts::host_of(page);
+    if !bagholder_wealthsimple::hosts::is_wealthsimples(host) {
         ws.close();
         return Ok(None);
     }
@@ -1271,7 +1257,7 @@ mod tests {
     use crate::tests_common::{app, guard};
 
     fn cookie(name: &str, value: &str) -> Value {
-        json!({"name": name, "value": value, "domain": ".wealthsimple.com"})
+        json!({"name": name, "value": value, "domain": format!(".{}", bagholder_wealthsimple::hosts::cookie_domain())})
     }
 
     /// A listener on 127.0.0.1 answering every request with `body` as JSON.
@@ -1347,7 +1333,7 @@ mod tests {
 
     #[test]
     fn test_cookies_from_document_cookie_splits_on_semicolons() {
-        let h = "my.wealthsimple.com";
+        let h = &format!("my.{}", bagholder_wealthsimple::hosts::cookie_domain());
         assert_eq!(cookies_from_document_cookie(" a=1; b=2 ; c", h), vec![json!({"name": "a", "value": "1", "domain": h}), json!({"name": "b", "value": "2", "domain": h})]);
         assert!(cookies_from_document_cookie("", h).is_empty());
     }
@@ -1380,15 +1366,32 @@ mod tests {
     fn test_only_wealthsimples_own_oauth_cookie_is_taken_for_the_login() {
         let _g = guard();
         let on = |domain: &str, name: &str, token: &str| json!({"name": name, "value": format!(r#"{{"access_token": "{token}"}}"#), "domain": domain});
-        assert!(tokens_from_cookie_list(&app(), &[cookie("other", r#"{"access_token": "a0"}"#)]).unwrap().is_none(), "another cookie of Wealthsimple's carrying a token");
-        for foreign in ["evil.example", ".notwealthsimple.com", "wealthsimple.com.evil.example", ""] {
-            assert!(tokens_from_cookie_list(&app(), &[on(foreign, OAUTH_COOKIE, "stolen")]).unwrap().is_none(), "the cookie's name set by {foreign:?}");
+        // Wealthsimple's domain as the one place names it, a stand-in's when one is set
+        let take = |cookies: &[Value]| tokens_from_cookie_list(&app(), cookies).unwrap();
+        let check = |own: &str| {
+            let sub = format!("my.{own}");
+            assert!(take(&[cookie("other", r#"{"access_token": "a0"}"#)]).is_none(), "another cookie of Wealthsimple's carrying a token");
+            for foreign in ["evil.example".to_string(), format!(".not{own}"), format!("{own}.evil.example"), String::new()] {
+                assert!(take(&[on(&foreign, OAUTH_COOKIE, "stolen")]).is_none(), "the cookie's name set by {foreign:?}");
+            }
+            assert_eq!(take(&[on("evil.example", OAUTH_COOKIE, "stolen"), on(&sub, OAUTH_COOKIE, "ours")]).unwrap().access_token, "ours", "Wealthsimple's, whichever comes first");
+            assert_eq!(take(&[on(own, OAUTH_COOKIE, "ours")]).unwrap().access_token, "ours", "set for the domain itself");
+            let device = [on(&sub, OAUTH_COOKIE, "ours"), json!({"name": DEVICE_COOKIE, "value": "theirs", "domain": "evil.example"})];
+            assert_eq!(take(&device).unwrap().wssdi, "", "a device cookie another site set is not Wealthsimple's");
+        };
+        let was = std::env::var(bagholder_wealthsimple::hosts::BASE_VAR).ok();
+        std::env::remove_var(bagholder_wealthsimple::hosts::BASE_VAR);
+        let real = bagholder_wealthsimple::hosts::cookie_domain();
+        check(&real);
+        // a stand-in's own cookies are its login, and the real host's are not then
+        std::env::set_var(bagholder_wealthsimple::hosts::BASE_VAR, "http://127.0.0.1:9");
+        assert_eq!(take(&[on("127.0.0.1", OAUTH_COOKIE, "stand-in")]).unwrap().access_token, "stand-in");
+        assert!(take(&[on(&format!("my.{real}"), OAUTH_COOKIE, "real")]).is_none(), "the real host's cookie, past a stand-in");
+        match was {
+            Some(v) => std::env::set_var(bagholder_wealthsimple::hosts::BASE_VAR, v),
+            None => std::env::remove_var(bagholder_wealthsimple::hosts::BASE_VAR),
         }
-        let both = [on("evil.example", OAUTH_COOKIE, "stolen"), on("my.wealthsimple.com", OAUTH_COOKIE, "ours")];
-        assert_eq!(tokens_from_cookie_list(&app(), &both).unwrap().unwrap().access_token, "ours", "Wealthsimple's, whichever comes first");
-        let device = [on("my.wealthsimple.com", OAUTH_COOKIE, "ours"), json!({"name": DEVICE_COOKIE, "value": "theirs", "domain": "evil.example"})];
-        assert_eq!(tokens_from_cookie_list(&app(), &device).unwrap().unwrap().wssdi, "", "a device cookie another site set is not Wealthsimple's");
-        assert_eq!((host_of("https://my.wealthsimple.com/app/home"), host_of("https://user@wealthsimple.com:443/x"), host_of("about:blank")), ("my.wealthsimple.com", "wealthsimple.com", ""));
+        assert_eq!((bagholder_wealthsimple::hosts::host_of("https://user@example.org:443/x"), bagholder_wealthsimple::hosts::host_of("about:blank")), ("example.org", ""));
     }
 
     #[test]

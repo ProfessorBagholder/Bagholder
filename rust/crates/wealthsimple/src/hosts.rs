@@ -19,6 +19,34 @@ pub fn web() -> String {
     base().unwrap_or_else(|| REAL.to_string())
 }
 
+/// The host of an address (`https://user@host:443/path` → `host`), empty for
+/// one with none.
+pub fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    host.split(':').next().unwrap_or("")
+}
+
+/// The domain Wealthsimple's sign-in cookies are set for, beside `web()`: its
+/// cookies are this domain's or a subdomain's. A stand-in's are its own host's.
+pub fn cookie_domain() -> String {
+    const REAL: &str = "wealthsimple.com";
+    match base() {
+        Some(b) => host_of(&b).to_ascii_lowercase(),
+        None => REAL.to_string(),
+    }
+}
+
+/// Whether a cookie's domain, or a page's host, is Wealthsimple's (or the
+/// stand-in's): `cookie_domain()` itself or a subdomain of it, a leading dot
+/// ignored.
+pub fn is_wealthsimples(domain: &str) -> bool {
+    let d = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    let own = cookie_domain();
+    !own.is_empty() && (d == own || d.ends_with(&format!(".{own}")))
+}
+
 /// The GraphQL endpoint every read and order goes to.
 pub fn graphql_url() -> String {
     format!("{}/graphql", web())
