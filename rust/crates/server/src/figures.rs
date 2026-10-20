@@ -933,6 +933,29 @@ mod tests {
         assert_eq!(owed(&f).map(|m| m.amount.to_string()), Some("7600".to_string()));
     }
 
+    /// Net worth by day, read with the balances while a page is open, moves the
+    /// portfolio, so the page reads it again and its chart fills at once.
+    #[test]
+    fn net_worth_by_day_read_with_the_balances_moves_the_portfolio() {
+        let home = tempfile::tempdir().unwrap();
+        pulled(home.path());
+        let now = at("2025-11-19T21:00:00Z");
+        let f = Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        let conn = book.connections().unwrap()[0].id;
+        let debt = bagholder_book::debts::OutsideDebt { entity_id: "loc".into(), kind: "LineOfCredit".into(), name: "Line of credit".into(), institution: "Bank".into(), last4: None, balance: bagholder_core::Dec::parse("7600").unwrap(), currency: bagholder_core::Currency::CAD, as_of: None };
+        book.keep_outside_debts(conn, now, &[debt]).unwrap();
+        f.debts_changed().unwrap();
+        let days = |f: &Figures| f.read(|e| e.scope(&Default::default()).portfolio.net_worth_history.len()).unwrap();
+        assert_eq!(days(&f), 0);
+        let day = |d: &str, v: &str| (d.parse().unwrap(), bagholder_core::Dec::parse(v).unwrap(), bagholder_core::Currency::CAD);
+        book.keep_net_worth_days(&[day("2025-11-17", "1000"), day("2025-11-18", "1100")], now).unwrap();
+        let moved = f.debts_changed().unwrap();
+        assert!(!moved.is_empty(), "a new read of net worth by day moves nothing, so the page never reads it");
+        assert_eq!(days(&f), 2);
+    }
+
     #[test]
     fn records_a_mapping_now_reads_differently_are_derived_again_when_the_book_opens() {
         let home = tempfile::tempdir().unwrap();

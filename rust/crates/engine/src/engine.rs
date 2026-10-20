@@ -67,6 +67,9 @@ pub enum Entity {
     /// The holdings as of a past day a screen shows (`Past`): what they are
     /// worked out from moved.
     Past,
+    /// What the broker's net worth feature states is held and owed outside it,
+    /// and net worth by day: what the net worth and what is owed show.
+    Debts,
 }
 
 /// The holdings as they stood at the close of a past day (`SPEC.md` §5, a range
@@ -963,6 +966,9 @@ impl Engine {
             }
             Change::Debts(d) => {
                 let before = self.snapshot(Parts::ALL);
+                if self.inputs.facts.debts != d {
+                    moved.0.entry(Entity::Debts).or_default().insert("*");
+                }
                 self.inputs.facts.debts = d;
                 self.cash = build_cashflow(&self.inputs, &self.matched);
                 self.compare(&before, &mut moved);
@@ -1802,6 +1808,9 @@ impl Engine {
         let (mine, theirs) = (&self.inputs.market.quotes, &other.inputs.market.quotes);
         for i in mine.keys().chain(theirs.keys()).collect::<BTreeSet<_>>() {
             quote_moved(*i, theirs.get(i), mine.get(i), &mut m);
+        }
+        if self.inputs.facts.debts != other.inputs.facts.debts {
+            m.0.entry(Entity::Debts).or_default().insert("*");
         }
         m
     }

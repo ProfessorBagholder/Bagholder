@@ -415,6 +415,9 @@ pub struct Portfolio {
     /// What is held outside the broker that is not a debt, each in CAD, under
     /// every account only: net worth's other assets.
     pub outside_assets: Vec<(crate::input::Debt, Fig<Money>)>,
+    /// Net worth by day as the broker's net worth feature states it, under every
+    /// account only; part of the figures so a new read of it moves the portfolio.
+    pub net_worth_history: Vec<(Date, Money)>,
     pub cash: Fig<Money>,
     pub cash_pct: Fig<Option<Ratio>>,
     pub day_change: Option<Partial>,
@@ -885,9 +888,11 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
     let owed = owed(f, inputs, &accounts);
     let outside_assets = if f.accounts.is_empty() { inputs.facts.debts.assets.iter().map(|d| (d.clone(), live_to_cad(&inputs.facts.rates, &inputs.clock, d.balance))).collect() } else { Vec::new() };
+    let net_worth_history = if f.accounts.is_empty() { inputs.facts.debts.history.clone() } else { Vec::new() };
     Portfolio {
         owed,
         outside_assets,
+        net_worth_history,
         unrealized_pct: ratio_of(&unrealized.total, &cost_basis.total),
         margin_used_pct: ratio_of(&margin_used, &accounts_market.total),
         cash_pct: match &net_value {
@@ -962,6 +967,7 @@ pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate:
     // no statement describes a past day's debts
     p.owed = None;
     p.outside_assets = Vec::new();
+    p.net_worth_history = Vec::new();
     p.margin_unavailable = Vec::new();
     p.past = Some(past);
     p
