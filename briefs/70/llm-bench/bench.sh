@@ -9,7 +9,7 @@ BUILD=b11750
 NGLS="${NGLS:-99 0}"   # GPU on, then off; NGLS=0 on a machine with no usable GPU
 REPS="${REPS:-2}"
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT="$PWD/results-$(hostname -s).md"
+OUT="$PWD/results-$(hostname -s)${OUT_SUFFIX:-}.md"
 WORK=$(mktemp -d)
 SERVER=""
 cleanup() { [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null; wait 2>/dev/null; rm -rf "$WORK"; }
@@ -56,5 +56,5 @@ while read -r LABEL URL SUM; do
   kill "$SERVER"; wait "$SERVER" 2>/dev/null || true; SERVER=""
   echo >> "$OUT"
   rm -f "$M"
-done < "$HERE/models.txt"
+done < "$HERE/${MODELS_FILE:-models.txt}"
 echo "Done: $OUT"

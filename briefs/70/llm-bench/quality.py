@@ -12,6 +12,8 @@ ASK = ("\n\nAbove is the start of a public company filing. Give a short, specifi
 def chat(text):
     body = {"messages": [{"role": "user", "content": "FILING TEXT:\n" + text + ASK}],
             "temperature": 0.1, "max_tokens": 120, "cache_prompt": True,
+            # a model with a reasoning mode (Qwen3.5) answers directly, as every other one does
+            "chat_template_kwargs": {"enable_thinking": False},
             "response_format": {"type": "json_object", "schema": SCHEMA}}
     req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", json.dumps(body).encode(),
                                  {"Content-Type": "application/json"})
