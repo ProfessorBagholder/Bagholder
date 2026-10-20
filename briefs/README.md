@@ -82,3 +82,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 69 | [#559, a SEDAR+ document past the first page: two changes](69-sedar-document-paging.md) | Built in #559; released in v2.7.0 |
 | 70 | [Filings made readable, fast, on any device: regulators' data first, then one call to Qwen3.5-2B on the GPU](70-filings-readable-fast.md) | Current; kit and results in [70/](70/) |
 | 71 | [Code carried over and never re-examined: four areas audited, defects to fix, code to delete](71-carried-over-audit.md) | Current |
+| 72 | [Agents anywhere read the trade history: one agents-only address, through the person's own tunnel](72-agents-from-anywhere.md) | Current; plan PR first |
