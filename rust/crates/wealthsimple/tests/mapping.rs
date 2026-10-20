@@ -506,7 +506,13 @@ fn a_move_into_or_out_of_staking_states_the_units_it_moved_and_moves_none() {
 /// record says it trades in `currency`; the row states its amount in `row_currency`.
 fn holding_moved(sent: &str, held: &str, after: &str, currency: &str, row_currency: &str) -> Mapped {
     let mut v = asset_movement_record();
-    edit(&mut v, "positions", |p| {
+    move_fund(&mut v, sent, held, after, currency, row_currency);
+    map_payload(&v)
+}
+
+/// A move's record made to show the fund moving, as `holding_moved` says.
+fn move_fund(v: &mut Value, sent: &str, held: &str, after: &str, currency: &str, row_currency: &str) {
+    edit(v, "positions", |p| {
         let Value::Array(list) = p else { panic!() };
         let fund = list.iter().find_map(|x| Node::root(x).list("nodes").unwrap().into_iter().find(|n| n.obj("security").unwrap().text("id").unwrap().starts_with("sec-s-")).map(|n| n.value().clone())).expect("the fund's position");
         let at = |q: &str, cost: &str| {
@@ -530,7 +536,7 @@ fn holding_moved(sent: &str, held: &str, after: &str, currency: &str, row_curren
             }
         }
     });
-    edit(&mut v, "activity", |a| {
+    edit(v, "activity", |a| {
         if let Value::Object(m) = a {
             m.insert("currency".into(), Value::String(row_currency.into()));
         }
@@ -541,10 +547,9 @@ fn holding_moved(sent: &str, held: &str, after: &str, currency: &str, row_curren
     if let Value::Object(m) = &mut fund {
         m.insert("currency".into(), Value::String(currency.into()));
     }
-    if let Value::Object(m) = &mut v {
+    if let Value::Object(m) = v {
         m.insert("securities".into(), Value::Object([("sec-s-ea6bdb7971df48bb897aae6744c50527".to_string(), fund)].into()));
     }
-    map_payload(&v)
 }
 
 /// A holding moved in from another of the person's accounts carries the cost
@@ -581,4 +586,124 @@ fn a_holding_moved_in_carries_the_cost_wealthsimple_gave_it_there() {
     let unstated = holding_moved("120", "1000", "1150", "USD", "CAD");
     assert_eq!(the_move(&unstated).value, None);
     assert_eq!(unstated.problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), ["moved-cost-unstated"]);
+}
+
+/// Set a row's fields, the row found by its id among the feed's.
+fn set_row(rows: &mut [Value], id: &str, fields: &[(&str, &str)]) {
+    let row = rows.iter_mut().find(|r| text(r, "canonicalId") == Some(id)).unwrap_or_else(|| panic!("no row {id}"));
+    let Value::Object(m) = row else { panic!() };
+    for (k, v) in fields {
+        m.insert(k.to_string(), Value::String(v.to_string()));
+    }
+}
+
+/// The feed edited, then every row mapped as a pull stores them: the record and
+/// the mapping of the row of this id.
+fn mapped_after(id: &str, edit_rows: impl FnOnce(&mut Vec<Value>)) -> (Value, Mapped) {
+    let mut r = replay(&fixtures());
+    edit_rows(&mut r.source.rows);
+    record_all(&mut r).into_iter().find(|(x, _, _)| text(x, "canonicalId") == Some(id)).map(|(_, p, m)| (p, m)).unwrap()
+}
+
+fn legs_in<'a>(m: &'a Mapped, account: &str) -> Vec<&'a Draft> {
+    m.legs.iter().filter(|d| d.account.value == account).collect()
+}
+
+/// A managed account sold to cash and closed, its cash moved to a self-directed
+/// account: Wealthsimple states the move arriving, and nothing in the managed
+/// account's feed leaving it (the owner's, 2025-06-16). The cash is booked
+/// leaving there too, at the same instant, so it is not counted in both.
+#[test]
+fn a_move_arriving_from_an_account_whose_feed_states_nothing_leaving_books_it_leaving_there() {
+    let (payload, m) = mapped_after("anon-asset-6", |rows| {
+        rows.retain(|r| text(r, "canonicalId") != Some("anon-asset-3"));
+        set_row(rows, "anon-asset-6", &[("amount", "4321.10")]);
+    });
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    // the record holds the other account's feed over the move's days
+    let feed = Node::root(&payload).obj("opposing").expect("the other account's feed");
+    assert_eq!(feed.text("account").unwrap(), "anon-resp-1");
+    assert!(feed.list("rows").unwrap().is_empty(), "no move in it");
+    let cad = |a: &str| Some(bagholder_core::Money::new(dec(a), Currency::CAD));
+    let arrived = legs_in(&m, "anon-resp-2");
+    let left = legs_in(&m, "anon-resp-1");
+    assert_eq!(arrived.len(), 1);
+    assert_eq!((arrived[0].kind, arrived[0].cash), (Kind::TransferIn, cad("4321.10")));
+    assert_eq!(left.len(), 1, "{:?}", m.legs);
+    assert_eq!((left[0].kind, left[0].cash, left[0].quantity), (Kind::TransferOut, cad("-4321.10"), None));
+    assert_eq!((left[0].occurred_at, left[0].trade_date), (arrived[0].occurred_at, arrived[0].trade_date), "at the same instant");
+    assert_ne!(left[0].leg, arrived[0].leg);
+    // the same legs every time it is derived
+    assert_eq!(map_payload(&payload), m);
+    // the book already moving that cash out of it on the move's days: nothing more
+    let mut booked = payload.clone();
+    edit(&mut booked, "book", |b| {
+        let Value::Array(list) = b else { panic!() };
+        list.push(json::parse(r#"{"account":"anon-resp-1","security":"sec-c-cad","day":"2025-06-16","quantity":"-4321.10"}"#).unwrap());
+    });
+    let m = map_payload(&booked);
+    assert_eq!(m.legs.len(), 1, "{:?}", m.legs);
+    assert!(legs_in(&m, "anon-resp-1").is_empty());    // an import's of it is not Wealthsimple's record of it: the pull replaces it with this leg
+    let mut imported = payload.clone();
+    edit(&mut imported, "book", |b| {
+        let Value::Array(list) = b else { panic!() };
+        list.push(json::parse(r#"{"account":"anon-resp-1","security":"sec-c-cad","day":"2025-06-16","quantity":"-4321.10","imported":true}"#).unwrap());
+    });
+    assert_eq!(legs_in(&map_payload(&imported), "anon-resp-1").len(), 1);
+}
+
+/// A move whose both rows Wealthsimple states books one leg in each account,
+/// each from its own row: a move read against positions (its rows each other's
+/// group) and one of cash (the other row in the other account's feed).
+#[test]
+fn a_move_whose_both_rows_are_stated_books_one_leg_in_each_account() {
+    for (out, inn) in [("anon-asset-3", "anon-asset-6"), ("anon-internal-395", "anon-internal-455")] {
+        let set = |rows: &mut Vec<Value>| {
+            for id in [out, inn] {
+                set_row(rows, id, &[("amount", "765.43")]);
+            }
+        };
+        let (_, sent) = mapped_after(out, set);
+        let (payload, arrived) = mapped_after(inn, set);
+        assert_eq!(sent.legs.len(), 1, "{out}: {:?}", sent.legs);
+        assert_eq!(arrived.legs.len(), 1, "{inn}: {:?}", arrived.legs);
+        assert_eq!((sent.legs[0].kind, sent.legs[0].cash.map(|c| c.amount)), (Kind::TransferOut, Some(dec("-765.43"))));
+        assert_eq!((arrived.legs[0].kind, arrived.legs[0].cash.map(|c| c.amount)), (Kind::TransferIn, Some(dec("765.43"))));
+        assert_ne!(sent.legs[0].account, arrived.legs[0].account);
+        assert!(Node::root(&payload).obj("opposing").is_ok(), "{inn}: read against the other account's feed");
+    }
+}
+
+/// A move of holdings whose arrival alone Wealthsimple states: the units are
+/// booked leaving the other account, the same security, signed the other way.
+#[test]
+fn a_move_of_holdings_arriving_alone_books_the_units_leaving_the_other_account() {
+    let (mut v, _) = mapped_after("anon-asset-5", |rows| {
+        rows.retain(|r| text(r, "canonicalId") != Some("anon-asset-1"));
+        set_row(rows, "anon-asset-5", &[("amount", "87.65")]);
+    });
+    move_fund(&mut v, "120", "1000", "1120", "CAD", "CAD");
+    let m = map_payload(&v);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    let (arrived, left) = (legs_in(&m, "anon-resp-2"), legs_in(&m, "anon-resp-1"));
+    assert_eq!(arrived.len(), 1, "{:?}", m.legs);
+    assert_eq!((arrived[0].kind, arrived[0].quantity, arrived[0].cash), (Kind::TransferIn, Some(dec("10")), None));
+    assert_eq!(left.len(), 1, "{:?}", m.legs);
+    assert_eq!((left[0].kind, left[0].quantity, left[0].cash, left[0].value), (Kind::TransferOut, Some(dec("-10")), None, None));
+    assert_eq!(security(left[0]), security(arrived[0]));
+    assert_eq!(left[0].occurred_at, arrived[0].occurred_at);
+}
+
+/// A move naming an account that is not one of the person's: nothing is booked
+/// in it.
+#[test]
+fn a_move_arriving_from_an_account_not_the_person_s_books_nothing_more() {
+    let (payload, m) = mapped_after("anon-asset-6", |rows| {
+        rows.retain(|r| text(r, "canonicalId") != Some("anon-asset-3"));
+        set_row(rows, "anon-asset-6", &[("amount", "4321.10"), ("opposingAccountId", "anon-elsewhere-9")]);
+    });
+    assert!(Node::root(&payload).obj("opposing").is_err(), "no feed of an account not the person's");
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.legs.len(), 1, "{:?}", m.legs);
+    assert_eq!((m.legs[0].kind, m.legs[0].account.value.as_str()), (Kind::TransferIn, "anon-resp-2"));
 }
