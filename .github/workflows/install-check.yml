@@ -1,0 +1,57 @@
+# The published download installed and started as a person would, on each
+# platform: the archive fetched, its checksum checked, unpacked, the app
+# started on an empty data folder, and its page and status answered.
+name: Install check
+
+on:
+  push:
+    branches: [install-check]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to check (e.g. v2.8.0)
+        required: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      TAG: ${{ inputs.version || github.event.release.tag_name || 'v2.8.0' }}
+    steps:
+      - name: Download, check, unpack
+        shell: pwsh
+        run: |
+          $u = "https://github.com/ProfessorBagholder/Bagholder/releases/download/$env:TAG/bagholder-$env:TAG-rust-x86_64-pc-windows-msvc.zip"
+          Invoke-WebRequest $u -OutFile bagholder.zip
+          Invoke-WebRequest "$u.sha256" -OutFile bagholder.zip.sha256
+          $got = (Get-FileHash bagholder.zip -Algorithm SHA256).Hash.ToLower()
+          $want = ((Get-Content bagholder.zip.sha256) -split '\s+')[0].ToLower()
+          if ($got -ne $want) { throw "checksum: got $got, the release states $want" }
+          Expand-Archive bagholder.zip -DestinationPath "$env:USERPROFILE\Bagholder"
+          Get-ChildItem "$env:USERPROFILE\Bagholder" | Select-Object Name, Length
+          & "$env:USERPROFILE\Bagholder\bagholder.exe" --version
+      - name: Start on an empty data folder, and the page answers
+        shell: pwsh
+        run: |
+          $env:BAGHOLDER_HOME = "$env:RUNNER_TEMP\bh-home"
+          $env:BAGHOLDER_NO_BROWSER = "1"
+          $env:BAGHOLDER_DRY_ORDERS = "1"
+          $p = Start-Process "$env:USERPROFILE\Bagholder\bagholder.exe" -PassThru -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+          $ok = $false
+          foreach ($i in 1..60) {
+            Start-Sleep -Seconds 1
+            try {
+              $page = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing
+              $status = Invoke-WebRequest "http://127.0.0.1:8765/api/status" -UseBasicParsing
+              if ($page.StatusCode -eq 200 -and $status.StatusCode -eq 200) { $ok = $true; break }
+            } catch {}
+          }
+          Get-Content out.txt, err.txt -ErrorAction SilentlyContinue
+          Get-ChildItem $env:BAGHOLDER_HOME | Select-Object Name
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Process bagholder -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ok) { throw "the page or /api/status did not answer within 60 s" }
+          Write-Output "page and status answered; the app stopped"
