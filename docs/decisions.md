@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each carries the owner's own words and where they were said; a decision proposed by a brief or a session and not yet confirmed by the owner is marked "unconfirmed" and binds nothing until the owner confirms it. Each names the test that fails if it is broken, quoting what it asserts, or says "review only" where no test can hold it.
 
+## 2026-10-21
+
+- **No code-signing certificate.** The owner will not buy or manage one: "i'm not going to be buying and managing a code signing certificate." So the Windows download is unsigned, and Windows SmartScreen may ask before it first runs. The install steps say so, and a fix for the warning is never one that needs a certificate the owner buys or keeps. (Owner.) Held by: review only.
+
 ## 2026-10-20
 
 - **AI agents in the cloud read the trade history too, not only agents on this machine.** The owner: "It can't only work for locally running agents, it has to work with Muse, Grok Bot, etc." and "Ideally, all of them should be made to work so that they can request Bagholder data." (Meta's Muse, xAI's Grok Bot, OpenAI's Dots, and Claude.) They reach the same read-only tools through one agents-only address, off until the person switches it on (`docs/plans/agents-from-anywhere.md`). It replaces the 2026-10-18 entry "Agents reach Bagholder from the same machine only, for now". (Owner, 2026-10-20, relayed through the reviewer, brief 72.) Held by: the plan's tests, once built (`agents::tests::the_route_table_is_exactly_the_planned_one`, `agents::tests::the_agents_module_holds_no_write_handle`); until then, review only.
