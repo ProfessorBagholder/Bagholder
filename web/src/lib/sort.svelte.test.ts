@@ -73,6 +73,7 @@ describe('every table breaks a tie by what the person sees', () => {
     shorts: ['symbol', 'exchange', 'ofFloat', 'daysToCover', 'asOf'],
     news: ['when', 'news', 'symbol'],
     disclosures: ['when', 'document', 'category', 'source', 'size'],
+    netWorth: ['name', 'amount'],
   }
   // what tells one row of each table from another, as the person sees it: rows are
   // generated distinct by these, never by the table's own tie columns, so a table
@@ -86,6 +87,7 @@ describe('every table breaks a tie by what the person sees', () => {
     shorts: ['symbol', 'exchange'],
     news: ['news', 'symbol'],
     disclosures: ['document', 'source'],
+    netWorth: ['name', 'institution', 'kind'],
   }
   for (const table of Object.keys(TIES) as (keyof typeof TIES)[]) {
     it(table, () => {

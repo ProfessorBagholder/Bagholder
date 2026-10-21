@@ -8,6 +8,7 @@
   import type { PositionsDoc, EquityPoint } from './model'
   import { money0, stamp, stampDay, waiting } from './fmt'
   import { abs, plot } from './dec'
+  import { sort, toggleSort, sortRows, TIES } from './sort.svelte'
 
   let { model }: { model: PositionsDoc } = $props()
   const nw = $derived(model.portfolio.netWorth)
@@ -23,6 +24,10 @@
   // under each name: its kind and its institution, whichever are known and not the name itself
   const under = (r: { name: string; kind: string; institution: string }) =>
     [KIND[r.kind] ?? r.kind, r.institution].filter((x) => x && x !== r.name).join(' · ')
+  // each list as its header says: in the server's order until a header is clicked
+  type Row = NonNullable<typeof nw>['assets'][number]
+  const sorted = (table: 'nwAssets' | 'nwLiabilities', rows: Row[]) =>
+    sort[table].key === 'listed' ? rows : sortRows(rows, sort[table].key, sort[table].dir, (r, k) => (r as unknown as Record<string, unknown>)[k], TIES.netWorth)
 
   // ---- net worth over time: the Dashboard's equity curve, its geometry and hover ----
   // `net`: net worth alone; `split`: everything held and everything owed, two lines on one scale
@@ -188,15 +193,22 @@
     </div>
     <!-- the two cards one height, each list scrolling inside its card, as the app's paired cards do -->
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;height:380px">
-      {#each [['Assets', 'Asset', 'Value', nw.assets], ['Liabilities', 'Debt', 'Balance', nw.liabilities]] as const as [heading, what, amount, rows] (heading)}
+      {#each [['Assets', 'Asset', 'Value', 'nwAssets', nw.assets], ['Liabilities', 'Debt', 'Balance', 'nwLiabilities', nw.liabilities]] as const as [heading, what, amount, table, rows] (heading)}
         <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
           <h5 style="margin-bottom:4px">{heading}</h5>
           {#if rows.length}
             <div class="scroll" style="flex:1;min-height:0">
             <table class="table" style="font-size:12px;table-layout:fixed;width:100%">
-              <thead><tr><th style="text-align:left;position:sticky;top:0;z-index:1">{what}</th><th style="text-align:right;width:30%;position:sticky;top:0;z-index:1">{amount}</th></tr></thead>
+              <thead><tr>
+                {#each [['name', what, 'left', ''], ['amount', amount, 'right', 'width:30%;']] as const as [key, label, align, width] (key)}
+                  {@const on = sort[table].key === key}
+                  <th style="text-align:{align};{width}position:sticky;top:0;z-index:1;cursor:pointer;white-space:nowrap;color:{on ? 'var(--ink)' : 'rgba(var(--ink-rgb),.6)'}" onclick={() => toggleSort(table, key)}>
+                    <span class="th-in" style="flex-direction:{align === 'right' ? 'row-reverse' : 'row'}">{label}<span class="arrow" style="color:{on ? 'var(--accent)' : 'transparent'}">{on && sort[table].dir === 'asc' ? '▲' : '▼'}</span></span>
+                  </th>
+                {/each}
+              </tr></thead>
               <tbody>
-                {#each rows as r (r.id)}
+                {#each sorted(table, rows) as r (r.id)}
                   <tr class="tab">
                     <td>{r.name}{#if under(r)}<div style="font-size:11px;color:var(--ink55)">{under(r)}</div>{/if}</td>
                     <td style="text-align:right">{money0(r.amount)}</td>
