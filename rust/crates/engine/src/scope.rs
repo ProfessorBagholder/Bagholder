@@ -385,6 +385,25 @@ pub struct Allocation {
     pub share: Fig<Ratio>,
 }
 
+/// Where each of net worth's rows of the broker's own accounts is held: the
+/// brokers of the accounts behind it, each as the person calls it
+/// (`AccountInfo::broker_label`), once, in the accounts' order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldAt {
+    pub holdings: Vec<String>,
+    pub invested_cash: Vec<String>,
+    pub chequing_cash: Vec<String>,
+    pub margin: Vec<String>,
+}
+
+impl HeldAt {
+    fn note(list: &mut Vec<String>, label: &str) {
+        if !list.iter().any(|l| l == label) {
+            list.push(label.to_string());
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Portfolio {
     pub positions: Vec<usize>,
@@ -431,6 +450,8 @@ pub struct Portfolio {
     pub invested_cash: Fig<Money>,
     /// The cash in the chequing (spending) accounts in scope.
     pub chequing_cash: Fig<Money>,
+    /// Where the holdings, the cash, the chequing cash and the margin are held.
+    pub held_at: HeldAt,
     /// The allocation's cash slice: the invested cash and its share of the
     /// holdings and it, where there is any and the scope is not a holding's.
     pub allocation_cash: Option<(Money, Fig<Ratio>)>,
@@ -1124,7 +1145,7 @@ fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -
         for (c, v) in &b.cash {
             let o = owed_of(kind, *v);
             if !o.is_zero() {
-                debts.push(crate::input::Debt { id: format!("{}:{}", a.account.id, c), kind: named.into(), name: a.account.name(), institution: String::new(), balance: Money::new(o, *c), as_of: b.as_of });
+                debts.push(crate::input::Debt { id: format!("{}:{}", a.account.id, c), kind: named.into(), name: a.account.name(), institution: a.broker_label.clone(), balance: Money::new(o, *c), as_of: b.as_of });
             }
         }
     }
@@ -1167,9 +1188,18 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
     let mut available = Vec::new();
     let mut unavailable = Vec::new();
     let mut unread = Vec::new();
+    let mut held_at = HeldAt::default();
+    for i in &idx {
+        if let Some(a) = inputs.ledger.accounts.get(&positions[*i].account) {
+            HeldAt::note(&mut held_at.holdings, &a.broker_label);
+        }
+    }
     for a in &accounts {
         let Some(b) = inputs.market.brokers.get(&a.account.id) else { continue };
         for (c, v) in &b.cash {
+            if v.is_negative() && is_margin(a) {
+                HeldAt::note(&mut held_at.margin, &a.broker_label);
+            }
             // money borrowed is a margin account's negative cash; another
             // account's (a credit card's balance owed) is a debt, not margin
             let slot = match (v.is_negative(), is_margin(a)) {
@@ -1188,10 +1218,14 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
                     _ => None,
                 };
                 let to = match kind {
-                    Some(AccountKind::Spending) => Some(&mut chequing_by),
+                    Some(AccountKind::Spending) => Some((&mut chequing_by, &mut held_at.chequing_cash)),
                     Some(AccountKind::CreditCard) | Some(AccountKind::LineOfCredit) => None,
-                    _ => Some(&mut invested_by),
+                    _ => Some((&mut invested_by, &mut held_at.invested_cash)),
                 };
+                let to = to.map(|(to, at)| {
+                    HeldAt::note(at, &a.broker_label);
+                    to
+                });
                 if let Some(to) = to {
                     let e = to.entry(*c).or_insert(Ok(Dec::ZERO));
                     if let Ok(total) = e {
@@ -1310,6 +1344,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
         allocation,
         invested_cash,
         chequing_cash,
+        held_at,
         allocation_cash,
         past: None,
     }

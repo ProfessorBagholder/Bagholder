@@ -377,3 +377,66 @@ fn the_days_kept_are_the_days_worked_out_afresh_after_every_change() {
     e.apply(Change::Clock(o.inputs.clock.clone()));
     same(&e, "the day");
 }
+
+/// Each of net worth's rows of the broker's own accounts names where it is
+/// held: a card's, a line of credit's and any account's cash below zero by its
+/// own account's broker, as the person calls it; the holdings, the cash waiting
+/// to be invested, the chequing cash and the margin by the brokers of the
+/// accounts behind each. Every kind of account, each at a broker of its own,
+/// with cash above zero and below; no name is fixed in the code.
+#[test]
+fn each_row_of_the_broker_s_accounts_names_the_broker_it_is_held_at() {
+    use bagholder_core::account::AccountKind;
+    use bagholder_engine::input::BrokerAccount;
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
+    let mut case: Value = serde_json::from_str(&text).unwrap();
+    let mut made = Vec::new();
+    for kind in AccountKind::ALL {
+        for sign in ["", "-"] {
+            let label = format!("{}{}", kind.as_str(), if sign.is_empty() { "-up" } else { "-down" });
+            case["accounts"].as_array_mut().unwrap().push(json!({ "id": label, "kind": kind.as_str() }));
+            made.push((label, *kind, sign));
+        }
+    }
+    let mut b = build(&case);
+    // every account at a broker of its own, by a name no code knows
+    let label_of = |l: &str| format!("Made-up Broker {l}");
+    let ids: Vec<_> = b.inputs.ledger.accounts.keys().copied().collect();
+    for id in ids {
+        let l = b.ids.account_name(id);
+        b.inputs.ledger.accounts.get_mut(&id).unwrap().broker_label = label_of(&l);
+    }
+    let mut e = engine(&mut b);
+    for (l, _, sign) in &made {
+        let id = b.ids.account(l);
+        e.apply(Change::Broker(id, Some(BrokerAccount { cash: BTreeMap::from([(Currency::CAD, Dec::parse(&format!("{sign}100")).unwrap())]), ..BrokerAccount::default() })));
+    }
+    let pf = e.scope(&Filters::default()).portfolio;
+    let labels = |ls: Vec<&str>| -> BTreeSet<String> { ls.into_iter().map(label_of).collect() };
+    let of = |want: &dyn Fn(AccountKind, &str) -> bool| -> BTreeSet<String> { labels(made.iter().filter(|(_, k, s)| want(*k, s)).map(|(l, _, _)| l.as_str()).collect()) };
+    let set = |v: &[String]| -> BTreeSet<String> { v.iter().cloned().collect() };
+    let (_, owed) = pf.owed.clone().expect("owed");
+    // each account's debt by its own account's broker
+    let mut named = BTreeSet::new();
+    for (d, _) in &owed {
+        let id = b.inputs.ledger.accounts.keys().find(|id| d.id.starts_with(&id.to_string())).copied().expect("an account's debt");
+        assert_eq!(d.institution, label_of(&b.ids.account_name(id)), "{}", d.name);
+        named.insert(d.institution.clone());
+    }
+    let named: BTreeSet<String> = named.intersection(&of(&|_, _| true)).cloned().collect();
+    // a card's and a line of credit's balance whichever its sign (in credit
+    // above zero); any other account's cash below zero, a margin account's
+    // being the margin
+    let cards = |k: AccountKind| matches!(k, AccountKind::CreditCard | AccountKind::LineOfCredit);
+    assert_eq!(named, of(&|k, s| cards(k) || (s == "-" && k != AccountKind::Margin)));
+    assert_eq!(set(&pf.held_at.margin), of(&|k, s| s == "-" && k == AccountKind::Margin));
+    assert_eq!(set(&pf.held_at.chequing_cash), of(&|k, s| s.is_empty() && k == AccountKind::Spending));
+    assert_eq!(set(&pf.held_at.invested_cash).intersection(&of(&|_, _| true)).cloned().collect::<BTreeSet<_>>(), of(&|k, s| s.is_empty() && !matches!(k, AccountKind::Spending | AccountKind::CreditCard | AccountKind::LineOfCredit)));
+    // the holdings by the brokers of the accounts holding them
+    let holding: BTreeSet<String> = pf.positions.iter().map(|i| b.inputs.ledger.accounts[&e.figures().positions[*i].account].broker_label.clone()).collect();
+    assert!(!holding.is_empty());
+    assert_eq!(set(&pf.held_at.holdings), holding);
+    for list in [&pf.held_at.holdings, &pf.held_at.invested_cash, &pf.held_at.chequing_cash, &pf.held_at.margin] {
+        assert!(list.iter().all(|l| !l.is_empty()), "{list:?}");
+    }
+}

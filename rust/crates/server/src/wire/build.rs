@@ -763,25 +763,28 @@ fn net_worth(engine: &Engine, pf: &bagholder_engine::scope::Portfolio, filters: 
     let mut liabilities: Vec<(bagholder_engine::input::Debt, Fig<Money>)> = pf.owed.as_ref().map(|(_, each)| each.clone()).unwrap_or_default();
     // what is borrowed on margin: a debt, shown as one, and added back to the
     // investments it was taken out of, so net worth counts it once
+    // each row of the broker's own accounts names where it is held: the
+    // brokers of the accounts behind it, as the person calls each
+    let held_at = |labels: &[String]| labels.join(", ");
     let margin = pf.margin_used.clone().filter(|m| m.as_ref().map_or(true, |m| !m.amount.is_zero()));
     if let Some(m) = &margin {
-        liabilities.insert(0, (bagholder_engine::input::Debt { id: "margin".into(), kind: "Margin".into(), name: "Margin".into(), institution: "Wealthsimple".into(), balance: Money::zero(bagholder_core::Currency::CAD), as_of: None }, m.clone()));
+        liabilities.insert(0, (bagholder_engine::input::Debt { id: "margin".into(), kind: "Margin".into(), name: "Margin".into(), institution: held_at(&pf.held_at.margin), balance: Money::zero(bagholder_core::Currency::CAD), as_of: None }, m.clone()));
     }
     let mut assets: Vec<OwedDebt> = Vec::new();
     // the broker's part, each row a figure the Portfolio shows: the holdings at
     // their market value, the cash waiting to be invested, and a chequing
     // account's balance, which is cash and no investment
-    let wealthsimple = |id: &str, kind: &str, name: &str, v: &Fig<Money>| OwedDebt { id: id.into(), kind: kind.into(), name: name.into(), institution: "Wealthsimple".into(), amount: fig_money(v), as_of: None };
+    let own = |id: &str, kind: &str, name: &str, at: &[String], v: &Fig<Money>| OwedDebt { id: id.into(), kind: kind.into(), name: name.into(), institution: held_at(at), amount: fig_money(v), as_of: None };
     let holdings = pf.market_value.total.clone();
     let worth = |v: &Fig<Money>| v.as_ref().map_or(true, |m| !m.amount.is_zero());
     if !pf.positions.is_empty() && worth(&holdings) {
-        assets.push(wealthsimple("holdings", "", "Holdings", &holdings));
+        assets.push(own("holdings", "", "Holdings", &pf.held_at.holdings, &holdings));
     }
     if worth(&pf.invested_cash) {
-        assets.push(wealthsimple("cash", "", "Uninvested cash", &pf.invested_cash));
+        assets.push(own("cash", "", "Uninvested cash", &pf.held_at.invested_cash, &pf.invested_cash));
     }
     if worth(&pf.chequing_cash) {
-        assets.push(wealthsimple("chequing", "Chequing", "Chequing", &pf.chequing_cash));
+        assets.push(own("chequing", "Chequing", "Chequing", &pf.held_at.chequing_cash, &pf.chequing_cash));
     }
     for (d, cad) in &pf.outside_assets {
         assets.push(row(d, cad));
