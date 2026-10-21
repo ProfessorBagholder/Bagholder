@@ -3,7 +3,7 @@
 //! update button. For a failure planted in each such step, the built server is
 //! started on a home of its own: it listens, `/` serves the page, and the header
 //! names the failure. And a start opens no store but the book and the market
-//! cache (`docs/plans/remove-the-earlier-app.md`, Part 2).
+//! cache (brief 75, test 9).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -161,17 +161,19 @@ fn a_market_cache_this_build_cannot_open_is_said_and_the_server_stays_up() {
 /// the system calls that open one, read from the trace `strace` keeps of the
 /// built server. A store is a file SQLite keeps (a database, its write-ahead log,
 /// its shared memory, its journal); each must be the book's or the market cache's.
-/// An earlier app's database left beside them, in the data folder and in the
-/// folder an earlier version kept its data in, is there and never opened.
+/// Any other SQLite file beside them, in the data folder and in the user's
+/// `.bagholder` folder, is never opened and is left byte for byte as it was.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_start_opens_no_store_but_the_book_and_the_market_cache() {
+fn a_start_opens_only_the_book_and_the_market_cache() {
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let earlier = ["earlier.db", "store.db", "old.sqlite"];
+    let unrelated = ["unrelated.db", "store.db", "other.sqlite"];
+    let mut bytes = Vec::new();
     for dir in [home.path().to_path_buf(), user.path().join(".bagholder")] {
         std::fs::create_dir_all(&dir).unwrap();
-        for name in earlier {
-            rusqlite::Connection::open(dir.join(name)).unwrap().execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);").unwrap();
+        for name in unrelated {
+            rusqlite::Connection::open(dir.join(name)).unwrap().execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('k', 'v');").unwrap();
+            bytes.push((dir.join(name), std::fs::read(dir.join(name)).unwrap()));
         }
     }
     let trace = user.path().join("opened.trace");
@@ -197,8 +199,14 @@ fn a_start_opens_no_store_but_the_book_and_the_market_cache() {
     let allowed: Vec<String> = [&book, &cache].iter().flat_map(|f| ["", "-wal", "-shm", "-journal"].map(|s| format!("{f}{s}"))).collect();
     let others: Vec<&String> = opened.iter().filter(|p| store(p) && !allowed.contains(p)).collect();
     assert!(others.is_empty(), "a start opened a store that is neither the book nor the market cache: {others:?}");
+    for (path, was) in &bytes {
+        assert_eq!(&std::fs::read(path).unwrap(), was, "{} is byte for byte as it was", path.display());
+    }
+    // the start made only the book, the cache, their journals and snapshots
+    let made: Vec<String> = std::fs::read_dir(home.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| store(n) && !unrelated.contains(&n.as_str())).collect();
+    assert!(made.iter().all(|n| n.starts_with("book.db") || n.starts_with("market.db")), "{made:?}");
     for dir in [home.path().to_path_buf(), user.path().join(".bagholder")] {
-        for name in earlier {
+        for name in unrelated {
             assert!(!opened.iter().any(|p| p.ends_with(&format!("/{name}"))), "{name} in {} was opened", dir.display());
             assert!(!dir.join(format!("{name}-shm")).exists() && !dir.join(format!("{name}-journal")).exists(), "{name} was read by SQLite");
         }

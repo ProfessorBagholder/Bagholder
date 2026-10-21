@@ -219,7 +219,7 @@ fn the_words_the_tables_allow_are_exactly_the_states_the_machines_have() {
 }
 
 #[test]
-fn an_order_and_a_bracket_carried_over_stand_where_the_earlier_app_had_them_and_read_back() {
+fn an_order_and_a_bracket_found_already_placed_stand_where_they_were_and_read_back() {
     let (_d, b) = book();
     let (was, at) = (t("2026-09-01T14:00:00Z"), t("2026-09-28T14:00:00Z"));
     let stop = Some(StopLeg { level: d("95"), trail: Some(Trail::Amount(d("2"))), high: Some(d("97")) });

@@ -335,7 +335,9 @@ fn migration_6_carries_every_filing_it_can_attribute_with_its_read_text() {
         row("NOPE", "sedar:9", "SEDAR+", "", "", None, None, false);
         row("NOPE", "sec:9", "SEC", "", "", None, None, false);
     }
-    let (conn, _) = migrate::open(&SCHEMA, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+    // as migration 6 left it: migration 9 drops the tickers it kept
+    let six: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..6] }));
+    let (conn, _) = migrate::open(six, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
     let rows: Vec<(String, String, String, Option<String>)> = conn
         .prepare("SELECT source, id, filer, summary FROM filings ORDER BY source, id")
         .unwrap()
@@ -430,30 +432,4 @@ fn migration_6_keeps_the_most_complete_read_of_a_document_whole() {
     }
     let (conn, _) = migrate::open(&SCHEMA, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
     the_most_complete_kept(&conn);
-}
-
-/// An earlier store's filings are carried by the same order: the most complete of
-/// disagreeing reads of a document, whole.
-#[test]
-fn an_earlier_stores_filings_carry_the_most_complete_read_of_a_document_whole() {
-    let dir = tempfile::tempdir().unwrap();
-    let old = dir.path().join("old.db");
-    let five: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..5] }));
-    drop(migrate::open(five, &old, "test", t("2026-09-24T00:00:00Z")).unwrap());
-    let (conn, _) = migrate::open(&SCHEMA, &dir.path().join("market.db"), "test", t("2026-09-24T00:00:00Z")).unwrap();
-    conn.execute("ATTACH DATABASE ? AS old", [old.to_string_lossy()]).unwrap();
-    store_disagreeing(&conn, "old");
-    let (carried, dropped) = bagholder_sources::cache::carry_filings(&conn, "old").unwrap();
-    assert_eq!((carried, dropped), (4, 0));
-    the_most_complete_kept(&conn);
-}
-
-/// Migration 6 attributes filers by the one rule `carry_filings` uses for an
-/// earlier store, so a filing carries to the same filer whichever way it came.
-#[test]
-fn migration_6_attributes_filers_by_the_one_rule() {
-    let sql = MIGRATIONS[5].sql;
-    let rule = bagholder_sources::cache::FILER_OF_ROW.replace("{meta}", "meta");
-    let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(squash(sql).contains(&squash(&rule)), "migration 6 attributes filers by FILER_OF_ROW");
 }

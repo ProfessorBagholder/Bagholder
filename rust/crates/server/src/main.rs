@@ -125,6 +125,9 @@ pub(crate) fn open_figures(a: &std::sync::Arc<app::App>) {
         let said = match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
             Ok(f) => {
                 figures_opened(a, f);
+                // a check of the cache at open, so a mended cache is said mended
+                // (a failure it finds, it says itself)
+                let _checked = feeds::conn(a);
                 String::new()
             }
             // said as every borrow of the cache says it, in the pool's own words
@@ -165,17 +168,6 @@ fn figures_opened(a: &std::sync::Arc<app::App>, f: figures::Figures) {
         log(&format!("bagholder: {e}"));
         let mut st = a.state.lock().unwrap();
         st.start_error = [st.start_error.as_str(), e.as_str()].into_iter().filter(|s| !s.is_empty()).map(status::sentence).collect::<Vec<_>>().join(" ");
-    }
-    // the book's told marks, carried once to the scopes a listing and a filer are kept
-    // under now that the cache names each ticker's filers; one that fails tells nothing
-    // twice (a scope with no mark sets one without telling) and is tried at the next start
-    if let Ok(cache) = feeds::conn(a) {
-        let carried = a.figures.get().ok_or_else(|| "the book is not open".to_string()).and_then(|f| f.book()).and_then(|b| notify::carry_told_by_listing(&b, &cache, bagholder_core::jiff::Timestamp::now()));
-        match carried {
-            Ok(Some((events, marks))) => log(&format!("bagholder: {events} told events and {marks} marks carried to the scopes each listing and filer is kept under")),
-            Ok(None) => {}
-            Err(e) => feeds::went(a, "told-by-listing", Err::<(), _>(format!("What was told could not be carried to each listing's own scope: {e}"))).unwrap_or_default(),
-        }
     }
 }
 

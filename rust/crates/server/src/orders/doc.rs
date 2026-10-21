@@ -362,8 +362,8 @@ pub fn legs(b: &Bracket, orders: &[StoredOrder], per: Option<Dec>) -> Vec<Leg> {
     out
 }
 
-/// When a bracket armed, from its log; one carried over from the earlier app already
-/// armed counts from when it was created.
+/// When a bracket armed, from its log; one found already placed and armed counts
+/// from when it was created.
 fn armed_at(book: &Book, sb: &StoredBracket) -> Result<Option<jiff::Timestamp>, String> {
     let log = book.bracket_log(&sb.place.id).map_err(|e| e.to_string())?;
     if let Some(BracketEvent::Imported { phase, .. }) = log.first().map(|l| &l.event) {

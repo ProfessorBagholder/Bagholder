@@ -27,7 +27,7 @@ enum Keyed {
 /// Every table the market cache holds, and what it is keyed by. A table not
 /// here fails the test until it is placed in one of these, so a new table keyed
 /// by a ticker cannot be added without saying so.
-const TABLES: [(&str, Keyed); 28] = [
+const TABLES: [(&str, Keyed); 27] = [
     ("price_history", Keyed::Listing),
     ("history_fetches", Keyed::Listing),
     ("price_bars", Keyed::Listing),
@@ -46,7 +46,6 @@ const TABLES: [(&str, Keyed); 28] = [
     ("reads", Keyed::Instrument),
     ("read_failures", Keyed::Allowed("a read that failed, by what it was of: a listing by its key (`ListingKey`), or the TSX's interlisted list as a whole")),
     ("exposures", Keyed::Allowed("a broker's security id, or a share's or fund's listing built by `venues::share_key` and `fund_key`")),
-    ("filings_carried", Keyed::Allowed("the earlier store's ticker to filer, read once to carry the told marks; nothing reads market data by it")),
     ("option_chains", Keyed::Allowed("a US option root: the US market lists one underlying per symbol, which is its `US` listing")),
     ("universes", Keyed::Allowed("a whole index's constituents, as the index's own source lists them")),
     ("gauges", Keyed::Allowed("a market-wide gauge, of no listing")),
@@ -117,12 +116,11 @@ fn test_every_market_cache_table_is_keyed_by_its_listing_its_filer_or_its_instru
     }
 }
 
-/// The meta keys a source keeps under its own name for one listing, an earlier
-/// store's, or no listing's, with the reason each may stand.
-const META_ALLOWED: [(&str, &str); 3] = [
+/// The meta keys a source keeps under its own name for one listing, or no
+/// listing's, with the reason each may stand.
+const META_ALLOWED: [(&str, &str); 2] = [
     ("yahoo_miss", "Yahoo's own form for one listing, which names its venue (`ENB.TO`)"),
     ("coinbase_product", "a coin pair, which is one coin's market"),
-    ("sedar_profile", "an earlier store's, read once by migration 6 to attribute its filings"),
 ];
 
 /// Every `.rs` file under the workspace's crates, less tests and generated code.

@@ -100,7 +100,7 @@ impl Book {
         self.insert_order(o, &OrderEvent::Written { dry }, asker, at, at)
     }
 
-    /// An order as the book holds one carried from the earlier app: its log
+    /// An order as the book holds one the app found already placed: its log
     /// starting with `first` (an `Imported` event), written when it was. Nothing
     /// writes one now; a test writes one to read it as a book holding one does.
     #[cfg(feature = "oracles")]
@@ -302,7 +302,7 @@ impl Book {
         self.insert_bracket(place, created, asker, at, at)
     }
 
-    /// A bracket as the book holds one carried from the earlier app: its log
+    /// A bracket as the book holds one the app found already placed: its log
     /// starting with `first` (an `Imported` event), created when it was. Nothing
     /// writes one now; a test writes one to read it as a book holding one does.
     #[cfg(feature = "oracles")]

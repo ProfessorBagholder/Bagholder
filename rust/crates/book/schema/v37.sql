@@ -1,0 +1,965 @@
+-- user_version 37
+CREATE INDEX account_refs_account ON account_refs (account_id);
+CREATE INDEX account_refs_value ON account_refs (value);
+CREATE INDEX account_values_account ON account_values (account_id, first_ns, first_seq);
+CREATE INDEX activity_reads_complete ON activity_reads (account_id, complete, at_ns);
+CREATE INDEX adjustments_applies ON adjustments (applies_record, applies_leg);
+CREATE INDEX brackets_live ON brackets(phase) WHERE phase <> 'ended';
+CREATE INDEX broker_reads_part ON broker_reads (connection_id, part, at_ns);
+CREATE INDEX buying_power_account ON buying_power (account_id, first_ns, first_seq);
+CREATE INDEX declared_distributions_read ON declared_distributions (read_id);
+CREATE INDEX declared_reads_instrument ON declared_reads (instrument_id, read_at);
+CREATE INDEX fx_reads_currency ON fx_reads (currency, first_day);
+CREATE INDEX instrument_joins_into ON instrument_joins (into_id);
+CREATE INDEX instrument_refs_instrument ON instrument_refs (instrument_id);
+CREATE INDEX instrument_routes_value ON instrument_routes (scheme, value);
+CREATE INDEX instrument_sightings_instrument ON instrument_sightings (instrument_id, day);
+CREATE INDEX instrument_sightings_named ON instrument_sightings (instrument_id, day, symbol) WHERE name IS NOT NULL;
+CREATE INDEX instrument_sightings_newest ON instrument_sightings (instrument_id, day, symbol);
+CREATE INDEX instrument_sightings_silent ON instrument_sightings (instrument_id, day, symbol) WHERE venue_mic IS NULL AND venue_name IS NULL;
+CREATE INDEX instrument_sightings_stating ON instrument_sightings (instrument_id, day, symbol) WHERE venue_mic IS NOT NULL OR venue_name IS NOT NULL;
+CREATE INDEX instrument_sightings_venue_named ON instrument_sightings (instrument_id, day, symbol) WHERE venue_name IS NOT NULL;
+CREATE INDEX link_records_record ON link_records (record_id);
+CREATE INDEX names_due_instrument ON names_due (instrument_id);
+CREATE INDEX option_terms_underlying ON option_terms (underlying_id);
+CREATE INDEX orders_by_bracket ON orders(bracket_id, role) WHERE bracket_id IS NOT NULL;
+CREATE INDEX orders_by_broker_id ON orders (broker_id) WHERE broker_id IS NOT NULL;
+CREATE INDEX orders_by_created ON orders(created_at);
+CREATE INDEX orders_in_flight ON orders(state) WHERE state IN ('sending','unconfirmed','pending','partly-filled','cancelling');
+CREATE INDEX record_holds_account ON record_holds (account_id);
+CREATE INDEX record_orders_order ON record_orders (order_id);
+CREATE INDEX record_problems_record ON record_problems (record_id);
+CREATE INDEX record_refs_record ON record_refs (record_id);
+CREATE INDEX security_standings_listing ON security_standings (standing, symbol, venue_mic);
+CREATE UNIQUE INDEX source_records_key ON source_records (COALESCE(connection_id, ''), source, source_key);
+CREATE INDEX statements_cash ON statements (account_id, kind, first_ns, first_seq);
+CREATE INDEX statements_units ON statements (account_id, kind, as_of_day);
+CREATE INDEX told_at ON told (at);
+CREATE UNIQUE INDEX trades_anchor ON trades (anchor_record, anchor_leg, anchor_instrument) WHERE anchor_record IS NOT NULL;
+CREATE INDEX trades_anchor_instrument ON trades (anchor_instrument) WHERE anchor_instrument IS NOT NULL;
+CREATE INDEX transactions_account ON transactions (account_id, trade_date);
+CREATE INDEX transactions_instrument ON transactions (instrument_id);
+CREATE INDEX transfer_links_in ON transfer_links (in_record);
+CREATE TABLE account_days (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    day TEXT NOT NULL,
+    net_value TEXT NOT NULL,
+    net_deposits TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    PRIMARY KEY (account_id, day, read_id)
+) STRICT;
+CREATE TABLE account_links (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    linked_to TEXT NOT NULL REFERENCES accounts(id),
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    PRIMARY KEY (account_id, linked_to)
+) STRICT;
+CREATE TABLE account_refs (
+    scheme TEXT NOT NULL,
+    value TEXT NOT NULL,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    PRIMARY KEY (scheme, value)
+) STRICT;
+CREATE TABLE "account_values" (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    -- the first moment it was stated
+    stated_at TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    first_ns INTEGER NOT NULL,
+    first_seq INTEGER NOT NULL,
+    last_ns INTEGER NOT NULL,
+    last_seq INTEGER NOT NULL,
+    last_read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    CHECK (first_ns < last_ns OR (first_ns = last_ns AND first_seq <= last_seq))
+) STRICT;
+CREATE TABLE accounts (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL REFERENCES broker_connections(id),
+    kind TEXT,
+    registration TEXT,
+    managed INTEGER CHECK (managed IN (0, 1)),
+    joint INTEGER CHECK (joint IN (0, 1)),
+    unrecognised_type TEXT,
+    status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+    nickname TEXT,
+    created_at TEXT NOT NULL,
+    CHECK ((kind IS NULL) = (unrecognised_type IS NOT NULL)),
+    CHECK ((kind IS NULL) = (registration IS NULL)),
+    CHECK ((kind IS NULL) = (managed IS NULL)),
+    CHECK ((kind IS NULL) = (joint IS NULL))
+) STRICT;
+CREATE TABLE activity_reads (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    read_at TEXT NOT NULL,
+    complete INTEGER NOT NULL CHECK (complete IN (0, 1)), at_ns INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, read_at)
+) STRICT;
+CREATE TABLE adjustment_legs (
+    record_id TEXT NOT NULL,
+    leg TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    from_instrument TEXT REFERENCES instruments(id),
+    to_instrument TEXT REFERENCES instruments(id),
+    units_per_unit TEXT,
+    cost_share TEXT,
+    cash_per_unit TEXT,
+    cash_currency TEXT,
+    cost TEXT,
+    cost_currency TEXT,
+    acquired TEXT,
+    PRIMARY KEY (record_id, leg, position),
+    FOREIGN KEY (record_id, leg) REFERENCES adjustments(record_id, leg),
+    CHECK ((cash_per_unit IS NULL) = (cash_currency IS NULL)),
+    CHECK ((cost IS NULL) = (cost_currency IS NULL)),
+    CHECK (from_instrument IS NOT NULL OR to_instrument IS NOT NULL)
+) STRICT;
+CREATE TABLE adjustments (
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    leg TEXT NOT NULL,
+    applies_record TEXT NOT NULL,
+    applies_leg TEXT NOT NULL,
+    PRIMARY KEY (record_id, leg)
+) STRICT;
+CREATE TABLE bank_holidays (
+    day TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source TEXT NOT NULL,
+    received_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE bracket_events (
+    bracket_id TEXT NOT NULL REFERENCES brackets(id),
+    seq INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    asker TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL,
+    refused TEXT,
+    PRIMARY KEY (bracket_id, seq)
+) STRICT;
+CREATE TABLE "brackets" (
+    id TEXT PRIMARY KEY,
+    -- where its exits trade: the broker's own ids, as they are sent
+    broker TEXT NOT NULL,
+    broker_account TEXT NOT NULL,
+    broker_security TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    -- the fold of its events
+    phase TEXT NOT NULL CHECK (phase IN ('waiting','guarding','to-target','target','back-to-stop','to-market','firing','closing-for-sale','selling','closing','halted','ended')),
+    updated_at TEXT NOT NULL
+, venue_mic TEXT, venue_name TEXT) STRICT;
+CREATE TABLE broker_connections (
+    id TEXT PRIMARY KEY,
+    broker TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE broker_reads (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL REFERENCES broker_connections(id),
+    part TEXT NOT NULL,
+    at TEXT NOT NULL
+, at_ns INTEGER NOT NULL DEFAULT 0) STRICT;
+CREATE TABLE "buying_power" (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    -- the first moment it was stated
+    stated_at TEXT NOT NULL,
+    amount TEXT,
+    currency TEXT,
+    unavailable TEXT,
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    first_ns INTEGER NOT NULL,
+    first_seq INTEGER NOT NULL,
+    last_ns INTEGER NOT NULL,
+    last_seq INTEGER NOT NULL,
+    last_read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    CHECK ((amount IS NULL) = (currency IS NULL)),
+    CHECK ((amount IS NULL) <> (unavailable IS NULL)),
+    CHECK (first_ns < last_ns OR (first_ns = last_ns AND first_seq <= last_seq))
+) STRICT;
+CREATE TABLE "declared_distributions" (
+    read_id INTEGER NOT NULL REFERENCES declared_reads(id),
+    ex_date TEXT NOT NULL,
+    record_date TEXT,
+    pay_date TEXT,
+    amount TEXT NOT NULL,
+    reinvested TEXT,
+    currency TEXT NOT NULL CHECK (length(currency) = 3)
+, form TEXT NOT NULL DEFAULT 'stated' CHECK (form IN ('stated', 'unstated'))) STRICT;
+CREATE TABLE declared_reads (
+    id INTEGER PRIMARY KEY,
+    instrument_id TEXT NOT NULL REFERENCES instruments(id),
+    source TEXT NOT NULL,
+    read_at TEXT NOT NULL
+, role TEXT NOT NULL DEFAULT 'payer' CHECK (role IN ('payer', 'market'))) STRICT;
+CREATE TABLE fx_rates (
+    currency TEXT NOT NULL CHECK (length(currency) = 3),
+    day TEXT NOT NULL,
+    rate TEXT NOT NULL,
+    source TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    PRIMARY KEY (currency, day, rate)
+) STRICT;
+CREATE TABLE fx_reads (
+    currency TEXT NOT NULL CHECK (length(currency) = 3),
+    first_day TEXT NOT NULL,
+    last_day TEXT NOT NULL,
+    source TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    CHECK (first_day <= last_day)
+) STRICT;
+CREATE TABLE fx_series (
+    currency TEXT NOT NULL CHECK (length(currency) = 3),
+    source TEXT NOT NULL,
+    first_day TEXT NOT NULL,
+    last_day TEXT NOT NULL,
+    received_at TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0 CHECK (ended IN (0, 1)),
+    PRIMARY KEY (currency, source),
+    CHECK (first_day <= last_day)
+) STRICT;
+CREATE TABLE instrument_joins (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
+    into_id TEXT NOT NULL REFERENCES instruments(id),
+    CHECK (instrument_id <> into_id)
+) STRICT;
+CREATE TABLE instrument_names (
+    instrument_id TEXT NOT NULL,
+    first_day TEXT NOT NULL,
+    first_symbol TEXT NOT NULL,
+    first_sighting INTEGER NOT NULL,
+    last_day TEXT NOT NULL,
+    last_symbol TEXT NOT NULL,
+    last_sighting INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    venue_mic TEXT,
+    venue_name TEXT,
+    name TEXT,
+    source TEXT NOT NULL,
+    PRIMARY KEY (instrument_id, first_day, first_symbol, first_sighting)
+) STRICT;
+CREATE TABLE instrument_refs (
+    scheme TEXT NOT NULL,
+    value TEXT NOT NULL,
+    instrument_id TEXT NOT NULL REFERENCES instruments(id),
+    PRIMARY KEY (scheme, value)
+) STRICT;
+CREATE TABLE instrument_routes (
+    instrument_id TEXT NOT NULL REFERENCES instruments(id),
+    scheme TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (instrument_id, scheme, value)
+) STRICT;
+CREATE TABLE instrument_sightings (
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    leg TEXT NOT NULL,
+    instrument_id TEXT NOT NULL REFERENCES instruments(id),
+    symbol TEXT NOT NULL,
+    venue_mic TEXT,
+    venue_name TEXT,
+    name TEXT,
+    day TEXT NOT NULL,
+    PRIMARY KEY (record_id, leg, instrument_id)
+) STRICT;
+CREATE TABLE instruments (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    issuer_id TEXT REFERENCES issuers(id),
+    created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE instruments_described (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
+    source TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    venue_mic TEXT,
+    venue_name TEXT,
+    name TEXT,
+    day TEXT NOT NULL
+) STRICT;
+CREATE TABLE issuers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE journal (
+    id INTEGER PRIMARY KEY,
+    trade_id TEXT UNIQUE REFERENCES trades(id),
+    group_id TEXT UNIQUE REFERENCES trade_groups(id),
+    thesis TEXT NOT NULL,
+    grade TEXT CHECK (grade IN ('A', 'B', 'C', 'F')),
+    updated_at TEXT NOT NULL,
+    CHECK ((trade_id IS NULL) <> (group_id IS NULL))
+) STRICT;
+CREATE TABLE journal_tags (
+    journal_id INTEGER NOT NULL REFERENCES journal(id),
+    position INTEGER NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (journal_id, position)
+) STRICT;
+CREATE TABLE ledger_changes (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('record', 'instrument', 'account', 'trade', 'group', 'adjustment')),
+    key TEXT NOT NULL
+) STRICT;
+CREATE TABLE link_records (
+    link_id TEXT NOT NULL REFERENCES links(id),
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    side TEXT NOT NULL CHECK (side IN ('from', 'to')),
+    PRIMARY KEY (link_id, record_id)
+) STRICT;
+CREATE TABLE links (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('supersedes')),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE listings_named (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
+    symbol TEXT NOT NULL,
+    venue_mic TEXT,
+    venue_name TEXT,
+    name TEXT,
+    named_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE margin_backing (
+    account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+    margin_account_id TEXT NOT NULL REFERENCES accounts(id),
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    CHECK (account_id <> margin_account_id)
+) STRICT;
+CREATE TABLE monthly_statements (
+    connection_id TEXT NOT NULL REFERENCES broker_connections(id),
+    account_key TEXT NOT NULL,
+    month TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    PRIMARY KEY (connection_id, account_key, month)
+) STRICT;
+CREATE TABLE names_due (
+    instrument_id TEXT NOT NULL,
+    day TEXT,
+    symbol TEXT,
+    sighting INTEGER
+) STRICT;
+CREATE TABLE notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    body TEXT,
+    extra TEXT,
+    seen_at TEXT,
+    read_at TEXT
+) STRICT;
+CREATE TABLE option_terms (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
+    underlying_id TEXT NOT NULL REFERENCES instruments(id),
+    expiry TEXT NOT NULL,
+    strike TEXT NOT NULL,
+    option_right TEXT NOT NULL CHECK (option_right IN ('call', 'put')),
+    multiplier TEXT,
+    source TEXT NOT NULL
+) STRICT;
+CREATE TABLE order_events (
+    order_id TEXT NOT NULL REFERENCES orders(id),
+    seq INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    asker TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL,
+    refused TEXT,
+    PRIMARY KEY (order_id, seq)
+) STRICT;
+CREATE TABLE orders (
+    id TEXT PRIMARY KEY,
+    broker TEXT NOT NULL,
+    broker_account TEXT NOT NULL,
+    broker_security TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('buy','sell')),
+    order_type TEXT NOT NULL CHECK (order_type IN ('market','limit','stop','stop-limit')),
+    quantity TEXT NOT NULL,
+    limit_price TEXT,
+    stop_price TEXT,
+    time_in_force TEXT NOT NULL CHECK (time_in_force IN ('day','until-cancel')),
+    -- the bracket it is the entry or an exit of, and which
+    bracket_id TEXT REFERENCES brackets(id),
+    role TEXT CHECK (role IN ('entry','stop','target','market')),
+    -- the request as it was sent
+    request TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    -- the fold of its events
+    state TEXT NOT NULL CHECK (state IN ('dry','sending','unconfirmed','pending','partly-filled','filled','cancelling','cancelled','expired','rejected','failed')),
+    broker_id TEXT,
+    filled TEXT NOT NULL,
+    average TEXT,
+    why TEXT,
+    code TEXT,
+    -- what the broker last stated of it: its price, quantity and when it lapses
+    stated_price TEXT,
+    stated_quantity TEXT,
+    expires_at TEXT,
+    updated_at TEXT NOT NULL, venue_mic TEXT, venue_name TEXT,
+    CHECK ((bracket_id IS NULL) = (role IS NULL))
+) STRICT;
+CREATE TABLE outside_days (
+    entity_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (entity_id, day)
+) STRICT;
+CREATE TABLE outside_debts (
+    connection_id TEXT NOT NULL REFERENCES broker_connections(id),
+    read_at TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    institution TEXT NOT NULL,
+    last4 TEXT,
+    balance TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    as_of TEXT,
+    PRIMARY KEY (connection_id, read_at, entity_id)
+) STRICT;
+CREATE TABLE push_subscriptions (
+    endpoint TEXT PRIMARY KEY NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    made_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE record_holds (
+    record_id TEXT PRIMARY KEY REFERENCES source_records(id),
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    kind TEXT NOT NULL CHECK (kind IN ('buy', 'put-sale', 'withdrawal')),
+    currency TEXT,
+    instrument_id TEXT REFERENCES instruments(id),
+    amount TEXT,
+    quantity TEXT,
+    premium TEXT
+) STRICT;
+CREATE TABLE record_orders (
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    order_id TEXT NOT NULL,
+    PRIMARY KEY (record_id, order_id)
+) STRICT;
+CREATE TABLE record_problems (
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    code TEXT NOT NULL,
+    detail TEXT NOT NULL
+) STRICT;
+CREATE TABLE record_refs (
+    scheme TEXT NOT NULL,
+    value TEXT NOT NULL,
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    PRIMARY KEY (scheme, value, record_id)
+) STRICT;
+CREATE TABLE record_revisions (
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    received_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (record_id, revision)
+) STRICT;
+CREATE TABLE repayment_answers (
+    payee_key TEXT PRIMARY KEY NOT NULL,
+    debt_id TEXT,
+    answered_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE schema_migrations (
+                        number INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        applied_at TEXT NOT NULL,
+                        app_version TEXT NOT NULL
+                     ) STRICT;
+CREATE TABLE security_standings (
+    scheme TEXT NOT NULL,
+    value TEXT NOT NULL,
+    standing TEXT NOT NULL CHECK (standing IN ('live', 'retired-by-event', 'delisted')),
+    kind TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    symbol TEXT,
+    venue_mic TEXT,
+    PRIMARY KEY (scheme, value, standing)
+) STRICT;
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
+    set_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE source_records (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT REFERENCES broker_connections(id),
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('live', 'superseded', 'removed')),
+    -- the version of the source's mapping its transactions and problems came from
+    derived_version INTEGER NOT NULL,
+    first_received_at TEXT NOT NULL,
+    -- when its state last changed: its arrival, or its replacement or removal
+    state_changed_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE stated_frequencies (
+    instrument_id TEXT NOT NULL REFERENCES instruments(id),
+    per_year INTEGER NOT NULL CHECK (per_year > 0),
+    source TEXT NOT NULL,
+    stated_at TEXT,
+    received_at TEXT NOT NULL,
+    PRIMARY KEY (instrument_id, received_at)
+) STRICT;
+CREATE TABLE statement_cash (
+    statement_id TEXT NOT NULL REFERENCES statements(id),
+    currency TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    PRIMARY KEY (statement_id, currency)
+) STRICT;
+CREATE TABLE statement_holds (
+    statement_id TEXT NOT NULL REFERENCES statements(id),
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    kind TEXT NOT NULL CHECK (kind IN ('buy', 'put-sale', 'withdrawal')),
+    currency TEXT,
+    instrument_id TEXT REFERENCES instruments(id),
+    amount TEXT,
+    quantity TEXT,
+    premium TEXT,
+    PRIMARY KEY (statement_id, record_id)
+) STRICT;
+CREATE TABLE statement_units (
+    statement_id TEXT NOT NULL REFERENCES statements(id),
+    instrument_id TEXT NOT NULL REFERENCES instruments(id),
+    quantity TEXT NOT NULL,
+    -- the broker's own book value for the position, kept as its statement,
+    -- never taken as a cost (brief 07 §5)
+    book_value TEXT,
+    book_value_currency TEXT, value TEXT, value_currency TEXT,
+    PRIMARY KEY (statement_id, instrument_id),
+    CHECK ((book_value IS NULL) = (book_value_currency IS NULL))
+) STRICT;
+CREATE TABLE "statements" (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    kind TEXT NOT NULL CHECK (kind IN ('cash', 'units')),
+    -- the first moment the cash was stated, for cash
+    stated_at TEXT,
+    -- the day the units are stated as of, for units
+    as_of_day TEXT,
+    -- the read that first stated it
+    read_id TEXT NOT NULL REFERENCES broker_reads(id),
+    -- for cash: the first and last moment it was stated (the read's instant in
+    -- nanoseconds, then the read's place among the reads), and the read that last
+    -- stated it
+    first_ns INTEGER,
+    first_seq INTEGER,
+    last_ns INTEGER,
+    last_seq INTEGER,
+    last_read_id TEXT REFERENCES broker_reads(id),
+    CHECK ((kind = 'cash') = (stated_at IS NOT NULL)),
+    CHECK ((kind = 'units') = (as_of_day IS NOT NULL)),
+    CHECK ((kind = 'cash') = (first_ns IS NOT NULL)),
+    CHECK ((kind = 'cash') = (first_seq IS NOT NULL)),
+    CHECK ((kind = 'cash') = (last_ns IS NOT NULL)),
+    CHECK ((kind = 'cash') = (last_seq IS NOT NULL)),
+    CHECK ((kind = 'cash') = (last_read_id IS NOT NULL)),
+    CHECK (first_ns < last_ns OR (first_ns = last_ns AND first_seq <= last_seq))
+) STRICT;
+CREATE TABLE successions_due (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    changed INTEGER NOT NULL,
+    settled INTEGER NOT NULL
+) STRICT;
+CREATE TABLE tiles (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
+    position INTEGER NOT NULL UNIQUE
+) STRICT;
+CREATE TABLE told (
+    scope TEXT NOT NULL,
+    event TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (scope, event)
+) STRICT;
+CREATE TABLE trade_group_members (
+    group_id TEXT NOT NULL REFERENCES trade_groups(id),
+    position INTEGER NOT NULL,
+    trade_id TEXT NOT NULL REFERENCES trades(id),
+    PRIMARY KEY (group_id, position),
+    UNIQUE (group_id, trade_id)
+) STRICT;
+CREATE TABLE trade_groups (
+    id TEXT PRIMARY KEY,
+    locked INTEGER NOT NULL CHECK (locked IN (0, 1)),
+    created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE trades (
+    id TEXT PRIMARY KEY,
+    anchor_record TEXT,
+    anchor_leg TEXT,
+    orphaned_reason TEXT,
+    created_at TEXT NOT NULL, anchor_instrument TEXT REFERENCES instruments(id),
+    CHECK ((anchor_record IS NULL) = (anchor_leg IS NULL)),
+    CHECK ((anchor_record IS NULL) = (orphaned_reason IS NOT NULL))
+) STRICT;
+CREATE TABLE transactions (
+    record_id TEXT NOT NULL REFERENCES source_records(id),
+    leg TEXT NOT NULL,
+    mapping_version INTEGER NOT NULL,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    occurred_at TEXT,
+    trade_date TEXT NOT NULL,
+    settle_date TEXT,
+    kind TEXT NOT NULL,
+    effect TEXT CHECK (effect IN ('open', 'close')),
+    instrument_id TEXT REFERENCES instruments(id),
+    quantity TEXT,
+    price TEXT,
+    price_currency TEXT,
+    cash TEXT,
+    cash_currency TEXT,
+    fee TEXT,
+    fee_currency TEXT,
+    fx_rate TEXT, paid_on TEXT, value TEXT, value_currency TEXT,
+    PRIMARY KEY (record_id, leg),
+    CHECK ((price IS NULL) = (price_currency IS NULL)),
+    CHECK ((cash IS NULL) = (cash_currency IS NULL)),
+    CHECK ((fee IS NULL) = (fee_currency IS NULL)),
+    CHECK (quantity IS NULL OR instrument_id IS NOT NULL),
+    CHECK (price IS NULL OR quantity IS NOT NULL)
+) STRICT;
+CREATE TABLE transfer_links (
+    out_record TEXT NOT NULL REFERENCES source_records(id),
+    out_leg TEXT NOT NULL,
+    in_record TEXT NOT NULL REFERENCES source_records(id),
+    in_leg TEXT NOT NULL,
+    PRIMARY KEY (out_record, out_leg)
+) STRICT;
+CREATE TABLE watched (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(id),
+    added_at TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER account_refs_changed_delete AFTER DELETE ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER account_refs_changed_insert AFTER INSERT ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.account_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER account_refs_changed_update AFTER UPDATE ON account_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.account_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.account_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER accounts_changed_delete AFTER DELETE ON accounts BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER accounts_changed_insert AFTER INSERT ON accounts BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER accounts_changed_update AFTER UPDATE ON accounts BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER adjustment_legs_changed_delete AFTER DELETE ON adjustment_legs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT applies_record || '/' || applies_leg AS k FROM adjustments WHERE record_id = OLD.record_id AND leg = OLD.leg) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER adjustment_legs_changed_insert AFTER INSERT ON adjustment_legs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT applies_record || '/' || applies_leg AS k FROM adjustments WHERE record_id = NEW.record_id AND leg = NEW.leg) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER adjustment_legs_changed_update AFTER UPDATE ON adjustment_legs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT applies_record || '/' || applies_leg AS k FROM adjustments WHERE record_id = OLD.record_id AND leg = OLD.leg) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT applies_record || '/' || applies_leg AS k FROM adjustments WHERE record_id = NEW.record_id AND leg = NEW.leg) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER adjustments_changed_delete AFTER DELETE ON adjustments BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT OLD.applies_record || '/' || OLD.applies_leg AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER adjustments_changed_insert AFTER INSERT ON adjustments BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT NEW.applies_record || '/' || NEW.applies_leg AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER adjustments_changed_update AFTER UPDATE ON adjustments BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT OLD.applies_record || '/' || OLD.applies_leg AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT NEW.applies_record || '/' || NEW.applies_leg AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER broker_connections_changed_delete AFTER DELETE ON broker_connections BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT id AS k FROM accounts WHERE connection_id = OLD.id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER broker_connections_changed_insert AFTER INSERT ON broker_connections BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT id AS k FROM accounts WHERE connection_id = NEW.id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER broker_connections_changed_update AFTER UPDATE ON broker_connections BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT id AS k FROM accounts WHERE connection_id = OLD.id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'account', k FROM (SELECT id AS k FROM accounts WHERE connection_id = NEW.id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_joins_changed_delete AFTER DELETE ON instrument_joins BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k UNION SELECT OLD.into_id UNION SELECT instrument_id FROM option_terms WHERE underlying_id IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT DISTINCT record_id AS k FROM transactions WHERE instrument_id IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT id AS k FROM trades WHERE anchor_instrument IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT DISTINCT a.applies_record || '/' || a.applies_leg AS k FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg WHERE l.from_instrument IN (OLD.instrument_id, OLD.into_id) OR l.to_instrument IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_joins_changed_insert AFTER INSERT ON instrument_joins BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k UNION SELECT NEW.into_id UNION SELECT instrument_id FROM option_terms WHERE underlying_id IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT DISTINCT record_id AS k FROM transactions WHERE instrument_id IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT id AS k FROM trades WHERE anchor_instrument IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT DISTINCT a.applies_record || '/' || a.applies_leg AS k FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg WHERE l.from_instrument IN (NEW.instrument_id, NEW.into_id) OR l.to_instrument IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_joins_changed_update AFTER UPDATE ON instrument_joins BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k UNION SELECT OLD.into_id UNION SELECT instrument_id FROM option_terms WHERE underlying_id IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT DISTINCT record_id AS k FROM transactions WHERE instrument_id IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT id AS k FROM trades WHERE anchor_instrument IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT DISTINCT a.applies_record || '/' || a.applies_leg AS k FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg WHERE l.from_instrument IN (OLD.instrument_id, OLD.into_id) OR l.to_instrument IN (OLD.instrument_id, OLD.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k UNION SELECT NEW.into_id UNION SELECT instrument_id FROM option_terms WHERE underlying_id IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT DISTINCT record_id AS k FROM transactions WHERE instrument_id IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT id AS k FROM trades WHERE anchor_instrument IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'adjustment', k FROM (SELECT DISTINCT a.applies_record || '/' || a.applies_leg AS k FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg WHERE l.from_instrument IN (NEW.instrument_id, NEW.into_id) OR l.to_instrument IN (NEW.instrument_id, NEW.into_id)) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_joins_names_delete AFTER DELETE ON instrument_joins BEGIN
+    INSERT INTO names_due (instrument_id) VALUES (OLD.instrument_id), (OLD.into_id);
+END;
+CREATE TRIGGER instrument_joins_names_insert AFTER INSERT ON instrument_joins BEGIN
+    INSERT INTO names_due (instrument_id) VALUES (NEW.instrument_id), (NEW.into_id);
+END;
+CREATE TRIGGER instrument_joins_names_update AFTER UPDATE ON instrument_joins BEGIN
+    INSERT INTO names_due (instrument_id) VALUES (OLD.instrument_id), (OLD.into_id), (NEW.instrument_id), (NEW.into_id);
+END;
+CREATE TRIGGER instrument_names_changed_delete AFTER DELETE ON instrument_names BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_names_changed_insert AFTER INSERT ON instrument_names BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_names_changed_update AFTER UPDATE ON instrument_names BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_changed_delete AFTER DELETE ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_changed_insert AFTER INSERT ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_changed_update AFTER UPDATE ON instrument_refs BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_refs_succession_delete AFTER DELETE ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instrument_refs_succession_insert AFTER INSERT ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instrument_refs_succession_update AFTER UPDATE ON instrument_refs BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instrument_sightings_changed_delete AFTER DELETE ON instrument_sightings BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_sightings_changed_insert AFTER INSERT ON instrument_sightings BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_sightings_changed_update AFTER UPDATE ON instrument_sightings BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instrument_sightings_names_delete AFTER DELETE ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting) VALUES (OLD.instrument_id, OLD.day, OLD.symbol, OLD.rowid);
+END;
+CREATE TRIGGER instrument_sightings_names_insert AFTER INSERT ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting) VALUES (NEW.instrument_id, NEW.day, NEW.symbol, NEW.rowid);
+END;
+CREATE TRIGGER instrument_sightings_names_rekeyed BEFORE UPDATE OF record_id, leg, instrument_id ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting)
+    SELECT instrument_id, day, symbol, rowid FROM instrument_sightings WHERE record_id = NEW.record_id AND leg = NEW.leg AND instrument_id = NEW.instrument_id AND rowid <> OLD.rowid;
+END;
+CREATE TRIGGER instrument_sightings_names_replaced BEFORE INSERT ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting)
+    SELECT instrument_id, day, symbol, rowid FROM instrument_sightings WHERE record_id = NEW.record_id AND leg = NEW.leg AND instrument_id = NEW.instrument_id;
+END;
+CREATE TRIGGER instrument_sightings_names_update AFTER UPDATE ON instrument_sightings BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting) VALUES (OLD.instrument_id, OLD.day, OLD.symbol, OLD.rowid);
+    INSERT INTO names_due (instrument_id, day, symbol, sighting) VALUES (NEW.instrument_id, NEW.day, NEW.symbol, NEW.rowid);
+END;
+CREATE TRIGGER instruments_changed_delete AFTER DELETE ON instruments BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_changed_insert AFTER INSERT ON instruments BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_changed_update AFTER UPDATE ON instruments BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_described_changed_delete AFTER DELETE ON instruments_described BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_described_changed_insert AFTER INSERT ON instruments_described BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_described_changed_update AFTER UPDATE ON instruments_described BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER instruments_succession_delete AFTER DELETE ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instruments_succession_insert AFTER INSERT ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER instruments_succession_update AFTER UPDATE ON instruments BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER journal_changed_delete AFTER DELETE ON journal BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT OLD.trade_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT OLD.group_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER journal_changed_insert AFTER INSERT ON journal BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT NEW.trade_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT NEW.group_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER journal_changed_update AFTER UPDATE ON journal BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT OLD.trade_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT OLD.group_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT NEW.trade_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT NEW.group_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER journal_tags_changed_delete AFTER DELETE ON journal_tags BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT trade_id AS k FROM journal WHERE id = OLD.journal_id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT group_id AS k FROM journal WHERE id = OLD.journal_id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER journal_tags_changed_insert AFTER INSERT ON journal_tags BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT trade_id AS k FROM journal WHERE id = NEW.journal_id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT group_id AS k FROM journal WHERE id = NEW.journal_id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER journal_tags_changed_update AFTER UPDATE ON journal_tags BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT trade_id AS k FROM journal WHERE id = OLD.journal_id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT group_id AS k FROM journal WHERE id = OLD.journal_id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT trade_id AS k FROM journal WHERE id = NEW.journal_id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT group_id AS k FROM journal WHERE id = NEW.journal_id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER link_records_changed_delete AFTER DELETE ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER link_records_changed_insert AFTER INSERT ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER link_records_changed_update AFTER UPDATE ON link_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER listings_named_changed_delete AFTER DELETE ON listings_named BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER listings_named_changed_insert AFTER INSERT ON listings_named BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER listings_named_changed_update AFTER UPDATE ON listings_named BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER option_terms_changed_delete AFTER DELETE ON option_terms BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER option_terms_changed_insert AFTER INSERT ON option_terms BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER option_terms_changed_update AFTER UPDATE ON option_terms BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT OLD.instrument_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT NEW.instrument_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER record_problems_changed_delete AFTER DELETE ON record_problems BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER record_problems_changed_insert AFTER INSERT ON record_problems BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER record_problems_changed_update AFTER UPDATE ON record_problems BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER security_standings_succession_delete AFTER DELETE ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER security_standings_succession_insert AFTER INSERT ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER security_standings_succession_update AFTER UPDATE ON security_standings BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER source_records_changed_delete AFTER DELETE ON source_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT DISTINCT instrument_id AS k FROM instrument_sightings WHERE record_id = OLD.id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER source_records_changed_insert AFTER INSERT ON source_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT DISTINCT instrument_id AS k FROM instrument_sightings WHERE record_id = NEW.id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER source_records_changed_update AFTER UPDATE ON source_records BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT DISTINCT instrument_id AS k FROM instrument_sightings WHERE record_id = OLD.id) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'instrument', k FROM (SELECT DISTINCT instrument_id AS k FROM instrument_sightings WHERE record_id = NEW.id) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER source_records_names_update AFTER UPDATE OF state ON source_records WHEN OLD.state IS NOT NEW.state BEGIN
+    INSERT INTO names_due (instrument_id, day, symbol, sighting) SELECT instrument_id, day, symbol, rowid FROM instrument_sightings WHERE record_id = NEW.id;
+END;
+CREATE TRIGGER trade_group_members_changed_delete AFTER DELETE ON trade_group_members BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT OLD.group_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trade_group_members_changed_insert AFTER INSERT ON trade_group_members BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT NEW.group_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trade_group_members_changed_update AFTER UPDATE ON trade_group_members BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT OLD.group_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT NEW.group_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trade_groups_changed_delete AFTER DELETE ON trade_groups BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trade_groups_changed_insert AFTER INSERT ON trade_groups BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trade_groups_changed_update AFTER UPDATE ON trade_groups BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'group', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trades_changed_delete AFTER DELETE ON trades BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trades_changed_insert AFTER INSERT ON trades BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER trades_changed_update AFTER UPDATE ON trades BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT OLD.id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'trade', k FROM (SELECT NEW.id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transactions_changed_delete AFTER DELETE ON transactions BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transactions_changed_insert AFTER INSERT ON transactions BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transactions_changed_update AFTER UPDATE ON transactions BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.record_id AS k) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.record_id AS k) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transactions_succession_delete AFTER DELETE ON transactions WHEN OLD.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER transactions_succession_insert AFTER INSERT ON transactions WHEN NEW.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER transactions_succession_update AFTER UPDATE ON transactions WHEN OLD.kind = 'corporate-event' OR NEW.kind = 'corporate-event' BEGIN
+    UPDATE successions_due SET changed = changed + 1 WHERE id = 1;
+END;
+CREATE TRIGGER transfer_links_changed_delete AFTER DELETE ON transfer_links BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.out_record AS k UNION SELECT OLD.in_record) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transfer_links_changed_insert AFTER INSERT ON transfer_links BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.out_record AS k UNION SELECT NEW.in_record) WHERE k IS NOT NULL;
+END;
+CREATE TRIGGER transfer_links_changed_update AFTER UPDATE ON transfer_links BEGIN
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT OLD.out_record AS k UNION SELECT OLD.in_record) WHERE k IS NOT NULL;
+    INSERT INTO ledger_changes (kind, key) SELECT 'record', k FROM (SELECT NEW.out_record AS k UNION SELECT NEW.in_record) WHERE k IS NOT NULL;
+END;

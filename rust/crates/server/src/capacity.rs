@@ -1,12 +1,12 @@
-//! `bagholder capacity`: the server held to its cost budget at the owner's size
+//! `bagholder capacity`: the server held to its cost budget at the reference size
 //! (`docs/architecture.md` §16; `docs/plans/stage-p-capacity-and-process.md`).
 //!
 //! - `capacity build <folder> [--times N] [--seed S]` makes a data folder the
-//!   way the app makes one: a made-up Wealthsimple of the owner's size (times N)
+//!   way the app makes one: a made-up Wealthsimple of the reference size (times N)
 //!   pulled through the real adapter and pull, a year of balances reads at the
-//!   owner's rate, the market facts through the cache's own writers, and the
+//!   reference rate, the market facts through the cache's own writers, and the
 //!   figures settled as a start settles them.
-//! - `capacity run <work folder>` builds (or reuses) the owner's size and four
+//! - `capacity run <work folder>` builds (or reuses) the reference size and four
 //!   times it under the work folder, measures each operation in a process of
 //!   its own, prints the table, and fails when the budget or the growth rule is
 //!   broken (or when an operation listed over budget is now within it).
@@ -63,23 +63,22 @@ pub const QUOTES_EVERY_MS: u64 = crate::due::QUOTES_EVERY.as_millis() as u64;
 /// How many times the median is taken over.
 pub const RUNS: usize = 7;
 
-/// The owner's size, counted on a copy of the owner's book on 2026-10-08: 29
+/// The reference size every book is held to (four times it, the growth rule): 29
 /// accounts, 210 instruments of which 53 option contracts (each option round
 /// trip here makes its own), 646 trades, three years of activity.
-pub const OWNER: Size = Size { accounts: 29, instruments: 157, trades: 646, months: 36, seed: 1, deep: 0 };
-/// How the owner's balances move, counted on a copy of the owner's book on
-/// 2026-10-10 over the 12.6 days from 2026-09-27 to 2026-10-09: 664 balances
-/// reads, each stating the cash of 16 accounts; 87 periods of cash, 816 of value
-/// now (16 accounts) and 533 of buying power (one margin account). A balances read
+pub const REFERENCE: Size = Size { accounts: 29, instruments: 157, trades: 646, months: 36, seed: 1, deep: 0 };
+/// How the reference book's balances move, over 12.6 days: 664 balances reads,
+/// each stating the cash of 16 accounts; 87 periods of cash, 816 of value now
+/// (16 accounts) and 533 of buying power (one margin account). A balances read
 /// a day, and each kind's changes a day per account (per margin account for
 /// buying power), as (count, over days × accounts).
 pub const BALANCES_READS: (u64, f64) = (664, 12.6);
 pub const CASH_CHANGES: (u64, f64) = (87, 12.6 * 16.0);
 pub const VALUE_CHANGES: (u64, f64) = (816, 12.6 * 16.0);
 pub const POWER_CHANGES: (u64, f64) = (533, 12.6);
-/// The most rows one instrument holds on the owner's book: 349 of 7,151 live
-/// transactions, counted on a copy of the owner's book on 2026-10-12. The depth
-/// pair carries one listing this deep, and four times it (brief 26, 12).
+/// The most rows one instrument holds in the reference book: 349 of 7,151 live
+/// transactions. The depth pair carries one listing this deep, and four times it
+/// (brief 26, 12).
 pub const DEEPEST_ROWS: usize = 349;
 /// A year of balances reads: the size the book reaches in a year of use.
 pub const BALANCES_DAYS: u32 = 365;
@@ -134,7 +133,7 @@ impl Pair {
         }
     }
 
-    /// The rows the deep listing of a book `times` the owner's was built with.
+    /// The rows the deep listing of a book `times` the reference size was built with.
     fn min_rows(self, times: usize) -> u64 {
         match self {
             Pair::Breadth => 0,
@@ -146,16 +145,16 @@ impl Pair {
     /// The pair's two books, under the work folder.
     fn folders(self, work: &Path) -> (PathBuf, PathBuf) {
         match self {
-            Pair::Breadth => (work.join("owner"), work.join("owner-x4")),
-            Pair::Depth => (work.join("owner-deep"), work.join("owner-deep-x4")),
+            Pair::Breadth => (work.join("reference"), work.join("reference-x4")),
+            Pair::Depth => (work.join("reference-deep"), work.join("reference-deep-x4")),
         }
     }
-    /// The size of its book `times` the owner's.
+    /// The size of its book `times` the reference size.
     fn size(self, times: usize) -> Size {
         match self {
-            Pair::Breadth => sized(times, OWNER.seed),
+            Pair::Breadth => sized(times, REFERENCE.seed),
             // two rows a round trip
-            Pair::Depth => Size { deep: DEEPEST_ROWS * times / 2, ..OWNER },
+            Pair::Depth => Size { deep: DEEPEST_ROWS * times / 2, ..REFERENCE },
         }
     }
 }
@@ -434,9 +433,9 @@ fn made_up_today() -> Date {
 
 // ---- build ----
 
-/// The owner's size times `times`.
+/// The reference size times `times`.
 pub fn sized(times: usize, seed: u64) -> Size {
-    Size { accounts: OWNER.accounts * times, instruments: OWNER.instruments * times, trades: OWNER.trades * times, seed, ..OWNER }
+    Size { accounts: REFERENCE.accounts * times, instruments: REFERENCE.instruments * times, trades: REFERENCE.trades * times, seed, ..REFERENCE }
 }
 
 /// Make the data folder `home` for `size`, with `balances_days` of balances reads.
@@ -456,11 +455,11 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
     if !report.failures.is_empty() {
         return Err(format!("the pull failed: {:?}", report.failures));
     }
-    // a year of balances reads at the owner's rate. One real pass, through the
+    // a year of balances reads at the reference rate. One real pass, through the
     // pull, writes what a pass writes; the rest through the book's own store
     // calls, as the pull writes them (`pull::balances`): every read kept, and a
     // statement stored where an account's cash, value or buying power changed, at
-    // the rates the owner's book shows (a statement stating again what the last
+    // the rates the reference book shows (a statement stating again what the last
     // did only extends its period, which the last pass does for every account).
     // The last pass states each account as the broker does, so the newest cash is
     // the book's own and the check reads no difference the activity did not make.
@@ -543,7 +542,7 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
     // settled as a start settles it: the engine built, each round trip given its trade
     let f = crate::figures::Figures::open(home, at)?;
     // the older part of the activity imported again from Wealthsimple's own
-    // activity export, through the import, as the owner's book holds it: what an
+    // activity export, through the import, as the reference book holds it: what an
     // import is linked against
     let export = activity_export(adapter.source.rows())?;
     let open = || Ok(Box::new(std::io::Cursor::new(export.clone().into_bytes())) as Box<dyn std::io::BufRead>);
@@ -579,14 +578,14 @@ fn coded_history(rounds: usize) -> Result<String, String> {
     Ok(text)
 }
 
-/// The share of the feed's records the owner's book also holds from
+/// The share of the feed's records the reference book also holds from
 /// Wealthsimple's activity export: 6,156 of 7,994, counted on the same copy.
 pub const EXPORTED_SHARE: (usize, usize) = (6_156, 7_994);
 
 /// Wealthsimple's activity export of the oldest `EXPORTED_SHARE` of the made-up
 /// activity, written from the same replies the pull read, in the export's own
 /// columns and words: its activity types and sub-types, a direction on every
-/// row and a currency on every row (CAD on every coin's), as the owner's
+/// row and a currency on every row (CAD on every coin's), as Wealthsimple's
 /// imported export rows state them.
 fn activity_export(rows: &[bagholder_core::json::Value]) -> Result<String, String> {
     use bagholder_core::json::Value;
@@ -1152,7 +1151,7 @@ pub struct Verdict {
 impl Verdict {
     #[cfg(test)]
     /// Whether the growth rule is broken by steps or allocations: what the process
-    /// reads from storage is judged at the owner's size only, by the capacity job.
+    /// reads from storage is judged at the reference size only, by the capacity job.
     fn grew(&self) -> Vec<&(Measure, String)> {
         self.over.iter().filter(|(m, _)| matches!(m, Measure::Steps | Measure::Allocations)).collect()
     }
@@ -1165,9 +1164,9 @@ pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
     let (budget, _) = budget_ms(op, four.divisor);
     if op.waited_on() {
         if pi_ms > budget * (1.0 + TIME_SPREAD) {
-            over.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, over {budget:.0} ms", pi_ms)));
+            over.push((Measure::Time, format!("{:.0} ms on a Pi at four times the reference size, over {budget:.0} ms", pi_ms)));
         } else if pi_ms >= budget * (1.0 - TIME_SPREAD) {
-            edge.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, within the runner's spread of {budget:.0} ms", pi_ms)));
+            edge.push((Measure::Time, format!("{:.0} ms on a Pi at four times the reference size, within the runner's spread of {budget:.0} ms", pi_ms)));
         }
     }
     if op.per_change() {
@@ -1291,7 +1290,7 @@ pub fn cli(args: &[String]) -> i32 {
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u64>().ok());
     let result = match args.first().map(String::as_str) {
         Some("build") => match args.get(1) {
-            Some(dir) => build(Path::new(dir), sized(flag("--times").unwrap_or(1) as usize, flag("--seed").unwrap_or(OWNER.seed)), BALANCES_DAYS),
+            Some(dir) => build(Path::new(dir), sized(flag("--times").unwrap_or(1) as usize, flag("--seed").unwrap_or(REFERENCE.seed)), BALANCES_DAYS),
             None => Err(usage.into()),
         },
         Some("run") => match args.get(1) {
@@ -1481,7 +1480,7 @@ mod tests {
     /// step is what lets the growth rule, under twice, see one), by breadth
     /// and by depth, in this process, and none off `OVER_BUDGET` breaks the growth
     /// rule there; the budget itself, and whether a listed one now meets it, is the
-    /// CI job's, at the owner's size, on the runner it is stated for.
+    /// CI job's, at the reference size, on the runner it is stated for.
     #[test]
     fn test_every_operation_is_measured_and_the_growth_rule_judged() {
         let _g = crate::tests_common::guard();
@@ -1523,9 +1522,9 @@ mod tests {
                 let v = judge(op, pair, &a, &b);
                 // steps and allocations: what the process reads from storage at
                 // these small sizes is what this run's page cache holds, judged by
-                // the capacity job at the owner's size instead
+                // the capacity job at the reference size instead
                 // a broker's late buy at these depths joins no later round trip, so its
-                // match of the holding whole shows unshared; at the owner's size it joins
+                // match of the holding whole shows unshared; at the reference size it joins
                 // every later one and is judged per trip, within the rule (#537)
                 let walks_whole_here = |m: Measure| op == Op::BackdatedFill && m == Measure::Allocations && b.changed == 1;
                 let growth: Vec<_> = v.grew().into_iter().filter(|(m, _)| !listed(op, pair, *m) && !walks_whole_here(*m)).collect();

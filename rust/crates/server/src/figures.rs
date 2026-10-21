@@ -378,24 +378,15 @@ impl From<OpenFailure> for String {
 
 impl Figures {
     /// Open the figure path in `home` at `at`: both files brought to this build's
-    /// schema, the earlier app's rows removed from the book once none counts, and
-    /// the engine built when the book holds a zone. A book or cache this build
+    /// schema, and the engine built when the book holds a zone. A book or cache this build
     /// cannot open is said by what failed, and the open is tried again later.
     pub fn open(home: &Path, at: Timestamp) -> Result<Figures, OpenFailure> {
         let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), debts_print: std::sync::Mutex::new(None), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
-        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
+        // a migration's code step reads records with every source's mapping
+        let mut read_with: Vec<&dyn bagholder_book::mapping::Mapping> = mappings().to_vec();
+        read_with.push(&bagholder_wealthsimple::statement::StatementMapping);
+        let (book, _) = Book::open_in_mapped(home, crate::app::APP_VERSION, at, &read_with).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Cache(format!("The market cache could not be opened: {e}")))?;
-        // the earlier app's rows, removed once the broker's own rows replace the last
-        // that counts; until then, or where a trade on one has nowhere to go, it is
-        // said, nothing is removed, and it is tried again at the next start
-        match book.remove_earlier_app_rows(at) {
-            Ok(done) => {
-                if let Some(said) = done.said() {
-                    crate::app::log(&format!("bagholder: {said}"));
-                }
-            }
-            Err(e) => crate::app::log(&format!("bagholder: {e}")),
-        }
         // the records derived again and the prices kept under a guessed venue forgotten,
         // both before anything is built: either failing is said on the page and tried
         // again at the next pass; it never stops the server, which a service manager

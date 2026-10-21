@@ -77,7 +77,6 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("read_failures", Place::Of(Kind::Market)),
     // the tickers the filings were kept under before migration 6, for carrying the
     // book's told marks once
-    ("filings_carried", Place::Of(Kind::Market)),
     ("meta", Place::Meta),
     ("gen", Place::Kept),
     ("schema_migrations", Place::Kept),
