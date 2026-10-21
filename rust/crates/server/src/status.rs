@@ -52,6 +52,42 @@ pub struct Status {
     pub imported: Option<crate::csv_import::Imported>,
     /// The language model's file while it downloads, and how far it has come.
     pub model_download: Option<ModelDownload>,
+    /// Where the book stands against the broker, when no difference stands
+    /// (`SPEC.md` pages-13): none while the figures are not built.
+    pub standing: Option<Standing>,
+}
+
+/// Where the book stands against the broker's statements, from the checks the
+/// engine already made and the stamps the book already keeps: every stated
+/// account's cash and holdings equal the broker's as of a day; or a statement is
+/// newer than the read of its account, or a difference waits on the balance that
+/// confirms it; or no account has a statement at its last full read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Standing {
+    #[ts(type = "'matches' | 'checking' | 'unchecked'")]
+    pub state: String,
+    /// For `matches`: the earliest day any account's units are stated as of.
+    pub as_of: Option<String>,
+}
+
+/// The book's standing from the broker checks and what each account's broker
+/// states; none where a difference stands, which the error line says.
+pub fn standing_of(checks: &[bagholder_engine::equity::BrokerCheck], brokers: &std::collections::BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>) -> Option<Standing> {
+    let state = |s: &str, as_of: Option<String>| Some(Standing { state: s.to_string(), as_of });
+    if checks.iter().any(|c| c.differences.iter().any(|d| !d.pending())) {
+        return None;
+    }
+    if !brokers.values().any(|b| b.cash_read.is_some()) {
+        return state("unchecked", None);
+    }
+    if checks.iter().any(|c| c.pending || c.differences.iter().any(|d| d.pending())) {
+        return state("checking", None);
+    }
+    match brokers.values().filter_map(|b| b.held_as_of).min() {
+        Some(day) => state("matches", Some(day.to_string())),
+        None => state("unchecked", None),
+    }
 }
 
 /// The language model's file downloading: the bytes written of its pinned size.
@@ -136,6 +172,7 @@ pub fn status(app: &Arc<App>) -> Status {
     sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
+    let standing = app.figures.get().and_then(|f| f.read(|e| standing_of(e.figures().checks, &e.inputs().market.brokers))).flatten();
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
     let error = failures(&st, &sources);
@@ -170,6 +207,7 @@ pub fn status(app: &Arc<App>) -> Status {
         imported: st.imported.clone(),
         model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
+        standing,
     }
 }
 
@@ -749,6 +787,51 @@ mod tests {
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
         (home, app)
+    }
+
+    /// Two accounts' broker inputs and checks, as the engine leaves them: each
+    /// stated `cash_read` (a statement at its last full read) where `read`, its
+    /// units as of `held` where given, with the differences and pending flag given.
+    fn checked(accounts: &[(bool, Option<&str>, bool, Vec<bagholder_engine::equity::Difference>)]) -> (Vec<bagholder_engine::equity::BrokerCheck>, std::collections::BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>) {
+        let mut checks = vec![];
+        let mut brokers = std::collections::BTreeMap::new();
+        for (n, (read, held, pending, differences)) in accounts.iter().enumerate() {
+            let id = bagholder_core::AccountId::parse(&format!("00000000-0000-7000-8000-{n:012}")).unwrap();
+            let b = bagholder_engine::input::BrokerAccount { cash_read: read.then(Default::default), held_as_of: held.map(|d| d.parse().unwrap()), ..Default::default() };
+            brokers.insert(id, b);
+            checks.push(bagholder_engine::equity::BrokerCheck { account: id, differences: differences.clone(), pending: *pending });
+        }
+        (checks, brokers)
+    }
+
+    fn cash_off(pending: bool) -> bagholder_engine::equity::Difference {
+        bagholder_engine::equity::Difference::Cash { currency: bagholder_core::Currency::CAD, own: Ok(bagholder_core::Dec::from_int(1)), broker: bagholder_core::Dec::ZERO, pending }
+    }
+
+    #[test]
+    fn the_sync_line_says_matches_as_of_the_day_the_units_are_stated() {
+        let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![]), (true, Some("2026-10-18"), false, vec![]), (true, None, false, vec![])]);
+        let s = super::standing_of(&checks, &brokers).unwrap();
+        assert_eq!((s.state.as_str(), s.as_of.as_deref()), ("matches", Some("2026-10-18")), "the earliest day any account's units are stated as of");
+        // a difference that stands is the error line's, never a standing beside it
+        let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![cash_off(false)])]);
+        assert_eq!(super::standing_of(&checks, &brokers), None);
+    }
+
+    #[test]
+    fn says_checking_while_a_statement_is_newer_than_the_read_or_a_difference_is_pending() {
+        let (checks, brokers) = checked(&[(true, Some("2026-10-20"), true, vec![]), (true, Some("2026-10-20"), false, vec![])]);
+        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "checking", "a statement newer than its account's read");
+        let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![cash_off(true)])]);
+        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "checking", "a difference waiting on the balance that confirms it");
+    }
+
+    #[test]
+    fn says_not_yet_checked_before_any_read() {
+        let (checks, brokers) = checked(&[]);
+        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "unchecked", "no account stated");
+        let (checks, brokers) = checked(&[(false, None, true, vec![]), (false, Some("2026-10-20"), true, vec![])]);
+        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "unchecked", "no account has a statement at its last full read");
     }
 
     #[test]
