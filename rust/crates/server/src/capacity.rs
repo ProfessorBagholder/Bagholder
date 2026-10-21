@@ -275,6 +275,9 @@ pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // the Trades list's first page builds and sorts every trade in scope before
     // taking the page: the page's own read and an agent's alike
     ("agent-trades-page", Pair::Breadth, Measure::Allocations, "#554"),
+    // a trade dated in the past derives every later trade again: just over its
+    // budget on the runner at four times the owner's size, master's code as well
+    ("backdated-trade", Pair::Depth, Measure::Time, "#569"),
 ];
 
 /// What a measurement is judged by.
