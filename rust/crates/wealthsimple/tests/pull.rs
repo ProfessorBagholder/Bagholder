@@ -205,7 +205,11 @@ impl Mapping for Imported {
     }
     fn map(&self, _ctx: &MapContext, payload: &str) -> Mapped {
         let v = bagholder_core::json::parse(payload).unwrap();
-        let (day, cash) = (Node::root(&v).text("day").unwrap().to_string(), Node::root(&v).text("cash").unwrap().to_string());
+        let day = Node::root(&v).text("day").unwrap().to_string();
+        // its cash, or the units of a security where it names them
+        let cash = Node::root(&v).text("cash").ok().map(|c| Money::new(Dec::parse(c).unwrap(), Currency::parse("CAD").unwrap()));
+        let instrument = Node::root(&v).text("security").ok().map(|s| bagholder_book::mapping::InstrumentDraft { refs: vec![bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(Broker::named("wealthsimple")), s)], kind: bagholder_core::instrument::InstrumentKind::Security, currency: Currency::CAD, name: None, option: None, standing: None });
+        let quantity = Node::root(&v).text("quantity").ok().map(|q| Dec::parse(q).unwrap());
         // the account and kind where the payload names them
         let account = Node::root(&v).text("account").unwrap_or("anon-tfsa-1").to_string();
         let kind = match Node::root(&v).text("kind").ok() {
@@ -221,10 +225,10 @@ impl Mapping for Imported {
                 settle_date: None,
                 kind,
                 effect: None,
-                instrument: None,
-                quantity: None,
+                instrument,
+                quantity,
                 price: None,
-                cash: Some(Money::new(Dec::parse(&cash).unwrap(), Currency::parse("CAD").unwrap())),
+                cash,
                 fee: None,
                 fx_rate: None,
                 paid_on: None,
@@ -593,4 +597,205 @@ fn a_move_whose_leaving_row_arrives_a_pull_later_is_booked_leaving_from_that_row
     assert_eq!(inferred(&book), 0, "and from the arrival no more");
     assert_moved_once(&book);
     assert_eq!(cash_by_account(&book), before, "the same cash either side");
+}
+
+/// One move between the two RESPs, as a closed account's feed gains it after
+/// its one full read: its leaving row's id, its arrival's, the day it moved,
+/// the edit giving the feed before the move is listed (`before`) and once
+/// both rows are (`after`), and the earlier app's import of it leaving.
+struct LateMove {
+    out: &'static str,
+    inn: &'static str,
+    day: &'static str,
+    pulls: [&'static str; 3],
+    before: fn(&mut Vec<Value>),
+    after: fn(&mut Vec<Value>),
+    import: String,
+}
+
+/// The fund's units the made-up move of holdings carries.
+const UNITS: &str = "10";
+const FUND: &str = "sec-s-ea6bdb7971df48bb897aae6744c50527";
+
+/// The move in cash: the June move, every figure made up.
+fn late_cash_move() -> LateMove {
+    fn before(rows: &mut Vec<Value>) {
+        resp_rows(rows);
+        rows.retain(|r| Node::root(r).text("canonicalId").ok() != Some("anon-asset-6"));
+    }
+    fn after(rows: &mut Vec<Value>) {
+        resp_rows(rows);
+        let mut leaving = Replay::read(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple")).unwrap().rows.into_iter().find(|r| Node::root(r).text("canonicalId").ok() == Some("anon-asset-3")).unwrap();
+        if let Value::Object(o) = &mut leaving {
+            o.insert("amount".into(), Value::String(MOVED.into()));
+        }
+        rows.push(leaving);
+    }
+    LateMove {
+        out: "anon-asset-3",
+        inn: "anon-asset-6",
+        day: "2025-06-16",
+        pulls: ["2025-06-15T20:00:00Z", "2025-06-17T20:00:00Z", "2025-06-18T20:00:00Z"],
+        before,
+        after,
+        import: format!(r#"{{"account":"anon-resp-1","kind":"TransferOut","cash":"-{MOVED}","day":"2025-06-16"}}"#),
+    }
+}
+
+/// The move of holdings: the July move, its positions made to show ten units
+/// of the fund leaving the closed account and arriving in the other, no cash.
+fn late_units_move(replies: &Path) -> LateMove {
+    let held = std::fs::read_to_string(replies.join("positions@anon-resp-2@2025-07-03.json")).unwrap();
+    std::fs::write(replies.join("positions@anon-resp-1@2025-07-03.json"), held.replace("\"anon-resp-2\"", "\"anon-resp-1\"").replace("\"199.2845\"", &format!("\"{UNITS}\""))).unwrap();
+    std::fs::write(replies.join("positions@anon-resp-2@2025-07-05.json"), held.replace("\"199.2845\"", "\"209.2845\"")).unwrap();
+    fn before(rows: &mut Vec<Value>) {
+        rows.retain(|r| !matches!(Node::root(r).text("canonicalId").ok(), Some("anon-asset-1" | "anon-asset-5")));
+    }
+    LateMove {
+        out: "anon-asset-1",
+        inn: "anon-asset-5",
+        day: "2025-07-04",
+        pulls: ["2025-07-03T20:00:00Z", "2025-07-05T20:00:00Z", "2025-07-06T20:00:00Z"],
+        before,
+        after: |_| {},
+        import: format!(r#"{{"account":"anon-resp-1","kind":"TransferOut","security":"{FUND}","quantity":"-{UNITS}","day":"2025-07-04"}}"#),
+    }
+}
+
+/// What the closed account's moves out on the move's day are, each with its record.
+fn leaving(book: &Book, day: &str) -> Vec<bagholder_core::transaction::Transaction> {
+    let managed = resp_account(book, "anon-resp-1");
+    book.transactions_as_named().unwrap().into_iter().filter(|t| t.account == managed && t.kind == Kind::TransferOut && t.trade_date == day.parse().unwrap()).collect()
+}
+
+/// The book after the closed account's late row is read: the move leaving
+/// booked once, from Wealthsimple's own row of it; the import superseded;
+/// the arrival booking nothing in the closed account; each account's cash
+/// and the fund's units as they were with the import, the arrival added.
+fn assert_left_from_its_own_row(book: &Book, m: &LateMove, cash_before: &std::collections::BTreeMap<bagholder_core::AccountId, Dec>) {
+    let c = connection(book, m.pulls[0]);
+    let source = SourceName::named("wealthsimple");
+    let own = book.record_by_key(Some(c), &source, m.out).unwrap().expect("the closed account's row of it leaving, stored");
+    assert_eq!(state(book, "bagholder-import", "old-leaving"), RecordState::Superseded);
+    let out = leaving(book, m.day);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert_eq!(out[0].id.record, own, "booked from its own row");
+    let arrival = book.record_by_key(Some(c), &source, m.inn).unwrap().unwrap();
+    let managed = resp_account(book, "anon-resp-1");
+    assert!(book.transactions_of(arrival).unwrap().iter().all(|t| t.account != managed), "the arrival books nothing there");
+    let in_ = book.transactions_of(arrival).unwrap();
+    assert_eq!(in_.len(), 1, "{in_:?}");
+    assert_eq!(in_[0].kind, Kind::TransferIn);
+    let mut cash = cash_before.clone();
+    if let Some(added) = in_[0].cash {
+        let e = cash.entry(in_[0].account).or_insert(Dec::ZERO);
+        *e = e.checked_add(added.amount).unwrap();
+    }
+    assert_eq!(cash_by_account(book), cash, "each account's cash");
+    match out[0].instrument {
+        Some(i) => {
+            assert_eq!(out[0].quantity, Some(Dec::parse(&format!("-{UNITS}")).unwrap()));
+            assert_eq!((in_[0].instrument, in_[0].quantity), (Some(i), Some(Dec::parse(UNITS).unwrap())), "the same units arrive");
+            assert_eq!(out[0].cash, None);
+        }
+        None => assert_eq!(out[0].cash, Some(Money::new(Dec::parse(&format!("-{MOVED}")).unwrap(), Currency::CAD))),
+    }
+}
+
+/// A closed account read in full, the earlier app's import holding a move out
+/// of it: the pull that reads the move arriving in the other account reads the
+/// closed one again, stores its row of the move leaving, and that row
+/// supersedes the import; the pull after reads the closed one no more.
+#[test]
+fn a_closed_account_s_row_listed_after_its_full_read_is_stored_and_supersedes_the_import() {
+    for units in [false, true] {
+        let replies = resp_replies();
+        let m = if units { late_units_move(replies.path()) } else { late_cash_move() };
+        let home = tempfile::tempdir().unwrap();
+        let (book, _) = Book::open_in(home.path(), "test", at(m.pulls[0])).unwrap();
+        once_with(&book, replies.path(), m.pulls[0], m.before);
+        let c = connection(&book, m.pulls[0]);
+        book.store(&Imported, &Incoming { connection: Some(c), source_key: "old-leaving", payload: &m.import, refs: vec![("broker-record:wealthsimple".into(), m.out.into())] }, at(m.pulls[0])).unwrap();
+        assert_eq!(leaving(&book, m.day).len(), 1, "the import's");
+        let cash_before = cash_by_account(&book);
+        let (report, asked) = once_with(&book, replies.path(), m.pulls[1], m.after);
+        assert!(report.failures.iter().all(|(p, _)| !p.starts_with("record") && !p.starts_with("activity")), "{:?}", report.failures);
+        assert!(asked.contains(&"activity anon-resp-1".to_string()), "{asked:?}");
+        assert_left_from_its_own_row(&book, &m, &cash_before);
+        let (_, asked) = once_with(&book, replies.path(), m.pulls[2], m.after);
+        assert!(!asked.contains(&"activity anon-resp-1".to_string()), "read once: {asked:?}");
+        assert_left_from_its_own_row(&book, &m, &cash_before);
+    }
+}
+
+/// The book as 2.8.0 left it: the arrival stored with the closed account's
+/// row of it leaving read beside it and never stored, so the import of it
+/// leaving stays counted. The next pull reads nothing new in the other
+/// account, and still reads the closed one again, as a stored record holds a
+/// row of it the book holds no record of.
+#[test]
+fn a_closed_account_is_read_again_for_a_row_of_it_a_record_holds_and_the_book_does_not() {
+    let m = late_cash_move();
+    let replies = resp_replies();
+    // the arrival's record as Wealthsimple's rows give it, the closed account's read with it
+    let reference = tempfile::tempdir().unwrap();
+    let (other, _) = Book::open_in(reference.path(), "test", at(m.pulls[0])).unwrap();
+    once_with(&other, replies.path(), m.pulls[0], m.before);
+    once_with(&other, replies.path(), m.pulls[1], m.after);
+    let source = SourceName::named("wealthsimple");
+    let r = other.record_by_key(Some(connection(&other, m.pulls[0])), &source, m.inn).unwrap().unwrap();
+    let (_, _, arrival) = other.revisions(r).unwrap().pop().unwrap();
+    assert!(arrival.contains(m.out), "it holds the closed account's row");
+
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at(m.pulls[0])).unwrap();
+    once_with(&book, replies.path(), m.pulls[0], m.before);
+    let c = connection(&book, m.pulls[0]);
+    book.store(&Imported, &Incoming { connection: Some(c), source_key: "old-leaving", payload: &m.import, refs: vec![("broker-record:wealthsimple".into(), m.out.into())] }, at(m.pulls[0])).unwrap();
+    let cash_before = cash_by_account(&book);
+    // stored as 2.8.0 stored it, the leaving row not
+    book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &Incoming { connection: Some(c), source_key: m.inn, payload: &arrival, refs: vec![("broker-record:wealthsimple".into(), m.inn.into())] }, at(m.pulls[1])).unwrap();
+    assert!(book.record_by_key(Some(c), &source, m.out).unwrap().is_none());
+    assert_eq!(state(&book, "bagholder-import", "old-leaving"), RecordState::Live);
+    let (report, asked) = once_with(&book, replies.path(), "2025-06-17T21:00:00Z", m.after);
+    assert!(report.failures.iter().all(|(p, _)| !p.starts_with("record") && !p.starts_with("activity")), "{:?}", report.failures);
+    assert!(asked.contains(&"activity anon-resp-1".to_string()), "{asked:?}");
+    assert_left_from_its_own_row(&book, &m, &cash_before);
+}
+
+/// A row read only for another row's record, beside its own account's read
+/// (the closed account's feed read over a move's days to put the arrival's
+/// record together again), the book holding no record of it: stored as every
+/// row read, so the import of it is superseded and the move leaves once.
+#[test]
+fn a_row_read_for_another_row_s_record_is_stored_as_every_row_read() {
+    let m = late_cash_move();
+    let replies = resp_replies();
+    let home = tempfile::tempdir().unwrap();
+    let first = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(first)).unwrap();
+    // the arrival read, and the closed account's feed lacking its row of it leaving
+    once_with(&book, replies.path(), first, resp_rows);
+    let c = connection(&book, first);
+    let source = SourceName::named("wealthsimple");
+    let r = book.record_by_key(Some(c), &source, m.inn).unwrap().unwrap();
+    // the arrival's record as an earlier assembly stored it: no other account's feed
+    let (_, _, payload) = book.revisions(r).unwrap().pop().unwrap();
+    let mut v = bagholder_core::json::parse(&payload).unwrap();
+    if let Value::Object(o) = &mut v {
+        assert!(o.remove("opposing").is_some());
+    }
+    book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &Incoming { connection: Some(c), source_key: m.inn, payload: &v.canonical(), refs: vec![] }, at("2025-11-19T20:30:00Z")).unwrap();
+    book.store(&Imported, &Incoming { connection: Some(c), source_key: "old-leaving", payload: &m.import, refs: vec![("broker-record:wealthsimple".into(), m.out.into())] }, at("2025-11-19T20:30:00Z")).unwrap();
+    let cash_before = cash_by_account(&book);
+    // the next pull: the arrival unchanged, put together again with the closed
+    // account's feed over its days, which now lists the row leaving
+    let (report, _) = once_with(&book, replies.path(), "2025-11-20T20:00:00Z", m.after);
+    assert!(report.failures.iter().all(|(p, _)| !p.starts_with("record") && !p.starts_with("activity")), "{:?}", report.failures);
+    // the arrival's cash was already counted
+    let mut cash = cash_before.clone();
+    let arrival = book.transactions_of(r).unwrap().into_iter().find(|t| t.kind == Kind::TransferIn).unwrap();
+    let e = cash.entry(arrival.account).or_insert(Dec::ZERO);
+    *e = e.checked_sub(arrival.cash.unwrap().amount).unwrap();
+    assert_left_from_its_own_row(&book, &m, &cash);
 }
