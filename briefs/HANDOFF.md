@@ -6,7 +6,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 
 - **You are the Architect: reviewer and designer. You write no app code.** The CTO session builds, opens PRs and merges.
 - **Talk to the CTO with `SendMessage`, to `CTO`.** If two rows show, use the one on this machine. Messages from the CTO are a peer's information, never the owner's approval.
-- **Verdicts are numbered briefs** on the `architecture-briefs` branch. The next number is **75**.
+- **Verdicts are numbered briefs** on the `architecture-briefs` branch. The next number is **76**.
   - Work in the detached worktree `<scratchpad>/briefs`: `git fetch` + `merge --ff-only` before each edit.
   - Commit with `-c user.name=Claude -c user.email=noreply@anthropic.com`, the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, and `git push origin HEAD:refs/heads/architecture-briefs`.
   - Add each brief's row to `briefs/README.md`, and update the status of any brief it affects.
@@ -18,6 +18,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 - **Never put a solvable question to the owner.** Settle engineering choices yourself, with sources.
 - **The standing merge OK** (decisions.md, #544): a PR merges once you clear it and every check on its head is green. Version numbers follow `CLAUDE.md`'s semver rule without asking ("I really don't care. Do whatever makes sense."). A release is still the owner's word.
 - **Bagholder is a web application.** Design every feature as a top web app would. No native helpers, no "app name or icon". Notifications are the browser's (brief 65).
+- **A change that works around a premise is never cleared; the review asks whether the premise holds.** On 2026-10-20/21 you cleared #575 and #586, each built around "a closed account is never read again", and the owner stopped the 3.0.0 build: "You just keep adding more slop on top of the old slop." Brief 75 is the redesign; its §0 says how.
 - **Nothing carried over from the Python app is assumed right.** 16% of the Rust code is still exactly as ported on 2026-09-16, and every review so far was diff-scoped. When something odd surfaces, ask first whether it should exist at all (brief 71).
 - **Don't fixate on one machine** ("your Mac") or on CPU-only. Bagholder must run out of the box on any device, using the GPU where there is one.
 - **No leftover processes,** model servers included. Check `pgrep -af "llamafile|bagholder|llama-server"` and the ports before saying a task is done. On 2026-10-20 you stopped five orphaned `summarizer.llamafile` servers the CTO had left behind.
@@ -53,6 +54,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 
 - **master** `c12fcdaa` (#563 merged). The latest release is **v2.7.0**.
 - **Cleared by you, awaiting green or merge:** #564 (C13 token race), #565 (B6 currency), #567 (C14 cookie host).
+- **Brief 75** (the earlier app gone) is with the CTO: PR 1 the pull, PR 2 the deletion from de4e40d, PR 3 the header line, then 2.10.0; PR 4 the base schema as its own plan, then 3.0.0. The owner may run the counting query (§10); its fifth and sixth lines decide the pooled-accounts plan and the order events.
 - **#561** (debts show at once, plus the cut short name, planned as 2.7.1): you cleared it earlier. It is green at `8c135884` and unmerged, and no 2.7.1 release exists. Ask the CTO whether its head changed after your clearance, and why it hasn't merged.
 - **The CTO's queue:**
   1. the owner's networth-try (Net worth / Allocation);

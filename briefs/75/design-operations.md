@@ -1,0 +1,234 @@
+# The earlier app gone, every account read the same way, and the page saying when the numbers agree
+
+Clone: `/tmp/claude-1005/-home-md-dev/12a8decb-6b2e-51e6-96e2-82398e1475b1/scratchpad/r571` at origin/master (`2255a88`). Every path below is relative to it; line numbers are the clone's.
+
+## Verdict
+
+Two releases. **2.10.0** ships one SQL migration (number 37) that deletes every record of the earlier app's import and everything that hangs off them, drops the two `legacy_key` columns, and clears the book's record of which accounts were read, so that the first sync after the update reads every account from Wealthsimple whole; the same release deletes every reader and writer of the earlier app's file, reverts the pull machinery of PRs #575 and #586, replaces the closed-account exception with one read rule (the day's sync reads the whole of every account's activity, open or closed; a quick sync reads what moved since the last whole read), and adds one line to the header that says when the book agrees with Wealthsimple and as of what day. **2.11.0**, cut once both of your copies are on 2.10.x, folds the book's 37 migrations into a baseline schema and refuses a book from before 2.10.0 with the one step to take, which is how Rails, Django and GitLab retire migration code. Nothing in either release waits on a condition or runs at every start. About 45,000 lines leave the repository and about 1,500 arrive, of which about 450 are hand-written code and tests that stay.
+
+## 1. What happens to your book, step by step
+
+**Today (2.9.0).** Your book holds 6,156 records of source `bagholder-import`: 5,867 superseded, 288 removed, 1 live (the task's count; the plan's earlier count is `docs/plans/remove-the-earlier-app.md:14-17`). A superseded or removed record has no transactions at all: superseding and removing both delete them (`rust/crates/book/src/records.rs:500-507`, called at `rust/crates/book/src/links.rs:92` and `records.rs:486`), so those 6,155 records count in no figure now. The one live record books the leaving side of the 2025-06-16 move out of the managed RESP; Wealthsimple's own row for the arriving side is in the book (`docs/plans/remove-the-earlier-app.md:19`). The closed managed RESP was read whole once and never again (`rust/crates/broker/src/pull.rs:189-194`: a closed account with a complete read goes to `closed`, read only for a `closed_due` reason, `pull.rs:197-207`). Your page shows both RESPs right, and the header shows `Synced …` (`web/src/App.svelte:314`), a time and nothing about whether the figures agree with Wealthsimple.
+
+**The update to 2.10.0.** You press the header's `Update to v2.10.0` (README.md, "Keeping up to date"). The new server opens the book; before any migration runs on a file that holds a schema, the whole file is copied to `snapshots/book-v36-<stamp>.db` beside it (`rust/crates/sqlite/src/migrate.rs:178-180`, `:251-267`), and an update that does not come up is rolled back to that copy (`SPEC.md` versions-and-the-update-check-7; `docs/architecture.md` §6, "Schema changes never lose data"). Migration 37 then runs in its own transaction (`migrate.rs:215-241`) and is recorded in `schema_migrations` with the time and the app version (`migrate.rs:232-235`), so it runs once per file and never again. What it does to your book, in order (the SQL is in §3a):
+
+1. The one trade anchored on the live import record, if there is one, is orphaned with the reason and keeps its journal entry (the same as Clear data does, `rust/crates/book/src/clear.rs:165-169`). A trade anchored on a superseded or removed record does not exist: superseding moves or orphans every trade first (`links.rs:58-74`, then `:94`) and removal orphans them first (`records.rs:478-480`, then `:487`).
+2. The 6,156 import records go, with their transactions, revisions, refs, problems, holds, order links, sightings, adjustments, transfer links and their side of each supersession link; a link left with no `from` side goes too. A journal entry, a group, an order, a bracket, a notification, a told mark, a watchlist row and a tile name no record (`rust/crates/book/schema/v36.sql:290-298`, `:590-602`, `:380-412`, `:350-360`, `:584-589`, `:646-649`, `:580-583`), so none of them can be touched.
+3. The two `legacy_key` columns and their indexes (`rust/crates/book/migrations/001-the-book.sql:195`, `:201`, `:206`, `:209`) are dropped; an orphaned trade that carries no journal entry and sits in no group is deleted (it anchors nothing and says nothing).
+4. The settings rows that recorded the carries from the earlier app (`carried.%`, `rust/crates/server/src/carry.rs:40`, `:325`, `rust/crates/book/src/notices.rs:24`) and the one repair (`repair.carried-notes-reattached`, `rust/crates/server/src/legacy_import.rs:359`) go.
+5. Every row of `activity_reads` (`rust/crates/book/migrations/006-the-broker-s-statements.sql:69-74`) and the `daily` marker row of `broker_reads` (`pull.rs:534-536`, `:543`) go. Nothing references either (`activity_reads` has no child table; the daily row is written only at `pull.rs:536`).
+
+On your book the migration takes about a second (one transaction over 6,156 records and their rows). The engine then builds from what remains. The arriving side of the June move is Wealthsimple's own record and stays; the leaving side was the live import record and is gone, so for the moment the book has the managed RESP still holding what moved, and Net worth counts it twice. This is the one figure the migration moves, and it is the figure the owner's decision accepts moving for the length of one sync ("the earlier app's rows are deleted outright in one migration on every book, the first sync after it reads every account from the broker in full", `docs/decisions.md:7`).
+
+**The first sync.** With a sign-in on disk, the broker loop's first pass finds the day's pull due at once: `last_read(conn, "daily")` is `None` after step 5, and a pull with no last read is due (`rust/crates/server/src/broker_reads.rs:289-290`, `:85-90`), so it runs the whole pull (`broker_reads.rs:296`, `pull.rs:90-91`) without waiting for the 14:00 Mountain window (`broker_reads.rs:34`). The header shows each step by account (`pull.rs:211`; `broker_reads.rs:335-349`). Every stated account has no complete read now (`rust/crates/book/src/statements.rs:535-538` reads `activity_reads`), so each is read from nothing (`pull.rs:215`: `from` is `None` where `last` is), the closed managed RESP included under the rule in §4. Wealthsimple lists the leaving row (ASSET_MOVEMENT, SOURCE, COMPLETED, 2025-06-16: the task's statement of the feed today), so it is stored as Wealthsimple's own record, the mapping books it leaving, and `link_moves` joins it to the arrival by instrument, instant and opposite quantity (`pull.rs:862-879`). Every other row of every account is already held as it is and costs nothing more than the feed page it came on (`pull.rs:250-256`, `:549-555`). Cost: one request per hundred rows per account (`rust/crates/wealthsimple/src/client.rs:241`), at least 150 ms apart (`client.rs:18`, `:100-105`): for a book of about 6,000 rows, about 70 requests and about 11 seconds. Then the balances and the units as of yesterday are read for every stated account (§4), and the statements for any account whose cash differs (`pull.rs:385`). The managed RESP is flat from 2025-06-16; Net worth is right again; and once the broker check finds every account's cash and units equal to the book's, the header reads `Synced just now · agrees with Wealthsimple as of <yesterday>` (§5).
+
+If Wealthsimple did not list the leaving row after all, the book would keep the units in the managed RESP, Wealthsimple would state none for it, and the header would say so by name once confirmed (`rust/crates/server/src/status.rs:213-215`): the figure would be wrong and named, never wrong and silent.
+
+**Every day after.** The weekday pull at 14:00 Mountain reads the whole of every account's activity again (§4): a row Wealthsimple adds later under an older date is in the book the day after it appears. A page open reads the balances every five minutes (`broker_reads.rs:36`, `:220`); cash that moved since the last activity read starts a quick sync that reads what moved since the last whole read (`broker_reads.rs:297-303`, `pull.rs:94-101`). The header's agreement line moves with each check.
+
+**The release after (2.11.0).** The book's migrations 1 to 37 and their 36 committed snapshots leave the repository, replaced by the schema at version 37 as the baseline a fresh book is created from. A book last opened by a version before 2.10.0 is refused with the step to take (§6). Your two copies, on 2.10.x, open as before. A snapshot of the book is still taken before any later migration.
+
+**Each kind of book.**
+
+| Book | The migration | After it | The first sync |
+|---|---|---|---|
+| Fresh (no records) | every delete finds nothing; the columns are dropped | empty, as before | reads every account whole, as a first sync always did (`pull.rs:4-5`) |
+| Imports, none live | 6,155-odd records go; no figure moves (no transactions on them, `records.rs:500-507`) | identical figures | reads every account whole: the cost above, nothing else |
+| One live import (yours) | as above, plus the leaving leg of the June move | the managed RESP holds what moved until the sync; Net worth double counts it; the header shows no agreement line, since no account is checked yet | reads the closed RESP whole, stores the leaving row, the figures are right, the header says they agree |
+| Cannot reach the broker (sign-in lapsed) | the same; the migration needs no broker | the same as the row above, and the header reads `Not connected` (`App.svelte:312`); nothing positive is said | the sign-in's pull reads everything whole (`broker_reads.rs:268-273`: nothing is read until one) |
+
+The migration's copy under `snapshots/` is the way back for any of them (`migrate.rs:51-55` keeps the newest of the two latest versions).
+
+## 2. What is deleted
+
+Counts are `wc -l` ranges from the map, checked where cited.
+
+**The earlier app's code (release 2.10.0).** Everything the deletion map names, with two changes: `carry_told_by_listing` is retired rather than moved, and `OrderEvent::Imported`/`BracketEvent::Imported` stay (§10).
+
+| Area | Deleted | Lines |
+|---|---|---|
+| server | `carry.rs` whole (`from_old_store` runs at every start, `rust/crates/server/src/main.rs:160`; `carry_told_by_listing` runs at every start behind a setting, `main.rs:184`, `carry.rs:382-385`, added 2026-10-16 by `777161e` and done on every copy that has run 2.7.0 or later); `legacy_import.rs` (`adopt_python_database` at `main.rs:234-237`; `reattach_carried_notes` at every engine build, `rust/crates/server/src/figures.rs:269-272`); `legacy_orders.rs`; `compare.rs`; `figures.rs:33-34`, `:269-272`, `:394-398`, and `ImportMapping` out of `mappings()` (`figures.rs:887`); `main.rs` mods, adoption and the two CLI commands; `update.rs:609-610`'s `OLD_FILE`; `engine_inputs.rs:196-200`; `clear.rs:170-171` and its old-store test halves; `demo.rs:566`; `tests_boundary.rs`, `tests_failures.rs`, `tests_types.rs` earlier-app parts; `tests/start_failures.rs:152-176` | ≈1,978 code, ≈1,014 tests |
+| book | `src/import/` whole (`mod.rs` 402, `old.rs` 260, `mapping.rs` 516) less 130 lines moved (the CSV reader's `Rule`/`Qty`/`Cash`/`rule()` to `bagholder_broker::csv`, its only caller `rust/crates/broker/src/csv.rs:22`, `:451-474`; `wealthsimple_account_type` to `bagholder_wealthsimple::read`, its callers `rust/crates/wealthsimple/src/read.rs:5`, `:97`); `trades.rs`'s `orphan_trade`, `reattach`, `trade_by_legacy_key`, the `legacy_key` parameters; `notices.rs:78-140`; `watched.rs:224-255`; `orders.rs:103-126` (the import writers); `lib.rs:15`; `tests/import.rs` (500), `tests/notices.rs` (99), `tests/watched.rs:124-143` | ≈1,323 code, 620 tests |
+| core | `journal.rs:16-17` `legacy_key` | 2 |
+| store | the crate goes: ≈4,286 old-only src lines deleted; ≈2,405 lines of market-cache SQL (`feeds.rs` less its watchlist block, `bars.rs`, `market.rs:216-394`, `gens.rs`, `tables.rs`'s meta/json family, `rows.rs`'s `exposures`/`news`/`universes`, `guard_home`) move to `bagholder-sources` beside the cache's migrations; tests 1,678 deleted, 772 rebuilt on the cache's migrations; fixtures `tests/golden/*` 9,434 and `sql/schema_*.sql` 349 deleted | ≈4,286 code, 1,678 tests, 9,783 fixtures |
+| market | `refresh.rs` (288, no production caller: `refresh::` only in `market/tests/failures.rs:92-99`), the old quote functions in `quotes.rs` (≈350), `lib.rs:27-36`; tests `failures.rs`, `quotes.rs`, `quote_refresh.rs`, `quote_records.rs` (539); 13 test files' setup rebuilt on `bagholder_sources::cache::MIGRATIONS` as `carry.rs:636-638` already does | ≈648 code, 539 tests |
+| sources | `cache.rs:62-80` `carry_filings`; `tests/cache.rs:437-450`; a cache migration drops `filings_carried` (`rust/crates/sources/migrations/006-market-data-by-listing.sql:129`), whose last readers were `carry_filings` and `carry_told_by_listing` (`carry.rs:356`) and its clear (`rust/crates/server/src/clear.rs:84`) | ≈20 code, 14 tests |
+| web | `web/src/lib/generated/book.ts` and the `LegacyNote` import in `model_api.ts:5` | 28 |
+| docs | README.md:189's adoption sentence; `.gitignore:8`; `docs/plans/remove-the-earlier-app.md` marked superseded by this design; stage-3c and stage-6 marked historical | ≈10 |
+
+Subtotal: ≈8,344 code, ≈3,865 tests, ≈9,783 fixtures; ≈2,535 lines moved (neither added nor removed).
+
+**The #575 and #586 machinery and the import-replacing pull (release 2.10.0).** PR #575 (`bfedbae`) is +832 −43 over 9 files; #586 (`784bfbb`) is +591 −58, of which the pull parts are `lib.rs` +20, `pull.rs` +146 −20, `adapter.rs` +30 −1, `tests/pull.rs` +209 −4 (the map, §2). Reverted:
+
+- `rust/crates/broker/src/lib.rs`: `Moved.imported` (`:119-123`); the default methods `refreshes`, `refresh`, `watches`, `amend` (`:233-259`), `watched_rows`, `names`, `read_beside` (`:262-279`); `record_scheme` (`:204-208`, the import's scheme).
+- `rust/crates/broker/src/pull.rs`: `stale` and the refresh loop (`:145-159`, `:282-309`); `watching`/`Watching` and the amend loop (`:148-150`, `:166`, `:681-683`, `:720-740`); `unheld` (`:151-153`, `:160-165`); the `closed`/`to_read` loop with `closed_read` and `since` (`:183-209`, `:220-221`) and `closed_due` (`:557-597`); the `read_beside` loop (`:310-341`, `:342`, `:358`); the `replaces` lookup and `store_superseding` branch (`:699-713`) and `Report.superseded` (`:33-34`); `supersede_copies` (`:745-786`; it reaches CSV records too, `:771-775`); `replaced_by` (`:788-802`) and the `replaced` skip in `index` (`:807-808`) with the `imported` flag (`:826`, `:833-840`, `:852`, `:856`); the import-removal loop in `unlisted` (`:656-677`); the `a.open` filters on `keys_of` and the statements' `closed` set (`:365`, `:368`, `:377-384`), and the book-status filter in `balances()` (`:910`). Kept: `held` (`:549-555`), `link_moves` (`:862-879`), the `book.atomically` wrapper of `store_row`, `unlisted`'s guard (`:641-655`) unchanged.
+- `rust/crates/wealthsimple/src/adapter.rs`: `stated`, `read_from`, `read_again`, `given` (`:79-88`); `Replies::opposing` (`:264-292`); `lacks_opposing`, `watches`, `amend`, `watched_rows`, `names`, `read_beside`, `refreshes`, `refresh` (`:349-361`, `:483-586`); `book_moves` (`:332-346`). `assemble.rs`: `Needs.opposing`, `Replies::opposing`, `is_move`, `opposing()`, `days_read`, the opposing step (`:37-40`, `:76-107`, `:144-148`, `:256-259`). `record.rs`: `Record.opposing`, `Opposing`, `BookMove.imported` and their serialization (`:69-80`, `:106-108`, `:175-188`). `mapping.rs`: `fn leaving` (`:1007-1077`), its call (`:289-292`), its premise now false (`:1007-1010`: "no row leaving the managed account, read 2026-10-20"); version 13 becomes 14 (`:95-98`), so any record derived with it is derived again on open (`figures.rs:890-900`).
+- Book lookups only the import used: `records_by_ref` (`records.rs:561-565`) and `live_records_by_scheme` (`records.rs:720-732`).
+- Tests: `rust/crates/wealthsimple/tests/pull.rs:246`, `:484`, `:498`, `:517`, `:566`, `:710`, `:737`, `:771` and the `Imported` test mapping (`:197-245`); `tests/mapping.rs:617`, `:680`, `:700`. Kept and reused: the RESP fixtures (`tests/pull.rs:401-463`), the `LateMove` fixtures (`:606-705`), `mapping.rs:659` minus its `opposing` assertion.
+
+Subtotal: ≈1,370 lines deleted, ≈68 restored from the two PRs' own removals, ≈140 fixture lines retained; net ≈1,230.
+
+**The migration history (release 2.11.0).** `rust/crates/book/migrations/001` to `037` (1,574 lines today plus 37's ≈50); `rust/crates/book/schema/v1.sql` to `v36.sql` (19,956 lines); in `rust/crates/book/tests/schema.rs` the migration-specific tests for 25, 26 and 30 (`:114-147`, `:161-266`, `:268-301`) and 2.10.0's test of migration 37. Subtotal ≈21,830.
+
+**Total removed: ≈45,000 lines** (≈1,230 + ≈8,344 + ≈3,865 + ≈9,783 + ≈21,830).
+
+## 3. What is added
+
+### 3a. Migration 37: the data step (≈50 lines of SQL, plus the ≈965-line `schema/v37.sql` the project's own rule requires, `rust/crates/book/src/schema.rs:1-3`)
+
+Modelled on Clear data's order (`rust/crates/book/src/clear.rs:152-233`), which already deletes `bagholder-import` records with the broker's (`clear.rs:142`, `:156-161`), with one difference: a link is deleted only once its `from` side is empty, because a CSV record can share a link's `from` side with an import record through `supersede_copies` (`pull.rs:784`), and `supersedes_from` (`links.rs:140-147`) is the CSV linker's production check (`rust/crates/server/src/csv_import.rs:499`). Migrations run with references off and every reference checked before commit (`migrate.rs:191-194`, `:231`), so the order below is also right under `PRAGMA foreign_keys = ON`.
+
+```sql
+-- 037-the-earlier-app-s-records.sql
+CREATE TEMP TABLE cleared AS SELECT id FROM source_records WHERE source = 'bagholder-import';
+UPDATE trades SET anchor_record = NULL, anchor_leg = NULL, anchor_instrument = NULL,
+       orphaned_reason = 'the record it opened on was cleared'
+ WHERE anchor_record IN (SELECT id FROM temp.cleared);
+INSERT INTO record_problems (record_id, code, detail)
+SELECT a.record_id, 'adjustment-target-gone',
+       'the transaction it explains, ' || a.applies_record || '/' || a.applies_leg || ', was cleared'
+  FROM adjustments a WHERE a.applies_record IN (SELECT id FROM temp.cleared)
+   AND a.record_id NOT IN (SELECT id FROM temp.cleared);
+DELETE FROM transfer_links WHERE out_record IN (SELECT id FROM temp.cleared) OR in_record IN (SELECT id FROM temp.cleared);
+DELETE FROM link_records WHERE record_id IN (SELECT id FROM temp.cleared);
+CREATE TEMP TABLE empty_links AS SELECT id FROM links WHERE id NOT IN (SELECT link_id FROM link_records WHERE side = 'from');
+DELETE FROM link_records WHERE link_id IN (SELECT id FROM temp.empty_links);
+DELETE FROM links WHERE id IN (SELECT id FROM temp.empty_links);
+DELETE FROM instrument_sightings WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM adjustment_legs WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM adjustments WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM record_problems WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM record_refs WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM record_revisions WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM transactions WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM record_holds WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM record_orders WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM statement_holds WHERE record_id IN (SELECT id FROM temp.cleared);
+DELETE FROM source_records WHERE id IN (SELECT id FROM temp.cleared);
+DROP TABLE temp.empty_links; DROP TABLE temp.cleared;
+-- a trade that anchors nothing and says nothing
+DELETE FROM trades WHERE anchor_record IS NULL
+   AND id NOT IN (SELECT trade_id FROM journal WHERE trade_id IS NOT NULL)
+   AND id NOT IN (SELECT trade_id FROM trade_group_members);
+DROP INDEX trades_legacy_key; ALTER TABLE trades DROP COLUMN legacy_key;
+DROP INDEX trade_groups_legacy_key; ALTER TABLE trade_groups DROP COLUMN legacy_key;
+DELETE FROM settings WHERE key LIKE 'carried.%' OR key = 'repair.carried-notes-reattached';
+-- the next sync reads every account whole, and is the day's pull
+DELETE FROM activity_reads;
+DELETE FROM broker_reads WHERE part = 'daily';
+```
+
+`DROP COLUMN` needs SQLite 3.35; the bundled library is 3.46 (`rust/Cargo.lock:1506-1507`, `libsqlite3-sys 0.30.1`), and `legacy_key` is named by no trigger or view (the four mentions in `schema/v36.sql` are the columns and their indexes). Every table that points at a record is listed in `schema/v36.sql:122`, `:259`, `:312`, `:441`, `:451`, `:456`, `:463`, `:467`, `:528`, `:614`, `:640`, `:642`, and none cascades (no `ON DELETE` anywhere in the schema or the migrations). The deletes queue `names_due` and `successions_due` through the existing triggers (`v36.sql:770-772`, `:951-953`), settled at the book's first write after the open (`rust/crates/book/src/lib.rs:143-158`), which is the first sync; the broker's own rows carry the same sightings the import's did.
+
+### 3b. The read rule (≈8 lines in `pull.rs`; the trait's `activity(account, from)` stays, `lib.rs:211`)
+
+The loop at `pull.rs:183-221` collapses to: for every stated account, `last = activity_read_at`; `from = if daily { None } else { last day, lowered to the earliest day of a stored row not yet final }` (today's `:215-219`, kept because a pending row is read again from its day: Plaid and Teller both document that a pending record becomes a different posted one, below). `read_before` stays (`:182`, `:212-214`) and so does `unlisted`'s guard, unchanged. `keys_of`, the margin set and the statement keys cover every stated account (`:365-384` lose their `a.open` filters; the `closed` set passed to `statements::run` is the stated closed accounts, as today). `balances()` covers every account of the connection (`:910` loses its status test).
+
+### 3c. The assurance line (≈95 lines: status ≈30, wire 3, page 3, SPEC 3, tests ≈55)
+
+`Status.agreed: Option<String>` (the day) is derived in `status.rs` from `figures.checks`, the broker checks the engine already computes (`rust/crates/engine/src/equity.rs:130-214`): it is `Some(day)` when every account in `inputs.market.brokers` has no difference at all, pending or not, and `day` is the earliest `held_as_of` among them. The page appends ` · agrees with Wealthsimple as of <day>` to `Synced …` (`App.svelte:307-315`). `SPEC.md` §4 (pages-4) gains the sentence, naming the products modelled on (§5).
+
+### 3d. Release 2.11.0: the baseline (≈125 lines: `migrate.rs` ≈70 with its unit tests ≈30, `schema.rs` ≈5, `tests/schema.rs` ≈+20)
+
+`Schema` gains `base: Option<Base { version: u32, sql: &'static str }>` (`migrate.rs:35-42`). `check_numbering` expects the first migration at `base + 1` (`:134-142`). `identify` refuses a file with `0 < version < base` with a new `MigrateError::Older { store, file, minimum: &'static str }` whose message names the release to go through (`:149-168`, `:57-70`). `run_pending` creates a fresh file from `base.sql`, sets the application id and `user_version`, and records one `schema_migrations` row for the base (`:215-241`); the slice is offset by the base. `schema_text` orders tables before indexes before triggers (`:320-331`; the book has no views: `schema/v36.sql` holds 67 tables, 43 indexes, 90 triggers), so the committed text is runnable as the base; `schema/v37.sql` and the cache's `v1`-`v3.sql` are re-blessed in that order. The cache store passes `base: None` and is unchanged. The book: `BASE = Base { version: 37, sql: include_str!("../schema/v37.sql") }`, `MIGRATIONS: [Migration; 0]`.
+
+**Total added: ≈1,500 lines** (2.10.0 ≈1,320 including the ≈965-line `v37.sql`, the ≈50-line migration and its ≈60-line test, the ≈40-line start-files test and ≈68 lines restored by the reverts; 2.11.0 ≈125; the migration and its test leave again in 2.11.0). Hand-written code and tests that remain after both releases: ≈450.
+
+## 4. The read and reconciliation rule
+
+Stated as the rule the tests hold:
+
+1. **Every account the broker states is read the same way on each sync, open or closed.** No account is assumed never to change (`docs/decisions.md:8`).
+2. **The day's sync reads the whole of each account's activity.** A quick sync (cash moved at the broker while a page is open, `broker_reads.rs:297-303`; a fill awaited, `:286`) reads from the last whole read, lowered to the day of any stored row not yet final. A sync you ask for is a day's sync (`broker_reads.rs:290`, `:296`).
+3. **A row the book holds as the broker lists it costs nothing more** (`pull.rs:250-256`, `rust/crates/wealthsimple/src/adapter.rs:426-428`); a row that changed is stored as a revision (`pull.rs:690-718`); a row no longer listed over the span read is removed under the guard (`pull.rs:641-655`: nothing removed and the account said suspect when a final row older than the last whole read's day is gone or more than three final rows are).
+4. **Cash now, units as of the last full day and net value are read for every stated account**, closed ones too (`pull.rs:364-371`, `:393-407`), and the monthly statements for any whose cash differs (`:385`).
+5. **The book agrees with the broker when every stated account's cash and units equal the book's** (`equity.rs:130-214`); a difference is said once confirmed (`equity.rs:160-172`; `docs/decisions.md`, 2026-10-09) and the agreement is said with its day (§5).
+
+Why a whole read daily rather than "from the last read". Wealthsimple's feed is filtered by `startDate` (`client.rs:235-241`), the day of the last complete read (`pull.rs:215`), and nothing in the repository says whether Wealthsimple applies it to `occurredAt` or to a posting time (`rust/crates/wealthsimple/graphql/FetchActivityFeedItems.graphql:2`, `:32`; no recorded reply carries a condition). Under the code's own reading a row added later under an older date is never asked for again, for an open account or a closed one; the plan's answer, a re-read driven by the broker check (`docs/plans/stage-3b-wealthsimple.md:63`), was never built (`rust/crates/broker/src` has no path from a difference to a read). The vendors that document this say the same: Plaid, "a removed transaction will no longer appear in /transactions/get" and "a posted transaction cannot necessarily be considered immutable" (https://plaid.com/docs/api/products/transactions/, https://plaid.com/docs/transactions/transactions-data/); Teller, "When a pending transaction posts, its date often changes to the posting date" (https://teller.io/docs/api/account/transactions); Akahu, "banks often mutate a transaction in the days (or weeks) following its posting" and, for the volatile part, "it is recommended that you completely rebuild your local copy of this data" (https://developers.akahu.nz/docs/accessing-transactional-data). The sound designs are a change feed with a cursor (Plaid `/transactions/sync`, Stripe's `transaction_refresh`, https://docs.stripe.com/financial-connections/transactions) or stable ids with a re-read and upsert. Wealthsimple offers no cursor (nothing official exists, and the open-source clients send only `startDate`/`endDate`/`accountIds`: https://raw.githubusercontent.com/gboudreau/ws-api-python/main/ws_api/wealthsimple_api.py), so the whole read on the day's pull is the second design, with Wealthsimple's stable `canonicalId` as the key (`adapter.rs:402-408`). It is one rule for every account, needs no state about why an account is read, and is the same read a fresh book gets. Its cost is one request per hundred rows per account per day, paced at 150 ms (`client.rs:18`): about 11 seconds a day at your size, about 45 at four times it, reported by the capacity job and listed with its reason as the day's pull already is (`docs/architecture.md` §13: "every periodic read that remains is listed with its reason"). No new timer: `TIMED_WAITS` is unchanged.
+
+## 5. How accuracy is assured and shown
+
+What exists: the engine compares each stated account's cash per currency and units per instrument with the book's (`equity.rs:130-214`), and the header says each confirmed difference by name (`status.rs:201-237`, `:213-215`), each month a statement does not reconcile (`status.rs:405-420`) and each row kept with a problem (`status.rs:315-389`). What is missing is anything positive: the only positive signal is `Synced <time>` (`App.svelte:314`), a time, not a statement that the figures agree. Consumer finance apps show a positive, dated state: YNAB's reconciliation "puts green lock icons next to reconciled transactions" and "provides assurance that the numbers in your plan are correct" (https://support.ynab.com/en_us/reconciling-accounts-a-guide-BJFE3fHys, https://support.ynab.com/en_us/getting-started-with-reconciling-accounts-an-overview-Sy3JWx4Js); Quicken marks a reconciled transaction with an R (https://info.quicken.com/win/find-out-if-a-transaction-has-cleared); Beancount keeps a dated balance assertion in the ledger and errors on any departure (https://beancount.github.io/docs/beancount_language_syntax/). The accounting term is a bank reconciliation: once prepared, "both the bank balance and the company balance will be the same amount" (https://openstax.org/books/principles-financial-accounting/pages/8-6-define-the-purpose-of-a-bank-reconciliation-and-prepare-a-bank-reconciliation-and-its-associated-journal-entries).
+
+So the header carries three states, from the same checks and no new read:
+
+- **Agrees.** Every stated account's cash and units equal the book's: `Synced 2 minutes ago · agrees with Wealthsimple as of Oct 20` (the day the units are stated as of; cash is compared as stated now). Closed accounts are in the comparison once their balances are read (§4, rule 4), which is what would catch a holding counted in two RESPs.
+- **Differs.** A confirmed difference: the existing sentence by account, instrument and both figures (`status.rs:215-216`), and no agreement line.
+- **Not yet checked.** A difference seen once and not yet confirmed by a later statement, or an account not yet stated: neither line, `Synced …` alone. After the update, before the first sync, this is the state; with no sign-in it reads `Not connected`.
+
+The book is derived from the broker's records and nothing else: "Since an application state is purely derivable from the event log, you can cache it anywhere you like" (Fowler, https://martinfowler.com/eaaDev/EventSourcing.html); a derived view "is just a cached subset of the log, and you could rebuild it from the log at any time" (Kleppmann, https://martin.kleppmann.com/2015/03/04/turning-the-database-inside-out.html). The migration deletes the one set of records that was not the broker's; the first sync rebuilds from the broker's; the header says whether the result agrees.
+
+## 6. Releases, versions, release notes and retiring the migration
+
+**2.10.0 (MINOR: new things a user sees, `CLAUDE.md:91`).** Two pull requests, merged in order, one release: (1) migration 37, the read rule, the reverts of §2, the mapping version, the agreement line; (2) the earlier app's code out, the store's cache SQL into `bagholder-sources`. Release notes:
+
+> Nothing of the earlier Python app remains. Bagholder no longer reads or writes `~/.bagholder/bagholder.db`; the file is left where it is and you may delete it. The records imported from it in September are deleted from the book by this version's migration (a copy of the book from before it is kept under `snapshots/`), and the book is rebuilt from Wealthsimple's own records: the first sync after this update reads every account in full, about a second per hundred rows. Every account, open or closed, is read the same way: the whole of its activity at the day's sync, and what moved since at a quick one. The header now says when the book agrees with Wealthsimple and as of what day, and names any account that does not. Install this version before any later one: 2.11.0 and later open only a book 2.10.0 has opened.
+
+**2.11.0 (MINOR: the refusal is new behaviour a user sees; no install at 2.10.x breaks).** Cut once both of your copies show 2.10.x in the header, which is Django's rule: "wait until all systems are upgraded with the new release ... and then remove the old files, commit and do a second release" (https://docs.djangoproject.com/en/5.2/topics/migrations/). Release notes:
+
+> The book's schema history before 2.10.0 is folded into a baseline. A book last opened by a version before 2.10.0 is refused with the step to take: install 2.10.0, open the book once, then update. Nothing else changes.
+
+**The minimum upgrade path.** README.md's "Keeping up to date" gains one line: a copy more than one release behind installs 2.10.0 first. The updater offers only GitHub's latest release (`rust/crates/server/src/update.rs:37`), so a copy at 2.9.0 that missed 2.10.x would be offered 2.11.0 and, on opening the book, see the refusal in the header instead of a page (`docs/architecture.md` §15: "a migration that failed: the page says so instead of loading"; `main.rs:258-265`), with the step named. This is GitLab's "required upgrade stop" ("versions of GitLab that you must upgrade to before upgrading to later versions", https://docs.gitlab.com/update/upgrade_paths/), Nextcloud's "You cannot skip major releases" (https://docs.nextcloud.com/server/latest/admin_manual/maintenance/upgrade.html) and Home Assistant's migration code "only available for 6 months after deprecation" (https://www.home-assistant.io/more-info/unsupported/home_assistant_core_version/).
+
+**How the migration's code is retired.** Rails: "db/schema.rb ... is a snapshot of the current state of your database and is the authoritative source for rebuilding that database. This makes it possible to delete or prune old migration files" (https://guides.rubyonrails.org/active_record_migrations.html). GitLab squashes at each required stop: the task "Updates db/init_structure.sql with the squashed schema" and "Removes all migrations from the previous version" (https://docs.gitlab.com/development/database/migration_squashing/). The repository already commits the schema each version produces (`rust/crates/book/schema/v1.sql`-`v36.sql`, held by `tests/schema.rs:22-33`); 2.11.0 makes v37 the baseline and deletes the history before it, which is where migration 37's SQL and its test, the last code to name the earlier app, go. The mechanism is generic in `migrate.rs` and serves the cache store the same way later.
+
+## 7. Tests, each named against the rule it holds
+
+2.10.0:
+
+- `rust/crates/book/tests/schema.rs::migration_37_leaves_no_record_of_the_earlier_app_and_keeps_the_person_s_own`: on a version-36 book with records of the import's source (superseded, removed, one live), a trade moved to the broker's record, a journal entry, an orphaned trade with a note and a legacy key, and a CSV record sharing a link's `from` side with an import record: after `Book::open`, zero records of that source, the journal entry and the trade intact, the CSV record still superseded (`links.rs:140-147`), no `legacy_key` column, no `activity_reads` row, no `daily` read. Holds "nothing of the import is kept; the person's own data survives". It is the one place the source's name appears, and it leaves in 2.11.0 with the migration.
+- `rust/crates/wealthsimple/tests/pull.rs::the_day_s_pull_reads_every_account_whole_and_an_activity_pull_from_its_last_full_read`: with the replay's `asked` extended to record `from` (`rust/crates/wealthsimple/src/replay.rs:191-194`), the daily pull asks every stated account, the closed RESP included, with no `from`; the activity pull asks from the last whole read's day. Holds rules 1 and 2.
+- `rust/crates/wealthsimple/tests/pull.rs::a_closed_account_s_row_listed_after_its_full_read_is_stored_by_the_next_day_s_pull`: the `LateMove` fixtures (`:606-705`, cash and units), `before` then `after`; the leaving leg is booked from its own row and the cash nets as `assert_left_from_its_own_row` checks. Replaces `:710`, `:737`, `:771`. Holds "no account is assumed never to change".
+- `rust/crates/wealthsimple/tests/pull.rs::the_balances_and_units_of_every_stated_account_are_read_closed_ones_too`: the RESP fixture with `custodianAccounts` filled (`:424` today empties them); cash and units stored for `anon-resp-1` while closed. Holds rule 4.
+- `rust/crates/wealthsimple/tests/mapping.rs::a_move_stated_on_both_sides_books_one_leg_in_each_account` (`:659` minus its `opposing` assertion). Holds "the mapping books what the broker states, never an inferred leg".
+- `rust/crates/server/src/status.rs::tests::the_header_says_the_book_agrees_with_the_broker_only_when_every_stated_account_does`: all agree gives the sentence with the day; one pending difference gives none; one confirmed difference gives none and the difference. Holds §5's three states.
+- `web/e2e/states.spec.ts`: the agreement line on the made-up book, absent on one with a difference. Holds `SPEC.md` §4's new sentence in the browser (`CLAUDE.md:73`).
+- `rust/crates/server/tests/start_files.rs::a_start_opens_only_the_book_and_the_market_cache` (the plan's own test, `docs/plans/remove-the-earlier-app.md:114`): a start on a temporary home seeded with one unrelated SQLite file leaves it byte-for-byte as it was and creates only the book, the cache, the log and the settings. It names no earlier-app identifier, which is why it and not a scan holds `docs/decisions.md:7`; the decision's "Held by" line is corrected to it, and the second entry's to the three pull tests above.
+- `rust/crates/server/src/tests_misc.rs::test_no_wait_on_a_clock_that_is_not_accounted_for` unchanged: no new timer.
+- The capacity job reports the day's pull's request count at your size and four times it (`bagholder capacity` runs the real adapter on generated replies, `docs/architecture.md` §16).
+
+2.11.0:
+
+- `rust/crates/sqlite/src/migrate.rs::tests::a_file_older_than_the_base_is_refused_naming_the_release_to_install_first`.
+- `rust/crates/book/tests/schema.rs::a_fresh_book_is_the_base_and_every_version_from_it_reaches_the_latest_with_its_rows` (the two existing tests, `:22-52`, rewritten from the base) and `the_header_and_the_record_of_migrations_agree` (`:54-64`) reading the base row.
+
+## 8. Order
+
+1. PR 1 (2.10.0): migration 37 and `schema/v37.sql`; the pull loop and `keys_of`; the reverts; mapping version 14; the agreement line with `SPEC.md`; the tests above. Run on a copy of your data folder (`CLAUDE.md:80-86`): the count of import records before and after (zero), both RESPs' units on 2025-06-17, the header's line. The one capture only you can supply: Wealthsimple's `FetchAccountsWithBalance` reply for the closed RESP, figures made up before it is pushed (no recorded reply shows a closed account's balance: `rust/crates/wealthsimple/tests/replies/wealthsimple-pull/edited-balances.json` holds two open accounts).
+2. PR 2 (2.10.0): the earlier app's code out; the store's cache SQL into `bagholder-sources`; the market tests on the cache's migrations; the `filings_carried` drop; README and docs.
+3. Bump `APP_VERSION` (`rust/crates/server/src/app.rs:14`) to 2.10.0, release as the process says (`CLAUDE.md:91`).
+4. Once both copies show 2.10.x: PR 3, the baseline; bump to 2.11.0; release.
+
+## 9. Risks
+
+- **Wealthsimple may refuse or omit a closed account's balance.** The document restricts nothing (`rust/crates/wealthsimple/graphql/FetchAccountsWithBalance.graphql:2-3`) and no reply records it. Omitted: the account's cash stays unstated and it is compared with nothing, as today (`pull.rs:1043-1046`). Refused: the chunk of up to twenty accounts fails and the header says the balances could not be read (`broker_reads.rs:508-510`) until the closed ids are asked in a request of their own, a five-line change held back until the capture says it is needed.
+- **The window between the migration and the first sync** on a book with a live import: one figure wrong (the managed RESP's holding) for the length of a sync, or until a sign-in. It is the cost the decision takes (`docs/decisions.md:7`); the header says nothing positive meanwhile.
+- **The guard under daily whole reads.** A final row dated before yesterday that Wealthsimple stops listing makes that account suspect every day and keeps a `Sync failed: a suspect read of …` line in the header (`broker_reads.rs:444-455`) until the row is listed again. The figure is kept and the person told, which `docs/architecture.md:91` asks ("marked removed only when its source reports the removal"); a refinement (removed after two consecutive whole reads without it) is not included.
+- **A quick sync can miss a late-dated row for at most one day**, until the day's whole read; it reads what moved since the last whole read by design.
+- **Skipping 2.10.0.** A copy that updates from 2.9.0 straight to 2.11.0 sees the refusal and installs 2.10.0 by hand; cutting 2.11.0 only after both copies are on 2.10.x avoids it. If you read the refusal as a break of an existing install, 2.11.0 is 3.0.0 under `CLAUDE.md:91`; the design does not depend on the number.
+- **`ORDER BY` of the baseline.** `schema_text` orders by type then name today (`migrate.rs:323`), which puts indexes before their tables; 2.11.0 orders tables first, and the committed texts are re-blessed once. The book has no views, so name order within a kind is safe.
+- **Instrument names.** Deleting the import's sightings queues a re-forming of names at the first write; the broker's own rows for the same activity carry the same sightings.
+
+## 10. Not included
+
+- **`OrderEvent::Imported` and `BracketEvent::Imported`** (`rust/crates/core/src/order.rs:167`, `:184`, `:229-240`; `bracket.rs:247`, `:275`, `:340-372`; read at `rust/crates/server/src/orders/doc.rs:369`): their writers go (`rust/crates/book/src/orders.rs:103-126`, `legacy_orders.rs:93`, `:176`), the variants stay, because an order's event log is the person's own history and a book that holds such events would stop reading its orders without them. The decision for you, one line: keep them as the orders' history (recommended), or rewrite those events in the migration.
+- **The old engine in `rust/crates/model`** (`fifo`, `base`, `view`, `trades`, `nav`, … , 5,109 lines, with 2,070 of tests) and the recorded cases `tests/cases` and `tests/wire` (122,939 lines): after 2.10.0 their only production users (`compare.rs`, `legacy_import.rs`) are gone, but the live `context.rs`, `wire.rs` and `symbols_of.rs` reference them (`model/src/context.rs:62`, `wire.rs:809`, `:837`, `:855`, `symbols_of.rs:11`, `:13`), and the phone apps, on hold, compute the old model and are held to the cases (`MOBILE.md:3`; `CLAUDE.md:25`). A third release moves the three live types out and deletes the rest, once you decide whether the phone apps' oracle is kept. One decision.
+- **Orphaned trades that carry a journal entry** stay orphaned, as today; no page lists them (`rust/crates/book/src/trades.rs:445-457` has no production caller after 2.10.0). A page for them is a proposal, not built here.
+- **A per-account agreement mark on the Portfolio or Net worth pages**: the header line and the existing per-account sentences are the whole of what is shown.
+- **Removing a row after two whole reads without it**, and asking closed accounts' balances in a request of their own: held back until the capture or a sync shows the need.
+- **The statements and the two manual LIRA withdrawals**: unchanged (`docs/plans/remove-the-earlier-app.md:23`).
+- **A cursor-based sync**: Wealthsimple offers none.
+
+## Lines
+
+Removed ≈45,000 (reverts ≈1,230; earlier-app code ≈8,344, tests ≈3,865, fixtures ≈9,783; migration history ≈21,830). Added ≈1,500 (≈965 the committed `v37.sql`, ≈110 the migration and its test that leave in 2.11.0, ≈68 restored, ≈125 the baseline mechanism, the rest the read rule, the agreement line, their tests and the start-files test). Remaining hand-written additions after both releases: ≈450.
+
+lines_removed 45000 lines_added 1500
+
+key claims:
+- A migration runs once per file inside its own transaction and is recorded in schema_migrations with the app version (rust/crates/sqlite/src/migrate.rs:215-241), so deleting the import records in migration 37 is a one-time step; and migrate.rs refuses a newer file but has no refusal for an older one (migrate.rs:149-168, :57-70), so a stated minimum upgrade path needs the base version 2.11.0 adds.
+- Deleting every activity_reads row and the 'daily' broker_reads row makes the first pass after the start a whole pull in which every account is read from nothing: pull_due(None) is true (rust/crates/server/src/broker_reads.rs:85-90, :289-290, :296) and `from` is None where activity_read_at is None (rust/crates/broker/src/pull.rs:190-193, :215; rust/crates/book/src/statements.rs:535-538).
+- A superseded or removed record has no transactions and no trade anchored on it (rust/crates/book/src/records.rs:500-507; links.rs:58-74 then :94; records.rs:478-480 then :487), so deleting 6,155 of the 6,156 import records moves no figure; only the one live record's leaving leg does, and the whole read of the closed RESP restores it from Wealthsimple's own row.
+- An incremental read sends startDate = the day of the last complete read (rust/crates/wealthsimple/src/client.rs:235-241; pull.rs:215) and lowers it only for a stored row not yet final or a closed_due reason (pull.rs:215-221, :557-597), so a row Wealthsimple adds later under an older date is never asked for; rows the book already holds unchanged cost nothing on a whole read (pull.rs:250-256, adapter.rs:426-428), so a daily whole read closes the hole at one request per hundred rows per account.
+- The engine already compares every stated account's cash and units with the book's (rust/crates/engine/src/equity.rs:130-214) but the page shows only differences (rust/crates/server/src/status.rs:201-237; web/src/App.svelte:307-315), so the positive dated line is derived from the same checks with no new read.
+- Clear data's SQL is the proven order of deletes for records (rust/crates/book/src/clear.rs:152-233); migration 37 follows it, deleting a link only once its from side is empty because records_by_ref reads record_refs alone (records.rs:561-565), only the import stores a ref under the scheme (rust/crates/book/src/import/mod.rs:108), and supersede_copies can put a CSV record on the same link (pull.rs:771-784) whose supersedes_from the CSV linker checks (links.rs:140-147, rust/crates/server/src/csv_import.rs:499).
