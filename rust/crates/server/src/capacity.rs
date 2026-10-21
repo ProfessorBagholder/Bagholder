@@ -1183,12 +1183,26 @@ pub fn listed_disagree(verdicts: &[Verdict]) -> Vec<String> {
                 // at the edge, it passes only listed with its issue: a run either side
                 // of the budget says the same
                 (false, true, false) => out.push(format!("{} ({}) is at the edge of its budget: {}; list it on OVER_BUDGET with its issue", v.op.name(), v.pair.name(), edge.join("; "))),
+                // a time under the band while listed is said beside the table and fails
+                // nothing: time is noisy, and the listing stays in sight by its issue
+                (true, true, true) if m == Measure::Time => {}
                 (true, true, true) => out.push(format!("{} ({}) is within its budget by {} now: take it off OVER_BUDGET and close its issue", v.op.name(), v.pair.name(), m.name())),
                 _ => {}
             }
         }
     }
     out
+}
+
+/// The operations listed over by time that a run found under the band: said, never
+/// failed (`listed_disagree`).
+pub fn could_come_off(verdicts: &[Verdict]) -> Vec<String> {
+    let time = |l: &[(Measure, String)]| l.iter().any(|(m, _)| *m == Measure::Time);
+    verdicts
+        .iter()
+        .filter(|v| listed(v.op, v.pair, Measure::Time) && !time(&v.over) && !time(&v.edge))
+        .map(|v| format!("{} ({}) was under its budget by time on this run: it could come off OVER_BUDGET", v.op.name(), v.pair.name()))
+        .collect()
 }
 
 pub fn run(work: &Path) -> Result<String, String> {
@@ -1241,10 +1255,11 @@ pub fn run(work: &Path) -> Result<String, String> {
         }
     }
     let wrong = listed_disagree(&verdicts);
+    let said: String = could_come_off(&verdicts).iter().map(|s| format!("\n{s}")).collect();
     if wrong.is_empty() {
-        Ok(String::from("\nEvery operation is within its budget and the growth rule, or listed over it.\n"))
+        Ok(format!("{said}\nEvery operation is within its budget and the growth rule, or listed over it.\n"))
     } else {
-        Err(format!("\n{}", wrong.join("\n")))
+        Err(format!("{said}\n{}", wrong.join("\n")))
     }
 }
 
@@ -1685,6 +1700,11 @@ mod tests {
         let v = judge(unlisted_op, Pair::Depth, &one, &at(under));
         assert!(!time(&v.over) && !time(&v.edge), "{v:?}");
         assert!(listed_disagree(&[v]).is_empty());
-        assert!(listed_disagree(&[judge(listed_op, Pair::Depth, &one, &at(under))]).iter().any(|s| s.contains("take it off")));
+        // and listed, it is said and fails nothing: time is noisy
+        let v = judge(listed_op, Pair::Depth, &one, &at(under));
+        assert!(could_come_off(std::slice::from_ref(&v)).iter().any(|s| s.contains("could come off")), "{v:?}");
+        assert!(listed_disagree(&[v]).is_empty());
+        // listed at the edge or past it, nothing is said
+        assert!(could_come_off(&[judge(listed_op, Pair::Depth, &one, &at(budget))]).is_empty());
     }
 }
