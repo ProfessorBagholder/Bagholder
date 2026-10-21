@@ -37,7 +37,9 @@ fn migration_two_anchors_every_trade_on_its_transaction_and_instrument() {
          INSERT INTO source_records(id, connection_id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('01900000-0000-7000-8000-000000000004', '01900000-0000-7000-8000-000000000001', 's', 'k', 'live', 1, 'x', 'x');
          INSERT INTO transactions(record_id, leg, mapping_version, account_id, trade_date, kind, instrument_id, quantity, cash, cash_currency) VALUES ('01900000-0000-7000-8000-000000000004', 'trade', 1, '01900000-0000-7000-8000-000000000002', '2026-01-02', 'buy', '01900000-0000-7000-8000-000000000003', '10', '-100', 'CAD');
          INSERT INTO trades(id, anchor_record, anchor_leg, created_at) VALUES ('01900000-0000-7000-8000-000000000005', '01900000-0000-7000-8000-000000000004', 'trade', 'x');
-         INSERT INTO trades(id, orphaned_reason, created_at) VALUES ('01900000-0000-7000-8000-000000000006', 'gone', 'x');",
+         INSERT INTO trades(id, orphaned_reason, created_at) VALUES ('01900000-0000-7000-8000-000000000006', 'gone', 'x');
+         -- a note on the orphan: an orphan holding nothing goes (migration 37)
+         INSERT INTO journal(trade_id, thesis, updated_at) VALUES ('01900000-0000-7000-8000-000000000006', 'why', 'x');",
     )
     .unwrap();
     drop(conn);

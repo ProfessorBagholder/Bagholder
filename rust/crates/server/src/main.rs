@@ -390,7 +390,7 @@ fn main() {
     if args.first().map(String::as_str) == Some("pull-broker") {
         std::process::exit(pull_broker::cli(&args[1..]));
     }
-    // the server held to its cost budget at the owner's size (docs/architecture.md §16)
+    // the server held to its cost budget at the reference size (docs/architecture.md §16)
     if args.first().map(String::as_str) == Some("capacity") {
         std::process::exit(capacity::cli(&args[1..]));
     }
