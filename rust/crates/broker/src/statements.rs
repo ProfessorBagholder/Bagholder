@@ -244,6 +244,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                     Some(p) if m == newest && p >= first => {
                         top = p;
                         m = p;
+                        oldest = p;
                         continue 'walk;
                     }
                     _ => break 'walk,

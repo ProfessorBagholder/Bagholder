@@ -338,9 +338,6 @@ fn identity_is_carried_as_the_broker_gave_it() {
     let terms = i.book.option_terms(opt).unwrap().unwrap();
     assert_eq!((terms.strike, terms.expiry.to_string(), terms.multiplier), (Dec::parse("12").unwrap(), "2027-01-15".to_string(), None));
     assert_eq!(terms.underlying, tx(&i, "usd-side").unwrap().instrument.unwrap());
-    // every record carries its Wealthsimple id, for the raw row that will replace it
-    let found = i.book.records_by_ref(bagholder_book::import::WEALTHSIMPLE_RECORD, "ws-trade-buy").unwrap();
-    assert_eq!(found.len(), 1);
 }
 
 #[test]

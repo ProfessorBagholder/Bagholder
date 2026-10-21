@@ -97,6 +97,12 @@ impl Book {
         })
     }
 
+    /// An account's status, as its broker states it now.
+    pub fn set_account_status(&self, account: AccountId, status: AccountStatus) -> Result<()> {
+        self.conn().execute("UPDATE accounts SET status = ?1 WHERE id = ?2 AND status <> ?1", params![status.as_str(), account.to_string()])?;
+        Ok(())
+    }
+
     /// Add a broker id to an account. One another account holds is refused.
     pub fn add_account_ref(&self, account: AccountId, r: &AccountRef) -> Result<()> {
         match self.account_by_ref(r)? {

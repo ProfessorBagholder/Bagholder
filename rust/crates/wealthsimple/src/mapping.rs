@@ -92,10 +92,11 @@ impl Mapping for WealthsimpleMapping {
     ///    cost Wealthsimple gave it there where it reset it, read from its book
     ///    cost in both accounts either side of the move (`SPEC.md` §2, Moves
     ///    between your accounts).
-    /// 13: a move arriving from another of the person's accounts whose feed
-    ///    records nothing leaving books it leaving there too.
+    /// 14: a move between two of the person's accounts is booked in each from
+    ///    that account's own row alone (13, a move leaving booked from its
+    ///    arrival, withdrawn: brief 75 §4).
     fn version(&self) -> u32 {
-        13
+        14
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -286,10 +287,7 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
         "OPTIONS_ASSIGN" => assignment(&root, &row, &base, &mut out)?,
         "CORPORATE_ACTION" => corporate_action(&root, &row, &base, &ctx.record, &mut out)?,
         "FUNDS_CONVERSION" => conversion(&root, &row, &base, &mut out)?,
-        "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "LEGACY_INTERNAL_TRANSFER" => {
-            transfer(&root, &row, &base, &mut out)?;
-            leaving(&root, &row, &mut out)?;
-        }
+        "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "LEGACY_INTERNAL_TRANSFER" => transfer(&root, &row, &base, &mut out)?,
         "INSTITUTIONAL_TRANSFER_INTENT" => institutional(&root, &row, &base, &mut out)?,
         ty => match rule(ty, row.sub) {
             Some(r) => single(&root, &row, &base, &r, &mut out)?,
@@ -1000,78 +998,6 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     }
     if n == 0 {
         unstated(out, format!("a {kind} the positions do not show moving anything its way"));
-    }
-    Ok(())
-}
-
-/// A move arriving from another of the person's accounts that the other
-/// account's feed records nothing leaving: Wealthsimple states one side of some
-/// moves only (a managed account's cash moved to a self-directed one as it
-/// closed: its arrival, and no row leaving the managed account, read 2026-10-20).
-/// What arrived left the other account at the same instant, so it is booked
-/// leaving there too, signed the other way: each leg of the arrival that moved
-/// cash or units. Only where the record holds that account's feed over the
-/// move's days (`opposing`: it is the person's, and read), and nothing records
-/// it leaving: no row of the move's group in it, no move of its feed leaving
-/// it for this account (or for none named) that is done or under way, and no
-/// transaction of the book's moving out the same cash or units there on those
-/// days, other than an import's (which the pull replaces with this leg).
-fn leaving(root: &Node, row: &Row, out: &mut Mapped) -> Result<(), Failed> {
-    if !matches!(row.sub, Some("DESTINATION" | "TRANSFER_IN")) {
-        return Ok(());
-    }
-    let Some(other) = row.node.opt_text("opposingAccountId")?.filter(|o| *o != row.account) else { return Ok(()) };
-    let Ok(feed) = root.obj("opposing") else { return Ok(()) };
-    if feed.text("account")? != other {
-        return Ok(());
-    }
-    // a row of the move in the other account
-    if let Ok(list) = root.list("siblings") {
-        if list.iter().any(|g| g.text("accountId").ok() == Some(other)) {
-            return Ok(());
-        }
-    }
-    // the other account's feed records it leaving
-    for r in feed.list("rows")? {
-        let status = r.text("unifiedStatus")?;
-        let stands = status == "COMPLETED" || crate::adapter::settled(status) == Some(false);
-        let out_of_it = matches!(r.opt_text("subType")?, Some("SOURCE" | "TRANSFER_OUT"));
-        let to_here = r.opt_text("opposingAccountId")?.is_none_or(|o| o == row.account);
-        if r.text("accountId")? == other && stands && out_of_it && to_here {
-            return Ok(());
-        }
-    }
-    // the book's own transactions moving it out there on the move's days (an
-    // import's are what Wealthsimple's own rows replace: not its record of it)
-    let mut booked_out: Vec<(String, Dec)> = Vec::new();
-    if let Ok(list) = root.list("book") {
-        for b in list {
-            let imported = b.field("imported").is_ok_and(|f| matches!(f.value(), Value::Bool(true)));
-            if b.text("account")? == other && !imported {
-                booked_out.push((b.text("security")?.to_string(), b.dec_text("quantity")?));
-            }
-        }
-    }
-    let arrived: Vec<Draft> = out.legs.iter().filter(|d| d.kind == Kind::TransferIn && d.account.value == row.account && (d.cash.is_some() || d.quantity.is_some())).cloned().collect();
-    for (n, d) in arrived.into_iter().enumerate() {
-        let what = match (&d.cash, &d.instrument) {
-            (Some(c), _) => Some((format!("sec-c-{}", c.currency.to_string().to_lowercase()), c.amount)),
-            (None, Some(i)) => i.refs.iter().find(|r| matches!(r.scheme, RefScheme::BrokerSecurity(_))).map(|r| r.value.clone()).zip(d.quantity),
-            (None, None) => None,
-        };
-        if let Some((id, q)) = &what {
-            if booked_out.iter().any(|(s, x)| s == id && x.checked_add(*q).ok() == Some(Dec::ZERO)) {
-                continue;
-            }
-        }
-        let mut m = d;
-        m.leg = nth_leg("leaving", n);
-        m.account = AccountRef::new(broker(), other);
-        m.kind = Kind::TransferOut;
-        m.cash = m.cash.map(|c| Money::new(c.amount.neg(), c.currency));
-        m.quantity = m.quantity.map(|q| q.neg());
-        m.value = None;
-        out.legs.push(m);
     }
     Ok(())
 }

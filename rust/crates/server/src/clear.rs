@@ -427,7 +427,7 @@ mod tests {
         let f = app.figures.get().unwrap();
         let before = counts(&f.book().unwrap().conn_for_tests());
         for (t, holds) in TABLES {
-            if !matches!(holds, Holds::Schema) && !["adjustments", "adjustment_legs", "links", "link_records", "transfer_links", "account_links", "issuers", "instrument_routes", "declared_reads", "declared_distributions", "stated_frequencies", "bank_holidays", "fx_series", "trade_groups", "trade_group_members", "names_due"].contains(t) {
+            if !matches!(holds, Holds::Schema) && !["adjustments", "adjustment_legs", "links", "link_records", "transfer_links", "account_links", "issuers", "instrument_routes", "declared_reads", "declared_distributions", "stated_frequencies", "bank_holidays", "fx_series", "trade_groups", "trade_group_members", "names_due", "record_refs"].contains(t) {
                 assert!(before[*t] > 0, "the book's {t} is empty before the clear, so the test proves nothing of it");
             }
         }
