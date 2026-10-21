@@ -66,3 +66,8 @@ A note, not a change: `return Err(NetError::Offline)` after `client::leave(…)?
 2. **The planted reverses** are the reviewer's, run under rule 1.
 3. **Brief 50 starts after #525 merges.** Its fixes are built and checked under rule 1 and pushed together in one push. The full run that push starts is its merge evidence.
 4. **The standing rule:** add rules 1–3 to `CLAUDE.md` *Verifying a change*, in the next PR that touches that file, in the words above. Held by: review only.
+
+
+## Addendum, 2026-10-21: one build folder per worktree, sccache off
+
+The shared `CARGO_TARGET_DIR` is withdrawn for tests. A test binary built in one worktree is reused in another and keeps the first worktree's `env!("CARGO_MANIFEST_DIR")`, so every test that reads `tests/replies`, `tests/cases` or `schema/` through it reads the other worktree's files: a case added in one worktree passed locally and failed in CI (#590, found by the CTO). The rule now: one `CARGO_TARGET_DIR` per worktree or clone, and `RUSTC_WRAPPER=` (sccache off) for test builds. A cold build of the engine's cases is about 40 s, which is affordable. Everything else in this brief stands: named tests only, one build at a time (`flock -o`), one CI run per merge head.

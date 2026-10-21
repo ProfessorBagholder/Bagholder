@@ -39,7 +39,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 ## 3. The review method
 
 1. Read the brief or plan, then the diff. For every required change, find its code and the test that holds it.
-2. Plant the reverse of the key changes and confirm the test fails. Use `<scratchpad>/plant548.sh`-style scripts, the shared build folder `<scratchpad>/cargo-target`, and `flock -o /tmp/bagholder-build.lock nice -n 10 cargo test --locked …` (`-o` closes the lock before the command runs; without it the sccache server cargo starts inherits the lock and every later build waits forever, 2026-10-21), one build at a time.
+2. Plant the reverse of the key changes and confirm the test fails. Use `<scratchpad>/plant548.sh`-style scripts, one build folder per clone (`CARGO_TARGET_DIR=$PWD/target RUSTC_WRAPPER=`; a shared folder reuses a test binary across worktrees with the wrong `CARGO_MANIFEST_DIR` baked in, brief 51's addendum), and `flock -o /tmp/bagholder-build.lock nice -n 10 cargo test --locked …` (`-o` closes the lock before the command runs; without it the sccache server cargo starts inherits the lock and every later build waits forever, 2026-10-21), one build at a time.
 3. Check outside facts against a primary source.
 4. Full suites only on CI: the one run that starts on the PR's push is the merge evidence. Never dispatch a run or push a throwaway branch to prove one test, and never rerun a CI job to retry a test; rerun the failing test locally.
 5. This server's CPU (Pentium G4400, no AVX) is slower than a Pi 5 for model work. Its iGPU isn't usable by this account, so don't benchmark models here; use the kit on the Mac.
@@ -88,7 +88,7 @@ These live in `/home/md/.claude/projects/-home-md-dev/memory/`:
 
 `/tmp/claude-1005/-home-md-dev/12a8decb-6b2e-51e6-96e2-82398e1475b1/scratchpad/`:
 - `briefs/` (worktree);
-- `cargo-target/` (shared warm build, about 4 GB);
+- `cargo-target/` (the old shared build, withdrawn by brief 51's addendum; remove it);
 - `plant*.sh`;
 - `llm/` (benchmark leftovers, removable);
 - `repro/` (an auditor's test binaries, removable).
