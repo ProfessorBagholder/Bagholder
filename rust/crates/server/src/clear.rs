@@ -277,6 +277,10 @@ mod tests {
         let usd = bagholder_core::Currency::parse("USD").unwrap();
         let day: bagholder_core::jiff::civil::Date = "2025-11-18".parse().unwrap();
         book.store_rates(usd, &[(day, bagholder_core::Dec::parse("1.4").unwrap())], (day, day), &bagholder_core::SourceName::named("bank-of-canada"), t).unwrap();
+        // a margin interest rate stated, made up
+        let account = book.accounts().unwrap()[0].id;
+        let read = book.broker_read(book.connections().unwrap()[0].id, "margin-rates", t).unwrap();
+        book.store_margin_rates(account, t, &[(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("0.0495").unwrap())].into(), &read).unwrap();
         book.set_setting("watch.folder", Some("/somewhere"), t).unwrap();
         // a browser subscribed to this copy's pushes
         book.keep_push_subscription("https://push.example/sub", "BAAA", "AAAA", t).unwrap();

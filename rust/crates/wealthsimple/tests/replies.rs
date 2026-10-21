@@ -170,6 +170,9 @@ impl Source for Routed<'_> {
     fn buying_power(&mut self, account: &str) -> Answer<Value> {
         self.replay.buying_power(account)
     }
+    fn margin_rates(&mut self, account: &str) -> Answer<Value> {
+        self.replay.margin_rates(account)
+    }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         if self.op == Op::Positions { self.client.positions(account, day) } else { self.replay.positions(account, day) }
     }

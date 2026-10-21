@@ -1,0 +1,14 @@
+query FetchAccountAppliedRates($accountId: ID!, $rateType: RateType!) {
+  account(id: $accountId) {
+    id
+    appliedRates(rateType: $rateType) {
+      __typename
+      ... on AppliedMarginInterestRates {
+        cadPositionRate
+        usdPositionRate
+        __typename
+      }
+    }
+    __typename
+  }
+}

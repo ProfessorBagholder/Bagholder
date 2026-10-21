@@ -796,6 +796,9 @@ pub struct BrokerAccount {
     pub held_as_of: Option<Date>,
     /// What it can borrow, as the broker states it, or why it cannot say.
     pub buying_power: Option<Result<Money, String>>,
+    /// A margin account's yearly interest rate on what it borrows, per
+    /// currency, as a fraction: the currencies the broker states one in.
+    pub margin_rates: BTreeMap<Currency, Dec>,
 }
 
 /// The ETF that tracks a benchmark, as its source states it: each session's

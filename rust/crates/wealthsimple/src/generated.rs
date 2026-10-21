@@ -1224,6 +1224,14 @@ impl Source for Generated {
         json::parse(&reply).map_err(|e| Failure::Mismatch(e.to_string()))
     }
 
+    fn margin_rates(&mut self, account: &str) -> Answer<Value> {
+        self.asked += 1;
+        self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
+        // the made-up person's rates, the same for every margin account
+        let reply = format!(r#"{{"id":"{account}","appliedRates":{{"__typename":"AppliedMarginInterestRates","cadPositionRate":"0.0545","usdPositionRate":"0.0745"}},"__typename":"Account"}}"#);
+        json::parse(&reply).map_err(|e| Failure::Mismatch(e.to_string()))
+    }
+
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked += 1;
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;

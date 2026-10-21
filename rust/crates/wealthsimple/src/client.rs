@@ -34,6 +34,7 @@ fn doc(name: &str) -> &'static str {
         "FetchIdentityNetWorthAccounts" => include_str!("../graphql/FetchIdentityNetWorthAccounts.graphql"),
         "FetchIdentityNetWorthFinancials" => include_str!("../graphql/FetchIdentityNetWorthFinancials.graphql"),
         "FetchAccountCurrentMarginBuyingPowerV2" => include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql"),
+        "FetchAccountAppliedRates" => include_str!("../graphql/FetchAccountAppliedRates.graphql"),
         "FetchMonthlyStatementWithTransactions" => include_str!("../graphql/FetchMonthlyStatementWithTransactions.graphql"),
         "FetchTradingBalanceBuyingPower" => include_str!("../graphql/FetchTradingBalanceBuyingPower.graphql"),
         // the probe's only: the enum's values where Wealthsimple answers introspection
@@ -322,6 +323,11 @@ impl Source for Client<'_> {
     fn buying_power(&mut self, account: &str) -> Answer<Value> {
         let op = "FetchAccountCurrentMarginBuyingPowerV2";
         let data = self.graphql(op, obj(vec![("accountId", text(account)), ("currency", text("CAD"))]))?;
+        Ok(Node::root(&data).obj("account").map_err(|m| mismatch(op, m))?.value().clone())
+    }
+    fn margin_rates(&mut self, account: &str) -> Answer<Value> {
+        let op = "FetchAccountAppliedRates";
+        let data = self.graphql(op, obj(vec![("accountId", text(account)), ("rateType", text("MARGIN_INTEREST"))]))?;
         Ok(Node::root(&data).obj("account").map_err(|m| mismatch(op, m))?.value().clone())
     }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {

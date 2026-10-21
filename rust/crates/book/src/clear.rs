@@ -81,6 +81,7 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("account_links", Holds::Broker),
     ("margin_backing", Holds::Broker),
     ("buying_power", Holds::Broker),
+    ("margin_rates", Holds::Broker),
     ("statements", Holds::Broker),
     ("statement_cash", Holds::Broker),
     ("statement_units", Holds::Broker),
@@ -200,7 +201,7 @@ impl Book {
             if what.broker {
                 c.execute_batch(
                     "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_holds; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
-                     DELETE FROM buying_power; DELETE FROM account_days; DELETE FROM account_links; DELETE FROM margin_backing;
+                     DELETE FROM buying_power; DELETE FROM margin_rates; DELETE FROM account_days; DELETE FROM account_links; DELETE FROM margin_backing;
                      DELETE FROM activity_reads; DELETE FROM broker_reads; DELETE FROM outside_debts; DELETE FROM outside_days;",
                 )?;
             }
@@ -280,6 +281,7 @@ impl Book {
                 AND id NOT IN (SELECT account_id FROM record_holds)
                 AND id NOT IN (SELECT account_id FROM statements)
                 AND id NOT IN (SELECT account_id FROM buying_power)
+                AND id NOT IN (SELECT account_id FROM margin_rates)
                 AND id NOT IN (SELECT account_id FROM account_days)
                 AND id NOT IN (SELECT account_id FROM account_links)
                 AND id NOT IN (SELECT linked_to FROM account_links WHERE linked_to IS NOT NULL)

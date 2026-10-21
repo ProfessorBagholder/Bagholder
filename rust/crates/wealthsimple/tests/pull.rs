@@ -655,3 +655,64 @@ fn a_row_whose_record_cannot_be_put_together_leaves_its_account_s_read_incomplet
     assert!(book.record_by_key(Some(c), &SourceName::named("wealthsimple"), &key).unwrap().is_some(), "listed again, and stored");
     assert!(book.activity_read_at(account).unwrap().is_some());
 }
+
+/// The pull's replies with the account made a margin account, and, with
+/// `rates`, Wealthsimple's statement of its margin interest rates (every
+/// figure made up).
+fn margin_replies(rates: Option<&str>) -> tempfile::TempDir {
+    let replies = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(dir()).unwrap() {
+        let p = e.unwrap().path();
+        if !p.to_string_lossy().ends_with(".later") {
+            std::fs::copy(&p, replies.path().join(p.file_name().unwrap())).unwrap();
+        }
+    }
+    let path = replies.path().join("edited-accounts-one.json");
+    std::fs::write(&path, std::fs::read_to_string(&path).unwrap().replace("\"SELF_DIRECTED_TFSA\"", "\"SELF_DIRECTED_NON_REGISTERED_MARGIN\"")).unwrap();
+    if let Some(applied) = rates {
+        std::fs::write(replies.path().join("FetchAccountAppliedRates-1.json"), format!(r#"{{"data":{{"account":{{"id":"anon-tfsa-1","appliedRates":{applied},"__typename":"Account"}}}}}}"#)).unwrap();
+    }
+    replies
+}
+
+/// A margin account's interest rates are read with the day's pull and kept as
+/// stated; the balances read between pulls, and a pull of the activity alone,
+/// do not ask them again (a rate changes seldom).
+#[test]
+fn a_margin_account_s_rates_are_read_with_the_day_s_pull_alone() {
+    let replies = margin_replies(Some(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":"0.0445","usdPositionRate":"0.0695"}"#));
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let (report, asked) = once(&book, replies.path(), now);
+    assert!(!report.failures.iter().any(|(p, _)| p.starts_with("margin rate")), "{:?}", report.failures);
+    assert_eq!(asked.iter().filter(|a| a.starts_with("margin rates")).collect::<Vec<_>>(), ["margin rates anon-tfsa-1"]);
+    let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+    let (_, rates) = book.stated(account).unwrap().margin_rates.expect("the rates stated");
+    assert_eq!(rates, [(Currency::CAD, Dec::parse("0.0445").unwrap()), (Currency::USD, Dec::parse("0.0695").unwrap())].into());
+    let c = connection(&book, now);
+    let mut ws = Wealthsimple::new(Replay::read(replies.path()).unwrap().taken_before_statements());
+    bagholder_broker::pull::balances(&book, &mut ws, c, at("2025-11-19T20:05:00Z")).unwrap();
+    bagholder_broker::pull::pull_activity(&book, &mut ws, c, "2025-11-19".parse().unwrap(), at("2025-11-19T20:10:00Z"), &mut |_| {}).unwrap();
+    assert!(!ws.source.asked.iter().any(|a| a.starts_with("margin rates")), "{:?}", ws.source.asked);
+}
+
+/// A rate read that fails is its own failed part, named by the account, and
+/// stores nothing; a rate that is not a yearly fraction is refused, never
+/// converted.
+#[test]
+fn a_margin_rate_not_read_is_said_by_its_account_and_stores_nothing() {
+    for (rates, why) in [(None, "no margin rates"), (Some(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":"4.45","usdPositionRate":null}"#), "not a yearly rate")] {
+        let replies = margin_replies(rates);
+        let home = tempfile::tempdir().unwrap();
+        let now = "2025-11-19T20:00:00Z";
+        let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+        let (report, _) = once(&book, replies.path(), now);
+        let failed: Vec<&(String, bagholder_broker::Failure)> = report.failures.iter().filter(|(p, _)| p.starts_with("margin rate")).collect();
+        assert_eq!(failed.len(), 1, "{:?}", report.failures);
+        assert_eq!(failed[0].0, "margin rate:anon-tfsa-1");
+        assert!(format!("{:?}", failed[0].1).contains(why), "{:?}", failed[0].1);
+        let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+        assert_eq!(book.stated(account).unwrap().margin_rates, None);
+    }
+}

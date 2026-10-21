@@ -210,6 +210,35 @@ pub fn buying_power(node: &Value, account: &str) -> Read<Result<Dec, String>> {
     }
 }
 
+/// A margin account's yearly interest rate on what it borrows, per currency
+/// (`FetchAccountAppliedRates`'s `account`, asked for rate type MARGIN_INTEREST,
+/// of the account asked for): `AppliedMarginInterestRates`' `cadPositionRate`
+/// and `usdPositionRate`, each a fraction (Wealthsimple's web app works a
+/// month's interest from it as the principal × ((1 + rate ÷ the year's days) ^
+/// the month's days − 1)), none for a currency it states none in. A rate
+/// outside 0 to 1 is not a fraction: a mismatch, never converted.
+pub fn margin_rates(node: &Value, account: &str) -> Read<BTreeMap<Currency, Dec>> {
+    let n = Node::root(node);
+    let id = n.text("id")?;
+    if id != account {
+        return Err(n.field("id")?.mismatch(format!("the account {id}, not {account}, which was asked")));
+    }
+    let applied = n.obj("appliedRates")?;
+    let kind = applied.text("__typename")?;
+    if kind != "AppliedMarginInterestRates" {
+        return Err(applied.field("__typename")?.mismatch(format!("{kind}, where the margin interest rates were asked")));
+    }
+    let mut out = BTreeMap::new();
+    for (key, currency) in [("cadPositionRate", Currency::CAD), ("usdPositionRate", Currency::USD)] {
+        let Some(rate) = applied.opt_dec_text(key)? else { continue };
+        if rate.is_negative() || rate >= Dec::from_int(1) {
+            return Err(applied.field(key)?.mismatch(format!("{} is not a yearly rate as a fraction", rate.to_text())));
+        }
+        out.insert(currency, rate);
+    }
+    Ok(out)
+}
+
 /// What is owed on a credit card now (`creditCardAccount.balance.current`: the
 /// posted purchases less payments; `pending` is apart), of the card account
 /// asked for.

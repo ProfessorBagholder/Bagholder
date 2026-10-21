@@ -359,6 +359,9 @@ pub fn build(case: &Value) -> Built {
         }
         acct.held_as_of = s(&b, "held_as_of").map(day);
         acct.buying_power = s(&b, "buying_power").map(|v| Ok(Money::new(dec(v), vc)));
+        if let Some(r) = b.get("margin_rates").and_then(Value::as_object) {
+            acct.margin_rates = r.iter().map(|(k, v)| (ccy(k), dec(v.as_str().unwrap()))).collect();
+        }
         market.brokers.insert(id, acct);
     }
     let today = day(s(case, "today").unwrap());
