@@ -183,6 +183,8 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             }
             kept.insert(k.clone(), months);
         }
+        // a closed account's statements end when it closed
+        let all_closed = keys.iter().all(|k| closed.contains(k));
         // the newest month issued: the one before it until the broker issues it
         let mut top = newest;
         let mut base: BTreeMap<Currency, Option<jiff::civil::Date>> = differing.iter().map(|c| (*c, None)).collect();
@@ -238,10 +240,11 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             }
             if !issued {
                 // the newest completed month not issued yet: the one before is
-                // the newest there is; any earlier month not issued is where the
-                // account's statements begin
+                // the newest there is (for a closed account, every month after it
+                // closed); any earlier month not issued is where the account's
+                // statements begin
                 match previous(m) {
-                    Some(p) if m == newest && p >= first => {
+                    Some(p) if m == top && (m == newest || all_closed) && p >= first => {
                         top = p;
                         m = p;
                         oldest = p;
