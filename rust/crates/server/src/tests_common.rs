@@ -8,10 +8,32 @@ use crate::app::App;
 static LOCK: Mutex<()> = Mutex::new(());
 static APP: OnceLock<Arc<App>> = OnceLock::new();
 
+/// A folder shared by every test in this run, removed when the run's process
+/// exits, whether its tests passed or failed. A folder one test owns is a
+/// `tempfile::TempDir` instead, removed when the test ends; a folder held in a
+/// static is never dropped, so this one is removed at exit.
+pub fn folder_for_the_run() -> PathBuf {
+    static RUN: OnceLock<PathBuf> = OnceLock::new();
+    RUN.get_or_init(|| {
+        extern "C" fn remove() {
+            if let Some(d) = RUN.get() {
+                // nothing can be reported this late; a folder left behind is caught
+                // by the leftover check (`bin/check-test-leftovers.sh`)
+                let _ = std::fs::remove_dir_all(d);
+            }
+        }
+        let d = tempfile::Builder::new().prefix("bh-server-tests-").tempdir().unwrap().keep();
+        // SAFETY: `remove` is a plain function that never unwinds; atexit only stores it
+        assert_eq!(unsafe { libc::atexit(remove) }, 0, "the run's folder could not be set to go at exit");
+        d
+    })
+    .clone()
+}
+
 pub fn home() -> PathBuf {
     static H: OnceLock<PathBuf> = OnceLock::new();
     H.get_or_init(|| {
-        let d = std::env::temp_dir().join(format!("bh-server-tests-{}", std::process::id()));
+        let d = folder_for_the_run().join("shared");
         std::fs::create_dir_all(&d).unwrap();
         std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
         // nothing this binary does reaches beyond loopback; the Wealthsimple

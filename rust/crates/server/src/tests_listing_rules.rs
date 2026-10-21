@@ -249,7 +249,7 @@ fn test_no_route_finds_a_listing_by_a_bare_symbol() {
         with_symbol.extend(more);
     }
     let carries_symbol = |name: &str| with_symbol.contains(name);
-    let app = crate::tests_routes_golden::isolated();
+    let (_home, app) = crate::tests_routes_golden::isolated();
     let rt = crate::tests_routes_golden::runtime();
     let mut driven = Vec::new();
     for e in crate::http::route_table() {

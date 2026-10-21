@@ -41,13 +41,12 @@ use crate::app::App;
 use crate::http::{router, AppState};
 
 /// An app on a temp home of its own -- nothing another test wrote is in it,
-/// and nothing this test writes is seen by another.
-pub(crate) fn isolated() -> Arc<App> {
-    let dir = std::env::temp_dir().join(format!("bh-routes-golden-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// and nothing this test writes is seen by another. The home is removed when
+/// the returned folder is dropped.
+pub(crate) fn isolated() -> (tempfile::TempDir, Arc<App>) {
+    let dir = tempfile::tempdir().unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let app = App::new(dir, root, "127.0.0.1".into());
+    let app = App::new(dir.path().to_path_buf(), root, "127.0.0.1".into());
     // the figure path, on the recorded month, as the shared test app has it
     let book = app.home.join("figures");
     std::fs::create_dir_all(&book).unwrap();
@@ -56,7 +55,7 @@ pub(crate) fn isolated() -> Arc<App> {
     let f = crate::figures::Figures::open(&book, now).unwrap();
     f.state_zone("America/Toronto", now).unwrap();
     app.set_figures(f);
-    app
+    (dir, app)
 }
 
 pub(crate) fn runtime() -> tokio::runtime::Runtime {
@@ -226,7 +225,7 @@ fn scrub(mut v: Value) -> Value {
 fn test_routes_golden() {
     let _g = crate::tests_common::guard();
     std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
-    let app = isolated();
+    let (_home, app) = isolated();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/routes.json");
     let got: Map<String, Value> = runtime().block_on(async {
         let mut m = Map::new();
@@ -265,11 +264,9 @@ fn test_refresh_route_reaches_a_connected_answer() {
         }
     }
     let asked = std::sync::Arc::new(Token(std::sync::Mutex::new(vec![])));
-    let dir = std::env::temp_dir().join(format!("bh-routes-refresh-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let net = bagholder_net::Net::answered_by(std::sync::Arc::new(bagholder_net::SystemClock), std::sync::Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(asked.clone())));
-    let app = App::with_net(dir, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
+    let app = App::with_net(dir.path().to_path_buf(), PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
     seed_refreshable_session(&app);
     let req = from_the_page(&app, Method::POST, "/api/refresh", None);
     let got = runtime().block_on(json_of(app.clone(), req));
@@ -352,14 +349,13 @@ fn test_every_write_to_the_book_reaches_the_stream() {
     let trades = call(Method::GET, "/api/figures/trades", None);
     let trade = trades["body"]["trades"].as_array().and_then(|t| t.first()).and_then(|t| t["id"].as_str()).unwrap_or_else(|| panic!("a trade in the made-up book: {trades}")).to_string();
     let stamp = || app.events.stamp()[crate::events::Source::Store as usize];
-    let watched = std::env::temp_dir().join(format!("bh-watched-{}", std::process::id()));
-    std::fs::create_dir_all(&watched).unwrap();
+    let watched = tempfile::tempdir().unwrap();
     let writes: Vec<(&str, Method, &str, Option<Value>)> = vec![
         ("a journal note and grade", Method::POST, "/api/journal", Some(json!({"id": trade, "thesis": "a note", "grade": "B", "tags": ["setup"]}))),
         ("a trade typed in", Method::POST, "/api/entries", Some(json!({"entry": "trade", "account": "", "instrument": null, "symbol": "ZZWRITE", "exchange": "TSX", "currency": "CAD", "day": "2026-09-01", "side": "BUY", "quantity": "10", "price": "1.50", "fee": "0"}))),
         ("the tiles chosen", Method::POST, "/api/tiles/set", Some(json!({"tiles": []}))),
         ("the notification settings", Method::POST, "/api/notifications/settings", Some(json!({"fills": true}))),
-        ("a folder watched", Method::POST, "/api/watch", Some(json!({"path": watched.to_string_lossy(), "account": ""}))),
+        ("a folder watched", Method::POST, "/api/watch", Some(json!({"path": watched.path().to_string_lossy(), "account": ""}))),
         ("the watched folder cleared", Method::POST, "/api/watch/clear", None),
     ];
     for (what, method, uri, body) in writes {

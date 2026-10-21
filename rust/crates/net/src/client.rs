@@ -1012,9 +1012,8 @@ mod ceiling_tests {
 
     #[test]
     fn a_download_past_its_ceiling_stops_while_it_is_read_and_never_after() {
-        let dir = std::env::temp_dir().join(format!("bh-net-ceiling-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("f.part");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.part");
         // a reply that does not say its length, in chunks, far past the ceiling
         let (port, _) = host("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n", 4 * 1024 * 1024, true);
         let mut f = std::fs::File::create(&path).unwrap();
@@ -1035,9 +1034,8 @@ mod ceiling_tests {
     #[test]
     fn a_download_redirected_to_a_host_it_does_not_take_goes_no_further() {
         let (port, _) = host("HTTP/1.1 302 Found\r\nLocation: http://elsewhere.example/f\r\nContent-Length: 0\r\n\r\n", 0, false);
-        let dir = std::env::temp_dir().join(format!("bh-net-redirect-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut f = std::fs::File::create(dir.join("f")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("f")).unwrap();
         let e = download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 1024, &|h| h == "127.0.0.1", &mut |_| true).unwrap_err();
         assert!(e.to_string().contains("elsewhere.example is not a host"), "{e}");
     }

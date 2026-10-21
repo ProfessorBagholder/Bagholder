@@ -816,9 +816,8 @@ mod tests {
 
     #[test]
     fn the_import_reads_a_copy_and_leaves_the_database_as_it_was() {
-        let dir = std::env::temp_dir().join(format!("bh-import-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         let old = dir.join("bagholder.db");
         {
             let conn = bagholder_store::open_db(&old).unwrap();
@@ -836,7 +835,6 @@ mod tests {
         assert!(left.iter().all(|f| f.starts_with("book.db")), "the copy is gone: {left:?}");
         let again = import(&old, &home, at).unwrap();
         assert_eq!((again.records_new, again.records_unchanged), (0, 1));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A made-up person's home: the Python app's folder with its database in it.

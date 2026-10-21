@@ -50,12 +50,15 @@ jobs:
       - name: The lock file is current
         run: cargo metadata --locked --format-version 1 > /dev/null
         working-directory: rust
-      # a warning fails the build: the workspace is kept warning-free
+      # a warning fails the build: the workspace is kept warning-free; the suite runs
+      # on a temp folder of its own, and a test that leaves anything there fails it
       - name: The Rust suite
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
-        run: cargo test --workspace --locked
+        run: |
+          cargo test --workspace --locked --no-run
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked
         working-directory: rust
       # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
       # feature no release build enables: their own tests, built with them
@@ -108,7 +111,9 @@ jobs:
       - name: The Rust suite
         env:
           CI: "true"
-        run: cargo test --workspace --locked
+        run: |
+          cargo test --workspace --locked --no-run
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked
         working-directory: rust
       # the one test kept out of the suite for the machine it needs: the notification
       # applet, built with osacompile (the capture tests read the owner's own data,
@@ -283,6 +288,9 @@ jobs:
       - name: The server and the made-up book
         run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
+      # on a temp folder of their own: a test that leaves anything there fails them
       - name: The browser tests
-        run: npm run e2e
+        run: |
+          npx vite build
+          ../bin/check-test-leftovers.sh npx playwright test
         working-directory: web
