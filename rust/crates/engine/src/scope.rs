@@ -723,8 +723,8 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
 }
 
 /// The holdings' part of a filter set.
-pub fn portfolio_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfolio {
-    portfolio(f, inputs, positions)
+pub fn portfolio_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days: PastDays) -> Portfolio {
+    portfolio(f, inputs, positions, past_days)
 }
 
 /// The cashflow's part of a filter set, over the holdings' part.
@@ -744,9 +744,10 @@ pub fn scope(
     rates: &BTreeMap<InstrumentId, PayerRate>,
     equity: &BTreeMap<AccountId, AccountEquity>,
     benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>,
+    past_days: PastDays,
 ) -> Scoped {
     let d = dashboard(f, inputs, trades, equity, benchmarks);
-    let portfolio = portfolio(f, inputs, positions);
+    let portfolio = portfolio(f, inputs, positions, past_days);
     let cashflow = cashflow(f, inputs, trades, positions, cash_rows, rates, &portfolio);
     Scoped {
         trades: trades_in_scope(f, inputs, trades),
@@ -967,8 +968,18 @@ fn kind_of(a: &crate::input::AccountInfo) -> Option<AccountKind> {
 /// `now`: the figures the tiles show. A day with a part that cannot be stated (a
 /// rate not published) is kept, waiting on it.
 pub fn net_worth_days(f: &Filters, inputs: &Inputs, now: &NetWorthDay) -> Vec<NetWorthDay> {
+    let mut out = net_worth_past(&f.accounts, inputs);
+    out.push(now.clone());
+    out
+}
+
+/// Net worth by day over the accounts `in_scope` (every account where empty), each day
+/// before today (`net_worth_days`). Nothing a quote or a close moves is among
+/// what it is worked out from, so it is kept from one price change to the next
+/// (`Engine::net_worth_past`).
+pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<NetWorthDay> {
     let debts = &inputs.facts.debts;
-    let whole = f.accounts.is_empty();
+    let whole = in_scope.is_empty();
     let (rates, clock) = (&inputs.facts.rates, &inputs.clock);
     let today = clock.today;
     // the accounts the broker states, in the order of their ids, each with its
@@ -984,7 +995,7 @@ pub fn net_worth_days(f: &Filters, inputs: &Inputs, now: &NetWorthDay) -> Vec<Ne
         .ledger
         .accounts
         .values()
-        .filter(|a| whole || f.accounts.contains(&a.account.id))
+        .filter(|a| whole || in_scope.contains(&a.account.id))
         .filter_map(|a| {
             let v = &inputs.market.brokers.get(&a.account.id)?.net_value;
             let values = match v.keys().next_back() {
@@ -1080,7 +1091,6 @@ pub fn net_worth_days(f: &Filters, inputs: &Inputs, now: &NetWorthDay) -> Vec<Ne
             };
         }
     }
-    out.push(now.clone());
     out
 }
 
@@ -1129,7 +1139,11 @@ fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -
     Some((fig_sum(&each.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>()), each))
 }
 
-fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfolio {
+/// What the days before today come to (`net_worth_past`) under an account set,
+/// asked only where the scope has net worth by day.
+pub type PastDays<'a> = &'a dyn Fn(&BTreeSet<AccountId>) -> std::sync::Arc<Vec<NetWorthDay>>;
+
+fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days: PastDays) -> Portfolio {
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
     let idx: Vec<usize> = positions.iter().enumerate().filter(|(_, p)| position_matches(f, inputs, p)).map(|(i, _)| i).collect();
@@ -1262,7 +1276,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         }
         NetWorthDay { day: inputs.clock.today, assets, debts }
     };
-    let net_worth_history = if holdings_filtered(f) { Vec::new() } else { net_worth_days(f, inputs, &now).into_iter().filter(|n| f.in_dates(inputs.clock.today, n.day)).collect() };
+    let net_worth_history = if holdings_filtered(f) { Vec::new() } else { past_days(&f.accounts).iter().chain(std::iter::once(&now)).filter(|n| f.in_dates(inputs.clock.today, n.day)).cloned().collect() };
     Portfolio {
         owed,
         outside_assets,
@@ -1305,9 +1319,9 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
 /// then, at that day's close and rate; what the accounts were worth that day,
 /// as the broker stated it; the cash that day (`CashByDay`); nothing borrowed or
 /// available to borrow, which the broker states only now.
-pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate::engine::Past>) -> Portfolio {
+pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate::engine::Past>, past_days: PastDays) -> Portfolio {
     let day = past.day;
-    let mut p = portfolio(f, inputs, &past.positions);
+    let mut p = portfolio(f, inputs, &past.positions, past_days);
     let accounts: Vec<AccountId> = inputs.ledger.accounts.keys().copied().filter(|a| f.accounts.is_empty() || f.accounts.contains(a)).collect();
     // each account's value that day: its last stated on or before it
     // each at the rate of the day it is that account's value for

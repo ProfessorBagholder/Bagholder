@@ -335,3 +335,45 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
         assert_eq!(days.last().unwrap().debts.clone().unwrap().amount, balance.neg(), "book {n}: today");
     }
 }
+
+/// Net worth by day before today is kept from one change to the next
+/// (`Engine::net_worth_past`), and what is kept is what a fresh working-out
+/// gives, under every account set, after each kind of change that moves it: a
+/// transaction added, a new rate, the debts held outside, what the broker
+/// states, the day.
+#[test]
+fn the_days_kept_are_the_days_worked_out_afresh_after_every_change() {
+    let (mut b, mut e) = engine_of(&case());
+    let (a, bb) = (b.ids.account("A"), b.ids.account("B"));
+    let sets = [BTreeSet::new(), BTreeSet::from([a]), BTreeSet::from([bb]), BTreeSet::from([a, bb])];
+    let same = |e: &bagholder_engine::Engine, what: &str| {
+        for s in &sets {
+            assert_eq!(*e.net_worth_past(s), bagholder_engine::scope::net_worth_past(s, e.inputs()), "after {what}, over {s:?}");
+        }
+    };
+    same(&e, "the first build");
+    // the same book with each part changed, its ids the same as the labels' order
+    // is; a deposit larger than the cash stated now, so the account owes before it
+    let mut other = case();
+    other["transactions"] = json!([{"id": "d1", "account": "A", "day": "2026-10-08", "at": "2026-10-08T15:00:00Z", "kind": "deposit", "cash": "2000"}]);
+    other["rates"]["USD"]["2026-10-13"] = json!("1.45");
+    other["brokers"]["B"]["net_value"]["2026-10-16"] = json!("115");
+    other["today"] = json!("2026-10-21");
+    other["now"] = json!("2026-10-21T22:00:00Z");
+    let o = build(&other);
+    let record = o.tx["d1"].record;
+    let mut delta = bagholder_engine::input::LedgerDelta::default();
+    delta.records.insert(record, Some((o.inputs.ledger.records[&record].clone(), o.inputs.ledger.transactions.of_record(record).cloned().collect())));
+    e.apply(Change::Ledger(delta));
+    same(&e, "a transaction added");
+    e.apply(Change::Rates(o.inputs.facts.rates.clone()));
+    same(&e, "a new rate");
+    let mut debts = outside();
+    debts.history.get_mut("home").unwrap().insert(day("2026-10-10"), cad("305000"));
+    e.apply(Change::Debts(debts));
+    same(&e, "the debts held outside");
+    e.apply(Change::Broker(bb, o.inputs.market.brokers.get(&bb).cloned()));
+    same(&e, "what the broker states");
+    e.apply(Change::Clock(o.inputs.clock.clone()));
+    same(&e, "the day");
+}
