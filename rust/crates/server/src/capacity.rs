@@ -48,9 +48,10 @@ pub const PI_SLOWDOWN: f64 = 2.1;
 /// How far one run's wall time on the runner lands from another's, as a share of
 /// their median: `backdated-trade` by depth, the same code on sixteen runs of
 /// pull requests #574, #575 and #577 (2026-10-20 and -21), read 86.4 to 107.1 ms
-/// on a Pi about a median of 98.0, (107.1 - 86.4) / 98.0. A time within this of
-/// its budget is at the edge of it, said the same whichever side a run lands.
-pub const TIME_SPREAD: f64 = 0.21;
+/// on a Pi about a median of 98.0: a range of (107.1 - 86.4) / 98.0, or 21%, half
+/// of it either side of a true value. A time within this of its budget is at the
+/// edge of it, said the same whichever side a run lands.
+pub const TIME_SPREAD: f64 = 0.106;
 /// Work through an index grows by a B-tree's depth when the book is four times
 /// the size; work proportional to the book grows about four times. Under twice
 /// tells the two apart.
