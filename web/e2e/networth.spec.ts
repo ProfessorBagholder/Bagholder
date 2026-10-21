@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { ready, view, openWithStatus, money0, stampDay } from './helpers'
+import { ready, view, openWithStatus, money0, stampDay, cmp } from './helpers'
 
 // SPEC §4, Net worth: the tiles are today's, the chart is every day Bagholder
 // works out to today, the lists are what each figure comes to, and the filters
@@ -234,4 +234,35 @@ test('the Assets and Liabilities cards are one height at every width, a long lis
   const head = (await assets.locator('thead th').first().boundingBox())!
   const lb = (await list.boundingBox())!
   expect(Math.abs(head.y - lb.y)).toBeLessThan(1)
+})
+
+test('a header click re-sorts Assets and Liabilities, a second click reverses it, and each list keeps its order until one is clicked', async ({ page, request }) => {
+  // made-up rows, names and amounts in neither order, in each list
+  const made = (p: string, kind: string): Item[] =>
+    [['Beta', '300'], ['Alpha', '100'], ['Gamma', '200']].map(([n, v], i) => ({ id: p + i, kind, name: n + ' ' + p, institution: 'Omicron Trust', amount: v, asOf: null }))
+  let given: NetWorth | null = null
+  await openWithStatus(page, request, {}, '#networth', (m) => {
+    const nw = m.portfolio.netWorth as NetWorth
+    nw.assets = [...nw.assets, ...made('asset', 'Savings')]
+    nw.liabilities = [...nw.liabilities, ...made('debt', 'PersonalLoan')]
+    given = nw
+  })
+  await ready(page)
+  const nw = given as unknown as NetWorth
+  for (const [heading, what, amount, rows] of [['Assets', 'Asset', 'Value', nw.assets], ['Liabilities', 'Debt', 'Balance', nw.liabilities]] as const) {
+    const c = card(page, heading)
+    const names = () => c.locator('tbody tr').evaluateAll((trs) => trs.map((tr) => tr.querySelector('td')!.firstChild!.textContent!.trim()))
+    // the server's order until a header is clicked, no arrow shown
+    expect(await names()).toEqual(rows.map((r) => r.name))
+    const byAmount = [...rows].sort((a, b) => cmp(b.amount, a.amount)).map((r) => r.name)
+    await c.locator('th', { hasText: amount }).click()
+    await expect.poll(names).toEqual(byAmount)
+    await c.locator('th', { hasText: amount }).click()
+    await expect.poll(names).toEqual([...byAmount].reverse())
+    const byName = [...rows].sort((a, b) => b.name.localeCompare(a.name)).map((r) => r.name)
+    await c.locator('th', { hasText: what }).click()
+    await expect.poll(names).toEqual(byName)
+    await c.locator('th', { hasText: what }).click()
+    await expect.poll(names).toEqual([...byName].reverse())
+  }
 })

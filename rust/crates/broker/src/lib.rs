@@ -257,6 +257,26 @@ pub trait BrokerAdapter {
         let _ = (payload, row);
         None
     }
+    /// The rows of the `watches` account a stored record holds: each one's
+    /// broker id and day.
+    fn watched_rows(&self, payload: &Value) -> Vec<(String, Option<jiff::civil::Date>)> {
+        let _ = payload;
+        Vec::new()
+    }
+    /// The other of the person's accounts a row states as the other side of a
+    /// move between them: a row of it the book does not hold as it is now is
+    /// a reason to read that account's activity again, closed or not.
+    fn names(&self, row: &Row) -> Option<String> {
+        let _ = row;
+        None
+    }
+    /// The rows of the person's accounts the adapter read in this pull for
+    /// another row's record (a move's other side, over its days) beside each
+    /// account's own read, each given once: the pull stores them as it stores
+    /// every row read.
+    fn read_beside(&mut self) -> Vec<Row> {
+        Vec::new()
+    }
     /// The day the broker files an instant under.
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
     /// Each account's cash per currency now: an account left out is one the

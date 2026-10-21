@@ -24,6 +24,9 @@ const DEFAULTS: Record<string, SortState> = {
   watchlist: { key: 'added', dir: 'desc' },
   news: { key: 'when', dir: 'desc' },
   shorts: { key: 'ofFloat', dir: 'desc' },
+  // the order the server gives each list, which no column's arrow names
+  nwAssets: { key: 'listed', dir: 'desc' },
+  nwLiabilities: { key: 'listed', dir: 'desc' },
 }
 
 function load(): Record<string, SortState> {
@@ -95,6 +98,8 @@ export const TIES = {
   shorts: ['symbol', 'exchange'],
   news: ['news', 'symbol'],
   disclosures: ['document', 'source'],
+  // two cards with no name of their own at one broker differ by their balance alone
+  netWorth: ['name', 'institution', 'kind', 'amount'],
 } as const satisfies Record<string, readonly string[]>
 
 // Sort a copy; a row with nothing in the column always sinks to the bottom,

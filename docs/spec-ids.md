@@ -680,6 +680,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `net-worth-17`
 - `net-worth-18`
 - `net-worth-19`
+- `net-worth-20`
 - `order-ticket-1`
 - `order-ticket-2`
 - `order-ticket-3`
