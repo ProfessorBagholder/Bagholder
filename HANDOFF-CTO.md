@@ -1,6 +1,6 @@
 # Handoff: the CTO session for Bagholder
 
-Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
+Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-21; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
 
 The old session's memory (about 95 notes) lived only on the Mac. Everything in it that still matters is folded in below. Where a rule is already in the repo's `CLAUDE.md`, this file points to it and does not restate it.
 
@@ -22,63 +22,49 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-20, written by the home-server CTO session before a compaction)
+## 2. Where things stand (2026-10-21 ~17:00 UTC, written by the home-server CTO session before a compaction)
 
-The Architect is a peer session on this server: reply to its `from=` address (`uds:/run/user/1005/cc-socks/132593.sock`). **Message it only when a plan or PR head is ready for review, or when a decision needs the owner.** No acknowledgements and no status: those go in the PR (the owner's rule, 2026-10-20). Verdicts are briefs on `architecture-briefs` (latest: brief 74). **master is protected:** PRs only, no force-push. Merge = the Architect's "cleared" plus every run on the head green: `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/merge-when-green.sh <pr>`, run in the background. A macOS or Windows job that is "not acquired by Runner" is a GitHub capacity cancel: re-run it (#568). Any other failure: read the log and fix it.
+**HOLD: the Architect said "Hold everything until the brief; I'll send it when it's done." Build nothing until that brief arrives.** It covers the earlier-app removal design, whether to revert #575/#586's machinery, and how users can trust their numbers. The owner handed it to the Architect after saying the work had become "slop on top of slop", that 156k lines (2.7.0) had grown to 184k (2.9.0), and that they "can no longer assure my users that their numbers will be accurate". When the brief comes, build exactly what it says, and nothing else.
 
-**Releases:** v2.7.0 is the latest (2026-10-19). The version follows CLAUDE.md's rule without asking. Releases are the owner's word.
+### Released
+- **v2.8.0** (#574, #575, #577 Net worth tab, #579 capacity dead band).
+- **v2.9.0** (#586: closed-account re-read-when-due, broker label on Net worth rows, click-to-sort on Net worth). The owner's Mac runs 2.9.0, installed from `~/Applications/Bagholder/` (release-archive layout, run directly).
+- Docs PRs merged: #585 (no code-signing certificate: the owner's decision), #588 (two decisions: the earlier app is retired by one migration and never a standing condition; closed accounts are read like any other).
 
-### Merged 2026-10-20
-#563 (brief 71 A1, unescape), #564 (C13, refresh-token lock), #565 (B6, chart currencies), #567 (C14, capture cookie host).
+### The established fact behind the hold
+- The owner's book has one live `bagholder-import` row: the leaving side of a cash move out of a closed managed RESP, 2025-06-16. Counts: live 1, superseded 5,867, removed 288.
+- Wealthsimple's feed DOES list that leaving row (ASSET_MOVEMENT/SOURCE, COMPLETED). It's held in the arrival record's `$.opposing.rows`.
+- The book never stored it for one reason: pull.rs never re-reads a closed account once it has been read in full.
+- #575 and #586 added layers around that premise instead of removing it.
+- 2.9.0 had not run its daily full pull (weekdays after 2 PM Mountain) when the last count was taken.
+- Unverified: whether any person data (journal, anchors, carried orders) sits on import-derived trades.
 
-### Open, cleared, merging on green
-- **#572** (plan: agents anywhere, brief 72, cleared at 3790653c). Its rust job failed once on `server/tests/start_failures.rs` `an_earlier_store_that_cannot_be_carried_beside_a_book_…` ("the server stopped before it listened"). It was re-run, and the merge script is waiting. If it fails again, investigate; that test is deleted by the removal anyway.
-- **#573** (plan: remove the earlier app, cleared at 7510824c after brief 74's four changes). The merge script is running.
-
-### In progress (background agents in their own worktrees; neither pushed yet)
-1. **Demo into the book.** Worktree `scratchpad/demo`, branch `demo-into-the-book`. The e2e sample data is written straight into the book through a made-up Wealthsimple and the real pull (`Generated::from_records`, a `bagholder demo <home>` command), replacing `store/src/bin/demo_book.rs` and the old-file parts of `demo_facts.rs`, with e2e green. When the agent reports: review it, push, open the PR, send it to the Architect.
-2. **Move-out from its arrival** (Part 1 of plan #573). Worktree `scratchpad/mv`, branch `move-out-from-the-arrival`.
-   - The cause, found on the owner's book: a managed RESP (closed) sold everything on 2025-06-13. On 2025-06-16 its cash moved to the self-directed RESP. The DESTINATION row (`opposingAccountId` = the managed RESP, read in full) booked the arrival only, and the managed RESP's feed has no leaving row.
-   - The fix: an arriving row books the mirrored leaving leg in the person's own opposing account when nothing records it leaving.
-   - Tests: the owner's shape, both rows present (no double count), a units move, and a foreign account.
-   - Then the PR goes to the Architect. After the merge, **the owner syncs once** and re-runs the count; it must show 0 `live` imported rows:
-     `sqlite3 ~/.bagholder-rust/book.db "SELECT state, COUNT(*) FROM source_records WHERE source='bagholder-import' GROUP BY state"`
-     Before: 1 live, 5,573 superseded, 288 removed.
-3. **Part 2 of #573,** after 1 and 2. One PR:
-   - the book upkeep step that deletes all imported rows once none is live, with the person's data re-pointed and kept, and units and cash unchanged;
-   - the deletion of every reader and writer of `bagholder.db`: carry, legacy_import, legacy_orders, compare, store crate, market refresh/quotes old code, sources `carry_filings`, book import, `explain-move` if made;
-   - the exact-identifier source scan;
-   - the files-opened test.
-
-   The deletion map is in this session's transcript (the agent report "deletion map"). Re-survey if it's lost.
+### Stopped / not built
+- The 3.0.0 build: stopped, nothing pushed. Branch `remove-earlier-app` (de4e40d) is still the old Part 2 build.
+- No identifier-scan test, ever. The owner: a test naming old code is old code kept.
+- `install-check` branch (423bcfe7): `.github/workflows/install-check.yml`, a Windows job that downloads, unpacks and starts the release. It passed on Windows Server 2025 for v2.8.0. Not a PR yet. The owner noted Server isn't Windows 11. The owner wants Windows steps as short as possible: the one-line PowerShell `irm …releases/latest | … ; Expand-Archive …; & $HOME\Bagholder\bagholder.exe`, no hashes. Not yet run on Windows.
 
 ### Waiting on the owner
-- **networth-try** (branch, head f199f825): the Net worth tab (assets and debts by day, filters, Holdings / Uninvested cash / Chequing rows) and the Allocation donut's Cash slice. The owner tested parts and said "looks much better". There's **no go yet** for the full process: fold it into a PR, the layout test, e2e (debts.spec's Portfolio-owed tests are stale), spec, Architect, CI, then merge **#561** (cleared, head 8c135884, held for this go), then release. Also needed from the owner: the card check (hover the rightmost day in Assets & debts against the tiles).
-- **The recorded-reply guard (#558)** is PAUSED by the owner's question: "why are any numbers committed at all". I answered that no real numbers are needed and offered fully made-up replies. They haven't decided, so build nothing. A local-only branch `guard-recorded-figures` in `scratchpad/g558` has outside-figure stand-ins plus real order ids replaced. **Not pushed;** discard or reuse once the owner decides.
+- **Short-interest bug.** Option holdings get sent to FINRA, and the header shows an EOF error. Cause: my c913b605 (10-16) passes the listing key's symbol, with spaces stripped, to `shorts::market_of`, whose `is_option_symbol` needs the spaced form. Proposed fix: decide by instrument kind in `server/src/feeds.rs` `shorts_listings`. I asked the owner whether to do it despite the hold. No answer yet.
+- **PR #589** (opened by a session the owner started): tests delete their temp folders, plus a CI leftover check. Untouched because of the hold. To mention to the Architect.
 
-### Queue after the above (the Architect's order)
-1. **The brief 72 build** (agents anywhere), from the merged plan `docs/plans/agents-from-anywhere.md`. Add: the panel names Cloudflare and Google beside the reachability check's DNS.
-2. **#569:**
-   - capacity timing for brokers, price-changed, feed-step, backdated-fill and backdated-record;
-   - agent-trades-page reported-only (#554);
-   - the test that every row is timed or reported-only with a reason;
-   - the runner-spread margin with its source runs, and "at the edge" rows, each needing an issue.
-3. **#570:** feed-step at 99% of its cadence; profile it.
-4. **Repayment ask** (owner via the Architect): when a payment's candidates are all debts, count it as a repayment and don't ask. Drop the answered or now-settled asks. Tests: three debts at one lender → counted with no question; no name or debt-purpose match → not counted.
-5. **Brief 71's rest:** C15 (Clear/Disconnect leave sign-in data), A3, A4, the deletions. D18 is superseded by the removal.
-6. **Brief 70** (filings model: `-ngl`, child tied to the server, regulators' own names, Qwen3.5-2B, measured with the kit).
-7. Issues: #562, #566 (chart reason names the missing field), #568, #509, #508, #512; Dependabot #488–#502.
+### Issues filed 2026-10-21
+- #580: flaky notices.spec.
+- #581: sync progress text stuck on one percentage.
+- #582: sync logs nothing.
+- #583: CLOSE_WAIT socket leak.
+- #584: a copy that can't open the book retries every 30 s.
+- #587: card last-4 digits on Net worth (the owner wants it; needs a plan, since it's a migration).
 
-### Worktrees in the scratchpad (`/tmp/claude-1005/-home-md-dev/367843df-f342-4e65-bda4-58c0ce3c5aae/scratchpad/`)
-Each has its own `target-*` dir. Remove a worktree after its PR merges (`git worktree remove`):
-- fix (networth-try)
-- a1, c13, b6, c14 (merged)
-- d18 (closed #571)
-- p72 (#572)
-- rm (#573 plan; Part 2 later)
-- demo, mv (agents)
-- g558 (paused)
-- ho (this handoff)
+### Queue after the brief (the owner's order)
+1. The earlier-app work, as the Architect's brief says.
+2. The agents build (briefs 72/73).
+3. Then: #587; CI efficiency (affected-only jobs, cancel-in-progress, full run only before a release); the rest of #569; #581–#584; the Windows 11 check.
+
+### Workspace
+- Server worktrees in the scratchpad: `g558` (paused guard-recorded-figures, the owner's call) and `ho` (this handoff). Nothing else.
+- No sessions of mine are running, and the owner deleted the rest.
+- The merge script: `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/merge-when-green.sh <pr…>`. It merges with `--merge` when every check is green. Only run it after the Architect has cleared the head.
 
 ## 3. How the owner wants to be worked with
 
@@ -93,6 +79,14 @@ Each rule below cost the owner real anger, often more than once. Treat them as h
 - **Answer the question asked.** Don't rush into changes before things are decided: "answer the question instead of rushing to make changes before things are decided".
 - **Never commit real figures from the owner's account.** The repo is public. Commands given to the owner print no ids, names or amounts.
 - **Nothing of the earlier (Python) app is kept** (2026-10-20). A migration converts once and leaves nothing of the old format behind.
+- **Added 2026-10-21, all in the memory files too:**
+  - Subtract before adding: find the wrong premise and delete it, never stack mechanisms; size is a criterion (`bagholder-subtract-before-adding`).
+  - Look on the machine before answering; never agree to a claim without checking it (`check-the-machine-before-answering`).
+  - The delegation playbook: do it myself by default; the Mac bridge's known limits; one full first prompt; checks stay checks (`bagholder-delegation-playbook`).
+  - Sessions clean up after themselves and report back via send_message @parent (`sessions-clean-up-themselves`).
+  - No unnecessary CI runs: every push is final, run the touched tests locally first, commit named files only, cancel superseded runs (`bagholder-ci-runs`).
+  - Explain outcomes in plain words, not plumbing. Never make claims about other users' data.
+  - Bagholder runs on any platform. The owner runs it on a Mac and tests on Windows matter. Don't call Windows Server "Windows".
 
 ### Talking to the owner
 
