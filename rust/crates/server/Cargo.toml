@@ -83,6 +83,9 @@ bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 bagholder-ws = { path = "../ws", features = ["standin"] }
 # a database of its own for the model cache tests, as the store's tests have
 tempfile = "3"
+# the C library's atexit, on every platform: a folder shared by a whole test run
+# (`tests_common::folder_for_the_run`) is removed when the run's process exits
+libc = "0.2"
 
 [lints]
 workspace = true

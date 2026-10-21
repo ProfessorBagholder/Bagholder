@@ -229,10 +229,21 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     // the person's zone, as their page last stated it; the machine's is never used
     let zone = Book::open_in(book_dir, crate::app::APP_VERSION, at).map_err(err)?.0.zone().map_err(err)?.ok_or("the book holds no zone: open the app once, so its page states the zone of its browser")?.zone;
     let today = today.unwrap_or_else(|| at.to_zoned(zone.clone()).date());
-    let scratch = std::env::temp_dir().join(format!("bh-compare-{}", at.as_millisecond()));
+    let scratch = std::env::temp_dir().join(format!("bh-compare-{}-{}", std::process::id(), at.as_millisecond()));
     std::fs::create_dir_all(&scratch).map_err(err)?;
+    let compared = compare_on(&scratch, old_path, book_dir, at, zone, today, from);
+    // the copy goes whatever the comparison came to; one that cannot is said
+    match (compared, std::fs::remove_dir_all(&scratch)) {
+        (compared, Ok(())) => compared,
+        (Ok(_), Err(e)) => Err(format!("the old store's copy in {} could not be removed ({e}): delete it by hand", scratch.display())),
+        (Err(why), Err(e)) => Err(format!("{why}; and the old store's copy in {} could not be removed ({e}): delete it by hand", scratch.display())),
+    }
+}
+
+/// The comparison, on a copy of the old store made in `scratch`.
+fn compare_on(scratch: &Path, old_path: &Path, book_dir: &Path, at: bagholder_core::jiff::Timestamp, zone: bagholder_core::jiff::tz::TimeZone, today: bagholder_core::jiff::civil::Date, from: FactsFrom) -> Result<String, String> {
     bagholder_book::import::copy_database(old_path, &scratch.join("bagholder.db")).map_err(err)?;
-    let old = bagholder_store::connect(&scratch).map_err(err)?;
+    let old = bagholder_store::connect(scratch).map_err(err)?;
     if bagholder_store::schema::figures_moved(&old).map_err(err)? {
         return Err(format!("{} no longer holds the earlier figures: the book took them over, and the file as it was is in snapshots/ (bagholder-before-the-book-…db)", old_path.display()));
     }

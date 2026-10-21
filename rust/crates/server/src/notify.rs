@@ -995,7 +995,7 @@ mod tests {
         static APP: std::sync::OnceLock<Arc<App>> = std::sync::OnceLock::new();
         let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let app: &'static Arc<App> = APP.get_or_init(|| {
-            let home = std::env::temp_dir().join(format!("bagholder-notify-tests-{}", std::process::id()));
+            let home = crate::tests_common::folder_for_the_run().join("notify");
             std::fs::create_dir_all(&home).unwrap();
             let app = App::new(home.clone(), PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
             // the figures, for what a notice reads of the book

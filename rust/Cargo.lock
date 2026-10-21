@@ -282,6 +282,7 @@ dependencies = [
  "jiff",
  "openssl",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

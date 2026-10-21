@@ -21,10 +21,9 @@ fn guard() -> std::sync::MutexGuard<'static, ()> {
     g
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("bh-localmodel-test-{}-{}", std::process::id(), name));
-    let _ = std::fs::create_dir_all(&d);
-    d
+/// A folder of the test's own, removed when the test ends however it ends.
+fn scratch() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
 }
 
 // --- EndpointTest
@@ -32,7 +31,8 @@ fn scratch(name: &str) -> PathBuf {
 #[test]
 fn test_a_running_endpoint_is_used_and_nothing_is_provisioned() {
     let _g = guard();
-    localmodel::serve_from(&scratch("detect")).unwrap();
+    let dir = scratch();
+    localmodel::serve_from(dir.path()).unwrap();
     hooks::DETECT.with(|h| *h.borrow_mut() = Some(Box::new(|| Some(("http://127.0.0.1:11434".into(), "llama3.2".into())))));
     let kicked = Rc::new(Cell::new(0));
     let k = kicked.clone();
@@ -46,7 +46,8 @@ fn test_a_running_endpoint_is_used_and_nothing_is_provisioned() {
 #[test]
 fn test_no_endpoint_kicks_provisioning_and_returns_empty() {
     let _g = guard();
-    localmodel::serve_from(&scratch("kick")).unwrap();
+    let dir = scratch();
+    localmodel::serve_from(dir.path()).unwrap();
     let kicked = Rc::new(Cell::new(0));
     let k = kicked.clone();
     hooks::ENSURE.with(|h| *h.borrow_mut() = Some(Box::new(move || k.set(k.get() + 1))));
@@ -74,9 +75,9 @@ fn test_until_an_app_names_its_folder_nothing_is_asked_or_started() {
 #[test]
 fn test_the_model_folder_is_the_named_home_s_models_folder() {
     let _g = guard();
-    let home = scratch("home");
-    localmodel::serve_from(&home).unwrap();
-    assert_eq!(localmodel::folder(), Some(home.join("models")));
+    let home = scratch();
+    localmodel::serve_from(home.path()).unwrap();
+    assert_eq!(localmodel::folder(), Some(home.path().join("models")));
     localmodel::reset_state();
     assert_eq!(localmodel::folder(), None, "a fresh process has no folder until told");
 }
@@ -100,7 +101,8 @@ fn test_status_defaults_to_off() {
 #[test]
 fn test_a_file_is_verified_against_the_pinned_sha256() {
     let _g = guard();
-    let p = scratch("verify").join("m.llamafile");
+    let dir = scratch();
+    let p = dir.path().join("m.llamafile");
     std::fs::write(&p, b"hello world").unwrap();
     let saved = std::env::var("BAGHOLDER_LLAMAFILE_SHA256").ok();
     // sha256("hello world")
@@ -112,7 +114,6 @@ fn test_a_file_is_verified_against_the_pinned_sha256() {
         Some(v) => std::env::set_var("BAGHOLDER_LLAMAFILE_SHA256", v),
         None => std::env::remove_var("BAGHOLDER_LLAMAFILE_SHA256"),
     }
-    let _ = std::fs::remove_file(&p);
 }
 
 #[test]
@@ -126,7 +127,8 @@ fn test_download_refuses_a_host_off_the_allowlist() {
     let _g = guard();
     let saved = std::env::var("BAGHOLDER_LLAMAFILE_URL").ok();
     std::env::set_var("BAGHOLDER_LLAMAFILE_URL", "https://evil.example.com/x.llamafile");
-    let got = localmodel::download(&scratch("download").join("m"));
+    let dir = scratch();
+    let got = localmodel::download(&dir.path().join("m"));
     match saved {
         Some(v) => std::env::set_var("BAGHOLDER_LLAMAFILE_URL", v),
         None => std::env::remove_var("BAGHOLDER_LLAMAFILE_URL"),
