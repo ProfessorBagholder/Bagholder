@@ -230,7 +230,7 @@ function countReads(page: Page): void {
 }
 
 test('the walk finds the router\'s tabs and the page\'s panels and dialogs', () => {
-  expect(TABS).toEqual(['dashboard', 'trades', 'portfolio', 'markets', 'cashflow'])
+  expect(TABS).toEqual(['dashboard', 'trades', 'portfolio', 'markets', 'cashflow', 'networth'])
   expect(PANELS.length).toBeGreaterThan(0)
   expect(MODALS.length).toBeGreaterThan(0)
 })

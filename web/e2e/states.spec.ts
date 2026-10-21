@@ -13,7 +13,7 @@ test('the app is there before the model is: header, tabs and the tab\'s own silh
   })
   await page.goto('/#trades')
   await expect(page.locator('#hdr')).toBeVisible()
-  await expect(page.locator('.tabbtn')).toHaveCount(5)
+  await expect(page.locator('.tabbtn')).toHaveCount(6)
   await expect(page.locator('#pageSkel')).toBeVisible()
   // the trades silhouette is a table, not tiles
   expect(await page.locator('#pageSkel .bhsk').count()).toBeGreaterThan(100)
