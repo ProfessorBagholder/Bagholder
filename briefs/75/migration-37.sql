@@ -56,5 +56,11 @@ DELETE FROM record_refs WHERE scheme = 'broker-record:wealthsimple';
 -- the marks of the one-time carries and repairs
 DELETE FROM settings WHERE key IN ('carried.notices', 'following.carried', 'carried.told-by-listing', 'repair.carried-notes-reattached');
 
--- every account is read whole at the next sync
+-- every account is read whole at the next sync, and the header does not restart
+-- on what the last pull's statements said of accounts as they were
 DELETE FROM activity_reads;
+DELETE FROM settings WHERE key = 'statements.said';
+
+-- then the code step of this migration (brief 75 §4): every book account holding
+-- more than one broker id is split to one account per id, with the mappings in
+-- hand, inside this same transaction
